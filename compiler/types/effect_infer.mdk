@@ -1,0 +1,22 @@
+-- Scoped effect collection. A capture observes performed rows without solving
+-- them; inference allowances and signature constraints belong to the checker.
+import types.effect_rows.{EffRow(..), Effvar, collectRows}
+import support.util.{reverseL}
+
+export
+recordEffect : Ref (List EffRow) -> EffRow -> Unit
+recordEffect _ (EffRow [] None) = ()
+recordEffect ambient row = ambient := row :: !ambient
+
+export
+captureEffects : Ref (List EffRow) ->
+  (List (Ref Effvar) -> Ref Effvar) ->
+  (Unit -> a) ->
+  (a, EffRow)
+captureEffects ambient makeJoin body =
+  let saved = !ambient
+  ambient := []
+  let result = body ()
+  let performed = collectRows makeJoin (reverseL !ambient)
+  ambient := saved
+  (result, performed)

@@ -29,4 +29,4 @@ main = println "effect hole ok"
 # TYPES_USER
 netGet : String -> <FFI, Net> String
 fetch : Unit -> <FFI, Net "a.com/*"> String
-main : Unit
+main : <IO> Unit

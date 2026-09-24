@@ -22,4 +22,4 @@ pair : a -> b -> (a, b)
 applyBoth : (a -> b) -> (a -> c) -> a -> (b, c)
 double : Num a => a -> a
 inc : Num a => a -> a
-main : Unit
+main : <IO> Unit

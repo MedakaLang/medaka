@@ -193,7 +193,7 @@ installGroup : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List LetBind
 installGroups : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List (String, List (List Pat, Expr)) -> Unit
 installModGroups : List (ModInfo (Value a)) -> Unit
 intSeq : Int -> Int -> List Int
-ioExternBindings : Unit -> List (String, Value a)
+ioExternBindings : Unit -> List (String, Value <IO>)
 isDefaultCand : Value a -> Bool
 isDispatching : Value a -> Bool
 isMethodBinding : Value a -> Bool
@@ -467,7 +467,7 @@ stripResolved : Value a -> Value a
 subClampZero : Int -> Int -> Int
 sumInts : List Int -> Int
 takeN : Int -> List a -> List a
-testCapableExterns : Unit -> List (String, Value a)
+testCapableExterns : Unit -> List (String, Value <IO>)
 topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 tupleHeadTag : Int -> String
 twoDistinctKeys : List (Value a) -> List (String, String) -> Bool

@@ -8,4 +8,4 @@ main =
   then println "yes"
   else println "no"
 # TYPES_USER
-main : Unit
+main : <IO | a> Unit

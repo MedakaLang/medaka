@@ -13,6 +13,7 @@ import types.evidence.{
   SolverEvidence,
 }
 import types.repr.{IfaceRef, Mono, Scheme(..)}
+import types.effect_rows.{EffRow}
 
 public export data ClassPredicate = ClassPredicate {
   predicateInterface : IfaceRef,
@@ -52,12 +53,14 @@ public export data InstantiationArgument = InstantiationArgument {
 
 public export data Instantiation = Instantiation {
   body : Mono,
+  force : EffRow,
   arguments : List InstantiationArgument,
 }
 
 public export data InstantiationServices subst = InstantiationServices {
   makeSubstitution : List Int -> List Int -> subst,
   substituteBody : subst -> Mono -> Mono,
+  substituteForce : subst -> EffRow -> EffRow,
   substituteArgument : subst -> Mono -> Mono,
   freshGoal : GoalOrigin -> ScopeId -> GoalId,
   freshDestination : GoalOrigin -> ScopeId -> EvId,
@@ -68,6 +71,7 @@ public export data InstantiationServices subst = InstantiationServices {
 -- producer never mints a second evidence destination.
 public export data ExistingInstantiationServices subst = ExistingInstantiationServices {
   substituteExistingBody : subst -> Mono -> Mono,
+  substituteExistingForce : subst -> EffRow -> EffRow,
   substituteExistingArgument : subst -> Mono -> Mono,
 }
 
@@ -160,10 +164,11 @@ instantiateQualifiedAt : ExistingInstantiationServices subst ->
   Option Instantiation
 instantiateQualifiedAt services subst scope origin targets qualified =
   match qualified.hm
-    Forall _ _ schemeBody =>
+    Forall _ _ schemeForce schemeBody =>
       map
         (arguments => Instantiation {
           body = services.substituteExistingBody subst schemeBody,
+          force = services.substituteExistingForce subst schemeForce,
           arguments = arguments,
         })
         (instantiateExistingQualifiers
@@ -181,10 +186,11 @@ instantiateQualified : InstantiationServices subst ->
   QualifiedScheme ->
   Instantiation
 instantiateQualified services scope origin qualified = match qualified.hm
-  Forall typeVariables effectVariables schemeBody =>
+  Forall typeVariables effectVariables schemeForce schemeBody =>
     let subst = services.makeSubstitution typeVariables effectVariables
     Instantiation {
       body = services.substituteBody subst schemeBody,
+      force = services.substituteForce subst schemeForce,
       arguments =
         instantiateQualifiers services subst scope origin qualified.qualifiers,
     }

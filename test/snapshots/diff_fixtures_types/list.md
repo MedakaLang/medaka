@@ -16,4 +16,4 @@ main =
 # TYPES_USER
 sum : (Foldable a, Num b) => a b -> b
 myLength : Foldable a => a b -> Int
-main : Unit
+main : <IO> Unit

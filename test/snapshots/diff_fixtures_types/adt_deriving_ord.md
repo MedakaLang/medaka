@@ -15,4 +15,4 @@ main =
   println (compare (A 1) (A 2))
   println (compare (A 2) (A 1))
 # TYPES_USER
-main : Unit
+main : <IO> Unit

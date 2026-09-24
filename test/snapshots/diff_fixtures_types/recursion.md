@@ -20,4 +20,4 @@ main =
 # TYPES_USER
 factorial : Int -> Int
 fib : Int -> Int
-main : Unit
+main : <IO> Unit

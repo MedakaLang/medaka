@@ -23,4 +23,4 @@ main = println "effect labels ok"
 kvGet : String -> <FFI, KV> String
 get : String -> <FFI, KV> String
 handler : String -> <FFI, KV, Log> String
-main : Unit
+main : <IO> Unit

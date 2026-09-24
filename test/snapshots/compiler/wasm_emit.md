@@ -1,5 +1,5 @@
 # META
-source_lines=12607
+source_lines=12627
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -11756,6 +11756,23 @@ collectExprLocals (CUnOp _ x) = collectExprLocals x
 collectExprLocals (CIf c t f) =
   collectExprLocals c ++ collectExprLocals t ++ collectExprLocals f
 collectExprLocals (CApp f a) = collectExprLocals f ++ collectExprLocals a
+collectExprLocals (CTuple items) = flatMap collectExprLocals items
+collectExprLocals (CList items) = flatMap collectExprLocals items
+collectExprLocals (CArray items) = flatMap collectExprLocals items
+collectExprLocals (CRecord _ fields) = flatMap collectFieldLocals fields
+collectExprLocals (CFieldAccess base _ _) = collectExprLocals base
+collectExprLocals (CRecordUpdate _ base fields) =
+  collectExprLocals base ++ flatMap collectFieldLocals fields
+collectExprLocals (CVariantUpdate _ base fields) =
+  collectExprLocals base ++ flatMap collectFieldLocals fields
+collectExprLocals (CRangeList lo hi _) =
+  collectExprLocals lo ++ collectExprLocals hi
+collectExprLocals (CRangeArray lo hi _) =
+  collectExprLocals lo ++ collectExprLocals hi
+collectExprLocals (CIndex base index) =
+  collectExprLocals base ++ collectExprLocals index
+collectExprLocals (CSlice base lo hi _) =
+  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
 collectExprLocals (CBlock stmts) = flatMap collectStmtLocals stmts
 collectExprLocals (CDecision scrut arms _) =
   collectExprLocals scrut ++ flatMap collectArmLocals arms
@@ -11772,6 +11789,9 @@ collectExprLocals (CLetGroup binds body) =
     ++ flatMap collectLgValLocals binds
     ++ collectExprLocals body
 collectExprLocals _ = []
+
+collectFieldLocals : CField -> List String
+collectFieldLocals (CField _ value) = collectExprLocals value
 
 -- P1: the inline-emitted locals of a group's nullary VALUE member (none for a function
 -- member — that one is lifted).
@@ -14614,11 +14634,24 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "collectExprLocals" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "collectExprLocals") (EVar "x")))
 (DFunDef false "collectExprLocals" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "c")) (EApp (EVar "collectExprLocals") (EVar "t"))) (EApp (EVar "collectExprLocals") (EVar "f"))))
 (DFunDef false "collectExprLocals" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "f")) (EApp (EVar "collectExprLocals") (EVar "a"))))
+(DFunDef false "collectExprLocals" ((PCon "CTuple" (PVar "items"))) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "items")))
+(DFunDef false "collectExprLocals" ((PCon "CList" (PVar "items"))) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "items")))
+(DFunDef false "collectExprLocals" ((PCon "CArray" (PVar "items"))) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "items")))
+(DFunDef false "collectExprLocals" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "flatMap") (EVar "collectFieldLocals")) (EVar "fields")))
+(DFunDef false "collectExprLocals" ((PCon "CFieldAccess" (PVar "base") PWild PWild)) (EApp (EVar "collectExprLocals") (EVar "base")))
+(DFunDef false "collectExprLocals" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EApp (EVar "flatMap") (EVar "collectFieldLocals")) (EVar "fields"))))
+(DFunDef false "collectExprLocals" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EApp (EVar "flatMap") (EVar "collectFieldLocals")) (EVar "fields"))))
+(DFunDef false "collectExprLocals" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((PCon "CIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "index"))))
+(DFunDef false "collectExprLocals" ((PCon "CSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
 (DFunDef false "collectExprLocals" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "collectStmtLocals")) (EVar "stmts")))
 (DFunDef false "collectExprLocals" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "binds")) (EApp (EApp (EVar "flatMap") (EVar "collectLgValLocals")) (EVar "binds"))) (EApp (EVar "collectExprLocals") (EVar "body"))))
 (DFunDef false "collectExprLocals" (PWild) (EListLit))
+(DTypeSig false "collectFieldLocals" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "collectFieldLocals" ((PCon "CField" PWild (PVar "value"))) (EApp (EVar "collectExprLocals") (EVar "value")))
 (DTypeSig false "collectLgValLocals" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectLgValLocals" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs"))))) (EApp (EVar "collectExprLocals") (EVar "rhs")))
 (DFunDef false "collectLgValLocals" (PWild) (EListLit))
@@ -16935,11 +16968,24 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "collectExprLocals" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "collectExprLocals") (EVar "x")))
 (DFunDef false "collectExprLocals" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "c")) (EApp (EVar "collectExprLocals") (EVar "t"))) (EApp (EVar "collectExprLocals") (EVar "f"))))
 (DFunDef false "collectExprLocals" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "f")) (EApp (EVar "collectExprLocals") (EVar "a"))))
+(DFunDef false "collectExprLocals" ((PCon "CTuple" (PVar "items"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "items")))
+(DFunDef false "collectExprLocals" ((PCon "CList" (PVar "items"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "items")))
+(DFunDef false "collectExprLocals" ((PCon "CArray" (PVar "items"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "items")))
+(DFunDef false "collectExprLocals" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectFieldLocals")) (EVar "fields")))
+(DFunDef false "collectExprLocals" ((PCon "CFieldAccess" (PVar "base") PWild PWild)) (EApp (EVar "collectExprLocals") (EVar "base")))
+(DFunDef false "collectExprLocals" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EVar "collectFieldLocals")) (EVar "fields"))))
+(DFunDef false "collectExprLocals" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EVar "collectFieldLocals")) (EVar "fields"))))
+(DFunDef false "collectExprLocals" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "lo")) (EApp (EVar "collectExprLocals") (EVar "hi"))))
+(DFunDef false "collectExprLocals" ((PCon "CIndex" (PVar "base") (PVar "index"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EMethodRef "index"))))
+(DFunDef false "collectExprLocals" ((PCon "CSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "base")) (EApp (EVar "collectExprLocals") (EVar "lo"))) (EApp (EVar "collectExprLocals") (EVar "hi"))))
 (DFunDef false "collectExprLocals" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectStmtLocals")) (EVar "stmts")))
 (DFunDef false "collectExprLocals" ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "binds")) (EApp (EApp (EDictApp "flatMap") (EVar "collectLgValLocals")) (EVar "binds"))) (EApp (EVar "collectExprLocals") (EVar "body"))))
 (DFunDef false "collectExprLocals" (PWild) (EListLit))
+(DTypeSig false "collectFieldLocals" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "collectFieldLocals" ((PCon "CField" PWild (PVar "value"))) (EApp (EVar "collectExprLocals") (EVar "value")))
 (DTypeSig false "collectLgValLocals" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectLgValLocals" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs"))))) (EApp (EVar "collectExprLocals") (EVar "rhs")))
 (DFunDef false "collectLgValLocals" (PWild) (EListLit))

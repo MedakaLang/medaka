@@ -23,4 +23,4 @@ main =
 # TYPES_USER
 sign : (Num a, Ord a) => a -> String
 clamp : Ord a => a -> a -> a -> a
-main : Unit
+main : <IO> Unit

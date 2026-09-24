@@ -26,4 +26,4 @@ main =
 invShared : Inv -> Int
 watShared : Wat -> String
 charAt : String -> Char
-main : Unit
+main : <IO> Unit

@@ -1419,7 +1419,7 @@ gatedReportTests : String ->
   List Decl ->
   List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> Bool
+  <IO | e> Bool
 gatedReportTests target corpus env tests =
   match uncapableExterns corpus env tests
     [] => reportTests target env tests
@@ -1448,7 +1448,7 @@ joinCommas (n :: rest) = "`\{n}`, " ++ joinCommas rest
 reportTests : String ->
   List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> Bool
+  <IO | e> Bool
 reportTests target env tests =
   let _ = putStrLn ("running tests in " ++ target)
   let (passed, failed, errors) = runTestLoop target env tests 0 0 0
@@ -1504,7 +1504,7 @@ runTestLoop : String ->
   Int ->
   Int ->
   Int ->
-  <IO> (Int, Int, Int)
+  <IO | e> (Int, Int, Int)
 runTestLoop _ _ [] passed failed errors = (passed, failed, errors)
 runTestLoop target env ((name, line, body) :: rest) passed failed errors =
   let _ = printTestRunning target line name
@@ -1890,7 +1890,7 @@ gatedTestsCollect : String ->
   List Decl ->
   List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> List (String, Int, ExResult)
+  <e> List (String, Int, ExResult)
 gatedTestsCollect target corpus env tests =
   match uncapableExterns corpus env tests
     [] => runTestsCollect env tests
@@ -1903,7 +1903,7 @@ snd3 (_, b, _) = b
 
 runTestsCollect : List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> List (String, Int, ExResult)
+  <e> List (String, Int, ExResult)
 runTestsCollect _ [] = []
 runTestsCollect env ((name, line, body) :: rest) =
   (name, line, runOneTest env body) :: runTestsCollect env rest
@@ -2569,7 +2569,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "attachRawLines" (PWild (PList)) (EListLit))
 (DFunDef false "attachRawLines" ((PList) (PCons (PTuple (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (ELit (LInt 0)) (EVar "body")) (EApp (EApp (EVar "attachRawLines") (EListLit)) (EVar "rest"))))
 (DFunDef false "attachRawLines" ((PCons (PTuple PWild (PVar "l") PWild) (PVar "rawRest")) (PCons (PTuple (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "l") (EVar "body")) (EApp (EApp (EVar "attachRawLines") (EVar "rawRest")) (EVar "rest"))))
-(DTypeSig false "gatedReportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyCon "Bool")))))))
+(DTypeSig false "gatedReportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") (Some "e") (TyCon "Bool")))))))
 (DFunDef false "gatedReportTests" ((PVar "target") (PVar "corpus") (PVar "env") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "uncapableExterns") (EVar "corpus")) (EVar "env")) (EVar "tests")) (arm (PList) () (EApp (EApp (EApp (EVar "reportTests") (EVar "target")) (EVar "env")) (EVar "tests"))) (arm (PVar "names") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "uncapableExternsMsg") (EVar "target")) (EVar "names")))) (DoExpr (EVar "False"))))))
 (DTypeSig false "uncapableExternsMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "uncapableExternsMsg" ((PVar "target") (PVar "names")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": `test \"…\"` declarations here reach "))) (EApp (EVar "display") (EApp (EVar "externWord") (EVar "names")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinCommas") (EVar "names")))) (ELit (LString ", which `medaka test` does not provide under the interpreter — its capability policy covers the clock, allocation counts and stderr only, so no filesystem, environment, stdin, network or subprocess extern is bound. No test was run. Run these tests natively instead: `medaka test --native "))) (EApp (EVar "display") (EVar "target"))) (ELit (LString "`."))))
@@ -2580,7 +2580,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "joinCommas" ((PList)) (ELit (LString "")))
 (DFunDef false "joinCommas" ((PList (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "joinCommas" ((PCons (PVar "n") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`, "))) (EApp (EVar "joinCommas") (EVar "rest"))))
-(DTypeSig false "reportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DTypeSig false "reportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") (Some "e") (TyCon "Bool"))))))
 (DFunDef false "reportTests" ((PVar "target") (PVar "env") (PVar "tests")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "running tests in ")) (EVar "target")))) (DoLet false false (PTuple (PVar "passed") (PVar "failed") (PVar "errors")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestLoop") (EVar "target")) (EVar "env")) (EVar "tests")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "reportTestSummary") (EVar "target")) (EVar "passed")) (EVar "failed")) (EVar "errors")))))
 (DTypeSig false "reportTestSummary" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "reportTestSummary" ((PVar "target") (PVar "passed") (PVar "failed") (PVar "errors")) (EBlock (DoLet false false (PVar "total") (EBinOp "+" (EBinOp "+" (EVar "passed") (EVar "failed")) (EVar "errors"))) (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "passed")))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " passed"))))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EApp (EVar "testFailSuffix") (EVar "failed")) (EVar "errors")))) (DoLet false false PWild (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EVar "failed") (ELit (LInt 0))) (EBinOp "==" (EVar "errors") (ELit (LInt 0)))))))
@@ -2594,7 +2594,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "tallyTest" ((PCon "Pass" PWild PWild) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EBinOp "+" (EVar "passed") (ELit (LInt 1))) (EVar "failed") (EVar "errors")))
 (DFunDef false "tallyTest" ((PCon "Fail" PWild PWild PWild) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EVar "passed") (EBinOp "+" (EVar "failed") (ELit (LInt 1))) (EVar "errors")))
 (DFunDef false "tallyTest" ((PCon "Errored" PWild) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EVar "passed") (EVar "failed") (EBinOp "+" (EVar "errors") (ELit (LInt 1)))))
-(DTypeSig false "runTestLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))))))))))
+(DTypeSig false "runTestLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") (Some "e") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))))))))))
 (DFunDef false "runTestLoop" (PWild PWild (PList) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EVar "passed") (EVar "failed") (EVar "errors")))
 (DFunDef false "runTestLoop" ((PVar "target") (PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest")) (PVar "passed") (PVar "failed") (PVar "errors")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printTestRunning") (EVar "target")) (EVar "line")) (EVar "name"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "printTestVerdict") (EVar "target")) (EVar "line")) (EVar "name")) (EVar "result"))) (DoLet false false (PTuple (PVar "p") (PVar "f") (PVar "e")) (EApp (EApp (EApp (EApp (EVar "tallyTest") (EVar "result")) (EVar "passed")) (EVar "failed")) (EVar "errors"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestLoop") (EVar "target")) (EVar "env")) (EVar "rest")) (EVar "p")) (EVar "f")) (EVar "e")))))
 (DTypeSig false "testFailSuffix" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -2634,11 +2634,11 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "zipTestResults" ((PList) PWild) (EListLit))
 (DFunDef false "zipTestResults" ((PCons PWild PWild) (PList)) (EListLit))
 (DFunDef false "zipTestResults" ((PCons (PTuple (PVar "name") (PVar "line") PWild) (PVar "rest")) (PCons (PVar "r") (PVar "rRest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EVar "r")) (EApp (EApp (EVar "zipTestResults") (EVar "rest")) (EVar "rRest"))))
-(DTypeSig false "gatedTestsCollect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))))
+(DTypeSig false "gatedTestsCollect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))))
 (DFunDef false "gatedTestsCollect" ((PVar "target") (PVar "corpus") (PVar "env") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "uncapableExterns") (EVar "corpus")) (EVar "env")) (EVar "tests")) (arm (PList) () (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "tests"))) (arm (PVar "names") () (EBlock (DoLet false false (PVar "msg") (EApp (EApp (EVar "uncapableExternsMsg") (EVar "target")) (EVar "names"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "t")) (ETuple (EApp (EVar "fst3") (EVar "t")) (EApp (EVar "snd3") (EVar "t")) (EApp (EVar "Errored") (EVar "msg"))))) (EVar "tests")))))))
 (DTypeSig false "snd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "b")))
 (DFunDef false "snd3" ((PTuple PWild (PVar "b") PWild)) (EVar "b"))
-(DTypeSig false "runTestsCollect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))
+(DTypeSig false "runTestsCollect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))
 (DFunDef false "runTestsCollect" (PWild (PList)) (EListLit))
 (DFunDef false "runTestsCollect" ((PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "rest"))))
 (DTypeSig true "testHelpText" (TyCon "String"))
@@ -2917,7 +2917,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "attachRawLines" (PWild (PList)) (EListLit))
 (DFunDef false "attachRawLines" ((PList) (PCons (PTuple (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (ELit (LInt 0)) (EVar "body")) (EApp (EApp (EVar "attachRawLines") (EListLit)) (EVar "rest"))))
 (DFunDef false "attachRawLines" ((PCons (PTuple PWild (PVar "l") PWild) (PVar "rawRest")) (PCons (PTuple (PVar "name") PWild (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "l") (EVar "body")) (EApp (EApp (EVar "attachRawLines") (EVar "rawRest")) (EVar "rest"))))
-(DTypeSig false "gatedReportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyCon "Bool")))))))
+(DTypeSig false "gatedReportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") (Some "e") (TyCon "Bool")))))))
 (DFunDef false "gatedReportTests" ((PVar "target") (PVar "corpus") (PVar "env") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "uncapableExterns") (EVar "corpus")) (EVar "env")) (EVar "tests")) (arm (PList) () (EApp (EApp (EApp (EVar "reportTests") (EVar "target")) (EVar "env")) (EVar "tests"))) (arm (PVar "names") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "uncapableExternsMsg") (EVar "target")) (EVar "names")))) (DoExpr (EVar "False"))))))
 (DTypeSig false "uncapableExternsMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "uncapableExternsMsg" ((PVar "target") (PVar "names")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": `test \"…\"` declarations here reach "))) (EApp (EMethodRef "display") (EApp (EVar "externWord") (EVar "names")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinCommas") (EVar "names")))) (ELit (LString ", which `medaka test` does not provide under the interpreter — its capability policy covers the clock, allocation counts and stderr only, so no filesystem, environment, stdin, network or subprocess extern is bound. No test was run. Run these tests natively instead: `medaka test --native "))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "`."))))
@@ -2928,7 +2928,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "joinCommas" ((PList)) (ELit (LString "")))
 (DFunDef false "joinCommas" ((PList (PVar "n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))
 (DFunDef false "joinCommas" ((PCons (PVar "n") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`, "))) (EApp (EVar "joinCommas") (EVar "rest"))))
-(DTypeSig false "reportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DTypeSig false "reportTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") (Some "e") (TyCon "Bool"))))))
 (DFunDef false "reportTests" ((PVar "target") (PVar "env") (PVar "tests")) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "running tests in ")) (EVar "target")))) (DoLet false false (PTuple (PVar "passed") (PVar "failed") (PVar "errors")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestLoop") (EVar "target")) (EVar "env")) (EVar "tests")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "reportTestSummary") (EVar "target")) (EVar "passed")) (EVar "failed")) (EVar "errors")))))
 (DTypeSig false "reportTestSummary" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "reportTestSummary" ((PVar "target") (PVar "passed") (PVar "failed") (PVar "errors")) (EBlock (DoLet false false (PVar "total") (EBinOp "+" (EBinOp "+" (EVar "passed") (EVar "failed")) (EVar "errors"))) (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "passed")))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " passed"))))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EApp (EVar "testFailSuffix") (EVar "failed")) (EVar "errors")))) (DoLet false false PWild (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EVar "failed") (ELit (LInt 0))) (EBinOp "==" (EVar "errors") (ELit (LInt 0)))))))
@@ -2942,7 +2942,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "tallyTest" ((PCon "Pass" PWild PWild) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EBinOp "+" (EVar "passed") (ELit (LInt 1))) (EVar "failed") (EVar "errors")))
 (DFunDef false "tallyTest" ((PCon "Fail" PWild PWild PWild) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EVar "passed") (EBinOp "+" (EVar "failed") (ELit (LInt 1))) (EVar "errors")))
 (DFunDef false "tallyTest" ((PCon "Errored" PWild) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EVar "passed") (EVar "failed") (EBinOp "+" (EVar "errors") (ELit (LInt 1)))))
-(DTypeSig false "runTestLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))))))))))
+(DTypeSig false "runTestLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") (Some "e") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))))))))))
 (DFunDef false "runTestLoop" (PWild PWild (PList) (PVar "passed") (PVar "failed") (PVar "errors")) (ETuple (EVar "passed") (EVar "failed") (EVar "errors")))
 (DFunDef false "runTestLoop" ((PVar "target") (PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest")) (PVar "passed") (PVar "failed") (PVar "errors")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printTestRunning") (EVar "target")) (EVar "line")) (EVar "name"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "printTestVerdict") (EVar "target")) (EVar "line")) (EVar "name")) (EVar "result"))) (DoLet false false (PTuple (PVar "p") (PVar "f") (PVar "e")) (EApp (EApp (EApp (EApp (EVar "tallyTest") (EVar "result")) (EVar "passed")) (EVar "failed")) (EVar "errors"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestLoop") (EVar "target")) (EVar "env")) (EVar "rest")) (EVar "p")) (EVar "f")) (EVar "e")))))
 (DTypeSig false "testFailSuffix" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -2982,11 +2982,11 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "zipTestResults" ((PList) PWild) (EListLit))
 (DFunDef false "zipTestResults" ((PCons PWild PWild) (PList)) (EListLit))
 (DFunDef false "zipTestResults" ((PCons (PTuple (PVar "name") (PVar "line") PWild) (PVar "rest")) (PCons (PVar "r") (PVar "rRest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EVar "r")) (EApp (EApp (EVar "zipTestResults") (EVar "rest")) (EVar "rRest"))))
-(DTypeSig false "gatedTestsCollect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))))
+(DTypeSig false "gatedTestsCollect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))))
 (DFunDef false "gatedTestsCollect" ((PVar "target") (PVar "corpus") (PVar "env") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "uncapableExterns") (EVar "corpus")) (EVar "env")) (EVar "tests")) (arm (PList) () (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "tests"))) (arm (PVar "names") () (EBlock (DoLet false false (PVar "msg") (EApp (EApp (EVar "uncapableExternsMsg") (EVar "target")) (EVar "names"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (ETuple (EApp (EVar "fst3") (EVar "t")) (EApp (EVar "snd3") (EVar "t")) (EApp (EVar "Errored") (EVar "msg"))))) (EVar "tests")))))))
 (DTypeSig false "snd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "b")))
 (DFunDef false "snd3" ((PTuple PWild (PVar "b") PWild)) (EVar "b"))
-(DTypeSig false "runTestsCollect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))
+(DTypeSig false "runTestsCollect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult")))))))
 (DFunDef false "runTestsCollect" (PWild (PList)) (EListLit))
 (DFunDef false "runTestsCollect" ((PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "rest"))))
 (DTypeSig true "testHelpText" (TyCon "String"))

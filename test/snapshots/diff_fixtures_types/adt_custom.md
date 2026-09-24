@@ -25,4 +25,4 @@ main =
 # TYPES_USER
 area : Shape -> Int
 perimeter : Shape -> Int
-main : Unit
+main : <IO> Unit

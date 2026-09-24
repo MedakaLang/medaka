@@ -20,4 +20,4 @@ main =
 # TYPES_USER
 classify : (Num a, Ord a) => a -> String
 abs : (Num a, Ord a) => a -> a
-main : Unit
+main : <IO> Unit

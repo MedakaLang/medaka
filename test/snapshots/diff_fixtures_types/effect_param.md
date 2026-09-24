@@ -63,5 +63,5 @@ runAsync : Async a b -> b
 liftIO : (Unit -> a) -> Async b a
 yld : Async a Unit
 seqIO : Async a b -> (b -> Async a c) -> Async a c
-main : Unit
+main : <IO> Unit
 liftIO2 : (Unit -> <IO> a) -> Async <IO | b> a

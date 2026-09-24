@@ -2887,7 +2887,7 @@ main26_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/main26.mdk" 2>/tmp
 main26_code=$?
 main26_err="$(cat /tmp/main26.err)"
 case "$main26_out" in
-  "main : Unit")
+  "main : <IO | a> Unit")
     case "$main26_err" in
       *"further diagnostic"*"--json"*)
         if [ "$main26_code" -eq 0 ]; then

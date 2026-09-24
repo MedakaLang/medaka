@@ -18,4 +18,4 @@ main =
 # TYPES_USER
 greet : String -> String
 repeat : Int -> String -> String
-main : Unit
+main : <IO> Unit

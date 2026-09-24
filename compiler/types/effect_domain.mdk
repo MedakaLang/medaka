@@ -1,0 +1,300 @@
+-- Concrete authority domains and canonical row atoms. Domain operations do not
+-- depend on inference state, syntax, or dictionary selection.
+
+import support.util.{
+  listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
+  reverseL
+}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+
+public export data Param =
+  | PUnit
+  | PPrefix (Option String)
+  | PSet (Option (List String))
+  | PProduct (List (String, Param))
+
+export
+effHoleSrc : String
+effHoleSrc = "_"
+
+export
+isHoleStr : String -> Bool
+isHoleStr s = s == effHoleSrc
+
+export
+normHole : Param -> Param
+normHole (PPrefix (Some s)) =
+  if isHoleStr s then PPrefix None else PPrefix (Some s)
+normHole p = p
+
+public export data Atom = Atom String Param
+
+export
+atomLabel : Atom -> String
+atomLabel (Atom l _) = l
+
+export
+atomParam : Atom -> Param
+atomParam (Atom _ p) = p
+
+export
+subTopOf : Param -> Param
+subTopOf (PPrefix _) = PPrefix None
+subTopOf (PSet _) = PSet None
+subTopOf (PProduct _) = PProduct []
+subTopOf _ = PUnit
+
+export
+lookupAxis : String -> List (String, Param) -> Option Param
+lookupAxis _ [] = None
+lookupAxis name ((k, v) :: rest) =
+  if name == k then Some v else lookupAxis name rest
+
+export
+djoin : Param -> Param -> Param
+djoin p1 p2 = djoinN (normHole p1) (normHole p2)
+
+export
+djoinN : Param -> Param -> Param
+djoinN PUnit PUnit = PUnit
+djoinN (PPrefix None) _ = PPrefix None
+djoinN _ (PPrefix None) = PPrefix None
+djoinN (PPrefix (Some a)) (PPrefix (Some b)) =
+  let k = commonPrefixLen a b 0
+  if k == 0 then PPrefix None else PPrefix (Some (stringSlice 0 k a))
+djoinN (PSet None) _ = PSet None
+djoinN _ (PSet None) = PSet None
+djoinN (PSet (Some a)) (PSet (Some b)) =
+  let u = sortUniqS (a ++ b)
+  if listLen u > setCardCap then PSet None else PSet (Some u)
+djoinN (PProduct ax) (PProduct bx) =
+  productNorm (map (joinAxis ax bx) (axisUnion ax bx))
+djoinN p _ = p
+
+export
+joinAxis : List (String, Param) ->
+  List (String, Param) ->
+  String ->
+  (String, Param)
+joinAxis ax bx name = match (lookupAxis name ax, lookupAxis name bx)
+  (Some pa, Some pb) => (name, djoinN pa pb)
+  (Some pa, None) => (name, djoinN pa (subTopOf pa))
+  (None, Some pb) => (name, djoinN (subTopOf pb) pb)
+  (None, None) => (name, PUnit)
+
+export
+axisUnion : List (String, Param) -> List (String, Param) -> List String
+axisUnion ax bx = sortUniqS (map fst ax ++ map fst bx)
+
+export
+productNorm : List (String, Param) -> Param
+productNorm axes =
+  PProduct (sortAxes (filterList (p => not (isSubTop (snd p))) axes))
+
+export
+isSubTop : Param -> Bool
+isSubTop (PPrefix None) = True
+isSubTop (PSet None) = True
+isSubTop (PProduct []) = True
+isSubTop PUnit = True
+isSubTop _ = False
+
+export
+sortAxes : List (String, Param) -> List (String, Param)
+sortAxes [] = []
+sortAxes (x :: xs) = insertAxis x (sortAxes xs)
+
+export
+insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
+insertAxis x [] = [x]
+insertAxis x (y :: ys) = match stringCompare (fst x) (fst y)
+  Gt => y :: insertAxis x ys
+  _ => x :: y :: ys
+
+export
+setCardCap : Int
+setCardCap = 16
+
+export
+commonPrefixLen : String -> String -> Int -> Int
+commonPrefixLen a b i =
+  if i >= stringLength a || i >= stringLength b then
+    i
+  else if stringSlice i (i + 1) a == stringSlice i (i + 1) b then
+    commonPrefixLen a b (i + 1)
+  else
+    i
+
+export
+drender : Param -> String
+drender p = drenderN (normHole p)
+
+export
+drenderN : Param -> String
+drenderN PUnit = ""
+drenderN (PPrefix None) = ""
+drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
+drenderN (PSet None) = ""
+drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
+drenderN (PProduct []) = ""
+drenderN (PProduct ax) = " " ++ renderProductLit ax
+
+export
+quoteStr : String -> String
+quoteStr s = "\"" ++ s ++ "\""
+
+export
+renderProductLit : List (String, Param) -> String
+renderProductLit ax = joinWith " " (map renderAxis ax)
+
+export
+renderAxis : (String, Param) -> String
+renderAxis (name, p) = "\{name}=\{renderAxisVal p}"
+
+export
+renderAxisVal : Param -> String
+renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
+renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
+renderAxisVal _ = ""
+
+export
+renderAtom : Atom -> String
+renderAtom a = atomLabel a ++ drender (atomParam a)
+
+export
+renderAtoms : List Atom -> String
+renderAtoms atoms = joinWith ", " (map renderAtom (atomsNorm atoms))
+
+export
+atomInsert : Atom -> List Atom -> List Atom
+atomInsert x [] = [x]
+atomInsert x (y :: ys) = match stringCompare (atomLabel x) (atomLabel y)
+  Lt => x :: y :: ys
+  Eq => Atom (atomLabel y) (djoin (atomParam x) (atomParam y)) :: ys
+  Gt => y :: atomInsert x ys
+
+export
+atomsNorm : List Atom -> List Atom
+atomsNorm [] = []
+atomsNorm [x] = [x]
+atomsNorm [x, y] = atomInsert y [x]
+atomsNorm [x, y, z] = atomInsert z (atomInsert y [x])
+atomsNorm xs = atomsFromIndex (atomIndex xs omEmpty)
+
+-- Rows normally contain one or two labels, where a tree would be needless
+-- allocation.  Once a row grows past that fixed small case, index by the
+-- already-existing label string.  The map's in-order keys also retain the
+-- canonical rendering order.  `djoin x old` deliberately matches atomInsert:
+-- a later occurrence is joined into the earlier one in the same direction.
+atomIndex : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndex [] m = m
+atomIndex (x :: xs) m =
+  let label = atomLabel x
+  let next = match omLookup label m
+    None => x
+    Some old => Atom label (djoin (atomParam x) (atomParam old))
+  atomIndex xs (omInsert label next m)
+
+atomIndexFirst : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndexFirst [] m = m
+atomIndexFirst (x :: xs) m = match omLookup (atomLabel x) m
+  None => atomIndexFirst xs (omInsert (atomLabel x) x m)
+  Some _ => atomIndexFirst xs m
+
+atomsFromIndex : OrdMap Atom -> List Atom
+atomsFromIndex m = atomsFromKeys (omKeys m) m
+
+atomsFromKeys : List String -> OrdMap Atom -> List Atom
+atomsFromKeys [] _ = []
+atomsFromKeys (label :: labels) m = match omLookup label m
+  Some atom => atom :: atomsFromKeys labels m
+  None => atomsFromKeys labels m
+
+export
+atomsNormGo : List Atom -> List Atom -> List Atom
+atomsNormGo xs acc = atomsNorm (acc ++ xs)
+
+export
+atomsUnion : List Atom -> List Atom -> List Atom
+atomsUnion a b = atomsNorm (a ++ b)
+
+export
+prefixConcrete : String -> String
+prefixConcrete s =
+  let n = stringLength s
+  if n > 0 && stringSlice (n - 1) n s == "*" then stringSlice 0 (n - 1) s else s
+
+export
+dsub : Param -> Param -> Bool
+dsub p1 p2 = dsubN (normHole p1) (normHole p2)
+
+export
+dsubN : Param -> Param -> Bool
+dsubN PUnit PUnit = True
+dsubN _ (PPrefix None) = True
+dsubN (PPrefix (Some a)) (PPrefix (Some b)) =
+  startsWith (prefixConcrete b) (prefixConcrete a)
+dsubN (PPrefix None) (PPrefix (Some _)) = False
+dsubN _ (PSet None) = True
+dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b
+dsubN (PSet None) (PSet (Some _)) = False
+dsubN _ (PProduct []) = True
+dsubN (PProduct ax) (PProduct bx) = allList (axisSub ax) bx
+dsubN _ _ = False
+
+export
+axisSub : List (String, Param) -> (String, Param) -> Bool
+axisSub ax (name, bp) = dsubN (lookupAxisOrTop name ax bp) bp
+
+export
+lookupAxisOrTop : String -> List (String, Param) -> Param -> Param
+lookupAxisOrTop name ax bp = match lookupAxis name ax
+  Some v => v
+  None => subTopOf bp
+
+export
+subsetStr : List String -> List String -> Bool
+subsetStr [] _ = True
+subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
+
+export
+atomsDiff : List Atom -> List Atom -> List Atom
+atomsDiff [] _ = []
+atomsDiff xs [] = xs
+atomsDiff [x] ys = atomsDiffOne x ys
+atomsDiff [x, y] ys = atomsDiffOne x ys ++ atomsDiffOne y ys
+atomsDiff xs [y] = atomsDiffOneAgainst xs y
+atomsDiff xs ys = reverseL (atomsDiffIndexed xs (atomIndexFirst ys omEmpty) [])
+
+-- The one-bound case is common for a single capability check and avoids a map.
+-- Its first-match behavior is identical to `findAtom` on an unnormalised row.
+atomsDiffOne : Atom -> List Atom -> List Atom
+atomsDiffOne x ys = match findAtom (atomLabel x) ys
+  None => [x]
+  Some y => if dsub (atomParam x) (atomParam y) then [] else [x]
+
+atomsDiffOneAgainst : List Atom -> Atom -> List Atom
+atomsDiffOneAgainst xs y = reverseL (atomsDiffOneAgainstGo xs y [])
+
+atomsDiffOneAgainstGo : List Atom -> Atom -> List Atom -> List Atom
+atomsDiffOneAgainstGo [] _ acc = acc
+atomsDiffOneAgainstGo (x :: xs) y acc =
+  if atomLabel x == atomLabel y && dsub (atomParam x) (atomParam y) then
+    atomsDiffOneAgainstGo xs y acc
+  else
+    atomsDiffOneAgainstGo xs y (x :: acc)
+
+atomsDiffIndexed : List Atom -> OrdMap Atom -> List Atom -> List Atom
+atomsDiffIndexed [] _ acc = acc
+atomsDiffIndexed (x :: xs) index acc = match omLookup (atomLabel x) index
+  Some y =>
+    if dsub (atomParam x) (atomParam y) then
+      atomsDiffIndexed xs index acc
+    else
+      atomsDiffIndexed xs index (x :: acc)
+  None => atomsDiffIndexed xs index (x :: acc)
+
+export
+findAtom : String -> List Atom -> Option Atom
+findAtom _ [] = None
+findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys

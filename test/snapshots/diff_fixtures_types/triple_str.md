@@ -28,4 +28,4 @@ main =
 inline : String
 block : String
 interp : Display a => a -> String
-main : Unit
+main : <IO> Unit

@@ -1,0 +1,427 @@
+-- Binding effects are observed through production group inference, not a
+-- synthetic row helper. No standard library is needed by these tiny programs.
+import test.{expectAll, expectEqual, expectNotEqual, expectTrue}
+import frontend.ast.{Loc(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import types.typecheck.{
+  checkOneDiags, checkOneSchemeFullK, checkModulesDiagsChain, ModDiags,
+  TcDiag(..), tcCode, tcMsg
+}
+import types.repr.{Scheme(..)}
+import types.effect_rows.{effrowLabels}
+import types.effect_domain.{renderAtoms}
+import support.util.{contains, lookupAssoc}
+
+effectPrelude : String
+effectPrelude = "effect Audit\nextern emitAudit : Unit -> <Audit> Unit\n"
+
+errorsFor : String -> List String
+errorsFor source =
+  let (errors, _) = checkOneDiags [] [] (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  map tcCode errors
+
+forcingFor : String -> String -> String
+forcingFor source name =
+  let (_, schemes) = checkOneSchemeFullK None [] [] (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  match lookupAssoc name schemes
+    Some (Forall _ _ force _) => renderAtoms (effrowLabels force)
+    None => "<missing binding>"
+
+messagesFor : String -> List String
+messagesFor source =
+  let (errors, _) = checkOneDiags [] [] (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  map tcMsg errors
+
+moduleErrors : String -> String -> List String
+moduleErrors provider entry = moduleErrorsChain [
+  ("provider", provider),
+  ("entry", entry),
+]
+
+moduleErrorsChain : List (String, String) -> List String
+moduleErrorsChain sources =
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parseLocated effectPrelude))
+      (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
+  flatMap moduleDiagCodes results
+
+keyedModuleErrors : String -> List (String, String) -> List String
+keyedModuleErrors key sources =
+  let results =
+    checkModulesDiagsChain
+      (Some (1812, 1813))
+      "effect-bindings-supplier-tag:\{key}"
+      [Some "provider-v1", Some "relay-v1", None]
+      []
+      (desugar (parseLocated effectPrelude))
+      (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
+  flatMap moduleDiagCodes results
+
+moduleDiagCodes : ModDiags -> List String
+moduleDiagCodes (_, (_, errors, _)) = map tcCode errors
+
+moduleErrorDiags : String -> String -> List TcDiag
+moduleErrorDiags provider entry =
+  let results = checkModulesDiagsChain None "" [] [] (desugar
+    (parseLocated effectPrelude)) [
+    ("provider", desugar (parseLocated provider)),
+    ("entry", desugar (parseLocated entry)),
+  ]
+  flatMap moduleErrorsIn results
+
+moduleErrorsIn : ModDiags -> List TcDiag
+moduleErrorsIn (_, (_, errors, _)) = errors
+
+diagSpan : TcDiag -> (Int, Int, Int, Int)
+diagSpan (TcDiag _ _ (Some (Loc _ startLine startCol endLine endCol)) _ _ _) =
+  (startLine, startCol, endLine, endCol)
+diagSpan _ = (0, 0, 0, 0)
+
+test "imported lazy standalone forcing survives a method layer and local shadows" =
+  let provider = "export value : Unit\nvalue = emitAudit ()\n"
+  let entry =
+    "import provider.{value}\ninterface Has a where\n  value : a\nquiet : Unit -> Unit\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (moduleErrors provider (entry ++ "quiet _ = value\n"))),
+    expectEqual
+      []
+      (moduleErrors
+        provider
+        (entry ++ "quiet _ =\n  let value = ()\n  value\n")),
+  ]
+
+test "method dispatch charges only the selected standalone or method binding" =
+  let provider =
+    "export size : Bool -> Bool\nsize =\n  let _ = emitAudit ()\n  x => x\n"
+  let entry =
+    "import provider.{size}\ninterface Sizeable a where\n  size : a -> Bool\ndata Box = Box Bool\nimpl Sizeable Box where\n  size (Box x) = x\nquiet : Unit -> Bool\n"
+  expectAll [
+    expectEqual
+      []
+      (moduleErrors provider (entry ++ "quiet _ = size (Box True)\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (moduleErrors provider (entry ++ "quiet _ = size True\n"))),
+  ]
+
+test "an alias-admitted method and a standalone retain #1812 import precedence" =
+  let method =
+    "export interface AliasPick a where\n  pick : Int -> a -> Int\nimpl AliasPick String where\n  pick n _ = n\n"
+  let standalone = "export pick : String -> Int -> Int\npick _ n = n\n"
+  let methodFirst = moduleErrorsChain [
+    ("method", method),
+    ("standalone", standalone),
+    (
+      "entry",
+      "import method as M\nimport standalone.{pick}\nmain : Int\nmain = pick \"x\" 1\n",
+    ),
+  ]
+  let standaloneFirst = moduleErrorsChain [
+    ("method", method),
+    ("standalone", standalone),
+    (
+      "entry",
+      "import standalone.{pick}\nimport method as M\nmain : Int\nmain = pick \"x\" 1\n",
+    ),
+  ]
+  expectAll [
+    expectTrue (contains "T-TYPE-MISMATCH" methodFirst),
+    expectEqual [] standaloneFirst,
+  ]
+
+test "an alias import admits its synthetic bare method binding" =
+  let method =
+    "export interface AliasPick a where\n  pick : Int -> a -> Int\nimpl AliasPick String where\n  pick n _ = n\n"
+  expectEqual
+    []
+    (moduleErrorsChain [
+      ("method", method),
+      ("entry", "import method as M\nmain : Int\nmain = pick 1 \"x\"\n"),
+    ])
+
+test "a shadow-selected standalone application records its inferred interface obligation" =
+  let provider =
+    "export interface Addable a where\n  add : a -> a -> a\nexport interface Summable a where\n  sum : a -> a -> a\nimpl Addable String where\n  add x _ = x\nimpl Summable Int where\n  sum x _ = x\n"
+  let entry = "import provider.{add, sum}\nadd x y = sum x y\n"
+  expectAll [
+    expectEqual
+      ["T-NO-IMPL"]
+      (moduleErrors
+        provider
+        (entry ++ "bad : String\nbad = add \"a\" \"b\"\n")),
+    expectEqual
+      []
+      (moduleErrors
+        provider
+        "import provider.{add}\nok : String\nok = add \"a\" \"b\"\n"),
+  ]
+
+test "a k>0 shadow-selected standalone attributes a missing impl to its callee" =
+  let provider =
+    "export interface Selectable a where\n  pick : Int -> a -> Int\n  fuse : Int -> a -> Int\nimpl Selectable Int where\n  pick _ _ = 1\n  fuse _ _ = 1\n"
+  let entry =
+    "import provider.{pick, fuse}\ndata Box = Box Int\npick n x = fuse n x\nbad : Int\nbad = pick 7 (Box 3)\n"
+  let diags = moduleErrorDiags provider entry
+  expectAll [
+    expectEqual ["T-NO-IMPL"] (map tcCode diags),
+    expectEqual [(5, 6, 5, 10)] (map diagSpan diags),
+  ]
+
+test "standalone forcing survives named and wildcard re-export paths" =
+  let provider = "export value : Unit\nvalue = emitAudit ()\n"
+  let entryViaWildcard =
+    "import relay.*\ninterface Has a where\n  value : a\nquiet : Unit -> Unit\nquiet _ = value\n"
+  let entryViaName =
+    "import relay.{value}\ninterface Has a where\n  value : a\nquiet : Unit -> Unit\nquiet _ = value\n"
+  let namedReexport = moduleErrorsChain [
+    ("provider", provider),
+    ("relay", "export import provider.{value}\n"),
+    ("entry", entryViaWildcard),
+  ]
+  let wildcardReexport = moduleErrorsChain [
+    ("provider", provider),
+    ("relay", "export import provider.*\n"),
+    ("entry", entryViaName),
+  ]
+  expectAll [
+    expectTrue (contains "T-EFFECT-LEAK" namedReexport),
+    expectTrue (contains "T-EFFECT-LEAK" wildcardReexport),
+  ]
+
+test "keyed supplier-tag prefixes preserve changed suffix diagnostics" =
+  let badSources = [
+    ("provider", "export value : Unit\nvalue = emitAudit ()\n"),
+    ("relay", "export import provider.{value}\n"),
+    (
+      "entry",
+      "import relay.*\ninterface Has a where\n  value : a\nquiet : Unit -> Unit\nquiet _ = value\n",
+    ),
+  ]
+  let pureSources = [
+    ("provider", "export value : Unit\nvalue = emitAudit ()\n"),
+    ("relay", "export import provider.{value}\n"),
+    (
+      "entry",
+      "import relay.*\ninterface Has a where\n  value : a\nquiet : Unit -> Unit\nquiet _ =\n  let value = ()\n  value\n",
+    ),
+  ]
+  let cold = keyedModuleErrors "named-reexport-v1" badSources
+  let resumedPure = keyedModuleErrors "named-reexport-v1" pureSources
+  let resumedBad = keyedModuleErrors "named-reexport-v1" badSources
+  expectAll [
+    expectTrue (contains "T-EFFECT-LEAK" cold),
+    expectEqual [] resumedPure,
+    expectEqual cold resumedBad,
+  ]
+
+test "forcing a lazy initializer cannot cross a pure arrow" = expectAll [
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "value = emitAudit ()\nquiet : Unit -> Unit\nquiet _ = value\n")),
+  expectEqual
+    []
+    (errorsFor
+      "value = emitAudit ()\nhonest : Unit -> <Audit> Unit\nhonest _ = value\n"),
+]
+
+test "value annotations and aliases retain initializer effects" =
+  let source = "value : Unit\nvalue = emitAudit ()\nalias = value\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "value"),
+    expectEqual "Audit" (forcingFor source "alias"),
+  ]
+
+test "a function-valued initializer has a force distinct from its arrow" =
+  let source =
+    "factory _ =\n  let _ = emitAudit ()\n  x => x\nvalue = factory ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "factory"),
+    expectEqual "Audit" (forcingFor source "value"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (source ++ "quiet : Unit -> Unit\nquiet _ = value ()\n"))),
+  ]
+
+test "strict local lookup does not inherit a same-named lazy binding" =
+  expectEqual
+    []
+    (errorsFor
+      "value = emitAudit ()\nquiet : Unit -> Unit\nquiet _ =\n  let value = ()\n  value\n")
+
+test "unforced top-level computations do not charge an unrelated binding" =
+  let source = "unused = emitAudit ()\nquiet : Unit -> Unit\nquiet _ = ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "quiet"),
+  ]
+
+test "forcing summaries are stable across a failed request" =
+  let source = "value = emitAudit ()\nalias = value\n"
+  let before = forcingFor source "alias"
+  let bad = errorsFor "bad : String\nbad = ()\n"
+  let after = forcingFor source "alias"
+  expectAll [
+    expectEqual "Audit" before,
+    expectTrue (contains "T-TYPE-MISMATCH" bad),
+    expectEqual before after,
+  ]
+
+test "a pure alternative fits an open effect allowance without closing its tail" =
+  expectEqual
+    []
+    (errorsFor
+      "choose : (Unit -> <e> Unit) -> Bool -> <Audit | e> Unit\nchoose f True =\n  let _ = emitAudit ()\n  f ()\nchoose _ False = ()\n")
+
+test "unsigned clause effects join regardless of clause order" = expectAll [
+  expectEqual [] (errorsFor "choose True = ()\nchoose False = emitAudit ()\n"),
+  expectEqual [] (errorsFor "choose True = emitAudit ()\nchoose False = ()\n"),
+  expectEqual
+    []
+    (errorsFor
+      "choose x = go x\n  where\n    go True = ()\n    go False = emitAudit ()\n"),
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "choose True = ()\nchoose False = emitAudit ()\nquiet : Bool -> Unit\nquiet x = choose x\n")),
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "choose True = emitAudit ()\nchoose False = ()\nquiet : Bool -> Unit\nquiet x = choose x\n")),
+]
+
+test "recursive forcing equations retain concrete effects" = expectAll [
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "value : <Audit> Unit\nvalue = emitAudit ()\nloop =\n  let _ = value\n  loop\nquiet : Unit -> Unit\nquiet _ = loop\n")),
+  expectEqual
+    "Audit"
+    (forcingFor
+      "value : <Audit> Unit\nvalue = emitAudit ()\nloop =\n  let _ = value\n  loop\n"
+      "loop"),
+  expectEqual
+    "Audit"
+    (forcingFor
+      "value : <Audit> Unit\nvalue = emitAudit ()\na = b\nb =\n  let _ = value\n  a\n"
+      "a"),
+  expectEqual
+    "Audit"
+    (forcingFor
+      "value = emitAudit ()\nloop =\n  let _ = value\n  loop\n"
+      "loop"),
+  expectEqual
+    "Audit"
+    (forcingFor "value = emitAudit ()\na = b\nb =\n  let _ = value\n  a\n" "a"),
+  expectEqual
+    "Audit"
+    (forcingFor "value =\n  let _ = emitAudit ()\n  value\n" "value"),
+  expectEqual
+    "Audit"
+    (forcingFor "a = b\nb =\n  let _ = emitAudit ()\n  a\n" "a"),
+]
+
+test "recursive clause inference retains later effects" = expectAll [
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "choose x = go x ()\n  where\n    go True acc = acc\n    go False acc =\n      let _ = emitAudit ()\n      go True acc\nquiet : Bool -> Unit\nquiet x = choose x\n")),
+  expectEqual
+    []
+    (messagesFor
+      "choose x = go x ()\n  where\n    go True acc = acc\n    go False acc =\n      let _ = emitAudit ()\n      go True acc\n"),
+  expectEqual
+    []
+    (messagesFor
+      "choose : (Unit -> <Audit> a) -> Bool -> <Audit> List a\nchoose gen flag = go flag []\n  where\n    go True acc = acc\n    go False acc = go True (gen () :: acc)\n"),
+]
+
+test "pure defaults can fit a concrete plus variable allowance" =
+  expectEqual
+    []
+    (errorsFor
+      "interface I a where\n  f : (Unit -> <e> Unit) -> a -> <Audit | e> Unit\n  f _ _ = ()\nimpl I Unit\n")
+
+test "nullary method initialization cannot launder effects through its value type" =
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "interface Has a where\n  value : a\ndata Box = Box\nimpl Has Box where\n  value =\n    let _ = emitAudit ()\n    Box\nquiet : Unit -> Box\nquiet _ = value\n"))
+
+test "nullary default initialization cannot hide effects in a returned closure" =
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "interface Has a where\n  value : a -> a\n  value =\n    let _ = emitAudit ()\n    x => x\nimpl Has Unit\n"))
+
+test "written force contracts charge honest methods at their occurrences" =
+  let source =
+    "interface Has a where\n  value : <Audit> a\ndata Box = Box\nimpl Has Box where\n  value =\n    let _ = emitAudit ()\n    Box\n"
+  expectAll [
+    expectEqual
+      []
+      (messagesFor
+        (source ++ "honest : Unit -> <Audit> Box\nhonest _ = value\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (source ++ "quiet : Unit -> Box\nquiet _ = value\n"))),
+  ]
+
+test "written force contracts are enforced on ordinary bindings" = expectAll [
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor "value : <> Unit\nvalue = emitAudit ()\n")),
+  expectEqual [] (messagesFor "value : <Audit> Unit\nvalue = emitAudit ()\n"),
+]
+
+test "honest defaults preserve the force on a function-valued method" =
+  let source =
+    "interface Has a where\n  value : <Audit> (a -> a)\n  value =\n    let _ = emitAudit ()\n    x => x\nimpl Has Unit\n"
+  expectAll [
+    expectEqual
+      []
+      (messagesFor
+        (source ++ "honest : Unit -> <Audit> Unit\nhonest x = value x\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (source ++ "quiet : Unit -> Unit\nquiet x = value x\n"))),
+  ]
+
+test "a default cannot choose its caller's force row" =
+  expectTrue
+    (contains
+      "T-EFFECT-LAUNDER"
+      (errorsFor
+        "interface Has a where\n  value : <e> ((Unit -> <e> Unit) -> a -> a)\n  value =\n    let _ = emitAudit ()\n    k => x => x\nimpl Has Unit\nquiet : Unit -> Unit\nquiet _ = value (u => ()) ()\n"))

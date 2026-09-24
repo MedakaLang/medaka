@@ -8,4 +8,4 @@ r = 1 +
 main = println r
 # TYPES_USER
 r : Int
-main : Unit
+main : <IO | a> Unit

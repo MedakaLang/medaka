@@ -1,3 +1,17 @@
+import types.effect_domain.{
+  normHole,
+  atomLabel,
+  atomParam,
+  atomsUnion,
+  drender,
+  dsub,
+  Param(..),
+  Atom(..),
+}
+import types.effect_rows.{
+  effrowLabels,
+  EffRow(..),
+}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
 --
@@ -48,21 +62,12 @@ import tools.check.{checkHasErrors}
 import types.repr.{
   Scheme(..),
   Mono(..),
-  EffRow(..),
-  Atom(..),
-  Param(..),
   normalize,
   tupleSpine,
-  effrowLabels,
-  atomLabel,
-  atomParam,
-  normHole,
-  drender,
 }
 import types.typecheck.{
   checkOneSchemeFull,
   checkModulesEntryFullSplitK,
-  dsub,
   decodeProductParam,
   decodeSetParam,
   TcDiag,
@@ -287,49 +292,20 @@ monoEffects : Mono -> List Atom
 monoEffects m = match normalize m
   TFun _ row result =>
     let atoms = effrowLabels row
-    sortUniqAtoms (atoms ++ monoEffects result)
+    atomsUnion atoms (monoEffects result)
   -- Fork C (Stage 1 preservation): a tuple TYPE is now a `__tupleN__`-headed
   -- `TApp` spine rather than an atomic `Mono.TTuple`, which the catch-all arm
   -- `_ => []` answers with no element effects; reproduce
   -- that exactly here instead of letting the generic `TApp` arm recurse in.
   TApp a b => match tupleSpine (TApp a b)
     Some _ => []
-    None => sortUniqAtoms (monoEffects a ++ monoEffects b)
+    None => atomsUnion (monoEffects a) (monoEffects b)
   _ => []
 
+export
 schemeEffects : Scheme -> List Atom
-schemeEffects (Forall _ _ mono) = monoEffects mono
-
--- Sort atoms by label and drop label-duplicates (first atom of a label wins;
--- in practice a row carries one atom per label after normalization).
-sortUniqAtoms : List Atom -> List Atom
-sortUniqAtoms atoms = dedupAtoms (sortAtoms atoms)
-
-sortAtoms : List Atom -> List Atom
-sortAtoms [] = []
-sortAtoms (x :: xs) = insertAtom x (sortAtoms xs)
-
-insertAtom : Atom -> List Atom -> List Atom
-insertAtom x [] = [x]
-insertAtom x (y :: ys) =
-  if stringLeq (atomLabel x) (atomLabel y) then
-    x :: y :: ys
-  else
-    y :: insertAtom x ys
-
-stringLeq : String -> String -> Bool
-stringLeq a b = match stringCompare a b
-  Gt => False
-  _ => True
-
-dedupAtoms : List Atom -> List Atom
-dedupAtoms [] = []
-dedupAtoms [x] = [x]
-dedupAtoms (x :: y :: rest) =
-  if atomLabel x == atomLabel y then
-    dedupAtoms (x :: rest)
-  else
-    x :: dedupAtoms (y :: rest)
+schemeEffects (Forall _ _ force mono) =
+  atomsUnion (effrowLabels force) (monoEffects mono)
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
@@ -585,7 +561,7 @@ listIsEmpty _ = False
 --   PUnit / PPrefix None → key = true  (bare ⊤ grant — host decides scope)
 --
 -- Output order: labels sorted ascending (stable/gateable).
--- Labels already arrive sorted from monoEffects/sortUniqAtoms.
+-- Labels already arrive sorted from the canonical atom join.
 --
 -- WS-1c (deferred): Wasm custom section — would embed M(module) into the
 -- compiled .wasm binary as a custom section.  Touches wasm_emit.mdk; left

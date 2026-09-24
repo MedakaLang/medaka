@@ -1,0 +1,31 @@
+import test.{expectAll, expectEqual}
+import types.repr.{Scheme(..), Mono(..), ppScheme}
+import types.effect_rows.{EffRow(..), Effvar(..)}
+import types.effect_domain.{Atom(..), Param(..)}
+
+test "binding renderers distinguish forcing from a latent arrow" = expectAll [
+  expectEqual "Unit" (ppScheme (Forall [] [] (EffRow [] None) (TRigid "Unit"))),
+  expectEqual
+    "<Audit> Unit"
+    (ppScheme
+      (Forall [] [] (EffRow [Atom "Audit" PUnit] None) (TRigid "Unit"))),
+  expectEqual
+    "<Audit> (Unit -> Unit)"
+    (ppScheme
+      (Forall
+        []
+        []
+        (EffRow [Atom "Audit" PUnit] None)
+        (TFun (TRigid "Unit") (EffRow [] None) (TRigid "Unit")))),
+]
+
+test "force and value indices share rendered quantified row names" =
+  let cell = Ref (EUnbound 7 0)
+  let row = EffRow [] (Some cell)
+  let body = TApp (TRigid "Box") (TEff row)
+  expectAll [
+    expectEqual "<a> Box a" (ppScheme (Forall [] [7] row body)),
+    expectEqual
+      "<Audit | a> Box a"
+      (ppScheme (Forall [] [7] (EffRow [Atom "Audit" PUnit] (Some cell)) body)),
+  ]

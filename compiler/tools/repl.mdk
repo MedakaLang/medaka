@@ -212,7 +212,7 @@ lookupScheme name ((n, s) :: rest)
   | otherwise = lookupScheme name rest
 
 runPipeline : List Decl ->
-  <e> (List String, List (String, Scheme), List (String, Value e))
+  <IO> (List String, List (String, Scheme), List (String, Value <IO>))
 runPipeline combined =
   let runtimeDecls = !runtimeDeclsRef
   let preludeDecls = !preludeDeclsRef

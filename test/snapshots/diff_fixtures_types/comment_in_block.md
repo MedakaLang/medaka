@@ -9,4 +9,4 @@ f x =
 main = println (f 3)
 # TYPES_USER
 f : Num a => a -> a
-main : Unit
+main : <IO | a> Unit

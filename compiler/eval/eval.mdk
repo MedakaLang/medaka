@@ -4910,7 +4910,7 @@ pOsEntropyBytes (VInt n) = vIntArray (osEntropyBytes n)
 pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 
 export
-ioExternBindings : Unit -> List (String, Value e)
+ioExternBindings : Unit -> List (String, Value <IO>)
 ioExternBindings _ = [
   -- Clock / GC / stderr — these OVERRIDE the frozen constants in externBindings
   ("wallTimeSec", prim1M pWallTimeSecIO),
@@ -4964,7 +4964,7 @@ ioExternBindings _ = [
 -- long-lived test process and falsely report SUCCESS — THE hazard), and every
 -- file / env / stdin / net extern (no sandbox / capability flag in test/repl).
 export
-testCapableExterns : Unit -> List (String, Value e)
+testCapableExterns : Unit -> List (String, Value <IO>)
 testCapableExterns _ = [
   ("wallTimeSec", prim1M pWallTimeSecIO),
   ("monotonicSec", prim1M pMonotonicSecIO),

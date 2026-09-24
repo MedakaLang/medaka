@@ -1,7 +1,21 @@
 # META
-source_lines=758
+source_lines=734
 stages=DESUGAR,MARK
 # SOURCE
+import types.effect_domain.{
+  normHole,
+  atomLabel,
+  atomParam,
+  atomsUnion,
+  drender,
+  dsub,
+  Param(..),
+  Atom(..),
+}
+import types.effect_rows.{
+  effrowLabels,
+  EffRow(..),
+}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
 --
@@ -52,21 +66,12 @@ import tools.check.{checkHasErrors}
 import types.repr.{
   Scheme(..),
   Mono(..),
-  EffRow(..),
-  Atom(..),
-  Param(..),
   normalize,
   tupleSpine,
-  effrowLabels,
-  atomLabel,
-  atomParam,
-  normHole,
-  drender,
 }
 import types.typecheck.{
   checkOneSchemeFull,
   checkModulesEntryFullSplitK,
-  dsub,
   decodeProductParam,
   decodeSetParam,
   TcDiag,
@@ -291,49 +296,20 @@ monoEffects : Mono -> List Atom
 monoEffects m = match normalize m
   TFun _ row result =>
     let atoms = effrowLabels row
-    sortUniqAtoms (atoms ++ monoEffects result)
+    atomsUnion atoms (monoEffects result)
   -- Fork C (Stage 1 preservation): a tuple TYPE is now a `__tupleN__`-headed
   -- `TApp` spine rather than an atomic `Mono.TTuple`, which the catch-all arm
   -- `_ => []` answers with no element effects; reproduce
   -- that exactly here instead of letting the generic `TApp` arm recurse in.
   TApp a b => match tupleSpine (TApp a b)
     Some _ => []
-    None => sortUniqAtoms (monoEffects a ++ monoEffects b)
+    None => atomsUnion (monoEffects a) (monoEffects b)
   _ => []
 
+export
 schemeEffects : Scheme -> List Atom
-schemeEffects (Forall _ _ mono) = monoEffects mono
-
--- Sort atoms by label and drop label-duplicates (first atom of a label wins;
--- in practice a row carries one atom per label after normalization).
-sortUniqAtoms : List Atom -> List Atom
-sortUniqAtoms atoms = dedupAtoms (sortAtoms atoms)
-
-sortAtoms : List Atom -> List Atom
-sortAtoms [] = []
-sortAtoms (x :: xs) = insertAtom x (sortAtoms xs)
-
-insertAtom : Atom -> List Atom -> List Atom
-insertAtom x [] = [x]
-insertAtom x (y :: ys) =
-  if stringLeq (atomLabel x) (atomLabel y) then
-    x :: y :: ys
-  else
-    y :: insertAtom x ys
-
-stringLeq : String -> String -> Bool
-stringLeq a b = match stringCompare a b
-  Gt => False
-  _ => True
-
-dedupAtoms : List Atom -> List Atom
-dedupAtoms [] = []
-dedupAtoms [x] = [x]
-dedupAtoms (x :: y :: rest) =
-  if atomLabel x == atomLabel y then
-    dedupAtoms (x :: rest)
-  else
-    x :: dedupAtoms (y :: rest)
+schemeEffects (Forall _ _ force mono) =
+  atomsUnion (effrowLabels force) (monoEffects mono)
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
@@ -589,7 +565,7 @@ listIsEmpty _ = False
 --   PUnit / PPrefix None → key = true  (bare ⊤ grant — host decides scope)
 --
 -- Output order: labels sorted ascending (stable/gateable).
--- Labels already arrive sorted from monoEffects/sortUniqAtoms.
+-- Labels already arrive sorted from the canonical atom join.
 --
 -- WS-1c (deferred): Wasm custom section — would embed M(module) into the
 -- compiled .wasm binary as a custom section.  Touches wasm_emit.mdk; left
@@ -761,13 +737,15 @@ runManifestAtoms rtSrc coreSrc src fnName =
     Some e => e
   fnEffects
 # DESUGAR
+(DUse false (UseGroup ("types" "effect_domain") ((mem "normHole" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "atomsUnion" false) (mem "drender" false) (mem "dsub" false) (mem "Param" true) (mem "Atom" true))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "effrowLabels" false) (mem "EffRow" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "normHole" false) (mem "drender" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "tupleSpine" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -871,23 +849,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "collectOpts" ((PCons (PCon "None") (PVar "rest"))) (EApp (EVar "collectOpts") (EVar "rest")))
 (DFunDef false "collectOpts" ((PCons (PCon "Some" (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "collectOpts") (EVar "rest"))))
 (DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EVar "atoms") (EApp (EVar "monoEffects") (EVar "result"))))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EApp (EVar "monoEffects") (EVar "a")) (EApp (EVar "monoEffects") (EVar "b"))))))) (arm PWild () (EListLit))))
-(DTypeSig false "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild (PVar "mono"))) (EApp (EVar "monoEffects") (EVar "mono")))
-(DTypeSig false "sortUniqAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "sortUniqAtoms" ((PVar "atoms")) (EApp (EVar "dedupAtoms") (EApp (EVar "sortAtoms") (EVar "atoms"))))
-(DTypeSig false "sortAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "sortAtoms" ((PList)) (EListLit))
-(DFunDef false "sortAtoms" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "insertAtom") (EVar "x")) (EApp (EVar "sortAtoms") (EVar "xs"))))
-(DTypeSig false "insertAtom" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "insertAtom" ((PVar "x") (PList)) (EListLit (EVar "x")))
-(DFunDef false "insertAtom" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "stringLeq") (EApp (EVar "atomLabel") (EVar "x"))) (EApp (EVar "atomLabel") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EVar "insertAtom") (EVar "x")) (EVar "ys")))))
-(DTypeSig false "stringLeq" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "stringLeq" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "stringCompare") (EVar "a")) (EVar "b")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True"))))
-(DTypeSig false "dedupAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "dedupAtoms" ((PList)) (EListLit))
-(DFunDef false "dedupAtoms" ((PList (PVar "x"))) (EListLit (EVar "x")))
-(DFunDef false "dedupAtoms" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EIf (EBinOp "==" (EApp (EVar "atomLabel") (EVar "x")) (EApp (EVar "atomLabel") (EVar "y"))) (EApp (EVar "dedupAtoms") (EBinOp "::" (EVar "x") (EVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dedupAtoms") (EBinOp "::" (EVar "y") (EVar "rest"))))))
+(DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EApp (EVar "atomsUnion") (EVar "atoms")) (EApp (EVar "monoEffects") (EVar "result")))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "monoEffects") (EVar "a"))) (EApp (EVar "monoEffects") (EVar "b")))))) (arm PWild () (EListLit))))
+(DTypeSig true "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "force"))) (EApp (EVar "monoEffects") (EVar "mono"))))
 (DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "atomLabels" ((PList)) (EListLit))
 (DFunDef false "atomLabels" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EVar "drender") (EApp (EVar "atomParam") (EVar "a")))) (EApp (EVar "atomLabels") (EVar "rest"))))
@@ -969,13 +933,15 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))
 # MARK
+(DUse false (UseGroup ("types" "effect_domain") ((mem "normHole" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "atomsUnion" false) (mem "drender" false) (mem "dsub" false) (mem "Param" true) (mem "Atom" true))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "effrowLabels" false) (mem "EffRow" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "normHole" false) (mem "drender" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "tupleSpine" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -1079,23 +1045,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "collectOpts" ((PCons (PCon "None") (PVar "rest"))) (EApp (EVar "collectOpts") (EVar "rest")))
 (DFunDef false "collectOpts" ((PCons (PCon "Some" (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "collectOpts") (EVar "rest"))))
 (DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EVar "atoms") (EApp (EVar "monoEffects") (EVar "result"))))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EApp (EVar "monoEffects") (EVar "a")) (EApp (EVar "monoEffects") (EVar "b"))))))) (arm PWild () (EListLit))))
-(DTypeSig false "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild (PVar "mono"))) (EApp (EVar "monoEffects") (EVar "mono")))
-(DTypeSig false "sortUniqAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "sortUniqAtoms" ((PVar "atoms")) (EApp (EVar "dedupAtoms") (EApp (EVar "sortAtoms") (EVar "atoms"))))
-(DTypeSig false "sortAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "sortAtoms" ((PList)) (EListLit))
-(DFunDef false "sortAtoms" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "insertAtom") (EVar "x")) (EApp (EVar "sortAtoms") (EVar "xs"))))
-(DTypeSig false "insertAtom" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "insertAtom" ((PVar "x") (PList)) (EListLit (EVar "x")))
-(DFunDef false "insertAtom" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "stringLeq") (EApp (EVar "atomLabel") (EVar "x"))) (EApp (EVar "atomLabel") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EVar "insertAtom") (EVar "x")) (EVar "ys")))))
-(DTypeSig false "stringLeq" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "stringLeq" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "stringCompare") (EVar "a")) (EVar "b")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True"))))
-(DTypeSig false "dedupAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "dedupAtoms" ((PList)) (EListLit))
-(DFunDef false "dedupAtoms" ((PList (PVar "x"))) (EListLit (EVar "x")))
-(DFunDef false "dedupAtoms" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EIf (EBinOp "==" (EApp (EVar "atomLabel") (EVar "x")) (EApp (EVar "atomLabel") (EVar "y"))) (EApp (EVar "dedupAtoms") (EBinOp "::" (EVar "x") (EVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dedupAtoms") (EBinOp "::" (EVar "y") (EVar "rest"))))))
+(DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EApp (EVar "atomsUnion") (EVar "atoms")) (EApp (EVar "monoEffects") (EVar "result")))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "monoEffects") (EVar "a"))) (EApp (EVar "monoEffects") (EVar "b")))))) (arm PWild () (EListLit))))
+(DTypeSig true "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "force"))) (EApp (EVar "monoEffects") (EVar "mono"))))
 (DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "atomLabels" ((PList)) (EListLit))
 (DFunDef false "atomLabels" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EVar "drender") (EApp (EVar "atomParam") (EVar "a")))) (EApp (EVar "atomLabels") (EVar "rest"))))

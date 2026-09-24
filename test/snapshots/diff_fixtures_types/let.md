@@ -10,4 +10,4 @@ main =
   println sum
   println (x * y)
 # TYPES_USER
-main : Unit
+main : <IO> Unit

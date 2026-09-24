@@ -6,4 +6,4 @@ swap : (a, b) -> (b, a)
 poly : a -> a
 twice : (a -> a) -> a -> a
 big : a -> a -> a -> a
-main : Int
+main : <a> Int

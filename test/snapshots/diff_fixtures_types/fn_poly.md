@@ -16,4 +16,4 @@ main =
 identity : a -> a
 konst : a -> b -> a
 flip : (a -> b -> c) -> b -> a -> c
-main : Unit
+main : <IO> Unit

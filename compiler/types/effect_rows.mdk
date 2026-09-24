@@ -1,0 +1,209 @@
+-- Effect row cells and their normalized views. A join retains every member's
+-- atoms: compressing it to only its unbound leaves would erase effects.
+
+import support.util.{reverseL}
+import support.opcount.{opBump}
+import types.effect_domain.{Atom, atomsUnion}
+import map.{Map(..), has, set}
+
+public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
+
+public export data Effvar =
+  | EUnbound Int Int
+  | ELink Int EffRow
+  | EJoin Int Int (List (Ref Effvar))
+
+export
+effrowNorm : EffRow -> EffRow
+effrowNorm (row@(EffRow _ None)) = row
+effrowNorm (row@(EffRow _ (Some cell))) = match !cell
+  EUnbound _ _ => row
+  _ =>
+    let (labels, members) = rowFlat row
+    match members
+      [] => EffRow labels None
+      [member] => EffRow labels (Some member)
+      _ => EffRow labels (Some (rowRepresentative cell))
+
+-- After flattening leaves more than one tail, the tail-chain representative
+-- must be a join. Returning an ELink here would hide that fact from solvers.
+rowRepresentative : Ref Effvar -> Ref Effvar
+rowRepresentative cell = match !cell
+  ELink _ (EffRow _ (Some next)) => rowRepresentative next
+  _ => cell
+
+-- Compress link chains without expanding joins. Expanding a shared join here
+-- would start a fresh visited set for each incoming link and defeat DAG sharing.
+-- Only empty-prefix links can share a normalized suffix without copying its
+-- atoms. Stop before a labelled node to retain its shared identity. Materializing every suffix of a
+-- distinct-label chain would allocate quadratically. rowFlat joins them once.
+compressLink : Ref Effvar -> EffRow -> EffRow
+compressLink cell (row@(EffRow [] (Some next))) = match !next
+  ELink _ (nextRow@(EffRow [] _)) =>
+    let target = compressLink next nextRow
+    linkRow cell target
+    target
+  _ => row
+compressLink _ row = row
+
+export
+effrowLabels : EffRow -> List Atom
+effrowLabels r = match effrowNorm r
+  EffRow labels _ => labels
+
+-- Sequencing is a join, never an equation between the performed computations.
+-- The allocator supplies a request-owned join identity; input cells are read
+-- but not linked, closed or narrowed by effect accumulation.
+export
+joinRows : (List (Ref Effvar) -> Ref Effvar) -> EffRow -> EffRow -> EffRow
+joinRows _ (EffRow [] None) right = right
+joinRows _ left (EffRow [] None) = left
+joinRows makeJoin left right = collectRows makeJoin [left, right]
+
+-- Captures prepend performed rows in constant time and finalize once. Flatten
+-- the whole collection with one visited set, including shared row DAGs.
+export
+collectRows : (List (Ref Effvar) -> Ref Effvar) -> List EffRow -> EffRow
+collectRows makeJoin rows =
+  let (atoms, cells) = rowFlatGo rows (Seen Tip Tip) [] []
+  match cells
+    [] => EffRow atoms None
+    [cell] => EffRow atoms (Some cell)
+    cells => EffRow atoms (Some (makeJoin cells))
+
+export
+effvarId : Ref Effvar -> Int
+effvarId cell = match !cell
+  EUnbound id _ => id
+  ELink id _ => id
+  EJoin id _ _ => id
+
+-- Identity belongs to the cell, not its current contents. Links retain it so
+-- a shared labelled suffix is visited once even after inference solves it.
+export
+linkRow : Ref Effvar -> EffRow -> Unit
+linkRow cell row = cell := ELink (effvarId cell) row
+
+export
+isJoinCell : Ref Effvar -> Bool
+isJoinCell cell = match !cell
+  EJoin _ _ _ => True
+  _ => False
+
+export
+rowFlat : EffRow -> (List Atom, List (Ref Effvar))
+rowFlat row = rowFlatGo [row] (Seen Tip Tip) [] []
+
+export
+rowFlatMembers : List Atom ->
+  List (Ref Effvar) ->
+  (List Atom, List (Ref Effvar))
+rowFlatMembers labels members =
+  rowFlatGo (EffRow labels None :: pushMembers members []) (Seen Tip Tip) [] []
+
+-- A row tail is a DAG: joins deliberately share member cells.  Traversing a
+-- shared join once per incoming edge is exponential for a diamond-shaped row.
+-- IDs are allocated from one request-owned supply and survive solving/linking.
+-- Sharing applies to label-bearing links as well as joins: visiting a common
+-- N-label suffix for each of M incoming edges would otherwise cost O(M*N).
+data Seen = Seen (Map Int Unit) (Map Int Unit)
+
+seenUnbound : Int -> Seen -> Bool
+seenUnbound id (Seen unbounds _) = has id unbounds
+
+seenJoin : Int -> Seen -> Bool
+seenJoin id (Seen _ joins) = has id joins
+
+markUnbound : Int -> Seen -> Seen
+markUnbound id (Seen unbounds joins) = Seen (set id () unbounds) joins
+
+markJoin : Int -> Seen -> Seen
+markJoin id (Seen unbounds joins) = Seen unbounds (set id () joins)
+
+-- `pending` is a stack.  Reverse first so a join's members still visit left to
+-- right, which retains the old first-occurrence order for its live tail cells.
+pushMembers : List (Ref Effvar) -> List EffRow -> List EffRow
+pushMembers members pending = pushMembersRev (reverseL members) pending
+
+pushMembersRev : List (Ref Effvar) -> List EffRow -> List EffRow
+pushMembersRev [] pending = pending
+pushMembersRev (member :: members) pending =
+  pushMembersRev members (EffRow [] (Some member) :: pending)
+
+addLabels : List Atom -> List (List Atom) -> List (List Atom)
+addLabels [] chunks = chunks
+addLabels labels chunks = labels :: chunks
+
+-- The chunks are accumulated in reverse visitation order.  Prepending each
+-- original chunk restores exact left-to-right atom input without any repeated
+-- list append; atomsUnion normalises just once at the end.
+flattenChunks : List (List Atom) -> List Atom -> List Atom
+flattenChunks [] acc = acc
+flattenChunks (chunk :: chunks) acc =
+  flattenChunks chunks (prependChunk chunk acc)
+
+prependChunk : List Atom -> List Atom -> List Atom
+prependChunk chunk acc = prependChunkRev (reverseL chunk) acc
+
+prependChunkRev : List Atom -> List Atom -> List Atom
+prependChunkRev [] acc = acc
+prependChunkRev (atom :: atoms) acc = prependChunkRev atoms (atom :: acc)
+
+rowFlatGo : List EffRow ->
+  Seen ->
+  List (List Atom) ->
+  List (Ref Effvar) ->
+  (List Atom, List (Ref Effvar))
+rowFlatGo [] _ chunks cells = (finishChunks chunks, reverseL cells)
+rowFlatGo ((EffRow labels tail) :: pending) seen chunks cells =
+  let _ = opBump ()
+  let chunks2 = addLabels labels chunks
+  match tail
+    None => rowFlatGo pending seen chunks2 cells
+    Some cell => match !cell
+      EUnbound id _ =>
+        if seenUnbound id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo pending (markUnbound id seen) chunks2 (cell :: cells)
+      ELink id row =>
+        if seenJoin id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo
+            (compressLink cell row :: pending)
+            (markJoin id seen)
+            chunks2
+            cells
+      EJoin id _ members =>
+        if seenJoin id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo
+            (pushMembers members pending)
+            (markJoin id seen)
+            chunks2
+            cells
+
+finishChunks : List (List Atom) -> List Atom
+finishChunks [] = []
+finishChunks [labels] = labels
+finishChunks chunks = atomsUnion [] (flattenChunks chunks [])
+
+export
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+dedupCells cells = reverseL (dedupCellsGo cells Tip [])
+
+-- `rowFlat` returns unbound cells, but this public helper is also used while
+-- constructing joins. Keep the first cell for each stable identity.
+dedupCellsGo : List (Ref Effvar) ->
+  Map Int Unit ->
+  List (Ref Effvar) ->
+  List (Ref Effvar)
+dedupCellsGo [] _ acc = acc
+dedupCellsGo (cell :: cells) seen acc =
+  let id = effvarId cell
+  if has id seen then
+    dedupCellsGo cells seen acc
+  else
+    dedupCellsGo cells (set id () seen) (cell :: acc)

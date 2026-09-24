@@ -15,4 +15,4 @@ main =
 # TYPES_USER
 double : Int -> Int
 greet : String -> String
-main : Unit
+main : <IO> Unit

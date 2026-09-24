@@ -925,7 +925,7 @@ declaredNumHelperSource : String
 declaredNumHelperSource = "value : Num a => Int -> a\nvalue n = fromInt n\n"
 
 schemeVariableCount : Scheme -> Int
-schemeVariableCount (Forall variables _ _) = listLen variables
+schemeVariableCount (Forall variables _ _ _) = listLen variables
 
 declaredNumSchemeObserved : Option (Int, Int) ->
   String ->

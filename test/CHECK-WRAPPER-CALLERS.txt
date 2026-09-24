@@ -19,4 +19,5 @@ compiler/tools/check_policy.mdk : checkOneSchemeFull
 compiler/tools/lsp.mdk : checkOneSchemeFullK
 compiler/tools/repl.mdk : checkOneDiags,checkOneScheme
 compiler/tools/snapshot.mdk : checkOneToLinesWithRuntime
+compiler/types/effect_bindings_test.mdk : checkOneDiags,checkOneSchemeFullK
 compiler/types/typecheck_test.mdk : checkOneDiags,checkOneSchemeFullK

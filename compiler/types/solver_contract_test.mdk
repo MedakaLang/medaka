@@ -1,3 +1,7 @@
+import types.effect_rows.{
+  EffRow(..),
+  Effvar(..),
+}
 -- Sibling tests for the scoped solver contract.  The service double exposes
 -- allocation identity through the cells it returns, so these tests distinguish
 -- one shared type/effect substitution from structurally similar substitutions.
@@ -13,8 +17,6 @@ import frontend.ast.{
 }
 import types.evidence.{EvidenceBinderId(..), GoalId(..), ScopeId(..)}
 import types.repr.{
-  EffRow(..),
-  Effvar(..),
   IfaceRef(..),
   Mono(..),
   Scheme(..),
@@ -100,6 +102,11 @@ substituteTestArgument (TestSubstitution _ _ effectCell) (TEff _) =
   TEff (EffRow [] (Some effectCell))
 substituteTestArgument _ mono = mono
 
+substituteTestForce : TestSubstitution -> EffRow -> EffRow
+substituteTestForce (TestSubstitution _ _ cell) (EffRow labels (Some _)) =
+  EffRow labels (Some cell)
+substituteTestForce _ row = row
+
 originLocationLine : GoalOrigin -> Int
 originLocationLine origin = match origin.location
   Some (Loc _ startLine _ _ _) => startLine
@@ -140,6 +147,7 @@ testServices : InstantiationServices TestSubstitution
 testServices = InstantiationServices {
   makeSubstitution = makeTestSubstitution,
   substituteBody = substituteTestBody,
+  substituteForce = substituteTestForce,
   substituteArgument = substituteTestArgument,
   freshGoal = freshTestGoal,
   freshDestination = freshTestDestination,
@@ -189,6 +197,7 @@ sharedScheme = QualifiedScheme {
     Forall
       [101, 103]
       [202, 204]
+      (EffRow [] (Some oldEffectCell))
       (TFun
         (TVar oldTypeCell)
         (EffRow [] (Some oldEffectCell))
@@ -207,11 +216,11 @@ effectCellId : Mono -> Int
 effectCellId (TEff (EffRow _ (Some cell))) = match !cell
   EUnbound id _ => id
   EJoin id _ _ => id
-  ELink _ => 0 - 1
+  ELink id _ => id
 effectCellId (TFun _ (EffRow _ (Some cell)) _) = match !cell
   EUnbound id _ => id
   EJoin id _ _ => id
-  ELink _ => 0 - 1
+  ELink id _ => id
 effectCellId _ = 0 - 2
 
 instantiationSignature : Instantiation -> (Int, Int, Int, Int)
@@ -267,6 +276,7 @@ data SharedSubstitutionObservation = SharedSubstitutionObservation {
   ssoSeenBody : List Int,
   ssoFirstBodyTypeShared : Bool,
   ssoFirstBodyEffectShared : Bool,
+  ssoFirstForceShared : Bool,
   ssoSecondBodyTypeShared : Bool,
   ssoSecondBodyEffectShared : Bool,
   ssoTypeCellsFreshAcrossRuns : Bool,
@@ -292,13 +302,13 @@ cellsAliasWithinAndSeparateAcross first second =
   )
     (Some firstBodyType, Some firstBodyEffect, Some firstPredType, Some firstPredEffect, Some secondBodyType, Some secondBodyEffect) =>
       firstBodyType := Link (TRigid "linked")
-      firstBodyEffect := ELink (EffRow [] None)
+      firstBodyEffect := ELink (effectCellId first.body) (EffRow [] None)
       CellAliasObservation {
         caoFirstPredicateTypeLinked = match !firstPredType
           Link _ => True
           _ => False,
         caoFirstPredicateEffectLinked = match !firstPredEffect
-          ELink _ => True
+          ELink _ _ => True
           _ => False,
         caoSecondBodyTypeFresh = match !secondBodyType
           Unbound _ _ => True
@@ -334,6 +344,7 @@ sharedSubstitutionResult _ =
     ssoSeenBody = !seenBody,
     ssoFirstBodyTypeShared = firstBodyType == firstPredType,
     ssoFirstBodyEffectShared = firstBodyEffect == firstPredEffect,
+    ssoFirstForceShared = effectCellId (TEff first.force) == firstBodyEffect,
     ssoSecondBodyTypeShared = secondBodyType == secondPredType,
     ssoSecondBodyEffectShared = secondBodyEffect == secondPredEffect,
     ssoTypeCellsFreshAcrossRuns = firstBodyType /= secondBodyType,
@@ -352,6 +363,7 @@ test "one type/effect substitution is shared and each instantiation is fresh" =
       ssoSeenBody = [101, 202, 101],
       ssoFirstBodyTypeShared = True,
       ssoFirstBodyEffectShared = True,
+      ssoFirstForceShared = True,
       ssoSecondBodyTypeShared = True,
       ssoSecondBodyEffectShared = True,
       ssoTypeCellsFreshAcrossRuns = True,
@@ -369,7 +381,7 @@ test "one type/effect substitution is shared and each instantiation is fresh" =
 
 vectorScheme : QualifiedScheme
 vectorScheme = QualifiedScheme {
-  hm = Forall [] [] (TRigid "body"),
+  hm = Forall [] [] (EffRow [] None) (TRigid "body"),
   qualifiers = [
     Qualifier {
       predicate = ClassPredicate {

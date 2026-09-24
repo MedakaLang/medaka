@@ -15,4 +15,4 @@ foo x = p x
 main = println (p 5 + foo 7)
 # TYPES_USER
 foo : Num a => a -> a
-main : Unit
+main : <IO | a> Unit

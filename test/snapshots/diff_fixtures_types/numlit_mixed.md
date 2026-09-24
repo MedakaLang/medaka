@@ -5,4 +5,4 @@ stages=TYPES_USER
 main : <IO> Unit
 main = println (1.0 + 2)
 # TYPES_USER
-main : Unit
+main : <IO> Unit

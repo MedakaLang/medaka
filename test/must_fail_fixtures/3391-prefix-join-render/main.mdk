@@ -1,0 +1,5 @@
+effect Net Prefix
+
+extern visit : String -> <Net "_", FFI> Unit
+
+joined b = if b then visit "a.com/*" else visit "a.com.evil/*"

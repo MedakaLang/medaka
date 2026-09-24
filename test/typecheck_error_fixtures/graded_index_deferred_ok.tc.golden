@@ -3,4 +3,4 @@ runBox : Box a b -> b
 loud : Int -> <Stdout> Int
 built : Box <Stdout> Int
 pureInt : Int
-main : Unit
+main : <IO | a> Unit

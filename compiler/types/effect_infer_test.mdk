@@ -1,0 +1,25 @@
+import test.{expectAll, expectEqual}
+import types.effect_infer.{captureEffects, recordEffect}
+import types.effect_rows.{EffRow(..), Effvar(..), effrowLabels}
+import types.effect_domain.{Atom(..), Param(..), renderAtoms}
+import support.util.{listLen}
+
+test "nested capture restores the parent without charging a stored computation" =
+  let ambient = Ref []
+  let makeJoin = cells => Ref (EJoin 1 0 cells)
+  let (inside, outer) = captureEffects ambient makeJoin (_ =>
+    recordEffect ambient (EffRow [Atom "Clock" PUnit] None)
+    let (_, inner) = captureEffects ambient makeJoin (_ =>
+      recordEffect ambient (EffRow [Atom "Audit" PUnit] None))
+    renderAtoms (effrowLabels inner))
+  expectAll [
+    expectEqual "Audit" inside,
+    expectEqual "Clock" (renderAtoms (effrowLabels outer)),
+    expectEqual 0 (listLen !ambient),
+  ]
+
+test "pure occurrences do not grow the capture buffer" =
+  let ambient = Ref []
+  recordEffect ambient (EffRow [] None)
+  recordEffect ambient (EffRow [] None)
+  expectEqual 0 (listLen !ambient)

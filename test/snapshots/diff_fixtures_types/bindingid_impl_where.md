@@ -15,4 +15,4 @@ g x = x
 main = println (g "hi")
 # TYPES_USER
 g : a -> a
-main : Unit
+main : <IO | a> Unit
