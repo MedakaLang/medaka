@@ -10087,6 +10087,8 @@ data PerRun = PerRun {
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
+  patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
+  patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
   numlitRanges : Ref (List (Mono, Int, Option Loc)),  -- every source integer literal's (var, value, loc), for the fixed-width range check (`checkFixedWidthLiterals`)
   numlitUntainted : Ref (List (Mono, Loc)),
   numlitOpLocs : Ref (List Loc),
@@ -10190,6 +10192,8 @@ freshPerRun _ = PerRun {
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
   numlitRanges = Ref [],
+  patLitPending = Ref [],
+  patLitDeferred = Ref [],
   numlitUntainted = Ref [],
   numlitOpLocs = Ref [],
   numlitCtxTags = Ref [],
@@ -10736,6 +10740,7 @@ bindOutsideDoMsg =
 -- ── generalization & instantiation ────────────────────────────────────────
 generalize : Mono -> Scheme
 generalize t =
+  let _ = defaultDeferredPatLitsIn perRun.value.currentLevel.value t
   Forall
     (dedupI (freeGenVars perRun.value.currentLevel.value t))
     (dedupI (freeEffvars t))
@@ -11973,6 +11978,7 @@ inferPat _ (PVar x xloc) =
   let _ = recordLocalBind x (Some xloc) v
   (v, [(x, monoScheme v)])
 inferPat _ PWild = (freshVar (), [])
+inferPat _ (PLit (LInt n)) = inferIntLitPat n
 inferPat _ (PLit l) = (litType l, [])
 inferPat env (PCon name pats) = inferPatCon env name pats
 inferPat env (PTuple pats) = inferPatTuple env pats
@@ -12061,6 +12067,82 @@ inferRecPatFieldWith env ft _ (Some p) =
   let pr = inferPat env p
   let _ = unify (fst pr) ft
   snd pr
+
+-- INTEGER-TYPES-DESIGN §3.2 item 5: an integer literal PATTERN takes its type from
+-- the scrutinee when that is a builtin integer head, and is `Int` otherwise.  It is
+-- inferred as a fresh var and parked on `patLitPending`; the pattern site that
+-- unifies the pattern with its scrutinee (or a signature's domain) then settles it
+-- with `settlePatLits`, or defers it to `generalize` when the scrutinee's type is
+-- not known yet.  Either way the var is settled before anything can quantify it,
+-- so a literal pattern never makes a binding polymorphic.
+inferIntLitPat : Int -> (Mono, List (String, Scheme))
+inferIntLitPat n =
+  let a = freshVar ()
+  perRun.value.patLitPending :=
+    (a, n, !currentLoc) :: perRun.value.patLitPending.value
+  (a, [])
+
+-- Open a pattern site: park the literals of any enclosing site and start empty.
+takePatLits : Unit -> List (Mono, Int, Option Loc)
+takePatLits _ =
+  let saved = perRun.value.patLitPending.value
+  perRun.value.patLitPending := []
+  saved
+
+-- Close a pattern site, after its pattern met its scrutinee.  A literal whose var
+-- is now a fixed-width head keeps that type and joins the literal range check; one
+-- whose var is any other type is `Int`, exactly as a literal pattern always was (a
+-- non-integer scrutinee is the same `Int vs T` mismatch).  A var still unknown here
+-- (a lambda's parameter, typed only by a later argument) is deferred: `generalize`
+-- defaults it to `Int` before it could be quantified, and the module's end settles
+-- whatever remains (`settleDeferredPatLits`).
+settlePatLits : List (Mono, Int, Option Loc) -> Unit
+settlePatLits saved =
+  let _ = settlePatLitsGo False perRun.value.patLitPending.value
+  perRun.value.patLitPending := saved
+
+-- [final]: the module is done, so an unknown var defaults instead of deferring.
+settlePatLitsGo : Bool -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsGo _ [] = ()
+settlePatLitsGo final ((a, n, loc) :: rest) =
+  let _ = match normalize a
+    TCon tag _ if isFixedWidthHead tag =>
+      perRun.value.numlitRanges :=
+        (a, n, loc) :: perRun.value.numlitRanges.value
+    TVar _ if not final =>
+      perRun.value.patLitDeferred :=
+        (a, n, loc) :: perRun.value.patLitDeferred.value
+    _ =>
+      let saved = !currentLoc
+      currentLoc := orElseLoc loc saved
+      let _ = unify (tconBuiltin "Int") a
+      currentLoc := saved
+  settlePatLitsGo final rest
+
+-- The module's inference is complete: every deferred literal pattern takes the
+-- type its scrutinee finally got, or `Int`.
+settleDeferredPatLits : Unit -> Unit
+settleDeferredPatLits _ =
+  let deferred = perRun.value.patLitDeferred.value
+  perRun.value.patLitDeferred := []
+  settlePatLitsGo True deferred
+
+-- Called by `generalize` before it quantifies [t]: a deferred literal-pattern var
+-- that is about to become a scheme variable is `Int` instead, so a literal pattern
+-- never makes a binding polymorphic.
+defaultDeferredPatLitsIn : Int -> Mono -> Unit
+defaultDeferredPatLitsIn lvl t = match perRun.value.patLitDeferred.value
+  [] => ()
+  deferred => defaultPatLitVarsIn (freeGenVars lvl t) deferred
+
+defaultPatLitVarsIn : List Int -> List (Mono, Int, Option Loc) -> Unit
+defaultPatLitVarsIn _ [] = ()
+defaultPatLitVarsIn quantified ((a, _, _) :: rest) =
+  let _ = match normalize a
+    TVar cell =>
+      if containsI (tyvarId cell) quantified then unify (tconBuiltin "Int") a
+    _ => ()
+  defaultPatLitVarsIn quantified rest
 
 litType : Lit -> Mono
 litType (LInt _) = tconBuiltin "Int"
@@ -13518,8 +13600,10 @@ inferStmt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 inferStmt env (DoBind pat e) =
   let t = infer env e
   let _ = pushTypeError "T-BIND-OUTSIDE-DO" bindOutsideDoMsg
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t
+  let _ = settlePatLits lits
   extendLocalVars env (snd pr)
 inferStmt _ _ = panic "typecheck: unsupported block statement"
 
@@ -13669,8 +13753,10 @@ blockLet env (PVar x xloc) e =
   seedAlphaLets (extendLocalVar env x sch) x e
 blockLet env pat e =
   let t = infer env e
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t
+  let _ = settlePatLits lits
   extendLocalVars env (snd pr)
 
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
@@ -18302,8 +18388,10 @@ expectedParamTypes _ _ = []
 -- and the hover side-channel see the expected type, not a bare fresh var.
 inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> Mono
 inferLamChecked env expected pats body =
+  let lits = takePatLits ()
   let pr = inferPats env pats
   let _ = unifyParamsExpected (fst pr) expected
+  let _ = settlePatLits lits
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := openRow ()
   let bodyTy = infer (extendLocalVars env (snd pr)) body
@@ -18721,7 +18809,9 @@ inferLam env pats body =
   let _ = match exprLoc body
     Some l => currentLoc := Some l
     None => ()
+  let lits = takePatLits ()
   let pr = inferPats env pats
+  let _ = settlePatLits lits
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := openRow ()
   let bodyTy = infer (extendLocalVars env (snd pr)) body
@@ -18843,8 +18933,10 @@ inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 inferLetBody env pat t1 _ e2 _ _ _ =
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t1
+  let _ = settlePatLits lits
   infer (extendLocalVars env (snd pr)) e2
 
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
@@ -19144,8 +19236,10 @@ inferArms env scrutTy result ((Arm pat gs body) :: rest) =
 
 inferArm : TcEnv -> Mono -> Mono -> Pat -> List Guard -> Expr -> Unit
 inferArm env scrutTy result pat gs body =
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) scrutTy
+  let _ = settlePatLits lits
   let envBody = inferArmGuards (extendLocalVars env (snd pr)) gs
   unify result (infer envBody body)
 
@@ -19159,8 +19253,10 @@ inferArmGuards env ((GBool g) :: rest) =
   inferArmGuards env rest
 inferArmGuards env ((GBind p e) :: rest) =
   let te = infer env e
+  let lits = takePatLits ()
   let pr = inferPat env p
   let _ = unify (fst pr) te
+  let _ = settlePatLits lits
   inferArmGuards (extendLocalVars env (snd pr)) rest
 
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
@@ -30222,6 +30318,7 @@ checkBodyImpl seed mid implDecls prog0 =
     -- first step of the graph-end drain every Module-arm driver now runs.
     let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
     let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
+    let _ = settleDeferredPatLits ()
     let _ = checkFixedWidthLiterals perRun.value.numlitRanges.value
     let _ = checkAdmittedOccObls ()
     ()
@@ -36831,8 +36928,10 @@ inferClauseEff env peel (pats, body) =
   let _ = match exprLoc body
     Some l => currentLoc := Some l
     None => ()
+  let lits = takePatLits ()
   let pr = inferPats env pats
   let _ = peelOntoParams peel (fst pr) pats
+  let _ = settlePatLits lits
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := openRow ()
   -- #2109: a signed clause's body is inferred AGAINST the signature's result
