@@ -1035,8 +1035,14 @@ projectTrustedMods entry roots stdlibRoot mods =
           map canonicalizePath (stdlibRoot :: roots)
         else
           [canonicalizePath stdlibRoot]
-      trustedModsGo deps roots trustedRoots (map fst mods)
-    None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+      trustedModsGo deps roots stdlibRoot trustedRoots (map fst mods)
+    None =>
+      trustedModsGo
+        []
+        roots
+        stdlibRoot
+        [canonicalizePath stdlibRoot]
+        (map fst mods)
 
 -- #2072 (epic #2070, R2): which of `mods` does the loader own to `stdlibRoot`?
 --
@@ -1071,9 +1077,16 @@ stdlibOwnedMods entry roots stdlibRoot mods =
       trustedModsGo
         (readDeps projectRoot)
         roots
+        stdlibRoot
         [canonicalizePath stdlibRoot]
         (map fst mods)
-    None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+    None =>
+      trustedModsGo
+        []
+        roots
+        stdlibRoot
+        [canonicalizePath stdlibRoot]
+        (map fst mods)
 
 -- The pair every typecheck driver needs from `stdlibOwnedMods`, in one call:
 -- (is the ENTRY module stdlib-owned?, the stdlib-owned modIds).  The first
@@ -1137,20 +1150,31 @@ scanAllowInternal inDeps (line :: rest) =
   else
     scanAllowInternal inDeps rest
 
+-- A module is trusted when the root it resolved under is a trusted root, or
+-- when its file lies anywhere under `stdlibRoot`. The second arm is what
+-- trusts a nested stdlib module (`stdlib/crypto/hmac.mdk`) checked as the
+-- entry: its own directory comes first in `roots`, so it resolves under
+-- `stdlib/crypto`, which is not itself a trusted root.
 trustedModsGo : List (String, String) ->
   List String ->
+  String ->
   List String ->
   List String ->
   <IO> List String
-trustedModsGo _ _ _ [] = []
-trustedModsGo deps roots trustedRoots (m :: ms) =
+trustedModsGo _ _ _ _ [] = []
+trustedModsGo deps roots stdlibRoot trustedRoots (m :: ms) =
+  let rest = trustedModsGo deps roots stdlibRoot trustedRoots ms
   match findModuleFile deps roots m
-    Some (_, owningRoot) =>
-      if contains (canonicalizePath owningRoot) trustedRoots then
-        m :: trustedModsGo deps roots trustedRoots ms
+    Some (path, owningRoot) =>
+      if contains (canonicalizePath owningRoot) trustedRoots
+        || underDir (canonicalizePath stdlibRoot) (canonicalizePath path) then
+        m :: rest
       else
-        trustedModsGo deps roots trustedRoots ms
-    None => trustedModsGo deps roots trustedRoots ms
+        rest
+    None => rest
+
+underDir : String -> String -> Bool
+underDir dir path = startsWith "\{dir}/" path
 
 -- Load a root file + transitive deps, dependency-first, WITHOUT the file paths.
 -- A projection of `loadProgramFilesE` (disk-only read, paths dropped) rather than a
