@@ -1,5 +1,5 @@
 # META
-source_lines=740
+source_lines=741
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -59,7 +59,7 @@ import eval.eval.{
   matchPat,
   force,
   startsWithAt,
-  evalArith,
+  evalArithAt,
   evalUnop,
   consVal,
   appendVal,
@@ -121,7 +121,8 @@ ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
 ceval env (CDecision scrut arms tree) =
   cevalDecision env (ceval env scrut) arms tree
 ceval env (CIf c t e) = cevalIf env (ceval env c) t e
-ceval env (CBinPrim op l r _) = cevalBinPrim op (ceval env l) (ceval env r)
+ceval env (CBinPrim op l r tag) =
+  cevalBinPrim op tag (ceval env l) (ceval env r)
 ceval env (CUnOp op e) = evalUnop op (ceval env e)
 ceval env (CTuple es) = VTuple (map (ceval env) es)
 ceval env (CList es) = VList (map (ceval env) es)
@@ -175,10 +176,10 @@ litValue (LChar c) = VChar c
 litValue (LBool b) = VBool b
 litValue LUnit = VUnit
 
-cevalBinPrim : String -> Value e -> Value e -> Value e
-cevalBinPrim "::" l r = consVal l r
-cevalBinPrim "++" l r = appendVal l r
-cevalBinPrim op l r = evalArith op l r
+cevalBinPrim : String -> String -> Value e -> Value e -> Value e
+cevalBinPrim "::" _ l r = consVal l r
+cevalBinPrim "++" _ l r = appendVal l r
+cevalBinPrim op tag l r = evalArithAt tag op l r
 
 cevalIf : EvalEnv (Value e) -> Value e -> CExpr -> CExpr -> <e> Value e
 cevalIf env (VBool True) t _ = ceval env t
@@ -748,7 +749,7 @@ cevalModulesOutput preludeDecls modules =
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "lookupEnv" false) (mem "extendEnv" false) (mem "pushFrame" false) (mem "findCell" false) (mem "applyValue" false) (mem "matchPat" false) (mem "force" false) (mem "startsWithAt" false) (mem "evalArith" false) (mem "evalUnop" false) (mem "consVal" false) (mem "appendVal" false) (mem "makeCtor" false) (mem "boolSeeds" false) (mem "externBindings" false) (mem "ctorToTypeRef" false) (mem "installConsts" false) (mem "cellResult" false) (mem "lookupBinding" false) (mem "isNullary" false) (mem "ppValue" false) (mem "outputRef" false) (mem "evalIndex" false) (mem "evalSlice" false) (mem "evalRange" false) (mem "rangeListMk" false) (mem "rangeArrayMk" false) (mem "evalRecordUpdate" false) (mem "evalValueField" false) (mem "evalField" false) (mem "routeTag" false) (mem "applyDicts" false) (mem "applyMethodDicts" false) (mem "coalesceImpls" false) (mem "buildCtorToType" false) (mem "collectCtors" false) (mem "installDispatchTables" false) (mem "implMethodNames" false) (mem "methodCellsOf" false) (mem "importFrameOf" false) (mem "pubReexports" false) (mem "ModExports" true) (mem "ctorsByTypeOf" false) (mem "evalVariantUpdate" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "methodAtNarrow" false) (mem "applyValues" false) (mem "defaultCellName" false) (mem "preludeShadowNames" false) (mem "globalFramesWith" false) (mem "coreImportExports" false) (mem "ffiExternNamesRef" false) (mem "externDeclNamesOfDecls" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "lookupEnv" false) (mem "extendEnv" false) (mem "pushFrame" false) (mem "findCell" false) (mem "applyValue" false) (mem "matchPat" false) (mem "force" false) (mem "startsWithAt" false) (mem "evalArithAt" false) (mem "evalUnop" false) (mem "consVal" false) (mem "appendVal" false) (mem "makeCtor" false) (mem "boolSeeds" false) (mem "externBindings" false) (mem "ctorToTypeRef" false) (mem "installConsts" false) (mem "cellResult" false) (mem "lookupBinding" false) (mem "isNullary" false) (mem "ppValue" false) (mem "outputRef" false) (mem "evalIndex" false) (mem "evalSlice" false) (mem "evalRange" false) (mem "rangeListMk" false) (mem "rangeArrayMk" false) (mem "evalRecordUpdate" false) (mem "evalValueField" false) (mem "evalField" false) (mem "routeTag" false) (mem "applyDicts" false) (mem "applyMethodDicts" false) (mem "coalesceImpls" false) (mem "buildCtorToType" false) (mem "collectCtors" false) (mem "installDispatchTables" false) (mem "implMethodNames" false) (mem "methodCellsOf" false) (mem "importFrameOf" false) (mem "pubReexports" false) (mem "ModExports" true) (mem "ctorsByTypeOf" false) (mem "evalVariantUpdate" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "methodAtNarrow" false) (mem "applyValues" false) (mem "defaultCellName" false) (mem "preludeShadowNames" false) (mem "globalFramesWith" false) (mem "coreImportExports" false) (mem "ffiExternNamesRef" false) (mem "externDeclNamesOfDecls" false))))
 (DTypeSig true "ceval" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "ceval" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "litValue") (EVar "l")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))
@@ -760,7 +761,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "cevalMatch") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EVar "cevalDecision") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")) (EVar "tree")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "cevalIf") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "c"))) (EVar "t")) (EVar "e")))
-(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild)) (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EVar "tag")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CUnOp" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "evalUnop") (EVar "op")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CTuple" (PVar "es"))) (EApp (EVar "VTuple") (EApp (EApp (EVar "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CList" (PVar "es"))) (EApp (EVar "VList") (EApp (EApp (EVar "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
@@ -791,10 +792,10 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "litValue" ((PCon "LChar" (PVar "c"))) (EApp (EVar "VChar") (EVar "c")))
 (DFunDef false "litValue" ((PCon "LBool" (PVar "b"))) (EApp (EVar "VBool") (EVar "b")))
 (DFunDef false "litValue" ((PCon "LUnit")) (EVar "VUnit"))
-(DTypeSig false "cevalBinPrim" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "cevalBinPrim" ((PLit (LString "::")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "consVal") (EVar "l")) (EVar "r")))
-(DFunDef false "cevalBinPrim" ((PLit (LString "++")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "appendVal") (EVar "l")) (EVar "r")))
-(DFunDef false "cevalBinPrim" ((PVar "op") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "evalArith") (EVar "op")) (EVar "l")) (EVar "r")))
+(DTypeSig false "cevalBinPrim" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "cevalBinPrim" ((PLit (LString "::")) PWild (PVar "l") (PVar "r")) (EApp (EApp (EVar "consVal") (EVar "l")) (EVar "r")))
+(DFunDef false "cevalBinPrim" ((PLit (LString "++")) PWild (PVar "l") (PVar "r")) (EApp (EApp (EVar "appendVal") (EVar "l")) (EVar "r")))
+(DFunDef false "cevalBinPrim" ((PVar "op") (PVar "tag") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "evalArithAt") (EVar "tag")) (EVar "op")) (EVar "l")) (EVar "r")))
 (DTypeSig false "cevalIf" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalIf" ((PVar "env") (PCon "VBool" (PCon "True")) (PVar "t") PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "t")))
 (DFunDef false "cevalIf" ((PVar "env") (PCon "VCon" (PLit (LString "True")) (PList)) (PVar "t") PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "t")))
@@ -942,7 +943,7 @@ cevalModulesOutput preludeDecls modules =
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "lookupEnv" false) (mem "extendEnv" false) (mem "pushFrame" false) (mem "findCell" false) (mem "applyValue" false) (mem "matchPat" false) (mem "force" false) (mem "startsWithAt" false) (mem "evalArith" false) (mem "evalUnop" false) (mem "consVal" false) (mem "appendVal" false) (mem "makeCtor" false) (mem "boolSeeds" false) (mem "externBindings" false) (mem "ctorToTypeRef" false) (mem "installConsts" false) (mem "cellResult" false) (mem "lookupBinding" false) (mem "isNullary" false) (mem "ppValue" false) (mem "outputRef" false) (mem "evalIndex" false) (mem "evalSlice" false) (mem "evalRange" false) (mem "rangeListMk" false) (mem "rangeArrayMk" false) (mem "evalRecordUpdate" false) (mem "evalValueField" false) (mem "evalField" false) (mem "routeTag" false) (mem "applyDicts" false) (mem "applyMethodDicts" false) (mem "coalesceImpls" false) (mem "buildCtorToType" false) (mem "collectCtors" false) (mem "installDispatchTables" false) (mem "implMethodNames" false) (mem "methodCellsOf" false) (mem "importFrameOf" false) (mem "pubReexports" false) (mem "ModExports" true) (mem "ctorsByTypeOf" false) (mem "evalVariantUpdate" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "methodAtNarrow" false) (mem "applyValues" false) (mem "defaultCellName" false) (mem "preludeShadowNames" false) (mem "globalFramesWith" false) (mem "coreImportExports" false) (mem "ffiExternNamesRef" false) (mem "externDeclNamesOfDecls" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "lookupEnv" false) (mem "extendEnv" false) (mem "pushFrame" false) (mem "findCell" false) (mem "applyValue" false) (mem "matchPat" false) (mem "force" false) (mem "startsWithAt" false) (mem "evalArithAt" false) (mem "evalUnop" false) (mem "consVal" false) (mem "appendVal" false) (mem "makeCtor" false) (mem "boolSeeds" false) (mem "externBindings" false) (mem "ctorToTypeRef" false) (mem "installConsts" false) (mem "cellResult" false) (mem "lookupBinding" false) (mem "isNullary" false) (mem "ppValue" false) (mem "outputRef" false) (mem "evalIndex" false) (mem "evalSlice" false) (mem "evalRange" false) (mem "rangeListMk" false) (mem "rangeArrayMk" false) (mem "evalRecordUpdate" false) (mem "evalValueField" false) (mem "evalField" false) (mem "routeTag" false) (mem "applyDicts" false) (mem "applyMethodDicts" false) (mem "coalesceImpls" false) (mem "buildCtorToType" false) (mem "collectCtors" false) (mem "installDispatchTables" false) (mem "implMethodNames" false) (mem "methodCellsOf" false) (mem "importFrameOf" false) (mem "pubReexports" false) (mem "ModExports" true) (mem "ctorsByTypeOf" false) (mem "evalVariantUpdate" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "methodAtNarrow" false) (mem "applyValues" false) (mem "defaultCellName" false) (mem "preludeShadowNames" false) (mem "globalFramesWith" false) (mem "coreImportExports" false) (mem "ffiExternNamesRef" false) (mem "externDeclNamesOfDecls" false))))
 (DTypeSig true "ceval" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "ceval" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "litValue") (EVar "l")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))
@@ -954,7 +955,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "cevalMatch") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EVar "cevalDecision") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")) (EVar "tree")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "cevalIf") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "c"))) (EVar "t")) (EVar "e")))
-(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild)) (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "cevalBinPrim") (EVar "op")) (EVar "tag")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "r"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CUnOp" (PVar "op") (PVar "e"))) (EApp (EApp (EVar "evalUnop") (EVar "op")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CTuple" (PVar "es"))) (EApp (EVar "VTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CList" (PVar "es"))) (EApp (EVar "VList") (EApp (EApp (EMethodRef "map") (EApp (EVar "ceval") (EVar "env"))) (EVar "es"))))
@@ -985,10 +986,10 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "litValue" ((PCon "LChar" (PVar "c"))) (EApp (EVar "VChar") (EVar "c")))
 (DFunDef false "litValue" ((PCon "LBool" (PVar "b"))) (EApp (EVar "VBool") (EVar "b")))
 (DFunDef false "litValue" ((PCon "LUnit")) (EVar "VUnit"))
-(DTypeSig false "cevalBinPrim" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "cevalBinPrim" ((PLit (LString "::")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "consVal") (EVar "l")) (EVar "r")))
-(DFunDef false "cevalBinPrim" ((PLit (LString "++")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "appendVal") (EVar "l")) (EVar "r")))
-(DFunDef false "cevalBinPrim" ((PVar "op") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "evalArith") (EVar "op")) (EVar "l")) (EVar "r")))
+(DTypeSig false "cevalBinPrim" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "cevalBinPrim" ((PLit (LString "::")) PWild (PVar "l") (PVar "r")) (EApp (EApp (EVar "consVal") (EVar "l")) (EVar "r")))
+(DFunDef false "cevalBinPrim" ((PLit (LString "++")) PWild (PVar "l") (PVar "r")) (EApp (EApp (EVar "appendVal") (EVar "l")) (EVar "r")))
+(DFunDef false "cevalBinPrim" ((PVar "op") (PVar "tag") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "evalArithAt") (EVar "tag")) (EVar "op")) (EVar "l")) (EVar "r")))
 (DTypeSig false "cevalIf" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalIf" ((PVar "env") (PCon "VBool" (PCon "True")) (PVar "t") PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "t")))
 (DFunDef false "cevalIf" ((PVar "env") (PCon "VCon" (PLit (LString "True")) (PList)) (PVar "t") PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "t")))
