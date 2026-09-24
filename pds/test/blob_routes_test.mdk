@@ -227,7 +227,7 @@ send context store bytes = match fromArray bytes
 verdictAgainst : Store -> Bytes -> Option LoginVerdict
 verdictAgainst store packed = match parseRequestClassified packed
   Err _ => None
-  Ok request => map settled (classifyLogin server [||] store request)
+  Ok request => map settled (classifyLogin server empty store request)
 
 settled : LoginCheck -> LoginVerdict
 settled check = match loginCheckVerdict check

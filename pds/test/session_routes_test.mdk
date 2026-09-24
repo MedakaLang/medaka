@@ -14,7 +14,7 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import bytes.{Bytes, fromArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain}
 import http.{parseRequestClassified}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
@@ -288,7 +288,10 @@ noUpgradeSalt = [||]
 verdictAgainst : Array Int -> Store -> Bytes -> Option LoginVerdict
 verdictAgainst salt store packed = match parseRequestClassified packed
   Err _ => None
-  Ok request => map settled (classifyLogin server salt store request)
+  Ok request =>
+    map
+      settled
+      (classifyLogin server (fromArrayAssumeByteDomain salt) store request)
 
 settled : LoginCheck -> LoginVerdict
 settled check = match loginCheckVerdict check

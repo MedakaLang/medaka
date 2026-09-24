@@ -167,6 +167,18 @@ export
 accountHostname : Account -> String
 accountHostname (Account _ _ hostname) = hostname
 
+{- | Whether the identifier a login presented names this account.
+
+   atproto lets a client log in with either its handle or its DID. A handle is
+   compared case-insensitively (atproto handles are domain names, which are);
+   a DID is compared exactly, because DID method-specific identifiers are
+   case-sensitive. -}
+export
+identifiesAccount : Account -> String -> Bool
+identifiesAccount account identifier =
+  toLower identifier == toLower (accountHandle account)
+    || identifier == accountDid account
+
 {- | The audience an ACCESS token for this account carries: this PDS's own
    hostname, the server the token may be presented to. -}
 export
@@ -1120,10 +1132,15 @@ createSessionNsid = "com.atproto.server.createSession"
    or a store with no credential. The registry is consulted rather than
    trusted, as in `classifyServiceAuth`, so a request the router would not
    dispatch to `createSession` costs no derivation. `salt` is the fresh salt a
-   successful login re-derives an outdated record under. -}
+   successful login re-derives an outdated record under.
+
+   The upgrade is offered only when the identifier names this account. The
+   password is graded against the record whatever the identifier, so an
+   identifier that names nobody costs the same derivation a wrong password
+   does, and a right password under it earns no second one. -}
 export
-classifyLogin : Server -> Array Int -> Store -> Request -> Option LoginCheck
-classifyLogin (Server _ registry _) salt store request =
+classifyLogin : Server -> Bytes -> Store -> Request -> Option LoginCheck
+classifyLogin (Server account registry _) salt store request =
   match requestNsid request
     None => None
     Some named =>
@@ -1138,8 +1155,13 @@ classifyLogin (Server _ registry _) salt store request =
             get "password" body,
             storeCredential store,
           )
-            (Some (JString _), Some (JString presented), Some record) =>
-              Some (loginCheckBegin presented salt defaultIterations record)
+            (Some (JString identifier), Some (JString presented), Some record) =>
+              let offered =
+                if identifiesAccount account identifier then
+                  toArray salt
+                else
+                  [||]
+              Some (loginCheckBegin presented offered defaultIterations record)
             _ => None
         _ => None
 

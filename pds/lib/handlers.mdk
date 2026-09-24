@@ -138,6 +138,7 @@ import lib.server_core.{
   accountHostname,
   createSessionNsid,
   getServiceAuthNsid,
+  identifiesAccount,
   makeServer,
   refreshAudience,
   serviceAuthUnavailableResponse,
@@ -1903,17 +1904,6 @@ sessionExpiry context = context.nowSeconds + refreshTokenSeconds
 -- The instant a family opened by a login at this request's instant ends.
 familyEnd : RequestContext -> Int
 familyEnd context = context.nowSeconds + sessionFamilyLifetimeSeconds
-
-{- | Whether the identifier a login presented names this account.
-
-   atproto lets a client log in with either its handle or its DID. A handle is
-   compared case-insensitively (atproto handles are domain names, which are);
-   a DID is compared exactly, because DID method-specific identifiers are
-   case-sensitive. -}
-identifiesAccount : Account -> String -> Bool
-identifiesAccount account identifier =
-  toLower identifier == toLower (accountHandle account)
-    || identifier == accountDid account
 
 {- | The one place a login is decided. A wrong password and an identifier that
    names nobody are the same refusal, deliberately.

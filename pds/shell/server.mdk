@@ -2957,7 +2957,11 @@ loginCheckFor : Server ->
   <Rand> Option LoginCheck
 loginCheckFor _ _ (Err _) = None
 loginCheckFor server storeRef (Ok request) =
-  classifyLogin server (osEntropyBytes saltBytes) !storeRef request
+  classifyLogin
+    server
+    (B.fromArrayAssumeByteDomain (osEntropyBytes saltBytes))
+    !storeRef
+    request
 
 {- | How many HMAC calls one slice of a login's derivation pays for before it
    yields to every other connection.
