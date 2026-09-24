@@ -21,8 +21,10 @@ dirname path
 
 The directory part of a path: everything before the last `/`.
 
-`"."` when the path has no `/`. A trailing `/` is ignored, so the last
-segment before it is still the part removed.
+`"."` when the path has no `/`. A trailing `/` is itself the last `/`, so
+it is stripped without also dropping the segment before it: `dirname "a/"`
+is `"a"`, not `"."`. Apply `normalize` first to collapse a trailing slash
+when that segment should be dropped as well.
 
 ```medaka
 > dirname "a/b/c.txt"
