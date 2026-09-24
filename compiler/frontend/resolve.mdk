@@ -351,7 +351,8 @@ internalExterns = [
   "arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill",
   "bytesToFloat64", "byteBlockGetUnsafe", "byteBlockSetUnsafe",
   "byteBlockCopyUnsafe", "byteBlockMake", "byteBlockFromIntArray",
-  "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout"
+  "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout", "u8Truncate",
+  "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt"
 ]
 
 -- The internal-extern guard list for a module given whether internal access is
@@ -1742,7 +1743,7 @@ tupleCtorTyNames = ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
 primitiveTypes : List String
 primitiveTypes = [
   "Int", "Float", "String", "Char", "Bool", "Unit", "List", "Ref", "Array",
-  "ByteBlock"
+  "ByteBlock", "U8", "U16", "U32"
 ]
 
 primitiveConstructors : List String
