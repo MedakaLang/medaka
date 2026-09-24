@@ -1,0 +1,6 @@
+-- #3383 control: the same call with an in-bound destination, which must
+-- check clean.
+mv : Unit -> <FileWrite "tmp/*"> Result String Unit
+mv _ = rename "tmp/a" "tmp/b"
+
+main = println 1
