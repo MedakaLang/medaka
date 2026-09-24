@@ -76,7 +76,8 @@ stdlibOwnership : String -> List String -> String -> List (String, List Decl) ->
 stripSuffixStr : String -> String -> String
 takeFirst : Int -> List a -> List a
 takeTo : String -> List String -> List String
-trustedModsGo : List (String, String) -> List String -> List String -> List String -> <IO> List String
+trustedModsGo : List (String, String) -> List String -> String -> List String -> List String -> <IO> List String
+underDir : String -> String -> Bool
 unknownModuleIdOf : String -> Option String
 unquote : String -> String
 valAfterEq : String -> String

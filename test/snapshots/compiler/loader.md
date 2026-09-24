@@ -1,5 +1,5 @@
 # META
-source_lines=1382
+source_lines=1406
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -1039,8 +1039,14 @@ projectTrustedMods entry roots stdlibRoot mods =
           map canonicalizePath (stdlibRoot :: roots)
         else
           [canonicalizePath stdlibRoot]
-      trustedModsGo deps roots trustedRoots (map fst mods)
-    None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+      trustedModsGo deps roots stdlibRoot trustedRoots (map fst mods)
+    None =>
+      trustedModsGo
+        []
+        roots
+        stdlibRoot
+        [canonicalizePath stdlibRoot]
+        (map fst mods)
 
 -- #2072 (epic #2070, R2): which of `mods` does the loader own to `stdlibRoot`?
 --
@@ -1075,9 +1081,16 @@ stdlibOwnedMods entry roots stdlibRoot mods =
       trustedModsGo
         (readDeps projectRoot)
         roots
+        stdlibRoot
         [canonicalizePath stdlibRoot]
         (map fst mods)
-    None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+    None =>
+      trustedModsGo
+        []
+        roots
+        stdlibRoot
+        [canonicalizePath stdlibRoot]
+        (map fst mods)
 
 -- The pair every typecheck driver needs from `stdlibOwnedMods`, in one call:
 -- (is the ENTRY module stdlib-owned?, the stdlib-owned modIds).  The first
@@ -1141,20 +1154,31 @@ scanAllowInternal inDeps (line :: rest) =
   else
     scanAllowInternal inDeps rest
 
+-- A module is trusted when the root it resolved under is a trusted root, or
+-- when its file lies anywhere under `stdlibRoot`. The second arm is what
+-- trusts a nested stdlib module (`stdlib/crypto/hmac.mdk`) checked as the
+-- entry: its own directory comes first in `roots`, so it resolves under
+-- `stdlib/crypto`, which is not itself a trusted root.
 trustedModsGo : List (String, String) ->
   List String ->
+  String ->
   List String ->
   List String ->
   <IO> List String
-trustedModsGo _ _ _ [] = []
-trustedModsGo deps roots trustedRoots (m :: ms) =
+trustedModsGo _ _ _ _ [] = []
+trustedModsGo deps roots stdlibRoot trustedRoots (m :: ms) =
+  let rest = trustedModsGo deps roots stdlibRoot trustedRoots ms
   match findModuleFile deps roots m
-    Some (_, owningRoot) =>
-      if contains (canonicalizePath owningRoot) trustedRoots then
-        m :: trustedModsGo deps roots trustedRoots ms
+    Some (path, owningRoot) =>
+      if contains (canonicalizePath owningRoot) trustedRoots
+        || underDir (canonicalizePath stdlibRoot) (canonicalizePath path) then
+        m :: rest
       else
-        trustedModsGo deps roots trustedRoots ms
-    None => trustedModsGo deps roots trustedRoots ms
+        rest
+    None => rest
+
+underDir : String -> String -> Bool
+underDir dir path = startsWith "\{dir}/" path
 
 -- Load a root file + transitive deps, dependency-first, WITHOUT the file paths.
 -- A projection of `loadProgramFilesE` (disk-only read, paths dropped) rather than a
@@ -1550,9 +1574,9 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "childDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EVar "stdlibRoot")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
 (DTypeSig true "stdlibOwnedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "stdlibOwnedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EApp (EVar "readDeps") (EVar "projectRoot"))) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "stdlibOwnedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EApp (EVar "readDeps") (EVar "projectRoot"))) (EVar "roots")) (EVar "stdlibRoot")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EVar "stdlibRoot")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
 (DTypeSig true "stdlibOwnership" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "stdlibOwnership" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EBlock (DoLet false false (PVar "owned") (EApp (EApp (EApp (EApp (EVar "stdlibOwnedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "mods"))) (DoExpr (ETuple (EApp (EApp (EVar "contains") (EApp (EVar "entryModIdOf") (EVar "mods"))) (EVar "owned")) (EVar "owned")))))
 (DTypeSig false "entryModIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
@@ -1564,9 +1588,11 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "scanAllowInternal" (PWild (PList)) (EVar "False"))
 (DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "header") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "stringTrim") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
-(DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
+(DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "trustedModsGo" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest"))))))
+(DTypeSig false "underDir" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "underDir" ((PVar "dir") (PVar "path")) (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/")))) (EVar "path")))
 (DTypeSig true "loadProgram" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "loadProgram" ((PVar "entry") (PVar "roots")) (EApp (EApp (EVar "mapErr") (EVar "loadErrorMessage")) (EApp (EApp (EVar "loadProgramE") (EVar "entry")) (EVar "roots"))))
 (DTypeSig true "loadProgramE" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
@@ -1764,9 +1790,9 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "childDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EVar "stdlibRoot")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
 (DTypeSig true "stdlibOwnedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "stdlibOwnedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EApp (EVar "readDeps") (EVar "projectRoot"))) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "stdlibOwnedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EApp (EVar "readDeps") (EVar "projectRoot"))) (EVar "roots")) (EVar "stdlibRoot")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EVar "stdlibRoot")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
 (DTypeSig true "stdlibOwnership" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "stdlibOwnership" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EBlock (DoLet false false (PVar "owned") (EApp (EApp (EApp (EApp (EVar "stdlibOwnedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "mods"))) (DoExpr (ETuple (EApp (EApp (EVar "contains") (EApp (EVar "entryModIdOf") (EVar "mods"))) (EVar "owned")) (EVar "owned")))))
 (DTypeSig false "entryModIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
@@ -1778,9 +1804,11 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "scanAllowInternal" (PWild (PList)) (EVar "False"))
 (DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "header") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "stringTrim") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
-(DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
+(DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "trustedModsGo" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "stdlibRoot") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "trustedRoots")) (EVar "ms"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EApp (EApp (EVar "underDir") (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))) (EApp (EVar "canonicalizePath") (EVar "path")))) (EBinOp "::" (EVar "m") (EVar "rest")) (EVar "rest"))) (arm (PCon "None") () (EVar "rest"))))))
+(DTypeSig false "underDir" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "underDir" ((PVar "dir") (PVar "path")) (EApp (EApp (EVar "startsWith") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/")))) (EVar "path")))
 (DTypeSig true "loadProgram" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "loadProgram" ((PVar "entry") (PVar "roots")) (EApp (EApp (EVar "mapErr") (EVar "loadErrorMessage")) (EApp (EApp (EVar "loadProgramE") (EVar "entry")) (EVar "roots"))))
 (DTypeSig true "loadProgramE" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
