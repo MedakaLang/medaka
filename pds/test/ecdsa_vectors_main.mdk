@@ -463,7 +463,7 @@ main = match args ()
               "Wycheproof classes: high-S=\{intToString counts[8]} malformed=\{intToString counts[9]} witnesses=\{intToString (counts[6] + counts[7])}/2"
           let () =
             println
-              "Wycheproof Bitcoin: \{intToString counts[16]} accepts / \{intToString counts[17]} rejects; \{intToString counts[18]} unique tcIds; public verification: \{intToString counts[19]}/3"
+              "Wycheproof Bitcoin: \{intToString counts[16]} accepts / \{intToString counts[17]} rejects; \{intToString counts[18]} unique tcIds; public verification: \{intToString counts[19]}/74"
           if counts[0] == 80
             && counts[1] == 0
             && counts[2] == 2
@@ -478,10 +478,10 @@ main = match args ()
             && counts[13] == 242
             && counts[14] == 1
             && counts[15] == 1
-            && counts[16] == 0
-            && counts[17] == 3
-            && counts[18] == 3
-            && counts[19] == 3 then
+            && counts[16] == 68
+            && counts[17] == 6
+            && counts[18] == 74
+            && counts[19] == 74 then
             println "TOTAL: PASS"
           else
             let () = println "TOTAL: FAIL"

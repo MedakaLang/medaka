@@ -109,11 +109,12 @@ def der_to_rs(sig_hex: str):
     return r.to_bytes(32, "big"), s.to_bytes(32, "big")
 
 
-def _p1363_seen(p1363_normalized: pathlib.Path) -> set[tuple[str, str, int]]:
-    """(pubkey, message, s) already covered by the P1363 corpus, plus each
-    entry's `n - s` mirror -- a Bitcoin row whose s or -s already appears
-    for the same key/message tests nothing the P1363 corpus does not."""
-    seen: set[tuple[str, str, int]] = set()
+def _p1363_seen(p1363_normalized: pathlib.Path) -> set[tuple[str, str, int, int]]:
+    """(pubkey, message, r, s) of every signature the P1363 corpus already
+    tests. Only an exact match is a duplicate: a signature sharing s but
+    not r, or sharing r with s replaced by its `n - s` mirror, is a
+    different verifier input."""
+    seen: set[tuple[str, str, int, int]] = set()
     for line in p1363_normalized.read_text().splitlines():
         fields = line.split(" ")
         if len(fields) < 5:
@@ -121,9 +122,7 @@ def _p1363_seen(p1363_normalized: pathlib.Path) -> set[tuple[str, str, int]]:
         public, message, signature = fields[2], fields[3], fields[4]
         if signature == "-" or len(signature) != 128:
             continue
-        s = int(signature[64:], 16)
-        seen.add((public, message, s))
-        seen.add((public, message, (ORDER - s) % ORDER))
+        seen.add((public, message, int(signature[:64], 16), int(signature[64:], 16)))
     return seen
 
 
@@ -137,15 +136,15 @@ def bitcoin_rows(data: dict, p1363_normalized: pathlib.Path) -> list[str]:
     byte): 463 source rows, of which 181 are strict-DER with both
     components in range ("convertible" -- the rest are the deliberately
     malformed/BER/wrong-type/out-of-range rows this corpus cannot
-    represent as fixed-width r||s), of which 3 are not already covered by
-    the pinned P1363 corpus under the (pubkey, message, s-or-its-mirror)
-    criterion above. The originating issue (#3362) estimated 231
-    convertible / 77 new from the flag vocabulary alone, without actually
-    decoding and cross-referencing signature values; 181/3 is this
-    generator's own measurement of the same pinned artifact and is what
-    is enforced below, not the issue's estimate. See the round-1 report
-    and pds/test/VECTOR-PROVENANCE.txt for the write-up of that
-    discrepancy."""
+    represent as fixed-width r||s). Of those 181, 107 are exact
+    (pubkey, message, r, s) duplicates of a P1363 row and are dropped; the
+    other 74 are kept. 69 of the kept rows share r with a P1363 row whose
+    s is high, carrying the low-S mirror `n - s` instead (68 valid, 1
+    invalid). The P1363 corpus never exercises those low-S values: its
+    high-S sibling is rejected by the low-S rule before the verify
+    arithmetic runs. The issue's estimate (#3362) of 231 convertible / 77
+    new came from the flag vocabulary alone, without decoding signature
+    values; 181/74 is what is enforced below."""
     if data.get("numberOfTests") != 463:
         raise SystemExit("Wycheproof Bitcoin numberOfTests drifted from 463")
     seen = _p1363_seen(p1363_normalized)
@@ -159,9 +158,10 @@ def bitcoin_rows(data: dict, p1363_normalized: pathlib.Path) -> list[str]:
                 continue
             convertible += 1
             r_bytes, s_bytes = parsed
+            r = int.from_bytes(r_bytes, "big")
             s = int.from_bytes(s_bytes, "big")
             message = test["msg"].lower() or "-"
-            if (public, message, s) in seen:
+            if (public, message, r, s) in seen:
                 continue
             signature = (r_bytes + s_bytes).hex()
             classification = s_class(signature)
@@ -175,8 +175,10 @@ def bitcoin_rows(data: dict, p1363_normalized: pathlib.Path) -> list[str]:
         raise SystemExit(
             f"Wycheproof Bitcoin convertible count drifted from 181 (measured {convertible})"
         )
-    if len(rows) != 3:
-        raise SystemExit(f"Wycheproof Bitcoin new-row count drifted from 3 (measured {len(rows)})")
+    if len(rows) != 74:
+        raise SystemExit(
+            f"Wycheproof Bitcoin new-row count drifted from 74 (measured {len(rows)})"
+        )
     seen_ids = {int(row.split(" ")[1]) for row in rows}
     if len(seen_ids) != len(rows):
         raise SystemExit("Wycheproof Bitcoin rows are not unique tcIds")

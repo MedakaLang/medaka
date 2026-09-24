@@ -53,7 +53,7 @@ row = Row {
         "PUBLIC malformed-digest: PASS sign=4/4 reject verify=4/4 false",
         "Wycheproof: 94 accepts / 148 rejects; 242 unique tcIds",
         "public verification: 242/242 Wycheproof rows",
-        "Wycheproof Bitcoin: 0 accepts / 3 rejects; 3 unique tcIds; public verification: 3/3",
+        "Wycheproof Bitcoin: 68 accepts / 6 rejects; 74 unique tcIds; public verification: 74/74",
       ],
       lastLine = Some "TOTAL: PASS",
     },

@@ -366,12 +366,12 @@ if [ "$MODE" = check ]; then
   cmp "$WORK/pds_message_signing_corpus.txt" "$OUT/pds_message_signing_corpus.txt"
   cmp "$WORK/wycheproof_secp256k1_sha256_p1363.txt" "$OUT/wycheproof_secp256k1_sha256_p1363.txt"
   cmp "$WORK/wycheproof_secp256k1_sha256_bitcoin.txt" "$OUT/wycheproof_secp256k1_sha256_bitcoin.txt"
-  echo "gen_signing_corpus: CHECK PASS — 80 prehashed, 16 PDS-message, 242 Wycheproof P1363, 463/181/3 Wycheproof Bitcoin"
+  echo "gen_signing_corpus: CHECK PASS — 80 prehashed, 16 PDS-message, 242 Wycheproof P1363, 463/181/74 Wycheproof Bitcoin"
 else
   mkdir -p "$OUT"
   cp "$WORK/prehashed_signing_corpus.txt" "$OUT/prehashed_signing_corpus.txt"
   cp "$WORK/pds_message_signing_corpus.txt" "$OUT/pds_message_signing_corpus.txt"
   cp "$WORK/wycheproof_secp256k1_sha256_p1363.txt" "$OUT/wycheproof_secp256k1_sha256_p1363.txt"
   cp "$WORK/wycheproof_secp256k1_sha256_bitcoin.txt" "$OUT/wycheproof_secp256k1_sha256_bitcoin.txt"
-  echo "gen_signing_corpus: wrote 80 prehashed, 16 PDS-message, 242 Wycheproof P1363, 3 Wycheproof Bitcoin rows"
+  echo "gen_signing_corpus: wrote 80 prehashed, 16 PDS-message, 242 Wycheproof P1363, 74 Wycheproof Bitcoin rows"
 fi
