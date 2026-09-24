@@ -1,6 +1,6 @@
 # Effects within the typechecker
 
-Status: implementation plan. The delivery checklist below distinguishes the
+**Status:** INCOMPLETE — implementation plan and delivered foundation. The delivery checklist below distinguishes the
 destination from code that has actually migrated. This is one implementation
 effort, not a sprint contract. Base: `c8d1ffe38`.
 
