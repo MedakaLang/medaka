@@ -16,10 +16,12 @@ checked=0
 pass() { checked=$((checked + 1)); printf 'ok %s - %s\n' "$checked" "$1"; }
 fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 
-# The checksums are a deliberately closed source manifest.  The four files are
-# the complete Medaka secret path: ingress -> scalar -> point -> public wrapper.
-# A change requires re-auditing the source, emitted IR, and linked code below;
-# it cannot silently widen the trusted callee set.
+# The checksums are a deliberately closed source manifest covering the
+# arithmetic secret path: ingress -> scalar -> point -> public wrapper. It
+# does not cover stdlib/bytes.mdk or the runtime's byte-block copy, which also
+# hold key material since SecretKey moved to pointer-free storage (#3389).
+# A change to these four files requires re-auditing the source, emitted IR,
+# and linked code below; it cannot silently widen this trusted callee set.
 source_closure_ok() {
   tree=$1
   [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '1576054259 4921' ] || return 1
