@@ -640,6 +640,21 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
+name = "pds/test/hmac_vectors"
+area = "engines"
+shard = "gates_1"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "native"
+migration = "done"
+run = "pds/test/hmac_vectors_test.mdk"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/inlang_test_oracle"
 area = "engines"
 shard = "gates_4"
@@ -696,6 +711,21 @@ cost = "medium"
 kind = "native"
 migration = "done"
 run = "pds/test/opaque_field_scalar_test.mdk"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/test/pbkdf2"
+area = "engines"
+shard = "gates_1"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "native"
+migration = "done"
+run = "pds/test/pbkdf2_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
