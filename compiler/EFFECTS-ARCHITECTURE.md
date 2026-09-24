@@ -136,6 +136,8 @@ listed here as proposed paths; presence in this table is not a delivery claim.
 | `effect_authority.mdk` | Domain-typed authority variables, symbolic joins and products | Concrete domains; scope identities but no HM orchestration |
 | `effect_rows.mdk` | Atoms, row/tail representation, normalization, row views | Authority terms; explicit request services for stateful operations |
 | `effect_solver.mdk` | Equality/subsumption modes, scoped authority constraints, residual solving | Rows and common scope/goal contracts; no import of `typecheck.mdk` |
+| `effect_bindings.mdk` | Source-arity shape and separate body/forcing summaries | Type and row representation; explicit fresh-variable services |
+| `effect_values.mdk` | N-ary structural joins of produced alternatives | Type and row representation; explicit equality, variance and allocation services |
 | `effect_infer.mdk` | Source abstraction and authority propagation through expressions and patterns | AST plus explicit lexical facts; never look up a local by bare name in a global table |
 | `effect_check.mdk` | Declared-signature and method-effect checks | Solver and explicit checking context; same entry for supplied/default bodies |
 | `repr.mdk` | HM monotypes, schemes and type rendering | Imports effect representation; does not own a second effect algebra |
@@ -236,6 +238,157 @@ anything still owed, rather than changing the destination to fit a partial resul
 
 ## Delivery
 
+### Binding-boundary redesign
+
+The solver integration distinguishes three facts: the source body's inferred
+summary, a written contract, and the scheme published to callers. They are not
+three names for one mutable row. `effect_bindings.mdk` owns the source-arity
+shape: constructing intermediate closures is pure; the final source application
+runs the body. A nullary source binding instead assigns the body summary to
+forcing. Returned functions keep their own invocation rows. A binding has two
+value shapes with shared source domains/body row: the published envelope `P`
+and the recursive-use assumption `R`. Recursive inference receives only `R`;
+the producer join constructs `P` independently. Publication checks `P <= R`,
+not unconditional equality. A recursive return contributes `R` as an actual
+producer lower bound when the source performs that dataflow.
+
+Every recursive group opens one effect-solving scope and allocates all body
+summaries before inference. Each clause contributes a lower bound to its member's
+summary. Unsigned recursive occurrences see the recursive-use shape; signed occurrences see
+fresh instances of the written contract, not another member's body-checking
+universals. A recursive contract's value scheme and predicate templates are
+allocated together and retained in one lexical descriptor. Primary and selected
+standalone roles each retain their own descriptor. Type, forcing, row-indexed
+predicate arguments and dictionary obligations use the same occurrence's
+substitution; final body-variable IDs cannot identify a fresh recursive call.
+Declared calls use the ordinary dictionary-routing pipeline, while inferred
+monomorphic recursion retains deferred routing. Definition and call templates
+share the ordinary-signature slot constructor and superclass expansion.
+Definition checking rejects declared type variables that become concrete or
+collapse together; otherwise the published dictionary ABI could differ from the
+recursive contract. Qualified signature elaboration derives constructor kinds
+from resolved interface predicates at the current module's visibility ordinal.
+That local kind scope separates row indices from ordinary type quantifiers in
+both the body-checking instance and the recursive scheme. It is not a global
+table keyed by variable spelling.
+Checking a body against a contract records directed
+obligations, including nested callback rows, rather than identifying contract
+tails with inference variables. Solving precedes generalization. Instantiation
+substitutes quantified variables only; it must never reopen a solved closed row.
+
+Instantiation explicitly registers its existential effect choices with the
+current solver scope. Encountering an unknown row during effect capture does not
+confer that ownership. The solver distinguishes declaration universals from
+flexible roots reachable in the value being published. Universals are never
+solved. Reachable inference roots are retained when unconstrained, but may be
+solved by accumulated lower bounds; returning an invariant `Box e` does not
+make its inferred `e` a universal. A local instantiated choice that is not
+reachable from the published value may take the least row. Environment roots
+remain outside the child's solving ownership. Ordinary row equality retains most-general HM
+unification, oriented so only flexible cells can be bound, including when the
+other side is a declaration universal. Equality involving a body summary enters
+the scoped solver as two obligations. Universal roles are installed before
+inference, not reconstructed afterward. Instantiation ownership follows
+normalized representatives, so a flexible equality cannot orphan a local choice.
+When an inner constraint depends on an outer summary, its flexible endpoints
+are lowered to the parent level before transfer. This keeps the retained proof
+and every local use on the same cells until the outer boundary solves them.
+
+Mutually reachable bare-variable inclusions prove equality and are collapsed
+before solving. An unconstrained retained equality class remains open. Filtered
+cycles and body summaries remain least-fixed-point equations; they do not receive
+invented polymorphic tails. Worklist propagation sends only newly discovered
+atoms and symbolic leaves across an edge, rather than rescanning each growing
+solution. More general directed residual schemes remain unfinished: the current
+solver does not publish general qualified inequalities. This is a completeness
+limitation, not permission to accept an unproved constraint.
+
+Scope closing has two phases. First solve owned summaries and non-published
+local choices, retaining published flexible leaves as symbolic payload. Then
+normalize and discard proved relations before solving summary-free residual
+constraints. Relations containing an outer summary transfer to its owner. A
+borrowed subset records source-domain roots and domains reached through positive
+published function projections. Non-exact borrowed targets retain one fresh
+residual per graph node; these residuals are seeded before worklist propagation,
+so dependent upper bounds receive the same freedom. Exact index targets do not
+receive a residual. Borrowed roles are re-derived through retained cell references
+after equality-class collapse, rather than left on stale pre-union IDs.
+
+Positive receiving slots have a separate least-allowance role. When directed
+flow first shapes an upper type variable, it reuses the structural value-envelope
+operation: domains and invariant arguments remain equal, while positive arrows
+receive flexible allowances constrained by the actual rows. The original value's
+rows are not reopened. Registered allowances take their least solution even in
+invariant published results; rigid and borrowed input roles take precedence.
+They are not body summaries, and compatibility never becomes a producer equation.
+An allowance lowered into an enclosing monotype transfers its ownership and the
+connected constraint component before local solving. A row-to-constraint index
+and visited maps perform that transfer without repeated whole-list scans. Even
+an unconstrained pure allowance transfers, so dropping a reflexive proof cannot
+lose the obligation to close it at its owner.
+
+Module publication retains the canonical callable scheme and the optional
+standalone scheme in one export descriptor. Visibility is checked per role.
+Import precedence selects that complete descriptor once; ordinary lookup and
+standalone dispatch project from the same winner. A same-named method cannot
+donate its public visibility to a private standalone.
+
+`effect_values.mdk` owns the structural join of produced alternatives. Functions
+keep equal domains, join latent rows, and recursively join their results. Data
+arguments join only where resolved declaration metadata proves covariance;
+effect indices and invariant, contravariant, or unknown slots use equality.
+Branches, match arms, list/array initializer elements, cons, and clause results
+use this operation. Fresh array elements are joined before allocation; existing
+arrays remain invariant. Application spines are traversed once and arguments
+joined column-wise, not by repeatedly folding an ever-growing intermediate row.
+Unknown alternatives receive fresh shapes, with an occurs check before shaping.
+
+The published envelope allocates owned summaries at positive returned arrows,
+including for a single producer. It never promotes an ordinary inference row to
+a summary. Source domains are checked separately, so this envelope walk starts
+after the syntactic arity and does not count source-body effects twice. Unknown
+type shapes still use HM equality: general delayed structural joins and their
+principal schemes remain outside this implemented subset.
+
+Arrow rendering now preserves row tails using the same naming context as forcing
+rows and type arguments. A printed closed row must not conceal an open allowance;
+the old labels-only arrow rendering obscured this distinction during review.
+
+### Solver checkpoint verification
+
+Before produced-value joining was added, a fresh compiler passed both binding
+and solver sibling suites under eval and native (47 and 17 assertions), the four
+effect-domain suites under native (63 assertions), and the native shadow suite
+(4 assertions). The check driver accepted the CLI closure and all 71 entry
+closures; the elaborate driver accepted the CLI closure. Self-compilation C3a
+and C3b were byte-identical. These are receipts for that solver checkpoint, not
+for the subsequent value-join changes or the complete no-laundering architecture.
+
+### Produced-value and scoped-allowance checkpoint verification
+
+The subsequent redesign passes the native binding, solver, value-join and
+representation suites (69, 26, 5 and 3 tests). With freshly rebuilt compiler and
+project-diagnostics binaries, the check driver accepts the CLI closure and all
+71 entry closures; the elaborate driver accepts the CLI closure. C3a agrees
+with the converged seed reference and C3b reproduces byte-identical IR.
+
+Nine selected fixtures agree across eval, native and Wasm: generic value choice,
+private standalone visibility, shadowed method forcing and six nullary-memo
+fixtures. The first two also pass independent value pins. Native CLI passes
+169 cases, cross-project dependencies pass nine tests, and all seven changed or
+new compiler snapshots pass. Disabling allowance ownership transfer makes its
+outward-pure regression fail; restoring the transfer makes it pass.
+
+Stock `bindings` and `nesting` performance probes pass without threshold changes.
+Allocation grows approximately 2.04x and 2.08–2.15x per input doubling,
+respectively. Binding typecheck time grows 1.26–1.46x; nesting remains below the
+gate's timing floor. These are targeted checks, not full engine, performance or
+preflight passes. Full CI and final exact-head review remain outstanding, as do
+the semantic migration items below.
+
+These are implementation invariants under active migration. The foundation
+receipts below predate the solver redesign.
+
 This is an **incomplete migration**, not a claim that the effects system meets
 the no-laundering contract. The one-shot implementation establishes the following
 foundation:
@@ -254,10 +407,13 @@ foundation:
 - Ordinary lazy bindings retain initializer effects, including function-valued
   initializers. Leading effect annotations constrain forcing. Supplied and
   default nullary methods check and publish their interface forcing contract.
-  Default bodies use one signature instantiation for inference and checking.
-- The shared-tail equality rule retains concrete lower bounds instead of merely
-  recording their disappearance. This repairs a demonstrated closed-contract
-  recursive forcing loss; it is not a least-fixed-point solver.
+  Supplied methods and default bodies install scoped rigid contract variables
+  before body inference. The solver validates their directed obligations at
+  scope exit; legacy post-inference checks remain during migration.
+- Binding-owned body and forcing equations are solved to a least fixed point,
+  including recursive dependencies and filtered higher-order call constraints.
+  Positive returned-value envelopes own separate summary equations; arbitrary
+  existing inference rows are never retroactively claimed as summaries.
 - Policy aggregation joins same-label authority parameters rather than keeping
   the first occurrence. It includes binding forcing effects. Its old structural
   traversal is still not an invocation-protocol summary.
@@ -273,13 +429,13 @@ foundation:
 
 Still required before this package can be called complete or laundering-free:
 
-1. Shared scoped universal signature checking and directed residual constraints
-   (#830, #2111, #825), replacing flexible pre-unification plus post-hoc checks.
-   The remaining row equality solver is not a general inclusion solver.
-2. Least forcing solutions across recursive groups, including inference rows
-   connected through function calls. Protecting only force cells and replaying
-   their constraints after solving is insufficient: an ordinary arrow row can
-   carry a recursive dependency back into the force equation.
+1. Complete directed residual schemes and retirement of legacy signature
+   post-checks (#830, #2111, #825). Scoped universal checking is integrated, but
+   the remaining row equality solver is not a general inclusion solver.
+2. Complete structural constraint solving when produced alternatives initially
+   have only unknown type shapes. The dual published/recursive envelopes solve
+   explicit returned-arrow equations, but HM equality can still identify
+   unknown alternatives before their eventual arrow shapes are available.
 3. Named authorities, qualified fields and constructor proof sources (#3385),
    together with retiring underscore and first-argument hole filling
    (#3382/#3383). Those existing laundering regressions remain release blockers.

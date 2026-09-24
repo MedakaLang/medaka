@@ -1,0 +1,57 @@
+-- A binding owns the effects of evaluating its source body, not every arrow in
+-- the value it returns. The syntactic arity separates thunk initialization from
+-- invocation and prevents returned closures from donating their effect slots.
+import types.repr.{Mono(..), normalize}
+import types.effect_rows.{EffRow(..)}
+
+pureRow : EffRow
+pureRow = EffRow [] None
+
+public export data BindingSummary = BindingSummary {
+  bsArity : Int,
+  bsValue : Mono,
+  bsRecursiveValue : Mono,
+  bsBody : EffRow,
+  bsForce : EffRow,
+}
+
+export
+bodyArrows : List Mono -> EffRow -> Mono -> Mono
+bodyArrows [] _ result = result
+bodyArrows [param] body result = TFun param body result
+bodyArrows (param :: rest) body result =
+  TFun param pureRow (bodyArrows rest body result)
+
+export
+newBindingSummary : Int -> (Unit -> Mono) -> (Unit -> EffRow) -> BindingSummary
+newBindingSummary arity freshType freshSummary =
+  let body = freshSummary ()
+  let (published, recursive) = freshBodyValues arity freshType body
+  BindingSummary {
+    bsArity = arity,
+    bsValue = published,
+    bsRecursiveValue = recursive,
+    bsBody = body,
+    bsForce = if arity == 0 then body else pureRow,
+  }
+
+-- Inputs and source invocation are shared. Only the produced result differs:
+-- recursive uses may constrain their assumption without claiming ownership of
+-- the envelope that will be published after all producers have been inferred.
+freshBodyValues : Int -> (Unit -> Mono) -> EffRow -> (Mono, Mono)
+freshBodyValues arity freshType body =
+  if arity <= 0 then
+    (freshType (), freshType ())
+  else
+    let domain = freshType ()
+    let row = if arity == 1 then body else pureRow
+    let (published, recursive) = freshBodyValues (arity - 1) freshType body
+    (TFun domain row published, TFun domain row recursive)
+
+-- Only source applications belong to the binding; a function-valued result
+-- starts a new invocation protocol. An arity mismatch is diagnosed by typing.
+export
+bodyRowAt : Int -> Mono -> EffRow
+bodyRowAt arity value = match normalize value
+  TFun _ row result => if arity == 1 then row else bodyRowAt (arity - 1) result
+  _ => pureRow

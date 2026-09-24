@@ -1,4 +1,4 @@
 charAt : String -> Char
 invShared : Inv -> Int
-main : Unit
+main : <IO> Unit
 watShared : Wat -> String

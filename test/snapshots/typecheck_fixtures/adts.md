@@ -23,8 +23,8 @@ mirror t = match t
 # TYPES
 wrap : a -> Opt a
 fromOpt : a -> Opt a -> a
-mapOpt : (a -> b) -> Opt a -> Opt b
+mapOpt : (a -> <b> c) -> Opt a -> <b> Opt c
 swap : Pair a b -> Pair b a
-applyPair : Pair (a -> b) a -> b
+applyPair : Pair (a -> <b> c) a -> <b> c
 single : a -> Tree a
 mirror : Tree a -> Tree a

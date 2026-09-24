@@ -322,17 +322,24 @@ ppScheme (Forall _ _ force t) = ppBinding (Ref []) (Ref 0) force t
 ppBinding : Ref (List (Int, String)) -> Ref Int -> EffRow -> Mono -> String
 ppBinding ctx cnt force t = match rowFlat force
   ([], []) => ppGo ctx cnt 0 t
-  (labels, members) =>
-    let atoms = renderAtoms labels
-    let tails = joinWith " | " (map (ppEffvarName ctx cnt) members)
-    let inside =
-      if atoms == "" then
-        tails
-      else if tails == "" then
-        atoms
-      else
-        "\{atoms} | \{tails}"
-    "<\{inside}> " ++ ppGo ctx cnt 2 t
+  flat => ppEffectPrefix ctx cnt flat ++ ppGo ctx cnt 2 t
+
+ppEffectPrefix : Ref (List (Int, String)) ->
+  Ref Int ->
+  (List Atom, List (Ref Effvar)) ->
+  String
+ppEffectPrefix _ _ ([], []) = ""
+ppEffectPrefix ctx cnt (labels, members) =
+  let atoms = renderAtoms labels
+  let tails = joinWith " | " (map (ppEffvarName ctx cnt) members)
+  let inside =
+    if atoms == "" then
+      tails
+    else if tails == "" then
+      atoms
+    else
+      "\{atoms} | \{tails}"
+  "<\{inside}> "
 
 -- Render a scheme WITH its constraint context (`Num a => a -> a -> a`).  The
 -- constraint tyvar ids are threaded through the SAME ctx/cnt that renders the
@@ -494,8 +501,9 @@ ppFun : Ref (List (Int, String)) ->
   String
 ppFun ctx cnt prec a eff b =
   let sa = ppGo ctx cnt 2 a
+  let se = ppEffectPrefix ctx cnt (rowFlat eff)
   let sb = ppGo ctx cnt 1 b
-  wrapIf (prec > 1) "\{sa} -> \{effStr (effrowLabels eff)}\{sb}"
+  wrapIf (prec > 1) "\{sa} -> \{se}\{sb}"
 
 export
 effStr : List Atom -> String

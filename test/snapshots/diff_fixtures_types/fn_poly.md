@@ -15,5 +15,5 @@ main =
 # TYPES_USER
 identity : a -> a
 konst : a -> b -> a
-flip : (a -> b -> c) -> b -> a -> c
+flip : (a -> <b> c -> <d> e) -> c -> a -> <b | d> e
 main : <IO> Unit

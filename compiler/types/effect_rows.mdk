@@ -12,12 +12,14 @@ public export data Effvar =
   | EUnbound Int Int
   | ELink Int EffRow
   | EJoin Int Int (List (Ref Effvar))
+  | ESummary Int Int Int
 
 export
 effrowNorm : EffRow -> EffRow
 effrowNorm (row@(EffRow _ None)) = row
 effrowNorm (row@(EffRow _ (Some cell))) = match !cell
   EUnbound _ _ => row
+  ESummary _ _ _ => row
   _ =>
     let (labels, members) = rowFlat row
     match members
@@ -77,12 +79,42 @@ effvarId cell = match !cell
   EUnbound id _ => id
   ELink id _ => id
   EJoin id _ _ => id
+  ESummary id _ _ => id
 
 -- Identity belongs to the cell, not its current contents. Links retain it so
 -- a shared labelled suffix is visited once even after inference solves it.
 export
 linkRow : Ref Effvar -> EffRow -> Unit
-linkRow cell row = cell := ELink (effvarId cell) row
+linkRow cell row = match !cell
+  ESummary _ _ _ => panic "effect summary mutated by ordinary row unification"
+  _ => cell := ELink (effvarId cell) row
+
+export
+solveSummaryCell : Int -> Ref Effvar -> EffRow -> Unit
+solveSummaryCell owner cell row = match !cell
+  ESummary id _ actualOwner if owner == actualOwner => cell := ELink id row
+  _ => panic "effect summary solved outside its owning scope"
+
+export
+rowHasSummary : EffRow -> Bool
+rowHasSummary row = hasSummaryRows [row] Tip
+
+hasSummaryRows : List EffRow -> Map Int Unit -> Bool
+hasSummaryRows [] _ = False
+hasSummaryRows ((EffRow _ None) :: rest) seen = hasSummaryRows rest seen
+hasSummaryRows ((EffRow _ (Some cell)) :: rest) seen = match !cell
+  ESummary _ _ _ => True
+  EUnbound _ _ => hasSummaryRows rest seen
+  ELink id row =>
+    if has id seen then
+      hasSummaryRows rest seen
+    else
+      hasSummaryRows (row :: rest) (set id () seen)
+  EJoin id _ members =>
+    if has id seen then
+      hasSummaryRows rest seen
+    else
+      hasSummaryRows (pushMembers members rest) (set id () seen)
 
 export
 isJoinCell : Ref Effvar -> Bool
@@ -162,6 +194,11 @@ rowFlatGo ((EffRow labels tail) :: pending) seen chunks cells =
     None => rowFlatGo pending seen chunks2 cells
     Some cell => match !cell
       EUnbound id _ =>
+        if seenUnbound id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo pending (markUnbound id seen) chunks2 (cell :: cells)
+      ESummary id _ _ =>
         if seenUnbound id seen then
           rowFlatGo pending seen chunks2 cells
         else

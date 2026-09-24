@@ -7,4 +7,4 @@ main =
   then println "yes" -- then branch
   else println "no" -- else branch
 # TYPES_USER
-main : <IO | a> Unit
+main : <IO> Unit

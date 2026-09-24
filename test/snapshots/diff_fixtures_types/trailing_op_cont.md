@@ -64,4 +64,4 @@ cons : Int -> List Int -> List Int
 pipeline : Int -> Int
 composeR : Int -> Int
 composeL : Int -> Int
-main : <IO | a> Unit
+main : <IO> Unit

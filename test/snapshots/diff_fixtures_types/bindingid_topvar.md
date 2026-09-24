@@ -9,5 +9,5 @@ h = g 2
 main = println h
 # TYPES_USER
 g : Num a => a -> a
-h : <a> Int
-main : <IO | a> Unit
+h : Int
+main : <IO> Unit

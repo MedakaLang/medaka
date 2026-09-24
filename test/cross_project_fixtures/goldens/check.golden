@@ -1,1 +1,1 @@
-main : Unit
+main : <IO> Unit

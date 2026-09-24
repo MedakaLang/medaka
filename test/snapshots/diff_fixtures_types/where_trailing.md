@@ -8,4 +8,4 @@ f x = go x where
 main = println (f 5)
 # TYPES_USER
 f : Num a => a -> a
-main : <IO | a> Unit
+main : <IO> Unit

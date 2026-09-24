@@ -6,7 +6,7 @@
 -- machinery), and NOT again at `mid ` (memoised).  Expected on all three engines:
 -- `start [force] mid end`.  Eager forcing would print `[force] start ...`.
 interface HasUnit a where
-  theUnit : a
+  theUnit : <Stdout> a
 
 data Box = Box String
 

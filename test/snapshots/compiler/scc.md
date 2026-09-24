@@ -5,8 +5,8 @@ stages=DESUGAR,MARK
 -- Tarjan's strongly-connected-components algorithm, extracted from
 -- types/typecheck.mdk (PR1 of #158).  Self-contained: it references only
 -- String/Int/Bool/List and the OrdMap wrappers, plus the `reverseL`/`minI`
--- helpers from support.util.  The sole consumer is `processTopGroups` in
--- typecheck.mdk, which uses it to order top-level letrec groups.
+-- helpers from support.util. Typechecking uses it to order top-level letrec
+-- groups and to identify equality classes in the effect inclusion graph.
 --
 -- The six `tj*` module-level Refs are private scratch state; `tarjanSCCs`
 -- resets all of them at entry, so it is re-entrant across calls (processing

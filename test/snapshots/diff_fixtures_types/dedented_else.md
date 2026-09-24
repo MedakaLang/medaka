@@ -7,4 +7,4 @@ main =
     then println "yes"
   else println "no"
 # TYPES_USER
-main : <IO | a> Unit
+main : <IO> Unit

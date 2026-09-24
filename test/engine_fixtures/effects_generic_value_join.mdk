@@ -1,0 +1,9 @@
+-- Each selection chooses the printing callback. The two lines are the same
+-- whether that callback supplies the first or second generic argument.
+-- lint-disable-next-line rule-missing-signature
+choose left right flag = if flag then left else right
+
+main : <Stdout> Unit
+main =
+  let _ = choose (x => x) (x => putStrLn "audit") False ()
+  choose (x => putStrLn "audit") (x => x) True ()

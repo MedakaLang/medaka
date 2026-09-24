@@ -1,2 +1,2 @@
 countdown : Int -> Int
-main : Unit
+main : <IO> Unit

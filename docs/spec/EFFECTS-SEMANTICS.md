@@ -445,8 +445,14 @@ lower-effect type is expected must be rejected, *even point-free* — `launder =
 emit` (binding an `<IO>` function to a pure-typed name) cannot erase the row.
 This is a directed type/effect judgment, respecting arrow variance and invariant
 indices. Equality and directed flow are distinct relations; neither may erase an
-unproved row difference. Reopening a row during HM inference is an implementation
-technique, not the semantic definition or a substitute for checking universals.
+unproved row difference. Instantiation freshens quantified variables only: a
+closed row cannot become a fresh allowance merely because its function is aliased,
+passed as an argument, or composed with another function.
+An unshaped receiving type variable is different: it has no existing arrow row
+to preserve. Giving that slot a value shape may introduce positive inference
+allowances, constrained by every supplied value's unchanged row. Those allowances
+take their least solution before publication; they cannot manufacture an
+unconstrained result effect. Domains and invariant arguments still use equality.
 
 **No-laundering law.** *Every elimination of an effectful value flows its row into
 the ambient effect; no construct discards or downgrades a row except by `sub` to a
@@ -641,7 +647,7 @@ callbacks and records their rows in the result index. Its general contracts are:
 
 ```
 deferMap  : (a →^e₂ b) → f e a → f (e ⊔ e₂) b
-deferPure : a → f ⟨⟩ a
+deferPure : ∀e. a → f e a
 deferAp   : f e (a → b) → f e₂ a → f (e ⊔ e₂) b
 deferThen : f e a → (a →^e₂ f e₃ b) → f (e ⊔ e₂ ⊔ e₃) b
 ```
@@ -651,6 +657,19 @@ hierarchy mirrors the plain hierarchy, with distinct `defer*` method names.
 A `defer` block uses that family; `do` uses the plain family. Neither changes
 instance selection according to a grade. A single shared grade is a restricted
 instance of these contracts, not a license to identify independent caller rows.
+
+`deferPure` introduces a fresh computation at any caller-chosen upper bound;
+it performs and stores no effects. Choosing the empty grade is its least instance.
+This is not a coercion from an existing `f ⟨⟩ a` to `f e a`: abstract indices
+remain invariant. It permits a helper such as `deferWhen` to select between an
+existing `f e Unit` and a freshly constructed `deferPure ()` at that same grade.
+The implementation must satisfy this contract for every `e`, including empty.
+
+In a qualified signature, the resolved interface declaration determines the
+kind of each constrained constructor parameter. For example,
+`DeferredApplicative m => Bool → m e Unit → m e Unit` quantifies `e` as an
+effect row, not an ordinary type. These kinds are local to that signature;
+an unrelated variable also spelled `m` inherits nothing.
 
 Even an eager constructor arm must suspend its callback to implement the pure
 deferred contract: `deferMap g (Done a)` constructs a suspended application,
@@ -676,13 +695,77 @@ Sequencing joins effects without equating its operands. Independent callback
 variables remain independent. Checking a symbolic join must not choose an
 arbitrary decomposition or identify universal members to make a constraint fit.
 
+Produced alternatives also have a type join: this is distinct from joining the
+effects incurred while producing them. With equal parameter types, alternatives
+`a -> <p> b` and `a -> <q> c` produce
+`a -> <p | q> join(b, c)`. Merely selecting either closure does not incur its
+latent row. The same rule applies to `if`, match arms and multiple source clauses.
+Declared covariant data parameters admit recursive value joins; contravariant,
+invariant and unknown parameters require equality. Effect-kind indices remain
+invariant. A checker that cannot establish a join must report a type error, not
+erase an effect or assume unknown variance is covariant.
+
+List and array literals join their element values before construction. Cons
+joins its head value with the existing list's element type. Joining already
+constructed mutable containers is different: `Array` and `Ref` remain invariant,
+so a pure callback container cannot be widened to an effectful callback container
+through branch selection. Any unknown alternative inferred to be a callback keeps
+its own latent variable; another branch's closed row is not evidence that the
+unknown callback is pure. Ordinary infinite-type rejection still applies.
+
+Equality of invariant slots can solve their still-flexible inference variables.
+For example, separate `Ref` constructor instances in one binding group may infer
+one common callback allowance. This is not covariance of `Ref`: once either
+element row is fixed, equality must preserve it. A singleton constructor
+application with a pure callback must publish a pure element row, not an extra
+open tail. If an inference allowance belongs to an enclosing binding, its bounds
+and ownership transfer together and it is solved at that enclosing boundary.
+
 Captured effects and an inference allowance are distinct: capture records what
 a body performs; a shared clause or recursive inference variable can accumulate
 lower bounds until its group is solved. The first pure clause cannot close that
 variable before later clauses contribute. In particular a recursive equation
 `φ = Audit ⊔ φ` retains `Audit`; equality unification must not discard the
-concrete prefix. Recursive forcing summaries require a monotone solution before
-publication, independent of traversal order.
+concrete prefix. Recursive forcing and invocation summaries take the least
+solution of their body equations before publication, independent of traversal
+order. Intermediate arrows introduced by currying are pure; the final arrow
+carries the body's summary. Constructing a closure does not invoke its body.
+
+Recursive use assumes an allowance; it is not a new producer of effects. The
+inferred published value must fit that allowance. A returned recursive value
+contributes its assumed row to the actual result equation, where least solving
+resolves the cycle. A caller's input row remains symbolic during this process.
+If an inferred input allowance has lower bound `Audit`, its principal solution
+may still contain other effects (`Audit | e`); exact effect-index equality does
+not introduce such residual freedom. Unproved constraints must fail even when
+their variables also occur in a recursive result.
+
+Composition follows the same rule as ordinary application. If `f : a -> <p> b`
+and `g : b -> <q> c`, then `f >> g` (equivalently `g << f`) has type
+`a -> <p | q> c`. Constructing that closure does not perform `p` or `q`; invoking
+it performs both. Pipe application performs the selected function's row now.
+These constructs cannot introduce an unrelated result effect variable.
+
+An inference allowance is not an effect variable supplied by a caller. It cannot
+be performed, generalized, or published as an extra open tail. Compatibility is
+a directed relation between rows, not an extra effect added to either row.
+Ordinary callback variables remain in the least solution when their callbacks
+are invoked; callbacks merely stored or returned contribute no invocation effect.
+
+An inferred row occurring in a returned value is not thereby a declaration
+universal. For example, applying `store : (Unit -> <e> Unit) -> Box e` to an
+`Audit` callback constrains the returned index to include `Audit`. All arguments
+at that occurrence constrain the same fresh instance; two callbacks with
+different effects contribute their join, independent of argument order. A pure
+lower bound alone does not fix an otherwise unconstrained row. Actual declaration
+universals remain rigid throughout these judgments.
+
+A signed binding has separate inferred and declared roles: its body summary
+must fit the declared contract, while recursive uses and exported uses see that
+contract. A pure implementation of a declared `<Audit>` operation therefore
+still exposes `<Audit>`. Nested binding groups may retain a monomorphic
+dependency on an enclosing group's summary, but that summary cannot escape its
+own inference scope unsolved.
 
 ### 6.9 Dictionary orthogonality
 

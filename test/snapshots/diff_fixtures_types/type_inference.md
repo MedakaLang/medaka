@@ -19,7 +19,7 @@ main =
   println (snd r)
 # TYPES_USER
 pair : a -> b -> (a, b)
-applyBoth : (a -> b) -> (a -> c) -> a -> (b, c)
+applyBoth : (a -> <b> c) -> (a -> <d> e) -> a -> <b | d> (c, e)
 double : Num a => a -> a
 inc : Num a => a -> a
 main : <IO> Unit

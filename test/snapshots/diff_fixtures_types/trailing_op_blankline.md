@@ -9,4 +9,4 @@ r = 1 +
 main = println r
 # TYPES_USER
 r : Int
-main : <IO | a> Unit
+main : <IO> Unit

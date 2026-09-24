@@ -1,0 +1,31 @@
+-- Recursive contract instances must supply the dictionaries for their own types.
+evenCat : Monoid a => List a -> a
+evenCat [] = empty
+evenCat (x :: xs) = append x (oddCat xs)
+
+oddCat : Monoid a => List a -> a
+oddCat [] = empty
+oddCat (x :: xs) = append x (evenCat xs)
+
+renderAt : Display a => Bool -> a -> String
+renderAt flag x = if flag then renderAt False 1 else display x
+
+first : (Display a, Display b) => Bool -> a -> b -> String
+first flag x y = if flag then second False y x else display x ++ display y
+
+second : (Display a, Display b) => Bool -> a -> b -> String
+second flag x y = if flag then first False y x else display x ++ display y
+
+interface Clash a where
+  probe : a -> String
+
+probe : Display a => Bool -> a -> String
+probe again x = if again then probe False 1 else display x
+
+main : <Stdout> Unit
+main =
+  putStrLn "\{evenCat ["a", "b", "c"]}|\{oddCat ["x", "y"]}"
+  putStrLn (renderAt True "ignored")
+  putStrLn (first True "x" 2)
+  putStrLn (second True 3 "y")
+  putStrLn (probe True "ignored")

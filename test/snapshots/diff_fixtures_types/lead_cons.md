@@ -8,4 +8,4 @@ r = [1, 2]
 main = println r
 # TYPES_USER
 r : List (List Int)
-main : <IO | a> Unit
+main : <IO> Unit

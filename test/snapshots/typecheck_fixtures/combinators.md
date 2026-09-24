@@ -17,12 +17,12 @@ on f g x y = f (g x) (g y)
 # TYPES
 id : a -> a
 const : a -> b -> a
-apply : (a -> b) -> a -> b
-compose : (a -> b) -> (c -> a) -> c -> b
-flip : (a -> b -> c) -> b -> a -> c
+apply : (a -> <b> c) -> a -> <b> c
+compose : (a -> <b> c) -> (d -> <e> a) -> d -> <e | b> c
+flip : (a -> <b> c -> <d> e) -> c -> a -> <b | d> e
 pair : a -> b -> (a, b)
 fst3 : (a, b) -> a
 snd3 : (a, b) -> b
 swapT : (a, b) -> (b, a)
-twice : (a -> a) -> a -> a
-on : (a -> a -> b) -> (c -> a) -> c -> c -> b
+twice : (a -> <b> a) -> a -> <b> a
+on : (a -> <b> a -> <c> d) -> (e -> <f> a) -> e -> e -> <f | b | c> d

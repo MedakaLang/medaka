@@ -1,2 +1,2 @@
-main : Unit
+main : <IO> Unit
 total : (Foldable a, Num b) => a b -> b

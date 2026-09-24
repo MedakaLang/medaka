@@ -1,0 +1,240 @@
+-- Direct contracts for the positive produced-value join.  The typechecker owns
+-- real unification; this harness deliberately provides only enough equality to
+-- expose which positions `joinProduced` asks it to compare.
+
+import test.{expectAll, expectEqual, expectGreaterThan, expectLessThan}
+import list.{range, replicate}
+import support.opcount.{opBump, opSnap, setOpCounting}
+import types.effect_domain.{Atom(..), Param(..), atomsUnion, renderAtoms}
+import types.effect_rows.{EffRow(..), effrowLabels}
+import types.effect_values.{ValueJoinOps(..), joinProduced}
+import types.repr.{Mono(..), Tyvar(..), normalize}
+
+data Harness = Harness {
+  equalCalls : Ref Int,
+  mismatches : Ref (List String),
+  rowMismatches : Ref (List String),
+  nextFresh : Ref Int,
+}
+
+newHarness : Unit -> Harness
+newHarness () = Harness {
+  equalCalls = Ref 0,
+  mismatches = Ref [],
+  rowMismatches = Ref [],
+  nextFresh = Ref 10000,
+}
+
+recordMismatch : Harness -> String -> Unit
+recordMismatch harness context =
+  harness.mismatches := context :: !harness.mismatches
+
+recordRowMismatch : Harness -> String -> EffRow -> EffRow -> Unit
+recordRowMismatch harness context left right =
+  if rowLabels left == rowLabels right then
+    ()
+  else
+    harness.rowMismatches := context :: !harness.rowMismatches
+
+-- This is intentionally not a second unifier.  It records every requested
+-- equality and only links an unbound variable to a non-occurring peer, which
+-- lets the unknown-shaping tests observe the production occurs boundary.
+testEqual : Harness -> String -> Mono -> Mono -> Unit
+testEqual harness context left right =
+  let _ = opBump ()
+  harness.equalCalls := !harness.equalCalls + 1
+  equalGo harness context (normalize left) (normalize right)
+
+equalGo : Harness -> String -> Mono -> Mono -> Unit
+equalGo harness context (TVar cell) right = match !cell
+  Unbound id _ =>
+    if occurs id right then
+      recordMismatch harness context
+    else
+      cell := Link right
+  Link _ => ()
+equalGo harness context left (TVar cell) = match !cell
+  Unbound id _ =>
+    if occurs id left then recordMismatch harness context else cell := Link left
+  Link _ => ()
+equalGo harness context (TRigid left) (TRigid right) =
+  if left == right then () else recordMismatch harness context
+equalGo harness context (TFun leftDomain leftRow leftResult) (TFun rightDomain rightRow rightResult) =
+  let _ = equalGo harness context leftDomain rightDomain
+  let _ = recordRowMismatch harness context leftRow rightRow
+  equalGo harness context leftResult rightResult
+equalGo harness context (TApp leftHead leftArg) (TApp rightHead rightArg) =
+  let _ = equalGo harness context leftHead rightHead
+  equalGo harness context leftArg rightArg
+equalGo harness context (TEff left) (TEff right) =
+  recordRowMismatch harness context left right
+equalGo harness context _ _ = recordMismatch harness context
+
+occurs : Int -> Mono -> Bool
+occurs id value = match normalize value
+  TVar cell => match !cell
+    Unbound other _ => id == other
+    Link _ => False
+  TFun domain _ result => occurs id domain || occurs id result
+  TApp head argument => occurs id head || occurs id argument
+  _ => False
+
+freshType : Harness -> Unit -> Mono
+freshType harness () =
+  let id = !harness.nextFresh
+  harness.nextFresh := id + 1
+  TVar (Ref (Unbound id 0))
+
+freshRow : Harness -> Unit -> EffRow
+freshRow _ () = EffRow [] None
+
+pureRow : EffRow
+pureRow = EffRow [] None
+
+auditRow : EffRow
+auditRow = EffRow [Atom "Audit" PUnit] None
+
+clockRow : EffRow
+clockRow = EffRow [Atom "Clock" PUnit] None
+
+rowLabels : EffRow -> String
+rowLabels row = renderAtoms (effrowLabels row)
+
+-- Scale tests use `collectPure`, ensuring their allocation measurement belongs
+-- to `joinProduced`, not to test scaffolding.
+collectRows : List EffRow -> EffRow
+collectRows rows =
+  EffRow (fold (atoms row => atomsUnion atoms (effrowLabels row)) [] rows) None
+
+collectPure : List EffRow -> EffRow
+collectPure _ = pureRow
+
+ops : Harness -> List Bool -> (List EffRow -> EffRow) -> ValueJoinOps String
+ops harness modes collector = ValueJoinOps {
+  vjoEqual = testEqual harness,
+  vjoCovariants = _ => modes,
+  vjoFreshType = freshType harness,
+  vjoFreshRow = freshRow harness,
+  vjoCollectRows = collector,
+}
+
+arrow : EffRow -> Mono
+arrow row = TFun (TRigid "Input") row (TRigid "Output")
+
+joined : Option Mono -> Mono
+joined (Some value) = value
+joined None = panic "expected a produced-value join"
+
+joinedRow : Option Mono -> EffRow
+joinedRow values = match joined values
+  TFun _ row _ => row
+  _ => panic "expected joined arrow"
+
+test "n-ary function join collects every latent row once" =
+  let harness = newHarness ()
+  let values = [
+    ("pure", arrow pureRow),
+    ("audit", arrow auditRow),
+    ("clock", arrow clockRow),
+  ]
+  let result = joinProduced (ops harness [] collectRows) values
+  expectAll [
+    expectEqual "Audit, Clock" (rowLabels (joinedRow result)),
+    expectGreaterThan 0 !harness.equalCalls,
+    expectEqual [] !harness.mismatches,
+  ]
+
+test "known covariant constructor arguments join produced arrows" =
+  let harness = newHarness ()
+  let values = [
+    ("pure", TApp (TRigid "Box") (arrow pureRow)),
+    ("audit", TApp (TRigid "Box") (arrow auditRow)),
+  ]
+  let result = joined (joinProduced (ops harness [True] collectRows) values)
+  let payload = match result
+    TApp _ value => value
+    _ => panic "expected Box payload"
+  let payloadRow = match payload
+    TFun _ row _ => row
+    _ => panic "expected Box arrow payload"
+  expectAll [
+    expectEqual "Audit" (rowLabels payloadRow),
+    expectEqual [] !harness.mismatches,
+  ]
+
+test "unknown and invariant constructor arguments remain exact" =
+  let harness = newHarness ()
+  let values = [
+    ("pure", TApp (TRigid "Cell") (arrow pureRow)),
+    ("audit", TApp (TRigid "Cell") (arrow auditRow)),
+  ]
+  let result = joined (joinProduced (ops harness [] collectRows) values)
+  let payload = match result
+    TApp _ value => value
+    _ => panic "expected Cell payload"
+  let payloadRow = match payload
+    TFun _ row _ => row
+    _ => panic "expected Cell arrow payload"
+  expectAll [
+    expectEqual "" (rowLabels payloadRow),
+    expectEqual [] !harness.mismatches,
+    expectEqual ["audit"] !harness.rowMismatches,
+  ]
+
+test "unknown shaping reports an occurs equation through supplied equality" =
+  let harness = newHarness ()
+  let variable = TVar (Ref (Unbound 71 0))
+  let recursiveBox = TApp (TRigid "Box") variable
+  let _ = joinProduced (ops harness [True] collectRows) [
+    ("occurs", variable),
+    ("box", recursiveBox),
+  ]
+  expectAll [
+    expectGreaterThan 0 !harness.equalCalls,
+    expectEqual ["occurs"] !harness.mismatches,
+  ]
+
+applied : Int -> Mono
+applied arity = appliedGo arity (TRigid "F")
+
+appliedGo : Int -> Mono -> Mono
+appliedGo arity head =
+  if arity <= 0 then head else appliedGo (arity - 1) (TApp head (arrow pureRow))
+
+measure : Int -> Int -> <IO> (Int, Float)
+measure alternatives arity =
+  let harness = newHarness ()
+  let values =
+    map (index => (intToString index, applied arity)) (range 0 alternatives)
+  let _ = setOpCounting True
+  let beforeOps = opSnap ()
+  let beforeAlloc = allocBytes ()
+  let _ = joinProduced (ops harness (replicate arity False) collectPure) values
+  let allocation = allocBytes () - beforeAlloc
+  let operations = opSnap () - beforeOps
+  let _ = setOpCounting False
+  (operations, allocation)
+
+-- The callback counter is intentionally only a service-call census: it proves
+-- that each comparison column is reached, but cannot see a pure rescan inside
+-- `joinProduced`. Allocation is the fail-capable scaling metric here. It catches
+-- rebuilding application columns from an ever-growing prefix; its 8x input range
+-- has a 16x envelope (plus fixed scope cost), so a quadratic allocation mutation
+-- cannot pass merely by keeping equality calls linear.
+test "produced joins scale linearly in alternatives and application arity" =
+  let (smallAlternativesOps, smallAlternativesAlloc) = measure 8 8
+  let (largeAlternativesOps, largeAlternativesAlloc) = measure 64 8
+  let (smallArityOps, smallArityAlloc) = measure 2 8
+  let (largeArityOps, largeArityAlloc) = measure 2 64
+  expectAll [
+    expectGreaterThan 0 smallAlternativesOps,
+    expectGreaterThan 0 smallArityOps,
+    expectGreaterThan 0.0 smallAlternativesAlloc,
+    expectGreaterThan 0.0 smallArityAlloc,
+    expectLessThan (smallAlternativesOps * 12 + 200) largeAlternativesOps,
+    expectLessThan (smallArityOps * 12 + 200) largeArityOps,
+    expectLessThan
+      (smallAlternativesAlloc * 16.0 + 65536.0)
+      largeAlternativesAlloc,
+    expectLessThan (smallArityAlloc * 16.0 + 65536.0) largeArityAlloc,
+  ]

@@ -8,13 +8,359 @@ import types.typecheck.{
   checkOneDiags, checkOneSchemeFullK, checkModulesDiagsChain, ModDiags,
   TcDiag(..), tcCode, tcMsg
 }
-import types.repr.{Scheme(..)}
-import types.effect_rows.{effrowLabels}
+import types.repr.{Scheme(..), ppScheme}
+import types.effect_rows.{effrowLabels, rowFlat}
 import types.effect_domain.{renderAtoms}
 import support.util.{contains, lookupAssoc}
 
 effectPrelude : String
 effectPrelude = "effect Audit\nextern emitAudit : Unit -> <Audit> Unit\n"
+
+test "recursive declared contracts keep universal type variables" =
+  let source = "extern width : String -> Int\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-TYPE-TOO-GENERAL"
+        (errorsFor
+          (source
+            ++ "f : Bool -> a -> Int\nf again x = if again then f False x else width x\n"))),
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "f : Bool -> String -> Int\nf again x = if again then f False x else width x\n")),
+    expectTrue
+      (contains "T-TYPE-TOO-GENERAL" (errorsFor "f : a -> a\nf _ = ()\n")),
+  ]
+
+test "recursive declared predicates follow their occurrence substitution" =
+  let source =
+    "interface Render a where\n  render : a -> String\nimpl Render String where\n  render x = x\n"
+  expectAll [
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "f : Render a => Bool -> a -> String\nf again x = if again then f False \"ok\" else render x\n")),
+    expectTrue
+      (contains
+        "T-NO-IMPL"
+        (errorsFor
+          (source
+            ++ "f : Render a => Bool -> a -> String\nf again x = if again then f False () else render x\n"))),
+  ]
+
+test "qualified signature kinds are identity scoped and order independent" =
+  let graded =
+    "export interface C (f : Effect -> Type -> Type) where\n  inject : a -> f e a\n"
+  let plain = "export interface C (f : Type -> Type) where\n  wrap : a -> f a\n"
+  let body =
+    "keep : G.C m => Bool -> m e Unit -> m e Unit\nkeep flag x = if flag then x else G.inject ()\n"
+  expectAll [
+    expectEqual
+      []
+      (moduleErrorsChain [
+        ("graded", graded),
+        ("plain", plain),
+        ("entry", "import graded as G\nimport plain as P\n" ++ body),
+      ]),
+    expectEqual
+      []
+      (moduleErrorsChain [
+        ("plain", plain),
+        ("graded", graded),
+        ("entry", "import plain as P\nimport graded as G\n" ++ body),
+      ]),
+    expectTrue
+      (contains
+        "T-EFFECT-KIND-MISMATCH"
+        (moduleErrorsChain [
+          ("graded", graded),
+          ("plain", plain),
+          (
+            "entry",
+            "import graded as G\nimport plain as P\nbad : (G.C m, P.C m) => m e Unit -> m e Unit\nbad x = x\n",
+          ),
+        ])),
+  ]
+
+test "qualified kind errors are located in the signature" =
+  let provider =
+    "export interface G (f : Effect -> Type -> Type) where\n  inject : a -> f e a\nexport interface P (f : Type -> Type) where\n  wrap : a -> f a\n"
+  let entry =
+    "import provider.*\n\nbad : (G m, P m) => Bool -> m e Unit -> m e Unit\nbad _ x = x\n"
+  let diags = moduleErrorDiags provider entry
+  expectAll [
+    expectEqual ["T-EFFECT-KIND-MISMATCH"] (map tcCode diags),
+    expectEqual [(3, 20, 3, 24)] (map diagSpan diags),
+  ]
+
+test "recursive callback instantiations stay independent in either declaration order" =
+  let firstDef = "first f True = f\nfirst f False = second f True\n"
+  let secondDef =
+    "second g flag =\n  let callback = first g flag\n  let _ = callback ()\n  emitAudit\n"
+  expectAll
+    (map
+      (definitions =>
+        let source =
+          "effect Clock\neffect Bell\nextern tick : Unit -> <Clock> Unit\nextern ring : Unit -> <Bell> Unit\n"
+            ++ definitions
+            ++ "clockValue = first tick False ()\nbellValue = first ring False ()\npureValue = first (u => ()) False ()\n"
+        expectAll [
+          expectEqual [] (errorsFor source),
+          expectEqual "Audit, Clock" (forcingFor source "clockValue"),
+          expectEqual "Audit, Bell" (forcingFor source "bellValue"),
+          expectEqual "Audit" (forcingFor source "pureValue"),
+          expectEqual 0 (forcingTailCount source "clockValue"),
+          expectEqual 0 (forcingTailCount source "bellValue"),
+        ])
+      [firstDef ++ secondDef, secondDef ++ firstDef])
+
+test "nested callback aliases retain intrinsic effects under universal contracts" =
+  let source =
+    "mix f flag =\n  let chosen = if flag then f else emitAudit\n  let alias = chosen\n  alias\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LAUNDER"
+        (errorsFor
+          (source
+            ++ "bad : (Unit -> <e> Unit) -> Bool -> Unit -> <e> Unit\nbad f flag = mix f flag\n"))),
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "honest : (Unit -> <e> Unit) -> Bool -> Unit -> <Audit | e> Unit\nhonest f flag = mix f flag\n")),
+  ]
+
+test "a generic identity preserves an existing reference's invariant callback row" =
+  let source = "extern Ref : a -> Ref a\nidentity x = x\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-PARAM-VARIANCE"
+        (errorsFor
+          (source
+            ++ "bad : Ref (Unit -> <Audit> Unit) -> Ref (Unit -> Unit)\nbad r = identity r\n"))),
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "honest : Ref (Unit -> <Audit> Unit) -> Ref (Unit -> <Audit> Unit)\nhonest r = identity r\n")),
+  ]
+
+test "positive receiving allowances publish tight singleton results" =
+  let source =
+    "extern Ref : a -> Ref a\nidentity x = x\ncallback = identity (x => x)\ncell = Ref (x => x)\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "a -> a" (renderedFor source "callback"),
+    expectEqual "Ref (a -> a)" (renderedFor source "cell"),
+  ]
+
+test "generic produced choices collect callback effects in either argument order" =
+  let source =
+    "choose x y flag = if flag then x else y\nfirst = choose emitAudit (x => x) True ()\nsecond = choose (x => x) emitAudit False ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "first"),
+    expectEqual "Audit" (forcingFor source "second"),
+    expectEqual 0 (forcingTailCount source "first"),
+    expectEqual 0 (forcingTailCount source "second"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "quiet : Unit -> Unit\nquiet _ = choose (x => x) emitAudit False ()\n"))),
+  ]
+
+test "generic produced choices cannot widen an existing mutable container" =
+  let source = "choose x y flag = if flag then x else y\n"
+  expectAll [
+    expectNotEqual
+      []
+      (errorsFor (source ++ "bad = choose [|x => x|] [|emitAudit|] False\n")),
+    expectNotEqual
+      []
+      (errorsFor (source ++ "bad = choose [|emitAudit|] [|x => x|] True\n")),
+  ]
+
+test "mutual unknown produced shapes retain an unrelated callback effect" =
+  let source =
+    "effect Clock\nextern tick : Unit -> <Clock> Unit\nfirst f True = f\nfirst f False = second f True\nsecond g flag =\n  let callback = first g flag\n  let _ = callback ()\n  emitAudit\nvalue = first tick False ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit, Clock" (forcingFor source "value"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "quiet : Unit -> <Audit> Unit\nquiet _ = first tick False ()\n"))),
+  ]
+
+test "recursive produced closures solve their own least row" =
+  let source =
+    "pure True = x => x\npure False = x => pure True x\neffectful True = emitAudit\neffectful False = x => effectful True x\na = pure False ()\nb = effectful False ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "a"),
+    expectEqual 0 (forcingTailCount source "a"),
+    expectEqual "Audit" (forcingFor source "b"),
+    expectEqual 0 (forcingTailCount source "b"),
+  ]
+
+test "mutual returned closures retain effects independent of order" =
+  let source =
+    "first True = emitAudit\nfirst False = x => second True x\nsecond flag = x => first flag x\na = first False ()\nb = second False ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "a"),
+    expectEqual "Audit" (forcingFor source "b"),
+    expectEqual 0 (forcingTailCount source "a"),
+    expectEqual 0 (forcingTailCount source "b"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source ++ "quiet : Unit -> Unit\nquiet _ = second False ()\n"))),
+  ]
+
+test "recursive output equations cannot close a borrowed callback row" =
+  let source =
+    "relay f True = x => f x\nrelay f False = x => relay f True x\na = relay emitAudit False ()\nb = relay (x => x) True ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "a"),
+    expectEqual "" (forcingFor source "b"),
+    expectEqual 0 (forcingTailCount source "a"),
+    expectEqual 0 (forcingTailCount source "b"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "quiet : Unit -> Unit\nquiet _ = relay emitAudit False ()\n"))),
+  ]
+
+test "produced joins diagnose direct and cross-position infinite types" =
+  let declaration = "data Wrap a = Wrap a\n"
+  expectAll [
+    expectEqual
+      ["T-INFINITE-TYPE"]
+      (errorsFor (declaration ++ "bad x = if True then x else Wrap x\n")),
+    expectEqual
+      ["T-INFINITE-TYPE"]
+      (errorsFor (declaration ++ "bad x = if True then Wrap x else x\n")),
+    expectEqual
+      ["T-INFINITE-TYPE"]
+      (errorsFor
+        (declaration
+          ++ "bad x y = if True then (x, y) else (Wrap y, Wrap x)\n")),
+  ]
+
+test "different produced constructor heads diagnose and recover" =
+  expectEqual
+    ["T-TYPE-MISMATCH"]
+    (errorsFor
+      "bad flag = if flag then [emitAudit] else [|x => x|]\nafter x = x\n")
+
+test "produced joins preserve declaration variance through tuples and data" =
+  let source =
+    "data Wrap a = Wrap a\nchoose flag = if flag then (Wrap emitAudit, ()) else (Wrap (x => x), ())\nrun (Wrap f, _) = f ()\nvalue = run (choose True)\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "value"),
+    expectEqual 0 (forcingTailCount source "value"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source ++ "quiet : Unit -> Unit\nquiet _ = run (choose True)\n"))),
+  ]
+
+test "multi-clause returned callbacks join independently of source invocation" =
+  let source =
+    "choose True = emitAudit\nchoose False = x => x\nreverse True = x => x\nreverse False = emitAudit\nclosure = choose True\na = closure ()\nb = reverse False ()\nlocal flag = helper flag\n  where\n    helper True = emitAudit\n    helper False = x => x\nc = local True ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "closure"),
+    expectEqual 0 (forcingTailCount source "closure"),
+    expectEqual "Audit" (forcingFor source "a"),
+    expectEqual "Audit" (forcingFor source "b"),
+    expectEqual "Audit" (forcingFor source "c"),
+    expectEqual 0 (forcingTailCount source "a"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (source ++ "quiet : Unit -> Unit\nquiet _ = closure ()\n"))),
+  ]
+
+test "produced callback branches join latent effects in either order" =
+  let source =
+    "left flag = if flag then emitAudit else (x => x)\nright flag = if flag then (x => x) else emitAudit\nmatched flag = match flag\n  True => emitAudit\n  False => (x => x)\na = left True ()\nb = right False ()\nc = matched True ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "a"),
+    expectEqual "Audit" (forcingFor source "b"),
+    expectEqual "Audit" (forcingFor source "c"),
+    expectEqual 0 (forcingTailCount source "a"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source ++ "quiet : Unit -> Unit\nquiet _ = left True ()\n"))),
+  ]
+
+test "a callback join preserves its borrowed input row" =
+  let source =
+    "choose f flag = if flag then f else emitAudit\npureCase = choose (x => x) True ()\neffect Clock\nextern tick : Unit -> <Clock> Unit\nclockCase = choose tick True ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "pureCase"),
+    expectEqual "Audit, Clock" (forcingFor source "clockCase"),
+    expectEqual 0 (forcingTailCount source "pureCase"),
+    expectEqual 0 (forcingTailCount source "clockCase"),
+  ]
+
+test "list construction and cons use the same produced-value join" =
+  let source =
+    "literal = [emitAudit, x => x]\nconsed = emitAudit :: [x => x]\nrun (f :: _) = f ()\nrun [] = ()\na = run literal\nb = run consed\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "a"),
+    expectEqual "Audit" (forcingFor source "b"),
+    expectEqual 0 (forcingTailCount source "a"),
+    expectEqual 0 (forcingTailCount source "b"),
+  ]
+
+test "fresh array elements join but existing mutable containers stay invariant" = expectAll
+  [
+    expectEqual [] (errorsFor "fresh _ = [|emitAudit, x => x|]\n"),
+    expectNotEqual
+      []
+      (errorsFor "bad flag = if flag then [|emitAudit|] else [|x => x|]\n"),
+    expectNotEqual
+      []
+      (errorsFor
+        "extern Ref : a -> Ref a\npureRef : Ref (Unit -> Unit)\npureRef = Ref (x => x)\nauditRef : Ref (Unit -> <Audit> Unit)\nauditRef = Ref emitAudit\nbad flag = if flag then auditRef else pureRef\n"),
+  ]
+
+test "fresh reference construction can infer one shared callback allowance" =
+  let source =
+    "extern Ref : a -> Ref a\nextern readRef : Ref a -> a\nchoose flag = if flag then Ref emitAudit else Ref (x => x)\nvalue = (readRef (choose True)) ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "value"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "quiet : Unit -> Unit\nquiet _ = (readRef (choose True)) ()\n"))),
+  ]
 
 errorsFor : String -> List String
 errorsFor source =
@@ -33,6 +379,26 @@ forcingFor source name =
   match lookupAssoc name schemes
     Some (Forall _ _ force _) => renderAtoms (effrowLabels force)
     None => "<missing binding>"
+
+renderedFor : String -> String -> String
+renderedFor source name =
+  let (_, schemes) = checkOneSchemeFullK None [] [] (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  match lookupAssoc name schemes
+    Some scheme => ppScheme scheme
+    None => "<missing binding>"
+
+forcingTailCount : String -> String -> Int
+forcingTailCount source name =
+  let (_, schemes) = checkOneSchemeFullK None [] [] (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  match lookupAssoc name schemes
+    Some (Forall _ _ force _) => length (snd (rowFlat force))
+    None => -1
 
 messagesFor : String -> List String
 messagesFor source =
@@ -121,6 +487,84 @@ test "method dispatch charges only the selected standalone or method binding" =
       (contains
         "T-EFFECT-LEAK"
         (moduleErrors provider (entry ++ "quiet _ = size True\n"))),
+  ]
+
+test "one provider retains both its method and standalone forcing scheme" =
+  let provider =
+    "export interface Sizeable a where\n  size : a -> Bool\nexport size : Bool -> Bool\nsize =\n  let _ = emitAudit ()\n  x => x\n"
+  expectAll
+    [
+      expectTrue
+        (contains
+          "T-EFFECT-LEAK"
+          (moduleErrors
+            provider
+            "import provider.{Sizeable, size}\nquiet : Unit -> <> Bool\nquiet _ = size True\n")),
+      expectEqual
+        []
+        (moduleErrors
+          provider
+          "import provider.{Sizeable, size}\nhonest : Unit -> <Audit> Bool\nhonest _ = size True\n"),
+      -- Qualified method spellings currently select the method, not the bare
+      -- standalone alternative (SHADOW-SEMANTICS S2-IMPORT-DIFFER).
+      expectTrue
+        (contains
+          "T-NO-IMPL"
+          (moduleErrors
+            provider
+            "import provider as P\nquiet : Unit -> <> Bool\nquiet _ = P.size True\n")),
+      expectTrue
+        (contains
+          "T-EFFECT-LEAK"
+          (moduleErrors
+            provider
+            "import provider.*\nquiet : Unit -> <> Bool\nquiet _ = size True\n")),
+      expectEqual
+        []
+        (moduleErrors
+          provider
+          "import provider.{Sizeable, size}\ndata Box = Box Bool\nimpl Sizeable Box where\n  size (Box x) = x\nquiet : Unit -> <> Bool\nquiet _ = size (Box True)\n"),
+    ]
+
+test "a public method cannot export a private standalone with the same name" =
+  let provider =
+    "export interface Sizeable a where\n  size : a -> Bool\nsize : Bool -> Bool\nsize =\n  let _ = emitAudit ()\n  x => x\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-NO-IMPL"
+        (moduleErrors
+          provider
+          "import provider.{Sizeable, size}\nquiet : Unit -> <> Bool\nquiet _ = size True\n")),
+    expectEqual
+      []
+      (moduleErrors
+        provider
+        "import provider.{Sizeable, size}\ndata Box = Box Bool\nimpl Sizeable Box where\n  size (Box x) = x\nquiet : Unit -> <> Bool\nquiet _ = size (Box True)\n"),
+  ]
+
+test "a re-export preserves a same-provider standalone forcing descriptor" =
+  let provider =
+    "export interface Sizeable a where\n  size : a -> Bool\nexport size : Bool -> Bool\nsize =\n  let _ = emitAudit ()\n  x => x\n"
+  let entry =
+    "import relay.{Sizeable, size}\nquiet : Unit -> <> Bool\nquiet _ = size True\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (moduleErrorsChain [
+          ("provider", provider),
+          ("relay", "export import provider.*\n"),
+          ("entry", entry),
+        ])),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (moduleErrorsChain [
+          ("provider", provider),
+          ("relay", "export import provider.{Sizeable, size}\n"),
+          ("entry", entry),
+        ])),
   ]
 
 test "an alias-admitted method and a standalone retain #1812 import precedence" =
@@ -397,6 +841,52 @@ test "written force contracts charge honest methods at their occurrences" =
         (errorsFor (source ++ "quiet : Unit -> Box\nquiet _ = value\n"))),
   ]
 
+test "dict-bound shadow receivers retain selected method forcing" =
+  let source =
+    "interface Sizeable a where\n  size : <Audit> (a -> Bool)\nsize : Bool -> Bool\nsize _ = False\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "quiet : Sizeable a => a -> <> Bool\nquiet x = size x\n"))),
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "honest : Sizeable a => a -> <Audit> Bool\nhonest x = size x\n")),
+    expectEqual
+      []
+      (errorsFor (source ++ "local : Bool -> <> Bool\nlocal x = size x\n")),
+  ]
+
+test "later dict-bound shadow receivers retain method forcing across modules" =
+  let provider =
+    "export interface Sizeable a where\n  size : <Audit> (Bool -> a -> Bool)\n"
+  let entry =
+    "import provider.{Sizeable, size}\nsize : Bool -> Bool -> Bool\nsize _ _ = False\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (moduleErrors
+          provider
+          (entry
+            ++ "quiet : Sizeable a => a -> <> Bool\nquiet x = size True x\n"))),
+    expectEqual
+      []
+      (moduleErrors
+        provider
+        (entry
+          ++ "honest : Sizeable a => a -> <Audit> Bool\nhonest x = size True x\n")),
+    expectEqual
+      []
+      (moduleErrors
+        provider
+        (entry ++ "local : Bool -> <> Bool\nlocal x = size True x\n")),
+  ]
+
 test "written force contracts are enforced on ordinary bindings" = expectAll [
   expectTrue
     (contains
@@ -425,3 +915,272 @@ test "a default cannot choose its caller's force row" =
       "T-EFFECT-LAUNDER"
       (errorsFor
         "interface Has a where\n  value : <e> ((Unit -> <e> Unit) -> a -> a)\n  value =\n    let _ = emitAudit ()\n    k => x => x\nimpl Has Unit\nquiet : Unit -> Unit\nquiet _ = value (u => ()) ()\n"))
+
+test "a returned effect index is inferred from callback constraints" =
+  let source =
+    "data Box (e : Effect) = Box (Unit -> <e> Unit)\nstore : (Unit -> <e> Unit) -> Box e\nstore f = Box f\nvalue = store emitAudit\nrun : Box e -> <e> Unit\nrun (Box f) = f ()\n"
+  expectAll [
+    expectEqual [] (messagesFor source),
+    expectEqual
+      "Audit"
+      (forcingFor (source ++ "forced = run value\n") "forced"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (source ++ "quiet : Unit -> Unit\nquiet _ = run value\n"))),
+  ]
+
+test "one call accumulates both callback lower bounds independent of order" =
+  let source =
+    "effect Clock\nextern tick : Unit -> <Clock> Unit\nboth : (Unit -> <e> Unit) -> (Unit -> <e> Unit) -> <e> Unit\nboth f g =\n  let _ = f ()\n  g ()\nforward = both emitAudit tick\nbackward = both tick emitAudit\n"
+  expectAll [
+    expectEqual [] (messagesFor source),
+    expectEqual "Audit, Clock" (forcingFor source "forward"),
+    expectEqual "Audit, Clock" (forcingFor source "backward"),
+  ]
+
+test "a lambda's inferred callee row is constrained by its typed input" =
+  let source =
+    "data List a = Nil | Cons a (List a)\nanyList : (a -> Bool) -> List a -> Bool\nanyList _ Nil = False\nanyList p (Cons x xs) = p x || anyList p xs\npredicate : Unit -> Bool\npredicate _ = True\ncatalog : List (Unit -> Bool, Unit)\ncatalog = Cons (predicate, ()) Nil\nuse : Unit -> Bool\nuse name = anyList ((pred, _) => pred name) catalog\n"
+  expectEqual [] (messagesFor source)
+
+test "composition retains both invoked rows without charging construction" =
+  let source =
+    "effect Clock\nextern tick : Unit -> <Clock> Unit\nforward = emitAudit >> tick\nbackward = tick << emitAudit\nfirst = forward ()\nsecond = backward ()\n"
+  expectAll [
+    expectEqual [] (messagesFor source),
+    expectEqual "" (forcingFor source "forward"),
+    expectEqual "" (forcingFor source "backward"),
+    expectEqual "Audit, Clock" (forcingFor source "first"),
+    expectEqual "Audit, Clock" (forcingFor source "second"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor "quiet : Unit -> Unit\nquiet = emitAudit >> (x => x)\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor "quiet : Unit -> Unit\nquiet = (x => x) << emitAudit\n")),
+  ]
+
+test "pure direct calls and nullary values close inferred forcing rows" =
+  let source = "identity x = x\nvalue = identity ()\nplain = ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "value"),
+    expectEqual 0 (forcingTailCount source "value"),
+    expectEqual "" (forcingFor source "plain"),
+    expectEqual 0 (forcingTailCount source "plain"),
+  ]
+
+test "recursive and mutual functions retain effects while pure recursion closes" =
+  let direct = "loop True = emitAudit ()\nloop False = loop True\n"
+  let mutual =
+    "left True = emitAudit ()\nleft False = right True\nright True = left True\nright False = ()\n"
+  let pure =
+    "pureLoop True = ()\npureLoop False = pureLoop True\nvalue = pureLoop False\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (direct ++ "quiet : Bool -> Unit\nquiet b = loop b\n"))),
+    expectEqual
+      []
+      (errorsFor
+        (direct ++ "honest : Bool -> <Audit> Unit\nhonest b = loop b\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (mutual ++ "quiet : Bool -> Unit\nquiet b = left b\n"))),
+    expectEqual [] (errorsFor pure),
+    expectEqual "" (forcingFor pure "value"),
+    expectEqual 0 (forcingTailCount pure "value"),
+  ]
+
+test "multi-clause effects are order independent at a forced call site" =
+  let pureFirst =
+    "choose True = ()\nchoose False = emitAudit ()\nvalue = choose True\nquiet : Bool -> Unit\nquiet b = choose b\n"
+  let effectFirst =
+    "choose True = emitAudit ()\nchoose False = ()\nvalue = choose False\nquiet : Bool -> Unit\nquiet b = choose b\n"
+  expectAll [
+    expectTrue (contains "T-EFFECT-LEAK" (errorsFor pureFirst)),
+    expectEqual "Audit" (forcingFor pureFirst "value"),
+    expectEqual 0 (forcingTailCount pureFirst "value"),
+    expectTrue (contains "T-EFFECT-LEAK" (errorsFor effectFirst)),
+    expectEqual "Audit" (forcingFor effectFirst "value"),
+    expectEqual 0 (forcingTailCount effectFirst "value"),
+  ]
+
+test "inferred callback effects instantiate independently and remain protected" =
+  let source =
+    "apply f = f ()\npureValue = apply (u => ())\nloudValue = apply emitAudit\npure : Unit -> Unit\npure _ = apply (u => ())\nhonest : Unit -> <Audit> Unit\nhonest _ = apply emitAudit\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "pureValue"),
+    expectEqual 0 (forcingTailCount source "pureValue"),
+    expectEqual "Audit" (forcingFor source "loudValue"),
+    expectEqual 0 (forcingTailCount source "loudValue"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source ++ "quiet : Unit -> Unit\nquiet _ = apply emitAudit\n"))),
+  ]
+
+test "local recursive and where helpers retain their inferred effects" =
+  let effectful =
+    "fromLet flag =\n  let rec go here = if here then emitAudit () else go True\n  go flag\nfromWhere flag = go flag\n  where\n    go here = if here then emitAudit () else go True\n"
+  let pure =
+    "pureLet flag =\n  let rec go here = if here then () else go True\n  go flag\npureWhere flag = go flag\n  where\n    go here = if here then () else go True\nquietLet : Bool -> Unit\nquietLet b = pureLet b\nquietWhere : Bool -> Unit\nquietWhere b = pureWhere b\n"
+  expectAll [
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (effectful ++ "quietLet : Bool -> Unit\nquietLet b = fromLet b\n"))),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (effectful
+            ++ "quietWhere : Bool -> Unit\nquietWhere b = fromWhere b\n"))),
+    expectEqual [] (errorsFor pure),
+  ]
+
+test "a nullary function value charges initialization and invocation separately" =
+  let source =
+    "effect Call\nextern emitCall : Unit -> <Call> Unit\nfactory _ =\n  let _ = emitAudit ()\n  x =>\n    let _ = emitCall ()\n    x\nvalue = factory ()\ncall = value ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "value"),
+    expectEqual 0 (forcingTailCount source "value"),
+    expectEqual "Audit, Call" (forcingFor source "call"),
+    expectEqual 0 (forcingTailCount source "call"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor (source ++ "quiet : Unit -> Unit\nquiet _ = value ()\n"))),
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "honest : Unit -> <Audit, Call> Unit\nhonest _ = value ()\n")),
+  ]
+
+test "strict where values charge initialization even when unused" = expectAll [
+  expectTrue
+    (contains
+      "T-EFFECT-LEAK"
+      (errorsFor
+        "quiet : Unit -> Unit\nquiet _ = ()\n  where\n    value = emitAudit ()\n")),
+  expectEqual
+    []
+    (errorsFor
+      "honest : Unit -> <Audit> Unit\nhonest _ = ()\n  where\n    value = emitAudit ()\n"),
+]
+
+test "partial application is pure and saturation charges the source body" =
+  let source =
+    "perform x y = emitAudit ()\npartial = perform ()\nfull = partial ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "partial"),
+    expectEqual 0 (forcingTailCount source "partial"),
+    expectEqual "Audit" (forcingFor source "full"),
+    expectEqual 0 (forcingTailCount source "full"),
+  ]
+
+test "invariant effect indices preserve universals and permit fresh instantiation" =
+  let declaration = "data Box (e : Effect) a = Box (Unit -> <e> a)\n"
+  expectAll [
+    expectEqual
+      []
+      (errorsFor
+        (declaration
+          ++ "relay : Box e a -> Box e a\nrelay x = x\npureBox : Unit -> Box <> Unit\npureBox _ = Box (u => ())\nrun : Box e a -> Unit -> <e> a\nrun (Box f) x = f x\n")),
+    expectNotEqual
+      []
+      (errorsFor
+        (declaration ++ "bad : Box <Audit | e> a -> Box e a\nbad x = x\n")),
+  ]
+
+test "a local indexed value solves toward its enclosing contract" =
+  expectEqual
+    []
+    (errorsFor
+      "data Box (e : Effect) a = Box (Unit -> <e> a)\nrelay : Box e a -> Box e a\nrelay x = x\nlocal : Box e a -> Box e a\nlocal x =\n  let y = relay x\n  y\n")
+
+test "signed mutual recursion instantiates contracts per occurrence" =
+  expectEqual
+    []
+    (errorsFor
+      "first : (Unit -> <e> Unit) -> Bool -> <e> Unit\nfirst f flag = if flag then second f False else f ()\nsecond : (Unit -> <e> Unit) -> Bool -> <e> Unit\nsecond f flag = if flag then first f False else f ()\n")
+
+test "a caller may choose pure for an output-only quantified effect" =
+  let source =
+    "fresh : Unit -> <e> Unit\nfresh _ = ()\nvalue = fresh ()\nquiet : Unit -> Unit\nquiet _ = fresh ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual 0 (forcingTailCount source "value"),
+  ]
+
+test "invoking a declared callback cannot solve its caller-chosen row" = expectAll
+  [
+    expectEqual
+      []
+      (errorsFor "call : (Unit -> <e> Unit) -> <e> Unit\ncall f = f ()\n"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          "bad : (Unit -> <e> Unit) -> <e> Unit\nbad f =\n  let _ = f ()\n  emitAudit ()\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          "bad : (Unit -> <e> Unit) -> <e> Unit\nbad f =\n  let _ = emitAudit ()\n  f ()\n")),
+  ]
+
+test "an alias preserves a quantified latent callback row" =
+  let source =
+    "relay : (Unit -> <e> Unit) -> Unit -> <e> Unit\nrelay f = f\nalias = relay\npure = alias (u => ()) ()\nloud = alias emitAudit ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "pure"),
+    expectEqual 0 (forcingTailCount source "pure"),
+    expectEqual "Audit" (forcingFor source "loud"),
+    expectEqual 0 (forcingTailCount source "loud"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source ++ "quiet : Unit -> Unit\nquiet _ = alias emitAudit ()\n"))),
+  ]
+
+test "a constructor's result-only index is generalized at a lazy alias" =
+  let source =
+    "data Token (e : Effect) = Token\nfresh = Token\npure : Token <>\npure = fresh\naudited : Token <Audit>\naudited = fresh\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "" (forcingFor source "fresh"),
+    expectEqual 0 (forcingTailCount source "fresh"),
+  ]
+
+test "function alternatives join through if match list array and tuple values" =
+  let source =
+    "extern firstArray : Array a -> a\nifPick flag = if flag then emitAudit else (u => ())\nmatchPick flag = match flag\n  True => emitAudit\n  False => (u => ())\nlistPick = [emitAudit, u => ()]\narrayPick = [|emitAudit, u => ()|]\ntuplePick = ((), emitAudit)\nifValue = ifPick True ()\nmatchValue = matchPick True ()\nlistValue = match listPick\n  f :: _ => f ()\n  [] => ()\narrayValue = firstArray arrayPick ()\ntupleValue = match tuplePick\n  (_, f) => f ()\n"
+  expectAll [
+    expectEqual [] (errorsFor source),
+    expectEqual "Audit" (forcingFor source "ifValue"),
+    expectEqual "Audit" (forcingFor source "matchValue"),
+    expectEqual "Audit" (forcingFor source "listValue"),
+    expectEqual "Audit" (forcingFor source "arrayValue"),
+    expectEqual "Audit" (forcingFor source "tupleValue"),
+    expectEqual 0 (forcingTailCount source "arrayValue"),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "quiet : Unit -> Unit\nquiet _ =\n  let _ = ifValue\n  let _ = matchValue\n  let _ = listValue\n  let _ = arrayValue\n  tupleValue\n"))),
+  ]

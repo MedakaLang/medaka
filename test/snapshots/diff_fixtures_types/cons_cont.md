@@ -8,4 +8,4 @@ wrap x y = x
 main = println (wrap 1 [2, 3])
 # TYPES_USER
 wrap : a -> List a -> List a
-main : <IO | a> Unit
+main : <IO> Unit

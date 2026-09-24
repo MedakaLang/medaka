@@ -217,11 +217,13 @@ import types.effect_domain.{
 }
 import types.effect_rows.{
   collectRows,
+  joinRows,
   effrowNorm,
   effrowLabels,
   effvarId,
   isJoinCell,
   rowFlat,
+  rowHasSummary,
   rowFlatMembers,
   dedupCells,
   linkRow,
@@ -229,6 +231,14 @@ import types.effect_rows.{
   Effvar(..),
 }
 import types.effect_infer.{recordEffect, captureEffects}
+import types.effect_solver as EffectSolver
+import types.effect_bindings.{
+  BindingSummary(..), newBindingSummary, bodyArrows, bodyRowAt
+}
+import types.effect_solver.{SummarySolver, SummaryFailure}
+import types.effect_values.{
+  ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes
+}
 import map as IdMap
 import map.{Map(..)}
 
@@ -832,9 +842,17 @@ freshEffvar _ = Ref (EUnbound (newEffvarId ()) perRun.value.currentLevel.value)
 freshEffvarAt : Int -> Ref Effvar
 freshEffvarAt lvl = Ref (EUnbound (newEffvarId ()) lvl)
 
--- an open row with a fresh tail variable
+-- An inference-created row is a local existential choice. Publication retains
+-- it if it is still reachable from the inferred value; otherwise scope solving
+-- may close it. Declaration variables use freshEffvar directly, not this path.
+freshInferenceEffvar : Unit -> Ref Effvar
+freshInferenceEffvar _ =
+  let cell = freshEffvar ()
+  let _ = EffectSolver.registerExistential perRun.value.effectSummaries cell
+  cell
+
 openRow : Unit -> EffRow
-openRow _ = EffRow [] (Some (freshEffvar ()))
+openRow _ = EffRow [] (Some (freshInferenceEffvar ()))
 
 -- v2 Stage 2b: fill inferred-hole atoms in a freshly-incurred call effect row.
 -- Returns a row whose head labels have every hole atom replaced by α of the
@@ -884,6 +902,7 @@ effvarLevel cell = match !cell
   EUnbound _ l => l
   ELink _ _ => 0
   EJoin _ l _ => l
+  ESummary _ l _ => l
 
 -- sorted + deduplicated string set (canonical effect-label order, matching the
 -- OCaml `List.sort_uniq String.compare` so multi-label rows render identically)
@@ -927,21 +946,165 @@ minLevelOf (m :: ms) = minI (effvarLevel m) (minLevelOf ms)
 performEffect : Ref (List EffRow) -> EffRow -> Unit
 performEffect cur eff = recordEffect cur eff
 
--- unify two effect rows.  PERMISSIVE (Phase 79): an open row absorbs the other
--- side's labels by binding its tail; two open rows route through one shared fresh
--- tail.  Differing closed rows / an open row whose labels exceed a closed bound
--- are left as-is (the laundering subset check lands in Phase 146, Stage D).
+beginEffectSummaryScope : Unit -> Unit
+beginEffectSummaryScope _ =
+  EffectSolver.openSummaryScope
+    perRun.value.effectSummaries
+    (newEffvarId ())
+    perRun.value.currentLevel.value
+
+freshEffectSummary : Unit -> EffRow
+freshEffectSummary _ =
+  EffectSolver.newSummary perRun.value.effectSummaries (newEffvarId ())
+
+recordEffectBody : EffRow -> EffRow -> Unit
+recordEffectBody summary lower =
+  EffectSolver.recordBodyLower perRun.value.effectSummaries summary lower
+
+deferEffectRelation : Bool -> EffRow -> EffRow -> Unit
+deferEffectRelation exact lower upper =
+  EffectSolver.recordRelation
+    perRun.value.effectSummaries
+    exact
+    (!currentLoc, perRun.value.currentFn.value)
+    lower
+    upper
+
+summaryEscape : Bool -> List Atom -> List Atom -> List Atom
+summaryEscape True lower upper = atomsDiff lower upper
+summaryEscape False lower upper = atomsEscape lower upper
+
+finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
+finishEffectSummaryScope retained borrowed =
+  let failures =
+    EffectSolver.closeSummaryScope
+      perRun.value.effectSummaries
+      perRun.value.rigidEffvarsRef.value
+      retained
+      borrowed
+      summaryEscape
+      joinCellOf
+      freshEffvarAt
+  reportEffectSummaryFailures failures
+
+reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
+reportEffectSummaryFailures [] = ()
+reportEffectSummaryFailures (failure :: rest) =
+  let saved = !currentLoc
+  currentLoc := fst failure.esfContext
+  let (upper, upperCells) = rowFlat failure.esfUpper
+  let escaping = atomsEscape (fst (rowFlat failure.esfLower)) upper
+  let _ =
+    if failure.esfExact then
+      let rows = ppEachShared (Ref []) (Ref 0) [
+        TEff failure.esfLower,
+        TEff failure.esfUpper,
+      ]
+      pushTypeError
+        "T-EFFECT-INDEX-MISMATCH"
+        ("Effect index mismatch: "
+          ++ joinWith " vs " rows
+          ++ ". Effect indices are invariant: write equal rows on both sides.")
+    else if isNonEmptyL escaping && isEmptyL upperCells then
+      effectLeakCheck escaping upper
+    else
+      let rows = ppEachShared (Ref []) (Ref 0) [
+        TEff failure.esfLower,
+        TEff failure.esfUpper,
+      ]
+      pushTypeError
+        "T-EFFECT-LAUNDER"
+        "Cannot prove effect row inclusion in binding '\{snd failure.esfContext}' (required, allowed): \{joinWith ", " rows}. A caller-chosen effect variable cannot be solved by the body."
+  currentLoc := saved
+  reportEffectSummaryFailures rest
+
+-- The row walker is DAG-aware. Type trees are visited once per boundary; maps
+-- accumulate roots without quadratic duplicate elimination across a large SCC.
+effectRoots : Mono -> Map Int Unit -> Map Int Unit
+effectRoots t roots = match normalize t
+  TFun a row b => effectRoots b (effectRoots a (effectRowRoots row roots))
+  TApp a b => effectRoots b (effectRoots a roots)
+  TEff row => effectRowRoots row roots
+  _ => roots
+
+effectRowRoots : EffRow -> Map Int Unit -> Map Int Unit
+effectRowRoots row roots =
+  fold
+    (acc cell => match !cell
+      EUnbound id _ => IdMap.set id () acc
+      _ => acc)
+    roots
+    (snd (rowFlat row))
+
+finishValueEffects : List Mono -> Unit
+finishValueEffects monos =
+  finishEffectSummaryScope
+    (fold (acc mono => effectRoots mono acc) Tip monos)
+    (fold (acc mono => borrowedEffectCells mono acc) Tip monos)
+
+borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
+borrowedEffectCells mono cells =
+  fold
+    (acc input => effectCells input acc)
+    cells
+    (producedInputTypes producedSlotCovariants mono)
+
+effectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
+effectCells mono cells = match normalize mono
+  TFun a row b => effectCells b (effectCells a (effectRowCells row cells))
+  TApp a b => effectCells b (effectCells a cells)
+  TEff row => effectRowCells row cells
+  _ => cells
+
+effectRowCells : EffRow -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
+effectRowCells row cells =
+  fold
+    (acc cell => match !cell
+      EUnbound id _ => IdMap.set id cell acc
+      _ => acc)
+    cells
+    (snd (rowFlat row))
+
+-- A contract's effect variables are universal throughout its body judgment.
+-- The same boundary is used for supplied methods and generic default bodies.
+beginEffectContract : EffRow -> Mono -> Map Int Unit
+beginEffectContract force value =
+  let saved = perRun.value.rigidEffvarsRef.value
+  let _ = beginEffectSummaryScope ()
+  perRun.value.rigidEffvarsRef := effectRoots value (effectRowRoots force saved)
+  saved
+
+finishEffectContract : Map Int Unit -> Unit
+finishEffectContract saved =
+  let _ = finishEffectSummaryScope Tip Tip
+  perRun.value.rigidEffvarsRef := saved
+
+-- Ordinary row equality can solve flexible cells, never declaration universals.
+-- Binding-owned summaries instead record both directions for scoped solving.
 unifyRow : EffRow -> EffRow -> Unit
 unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
 
--- #821: a row whose (normalized) tail is a JOIN takes the join unifier; every
--- other pair takes the four plain arms below, byte-identical to before.
+-- Joins and universal leaves use the role-aware unifier. Plain flexible rows
+-- retain the cheaper single-tail unification path.
 unifyRowN : EffRow -> EffRow -> Unit
 unifyRowN r1 r2 =
-  if rowTailIsJoin r1 || rowTailIsJoin r2 then
+  if rowHasSummary r1 || rowHasSummary r2 then
+    let _ = deferEffectRelation False r1 r2
+    deferEffectRelation False r2 r1
+  else if rowTailIsJoin r1
+    || rowTailIsJoin r2
+    || rowHasRigid r1
+    || rowHasRigid r2 then
     unifyJoinRows False r1 r2
   else
     unifyRowPlain r1 r2
+
+-- Equality may solve a flexible variable toward a declared universal, but
+-- never the reverse. The join unifier already partitions cells by this role.
+rowHasRigid : EffRow -> Bool
+rowHasRigid row = match perRun.value.rigidEffvarsRef.value
+  Tip => False
+  _ => anyList isRigidCell (snd (rowFlat row))
 
 rowTailIsJoin : EffRow -> Bool
 rowTailIsJoin (EffRow _ (Some c)) = isJoinCell c
@@ -1219,7 +1382,13 @@ unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
 -- INDEX mode (equality, never subsumption).
 unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyIndexRowN r1 r2 =
-  if rowTailIsJoin r1 || rowTailIsJoin r2 then
+  if rowHasSummary r1 || rowHasSummary r2 then
+    let _ = deferEffectRelation True r1 r2
+    deferEffectRelation True r2 r1
+  else if rowTailIsJoin r1
+    || rowTailIsJoin r2
+    || rowHasRigid r1
+    || rowHasRigid r2 then
     unifyJoinRows True r1 r2
   else
     unifyIndexRowPlain r1 r2
@@ -2418,17 +2587,9 @@ lowerMembers level (m :: ms) =
     EUnbound id lvl => if lvl > level then m := EUnbound id level
     _ => ()
   lowerMembers level ms
-
--- The existing HM row unifier needs flexible inference allowances on every
--- arrow until all clauses/recursive uses meet. These are not captured effects:
--- the body contributes its concrete lower bound only on the last arrow.
--- A scoped inclusion solver will replace these allowances with directed bounds.
+-- Closure construction is pure; only the source body's final application runs it.
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
-arrowsWithLastEffect [] _ ret = ret
-arrowsWithLastEffect [pt] eff ret =
-  TFun pt (collectRows joinCellOf [eff, openRow ()]) ret
-arrowsWithLastEffect (pt :: rest) eff ret =
-  TFun pt (openRow ()) (arrowsWithLastEffect rest eff ret)
+arrowsWithLastEffect params eff result = bodyArrows params eff result
 
 -- free generalizable effect variables: a row tail effvar deeper than the current
 -- scope (deduped by the caller, mirroring freeGenVars)
@@ -2451,6 +2612,7 @@ generalizableEffvar v = match !v
   EUnbound id lvl => if lvl > perRun.value.currentLevel.value then [id] else []
   ELink _ _ => []
   EJoin _ _ _ => []
+  ESummary _ _ _ => []
 
 -- the declared concrete effect set of a signature: labels on the first `<…>`
 -- reached walking down the return side (Phase 79e escape check)
@@ -7244,8 +7406,7 @@ methodReturnRequest row occurrence subst goalEv =
   let loc = !currentLoc
   let scope = captureScope ()
   let qualifiedBody = match row.msrScheme
-    Forall _ _ _ body =>
-      substMonoP True subst.misTypeSubst subst.misEffectSubst body
+    Forall _ _ _ body => substMono subst.misTypeSubst subst.misEffectSubst body
   MethodReturnRequest {
     mrrIface = row.msrIface,
     mrrName = row.msrName,
@@ -9958,6 +10119,7 @@ data PerRun = PerRun {
   -- once the receiver has grounded.  See `recordImplObligation`.
   admittedOccObls : Ref (List (String, Mono, Option Loc)),
   curEffect : Ref (List EffRow),
+  effectSummaries : SummarySolver (Option Loc, String),
   rigidEffvarsRef : Ref (Map Int Unit),
   recordByNameRef : Ref (OrdMap RecordInfo),
   fieldOwnersRef : Ref (OrdMap (List String)),
@@ -10058,6 +10220,7 @@ freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
   admittedOccObls = Ref [],
   curEffect = Ref [],
+  effectSummaries = EffectSolver.newSolver (),
   rigidEffvarsRef = Ref Tip,
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
@@ -10861,7 +11024,7 @@ dedupIGo (x :: xs) seen result =
 
 instantiate : Scheme -> Mono
 instantiate (Forall ids evars _ t) =
-  substMonoP True (freshSubst ids) (freshEffSubst evars) t
+  substMono (freshSubst ids) (freshEffSubst evars) t
 
 freshSubst : List Int -> List (Int, Mono)
 freshSubst [] = []
@@ -10869,7 +11032,9 @@ freshSubst (id :: rest) = (id, freshVar ()) :: freshSubst rest
 
 freshEffSubst : List Int -> List (Int, Ref Effvar)
 freshEffSubst [] = []
-freshEffSubst (id :: rest) = (id, freshEffvar ()) :: freshEffSubst rest
+freshEffSubst (id :: rest) =
+  let cell = freshInferenceEffvar ()
+  (id, cell) :: freshEffSubst rest
 
 substMono : List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
 substMono subst esub t = match normalize t
@@ -10879,37 +11044,6 @@ substMono subst esub t = match normalize t
   TApp a b => TApp (substMono subst esub a) (substMono subst esub b)
   TFun a eff b =>
     TFun (substMono subst esub a) (substRow esub eff) (substMono subst esub b)
-  TEff r => TEff (substRow esub r)
-
--- Phase 146 variance-aware re-open: when instantiating a generalized scheme,
--- re-open a CLOSED row carrying concrete labels (`EffRow labels None`) at a
--- COVARIANT (positive) position — an arrow the value itself produces.  This turns
--- a concrete effectful value (`putStrLn : String -> <IO> Unit`) meeting a pure
--- closed bound into the open-row subset check, rejecting the laundering escape.
--- Contravariant rows (a parameter / ctor field the scheme accepts) stay closed so
--- a legitimately pure argument in an effect-allowing slot still subsumes.  Pure
--- (label-less) rows are never re-opened — nothing to leak.
-reopenRow : Bool -> EffRow -> EffRow
-reopenRow pos r = reopenRowN pos (effrowNorm r)
-
-reopenRowN : Bool -> EffRow -> EffRow
-reopenRowN True (EffRow (l :: ls) None) =
-  EffRow (l :: ls) (Some (freshEffvar ()))
-reopenRowN _ r = r
-
--- positional twin of substMono used by scheme instantiation: flips variance on
--- the arrow domain and re-opens covariant closed-with-labels rows (start pos=True)
-substMonoP : Bool -> List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
-substMonoP pos subst esub t = match normalize t
-  TVar cell => optionOr (TVar cell) (lookupAssocI (tyvarId cell) subst)
-  c@(TCon _ _) => c
-  TRigid n => TRigid n
-  TApp a b => TApp (substMonoP pos subst esub a) (substMonoP pos subst esub b)
-  TFun a eff b =>
-    TFun
-      (substMonoP (not pos) subst esub a)
-      (reopenRow pos (substRow esub eff))
-      (substMonoP pos subst esub b)
   TEff r => TEff (substRow esub r)
 
 -- Render a binding's scheme WITH its inferred/declared constraint context, looked
@@ -11176,14 +11310,13 @@ sigToScheme ty = fst (sigToSchemeTvs ty)
 sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvs ty = sigToSchemeTvsIn [] ty
 
--- #822: the graded-scope-carrying form.  An INTERFACE METHOD signature is built with
--- its interface's declGradedScope so an abstract head `f e a` gets its Row slot; every
--- other signature passes `[]` and is elaborated exactly as before.
+-- Interface methods contribute their enclosing declaration's kinds; qualified
+-- signatures additionally obtain kinds from their resolved predicates.
 sigToSchemeTvsIn : List (String, List Kind) ->
   Ty ->
   (Scheme, List (String, Mono))
 sigToSchemeTvsIn scope ty =
-  let rows = rowArgNamesIn scope ty
+  let rows = rowArgNamesIn (qualifiedKindScope scope ty) ty
   let tvs = freshTvMap (removeAllS rows (tyVarNamesWithConstraints ty))
   let etbl = freshEffMap (dedup (effTailNames ty ++ rows))
   (
@@ -11601,15 +11734,57 @@ typeInRowSlotMsg ty =
 
 -- names a type uses in a KRow type-app argument slot (so a caller can seed them
 -- into an etbl with shared effvars before elaborating).  Walks the whole type.
--- The unscoped entry point: a type that is NOT an interface method signature has no
--- graded head, so only the DATA half (dataParamKindsRef) can contribute.  Every
--- general elaborator seam calls this one.
+-- General elaboration obtains abstract head kinds from this type's predicates;
+-- concrete data heads additionally use their registered parameter kinds.
 rowArgNames : Ty -> List String
-rowArgNames ty = rowArgNamesIn [] ty
+rowArgNames ty = rowArgNamesIn (qualifiedKindScope [] ty) ty
 
--- [scope] is the graded typaram map of the interface whose method signature this
--- type IS (declGradedScope); `[]` everywhere else.  It is the ONLY channel by which an
--- abstract head can be row-kinded, which is what confines #822 to method signatures.
+-- This scope belongs to one signature, never to a source variable spelling across
+-- declarations. Interface lookup uses both declaration identity and visibility.
+qualifiedKindScope : List (String, List Kind) -> Ty -> List (String, List Kind)
+qualifiedKindScope scope ty =
+  qualifiedConstraintKinds (firstTyLoc ty) scope (sigConstraintsOf ty)
+
+qualifiedConstraintKinds : Option Loc ->
+  List (String, List Kind) ->
+  List Constraint ->
+  List (String, List Kind)
+qualifiedConstraintKinds _ scope [] = scope
+qualifiedConstraintKinds loc scope ((Constraint { constraintHead, constraintOrigin, constraintArgs }) :: rest) =
+  let envs = driverState.value.declEnvsRef.value
+  let cur = declEnvsOrdOf driverState.value.currentModuleRef.value envs
+  let key = regKeyOfTab (ifaceTabKey constraintOrigin constraintHead)
+  let next = match ceLookupAt key cur envs.deIfaces
+    None => scope
+    Some row =>
+      qualifiedArgumentKinds loc scope (ceRowParamKinds row) constraintArgs
+  qualifiedConstraintKinds loc next rest
+
+qualifiedArgumentKinds : Option Loc ->
+  List (String, List Kind) ->
+  List (List Kind) ->
+  List Ty ->
+  List (String, List Kind)
+qualifiedArgumentKinds loc scope (kinds :: restKinds) ((TyVar name) :: restArgs) =
+  let next = match lookupAssoc name scope
+    None => (name, kinds) :: scope
+    Some previous =>
+      let _ =
+        if kindsEq previous kinds then
+          ()
+        else
+          pushTypeErrorOnceAt
+            "T-EFFECT-KIND-MISMATCH"
+            loc
+            "Signature parameter '\{name}' has incompatible required kinds '\{renderKindArrow previous}' and '\{renderKindArrow kinds}'. Use separate parameters or constraints requiring the same kind."
+      scope
+  qualifiedArgumentKinds loc next restKinds restArgs
+qualifiedArgumentKinds loc scope (_ :: restKinds) (_ :: restArgs) =
+  qualifiedArgumentKinds loc scope restKinds restArgs
+qualifiedArgumentKinds _ scope _ _ = scope
+
+-- [scope] comes from the enclosing interface or the signature's own predicates.
+-- Abstract heads have no ambient name-keyed kind lookup.
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
@@ -11787,10 +11962,15 @@ restAtoms (_ :: rest) = rest
 -- it absent.  Read by `lookupLocalFlag` at the two `recordImplObligation` guards.
 data StandaloneOrigin = LocalStandalone | ImportedStandalone
 
+data ValueScheme = ValueScheme {
+  vsScheme : Scheme,
+  vsDeclared : Option CDeclared,
+}
+
 data EnvBinding = EnvBinding {
-  ebScheme : Scheme,
+  ebValue : ValueScheme,
   ebMethodRow : Option MethodSchemeRow,
-  ebStandalone : Option (StandaloneOrigin, Scheme),
+  ebStandalone : Option (StandaloneOrigin, ValueScheme),
 }
 
 data TcEnv =
@@ -11801,7 +11981,7 @@ lookupBinding (TcEnv vs _ _ _) n = omLookup n vs
 
 lookupVar : TcEnv -> String -> Option Scheme
 lookupVar (TcEnv vs cs _ _) n = match omLookup n vs
-  Some binding => Some binding.ebScheme
+  Some binding => Some binding.ebValue.vsScheme
   None => omLookup n cs
 
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
@@ -11843,23 +12023,69 @@ extendBindings (TcEnv vs cs al lc) ((n, binding) :: rest) =
 -- under its spelling. Keep both descriptors in the lexical environment. A local
 -- binder replaces the complete entry, so no hidden outer initializer survives.
 lookupStandaloneVar : TcEnv -> String -> Option Scheme
-lookupStandaloneVar env name = match lookupBinding env name
+lookupStandaloneVar env name =
+  map (value => value.vsScheme) (lookupStandaloneValue env name)
+
+lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
+lookupStandaloneValue env name = match lookupBinding env name
   Some binding => map snd binding.ebStandalone
   None => None
 
 lookupImportedStandalone : TcEnv -> String -> Option Scheme
 lookupImportedStandalone env name = match lookupBinding env name
   Some binding => match binding.ebStandalone
-    Some (ImportedStandalone, scheme) => Some scheme
+    Some (ImportedStandalone, value) => Some value.vsScheme
     _ => None
   None => None
 
-bindingWithStandalone : EnvBinding -> (StandaloneOrigin, Scheme) -> EnvBinding
+bindingWithStandalone : EnvBinding ->
+  (StandaloneOrigin, ValueScheme) ->
+  EnvBinding
 bindingWithStandalone binding source = EnvBinding {
-  ebScheme = binding.ebScheme,
+  ebValue = binding.ebValue,
   ebMethodRow = binding.ebMethodRow,
   ebStandalone = Some source,
 }
+
+-- Recursive contracts precede body generalization. Their predicate templates
+-- belong to the same allocation as their scheme, not the final definition's ids.
+bindingDeclared : TcEnv -> String -> Option CDeclared
+bindingDeclared env name = match lookupBinding env name
+  Some binding => binding.ebValue.vsDeclared
+  None => None
+
+bindingDeclaredAt : TcEnv ->
+  String ->
+  MethodTrackedInstantiation ->
+  Option CDeclared
+bindingDeclaredAt env name inst =
+  declaredEffectsAt inst (bindingDeclared env name)
+
+-- Slot projection below applies the type substitution after superclass expansion;
+-- effect-index arguments use the same occurrence's row substitution here.
+declaredEffectsAt : MethodTrackedInstantiation ->
+  Option CDeclared ->
+  Option CDeclared
+declaredEffectsAt inst declared =
+  map
+    (dc => CDeclared {
+      cdSlots = dc.cdSlots,
+      cdPrefix = dc.cdPrefix,
+      cdArgs =
+        map (map (substMono [] inst.mtiSubstitution.misEffectSubst)) dc.cdArgs,
+    })
+    declared
+
+recordDeclaredBindingCall : CDeclared -> List (Int, Mono) -> Unit
+recordDeclaredBindingCall dc subst =
+  let expanded =
+    expandSupersVecs
+      driverState.value.superDeclsRef.value
+      (zipSlotVecs dc.cdSlots dc.cdArgs)
+  recordCallObligations
+    (map fst expanded)
+    (constraintMonosOf (map (pair => (fst pair).csId) expanded) subst)
+    (callArgVecsV expanded subst)
 
 extendTermBindings : TcEnv -> OrdMap Unit -> List (String, Scheme) -> TcEnv
 extendTermBindings env _ [] = env
@@ -11871,7 +12097,13 @@ extendTermBindings env masked ((name, scheme) :: rest) =
       ordinaryEnvBinding scheme
   extendTermBindings
     (extendBindings env [
-      (name, bindingWithStandalone visible (LocalStandalone, scheme)),
+      (
+        name,
+        bindingWithStandalone visible (
+          LocalStandalone,
+          ordinaryValueScheme scheme,
+        ),
+      ),
     ])
     masked
     rest
@@ -11884,8 +12116,10 @@ attachStandaloneSources sources bindings =
     ((name, binding) => (
       name,
       match omLookup name sources
-        Some source =>
-          bindingWithStandalone binding (ImportedStandalone, source)
+        Some source => bindingWithStandalone binding (
+          ImportedStandalone,
+          ordinaryValueScheme source,
+        )
         None => binding,
     ))
     bindings
@@ -12182,8 +12416,7 @@ doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
-  let elem = freshVar ()
-  let _ = unifyAll elem (inferEach env es)
+  let elem = joinValueTypes "array" (inferProduced env es)
   TApp (tconBuiltin "Array") elem
 
 -- [lo..hi] : List Int, [|lo..hi|] : Array Int
@@ -12239,25 +12472,49 @@ recordShadowStandaloneObls env name subst
   | otherwise = ()
 
 inferMethodAt env name arityRef tagRef implRef methodRef =
+  let selected = match standaloneValueBinding env name
+    Some scheme => Some scheme
+    None => standaloneValueBindingEmit env name tagRef
+  match selected
+    Some value =>
+      let sym = routeLocalSym !tagRef
+      let occurrence =
+        instantiateStandaloneOccurrence env name sym !currentLoc value
+      let inst = occurrence.svoInstance
+      let dicts = occurrence.svoDicts
+      arityRef := Some (funArity inst.mtiBody)
+      let receiver = match methodDispatchIdx name
+        Some idx => optionOr inst.mtiBody (nthArgMono idx inst.mtiBody)
+        None => inst.mtiBody
+      let _ =
+        pushSiteGoal
+          GKRLocalSite
+          (PendingEntry
+            name
+            tagRef
+            receiver
+            perRun.value.currentFn.value
+            (SKRLocal sym True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs)
+            !currentLoc
+            (captureScope ())
+            (freshEvId ()))
+      inst.mtiBody
+    None => inferMethodCandidateAt env name arityRef tagRef implRef methodRef
+
+-- Selection precedes instantiation: the returned value, forcing row, obligations,
+-- and route slots above share one occurrence's substitution. A discarded method
+-- candidate must not supply a standalone value's receiver or dictionary cells.
+inferMethodCandidateAt : TcEnv ->
+  String ->
+  Ref (Option Int) ->
+  Ref Route ->
+  Ref (List Route) ->
+  Ref (List Route) ->
+  Mono
+inferMethodCandidateAt env name arityRef tagRef implRef methodRef =
   match lookupVar env name
-    -- #1430 (S2, row 39, EMIT path): a definer shadow of a method whose interface is
-    -- NAMEABLE in this module but whose METHOD NAME was never imported (`import
-    -- smod.{Zed, sf}` names the interface, not `zed`) has no `zed` binding in this
-    -- module's env at all.  The mangler has already renamed the module's own standalone
-    -- to `<mid>__zed` and the mark pass rewrote the occurrence to `EMethodAt "zed"` with
-    -- `RLocal <mid>__zed` seeded on its route, so the bare lookup below misses and this
-    -- panicked `unbound method: zed` — `medaka build` exit 1 on a program `check` and
-    -- `run` both accept.  The route already names the standalone that IS in scope, so
-    -- recover through the same emit-path value-position accessor the `Some` arm consults
-    -- (`maybeStandaloneValueMonoEmit`), and stamp the route it was pinned to.  An APP head
-    -- (shadowHeadCtxRef True) and a route with no mangled symbol both decline there, so
-    -- every occurrence that genuinely has no denotation still panics as before.
-    None => match maybeStandaloneValueMonoEmit env name tagRef
-      Some m =>
-        arityRef := Some (funArity m)
-        tagRef := RLocal (routeLocalSym !tagRef) []
-        m
-      None => panic ("unbound method: " ++ name)
+    -- Routed standalone recovery already ran before candidate selection.
+    None => panic ("unbound method: " ++ name)
     Some s =>
       let inst = instantiateMethodTracked s
       let occurrence = inst.mtiBody
@@ -12272,39 +12529,8 @@ inferMethodAt env name arityRef tagRef implRef methodRef =
           let _ = recordArgSiteFn name idx occurrence
           occurrence
         None => recordSite env name s tagRef implRef methodRef occurrence subst
-      -- P0-19 d4b (S4): a bare value-position definer shadow (`map size xs`, marked to
-      -- `EMethodAt`) denotes the STANDALONE — return its declared scheme type so the type
-      -- mismatches live-impl elements (Box vs Int) instead of dispatching, while the route
-      -- side-effects above still stamp RLocal (ungrounded receiver) so `map size [1,2,3]`
-      -- runs the standalone.  Inert for an application head (shadowHeadCtxRef True).
-      match maybeStandaloneValueMono env name
-        Some m =>
-          arityRef := Some (funArity m)
-          m
-        -- #410/#669 (S4, EMIT path): maybeStandaloneValueMono is keyed on the BARE name via
-        -- `definerShadowNamesRef`.  Under the old mangle-first emit order the mangler had
-        -- already renamed the definer standalone's funDef + call sites to `<mid>__name`
-        -- before marking, so the bare name was no longer in that ref and the pin above
-        -- missed (#2809 reversed that order, and this is accommodation 6 of the census in
-        -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20, retiring with it on
-        -- its own measurement) — the occurrence then
-        -- gets the permissive METHOD scheme (`a -> a -> Int`), so `map size` infers element
-        -- type `Int -> Int` (a function) and `println`'s `Display (List (Int -> Int))`
-        -- stamps a NULL element route (RNone → i64 0 dict word → the built binary SEGFAULTs,
-        -- while `run` is correct because eval follows the RLocal route this same call already
-        -- stamped).  Recover the shadow post-mangle exactly as the app-head path does (P0-18):
-        -- the route sym seeded on `tagRef` names the mangled standalone, and
-        -- `standaloneValuesRef` is the emit-path shadow set (definer ∪ importer) that stamped
-        -- RLocal.  Pin the occurrence's TYPE to that standalone's scheme so the element var is
-        -- grounded (`Int`/`String`) BEFORE resolveDictApps, closing the check-vs-build type
-        -- skew.  Value-position ONLY (shadowHeadCtxRef False); an app head keeps `ret`.
-        None => match maybeStandaloneValueMonoEmit env name tagRef
-          Some m =>
-            arityRef := Some (funArity m)
-            m
-          None =>
-            let _ = forceInstantiation inst
-            ret
+      let _ = forceInstantiation inst
+      ret
 -- C5: if [name] is a standalone-shadow method, record its discriminating-arg
 -- mono cell UNGATED so resolveRLocalSites can route RLocal when the receiver
 -- grounds to a no-impl head (the arg-stamp path would otherwise leave it RNone
@@ -12370,7 +12596,7 @@ recordRLocalSite env name tagRef inst
         let sym = routeLocalSym !tagRef
         let dicts =
           shadowStandaloneDictSlotsAt
-            (standaloneSchemeFor env name sym)
+            (standaloneValueFor env name sym)
             name
             (if sym == "" then name else sym)
             am
@@ -12395,19 +12621,27 @@ recordRLocalSite env name tagRef inst
 -- A method-layer binding retains the standalone scheme it masks. Recover that
 -- exact scheme, including forcing effects, before trying a routed symbol.
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
-standaloneSchemeFor env name sym = match lookupStandaloneVar env name
-  Some s => Some s
-  None => if sym == "" then None else lookupVar env sym
+standaloneSchemeFor env name sym =
+  map (value => value.vsScheme) (standaloneValueFor env name sym)
 
-standaloneOccurrenceMono : TcEnv ->
+standaloneValueFor : TcEnv -> String -> String -> Option ValueScheme
+standaloneValueFor env name sym = match lookupStandaloneValue env name
+  Some value => Some value
+  None =>
+    if sym == "" then
+      None
+    else
+      map (binding => binding.ebValue) (lookupBinding env sym)
+
+standaloneOccurrence : TcEnv ->
   String ->
   String ->
   Option Loc ->
-  Option Mono
-standaloneOccurrenceMono env name sym origin =
+  Option SelectedValueOccurrence
+standaloneOccurrence env name sym origin =
   map
-    (instantiateStandaloneValue env name origin)
-    (standaloneSchemeFor env name sym)
+    (instantiateStandaloneOccurrence env name sym origin)
+    (standaloneValueFor env name sym)
 
 -- C5: the dispatch-arg index of an interface method, from the graph-wide map
 -- methodDispatchIdxByIdRef (built by checkModuleFullImpl from every interface decl).
@@ -12736,7 +12970,10 @@ inferDictAt env name ev = match lookupVar env name
   None => panic ("unbound constrained fn: " ++ name)
   Some scheme =>
     let inst = instantiateValueTracked scheme
-    inferDictAtFound name ev (inst.mtiBody, inst.mtiSubstitution.misTypeSubst)
+    let occurrence = (inst.mtiBody, inst.mtiSubstitution.misTypeSubst)
+    match bindingDeclaredAt env name inst
+      Some dc => inferDeclaredDictAt ev dc occurrence
+      None => inferDictAtFound name ev occurrence
 
 -- The callee's constraints are registered (funConstraintsRef has it) ⇒ a normal
 -- call: map each constraint id through the instantiation subst to this call's
@@ -12991,7 +13228,6 @@ inferDictAtFound name ev inst =
   -- entry decision — reading the slots qual-resolved and the vectors off the bare-name
   -- table is precisely the cross-module gap this slice closes.
   let dc = declaredConstraintFor name
-  let slots = dc.cdSlots
   -- ⚠️ UNTRUNCATED on purpose — `map (s => s.csId) slots` is NOT the same list when the
   -- arity table hits and the iface table misses.  See `declaredConstraintIds`.
   let declaredIds = declaredConstraintIds name
@@ -13013,48 +13249,7 @@ inferDictAtFound name ev inst =
   if isEmptyL declaredIds && hasImportDefiner name then
     fst inst
   else if known && anyIdPinned declaredIds (snd inst) then
-    -- WS-1b: expand the callee's constraint slots with their transitive supers HERE
-    -- (the global table isn't expanded until expandSupersTable runs after inference),
-    -- so this call site applies one dict per EXPANDED slot — matching the def params
-    -- dictArityOf/dictPass will prepend from the expanded table.  Each super slot's id
-    -- equals its sub slot's id (shared type param), still pinned in [snd inst].
-    -- S-dict-arity-contract: expand carrying each slot's argument vector, so an APPENDED
-    -- super slot routes on the vector its `requires` clause names (`requires Ix a b` off
-    -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
-    -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
-    -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
-    let expandedV =
-      expandSupersVecs
-        driverState.value.superDeclsRef.value
-        (zipSlotVecs slots dc.cdArgs)
-    let expanded = map fst expandedV
-    let ids = map (s => s.csId) expanded
-    let monos = constraintMonosOf ids (snd inst)
-    let argVecs = callArgVecsV expandedV (snd inst)
-    -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
-    -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
-    -- below carries identity.
-    let _ = pushDictApp PendingDictApp {
-      pdaRoutesRef = Ref [],
-      pdaEv = ev,
-      pdaMonos = monos,
-      pdaIfaces = map (s => s.csIface) expanded,
-      pdaArgVecs = argVecs,
-      pdaEncl = perRun.value.currentFn.value,
-      pdaLoc = !currentLoc,
-      pdaScope = captureScope (),
-    }
-    perRun.value.dictAppFns :=
-      consSiteFn
-        perRun.value.currentFn.value
-        monos
-        perRun.value.dictAppFns.value
-    -- #11 soundness: record this call's instantiated impl obligations (iface paired
-    -- with the call's constraint mono), checked after inference by checkCallObligations.
-    -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
-    -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
-    let _ = recordCallObligations expanded monos argVecs
-    fst inst
+    inferDeclaredDictAt ev dc inst
   else
     pushRecDictAppGoal
       (RecDictApp
@@ -13065,6 +13260,48 @@ inferDictAtFound name ev inst =
         (captureScope ())
         ev)
     fst inst
+
+inferDeclaredDictAt : EvId -> CDeclared -> (Mono, List (Int, Mono)) -> Mono
+inferDeclaredDictAt ev dc inst =
+  -- WS-1b: expand the callee's constraint slots with their transitive supers HERE
+  -- (the global table isn't expanded until expandSupersTable runs after inference),
+  -- so this call site applies one dict per EXPANDED slot — matching the def params
+  -- dictArityOf/dictPass will prepend from the expanded table.  Each super slot's id
+  -- equals its sub slot's id (shared type param), still pinned in [snd inst].
+  -- S-dict-arity-contract: expand carrying each slot's argument vector, so an APPENDED
+  -- super slot routes on the vector its `requires` clause names (`requires Ix a b` off
+  -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
+  -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
+  -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
+  let expandedV =
+    expandSupersVecs
+      driverState.value.superDeclsRef.value
+      (zipSlotVecs dc.cdSlots dc.cdArgs)
+  let expanded = map fst expandedV
+  let ids = map (s => s.csId) expanded
+  let monos = constraintMonosOf ids (snd inst)
+  let argVecs = callArgVecsV expandedV (snd inst)
+  -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
+  -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
+  -- below carries identity.
+  let _ = pushDictApp PendingDictApp {
+    pdaRoutesRef = Ref [],
+    pdaEv = ev,
+    pdaMonos = monos,
+    pdaIfaces = map (s => s.csIface) expanded,
+    pdaArgVecs = argVecs,
+    pdaEncl = perRun.value.currentFn.value,
+    pdaLoc = !currentLoc,
+    pdaScope = captureScope (),
+  }
+  perRun.value.dictAppFns :=
+    consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value
+  -- #11 soundness: record this call's instantiated impl obligations (iface paired
+  -- with the call's constraint mono), checked after inference by checkCallObligations.
+  -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
+  -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
+  let _ = recordCallObligations expanded monos argVecs
+  fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
 -- a key of the instantiation subst — i.e. instantiateTracked actually quantified it,
@@ -13139,7 +13376,7 @@ instantiateMethodTracked (Forall ids evars force body) =
   let typeSubst = freshSubst ids
   let effectSubst = freshEffSubst evars
   MethodTrackedInstantiation {
-    mtiBody = substMonoP True typeSubst effectSubst body,
+    mtiBody = substMono typeSubst effectSubst body,
     mtiForce = substRow effectSubst force,
     mtiSubstitution = MethodInstantiationSubst {
       misTypeSubst = typeSubst,
@@ -13603,10 +13840,7 @@ blockRecLet env x xloc e =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
-  let placeholder = freshVar ()
-  let envSelf = extendLocalVar env x (monoScheme placeholder)
-  let t1 = infer envSelf e
-  let _ = unify placeholder t1
+  let t1 = inferRecursiveValue env x e
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -13626,10 +13860,12 @@ blockRecLet env x xloc e =
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockLet env (PVar x xloc) e =
   let _ = enterLevel ()
+  let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let t = infer env e
+  let _ = finishValueEffects [t]
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -15442,16 +15678,20 @@ boolOp lt rt =
 
 consOp : Mono -> Mono -> Mono
 consOp lt rt =
-  let listTy = TApp (tconBuiltin "List") lt
+  let tailElem = freshVar ()
   let _ = noteNumlitCtx lt rt "cons"  -- Chunk D: tag cons head-vs-list Num mismatch
-  let _ = unify rt listTy
-  listTy
+  let _ = unify rt (TApp (tconBuiltin "List") tailElem)
+  TApp
+    (tconBuiltin "List")
+    (joinValueTypes "cons" [
+      (!currentLoc, lt),
+      (!currentLoc, tailElem),
+    ])
 
 pipeOp : Mono -> Mono -> Mono
 pipeOp lt rt =
   let res = freshVar ()
-  let eff = openRow ()
-  let _ = unify rt (TFun lt eff res)
+  let eff = applicationRow rt lt res
   let _ = performEffect perRun.value.curEffect eff
   res
 
@@ -15462,16 +15702,10 @@ composeOp gt ht False =
   let a = freshVar ()
   let b = freshVar ()
   let c = freshVar ()
-  let _ = unify gt (TFun a (openRow ()) b)
-  let _ = unify ht (TFun b (openRow ()) c)
-  TFun a (openRow ()) c
-composeOp gt ht True =
-  let a = freshVar ()
-  let b = freshVar ()
-  let c = freshVar ()
-  let _ = unify gt (TFun a (openRow ()) b)
-  let _ = unify ht (TFun c (openRow ()) a)
-  TFun c (openRow ()) b
+  let first = applicationRow gt a b
+  let second = applicationRow ht b c
+  TFun a (joinRows joinCellOf first second) c
+composeOp gt ht True = composeOp ht gt False
 
 inferUnop : String -> Mono -> Mono
 inferUnop "-" t = negateOp t
@@ -15576,10 +15810,10 @@ inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVarPlainId env x id = match lookupVar env x
   Some s => match lookupMethodRow env x
     Some _ =>
-      let inst = instantiateVarTrackedWithSubst x id s
+      let inst = instantiateVarTrackedWithSubst env x id s
       recordMethodObligationOwned env x s inst.mtiBody inst.mtiSubstitution None
     None =>
-      let mono = instantiateVarTrackedId x id s
+      let mono = instantiateVarTrackedId env x id s
       recordMethodObligationGuarded env x s mono
   None => unboundVarFresh x
 
@@ -15594,16 +15828,30 @@ inferVarPlainId env x id = match lookupVar env x
 -- lookup keys EXACTLY (x, id) — so a top-level `g`'s use can never pick up a
 -- where-helper `g`'s obligations.  id == 0 (local/where/cross-module/global, or
 -- any non-EVarId caller) falls to the bare-name scan — byte-identical to today.
-instantiateVarTrackedId : String -> Int -> Scheme -> Mono
-instantiateVarTrackedId x id s =
-  let inst = instantiateVarTrackedWithSubst x id s
+instantiateVarTrackedId : TcEnv -> String -> Int -> Scheme -> Mono
+instantiateVarTrackedId env x id s =
+  let inst = instantiateVarTrackedWithSubst env x id s
   inst.mtiBody
 
-instantiateVarTrackedWithSubst : String ->
+instantiateVarTrackedWithSubst : TcEnv ->
+  String ->
   Int ->
   Scheme ->
   MethodTrackedInstantiation
-instantiateVarTrackedWithSubst x id s =
+instantiateVarTrackedWithSubst env x id s = match bindingDeclared env x
+  Some _ =>
+    let inst = instantiateValueTracked s
+    let _ = match bindingDeclaredAt env x inst
+      Some dc => recordDeclaredBindingCall dc inst.mtiSubstitution.misTypeSubst
+      None => ()
+    inst
+  None => instantiateLegacyVarTracked x id s
+
+instantiateLegacyVarTracked : String ->
+  Int ->
+  Scheme ->
+  MethodTrackedInstantiation
+instantiateLegacyVarTracked x id s =
   match lookupSchemeObls x id perRun.value.schemeObligationsRef.value
     Some obs =>
       let inst = instantiateValueTracked s
@@ -16291,8 +16539,7 @@ unifySpineResult : Mono -> List Mono -> Mono
 unifySpineResult ft [] = ft
 unifySpineResult ft (a :: rest) =
   let r = freshVar ()
-  let eff = openRow ()
-  let _ = unify ft (TFun a eff r)
+  let eff = applicationRow ft a r
   let _ = performEffect perRun.value.curEffect eff
   unifySpineResult r rest
 
@@ -16302,8 +16549,7 @@ unifySpineProbe : Mono -> List Mono -> Unit
 unifySpineProbe _ [] = ()
 unifySpineProbe ft (a :: rest) =
   let r = freshVar ()
-  let eff = openRow ()
-  let _ = unify ft (TFun a eff r)
+  let _ = applicationRow ft a r
   unifySpineProbe r rest
 
 -- ── #2109: RESULT-FIRST inference against a known expected type ───────────
@@ -16419,11 +16665,11 @@ inferAppArgsAgainst env appSoFar ft (x :: rest) =
 -- at a contravariant one the reverse, and a non-covariant type-constructor slot
 -- demands equality (`paramVarianceGuard`). A closed lower row already covered
 -- by the upper row's known labels imposes no constraint on its tail. Closed
--- pairs are checked directionally. Remaining open-row constraints still use
--- the existing row unifier pending the scoped inclusion solver. Everything
--- else — a type variable or a head mismatch — is ordinary `unify`, so
--- bindings and diagnostics off this path are unchanged, including the order a
--- plain type mismatch names the two sides in: `unifyInto` names the slot first,
+-- pairs are checked directionally. Inside an inference scope, open rows become
+-- solver constraints. A flexible upper type acquires a positive envelope rather
+-- than copying the first value's closed rows. Other shape equations use ordinary
+-- `unify`, including the order a plain type mismatch names the two sides in:
+-- `unifyInto` names the slot first,
 -- as a call argument's `unify` did; `unifyIntoValueFirst` names the value first,
 -- as an annotation's and a supplied field's did.
 unifyInto : Bool -> Mono -> Mono -> Unit
@@ -16438,6 +16684,10 @@ unifyIntoOrd valueFirst pos e a =
   unifyIntoN valueFirst pos (normalize e) (normalize a)
 
 unifyIntoN : Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoN _ True (TVar cell) (lower@(TFun _ _ _)) = bindValueUpper cell lower
+unifyIntoN _ True (TVar cell) (lower@(TApp _ _)) = bindValueUpper cell lower
+unifyIntoN _ False (lower@(TFun _ _ _)) (TVar cell) = bindValueUpper cell lower
+unifyIntoN _ False (lower@(TApp _ _)) (TVar cell) = bindValueUpper cell lower
 unifyIntoN vf pos (TFun e1 er e2) (TFun a1 ar a2) =
   let _ = unifyIntoOrd vf (not pos) e1 a1
   let _ = rowInto pos (effrowNorm er) (effrowNorm ar)
@@ -16449,6 +16699,31 @@ unifyIntoN vf pos (e@(TApp e1 e2)) (a@(TApp a1 a2))
     unifyIntoOrd vf pos e2 a2
 unifyIntoN vf _ e a = unifyOrdered vf e a
 
+-- A flexible receiving slot acquires the value's shape, not its first closed
+-- row. Positive arrows get inference allowances with directed lower bounds;
+-- domains and invariant constructor arguments keep ordinary HM equality.
+-- This is the same structural envelope as a produced-value join, so a generic
+-- choice cannot depend on which callback happens to be supplied first.
+bindValueUpper : Ref Tyvar -> Mono -> Unit
+bindValueUpper cell lower =
+  perRun.value.occursCheckFailed := False
+  let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) lower
+  if not perRun.value.occursCheckFailed.value then
+    let upper =
+      optionOrFresh
+        (joinProducedEnvelope (valueJoinOps "argument" collectValueAllowance) [
+          (!currentLoc, lower),
+        ])
+    bindVar cell upper
+
+collectValueAllowance : List EffRow -> EffRow
+collectValueAllowance rows =
+  let cell = freshInferenceEffvar ()
+  let _ = EffectSolver.registerValueAllowance perRun.value.effectSummaries cell
+  let upper = EffRow [] (Some cell)
+  let _ = fold (_ lower => rowInto True upper lower) () rows
+  upper
+
 unifyOrdered : Bool -> Mono -> Mono -> Unit
 unifyOrdered True e a = unify a e
 unifyOrdered False e a = unify e a
@@ -16456,6 +16731,12 @@ unifyOrdered False e a = unify e a
 -- Check the known inclusion without equating the allowance with the performed
 -- row. In particular, a pure alternative must not close an allowance's tail.
 rowInto : Bool -> EffRow -> EffRow -> Unit
+rowInto pos er ar
+  | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
+    if pos then
+      deferEffectRelation False ar er
+    else
+      deferEffectRelation False er ar
 rowInto True (EffRow le None) (EffRow la None) =
   effectLeakCheck (atomsEscape la le) le
 rowInto False (EffRow le None) (EffRow la None) =
@@ -16782,18 +17063,19 @@ inferShadowStandaloneArm : TcEnv ->
   Mono ->
   Mono
 inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
-  match lookupStandaloneVar env mname
-    Some sscheme =>
-      let smono =
-        instantiateStandaloneValue
+  match lookupStandaloneValue env mname
+    Some value =>
+      let occurrence =
+        instantiateStandaloneOccurrence
           env
           mname
+          ""
           (orElseLoc (appSpineHeadLoc f) !currentLoc)
-          sscheme
+          value
+      let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = freshVar ()
-      let eff = openRow ()
-      let _ = unify smono (TFun tx eff r)
+      let eff = applicationRow smono tx r
       let _ = performEffect perRun.value.curEffect eff
       let _ = stampRoutes tagRefs
       -- S-1 (Fork D — the importer half): an IMPORTED constrained standalone shadowing
@@ -16803,7 +17085,8 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
       -- above ran mid-inference, when the receiver is not yet solved, so it could only
       -- write `RLocal sym []`.  forceLocal=True: this arm has already committed the
       -- site's TYPE to the standalone, so its route is not open to re-derivation.
-      let _ = recordImporterShadowDicts env mname tagRefs tx
+      let _ =
+        recordSelectedStandaloneRoutes mname occurrence.svoDicts tagRefs tx
       r
     None => inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
 
@@ -16892,19 +17175,21 @@ inferShadowStandaloneArmAt : TcEnv ->
   Mono ->
   Mono
 inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
-  match lookupStandaloneVar env mname
-    Some sscheme =>
-      let smono =
-        instantiateStandaloneValue
+  match lookupStandaloneValue env mname
+    Some value =>
+      let occurrence =
+        instantiateStandaloneOccurrence
           env
           mname
+          ""
           (orElseLoc (appSpineHeadLoc f) !currentLoc)
-          sscheme
+          value
+      let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = unifySpineResult smono (map snd pre ++ [tx])
       let _ = stampRoutes tagRefs
       let _ =
-        recordImporterShadowDictsAt env mname tagRefs (map snd pre ++ [tx]) tx
+        recordSelectedStandaloneRoutes mname occurrence.svoDicts tagRefs tx
       r
     None =>
       inferAppNodes
@@ -16943,59 +17228,15 @@ importerShadowDomainAt env mname k = match lookupStandaloneVar env mname
 -- resolveRLocalSites re-stamps the ref post-inference with the dicts filled in.
 -- forceLocal=True — inferShadowApp's standalone arm already committed the site's type.
 -- Inert (no dicts, same RLocal stamp) for an unconstrained imported standalone.
-recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
-recordImporterShadowDicts _ _ [] _ = ()
--- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
--- lint-disable-next-line rule-prefer-assign-op
-recordImporterShadowDicts env mname (r :: rest) tx =
-  -- the IMPORTED standalone's scheme, NOT `lookupVar env mname` (which env1 rebound to
-  -- the interface method) — see shadowStandaloneDictsWith.
-  let dicts =
-    shadowStandaloneDictsWith
-      (lookupStandaloneVar env mname)
-      mname
-      (routeLocalSym !r)
-      tx
-  let _ =
-    pushSiteGoal
-      GKRLocalSite
-      (PendingEntry
-        mname
-        r
-        tx
-        perRun.value.currentFn.value
-        (SKRLocal
-          (routeLocalSym !r)
-          True
-          dicts.sdMonos
-          dicts.sdIfaces
-          dicts.sdArgVecs)
-        !currentLoc
-        (captureScope ())
-        (freshEvId ()))
-  recordImporterShadowDicts env mname rest tx
-
--- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
--- applied prefix up to and including the receiver (mirrors shadowStandaloneDictsSp /
--- recordStandaloneSigObligationsSp's #1815 [ats] parameter), while [tx] stays the
--- receiver's own mono for the PendingEntry (the site's TYPE, same as inferShadowApp's
--- k == 0 arm records).
-recordImporterShadowDictsAt : TcEnv ->
-  String ->
+recordSelectedStandaloneRoutes : String ->
+  ShadowDicts ->
   List (Ref Route) ->
-  List Mono ->
   Mono ->
   Unit
-recordImporterShadowDictsAt _ _ [] _ _ = ()
+recordSelectedStandaloneRoutes _ _ [] _ = ()
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-recordImporterShadowDictsAt env mname (r :: rest) ats tx =
-  let dicts =
-    shadowStandaloneDictsWithSp
-      (lookupStandaloneVar env mname)
-      mname
-      (routeLocalSym !r)
-      ats
+recordSelectedStandaloneRoutes mname dicts (r :: rest) tx =
   let _ =
     pushSiteGoal
       GKRLocalSite
@@ -17013,7 +17254,7 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
         !currentLoc
         (captureScope ())
         (freshEvId ()))
-  recordImporterShadowDictsAt env mname rest ats tx
+  recordSelectedStandaloneRoutes mname dicts rest tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
 -- method occurrence (the user's OWN top-level fn reuses a single-param interface
@@ -17213,19 +17454,25 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
   -- would type `List a` not `List (k, v)`, so a downstream `debug (toList m)` resolves
   -- the WRONG element dict and SIGSEGVs.  When we carry the mangled symbol, instantiate
   -- its (standalone) scheme directly so the impl-body types exactly as the run path
-  -- does.  For the DISPATCH arm, type against the METHOD scheme (`definerShadowHeadType
-  -- env ""`) so a live-impl receiver unifies and the result comes from the method.
+  -- does. For the DISPATCH arm, type against the METHOD scheme so a live-impl
+  -- receiver unifies and the result comes from the method.
   -- DISPATCH arm: the interface METHOD scheme, fetched EXPLICITLY from
   -- methodIfaceParamsRef (which spans imported interfaces) — NOT `infer env f`, because
   -- on the multi-module path the env rebinds the bare method name to the LOCAL
   -- standalone (`Int -> Int`), so inferMethodAt's lookupVar would hand back `Int -> Int`
   -- and reject a live-impl receiver (`Box`).  STANDALONE arm: the standalone scheme
   -- (mangled sym on the emit path preserves the concrete result type).
+  let selected =
+    if dispatches then
+      None
+    else
+      standaloneOccurrence env name sym (orElseLoc (appSpineHeadLoc f) dloc)
   let ft =
     if dispatches then
       shadowVarHeadMethodScheme env name hd
-    else
-      definerShadowHeadType env name sym (orElseLoc (appSpineHeadLoc f) dloc) hd
+    else match selected
+      Some occurrence => occurrence.svoInstance.mtiBody
+      None => infer env hd
   arityRef := Some (funArity ft)
   toggles.value.shadowHeadCtxRef := savedShadowHead
   toggles.value.suppressRLocalRecord := savedRLocal
@@ -17239,7 +17486,9 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
     if dispatches || isDictVar then
       emptyShadowDicts
     else
-      shadowStandaloneDictsSp env name sym (map snd pre ++ [xt])
+      optionOr
+        emptyShadowDicts
+        (map (occurrence => occurrence.svoDicts) selected)
   -- Route by the ACTUAL argument type on BOTH the eval path (pendingRLocalSites,
   -- read by resolveRLocalSites) and the emit path (pendingArgStamps, read by
   -- resolveArgStamps — only recorded when this method arg-dispatches, i.e. on the
@@ -17302,16 +17551,15 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
   -- or a wrapper generalized over the shadow receiver then called at a live-impl type)
   -- becomes a located reject instead of build-time garbage.  A grounded receiver WITH
   -- an impl still dispatches (no enforcement) — that arm is untouched.  On the mangled
-  -- emit path (sym /= "") `ft` is already the standalone scheme (definerShadowHeadType),
+  -- emit path (sym /= "") `ft` is already the selected standalone instance,
   -- which enforces the domain itself, so this stays inert there.
   -- The STANDALONE arm with a written signature mirrors its unmarked twin
   -- (`inferDefinerStandaloneVarAppAt`'s `Some smono` branch): ONE unification of the
   -- standalone's type against the applied spine, at the call site.  Running the
   -- domain enforcement AND `inferApp` here raises the same mismatch twice (once at
   -- the call site, once at the receiver), and every driver reports from this arm
-  -- now.  `ft` IS the standalone's instantiation on this arm
-  -- (`definerShadowHeadType`), so nothing is lost by not re-deriving it from the
-  -- signature.
+  -- now. `ft` IS the standalone's retained occurrence on this arm, so nothing is
+  -- lost by not re-deriving it from the signature.
   match (if dispatches || isDictVar then
     None
   else
@@ -17509,7 +17757,7 @@ groundShadowReceiver dom xt isDictVar dloc
 -- Un-mangled run/check (sym == ""): the module's own sig table, keyed by the bare name.
 -- Mangled emit (sym /= ""): private_mangle renamed the standalone to `<mid>__name`, so
 -- definerShadowSigsRef has no `name` entry — take the domain off the env binding for the
--- mangled symbol, which is the very scheme definerShadowHeadType types this site against.
+-- mangled symbol, whose value descriptor also supplies the selected occurrence.
 -- #1815: [k] is the interface's dispatch index; `k = 0` is the pre-#1815 behavior.
 shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
 shadowDomainForAt _ name "" k = standaloneShadowDomainAt name k
@@ -17560,26 +17808,55 @@ standaloneShadowDomainAt name k =
 maybeStandaloneValueMono : TcEnv -> String -> Option Mono
 maybeStandaloneValueMono env name =
   map
-    (instantiateStandaloneValue env name !currentLoc)
+    (value =>
+      (instantiateStandaloneOccurrence
+        env
+        name
+        ""
+        !currentLoc
+        value).svoInstance.mtiBody)
     (standaloneValueBinding env name)
 
 -- A selected standalone value contributes its own forcing row and constraints.
 -- Preparing a method candidate must not charge this alternate binding.
-instantiateStandaloneValue : TcEnv -> String -> Option Loc -> Scheme -> Mono
-instantiateStandaloneValue env name origin scheme =
-  currentLoc := origin
-  let inst = instantiateValueTracked scheme
-  let _ = recordShadowStandaloneObls env name inst.mtiSubstitution.misTypeSubst
-  inst.mtiBody
+data SelectedValueOccurrence = SelectedValueOccurrence {
+  svoInstance : MethodTrackedInstantiation,
+  svoDicts : ShadowDicts,
+}
 
-standaloneValueBinding : TcEnv -> String -> Option Scheme
+instantiateStandaloneOccurrence : TcEnv ->
+  String ->
+  String ->
+  Option Loc ->
+  ValueScheme ->
+  SelectedValueOccurrence
+instantiateStandaloneOccurrence env name sym origin value =
+  currentLoc := origin
+  let inst = instantiateValueTracked value.vsScheme
+  let declared = declaredEffectsAt inst value.vsDeclared
+  let _ = match declared
+    Some dc => recordDeclaredBindingCall dc inst.mtiSubstitution.misTypeSubst
+    None =>
+      recordShadowStandaloneObls env name inst.mtiSubstitution.misTypeSubst
+  let key = if sym == "" then name else sym
+  let dc = optionOr (shadowDeclaredFor name key) declared
+  SelectedValueOccurrence {
+    svoInstance = inst,
+    svoDicts =
+      shadowStandaloneDictSlots
+        dc.cdSlots
+        dc.cdArgs
+        inst.mtiSubstitution.misTypeSubst,
+  }
+
+standaloneValueBinding : TcEnv -> String -> Option ValueScheme
 standaloneValueBinding env name
   | toggles.value.shadowHeadCtxRef.value = None
   | ifaceMethodName name
     && omHasKey name perRun.value.definerShadowNamesRef.value =
-    lookupStandaloneVar env name
+    lookupStandaloneValue env name
   | not (singleTyparamIfaceMethod name) = None
-  | otherwise = lookupStandaloneVar env name
+  | otherwise = lookupStandaloneValue env name
 
 -- #410/#669 (S4, EMIT path only): the sym-recovering peer of maybeStandaloneValueMono,
 -- for the marked (EMethodAt) value-position occurrence whose bare name maybeStandaloneValueMono
@@ -17609,7 +17886,7 @@ standaloneValueBinding env name
 --     Safe at multi-typaram width because a DEFINER app head is ALWAYS bracketed: it is caught
 --     by definerShadowArgHead's isDefinerShadow disjunct (typaram-agnostic) →
 --     inferDefinerShadowApp, which sets shadowHeadCtxRef True and types the head via
---     shadowVarHeadMethodScheme / definerShadowHeadType — NEVER through inferMethodAt.  So the
+--     the method scheme or selected standalone occurrence, never inferMethodAt. So the
 --     only definer occurrence reaching here with shadowHeadCtxRef False is a genuine value
 --     position, which is precisely what must ground (d22z is the app-head control).
 --   • otherwise (importer / non-shadow): singleTyparamIfaceMethod is REQUIRED, not incidental.
@@ -17628,18 +17905,15 @@ standaloneValueBinding env name
 -- and the `Undetermined`/KeepNone design (:9899) forbids element-position errors for this reason.
 -- Grounding the shadow occurrence's TYPE here (direction 1) closes the actual SIGSEGV vector at
 -- its source without that hazard, so the loud-floor was not needed.
-maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
+standaloneValueBindingEmit : TcEnv -> String -> Ref Route -> Option ValueScheme
 -- #2809: keyed on `recoveredShadowSym`, not on the raw seed.  This pin exists to
 -- recover a shadow the MANGLER hid; a bare seed hides nothing, and reading one as the
 -- old signal fires this emit-only pin on `check`/`run`.
-maybeStandaloneValueMonoEmit env name tagRef
+standaloneValueBindingEmit env name tagRef
   | toggles.value.shadowHeadCtxRef.value = None
   | recoveredShadowSym name tagRef == "" = None
   | not (emitValueShadowGate name) = None
-  | otherwise =
-    map
-      (instantiateStandaloneValue env name !currentLoc)
-      (standaloneSchemeFor env name (recoveredShadowSym name tagRef))
+  | otherwise = standaloneValueFor env name (recoveredShadowSym name tagRef)
 
 -- #724: the per-shadow-kind gate for the emit-path value-position pin, mirroring the
 -- check-path maybeStandaloneValueMono's per-arm split (definer arm typaram-agnostic; importer
@@ -17654,7 +17928,7 @@ maybeStandaloneValueMonoEmit env name tagRef
 --   • DEFINER shadow (isDefinerShadow): admit typaram-agnostically.  Safe at multi-typaram
 --     width because a definer app head is ALWAYS bracketed by inferDefinerShadowApp
 --     (definerShadowArgHead's isDefinerShadow disjunct fires typaram-agnostically), so it
---     reaches maybeStandaloneValueMonoEmit with shadowHeadCtxRef True and is declined by that
+--     reaches standaloneValueBindingEmit with shadowHeadCtxRef True and is declined by that
 --     function's first guard — the ONLY definer occurrence reaching the pin with
 --     shadowHeadCtxRef False is a genuine value position, which is what must ground.
 --   • otherwise (importer or non-shadow): keep singleTyparamIfaceMethod — a MULTI-typaram
@@ -17830,7 +18104,9 @@ shadowVarHeadMethodScheme env name f =
     -- complaint — a silent divergence between two elaborations of the SAME signature.
     -- Co-locating the scope with `ty` is what makes this a one-token fix instead of a
     -- second lookup that could disagree.
-    Some (_, _, ty, scope) => instantiate (fst (sigToSchemeTvsIn scope ty))
+    Some (_, _, ty, scope) =>
+      forceInstantiation
+        (instantiateMethodTracked (fst (sigToSchemeTvsIn scope ty)))
     None =>
       -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
       let saved = toggles.value.shadowHeadCtxRef.value
@@ -17856,27 +18132,14 @@ inferDefinerStandaloneVarAppAt : TcEnv ->
   Option Loc ->
   Mono
 inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
-  match (standaloneOccurrenceMono
-    env
-    name
-    ""
-    (orElseLoc (appSpineHeadLoc f) dloc))
-    Some smono =>
+  match standaloneOccurrence env name "" (orElseLoc (appSpineHeadLoc f) dloc)
+    Some occurrence =>
       currentLoc := dloc
       -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
       -- is what equated `Int -> Int -> Int` (the standalone) with `b -> r` (the annotated
       -- `wrap`'s second parameter) and monomorphised the user's written signature.
-      let r = unifySpineResult smono (map snd pre ++ [xt])
-      -- S-1 (REJECT direction).  standaloneShadowScheme instantiates the DECLARED SIG via
-      -- sigToScheme, which DROPS the `=>` constraints entirely — so `Num String` was never
-      -- asked and `check` ACCEPTED `size "hi"` against `size : Num a => a -> a`.  Re-read
-      -- the constraints off the signature and record them as call obligations at the
-      -- receiver, which makes it a located reject.  (This arm has a signature by
-      -- construction; the no-signature arm below goes through `infer env f` → inferVarPlain
-      -- → instantiateVarTracked, the ordinary obligation path.)
-      let _ = recordStandaloneSigObligationsSp name "" (map snd pre ++ [xt])
-      r
+      unifySpineResult occurrence.svoInstance.mtiBody (map snd pre ++ [xt])
     None =>
       -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
       let saved = toggles.value.shadowHeadCtxRef.value
@@ -17885,16 +18148,6 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
       toggles.value.shadowHeadCtxRef := saved
       let _ = enforceStandaloneDomainAt env name xt dloc (listLen pre)
       inferAppNodes (envAlphaLets env) ft (pre ++ [(EApp f x, xt)])
-
--- P0-18: the type of a definer-shadow application HEAD.  With a mangled symbol (the
--- emit path), instantiate the standalone's own scheme (bound under `<mid>__name`) so
--- the concrete result type survives; else infer the head node (the un-mangled path,
--- where the bare name already resolves to the standalone).
-definerShadowHeadType : TcEnv -> String -> String -> Option Loc -> Expr -> Mono
-definerShadowHeadType env name sym origin f =
-  match standaloneSchemeFor env name sym
-    Some s => instantiateStandaloneValue env name origin s
-    None => infer env f
 
 -- stamp every route ref (one for the marked EMethodAt form, none for the unmarked
 -- check-path EVar form) RLocal.  S-1: the standalone's own constraint dicts are NOT
@@ -17913,81 +18166,6 @@ stampMethodArities (r :: rest) arity =
   r := Some arity
   stampMethodArities rest arity
 
--- ── S-1: the shadowing standalone's OWN constraint dicts ──────────────────────
--- A `=>`-constrained top-level fn whose name collides with a visible interface method
--- (`eq : Num a => a -> a` vs the prelude's `Eq.eq`) sits in BOTH the shadow name set
--- and the dict name set.  The marking prePass is a first-match guard chain whose shadow
--- arm is tested FIRST, so the occurrence becomes `EMethodAt`, never `EDictAt` — and no
--- dict is ever computed for it.  But `dictPassDecl` (keyed on the same dict name set)
--- still prepends the dict PARAM to the definition.  Def arity 2, call arity 1 ⇒ the
--- call silently UNDER-APPLIES and the first real argument lands in the dict slot.
---
--- So: when a shadow occurrence resolves to the STANDALONE arm, compute that
--- standalone's constraint slots here — the shadowed interface decides WHICH function,
--- the standalone's own constraints decide WHICH DICTS (clause S9).
---
--- [xt] is the RECEIVER's mono.  We take a tracked instantiation of the standalone's own
--- scheme and unify it with `xt -> <fresh>`, which pins the standalone's constraint
--- variable to the receiver exactly as inferApp will pin the site's real head — so the
--- subst maps each constraint id to whatever that constraint variable becomes at THIS
--- call.  The fresh result var is a throwaway: it does NOT re-type the site (the caller's
--- own `ft`/`inferApp` still owns the site's type), it only ties the dict to the receiver.
---
--- ⚠️ Unify against the RECEIVER, not against the caller's head type `ft`.  On the
--- UN-MANGLED path `ft` is the permissive interface-METHOD scheme, not the standalone's
--- (the two doc-comments in inferDefinerShadowApp contradict each other; the one inside
--- `inferDefinerShadowAppAt` — `grep -n 'UN-MANGLED path'` — is the correct one).  Unifying
--- the standalone's `a -> a` against the method's `a -> a -> Bool` is an OCCURS-CHECK failure
--- ("Cannot construct infinite type") on the legal `eq : Num a => a -> a`; the receiver is common.
---
--- Returns the slot-ordered (monos, ifaces) that routesOfMonosTop turns into Routes, and
--- records the call's impl obligations so `size "hi"` (⇒ `Num String`, which has no
--- impl) becomes a LOCATED REJECT at `check` instead of build-time garbage — the second,
--- independent hole in this same arm.  ([] , []) for an unconstrained standalone, which
--- SHORT-CIRCUITS BEFORE THE UNIFY, so an unconstrained shadow (all 5 of the compiler's
--- own) does not even perturb the substitution — the fixpoint provably cannot move.
--- #1815: [ats] is the call's applied argument monos up to AND INCLUDING the receiver —
--- `[xt]` when the interface dispatches at argument 0, which is every pre-#1815 caller.
--- The unify below has to consume the WHOLE prefix, because at dispatch index k the
--- standalone's constraint variable sits behind k earlier parameters and unifying its
--- scheme against `TFun receiver …` asks about the wrong one (packet residual (a)).
-shadowStandaloneDictsSp : TcEnv -> String -> String -> List Mono -> ShadowDicts
-shadowStandaloneDictsSp env name sym ats =
-  -- P0-20's sym-awareness lesson, mirrored: on the mangled emit path the standalone is
-  -- bound under `<mid>__name`, so a BARE-name lookup here would be silently inert and
-  -- `build` would emit the un-dicted call while run/check dicted correctly — the same
-  -- bug, mirrored.  shadowDomainFor exists for exactly this reason.
-  shadowStandaloneDictsWithSp
-    (lookupVar env (if sym == "" then name else sym))
-    name
-    sym
-    ats
-
--- as shadowStandaloneDicts, but with the standalone's scheme supplied explicitly.
--- The IMPORTER shadow needs this: in the importing module `env1` deliberately rebinds the
--- bare name to the polymorphic INTERFACE-METHOD scheme while retaining its standalone
--- descriptor, so `lookupVar env name` hands back the
--- METHOD — whose quantified ids are not the ones funConstraintsRef recorded for the
--- imported standalone, so every dict slot silently resolves to nothing.  That is why the
--- importer shadow was correct on `build`/`wasm` (which reach the standalone through the
--- MANGLED symbol) and still under-applied on `run`.
-shadowStandaloneDictsWith : Option Scheme ->
-  String ->
-  String ->
-  Mono ->
-  ShadowDicts
-shadowStandaloneDictsWith mscheme name sym xt =
-  shadowStandaloneDictsWithSp mscheme name sym [xt]
-
-shadowStandaloneDictsWithSp : Option Scheme ->
-  String ->
-  String ->
-  List Mono ->
-  ShadowDicts
-shadowStandaloneDictsWithSp mscheme name sym ats =
-  let _ = recordStandaloneSigObligationsSp name sym ats
-  shadowStandaloneDictSlotsSp mscheme name (if sym == "" then name else sym) ats
-
 -- the dict slots ONLY — no call obligations.
 -- recordRLocalSite needs this: it fires for EVERY shadow method occurrence, at a point
 -- where the standalone-vs-dispatch choice is NOT yet made (resolveRLocalSite decides it
@@ -18001,13 +18179,26 @@ shadowStandaloneDictsWithSp mscheme name sym ats =
 -- classifier `isDefinerShadow` reads `definerShadowNamesRef`, which holds bare names on
 -- every path.  Passing [key] to that classifier makes it silently answer False for every
 -- mangled occurrence — see `shadowDeclaredFor`.
-shadowStandaloneDictSlotsAt : Option Scheme ->
+shadowStandaloneDictSlotsAt : Option ValueScheme ->
   String ->
   String ->
   Mono ->
   ShadowDicts
-shadowStandaloneDictSlotsAt mscheme name key xt =
-  shadowStandaloneDictSlotsSp mscheme name key [xt]
+shadowStandaloneDictSlotsAt None _ _ _ = emptyShadowDicts
+shadowStandaloneDictSlotsAt (Some value) name key xt =
+  let inst = instantiateMethodTracked value.vsScheme
+  let dc =
+    optionOr
+      (shadowDeclaredFor name key)
+      (declaredEffectsAt inst value.vsDeclared)
+  if isEmptyL dc.cdSlots then
+    emptyShadowDicts
+  else
+    let _ = unifySpineProbe inst.mtiBody [xt]
+    shadowStandaloneDictSlots
+      dc.cdSlots
+      dc.cdArgs
+      inst.mtiSubstitution.misTypeSubst
 
 -- #2722: a DEFINER SHADOW's own standalone, resolved from ITS module's table rather than
 -- through the import-keyed dispatch.  `declaredConstraintFor` / `declaredConstraintIds`
@@ -18030,47 +18221,6 @@ shadowDeclaredFor : String -> String -> CDeclared
 shadowDeclaredFor name key
   | isDefinerShadow name = localDeclaredConstraintFor key
   | otherwise = declaredConstraintFor key
-
--- the id twin of `shadowDeclaredFor`, taking the SAME arm off the same pure classifier so
--- the slots and the gate below can never come from different entry decisions.
-shadowDeclaredIds : String -> String -> List Int
-shadowDeclaredIds name key
-  | isDefinerShadow name =
-    predicateSlotIdsAt key perRun.value.funPredicateSlotsRef.value
-  | otherwise = declaredConstraintIds key
-
-shadowStandaloneDictSlotsSp : Option Scheme ->
-  String ->
-  String ->
-  List Mono ->
-  ShadowDicts
-shadowStandaloneDictSlotsSp mscheme name key ats =
-  -- FIX-shadow-arity-skew: ONE resolution, two projections — the slots AND the argument
-  -- vectors must come from the same entry decision, exactly as `inferDictAtFound` does.
-  let dc = shadowDeclaredFor name key
-  let slots = dc.cdSlots
-  -- REJECT direction — from the SIGNATURE, NOT from schemeObligationsRef.
-  -- ⚠️ For a SIGNATURED binding the two obligation tables live in DIFFERENT ID SPACES:
-  -- funConstraintsRef's ids (and the env scheme's quantified ids) come from
-  -- sigToSchemeTvs over the declared signature, while schemeObligationsRef's come from
-  -- GENERALIZATION.  Mapping the latter's ids through the former's substitution silently
-  -- finds nothing — which is why the dict ROUTES resolved correctly (they use
-  -- funConstraintsRef) while the obligation stayed unrecorded and `size "hi"` was
-  -- ACCEPTED.  The signature is the one source both halves can agree on.
-  -- the unconstrained standalone: nothing to solve, no unify, no perturbation at all.
-  -- This short-circuit is what makes the change provably fixpoint-safe — all 5 of the
-  -- compiler's own definer shadows are unconstrained and never reach the unify below.
-  -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
-  -- the `unify` below runs, so a truncation here would remove a unification side effect.
-  -- See `declaredConstraintIds`.
-  if isEmptyL (shadowDeclaredIds name key) then
-    emptyShadowDicts
-  else match mscheme
-    None => emptyShadowDicts
-    Some s =>
-      let inst = instantiateTracked s
-      let _ = unifySpineProbe (fst inst) ats
-      shadowStandaloneDictSlots slots dc.cdArgs (snd inst)
 
 -- the standalone's dict ROUTE slots for this call: its declared constraint ids mapped
 -- through the call's instantiation subst.  Expanded with transitive supers EXACTLY as
@@ -18115,97 +18265,12 @@ shadowStandaloneDictSlots slots args subst =
       sdArgVecs = callArgVecsV expandedV subst,
     }
 
--- ── S-1, REJECT direction on the plain `check` path ───────────────────────────
--- Record the standalone's declared `=>` constraints as CALL obligations, resolved from
--- its own SIGNATURE.
---
--- ⚠️ Why the SIGNATURE and not schemeObligationsRef: for a signatured binding those are
--- two different ID SPACES (sigToSchemeTvs's fresh quantification vs generalization's), so
--- schemeObligationsRef's ids are not keys of the env scheme's instantiation subst and
--- recordSchemeCallObligations silently records nothing.  That is exactly why the dict
--- ROUTES came out right (they key off funConstraintsRef, which IS the signature's id
--- space) while `check` still ACCEPTED `size "hi"` (⇒ `Num String`, which has no impl).
---
--- ⚠️ sigToSchemeTvs's `tvs` are the scheme's BOUND tyvars, and `instantiate` RE-freshens
--- them — so unifying the *instantiated* type against the receiver does not touch `tvs` at
--- all.  We must instantiateTracked and map each constraint tyvar's ID through the subst,
--- which is precisely what that function's own doc-comment prescribes ("so a caller can
--- recover the id of a specific constraint variable … a call-site instantiation's subst
--- maps them").  Getting this wrong records nothing and reads as "the fix does not work".
---
--- Keyed by the BARE name on the un-mangled run/check path and by the MANGLED symbol on
--- the emit path (sigsOf runs over the already-renamed decls there) — try both, exactly as
--- shadowDomainForAt has to.
---
--- #1815: [ats] is the applied prefix up to and including the receiver (`[xt]` at
--- dispatch index 0).  Same reason as `shadowStandaloneDictsSp`: the constraint variable
--- the obligation is about is only reachable through the whole prefix.
-recordStandaloneSigObligationsSp : String -> String -> List Mono -> Unit
-recordStandaloneSigObligationsSp name sym ats =
-  match standaloneShadowSigTy name sym
-    None => ()
-    Some ty => match sigConstraintsOf ty
-      [] => ()
-      cs =>
-        let pr = sigToSchemeTvs ty
-        let inst = instantiateTracked (fst pr)
-        let _ = unifySpineProbe (fst inst) ats
-        recordSigConstraintObls cs (snd pr) (snd inst)
-
--- the standalone's declared signature Ty, under whichever key this path stores it.
-standaloneShadowSigTy : String -> String -> Option Ty
-standaloneShadowSigTy name sym =
-  match omLookup name perRun.value.definerShadowSigsRef.value
-    Some ty => Some ty
-    None =>
-      if sym == "" then
-        None
-      else
-        omLookup sym perRun.value.definerShadowSigsRef.value
-
 -- every `=>` constraint in the signature.  Recurses the spine like constraintVarNamesTy
 -- rather than matching only the top node, so an effect-annotated sig still yields them.
 sigConstraintsOf : Ty -> List Constraint
 sigConstraintsOf (TyConstrained cs t) = cs ++ sigConstraintsOf t
 sigConstraintsOf (TyEffect _ _ t) = sigConstraintsOf t
 sigConstraintsOf _ = []
-
--- one obligation per `=>` PREDICATE in the signature, carrying its whole argument
--- vector at THIS call's instantiation (`Ix a i` => ONE ("Ix", [ma, mi]) entry, not
--- two 1-ary entries that ask an unanswerable question about each var alone).  If ANY
--- argument fails to resolve (not a plain tyvar, or absent from either map) the whole
--- predicate records nothing — a partial vector is a DIFFERENT, wrong predicate, so
--- dropping it is the never-over-reject direction (#607).
-recordSigConstraintObls : List Constraint ->
-  List (String, Mono) ->
-  List (Int, Mono) ->
-  Unit
-recordSigConstraintObls [] _ _ = ()
-recordSigConstraintObls ((Constraint { constraintHead = iface, constraintArgs = args, constraintOrigin = o }) :: rest) tvs subst =
-  let _ = match recordSigConstraintArgs args tvs subst
-    Some monos =>
-      recordObl
-        Predicate {
-          iface = IfaceRef { irName = iface, irOrigin = o },
-          args = monos,
-        }
-        0
-        PCallSlot
-        !currentLoc
-    None => ()
-  recordSigConstraintObls rest tvs subst
-
--- the constraint arguments' monos at THIS call's instantiation, in declaration order;
--- None if any argument does not resolve (see recordSigConstraintObls).  Two hops:
--- argument -> the signature's tyvar mono (constraintArgMonos), then that tyvar's id ->
--- this instantiation's mono (substMonos).  Both are all-or-nothing, so this is too.
-recordSigConstraintArgs : List Ty ->
-  List (String, Mono) ->
-  List (Int, Mono) ->
-  Option (List Mono)
-recordSigConstraintArgs args tvs subst = match constraintArgMonos args tvs
-  Some tvMonos => substMonos (map monoTyvarId tvMonos) subst
-  None => None
 
 -- the tyvar NAME a constraint argument mentions (`Num a` → "a"); None for a non-tyvar
 -- argument (a concrete head), which carries no per-call obligation here.
@@ -18601,7 +18666,6 @@ inferApp lets appExpr ft xt =
         let _ = poisonMismatchVars r r
         r
       None =>
-        let eff = openRow ()
         -- Type-error span (Bite 3, fork 3 = ARGUMENT): point a wrong-arg-type
         -- mismatch at the argument expression rather than the callee.  The live
         -- `currentLoc` after inferring the arg is its last atom; refine it to the
@@ -18613,12 +18677,7 @@ inferApp lets appExpr ft xt =
         -- pair there is checked directionally (`unifyInto`): a purer argument in
         -- an effect-allowing slot is accepted, the reverse is not.  A callee whose
         -- type is still a variable has no domain to direct against yet.
-        let _ = match normalize ft
-          TFun dom fr res =>
-            let _ = unifyInto True dom xt
-            let _ = unifyRow fr eff
-            unify res r
-          _ => unify ft (TFun xt eff r)
+        let eff = applicationRow ft xt r
         -- v2 Stage 2b: if f resolves to a leaf extern carrying an inferred-hole
         -- Prefix atom (`<Net _>`), fill it by α of the application spine's FIRST
         -- argument before the row propagates / is checked against any bound.  `lets`
@@ -18626,6 +18685,20 @@ inferApp lets appExpr ft xt =
         let eff2 = fillHolesInRow lets eff (spineFirstArg appExpr)
         let _ = performEffect perRun.value.curEffect eff2
         r
+
+-- All callable eliminations recover the selected arrow's row unchanged.
+-- Inference introduces a new row only while the callee's shape is unknown.
+-- The caller decides whether invocation happens now or in a composed closure.
+applicationRow : Mono -> Mono -> Mono -> EffRow
+applicationRow ft xt result = match normalize ft
+  TFun dom row res =>
+    let _ = unifyInto True dom xt
+    let _ = unify res result
+    row
+  _ =>
+    let unknown = openRow ()
+    let _ = unify ft (TFun xt unknown result)
+    unknown
 
 -- Chunk C: the applied head is a ground non-function.  If the spine over-applies
 -- a named function (callee name known AND at least one arg was consumed before
@@ -18693,10 +18766,7 @@ inferRecLet env x xloc e1 e2 =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
-  let placeholder = freshVar ()
-  let envSelf = extendLocalVar env x (monoScheme placeholder)
-  let t1 = infer envSelf e1
-  let _ = unify placeholder t1
+  let t1 = inferRecursiveValue env x e1
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -18712,6 +18782,36 @@ inferRecLet env x xloc e1 e2 =
     genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
+
+-- Recursive local bindings are strict. Their initializer is charged here;
+-- recursive occurrences read only the value, never a lazy forcing descriptor.
+inferRecursiveValue : TcEnv -> String -> Expr -> Mono
+inferRecursiveValue env name expr =
+  let _ = beginEffectSummaryScope ()
+  let arity = sourceBindingArity expr
+  let owned = newBindingSummary arity freshVar freshEffectSummary
+  let envSelf = extendLocalVar env name (monoScheme owned.bsRecursiveValue)
+  let (actual, immediate) =
+    captureEffects perRun.value.curEffect joinCellOf (_ => infer envSelf expr)
+  let _ = unifySourceDomains arity owned.bsValue actual
+  let _ = publishProducedResults owned [(exprLoc expr, actual)]
+  let _ = recordEffectBody owned.bsBody (if arity == 0 then
+    immediate
+  else
+    bodyRowAt arity actual)
+  let _ = checkRecursiveValue owned
+  let _ = finishValueEffects [owned.bsValue]
+  let _ = performEffect perRun.value.curEffect immediate
+  owned.bsValue
+
+sourceBindingArity : Expr -> Int
+sourceBindingArity (ELoc _ expr) = sourceBindingArity expr
+sourceBindingArity (EDoOrigin _ expr) = sourceBindingArity expr
+sourceBindingArity (EAnnot expr _) = sourceBindingArity expr
+sourceBindingArity (EHeadAnnot expr _) = sourceBindingArity expr
+sourceBindingArity (ELetGroup _ expr) = sourceBindingArity expr
+sourceBindingArity (ELam pats _) = listLen pats
+sourceBindingArity _ = 0
 
 -- Round-2 adversarial break "let-alias evasion" (#816): register a LOCAL
 -- binding's generalized scheme obligations exactly as processSCC does for
@@ -18755,10 +18855,12 @@ registerLocalScheme x sch oblN0 callN0 dictN0 =
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
 inferLetSimple env pat e1 e2 =
   let _ = enterLevel ()
+  let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let t1 = infer env e1
+  let _ = finishValueEffects [t1]
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground an ambiguous Num-only var owned by this inner let
   -- before it generalizes, so `let z = 2 in y + z` (y:Float) is a clean type
@@ -18794,9 +18896,91 @@ inferIf env c t e =
   let _ = unify (infer env c) (tconBuiltin "Bool")
   let tt = infer env t
   let ee = infer env e
-  let _ = noteNumlitCtx tt ee "if"  -- Chunk D: site-specific Num mis-framing wording
-  let _ = unify tt ee
-  tt
+  joinValueTypes "if" [(exprLoc t, tt), (exprLoc e, ee)]
+
+-- Inference owns source locations and variance metadata; effect_values owns
+-- the structural join. Unknown constructor slots remain exact.
+joinValueTypes : String -> List (Option Loc, Mono) -> Mono
+joinValueTypes context values =
+  optionOrFresh
+    (joinProduced (valueJoinOps context (collectRows joinCellOf)) values)
+
+valueJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+valueJoinOps context collector = ValueJoinOps {
+  vjoEqual = joinValueEqual context,
+  vjoCovariants = producedSlotCovariants,
+  vjoFreshType = freshVar,
+  vjoFreshRow = openRow,
+  vjoCollectRows = collector,
+}
+
+optionOrFresh : Option Mono -> Mono
+optionOrFresh None = freshVar ()
+optionOrFresh (Some value) = value
+
+collectProducedSummary : List EffRow -> EffRow
+collectProducedSummary rows =
+  let summary = freshEffectSummary ()
+  let _ = fold (_ row => recordEffectBody summary row) () rows
+  summary
+
+publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
+publishProducedResults owned values =
+  let results = map (clauseResult owned.bsArity) values
+  let produced =
+    optionOrFresh
+      (joinProducedEnvelope
+        (valueJoinOps "clause" collectProducedSummary)
+        results)
+  match resultAfterArrows owned.bsArity owned.bsValue
+    Some expected => unify expected produced
+    None => panic "binding source arity differs from its allocated shape"
+
+clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
+clauseResult arity (loc, value) = match resultAfterArrows arity value
+  Some result => (loc, result)
+  None => (loc, value)
+
+checkRecursiveValue : BindingSummary -> Unit
+checkRecursiveValue owned = unifyInto True owned.bsRecursiveValue owned.bsValue
+
+joinValueEqual : String -> Option Loc -> Mono -> Mono -> Unit
+joinValueEqual context loc left right =
+  let saved = !currentLoc
+  let _ = setLocIfSome loc
+  let _ = noteNumlitCtx left right context
+  let _ = unify left right
+  currentLoc := saved
+
+producedSlotCovariants : Mono -> List Bool
+producedSlotCovariants head = match headTyconMono head
+  Some (HkDecl key) =>
+    let slot = monoSpineDepth head
+    match paramPolaritiesOf key
+      Some polarities => map isCovariantPolarity (dropFirst slot polarities)
+      None =>
+        if tabKeyEq key (tyTabKey OriginBuiltin "List") then
+          if slot == 0 then [True] else []
+        else match headTyconNameMono head
+          Some name => match tupleTagArity name
+            Some arity =>
+              if tabKeyEq key (tyTabKey OriginBuiltin name) then
+                replicate (arity - slot) True
+              else
+                []
+            None => []
+          None => []
+  _ => []
+
+isCovariantPolarity : Polarity -> Bool
+isCovariantPolarity PCo = True
+isCovariantPolarity _ = False
+
+inferProduced : TcEnv -> List Expr -> List (Option Loc, Mono)
+inferProduced _ [] = []
+inferProduced env (e :: es) =
+  let value = infer env e
+  (exprLoc e, value) :: inferProduced env es
 
 inferEach : TcEnv -> List Expr -> List Mono
 inferEach _ [] = []
@@ -18806,18 +18990,8 @@ inferEach env (e :: es) =
 
 inferListLit : TcEnv -> List Expr -> Mono
 inferListLit env es =
-  let elem = freshVar ()
-  let _ = unifyAllNumlit elem (inferEach env es)  -- Chunk D: tag list-element Num mismatch
+  let elem = joinValueTypes "list" (inferProduced env es)
   TApp (tconBuiltin "List") elem
-
--- Chunk D: like unifyAll but tags each element that is a still-unbound literal var
--- being forced against a concrete accumulator (or vice-versa) with the "list" ctx.
-unifyAllNumlit : Mono -> List Mono -> Unit
-unifyAllNumlit _ [] = ()
-unifyAllNumlit t (x :: xs) =
-  let _ = noteNumlitCtx t x "list"
-  let _ = unify t x
-  unifyAllNumlit t xs
 
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferAnnot env e ty =
@@ -18877,8 +19051,7 @@ checkAnnotTooGeneral ty resolved =
 
 inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =
-  let result = freshVar ()
-  let _ = inferArms env scrutTy result arms
+  let result = joinValueTypes "match" (inferArms env scrutTy arms)
   let _ = checkMatchExhaustive scrutTy arms
   let _ = checkMatchRedundant scrutTy arms
   result
@@ -19078,18 +19251,18 @@ matchCol0Type ty = match headTyconNameMono ty
     Some (HkRigid _) => Some (TkBare NsType n)
     None => Some (TkBare NsType n)
 
-inferArms : TcEnv -> Mono -> Mono -> List Arm -> Unit
-inferArms _ _ _ [] = ()
-inferArms env scrutTy result ((Arm pat gs body) :: rest) =
-  let _ = inferArm env scrutTy result pat gs body
-  inferArms env scrutTy result rest
+inferArms : TcEnv -> Mono -> List Arm -> List (Option Loc, Mono)
+inferArms _ _ [] = []
+inferArms env scrutTy ((Arm pat gs body) :: rest) =
+  let value = inferArm env scrutTy pat gs body
+  (exprLoc body, value) :: inferArms env scrutTy rest
 
-inferArm : TcEnv -> Mono -> Mono -> Pat -> List Guard -> Expr -> Unit
-inferArm env scrutTy result pat gs body =
+inferArm : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
+inferArm env scrutTy pat gs body =
   let pr = inferPat env pat
   let _ = unify (fst pr) scrutTy
   let envBody = inferArmGuards (extendLocalVars env (snd pr)) gs
-  unify result (infer envBody body)
+  infer envBody body
 
 -- Thread an arm's guard qualifiers left-to-right: a `GBool` must be `Bool` and leaves the env unchanged; a
 -- `GBind p e` infers `e`, binds `p` against it, and extends the env so the bound
@@ -20136,12 +20309,18 @@ groupNames ((n, _) :: rest) seen = match omLookup n seen
 processLetGroup : TcEnv -> List LetBind -> TcEnv
 processLetGroup env binds =
   let _ = enterLevel ()
+  let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
-  let placeholders = map letBindPlaceholder binds
-  let env2 = extendLocalVars env placeholders
-  let _ = inferLetBinds env2 (zipL binds placeholders)
+  let summaries = map localBindingSummary binds
+  let placeholders = map (p => (fst p, monoScheme (snd p).bsValue)) summaries
+  let recursive =
+    map (p => (fst p, monoScheme (snd p).bsRecursiveValue)) summaries
+  let env2 = extendLocalVars env recursive
+  let _ = inferLetBinds env2 (zipL binds summaries)
+  let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
+  let _ = finishValueEffects (map (p => (snd p).bsValue) summaries)
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
   -- where-group boundary (and not arg-reachable from any member type) before the
@@ -20207,13 +20386,21 @@ groupSchemesOf genv ((LetBind name _) :: rest) = match lookupVar genv name
   Some sch => (name, sch) :: groupSchemesOf genv rest
   None => groupSchemesOf genv rest
 
-letBindPlaceholder : LetBind -> (String, Scheme)
-letBindPlaceholder (LetBind name _) = (name, monoScheme (freshVar ()))
+localBindingSummary : LetBind -> (String, BindingSummary)
+localBindingSummary (LetBind name clauses) =
+  let arity = match map funClausePair clauses
+    (pats, _) :: _ => listLen pats
+    [] => 0
+  (name, newBindingSummary arity freshVar freshEffectSummary)
 
-inferLetBinds : TcEnv -> List (LetBind, (String, Scheme)) -> Unit
+inferLetBinds : TcEnv -> List (LetBind, (String, BindingSummary)) -> Unit
 inferLetBinds _ [] = ()
-inferLetBinds env ((LetBind _ clauses, (_, sch)) :: rest) =
-  let _ = unify (schemeMono sch) (inferClauses env (map funClausePair clauses))
+inferLetBinds env ((LetBind _ clauses, (_, owned)) :: rest) =
+  let pairs = map funClausePair clauses
+  let _ = inferMemberClauses env None owned pairs
+  let _ = match pairs
+    [([], _)] => performEffect perRun.value.curEffect owned.bsForce
+    _ => ()
   inferLetBinds env rest
 
 schemeMono : Scheme -> Mono
@@ -21280,19 +21467,6 @@ clausesAreValue env clauses = allList (clauseIsValue env) clauses
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
 clauseIsValue _ (FunClause _ _) = True
-
--- infer a clause group (multi-clause function), unifying all clauses to one type
-inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
-inferClauses env clauses =
-  let v = freshVar ()
-  let _ = unifyClauses env v clauses
-  v
-
-unifyClauses : TcEnv -> Mono -> List (List Pat, Expr) -> Unit
-unifyClauses _ _ [] = ()
-unifyClauses env v ((pats, body) :: rest) =
-  let _ = unify v (inferLam env pats body)
-  unifyClauses env v rest
 
 -- ── elaboration: resolve return-position method dispatch (RKey) ────────────
 -- Rewrite each return-position method occurrence to EMethodAt (with a fresh route
@@ -29468,7 +29642,7 @@ checkBodyImpl : ModuleSeed ->
   String ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl)
+  (ModuleBindings, List Decl)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 checkBodyImpl moduleSeed mid implDecls prog0 =
@@ -29509,7 +29683,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- twin.  The Flat callers marked their whole program before this call.
   let stampRes =
     let (top, ids) = stampTopScope prog
-    let _ = beginModuleMarking mid prog top
+    let _ = beginModuleMarking mid prog top moduleSeed.msImportedValues
     (prog, ids)
   let progS = fst stampRes
   -- #907: index name→id as an OrdMap (was a List scanned linearly per rendered
@@ -29644,7 +29818,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
         prog0
         (standaloneShadowsFromSet
           crossRun.value.universeIfaceMethodsRef.value
-          crossRun.value.universeFunNamesRef.value
+          (omMapValues (_ => ()) moduleSeed.msImportedValues)
           prog0)
   let sigs = sigsOf prog
   perRun.value.definerShadowNamesRef := namesToSet definerShadows omEmpty
@@ -30160,7 +30334,13 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
     -- reload reads the alias universe at this module's own ordinal.
     appendDataUniverse mid prog0
-  let result = (globalS ++ topSchemes, progOut)
+  let result = (
+    ModuleBindings {
+      mbSchemes = globalS ++ topSchemes,
+      mbStandaloneSchemes = omFromPairs (reverseL topSchemes) omEmpty,
+    },
+    progOut,
+  )
   let _ = closeScope ()
   result
 -- D2: check top-level `let rec` bindings for non-function members before
@@ -30596,22 +30776,20 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- whole body inference — which is broader than any one unify, and is why no
   -- unify-level failure signal could have answered this: `inferDefaultMethodBody`
   -- also pushes T-EFFECT-LAUNDER, and contains its own gated unify.
-  -- #821: NO rigid window for a default body (mirrors the empty eager set it
-  -- passes to the D-3 check).  The default's expected type is an instantiated
-  -- scheme whose unannotated arrows carry FRESH rows, and only the method's
-  -- NAMED effect variables may be rigid; marking every arrow row rigid made an
-  -- ordinary default body (`loud x = "<" ++ speak x ++ ">"`) a join mismatch
-  -- in the elaboration pass.  Joins inside default bodies are a residual.
+  let savedEffects = beginEffectContract descriptor.mtiForce descriptor.mtiBody
   let (bodyErred, _) = erredDuring (_ =>
-    inferDefaultMethodBody
-      mname
-      subject
-      defLoc
-      env
-      (fst inst)
-      descriptor.mtiForce
-      pats
-      body)
+    let result =
+      inferDefaultMethodBody
+        mname
+        subject
+        defLoc
+        env
+        (fst inst)
+        descriptor.mtiForce
+        pats
+        body
+    let _ = finishEffectContract savedEffects
+    result)
   let _ =
     if bodyErred then
       ()
@@ -32902,8 +33080,8 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
       let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
       -- #821: the method's effect variables are RIGID for the body — two of them
       -- meeting in an ambient row join rather than being identified.
-      let savedRigid = perRun.value.rigidEffvarsRef.value
-      perRun.value.rigidEffvarsRef := cellIdSet (map snd effMap)
+      let savedRigid =
+        beginEffectContract (bindingForceFromAst effMap mty) expected
       -- #821/#825: the clause parameters are CHECKED against the declared
       -- domains (Phase 73's peel) rather than inferred fresh, so a callback's
       -- row IS the method's rigid `e` inside the body.  Performing it under a
@@ -32921,7 +33099,6 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
           True
           (bindingForceFromAst effMap mty)
           (effrowNorm (snd inferred))
-      perRun.value.rigidEffvarsRef := savedRigid
       let launderLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
       -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
       -- DECLARED return by the effect the method declares at that same arrow.  An effect an
@@ -32955,6 +33132,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
       let eagerIdx =
         eagerIndexOnlyVars gscope mty effMap actualArrows expected actual
       let _ = unifyInto True expected actual
+      let _ = finishEffectContract savedRigid
       let launderEsc =
         launderEscapeFromLog
           declArrows
@@ -36071,14 +36249,24 @@ processSCC env sigs grouped0 members =
     None => grouped
   let _ = scopeShadowsForGroup members
   let _ = enterLevel ()
+  let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let placeholders = map (m => (m, freshVar ())) members
   let scopedMembers = scopeMembers (captureScope ()) groupedStamped placeholders
-  let env2 =
-    extendTermBindings env omEmpty (map scopedMemberBinding scopedMembers)
   let (regs, sigTvMaps) = preunifySigsEx sigs scopedMembers
+  let savedRigidEffects = perRun.value.rigidEffvarsRef.value
+  perRun.value.rigidEffvarsRef :=
+    fold
+      (roots member =>
+        IdMap.foldlWithKey
+          (acc id _ => IdMap.set id () acc)
+          roots
+          member.smDeclaredRoots.value)
+      savedRigidEffects
+      scopedMembers
+  let env2 = extendBindings env (map scopedMemberBinding scopedMembers)
   -- P0-19 (constrained-receiver arm): publish THIS group's `=>`-constraint vars for
   -- the duration of body inference, so a definer-shadow method occurrence on one of
   -- them (`neq x y = not (eq x y)` under `neq : Eq a => …`) is seen as a DISPATCH and
@@ -36095,6 +36283,15 @@ processSCC env sigs grouped0 members =
   -- signed fn).  Registration/lookup now key by (name, binding-id), so a top-level
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
   let _ = inferMembers env2 sigs groupedStamped scopedMembers
+  let _ = fold (_ member => checkRecursiveValue member.smOwned) () scopedMembers
+  let _ =
+    finishEffectSummaryScope
+      (fold (acc member => memberEffectRoots member acc) Tip scopedMembers)
+      (fold
+        (acc member => borrowedEffectCells member.smOwned.bsValue acc)
+        Tip
+        scopedMembers)
+  perRun.value.rigidEffvarsRef := savedRigidEffects
   perRun.value.groupConstraintMonosRef := []
   let _ = checkSigsTooGeneral sigTvMaps
   let _ = registerConstraintRegs regs
@@ -36186,16 +36383,41 @@ isLetrecGroup [] = False
 isLetrecGroup [_] = False
 isLetrecGroup _ = True
 
-scopedMemberBinding : ScopedMember -> (String, Scheme)
+scopedMemberBinding : ScopedMember -> (String, EnvBinding)
 scopedMemberBinding member =
-  (member.smName, Forall [] [] (memberForce member) member.smMono)
+  let binding =
+    optionOr
+      (ordinaryEnvBinding
+        (Forall [] [] (memberForce member) member.smOwned.bsRecursiveValue))
+      member.smRecursive.value
+  (
+    member.smName,
+    bindingWithStandalone binding (LocalStandalone, binding.ebValue),
+  )
 
 memberForce : ScopedMember -> EffRow
-memberForce member = optionOr pureRow member.smForce
+memberForce member =
+  optionOr (optionOr pureRow member.smForce) member.smForceBound.value
+
+memberEffectRoots : ScopedMember -> Map Int Unit -> Map Int Unit
+memberEffectRoots member roots =
+  let inputs =
+    if member.smSigned.value then
+      roots
+    else
+      effectRoots member.smOwned.bsValue roots
+  IdMap.foldlWithKey
+    (acc id _ => IdMap.set id () acc)
+    inputs
+    member.smDeclaredRoots.value
 
 data ScopedMember = ScopedMember {
   smName : String,
   smMono : Mono,
+  smOwned : BindingSummary,
+  smDeclaredRoots : Ref (Map Int Unit),
+  smSigned : Ref Bool,
+  smRecursive : Ref (Option EnvBinding),
   smForce : Option EffRow,
   smForceBound : Ref (Option EffRow),
   smScope : ScopeId,
@@ -36229,12 +36451,21 @@ scopeMembers parent grouped ((name, mono) :: rest) =
       (BindingOwner name)
   -- This is the evaluator's topGroupValue distinction: a singleton nullary
   -- clause is a thunk, including a thunk whose result happens to be a function.
-  let force = match clausesOf name grouped
-    [([], _)] => Some (openRow ())
+  let clauses = clausesOf name grouped
+  let arity = match clauses
+    (pats, _) :: _ => listLen pats
+    [] => 0
+  let owned = newBindingSummary arity freshVar freshEffectSummary
+  let force = match clauses
+    [([], _)] => Some owned.bsForce
     _ => None
   ScopedMember {
       smName = name,
       smMono = mono,
+      smOwned = owned,
+      smDeclaredRoots = Ref Tip,
+      smSigned = Ref False,
+      smRecursive = Ref None,
       smForce = force,
       smForceBound = Ref None,
       smScope = sid,
@@ -36274,8 +36505,42 @@ preunifySigsEx sigs (member :: rest) =
   let (restRegs, restTvs) = preunifySigsEx sigs rest
   match omLookup m driverState.value.sigTyMapRef.value
     Some ty =>
+      member.smSigned := True
       let (signedMono, tvs, forceBound) = instantiateSigTracked ty
+      member.smDeclaredRoots :=
+        effectRowRoots
+          (optionOr pureRow forceBound)
+          (effectRoots signedMono Tip)
       member.smForceBound := forceBound
+      let (declaredScheme, declaredTvs) = sigToSchemeTvs ty
+      let (Forall ids eids declaredForce declaredValue) = declaredScheme
+      let slots =
+        declaredPredicateSlots
+          (constraintVarIfaceMonos (sigConstraints ty) declaredTvs)
+          (constraintVarArgMonos
+            (sigConstraints ty)
+            (sigConstraintArgTys ty)
+            declaredTvs)
+      member.smRecursive := Some EnvBinding {
+        ebValue = ValueScheme {
+          vsScheme =
+            Forall
+              ids
+              eids
+              (match forceBound
+                Some _ => declaredForce
+                None => optionOr pureRow member.smForce)
+              declaredValue,
+          vsDeclared = Some CDeclared {
+            cdSlots = predicateSlotCSlots slots,
+            cdPrefix =
+              CDPLen (listLen (dedupSlotVecs (map predicateSlotView slots))),
+            cdArgs = predicateSlotArgs slots,
+          },
+        },
+        ebMethodRow = None,
+        ebStandalone = None,
+      }
       let _ = unify v signedMono
       let regs = [
         ConstraintReg {
@@ -36290,14 +36555,16 @@ preunifySigsEx sigs (member :: rest) =
         },
       ]
       (regs ++ restRegs, (m, ty, tvs) :: restTvs)
-    None => (restRegs, restTvs)
+    None =>
+      let _ = unify v member.smOwned.bsValue
+      (restRegs, restTvs)
 
 -- like astTypeFresh but also returns the tyvar-name → fresh-var map
 instantiateSigTracked : Ty -> (Mono, List (String, Mono), Option EffRow)
 instantiateSigTracked ty =
-  let tvs =
-    freshTvMap (removeAllS (rowArgNames ty) (tyVarNamesWithConstraints ty))
-  let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
+  let rows = rowArgNames ty
+  let tvs = freshTvMap (removeAllS rows (tyVarNamesWithConstraints ty))
+  let etbl = freshEffMap (dedup (effTailNames ty ++ rows))
   (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl ty)
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
@@ -36508,7 +36775,7 @@ setFunConstraintEntry m slots =
 
 -- register a member's constraints: ids into funConstraintsRef + activeDictVars (the
 -- kept/abstract slots), and the SLOT-ALIGNED iface names into funConstraintIfacesRef.
--- registerMemberSlots keeps a slot only when its mono is still an abstract TVar (a
+-- declaredPredicateSlots keeps a slot only when its mono is still an abstract TVar (a
 -- body-forced-concrete constraint takes no dict slot); it emits the (iface, id) pair in
 -- ONE traversal, so the iface list cannot be filtered differently from the id list.
 registerMember : String ->
@@ -36528,14 +36795,15 @@ registerMember : String ->
 -- no entry (mirrors registerInferredFor's empty-ids guard).
 registerMember _ _ [] _ = ()
 registerMember m scope ifaceMonos argVecs =
-  let slots = registerMemberSlots scope 0 ifaceMonos argVecs
+  let slots = declaredPredicateSlots ifaceMonos argVecs
+  let _ = registerPredicateSlotIds scope 0 slots
   -- #1909: the PREDICATE-keyed half of the given, alongside the tyvar-id half
-  -- `registerMemberSlots` just wrote.  Exactly `registerReqSlots`' pairing, one channel
+  -- `registerPredicateSlotIds` just wrote. Exactly `registerReqSlots`' pairing, one channel
   -- over — see `registerSlotPredGivens`.
   let _ = registerSlotPredGivens scope 0 slots
   setFunConstraintEntry m slots
 
--- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
+-- #1161 (F-3a-ii): the argument vectors of the constraints declaredPredicateSlots KEEPS,
 -- in the same slot order — the same `normalize`-is-a-TVar filter applied to the parallel
 -- vector list, so funConstraintArgsRef stays slot-parallel to funConstraintsRef's ids.
 -- ⚠️ It is a PREFIX, not a full parallel list, when [argVecs] is shorter than the
@@ -36543,9 +36811,7 @@ registerMember m scope ifaceMonos argVecs =
 -- the second clause stops early.  That is why #994's fusion keeps this payload
 -- entry-level and OPTIONAL instead of folding it into `CSlot` — see
 -- `setFunConstraintEntry`.
--- [kept] is the next dict-param slot; a constraint variable forced concrete by the
--- body takes no dict and doesn't advance the slot (so param names stay 0..k-1,
--- matching dict_pass).
+-- A constraint variable forced concrete by the body takes no dict slot.
 --
 -- #994 (B-3-a): emits `CSlot`s, not a bare id list.  The iface half used to be recovered
 -- by a SECOND traversal (`keptConstraintIfaces`, deleted) applying the identical
@@ -36570,37 +36836,38 @@ registerMember m scope ifaceMonos argVecs =
 -- is what answers those sites (`enclSlotIndex`'s predicate/first-id rungs are keyed on
 -- the slot's lead id and legitimately miss).  This mirrors `registerReqSlots`'
 -- `registerEachActive`, which has keyed many ids onto one `requires` slot all along.
-registerMemberSlots : ScopeId ->
-  Int ->
-  List (IfaceRef, List Mono) ->
+declaredPredicateSlots : List (IfaceRef, List Mono) ->
   List (List Mono) ->
   List PredicateSlot
-registerMemberSlots _ _ [] _ = []
-registerMemberSlots scope kept ((iface, monos) :: rest) [] =
+declaredPredicateSlots [] _ = []
+declaredPredicateSlots ((iface, monos) :: rest) [] = match abstractSlotIds monos
+  [] => declaredPredicateSlots rest []
+  id :: more =>
+    PredicateSlot {
+        psIface = iface,
+        psArgs = PSArgsUnknown,
+        psBoundIds = id :: more,
+      }
+      :: declaredPredicateSlots rest []
+declaredPredicateSlots ((iface, monos) :: rest) (args :: argRest) =
   match abstractSlotIds monos
-    [] => registerMemberSlots scope kept rest []
+    [] => declaredPredicateSlots rest argRest
     id :: more =>
-      let _ = registerEachActiveId (id :: more) (Scopes.binderAt scope kept)
-      PredicateSlot {
-          psIface = iface,
-          psArgs = PSArgsUnknown,
-          psBoundIds = id :: more,
-        }
-        :: registerMemberSlots scope (kept + 1) rest []
-registerMemberSlots scope kept ((iface, monos) :: rest) (args :: argRest) =
-  match abstractSlotIds monos
-    [] => registerMemberSlots scope kept rest argRest
-    id :: more =>
-      let _ = registerEachActiveId (id :: more) (Scopes.binderAt scope kept)
       PredicateSlot {
           psIface = iface,
           psArgs = PSArgsKnown args,
           psBoundIds = id :: more,
         }
-        :: registerMemberSlots scope (kept + 1) rest argRest
+        :: declaredPredicateSlots rest argRest
+
+registerPredicateSlotIds : ScopeId -> Int -> List PredicateSlot -> Unit
+registerPredicateSlotIds _ _ [] = ()
+registerPredicateSlotIds scope kept (slot :: rest) =
+  let _ = registerEachActiveId slot.psBoundIds (Scopes.binderAt scope kept)
+  registerPredicateSlotIds scope (kept + 1) rest
 
 -- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
--- `registerMemberSlots` and `keptConstraintArgs` must agree on, factored so the two
+-- `declaredPredicateSlots` and `keptConstraintArgs` must agree on, factored so the two
 -- cannot drift (they decide, respectively, whether a slot exists and whether its
 -- argument vector is recorded — a disagreement desynchronizes `funConstraintArgsRef`
 -- from `funConstraintsRef`).
@@ -36713,10 +36980,16 @@ inferMembers env sigs grouped (member :: rest) =
   let _ = openScope member.smScope
   perRun.value.currentFn := m
   let peel = memberPeelSource sigs m v
-  let effs = inferMemberClauses env peel v member.smForce (clausesOf m grouped)
+  let effs = inferMemberClauses env peel member.smOwned (clausesOf m grouped)
+  let _ =
+    if member.smSigned.value then
+      unifyInto True member.smMono member.smOwned.bsValue
   let _ = match member.smForceBound.value
     Some bound =>
-      rowInto True (effrowNorm bound) (effrowNorm (memberForce member))
+      rowInto
+        True
+        (effrowNorm bound)
+        (effrowNorm (optionOr pureRow member.smForce))
     None => ()
   perRun.value.currentFn := ""
   let _ = closeScope ()
@@ -36751,23 +37024,42 @@ zipUnify (p :: ps) (q :: qs) =
   zipUnify ps qs
 zipUnify _ _ = ()
 
--- infer each clause, unifying it to the member placeholder [v] and collecting the
--- concrete effect labels the bodies perform (Phase 79e binding-boundary check).
--- [peel] threads the Phase-73 sig peel source (Some placeholder when signed).
+-- Domains constrain the recursive placeholder as each clause is inferred.
+-- Produced results join once after all alternatives are known: the first
+-- clause must not fix a returned callback's row for its siblings.
 inferMemberClauses : TcEnv ->
   Option Mono ->
-  Mono ->
-  Option EffRow ->
+  BindingSummary ->
   List (List Pat, Expr) ->
   List Atom
-inferMemberClauses _ _ _ _ [] = []
-inferMemberClauses env peel v force (cl :: rest) =
+inferMemberClauses _ _ _ [] = []
+inferMemberClauses env peel owned clauses =
+  let (values, effects) = inferClauseValues env peel owned clauses
+  let _ = publishProducedResults owned values
+  effrowLabels (collectRows joinCellOf effects)
+
+inferClauseValues : TcEnv ->
+  Option Mono ->
+  BindingSummary ->
+  List (List Pat, Expr) ->
+  (List (Option Loc, Mono), List EffRow)
+inferClauseValues _ _ _ [] = ([], [])
+inferClauseValues env peel owned (cl :: rest) =
   let ce = inferClauseEff env peel cl
-  let _ = unifyInto True v (fst ce)
-  let _ = match force
-    Some row => unifyRow row (snd ce)
-    None => ()
-  atomsUnion (effrowLabels (snd ce)) (inferMemberClauses env peel v force rest)
+  let _ = unifySourceDomains (listLen (fst cl)) owned.bsValue (fst ce)
+  let _ = recordEffectBody owned.bsBody (snd ce)
+  let (values, effects) = inferClauseValues env peel owned rest
+  ((exprLoc (snd cl), fst ce) :: values, snd ce :: effects)
+
+unifySourceDomains : Int -> Mono -> Mono -> Unit
+unifySourceDomains arity owned actual =
+  if arity <= 0 then
+    ()
+  else match (normalize owned, normalize actual)
+    (TFun domain _ result, TFun param _ body) =>
+      let _ = unify domain param
+      unifySourceDomains (arity - 1) result body
+    _ => unify owned actual
 
 -- infer one clause, returning its arrow type AND the concrete effect labels its
 -- body performs (captured in a fresh collection, then the ambient restored —
@@ -36919,10 +37211,9 @@ sigOverExpansiveMsg name ty =
 -- ── signature-too-general check ──────────────────────────────────────────────
 -- After body inference, the declared signature's type variables must map to
 -- DISTINCT TVar refs.  If two declared tyvars (e.g. `a` and `b` in `a -> b`)
--- collapse to the SAME TVar after unification (body forces them equal), the
--- declared signature claims more polymorphism than the body allows.
--- We only reject the "two tvars become one" case (not concrete grounding), so
--- `sum = fold (+) 0` (which grounds one tyvar to Int) passes.
+-- collapse to the SAME TVar or become a concrete type, the body is not universal.
+-- Recursive calls instantiate the written contract, so silently narrowing its
+-- definition can also change dictionary arity underneath those calls.
 checkSigsTooGeneral : List (String, Ty, List (String, Mono)) -> Unit
 checkSigsTooGeneral [] = ()
 checkSigsTooGeneral ((m, ty, tvs) :: rest) =
@@ -36932,8 +37223,21 @@ checkSigsTooGeneral ((m, ty, tvs) :: rest) =
 checkSigTooGeneral : String -> Ty -> List (String, Mono) -> Unit
 checkSigTooGeneral name ty tvs =
   let tvarIds = sigTvarIds (map snd tvs)
-  if hasDupI tvarIds then
-    reportSigTooGeneral name ty (sigCollapsedPair (sigTvarNamedIds tvs))
+  match groundedSignatureVariable tvs
+    Some (vname, actual) =>
+      pushTypeErrorOnceAt
+        "T-TYPE-TOO-GENERAL"
+        (firstTyLoc ty)
+        "Declared type variable '\{vname}' in '\{name}' must remain universal, but the body requires '\{ppMono actual}'. Write that type in the signature, or make the body work for every '\{vname}'."
+    None =>
+      if hasDupI tvarIds then
+        reportSigTooGeneral name ty (sigCollapsedPair (sigTvarNamedIds tvs))
+
+groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
+groundedSignatureVariable [] = None
+groundedSignatureVariable ((name, mono) :: rest) = match normalize mono
+  TVar _ => groundedSignatureVariable rest
+  actual => Some (name, actual)
 
 -- #1986 rung 2.  `sigTooGeneralMsg` reports the SYMPTOM ("two declared variables are
 -- the same type after inference") and offers no remedy.  When the reason those two
@@ -39698,7 +40002,7 @@ seedCheckRun oracleDecls =
 checkModuleFull : List (String, Scheme) ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl)
+  (ModuleBindings, List Decl)
 checkModuleFull seedVars accData prog =
   checkModuleFullImpl "" (plainModuleSeed seedVars) accData [] prog
 
@@ -39718,7 +40022,7 @@ checkModuleFullImpl : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl)
+  (ModuleBindings, List Decl)
 checkModuleFullImpl mid seedVars _accData implDecls prog =
   let result = checkBodyImpl seedVars mid implDecls prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
@@ -40837,14 +41141,18 @@ pickSchemesByDecl (n :: ns) table byId = match admittedRowFor n byId
 
 ordinaryEnvBinding : Scheme -> EnvBinding
 ordinaryEnvBinding scheme = EnvBinding {
-  ebScheme = scheme,
+  ebValue = ordinaryValueScheme scheme,
   ebMethodRow = None,
   ebStandalone = None,
 }
 
+ordinaryValueScheme : Scheme -> ValueScheme
+ordinaryValueScheme scheme =
+  ValueScheme { vsScheme = scheme, vsDeclared = None }
+
 methodEnvBinding : MethodSchemeRow -> EnvBinding
 methodEnvBinding row = EnvBinding {
-  ebScheme = row.msrScheme,
+  ebValue = ordinaryValueScheme row.msrScheme,
   ebMethodRow = Some row,
   ebStandalone = None,
 }
@@ -40959,12 +41267,16 @@ methodRowsByIdentity includeAll (row :: rest) acc =
     methodRowsByIdentity includeAll rest acc2
 
 -- Import selection precedes the ordinary environment's last-write overlay.
--- Keep the supplier kind beside the original scheme through re-exports; a method
--- and a standalone with the same spelling cannot be distinguished by type shape.
-data ExportSupplier = ExportMethod | ExportStandalone | ExportOther
+-- A name can export both a method and a standalone. Preserve both schemes and
+-- their shared cells; neither spelling nor type shape identifies the supplier.
+data ModuleBindings = ModuleBindings {
+  mbSchemes : List (String, Scheme),
+  -- Only standalone definitions owned by this module, before method overlays.
+  mbStandaloneSchemes : OrdMap Scheme,
+}
 data ExportBinding = ExportBinding {
   xbScheme : Scheme,
-  xbSupplier : ExportSupplier,
+  xbStandalone : Option Scheme,
 }
 data ModuleSeed = ModuleSeed {
   msSchemes : List (String, Scheme),
@@ -40977,52 +41289,65 @@ plainModuleSeed schemes = ModuleSeed {
   msImportedValues = omEmpty,
 }
 
--- `schemes` has the method/extern layer before the module's definitions. Tag
--- that same selection, without rebuilding a scheme or its shared row cells.
-tagModuleExports : List Decl ->
+-- The ordinary winner and standalone alternative travel together through
+-- import selection, aliases, re-exports, and graph memoization.
+tagModuleExports : OrdMap Scheme ->
   List (String, Scheme) ->
   List (String, ExportBinding)
-tagModuleExports prog schemes =
-  let methods =
-    namesToSet (allIfaceMethodNames (directInterfaceDecls prog)) omEmpty
-  let externs = namesToSet (map fst (directExternSigs prog)) omEmpty
-  let terms = namesToSet (declTopFnNames prog) omEmpty
+tagModuleExports standalones schemes =
   map
-    ((name, scheme) =>
-      let supplier =
-        if omHasKey name methods then
-          ExportMethod
-        else if omHasKey name externs then
-          ExportOther
-        else if omHasKey name terms then
-          ExportStandalone
-        else
-          ExportOther
-      (name, ExportBinding { xbScheme = scheme, xbSupplier = supplier }))
+    ((name, scheme) => (
+      name,
+      ExportBinding {
+        xbScheme = scheme,
+        xbStandalone = omLookup name standalones,
+      },
+    ))
     schemes
 
-importedValueWinners : List (String, ExportBinding) ->
+publicModuleExports : List Decl ->
+  ModuleBindings ->
+  List (String, ExportBinding)
+publicModuleExports prog bindings =
+  let standalones =
+    omFromPairs
+      (flatMap
+        (name => match omLookup name bindings.mbStandaloneSchemes
+          Some scheme => [(name, scheme)]
+          None => [])
+        (pubTopFnNames prog))
+      omEmpty
+  tagModuleExports
+    standalones
+    (pickSchemes (publicValNames prog) bindings.mbSchemes)
+
+importedBindingWinners : List (String, ExportBinding) ->
   OrdMap Unit ->
-  OrdMap Scheme ->
-  OrdMap Scheme
-importedValueWinners [] _ values = values
-importedValueWinners ((name, binding) :: rest) seen values =
+  List (String, ExportBinding)
+importedBindingWinners [] _ = []
+importedBindingWinners ((entry@(name, _)) :: rest) seen =
   if omHasKey name seen then
-    importedValueWinners rest seen values
+    importedBindingWinners rest seen
   else
-    let values2 = match binding.xbSupplier
-      ExportStandalone => omInsert name binding.xbScheme values
-      _ => values
-    importedValueWinners rest (omInsert name () seen) values2
+    entry :: importedBindingWinners rest (omInsert name () seen)
 
 moduleImportSeed : List (String, Scheme) ->
   List (String, ExportBinding) ->
   ModuleSeed
-moduleImportSeed base imported = ModuleSeed {
-  msSchemes =
-    base ++ map ((name, binding) => (name, binding.xbScheme)) imported,
-  msImportedValues = importedValueWinners imported omEmpty omEmpty,
-}
+moduleImportSeed base imported =
+  let selected = importedBindingWinners imported omEmpty
+  ModuleSeed {
+    msSchemes =
+      base ++ map ((name, binding) => (name, binding.xbScheme)) selected,
+    msImportedValues =
+      omFromPairs
+        (flatMap
+          ((name, binding) => match binding.xbStandalone
+            Some scheme => [(name, scheme)]
+            None => [])
+          selected)
+        omEmpty,
+  }
 
 monoSpineHeadIsCon : Mono -> Bool
 monoSpineHeadIsCon m = match normalize m
@@ -43095,24 +43420,23 @@ reexportDefiners before (_ :: rest) = reexportDefiners before rest
 -- from the importer, and a row for it could shadow a genuine wildcard row of the same
 -- name from a second dependency.
 --
--- ⚠️ The export test is `publicValNames`, the module's own canonical one — NOT a
--- hand-rolled `DFunDef True` scan, for the reason `attributeModuleSchemeObls` records
--- and this function's first cut re-learned the expensive way: `export pick : a -> a`
--- on one line with `pick x = x` on the next parses as a PUBLIC `DTypeSig` plus a
--- PRIVATE `DFunDef`, so a `DFunDef`-flag scan calls the common spelling private,
--- returns NO names, and the whole wildcard row-set is silently empty — which reads
--- exactly like "the fix had no effect".  Measured on this binary: with the flag scan
--- the F1 repro was byte-identically unfixed.
---
--- Intersected with `declTopFnNames` so the map carries only what this seam answers for
--- — top-level FN definitions.  `publicValNames` also yields public interface METHOD
--- names (global-by-name, owned by the method-side tables) and public EXTERNs (dict
--- arity 0 by construction); neither belongs in a fn-side definer map, and excluding
--- them fails OPEN to the bare path rather than to a dropped dict.
+-- Standalone visibility includes an exported signature with a private body,
+-- but never visibility donated by a same-named public interface method.
+-- Intersect with actual function definitions to exclude extern declarations.
 pubTopFnNames : List Decl -> List String
 pubTopFnNames decls =
   let fns = namesToSet (declTopFnNames decls) omEmpty
-  filterList (n => omHasKey n fns) (publicValNames decls)
+  filterList (n => omHasKey n fns) (publicStandaloneNames decls)
+
+publicStandaloneNames : List Decl -> List String
+publicStandaloneNames [] = []
+publicStandaloneNames ((DAttrib _ d) :: rest) =
+  publicStandaloneNames [d] ++ publicStandaloneNames rest
+publicStandaloneNames ((DFunDef True n _ _) :: rest) =
+  n :: publicStandaloneNames rest
+publicStandaloneNames ((DTypeSig True n _) :: rest) =
+  n :: publicStandaloneNames rest
+publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
 
 -- #739 fix follow-up: local-import-name → ORIGINAL exported name.  `importedBindings`
 -- yields (origin, local) pairs, so an aliased member `{x as y}` gives (y ↦ x) and a plain
@@ -43205,7 +43529,7 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 -- to the old append (same operand order), so the elab/diag witnesses are unchanged.
 foldModules : Bool ->
   Bool ->
-  (String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), e)) ->
+  (String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e)) ->
   (Bool -> String -> e -> acc -> acc) ->
   acc ->
   List (String, Scheme) ->
@@ -43223,9 +43547,7 @@ foldModules _wantData _wantAll worker collect base baseSeed coreV depEnv accData
 foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData accAll ((mid, prog) :: rest) =
   let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
   let (schemes, extra) = worker mid seed accData accAll prog
-  let pubV =
-    tagModuleExports prog (pickSchemes (publicValNames prog) schemes)
-      ++ reexportSeed coreV prog depEnv
+  let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
   collect
     False
     mid
@@ -43287,7 +43609,7 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 -- prelude simply misses and replaces it.
 data CoreCheckMemo = CoreCheckMemo {
   ccmKey : (Int, Int),
-  ccmCoreSchemes : List (String, Scheme),
+  ccmCoreSchemes : ModuleBindings,
   ccmCrossRun : CrossRun,
   ccmGraphRun : GraphRun,
   ccmDriver : DriverState,
@@ -43390,7 +43712,7 @@ restoreCoreDriverFields d =
 checkCoreMemoized : Option (Int, Int) ->
   List Decl ->
   List (String, Scheme) ->
-  List (String, Scheme)
+  ModuleBindings
 checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
     crossRun := copyCrossRun m.ccmCrossRun
@@ -43588,7 +43910,7 @@ graphPreamble : GraphOut ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme), List Decl, MarkSets)
+  (List (String, Scheme), ModuleBindings, List Decl, MarkSets)
 graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (EMPTY) CTOR ORACLE.  `matchOracle` lives on `driverState`, which
@@ -43743,7 +44065,7 @@ checkModulesPreambleK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme))
+  (List (String, Scheme), ModuleBindings)
 checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   let (runtimeSeed, coreSchemes, _, _) =
     graphPreamble GOutDiags preludeKey runtimeDecls coreDecls modules
@@ -43788,7 +44110,7 @@ cmCheckWorker : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List (String, Scheme))
+  (ModuleBindings, List (String, Scheme))
 cmCheckWorker mid seed _accData _accAll prog =
   -- #2705: this is the SCHEMES-ONLY query driver — LSP hover/completion
   -- (`projectEntrySchemes`) and the linear-time perf gate — and it does NOT solve:
@@ -43799,7 +44121,7 @@ cmCheckWorker mid seed _accData _accAll prog =
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
   let (schemes, _) = checkBodyImpl seed mid [] prog
-  (schemes, schemes)
+  (schemes, schemes.mbSchemes)
 
 -- check every module in dependency order against a shared prelude + runtime.
 -- modules = (moduleId, desugared program) in dependency-first order.
@@ -43848,8 +44170,8 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
     cmCheckWorker
     (_last mid schemes rest => (mid, schemes) :: rest)
     []
-    (runtimeSeed ++ coreSchemes)
-    (tagModuleExports coreDecls coreSchemes)
+    (runtimeSeed ++ coreSchemes.mbSchemes)
+    (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
     []
     []
     []
@@ -43898,7 +44220,7 @@ checkModuleFullDiags : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl, List TcDiag, List TcDiag)
+  (ModuleBindings, List Decl, List TcDiag, List TcDiag)
 checkModuleFullDiags mid seedVars accData accAll prog =
   -- #415 item 1: same seeding preamble as the flat entry points (one body), but the
   -- oracle decls are THIS module's own first.
@@ -44084,7 +44406,7 @@ graphModuleWorker : GraphOut ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), (List Decl, List (String, Scheme), List TcDiag, List TcDiag))
+  (ModuleBindings, (List Decl, List (String, Scheme), List TcDiag, List TcDiag))
 graphModuleWorker sel mid seed accData accAll prog =
   let implDecls = accAll ++ prog
   let _ = match sel
@@ -44094,7 +44416,7 @@ graphModuleWorker sel mid seed accData accAll prog =
     checkModuleFullDiags mid seed accData implDecls prog
   let _ = match sel
     GOutTrees =>
-      let _ = match lookupAssoc "main" schemes
+      let _ = match lookupAssoc "main" schemes.mbSchemes
         Some sc => driverState.value.mainSchemeRef := Some sc
         None => ()
       driverState.value.promotionHarvestRef :=
@@ -44103,7 +44425,7 @@ graphModuleWorker sel mid seed accData accAll prog =
             ++ perRun.value.promotedRef.value)
       ()
     GOutDiags => ()
-  (schemes, (marked, schemes, errs, warns))
+  (schemes, (marked, schemes.mbSchemes, errs, warns))
 
 -- collect: keeps the worker's marked tree and its `(schemes, errs, warns)` payload
 -- per module in load order, and on the DIAGS selection's TERMINAL module records
@@ -44381,8 +44703,8 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   let n = listLen kept
   let (finalResults, newSteps) =
     chainGo
-      (runtimeSeed ++ coreSchemes)
-      (tagModuleExports coreDecls coreSchemes)
+      (runtimeSeed ++ coreSchemes.mbSchemes)
+      (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       depEnv
       accData
       accAll
@@ -44424,19 +44746,17 @@ chainGo baseSeed coreV depEnv accData accAll results _ [(mid, prog)] =
   let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
   let (schemes, (_, _, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
-  let _ = setMainSchemeIfEntry True schemes
-  ((mid, (schemes, errs, warns)) :: results, [])
+  let _ = setMainSchemeIfEntry True schemes.mbSchemes
+  ((mid, (schemes.mbSchemes, errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
   let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
   let (schemes, (_, _, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
-  let pubV =
-    tagModuleExports prog (pickSchemes (publicValNames prog) schemes)
-      ++ reexportSeed coreV prog depEnv
+  let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
   let depEnv2 = (mid, pubV) :: depEnv
   let accData2 = accData ++ publicDataDecls prog
   let accAll2 = accAll ++ prog
-  let results2 = (mid, (schemes, errs, warns)) :: results
+  let results2 = (mid, (schemes.mbSchemes, errs, warns)) :: results
   let (key, keys2) = match keys
     k :: ks => (k, ks)
     [] => (None, [])
@@ -44551,8 +44871,8 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
       (graphModuleWorker sel)
       (graphCollect sel)
       ([], [])
-      (runtimeSeed ++ coreSchemes)
-      (tagModuleExports coreDecls coreSchemes)
+      (runtimeSeed ++ coreSchemes.mbSchemes)
+      (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
       []
       (publicDataDecls coreDecls)
       coreDecls
@@ -44575,7 +44895,7 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
   match sel
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
-      gdCoreSchemes = coreSchemes,
+      gdCoreSchemes = coreSchemes.mbSchemes,
       gdCore = [],
       gdModules = [],
       gdResidual = [],
@@ -44596,7 +44916,7 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
         dictPassModulesIfEnabled dictNames coreTree modules2
       GraphDrive {
         gdPerMod = perMod,
-        gdCoreSchemes = coreSchemes,
+        gdCoreSchemes = coreSchemes.mbSchemes,
         gdCore = coreD,
         -- `resolveAliasMethodSpellings` restores the origin name behind every
         -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
@@ -45826,8 +46146,24 @@ markClauseWith rw (ps, e) =
 -- nameable in `core`, so no `core.mdk` occurrence is one of its method occurrences.
 -- Same fail-OPEN guard as `nameableIfaceShadows`: an absent graph index leaves the sets
 -- unfiltered rather than emptying them.
-moduleMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
-moduleMarkCtx ms "" coreProg
+moduleMarkCtx : MarkSets -> String -> List Decl -> OrdMap Scheme -> MarkCtx
+moduleMarkCtx ms mid prog imported =
+  let candidates = methodMarkCtx ms mid prog
+  let local = namesToSet (declTopFnNames prog) omEmpty
+  MarkCtx {
+    mcRp = candidates.mcRp,
+    mcAn = candidates.mcAn,
+    mcSm =
+      filterList
+        (entry => omHasKey (fst entry) local || omHasKey (snd entry) imported)
+        candidates.mcSm,
+  }
+
+-- Method nameability and standalone availability are independent. The wrapper
+-- admits standalone routes only for this module's definitions or actual imported
+-- standalone descriptors, never for private functions elsewhere in the graph.
+methodMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
+methodMarkCtx ms "" coreProg
   | omSize driverState.value.graphIfaceMethodsRef.value == 0 = MarkCtx {
     mcRp = omFromNames ms.msMarkRpNames omEmpty,
     mcAn = omFromNames ms.msArgNames omEmpty,
@@ -45841,7 +46177,7 @@ moduleMarkCtx ms "" coreProg
       mcAn = omFromNames (filterList keep ms.msArgNames) omEmpty,
       mcSm = ms.msCoreShadowMap,
     }
-moduleMarkCtx ms _ prog
+methodMarkCtx ms _ prog
   -- fail OPEN when the graph index is absent, for the reason stated on
   -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
   -- S4/#410 class.
@@ -46185,7 +46521,7 @@ elabModuleStamp : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (List (String, Scheme), List Decl)
+  (ModuleBindings, List Decl)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 elabModuleStamp mid seedVars accData implDecls prog =
@@ -46566,8 +46902,8 @@ data ModuleMarking = ModuleMarking {
 -- Install the module's marking state at module start.  Reads the graph's mark sets
 -- off the driver preamble; a Module arm reached without one is a driver bug, and
 -- fails loud rather than marking nothing.
-beginModuleMarking : String -> List Decl -> OrdMap Int -> Unit
-beginModuleMarking mid prog top =
+beginModuleMarking : String -> List Decl -> OrdMap Int -> OrdMap Scheme -> Unit
+beginModuleMarking mid prog top imported =
   let ms = match driverState.value.markSetsRef.value
     Some s => s
     None =>
@@ -46577,7 +46913,7 @@ beginModuleMarking mid prog top =
     dedup (ms.msBareDictNames ++ driverState.value.promotionHarvestRef.value)
   let names = known ++ aliasDictNames known ms.msUnits [(mid, prog)]
   perRun.value.markingRef := Some ModuleMarking {
-    mmCtx = moduleMarkCtx ms mid prog,
+    mmCtx = moduleMarkCtx ms mid prog imported,
     mmTop = top,
     mmDictSet = Ref (omFromNames names omEmpty),
   }

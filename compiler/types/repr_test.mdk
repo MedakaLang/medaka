@@ -3,6 +3,22 @@ import types.repr.{Scheme(..), Mono(..), ppScheme}
 import types.effect_rows.{EffRow(..), Effvar(..)}
 import types.effect_domain.{Atom(..), Param(..)}
 
+test "arrow rendering preserves open tails and shared row identities" =
+  let input = Ref (EUnbound 7 0)
+  let other = Ref (EUnbound 8 0)
+  let joined = Ref (EJoin 9 0 [input, other])
+  let unit = TRigid "Unit"
+  let callback = TFun unit (EffRow [] (Some input)) unit
+  let body = TFun callback (EffRow [Atom "Audit" PUnit] (Some joined)) unit
+  expectAll [
+    expectEqual
+      "(Unit -> <a> Unit) -> <Audit | a | b> Unit"
+      (ppScheme (Forall [] [7, 8] (EffRow [] None) body)),
+    expectEqual
+      "<a> ((Unit -> <a> Unit) -> <Audit | a | b> Unit)"
+      (ppScheme (Forall [] [7, 8] (EffRow [] (Some input)) body)),
+  ]
+
 test "binding renderers distinguish forcing from a latent arrow" = expectAll [
   expectEqual "Unit" (ppScheme (Forall [] [] (EffRow [] None) (TRigid "Unit"))),
   expectEqual
