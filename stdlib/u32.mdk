@@ -1,0 +1,348 @@
+{- | Unsigned 32-bit integers, the `U32` type.
+
+   A `U32` holds a value from `0` to `4294967295`. Its arithmetic wraps:
+   `+`, `-` and `*` give the result modulo 2^32, so `4294967295 + 1` is `0`
+   and `0 - 1` is `4294967295`. `/` and `%` are unsigned division and
+   remainder, and a zero divisor panics as it does for `Int`.
+
+   An integer literal in `U32` position must fit, so `(4294967296 : U32)`
+   is a compile-time error. Converting a computed `Int` never wraps
+   silently: `fromInt` panics when the value is out of range, `tryFromInt`
+   answers `None`, and `truncate` keeps the low 32 bits and is the only
+   conversion that discards any. `toInt` goes the other way and always
+   succeeds.
+
+   Within the family, `fromU8` and `fromU16` widen a narrower value.
+
+   `bitAnd`, `bitOr`, `bitXor`, `bitNot`, `shiftLeft` and `shiftRight` have
+   the same names as the prelude's `Int` operations. Import the module
+   qualified, as `import u32 as U32`, and write `U32.shiftLeft`.
+
+   `toBytesBE` and `toBytesLE` write a value as 4 bytes, most or least
+   significant first, and `fromBytesBE` and `fromBytesLE` read one back.
+
+   `U32` values compare, hash, and render in decimal like `Int`. `toHex`
+   renders the 8-digit hexadecimal form. -}
+
+-- Every operation keeps a value in 0 .. 2^n - 1: the kernel conversions
+-- (`u32Truncate`, `u32ToInt`) and the `Int` bit primitives under their
+-- `int*` names are internal externs (stdlib/runtime.mdk), reached here because
+-- this module's own `bitAnd`, `shiftLeft` and the rest shadow the prelude's.
+
+import u8
+import u16 as U16
+import bytes.{Bytes}
+import bytes as B
+
+-- # Conversions
+
+{- | The value as a `U32`, or `None` when it is outside `0` to `4294967295`.
+
+   > tryFromInt 200 |> map toInt
+   Some 200
+   > tryFromInt 4294967296 |> map toInt
+   None -}
+export
+tryFromInt : Int -> Option U32
+tryFromInt n = if n < 0 || n > 4294967295 then None else Some (u32Truncate n)
+
+-- > tryFromInt (-1) |> map toInt
+-- None
+
+{- | The low 32 bits of the value, as a `U32`.
+
+   This is the one conversion that discards bits: a value outside `0` to
+   `4294967295` is reduced modulo 2^32, and a negative value is taken in two's
+   complement.
+
+   > toInt (truncate 4294967297)
+   1
+   > toInt (truncate (-1))
+   4294967295 -}
+export
+truncate : Int -> U32
+truncate n = u32Truncate n
+
+-- | The value as an `Int`, from `0` to `4294967295`.
+export
+toInt : U32 -> Int
+toInt x = u32ToInt x
+
+-- > toInt (4294967295 : U32)
+-- 4294967295
+
+{- | A `U8` as a `U32`, the same number.
+
+   > toInt (fromU8 (255 : U8))
+   255 -}
+export
+fromU8 : U8 -> U32
+fromU8 x = u32Truncate (u8ToInt x)
+
+{- | A `U16` as a `U32`, the same number.
+
+   > toInt (fromU16 (65535 : U16))
+   65535 -}
+export
+fromU16 : U16 -> U32
+fromU16 x = u32Truncate (u16ToInt x)
+
+-- # Bit operations
+
+{- | The bitwise and of two values.
+
+   > toInt (bitAnd 12 10)
+   8 -}
+export
+bitAnd : U32 -> U32 -> U32
+bitAnd a b = u32Truncate (intBitAnd (u32ToInt a) (u32ToInt b))
+
+{- | The bitwise or of two values.
+
+   > toInt (bitOr 12 10)
+   14 -}
+export
+bitOr : U32 -> U32 -> U32
+bitOr a b = u32Truncate (intBitOr (u32ToInt a) (u32ToInt b))
+
+{- | The bitwise exclusive or of two values.
+
+   > toInt (bitXor 12 10)
+   6 -}
+export
+bitXor : U32 -> U32 -> U32
+bitXor a b = u32Truncate (intBitXor (u32ToInt a) (u32ToInt b))
+
+{- | Every bit of the value inverted, within 32 bits.
+
+   > toInt (bitNot 0)
+   4294967295 -}
+export
+bitNot : U32 -> U32
+bitNot x = u32Truncate (intBitNot (u32ToInt x))
+
+{- | The value shifted left by a number of bits, the vacated bits zero.
+
+   Bits shifted past bit 31 are discarded, and a shift of 32 or more
+   gives `0`. A negative shift panics.
+
+   > toInt (shiftLeft 1 4)
+   16
+   > toInt (shiftLeft 1 32)
+   0 -}
+export
+shiftLeft : U32 -> Int -> U32
+shiftLeft x k
+  | k < 0 = panic "u32.shiftLeft: negative shift \{k}"
+  | k >= 32 = u32Truncate 0
+  | otherwise = u32Truncate (intShiftLeft (u32ToInt x) k)
+
+-- > toInt (shiftLeft 4294967295 1)
+-- 4294967294
+
+{- | The value shifted right by a number of bits, the vacated bits zero.
+
+   A shift of 32 or more gives `0`. A negative shift panics.
+
+   > toInt (shiftRight 16 4)
+   1 -}
+export
+shiftRight : U32 -> Int -> U32
+shiftRight x k
+  | k < 0 = panic "u32.shiftRight: negative shift \{k}"
+  | k >= 32 = u32Truncate 0
+  | otherwise = u32Truncate (intShiftRight (u32ToInt x) k)
+
+-- the rotate amount reduced into 0 .. 31, negative amounts included.
+rotateAmount : Int -> Int
+rotateAmount k = (k % 32 + 32) % 32
+
+{- | The value rotated left by a number of bits: the bits shifted out at the
+   top come back in at the bottom.
+
+   The amount is taken modulo 32, so a negative amount rotates right.
+
+   > toInt (rotateLeft 2147483648 1)
+   1 -}
+export
+rotateLeft : U32 -> Int -> U32
+rotateLeft x k =
+  let r = rotateAmount k
+  if r == 0 then x else bitOr (shiftLeft x r) (shiftRight x (32 - r))
+
+-- > toInt (rotateLeft 1 (-1))
+-- 2147483648
+
+{- | The value rotated right by a number of bits: the bits shifted out at
+   the bottom come back in at the top.
+
+   The amount is taken modulo 32, so a negative amount rotates left.
+
+   > toInt (rotateRight 1 1)
+   2147483648 -}
+export
+rotateRight : U32 -> Int -> U32
+rotateRight x k = rotateLeft x (32 - rotateAmount k)
+
+-- > toInt (rotateRight 1 32)
+-- 1
+
+-- the high and low 16 bits of the value, each as a `U16`.
+highHalf : U32 -> U16
+highHalf x = u16Truncate (intShiftRight (u32ToInt x) 16)
+
+lowHalf : U32 -> U16
+lowHalf x = u16Truncate (u32ToInt x)
+
+{- | The number of one bits.
+
+   > popCount 255
+   8 -}
+export
+popCount : U32 -> Int
+popCount x = U16.popCount (highHalf x) + U16.popCount (lowHalf x)
+
+{- | The number of zero bits above the highest one bit, 32 for `0`.
+
+   > leadingZeros 1
+   31 -}
+export
+leadingZeros : U32 -> Int
+leadingZeros x =
+  let hi = highHalf x
+  if u16ToInt hi == 0 then
+    16 + U16.leadingZeros (lowHalf x)
+  else
+    U16.leadingZeros hi
+
+{- | The number of zero bits below the lowest one bit, 32 for `0`.
+
+   > trailingZeros 8
+   3 -}
+export
+trailingZeros : U32 -> Int
+trailingZeros x =
+  let lo = lowHalf x
+  if u16ToInt lo == 0 then
+    16 + U16.trailingZeros (highHalf x)
+  else
+    U16.trailingZeros lo
+
+-- > trailingZeros 0
+-- 32
+-- > leadingZeros 0
+-- 32
+
+-- # Bytes
+
+-- the value whose two U16 halves are read from the two ends of a 4-byte string.
+fromHalves : Option U16 -> Option U16 -> Option U32
+fromHalves (Some hi) (Some lo) =
+  Some (u32Truncate (u16ToInt hi * 65536 + u16ToInt lo))
+fromHalves _ _ = None
+
+{- | The value as 4 bytes, most significant first.
+
+   > B.toArray (toBytesBE 16909060)
+   [|1, 2, 3, 4|] -}
+export
+toBytesBE : U32 -> Bytes
+toBytesBE x = U16.toBytesBE (highHalf x) ++ U16.toBytesBE (lowHalf x)
+
+{- | The value as 4 bytes, least significant first.
+
+   > B.toArray (toBytesLE 16909060)
+   [|4, 3, 2, 1|] -}
+export
+toBytesLE : U32 -> Bytes
+toBytesLE x = U16.toBytesLE (lowHalf x) ++ U16.toBytesLE (highHalf x)
+
+{- | The value written as exactly 4 bytes, most significant first, or
+   `None` when the byte string has any other length.
+
+   > fromBytesBE (toBytesBE 16909060) |> map toInt
+   Some 16909060 -}
+export
+fromBytesBE : Bytes -> Option U32
+fromBytesBE b =
+  if B.length b == 4 then
+    fromHalves (U16.fromBytesBE (B.take 2 b)) (U16.fromBytesBE (B.drop 2 b))
+  else
+    None
+
+{- | The value written as exactly 4 bytes, least significant first, or
+   `None` when the byte string has any other length.
+
+   > fromBytesLE (toBytesLE 16909060) |> map toInt
+   Some 16909060 -}
+export
+fromBytesLE : Bytes -> Option U32
+fromBytesLE b =
+  if B.length b == 4 then
+    fromHalves (U16.fromBytesLE (B.drop 2 b)) (U16.fromBytesLE (B.take 2 b))
+  else
+    None
+
+-- > fromBytesBE (toBytesBE 1 ++ toBytesBE 1)
+-- None
+
+-- # Rendering
+
+{- | The value in hexadecimal: 8 lowercase digits, zero-padded, with no
+   prefix.
+
+   > toHex 255
+   "000000ff" -}
+export
+toHex : U32 -> String
+toHex x = U16.toHex (highHalf x) ++ U16.toHex (lowHalf x)
+
+-- # Instances
+
+export impl Eq U32 where
+  eq a b = a == b
+
+export impl Ord U32 where
+  compare a b = if a < b then Lt else if a > b then Gt else Eq
+
+{- | Arithmetic modulo 2^32. `fromInt` panics when the `Int` is outside `0`
+   to `4294967295`; it is what a literal in a generic `Num a =>` position becomes,
+   and `tryFromInt` and `truncate` are the non-panicking conversions. -}
+export impl Num U32 where
+  add a b = a + b
+  sub a b = a - b
+  mul a b = a * b
+  div a b = a / b
+  negate a = 0 - a
+  abs a = a
+  signum a = if a == 0 then 0 else 1
+  fromInt n =
+    if n < 0 || n > 4294967295 then
+      panic "fromInt: \{n} does not fit U32 (0..4294967295)"
+    else
+      u32Truncate n
+  rem a b = a % b
+
+export impl Bounded U32 where
+  minBound = u32Truncate 0
+  maxBound = u32Truncate 4294967295
+
+export impl Hashable U32 where
+  hash x = hashInt (u32ToInt x)
+
+export impl Display U32 where
+  display x = intToString (u32ToInt x)
+
+export impl Debug U32 where
+  debug x = intToString (u32ToInt x)
+
+-- > toInt ((4294967295 : U32) + 1)
+-- 0
+-- > toInt ((0 : U32) - 1)
+-- 4294967295
+-- > toInt (negate (1 : U32))
+-- 4294967295
+-- > display (maxBound : U32)
+-- "4294967295"
+-- > sum [4294967295, 2] |> toInt
+-- 1

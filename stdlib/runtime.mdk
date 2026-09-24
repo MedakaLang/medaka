@@ -631,6 +631,29 @@ extern u32Truncate : Int -> U32
 -- | A `U32` as an `Int`.
 extern u32ToInt : U32 -> Int
 
+-- The `Int` bit primitives again, under names a module can still reach after
+-- it defines its own `bitAnd`, `shiftLeft` and the rest (the `u8`, `u16` and
+-- `u32` modules do).  Each is the primitive above it in this file, exactly.
+-- Restricted like the conversions.
+
+-- | `bitAnd`, under a name a module's own `bitAnd` does not shadow.
+extern intBitAnd : Int -> Int -> Int
+
+-- | `bitOr`, under a name a module's own `bitOr` does not shadow.
+extern intBitOr : Int -> Int -> Int
+
+-- | `bitXor`, under a name a module's own `bitXor` does not shadow.
+extern intBitXor : Int -> Int -> Int
+
+-- | `bitNot`, under a name a module's own `bitNot` does not shadow.
+extern intBitNot : Int -> Int
+
+-- | `shiftLeft`, under a name a module's own `shiftLeft` does not shadow.
+extern intShiftLeft : Int -> Int -> Int
+
+-- | `shiftRight`, under a name a module's own `shiftRight` does not shadow.
+extern intShiftRight : Int -> Int -> Int
+
 -- # Byte blocks
 
 -- `ByteBlock` is a mutable buffer holding one byte per element, so a block of
