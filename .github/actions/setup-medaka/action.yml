@@ -118,8 +118,11 @@ runs:
         # `wasm-tools-${v}-x86_64-linux/` behind after the binary is moved out, and the
         # gates shards end with a review gate (`git status --porcelain`) that FAILS on any
         # untracked file — so unpacking here turns a toolchain install into a red shard.
+        # Download to a file, then extract: a transient release-host error is
+        # retried, and a retry never appends to a stream `tar` already read.
         d="$(mktemp -d)"
-        curl -sSfL "$url" | tar xz -C "$d"
+        curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 -o "$d/wasm-tools.tar.gz" "$url"
+        tar xzf "$d/wasm-tools.tar.gz" -C "$d"
         sudo mv "$d/wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
         rm -rf "$d"
         wasm-tools --version

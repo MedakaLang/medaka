@@ -62,6 +62,7 @@ bound() { perl -e 'alarm 120; exec @ARGV' "$@"; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
+mdk_require_marker || fail=$((fail+1))
 
 # A user file that references an internal-only extern directly.
 cat > "$TMP/u.mdk" <<'EOF'
@@ -365,8 +366,7 @@ esac
 # 25/26: no real stdlib subdirectory module calls a kernel, so these run
 # against a scratch MEDAKA_ROOT whose stdlib is the real one plus `nest/`.
 # That root's fingerprint can never match the binary, so every run warns
-# stale; the warning line is dropped by its fixed tail.
-drop_stale() { printf '%s\n' "$1" | grep -v -F "it may be stale; rebuild"; }
+# stale, and the warning line is stripped.
 NR="$TMP/nested-root"
 mkdir -p "$NR/stdlib/nest"
 ln -s "$ROOT/compiler" "$NR/compiler"
@@ -377,7 +377,7 @@ printf 'import nest.probe.{probeGet}\n\nmain = println (probeGet [|7|])\n' > "$T
 # 25. nested-stdlib-entry
 out="$(MEDAKA_ROOT="$NR" bound "$MEDAKA" check "$NR/stdlib/nest/probe.mdk" 2>&1)"
 code=$?
-clean="$(drop_stale "$out")"
+clean="$(mdk_strip_stale "$out")"
 case "$clean" in
   *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL nested-stdlib-entry (false positive on stdlib/nest/probe.mdk: [%s])\n' "$clean" ;;
   *) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   nested-stdlib-entry (stdlib/nest/probe.mdk clean, no flag)\n'
@@ -387,7 +387,7 @@ esac
 # 26. nested-stdlib-import
 out="$(MEDAKA_ROOT="$NR" bound "$MEDAKA" run "$TMP/nested_user.mdk" 2>&1)"
 code=$?
-clean="$(drop_stale "$out")"
+clean="$(mdk_strip_stale "$out")"
 case "$clean" in
   *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL nested-stdlib-import (false positive: [%s])\n' "$clean" ;;
   7) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   nested-stdlib-import (importer of nest.probe runs, no flag)\n'
