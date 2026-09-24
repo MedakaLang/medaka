@@ -1,5 +1,5 @@
 # META
-source_lines=116
+source_lines=161
 stages=DESUGAR,MARK
 # SOURCE
 {- | HMAC-SHA-256 (RFC 2104) over byte arrays.
@@ -14,7 +14,10 @@ stages=DESUGAR,MARK
    for a caller whose bytes are already known to be in range. -}
 
 import array.{concat, make, setInPlace}
-import sha256.{sha256, sha256FixedBytes}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
+import sha256.{
+  sha256, sha256AssumeByteDomainFrom, sha256FixedBytes, sha256FoldKeyBlock
+}
 
 ctEqAccum : Array Int -> Array Int -> Int -> Int -> Int
 ctEqAccum a b i acc =
@@ -118,9 +121,52 @@ hmacSha256FixedBytes key message =
     if arrayLength key > blockBytes then sha256FixedBytes key else key
   let inner = sha256FixedBytes (concat [|keyPad normalized 0x36, message|])
   sha256FixedBytes (concat [|keyPad normalized 0x5c, inner|])
+
+{- | An HMAC-SHA-256 key with both padded blocks' compressions already
+   folded in.
+
+   Build one with `hmacSha256Key` and compute tags with
+   `hmacSha256WithKey`. Worth it for a caller that computes many tags
+   under the same key, such as PBKDF2's per-iteration folding: each
+   `hmacSha256WithKey` call then costs only the message-dependent tail of
+   the inner and outer hash, two SHA-256 compressions for a message that
+   fits in the tag's own 32 bytes, instead of `hmacSha256`'s four. -}
+export data HmacSha256Key =
+  | HmacSha256Key (Int, Int, Int, Int, Int, Int, Int, Int) (Int, Int, Int, Int, Int, Int, Int, Int)
+
+{- | Precomputes the ipad/opad compressions for `key`, once. -}
+export
+hmacSha256Key : Bytes -> HmacSha256Key
+hmacSha256Key key =
+  let keyArr = toArray key
+  let normalized =
+    if arrayLength keyArr > blockBytes then sha256FixedBytes keyArr else keyArr
+  HmacSha256Key
+    (sha256FoldKeyBlock (keyPad normalized 0x36))
+    (sha256FoldKeyBlock (keyPad normalized 0x5c))
+
+{- | The 32-byte HMAC-SHA-256 tag of `message` under `key`.
+
+   Byte-for-byte the same tag `hmacSha256`/`hmacSha256FixedBytes` give for
+   the same key and message. -}
+export
+hmacSha256WithKey : HmacSha256Key -> Bytes -> Bytes
+hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
+  let msgArr = toArray message
+  let inner = sha256AssumeByteDomainFrom innerStart blockBytes msgArr
+  let outer = sha256AssumeByteDomainFrom outerStart blockBytes inner
+  fromArrayAssumeByteDomain outer
+
+-- > let key = hmacSha256Key (fromArrayAssumeByteDomain (arrayMake 20 0x0b)) in let msg = fromArrayAssumeByteDomain [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] in toArray (hmacSha256WithKey key msg) == hmacSha256 (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True
+-- > let key = hmacSha256Key (fromArrayAssumeByteDomain [||]) in let msg = fromArrayAssumeByteDomain [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] in toArray (hmacSha256WithKey key msg) == hmacSha256 [||] [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True
+-- > let key = hmacSha256Key (fromArrayAssumeByteDomain (arrayMake 65 0x0b)) in let msg = fromArrayAssumeByteDomain [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] in toArray (hmacSha256WithKey key msg) == hmacSha256 (arrayMake 65 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
-(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256FixedBytes" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
+(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FixedBytes" false) (mem "sha256FoldKeyBlock" false))))
 (DTypeSig false "ctEqAccum" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "index") (EVar "a")) (EVar "i"))) (EApp (EApp (EVar "index") (EVar "b")) (EVar "i")))))))
 (DTypeSig true "ctEq" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bool"))))
@@ -135,9 +181,15 @@ hmacSha256FixedBytes key message =
 (DFunDef false "hmacSha256" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
 (DTypeSig true "hmacSha256FixedBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
 (DFunDef false "hmacSha256FixedBytes" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256FixedBytes") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
+(DData Abstract "HmacSha256Key" () ((variant "HmacSha256Key" (ConPos (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int"))))) ())
+(DTypeSig true "hmacSha256Key" (TyFun (TyCon "Bytes") (TyCon "HmacSha256Key")))
+(DFunDef false "hmacSha256Key" ((PVar "key")) (EBlock (DoLet false false (PVar "keyArr") (EApp (EVar "toArray") (EVar "key"))) (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "keyArr")) (EVar "blockBytes")) (EApp (EVar "sha256FixedBytes") (EVar "keyArr")) (EVar "keyArr"))) (DoExpr (EApp (EApp (EVar "HmacSha256Key") (EApp (EVar "sha256FoldKeyBlock") (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))))) (EApp (EVar "sha256FoldKeyBlock") (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))))))))
+(DTypeSig true "hmacSha256WithKey" (TyFun (TyCon "HmacSha256Key") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
+(DFunDef false "hmacSha256WithKey" ((PCon "HmacSha256Key" (PVar "innerStart") (PVar "outerStart")) (PVar "message")) (EBlock (DoLet false false (PVar "msgArr") (EApp (EVar "toArray") (EVar "message"))) (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "sha256AssumeByteDomainFrom") (EVar "innerStart")) (EVar "blockBytes")) (EVar "msgArr"))) (DoLet false false (PVar "outer") (EApp (EApp (EApp (EVar "sha256AssumeByteDomainFrom") (EVar "outerStart")) (EVar "blockBytes")) (EVar "inner"))) (DoExpr (EApp (EVar "fromArrayAssumeByteDomain") (EVar "outer")))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
-(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256FixedBytes" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
+(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FixedBytes" false) (mem "sha256FoldKeyBlock" false))))
 (DTypeSig false "ctEqAccum" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EMethodRef "index") (EVar "a")) (EVar "i"))) (EApp (EApp (EMethodRef "index") (EVar "b")) (EVar "i")))))))
 (DTypeSig true "ctEq" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bool"))))
@@ -152,3 +204,8 @@ hmacSha256FixedBytes key message =
 (DFunDef false "hmacSha256" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
 (DTypeSig true "hmacSha256FixedBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
 (DFunDef false "hmacSha256FixedBytes" ((PVar "key") (PVar "message")) (EBlock (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "key")) (EVar "blockBytes")) (EApp (EVar "sha256FixedBytes") (EVar "key")) (EVar "key"))) (DoLet false false (PVar "inner") (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))) (EVar "message"))))) (DoExpr (EApp (EVar "sha256FixedBytes") (EApp (EVar "concat") (EArrayLit (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))) (EVar "inner")))))))
+(DData Abstract "HmacSha256Key" () ((variant "HmacSha256Key" (ConPos (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int"))))) ())
+(DTypeSig true "hmacSha256Key" (TyFun (TyCon "Bytes") (TyCon "HmacSha256Key")))
+(DFunDef false "hmacSha256Key" ((PVar "key")) (EBlock (DoLet false false (PVar "keyArr") (EApp (EVar "toArray") (EVar "key"))) (DoLet false false (PVar "normalized") (EIf (EBinOp ">" (EApp (EVar "arrayLength") (EVar "keyArr")) (EVar "blockBytes")) (EApp (EVar "sha256FixedBytes") (EVar "keyArr")) (EVar "keyArr"))) (DoExpr (EApp (EApp (EVar "HmacSha256Key") (EApp (EVar "sha256FoldKeyBlock") (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 54))))) (EApp (EVar "sha256FoldKeyBlock") (EApp (EApp (EVar "keyPad") (EVar "normalized")) (ELit (LInt 92))))))))
+(DTypeSig true "hmacSha256WithKey" (TyFun (TyCon "HmacSha256Key") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
+(DFunDef false "hmacSha256WithKey" ((PCon "HmacSha256Key" (PVar "innerStart") (PVar "outerStart")) (PVar "message")) (EBlock (DoLet false false (PVar "msgArr") (EApp (EVar "toArray") (EVar "message"))) (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "sha256AssumeByteDomainFrom") (EVar "innerStart")) (EVar "blockBytes")) (EVar "msgArr"))) (DoLet false false (PVar "outer") (EApp (EApp (EApp (EVar "sha256AssumeByteDomainFrom") (EVar "outerStart")) (EVar "blockBytes")) (EVar "inner"))) (DoExpr (EApp (EVar "fromArrayAssumeByteDomain") (EVar "outer")))))

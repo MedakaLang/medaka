@@ -25,7 +25,7 @@
 -- the emitter's own diagnostic surfaced.
 
 import support.util.{stringTrim, joinWith, joinNl}
-import string.{words, contains}
+import string.{words, contains, startsWith}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
@@ -463,6 +463,73 @@ gcSectionsLinkFlag _ = match runCommand "uname" ["-s"]
       "-Wl,--gc-sections"
   _ => "-Wl,--gc-sections"
 
+-- ---- the runtime in the ThinLTO link (#3374) ----
+-- The program IR and runtime/medaka_rt.c go through ONE ThinLTO link, so the
+-- runtime's one-line helpers (mdk_alloc, mdk_bit_*, mdk_num_*) inline into the
+-- program instead of staying calls across an object boundary.  Measured on a
+-- PBKDF2-HMAC-SHA-256 loop: 77-83 us/iter linked plain, 42-60 with ThinLTO.
+-- The link is faster on a small program and slower on a large one (pds/serve.mdk:
+-- 12.6s to 20s), since the program half is one module the backend cannot split.
+--
+-- Detected per build.  A toolchain that cannot do it gets the plain link, never
+-- a failure:
+--   * the compiler must be clang (gcc has no -flto=thin);
+--   * off Darwin the link needs lld, and only the ld.lld clang itself resolves
+--     (`-print-prog-name`), which is the one whose bitcode reader matches the
+--     bitcode clang writes.  Apple's ld64 reads ThinLTO bitcode itself
+--     (written from its documentation; no Darwin box was available to test).
+-- MEDAKA_NO_LTO (any non-empty value) forces the plain link.  It is for a
+-- consumer that needs a NATIVE runtime object, which `ld -r` can merge and
+-- bitcode it cannot: test/diff_compiler_llvm_ffi.sh and the memcheck probe in
+-- pds/test/constant_time_signing.sh.
+--
+-- One reader for the link, the runtime-object cache and `--emit-rt-obj`, so the
+-- three always agree on whether the runtime is bitcode.  Returns the extra
+-- linker flags (none on Darwin), or None for the plain link.
+detectLto : String -> <IO> Option (List String)
+detectLto cc =
+  if envOr "MEDAKA_NO_LTO" "" /= "" then
+    None
+  else match runCommand cc ["--version"]
+    Ok (0, out, _) => if contains "clang" out then ltoLinker cc else None
+    -- fail-open-by-design: a compiler that cannot report its version gets the
+    -- plain link, which is what it got before ThinLTO existed.
+    _ => None
+
+ltoLinker : String -> <IO> Option (List String)
+ltoLinker cc = match runCommand "uname" ["-s"]
+  Ok (0, out, _) => if stringTrim out == "Darwin" then Some [] else lldFlags cc
+  -- fail-open-by-design: no `uname` falls through to the lld probe, the same
+  -- non-Darwin default gcSectionsLinkFlag takes.
+  _ => lldFlags cc
+
+lldFlags : String -> <IO> Option (List String)
+lldFlags cc = match runCommand cc ["-print-prog-name=ld.lld"]
+  Ok (0, out, _) =>
+    let path = stringTrim out
+    if startsWith "/" path && fileExists path then
+      Some ["-fuse-ld=lld"]
+    else
+      None
+  -- fail-open-by-design: no lld is the plain link, not an error.
+  _ => None
+
+-- The compile flag every ThinLTO input takes.
+ltoCflags : Option (List String) -> List String
+ltoCflags None = []
+ltoCflags (Some _) = ["-flto=thin"]
+
+ltoLinkFlags : Option (List String) -> List String
+ltoLinkFlags None = []
+ltoLinkFlags (Some linker) = "-flto=thin" :: linker
+
+-- The name clang records for the program module.  Under ThinLTO it feeds the
+-- module hash that suffixes every promoted local symbol (`f.llvm.<hash>`).  Left
+-- to default it is the IR file's path, inside a per-build mktemp directory, and
+-- two builds of one program would differ in their symbol tables.
+programModuleName : String
+programModuleName = "source_filename = \"program.ll\"\n"
+
 -- ---- keep-IR (--keep-ir / MEDAKA_KEEP_IR) ----
 -- Normally the emitted IR lives ONLY inside the per-process scratch dir
 -- (makeTempDir) and is gone the instant the build returns — which is exactly
@@ -776,7 +843,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
         if stringLength ir == 0 then
           buildErr
             "error: emitter produced empty IR for \{inputAbs}\n\{emitErr}"
-        else match writeFile llPath ir
+        else match writeFile llPath (programModuleName ++ ir)
           Err e => buildErr ("error: could not write IR: " ++ e)
           Ok _ =>
             -- --keep-ir / MEDAKA_KEEP_IR: copy the IR to a predictable path next
@@ -1133,9 +1200,10 @@ missingLibMsg projRoot name dir =
 -- three strings live in their OWN translation unit rather than inside
 -- medaka_rt.c, because they change on every build while medaka_rt.c does not —
 -- folding them in would defeat the fingerprint-keyed runtime object cache
--- (cachedRtObj) for every build on the machine.  Nothing on this link line is
--- LTO'd (see the cache commentary below), so there is no ThinLTO cache key to
--- invalidate here, unlike the emitter link the precedent guards against.
+-- (cachedRtObj) for every build on the machine.  The object is compiled
+-- without -flto, so it stays a native object outside the ThinLTO unit
+-- (detectLto): the stamps are per-build, and inside the unit they would change
+-- the runtime module on every build.
 --
 -- Opt-in, and silent by default: the four consumers that must keep reading ""
 -- — bootstrap_from_seed.sh, selfcompile_fixpoint.sh, stage A of
@@ -1237,11 +1305,12 @@ stampDate _ = match runCommand "date" ["-u", "+%Y-%m-%d"]
 --       link                            0.04 s
 -- medaka_rt.c is a FIXED file: byte-for-byte the same object on every build of
 -- every program on the machine.  Recompiling it per build is pure waste, and
--- because clang already treats the .c and the .ll as SEPARATE translation units
--- (no LTO on this link line), substituting a prebuilt object changes nothing
--- about the emitted program — proven byte-identical by
--- test/diff_compiler_rt_obj.sh, and re-measured over test/bench_fixtures/*:
--- 19/19 fixtures byte-identical binaries, runtime within noise.
+-- because the cached object is compiled with exactly the flags the inline
+-- compile gets (ThinLTO bitcode when detectLto is on, a native object when it
+-- is off), substituting it changes nothing about the linked binary — proven
+-- byte-identical by test/diff_compiler_rt_obj.sh.  Under ThinLTO the runtime's
+-- code generation happens at link time, for only what the program reaches, so
+-- the object saves the front end and the optimizer, not the whole compile.
 --
 -- ⚠️ WHY ONLY THE RUNTIME, AND NOT THE PRELUDE.  The sibling MEDAKA_PRELUDE_OBJ
 -- fast path is deliberately NOT auto-enabled here.  Splitting the prelude into
@@ -1258,11 +1327,13 @@ stampDate _ = match runCommand "date" ["-u", "+%Y-%m-%d"]
 -- medaka_cli.mdk) — that hashes `compiler/*.mdk` ONLY, and the object here does
 -- not depend on a single one of those files while it DOES depend on things that
 -- fingerprint cannot see: medaka_rt.c's own contents, the clang binary and its
--- version, MEDAKA_CLANG_OPT, and detectGC's discovered cflags.  Keying on the
+-- version, MEDAKA_CLANG_OPT, detectGC's discovered cflags, and whether the
+-- object is ThinLTO bitcode (detectLto).  Keying on the
 -- compiler fingerprint would be silently wrong the moment medaka_rt.c changed
 -- without a compiler-source edit alongside it.  What we hash, exactly and only:
 -- the cc name, `cc --version`, the full compile flag list (opt level + -pthread
--- + gcSectionsCflags + detectGC's cflags), and the CONTENTS of medaka_rt.c.
+-- + gcSectionsCflags + detectGC's cflags + -flto=thin when on), and the
+-- CONTENTS of medaka_rt.c.
 --
 -- ⚠️ KNOWN GAPS in that key — it is NOT a complete function of everything the
 -- object depends on.  Inputs
@@ -1334,10 +1405,10 @@ rtObjCacheKey : String ->
   List String ->
   String ->
   <IO> String
-rtObjCacheKey cc rtC optFlag gcCflags tmpDir =
+rtObjCacheKey cc rtC optFlag rtCflags tmpDir =
   let flagsPath = joinPath tmpDir "rtobj_flags"
   let flagsText =
-    joinWith " " ([optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags) ++ "\n"
+    joinWith " " ([optFlag, "-pthread"] ++ gcSectionsCflags ++ rtCflags) ++ "\n"
   match writeFile flagsPath flagsText
     Err _ => ""
     Ok _ =>
@@ -1356,17 +1427,17 @@ rtObjCacheKey cc rtC optFlag gcCflags tmpDir =
 -- Resolve the cached runtime object, populating the cache on a miss.  Returns
 -- the object path, or "" meaning "no cached object — compile the .c inline".
 cachedRtObj : String -> String -> String -> List String -> String -> <IO> String
-cachedRtObj cc rtC optFlag gcCflags tmpDir =
+cachedRtObj cc rtC optFlag rtCflags tmpDir =
   let dir = objCacheDir ()
   if dir == "" then
     ""
   else
-    let key = rtObjCacheKey cc rtC optFlag gcCflags tmpDir
+    let key = rtObjCacheKey cc rtC optFlag rtCflags tmpDir
     if key == "" then
       ""
     else
       let objPath = joinPath dir "rt-\{key}.o"
-      let hit = if fileExists objPath then rtObjUsable objPath else False
+      let hit = if fileExists objPath then rtObjUsable cc objPath else False
       if hit then
         -- Refresh the entry's mtime on every hit (best-effort; a failed touch
         -- costs nothing) so `sweepStaleObjCacheEntries` below ages out only
@@ -1375,7 +1446,7 @@ cachedRtObj cc rtC optFlag gcCflags tmpDir =
         let _ = runCommand "touch" [objPath]
         objPath
       else
-        populateRtObj cc rtC optFlag gcCflags dir objPath
+        populateRtObj cc rtC optFlag rtCflags dir objPath
 
 -- Sanity-check a cache HIT before trusting it (#2233 item 2).  The population
 -- path is already write-then-rename, so a truncated object needs a crash or
@@ -1395,15 +1466,19 @@ cachedRtObj cc rtC optFlag gcCflags tmpDir =
 --     it (mktemp + `mv -f`), so a corrupted entry SELF-REPAIRS rather than
 --     needing a manual clear.
 -- Matches both `T main` (ELF) and `T _main` (Mach-O's leading underscore), per
--- [B-DUAL-PLATFORM].
-rtObjUsable : String -> <IO> Bool
-rtObjUsable objPath =
+-- [B-DUAL-PLATFORM].  Under detectLto the entry is ThinLTO bitcode, which GNU
+-- nm reads only with the LLVM gold plugin installed, so the compiler's own
+-- llvm-nm is preferred when `cc -print-prog-name` names one that exists.
+rtObjUsable : String -> String -> <IO> Bool
+rtObjUsable cc objPath =
   let script = stringConcat [
-    "command -v nm >/dev/null 2>&1 || exit 0\n",
-    "syms=$(nm \"$1\" 2>/dev/null) || exit 1\n",
+    "n=$(\"$1\" -print-prog-name=llvm-nm 2>/dev/null)\n",
+    "case \"$n\" in /*) [ -x \"$n\" ] || n=nm ;; *) n=nm ;; esac\n",
+    "command -v \"$n\" >/dev/null 2>&1 || exit 0\n",
+    "syms=$(\"$n\" \"$2\" 2>/dev/null) || exit 1\n",
     "printf '%s\\n' \"$syms\" | grep -qE ' T _?main$'\n",
   ]
-  match runCommand "sh" ["-c", script, "sh", objPath]
+  match runCommand "sh" ["-c", script, "sh", cc, objPath]
     -- fail-open-by-design: FAIL-OPEN IN BOTH DIRECTIONS, per the comment
     -- above (no `nm` -> accept; `nm` finds no `main` -> reject+self-repair).
     Ok (0, _, _) => True
@@ -1420,7 +1495,7 @@ populateRtObj : String ->
   String ->
   String ->
   <IO> String
-populateRtObj cc rtC optFlag gcCflags dir objPath =
+populateRtObj cc rtC optFlag rtCflags dir objPath =
   match runCommand "mkdir" ["-p", dir]
     -- fail-open-by-design (all 4 arms below): "" on any failure, per
     -- cachedRtObj's contract above (caller skips the cache entirely and
@@ -1437,7 +1512,7 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
           let ccArgs =
             [optFlag, "-pthread"]
               ++ gcSectionsCflags
-              ++ gcCflags
+              ++ rtCflags
               ++ ["-c", rtC, "-o", tmpObj]
           match runCommand cc ccArgs
             -- fail-open-by-design: compile failure -> "".
@@ -1558,6 +1633,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLi
       let tGcProbe = now ()
       let _ = emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
       let optFlag = clangOptFlag
+      let lto = detectLto cc
       -- CI FAST PATH (MEDAKA_RT_OBJ).  Every `medaka build` otherwise recompiles the
       -- identical runtime/medaka_rt.c from scratch (~0.6s of clang each).  A gate
       -- that does hundreds of builds can precompile the runtime ONCE (via
@@ -1581,7 +1657,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLi
         if rtObjEnv /= "" && fileExists rtObjEnv then
           rtObjEnv
         else
-          cachedRtObj cc rtC optFlag gcCflags tmpDir
+          cachedRtObj cc rtC optFlag (gcCflags ++ ltoCflags lto) tmpDir
       let rtInput = if rtCached == "" then rtC else rtCached
       let tRtObj = now ()
       let _ =
@@ -1623,6 +1699,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLi
       let sectionsLink = gcSectionsLinkFlag ()
       let clangArgs =
         [optFlag, "-pthread"]
+          ++ ltoLinkFlags lto
           ++ gcSectionsCflags
           ++ gcCflags
           ++ linkInputs
@@ -1745,6 +1822,9 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
               else match writeFile llPath ir
                 Err e => buildErr ("error: could not write prelude IR: " ++ e)
                 Ok _ =>
+                  -- A native object even under detectLto: the link accepts a
+                  -- native input beside bitcode, and this opt-in object is
+                  -- compared by program output, not bytes.
                   let optFlag = clangOptFlag
                   let ccArgs =
                     [optFlag, "-pthread"]
@@ -1771,6 +1851,9 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
 -- omitted from a `-c` compile.  Having the COMPILER decide the flags (rather than
 -- a gate hand-rolling `clang -c medaka_rt.c` with guessed flags) is the whole
 -- point: it removes the drift surface that this optimization keeps rediscovering.
+-- Under detectLto the object is ThinLTO bitcode, which `ld -r` cannot merge; a
+-- caller that needs a native object sets MEDAKA_NO_LTO for this command and for
+-- the builds that link it.
 export
 emitRtObj : String -> String -> String -> <IO> Result BuildReport BuildReport
 emitRtObj cc root outObjPath = match probeClang cc
@@ -1796,6 +1879,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
           [optFlag, "-pthread"]
             ++ gcSectionsCflags
             ++ gcCflags
+            ++ ltoCflags (detectLto cc)
             ++ ["-c", rtC, "-o", outObjPath]
         match runCommandOk cc ccArgs
           Err e => buildErr "error: compiling runtime object failed\n\{e}"

@@ -8,19 +8,28 @@
    session secret and credential but no repository, the same shape
    `pds/test/session_routes_test.mdk` already uses. -}
 
-import bytes.{fromArray}
+import bytes.{Bytes, fromArray}
+import http.{parseRequestClassified}
 import json.{Json(..), get, jObject, parse, stringify}
 import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
-import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
+import lib.credential.{
+  CredentialRecord,
+  LoginCheck,
+  LoginVerdict,
+  loginCheckAdvance,
+  loginCheckVerdict,
+  makeCredential,
+}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.server_core.{
   Account,
   RequestContext(..),
   Server,
+  classifyLogin,
   handleBytes,
   makeAccount,
 }
@@ -53,13 +62,13 @@ server =
 testSecret : Array Int
 testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
 
+-- | The account credential, derived at a small fixed count rather than
+-- `defaultIterations`, so this file's cost does not grow when the shipped
+-- count does. What is under test here is the blob routes, not the login.
 credential : CredentialRecord
 credential =
   let derived =
-    makeCredential
-      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
-      defaultIterations
-      password
+    makeCredential (arrayMakeWith 16 (i => (i * 13 + 3) % 256)) 4 password
   match derived
     Ok made => made
     Err message => panic "blob_routes_test: credential: \{message}"
@@ -79,7 +88,7 @@ nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
 
 contextAt : Int -> Int -> RequestContext
 contextAt instant seed =
-  RequestContext { nowSeconds = instant, nonce = nonceAt seed }
+  RequestContext { nowSeconds = instant, nonce = nonceAt seed, login = None }
 
 -- ── requests and responses ──────────────────────────────────────────────────
 
@@ -201,10 +210,29 @@ stringEntries (_ :: rest) = stringEntries rest
 
 -- ── driving ──────────────────────────────────────────────────────────────────
 
+-- A login's verdict is derived before the request reaches the store, as the
+-- shell derives it (`settleLogin`, `pds/shell/server.mdk`), all at once here.
+-- The salt it offers is empty, which offers no upgrade: the shell's would
+-- re-derive the low-count `credential` at the shipped count on login.
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
-  Some packed => handleBytes server context store packed
+  Some packed =>
+    handleBytes
+      server
+      { context | login = verdictAgainst store packed }
+      store
+      packed
   None => panic "blob_routes: request fixture holds a non-byte element"
+
+verdictAgainst : Store -> Bytes -> Option LoginVerdict
+verdictAgainst store packed = match parseRequestClassified packed
+  Err _ => None
+  Ok request => map settled (classifyLogin server empty store request)
+
+settled : LoginCheck -> LoginVerdict
+settled check = match loginCheckVerdict check
+  Some verdict => verdict
+  None => settled (loginCheckAdvance 256 check)
 
 createSessionNsid : String
 createSessionNsid = "com.atproto.server.createSession"

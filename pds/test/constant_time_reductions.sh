@@ -601,7 +601,7 @@ secret_comparisons_ok() {
   dir=$4
   mkdir -p "$dir"
   for spec in \
-    "$credential:2:digest password" \
+    "$credential:3:digest password derived stored" \
     "$jwt:2:secret expected sigSeg" \
     "$store:9:secret wanted access refresh token fingerprint family consumed previous"
   do
@@ -639,6 +639,7 @@ secret_comparisons_ok() {
   roster_store=0
   for spec in \
     "credentialVerify:credential:1" \
+    "digestIs:credential:1" \
     "verifySegments:jwt:1" \
     "liveRefresh:store:1" \
     "consumedRefresh:store:1" \
@@ -1450,17 +1451,99 @@ conditional_jump_count() {
 # so a jump-count pin cannot see it. Tracked in #2838; do not reinstate a
 # symbol-addressed check without a predicate that discriminates.
 
-# Native bit helpers are C calls below the generated Medaka helpers. Inspect
-# the linked implementations on the tested target; either helper growing a
-# conditional jump invalidates the arithmetic proof.
-for helper in mdk_bit_and mdk_bit_xor mdk_shift_right; do
-  symbol=$(find_exact_symbol "$WORK/field_emit" "$helper")
-  [ -n "$symbol" ] || fail "final native $helper symbol exists"
-  disassemble "$WORK/field_emit" "$symbol" "$WORK/$helper.asm"
-  jumps=$(conditional_jump_count "$WORK/$helper.asm") || fail "supported native target for $helper disassembly"
-  [ "$jumps" -eq 0 ] || fail "final native $helper has no conditional jumps (got $jumps)"
-  pass "final native $helper has no conditional jumps"
-done
+# The runtime bit helpers are C, below every generated Medaka helper, and a
+# helper that grew a conditional jump would invalidate the arithmetic proof.
+# They are not checked as linked symbols of their own: `medaka build` links the
+# runtime into the program's ThinLTO unit (#3374), which inlines them into each
+# caller, so no such symbol survives. Instead a straight-line witness over
+# exactly the helpers under audit is built, and it is reached only as a function
+# value, so its body survives as a linked symbol. A helper that grew a branch
+# puts a conditional jump into that body wherever it is inlined. Under the plain
+# link (MEDAKA_NO_LTO, or a toolchain without lld) the helpers stay calls, and
+# every function the witness calls is disassembled in turn.
+witness_disassemble() {
+  case $(uname -s) in
+    Darwin) otool -tvV "$1" | awk -v label="_$2:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$3" ;;
+    *) objdump -d --disassemble="$2" "$1" > "$3" ;;
+  esac
+  [ -s "$3" ] || fail "native disassembly exists for $2"
+}
+
+# One line per control transfer: `target <symbol>` for a direct call or tail
+# jump to a named function, `stray <mnemonic>` for anything else (a conditional
+# jump, an indirect transfer, a jump within the function). A straight-line
+# function has no strays.
+witness_transfers() {
+  awk '
+    match($0, /[[:space:]](j[a-z]+|call[a-z]*|b|bl|br|blr|b\.[a-z]+|cbn?z|tbn?z)[[:space:]]/) {
+      op = substr($0, RSTART + 1, RLENGTH - 2)
+      rest = substr($0, RSTART + RLENGTH)
+      if (op ~ /^(jmp[a-z]*|call[a-z]*|b|bl)$/) {
+        if (rest ~ /^[[:space:]]*([0-9a-f]+[[:space:]]+)?<[A-Za-z0-9_.$]+>[[:space:]]*$/) {
+          sub(/^[^<]*</, "", rest); sub(/>.*$/, "", rest); print "target " rest; next
+        }
+        if (rest ~ /^[[:space:]]*_[A-Za-z0-9_.$]+[[:space:]]*$/) {
+          gsub(/[[:space:]]/, "", rest); sub(/^_/, "", rest); print "target " rest; next
+        }
+      }
+      print "stray " op
+    }' "$1"
+}
+
+check_bit_witness() {
+  expr=$1
+  shift
+  helpers=" $* "
+  src="$WORK/bit_witness.mdk"
+  bin="$WORK/bit_witness"
+  printf '%s\n' \
+    'ctBitWitness : Int -> Int -> Int' \
+    "ctBitWitness a b = $expr" \
+    '' \
+    'applyWitness : List (Int -> Int -> Int) -> Int -> Int -> Int' \
+    'applyWitness [] acc _ = acc' \
+    'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
+    '' \
+    'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
+  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+    cat "$WORK/bit-witness-build.log" >&2
+    fail 'bit-helper witness builds'
+  }
+  awk '/^define i64 @[A-Za-z0-9_]*__ctBitWitness\(/ { p=1 } p { print } p && /^}/ { exit }' "$bin.ll" > "$WORK/bit-witness.ll"
+  [ -s "$WORK/bit-witness.ll" ] || fail 'emitted bit-helper witness exists'
+  [ "$(grep -c '^  br ' "$WORK/bit-witness.ll" || true)" -eq 0 ] || fail 'emitted bit-helper witness is straight-line'
+  for helper in $helpers; do
+    grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
+  done
+  pass "emitted bit-helper witness is straight-line over $*"
+  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
+  pass 'linked bit-helper witness symbol exists'
+  visited=' '
+  while [ -n "$pending" ]; do
+    next_round=
+    for symbol in $pending; do
+      case $visited in *" $symbol "*) continue ;; esac
+      visited="$visited$symbol "
+      witness_disassemble "$bin" "$symbol" "$WORK/witness-$symbol.asm"
+      witness_transfers "$WORK/witness-$symbol.asm" > "$WORK/witness-$symbol.transfers"
+      strays=$(grep -c '^stray ' "$WORK/witness-$symbol.transfers" || true)
+      [ "$strays" -eq 0 ] || fail "linked $symbol has no conditional jumps (got $strays: $(grep '^stray ' "$WORK/witness-$symbol.transfers" | tr '\n' ' '))"
+      for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
+        case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
+        case $target in
+          *__ctBitWitness) next_round="$next_round $target" ;;
+          *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
+        esac
+      done
+    done
+    pending=$next_round
+  done
+  pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
+}
+
+check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
+  mdk_bit_and mdk_bit_xor mdk_shift_right
 
 printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"

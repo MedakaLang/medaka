@@ -110,7 +110,8 @@ testNonce : Array Int
 testNonce = arrayMakeWith 16 (i => (i * 17 + 3) % 256)
 
 testContext : RequestContext
-testContext = RequestContext { nowSeconds = testInstant, nonce = testNonce }
+testContext =
+  RequestContext { nowSeconds = testInstant, nonce = testNonce, login = None }
 
 account : Account
 account =

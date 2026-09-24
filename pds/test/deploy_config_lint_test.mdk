@@ -96,6 +96,7 @@ serviceDirectives = [
   ("PrivateTmp", "^PrivateTmp=true"),
   ("MemoryMax", "^MemoryMax="),
   ("CPUWeight-or-Nice", "^(CPUWeight|Nice)="),
+  ("GC_MARKERS-1", "^Environment=GC_MARKERS=1$"),
   ("TasksMax", "^TasksMax="),
   ("LimitNOFILE", "^LimitNOFILE="),
   ("StartLimitBurst", "^StartLimitBurst="),
@@ -711,6 +712,16 @@ test "mutation control: a stripped systemd directive (MemoryMax) is caught" =
         (without (startsWith "MemoryMax=")))
       serviceDirectives)
 
+test "mutation control: a stripped GC_MARKERS on pds.service is caught" =
+  expectFindings
+    "a stripped Environment=GC_MARKERS=1"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-gc-markers"
+        (without (startsWith "Environment=GC_MARKERS=")))
+      serviceDirectives)
+
 test "mutation control: a stripped OnFailure= on pds.service is caught" =
   expectFindings
     "a stripped OnFailure= on pds.service"
@@ -1049,9 +1060,9 @@ gradedPatterns =
     + length alertServiceForbidden
 
 patternFloor : Int
-patternFloor = 105
+patternFloor = 106
 
-test "deploy_config_lint grades at least PATTERN_FLOOR=105 patterns" =
+test "deploy_config_lint grades at least PATTERN_FLOOR=106 patterns" =
   if gradedPatterns >= patternFloor then
     Pass
       ">= \{intToString patternFloor} patterns"
@@ -1078,9 +1089,9 @@ declaredAssertions =
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
 
 assertionFloor : Int
-assertionFloor = 55
+assertionFloor = 56
 
-test "deploy_config_lint declares at least ASSERTION_FLOOR=55 `test` blocks" =
+test "deploy_config_lint declares at least ASSERTION_FLOOR=56 `test` blocks" =
   let want = ">= \{intToString assertionFloor} `test` blocks"
   match declaredAssertions
     Err e =>

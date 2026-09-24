@@ -171,18 +171,20 @@ claim nothing beyond that.
 
 ### 3.4 Keys and passwords
 
-- **The PBKDF2 iteration count is 3,000.** `defaultIterations`
-  (`pds/lib/credential.mdk`) is 3,000. OWASP's floor for PBKDF2-HMAC-SHA-256 is
-  600,000, 200 times more. Someone who steals `<data>/credential` can therefore
-  guess a weak password 200 times faster than against a server that meets the
+- **The PBKDF2 iteration count is 60,000.** `defaultIterations`
+  (`pds/lib/credential.mdk`) is 60,000. OWASP's floor for PBKDF2-HMAC-SHA-256 is
+  600,000, 10 times more. Someone who steals `<data>/credential` can therefore
+  guess a weak password 10 times faster than against a server that meets the
   floor. [ATPROTO-PDS-DESIGN.md](../design/ATPROTO-PDS-DESIGN.md) §4.2 ("The
-  chosen count", "The residual gap") gives the measurement and the budget.
-  The count is accepted for launch by ruling R3 in
-  [PDS-LAUNCH-PLAN.md](PDS-LAUNCH-PLAN.md) §5 (Val, 2026-09-12, recorded on
+  chosen count", "The residual gap") gives the measurement (2026-09-24, a login
+  at this count takes 0.26–0.52 s on the reference box) and the budget.
+  A record derived at an earlier count moves onto this one at its owner's next
+  successful login. Ruling R3 in [PDS-LAUNCH-PLAN.md](PDS-LAUNCH-PLAN.md) §5
+  (Val, 2026-09-12, recorded on
   [#2659](https://github.com/MedakaLang/medaka/issues/2659); launch criterion
-  B12). The ruling applies to a single-owner server whose password never leaves
-  its owner: whoever can read the credential file can also read the signing key.
-  Separate work to raise the count is in progress, tracked in
+  B12) accepted the previous count of 3,000 for a single-owner server whose
+  password never leaves its owner: whoever can read the credential file can
+  also read the signing key. The re-ruling for 60,000 is pending, tracked in
   [#3373](https://github.com/MedakaLang/medaka/issues/3373).
 - **Keys at rest are plaintext.** The signing key and the session secret are
   stored unencrypted at mode `0600`. Filesystem permissions are the only

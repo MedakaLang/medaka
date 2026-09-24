@@ -188,9 +188,16 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # unroll and inline them, and whether it does is a cost-threshold artifact
 # rather than anything about secrets.  Their shapes are pinned structurally in
 # the IR below, where the definitions always exist.
+# scanSecretBytes and secretBelowNBorrow left this list when `medaka build`
+# linked the runtime through ThinLTO (#3374), which inlines both into
+# scSecretCandidate. What is lost is only the claim that each is a distinct
+# function in the linked binary. Their shape is still caught where the
+# definitions always exist: both are in the emitted-symbol list above, the
+# closed source manifest pins scalar.mdk byte for byte, and M15 reds every
+# aggregate omission and a per-element early return in scanSecretBytes.
+# scSecretCandidate, the ingress that now holds them, is still required here.
 for symbol in \
-  mdk_lib_scalar__scSecretCandidate mdk_lib_scalar__scanSecretBytes \
-  mdk_lib_scalar__secretBelowNBorrow mdk_lib_field__carryFoldRound \
+  mdk_lib_scalar__scSecretCandidate mdk_lib_field__carryFoldRound \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
   mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
@@ -267,14 +274,99 @@ disassemble "$ladder_symbol" "$WORK/scalar-ladder.asm"
 [ "$(grep -F -c '__pointDoubleComplete' "$WORK/scalar-ladder.asm" || true)" -eq 2 ] || fail 'linked scalar ladder retains both complete doubling calls'
 pass 'linked native ladder retains complete candidate topology'
 
-for helper in mdk_bit_and mdk_bit_xor mdk_shift_right; do
-  symbol=$(nm "$BIN" | awk -v wanted="$helper" '$3 == wanted || $3 == "_" wanted { sub(/^_/, "", $3); print $3; exit }')
-  [ -n "$symbol" ] || fail "linked runtime helper $helper exists"
-  disassemble "$symbol" "$WORK/$helper.asm"
-  jumps=$(conditional_jumps "$WORK/$helper.asm") || fail "supported target for $helper disassembly"
-  [ "$jumps" -eq 0 ] || fail "runtime helper $helper has no conditional jumps (got $jumps)"
-  pass "runtime helper $helper has no conditional jumps"
-done
+# The runtime bit helpers are C, below every generated Medaka helper, and a
+# helper that grew a conditional jump would invalidate the arithmetic proof.
+# They are not checked as linked symbols of their own: `medaka build` links the
+# runtime into the program's ThinLTO unit (#3374), which inlines them into each
+# caller, so no such symbol survives. Instead a straight-line witness over
+# exactly the helpers under audit is built, and it is reached only as a function
+# value, so its body survives as a linked symbol. A helper that grew a branch
+# puts a conditional jump into that body wherever it is inlined. Under the plain
+# link (MEDAKA_NO_LTO, or a toolchain without lld) the helpers stay calls, and
+# every function the witness calls is disassembled in turn.
+witness_disassemble() {
+  case $(uname -s) in
+    Darwin) otool -tvV "$1" | awk -v label="_$2:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$3" ;;
+    *) objdump -d --disassemble="$2" "$1" > "$3" ;;
+  esac
+  [ -s "$3" ] || fail "native disassembly exists for $2"
+}
+
+# One line per control transfer: `target <symbol>` for a direct call or tail
+# jump to a named function, `stray <mnemonic>` for anything else (a conditional
+# jump, an indirect transfer, a jump within the function). A straight-line
+# function has no strays.
+witness_transfers() {
+  awk '
+    match($0, /[[:space:]](j[a-z]+|call[a-z]*|b|bl|br|blr|b\.[a-z]+|cbn?z|tbn?z)[[:space:]]/) {
+      op = substr($0, RSTART + 1, RLENGTH - 2)
+      rest = substr($0, RSTART + RLENGTH)
+      if (op ~ /^(jmp[a-z]*|call[a-z]*|b|bl)$/) {
+        if (rest ~ /^[[:space:]]*([0-9a-f]+[[:space:]]+)?<[A-Za-z0-9_.$]+>[[:space:]]*$/) {
+          sub(/^[^<]*</, "", rest); sub(/>.*$/, "", rest); print "target " rest; next
+        }
+        if (rest ~ /^[[:space:]]*_[A-Za-z0-9_.$]+[[:space:]]*$/) {
+          gsub(/[[:space:]]/, "", rest); sub(/^_/, "", rest); print "target " rest; next
+        }
+      }
+      print "stray " op
+    }' "$1"
+}
+
+check_bit_witness() {
+  expr=$1
+  shift
+  helpers=" $* "
+  src="$WORK/bit_witness.mdk"
+  bin="$WORK/bit_witness"
+  printf '%s\n' \
+    'ctBitWitness : Int -> Int -> Int' \
+    "ctBitWitness a b = $expr" \
+    '' \
+    'applyWitness : List (Int -> Int -> Int) -> Int -> Int -> Int' \
+    'applyWitness [] acc _ = acc' \
+    'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
+    '' \
+    'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
+  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+    cat "$WORK/bit-witness-build.log" >&2
+    fail 'bit-helper witness builds'
+  }
+  awk '/^define i64 @[A-Za-z0-9_]*__ctBitWitness\(/ { p=1 } p { print } p && /^}/ { exit }' "$bin.ll" > "$WORK/bit-witness.ll"
+  [ -s "$WORK/bit-witness.ll" ] || fail 'emitted bit-helper witness exists'
+  [ "$(grep -c '^  br ' "$WORK/bit-witness.ll" || true)" -eq 0 ] || fail 'emitted bit-helper witness is straight-line'
+  for helper in $helpers; do
+    grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
+  done
+  pass "emitted bit-helper witness is straight-line over $*"
+  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
+  pass 'linked bit-helper witness symbol exists'
+  visited=' '
+  while [ -n "$pending" ]; do
+    next_round=
+    for symbol in $pending; do
+      case $visited in *" $symbol "*) continue ;; esac
+      visited="$visited$symbol "
+      witness_disassemble "$bin" "$symbol" "$WORK/witness-$symbol.asm"
+      witness_transfers "$WORK/witness-$symbol.asm" > "$WORK/witness-$symbol.transfers"
+      strays=$(grep -c '^stray ' "$WORK/witness-$symbol.transfers" || true)
+      [ "$strays" -eq 0 ] || fail "linked $symbol has no conditional jumps (got $strays: $(grep '^stray ' "$WORK/witness-$symbol.transfers" | tr '\n' ' '))"
+      for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
+        case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
+        case $target in
+          *__ctBitWitness) next_round="$next_round $target" ;;
+          *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
+        esac
+      done
+    done
+    pending=$next_round
+  done
+  pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
+}
+
+check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
+  mdk_bit_and mdk_bit_xor mdk_shift_right
 
 printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"

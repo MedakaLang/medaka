@@ -59,8 +59,8 @@ expected_internal_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
-229045795 11986  stdlib/sha256.mdk
-2012701912 5886  stdlib/hmac.mdk
+462197452 13158  stdlib/sha256.mdk
+1421209466 8360  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
@@ -71,8 +71,8 @@ expected_public_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
-229045795 11986  stdlib/sha256.mdk
-2012701912 5886  stdlib/hmac.mdk
+462197452 13158  stdlib/sha256.mdk
+1421209466 8360  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
@@ -536,12 +536,18 @@ pass 'native internal carrier retains the exact signature plus candidate-1/exhau
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
-# Re-derived when reduceFixed moved to the unchecked carry pass. Measured
-# against the previous closure, symbol by symbol: two lines are a pure 1:1
-# rename (mdk_lib_scalar__carryAll -> carryAllUnchecked, carryGo ->
-# carryGoUnchecked). 172 definitions before and after; nothing else entered
-# or left.
-[ "$closure_grade" = '528626005 4814' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when `sha256AssumeByteDomain` was parameterized into
+# `sha256AssumeByteDomainFrom` (State/prior-byte-count) plus its zero-offset
+# caller (S-hmac-midstate). Measured against the previous closure, symbol by
+# symbol: `mdk_sha256__buildTail` is gone (folded into
+# `mdk_sha256__buildTailWithTotal`, now called directly), and
+# `mdk_sha256__sha256AssumeByteDomainFrom` is new; every other symbol,
+# including `mdk_sha256__sha256AssumeByteDomain` itself, is unchanged.
+# `mdk_sha256__sha256FoldKeyBlock` is NOT in this closure — the direct-call
+# `hmacSha256FixedBytes` path this carrier reaches never calls it, only
+# `hmacSha256Key`/`hmacSha256WithKey` do, and neither is on this route. 172
+# definitions after, 171 before.
+[ "$closure_grade" = '938975143 4847' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the five modules now live in stdlib/, which mangles without the `lib_`
 # segment, so the prefixes are spelled out rather than built from a module name.
 for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_sha256__ mdk_hmac__ \
@@ -565,12 +571,12 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-# Same rename as the closure grade above. Measured column-wise over all 172
-# rows, same order: the two renamed rows are the only change, and
-# carryGoUnchecked has one branch fewer than carryGo had (2 -> 1: the top-limb
-# carry check is gone). Every other column of those rows, and every other row,
-# is unchanged; no branch anywhere in the closure tests a byte.
-[ "$control_grade" = '1217626107 7238' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Same closure change as above (S-hmac-midstate). Measured row-wise: the
+# `mdk_sha256__buildTail` row is gone, `mdk_sha256__sha256AssumeByteDomainFrom`
+# gains a row identical in shape to the one `mdk_sha256__sha256AssumeByteDomain`
+# already carried (a straight-line fold, no branch), and every other row is
+# unchanged; no branch anywhere in the closure tests a byte.
+[ "$control_grade" = '4200468049 7271' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -600,17 +606,26 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 # schedule itself, mdk_hmac__hmacSha256FixedBytes. The guard is still pinned
 # by source text above and by the IR closure manifests, which read definitions
 # rather than surviving link-time symbols.
+#
+# mdk_sha256__compressRounds and mdk_lib_scalar__scNegateCt stood in this list
+# until `medaka build` linked the runtime through ThinLTO (#3374). That link
+# inlines both into their callers, so neither survives as a symbol. What is
+# lost is only the claim that each is a distinct function in the linked binary.
+# Their constant-time shape is still caught where their definitions always
+# exist: scNegateCt by the low-S route pin in internal_source_routes_ok (red
+# under M09) and by the emitted closure manifest above; compressRounds by the
+# exact control grade over the emitted closure, which counts its branches,
+# comparisons and indexing. Its caller mdk_hmac__hmacSha256FixedBytes still
+# survives below, so the HMAC/SHA schedule is still in the link.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_hmac__hmacSha256FixedBytes \
-  mdk_sha256__compressRounds \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
   mdk_lib_scalar__scInverse \
-  mdk_lib_scalar__scSelect \
-  mdk_lib_scalar__scNegateCt
+  mdk_lib_scalar__scSelect
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains the audited HMAC/SHA, two-signature, point, inverse, and arithmetic-selection topology'
 
@@ -620,13 +635,99 @@ if grep -E -q 'mdk_lib_scalar__(scFromBytesReduce|byteArrayOk|byteRangeGo)' "$WO
 fi
 pass 'linked signCandidate path excludes scFromBytesReduce/byteArrayOk/byteRangeGo'
 
-for helper in mdk_bit_and mdk_bit_or mdk_bit_xor mdk_bit_not mdk_shift_left mdk_shift_right; do
-  require_native_symbol "$helper"
-  disassemble "$helper" "$WORK/$helper.asm"
-  jumps=$(conditional_jumps "$WORK/$helper.asm") || fail "supported target for $helper disassembly"
-  [ "$jumps" -eq 0 ] || fail "runtime bit helper $helper has conditional jumps (got $jumps)"
-done
-pass 'all six linked runtime bit helpers exist and have no conditional jumps'
+# The runtime bit helpers are C, below every generated Medaka helper, and a
+# helper that grew a conditional jump would invalidate the arithmetic proof.
+# They are not checked as linked symbols of their own: `medaka build` links the
+# runtime into the program's ThinLTO unit (#3374), which inlines them into each
+# caller, so no such symbol survives. Instead a straight-line witness over
+# exactly the helpers under audit is built, and it is reached only as a function
+# value, so its body survives as a linked symbol. A helper that grew a branch
+# puts a conditional jump into that body wherever it is inlined. Under the plain
+# link (MEDAKA_NO_LTO, or a toolchain without lld) the helpers stay calls, and
+# every function the witness calls is disassembled in turn.
+witness_disassemble() {
+  case $(uname -s) in
+    Darwin) otool -tvV "$1" | awk -v label="_$2:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$3" ;;
+    *) objdump -d --disassemble="$2" "$1" > "$3" ;;
+  esac
+  [ -s "$3" ] || fail "native disassembly exists for $2"
+}
+
+# One line per control transfer: `target <symbol>` for a direct call or tail
+# jump to a named function, `stray <mnemonic>` for anything else (a conditional
+# jump, an indirect transfer, a jump within the function). A straight-line
+# function has no strays.
+witness_transfers() {
+  awk '
+    match($0, /[[:space:]](j[a-z]+|call[a-z]*|b|bl|br|blr|b\.[a-z]+|cbn?z|tbn?z)[[:space:]]/) {
+      op = substr($0, RSTART + 1, RLENGTH - 2)
+      rest = substr($0, RSTART + RLENGTH)
+      if (op ~ /^(jmp[a-z]*|call[a-z]*|b|bl)$/) {
+        if (rest ~ /^[[:space:]]*([0-9a-f]+[[:space:]]+)?<[A-Za-z0-9_.$]+>[[:space:]]*$/) {
+          sub(/^[^<]*</, "", rest); sub(/>.*$/, "", rest); print "target " rest; next
+        }
+        if (rest ~ /^[[:space:]]*_[A-Za-z0-9_.$]+[[:space:]]*$/) {
+          gsub(/[[:space:]]/, "", rest); sub(/^_/, "", rest); print "target " rest; next
+        }
+      }
+      print "stray " op
+    }' "$1"
+}
+
+check_bit_witness() {
+  expr=$1
+  shift
+  helpers=" $* "
+  src="$WORK/bit_witness.mdk"
+  bin="$WORK/bit_witness"
+  printf '%s\n' \
+    'ctBitWitness : Int -> Int -> Int' \
+    "ctBitWitness a b = $expr" \
+    '' \
+    'applyWitness : List (Int -> Int -> Int) -> Int -> Int -> Int' \
+    'applyWitness [] acc _ = acc' \
+    'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
+    '' \
+    'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
+  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+    cat "$WORK/bit-witness-build.log" >&2
+    fail 'bit-helper witness builds'
+  }
+  awk '/^define i64 @[A-Za-z0-9_]*__ctBitWitness\(/ { p=1 } p { print } p && /^}/ { exit }' "$bin.ll" > "$WORK/bit-witness.ll"
+  [ -s "$WORK/bit-witness.ll" ] || fail 'emitted bit-helper witness exists'
+  [ "$(grep -c '^  br ' "$WORK/bit-witness.ll" || true)" -eq 0 ] || fail 'emitted bit-helper witness is straight-line'
+  for helper in $helpers; do
+    grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
+  done
+  pass "emitted bit-helper witness is straight-line over $*"
+  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
+  pass 'linked bit-helper witness symbol exists'
+  visited=' '
+  while [ -n "$pending" ]; do
+    next_round=
+    for symbol in $pending; do
+      case $visited in *" $symbol "*) continue ;; esac
+      visited="$visited$symbol "
+      witness_disassemble "$bin" "$symbol" "$WORK/witness-$symbol.asm"
+      witness_transfers "$WORK/witness-$symbol.asm" > "$WORK/witness-$symbol.transfers"
+      strays=$(grep -c '^stray ' "$WORK/witness-$symbol.transfers" || true)
+      [ "$strays" -eq 0 ] || fail "linked $symbol has no conditional jumps (got $strays: $(grep '^stray ' "$WORK/witness-$symbol.transfers" | tr '\n' ' '))"
+      for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
+        case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
+        case $target in
+          *__ctBitWitness) next_round="$next_round $target" ;;
+          *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
+        esac
+      done
+    done
+    pending=$next_round
+  done
+  pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
+}
+
+check_bit_witness 'bitXor (bitAnd a b) (bitOr (shiftRight a (bitAnd b 7)) (shiftLeft (bitNot b) 5))' \
+  mdk_bit_and mdk_bit_or mdk_bit_xor mdk_bit_not mdk_shift_left mdk_shift_right
 
 MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$PUBLIC_SOURCE" -o "$WORK/signing-public" --keep-ir > "$WORK/public-build.log" 2>&1 || {
   cat "$WORK/public-build.log" >&2
@@ -698,23 +799,37 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # branches and 1 to 2 calls, and signDigest from 5 to 4 branches and 5 to 6
 # calls: each lost its SecretKey pattern's tag branch and gained the
 # secretScalar call. No other row moved in any column.
-if [ "$public_closure_grade" != '927876025 5349' ] || [ "$public_control_grade" != '250008883 8041' ]; then
+# Re-derived again for the byteAt/wordAt indexing change (S-sha256-rounds),
+# same shape as the internal-carrier grades above: `mdk_sha256__byteAt`'s row
+# is gone (191 -> 190, inlined), `mdk_sha256__wordAt` moved to
+# `0 0 1 0 0 0 1`, everything else unchanged.
+# Re-derived again for the same `sha256AssumeByteDomain` parameterization as
+# the internal-carrier grades above (S-hmac-midstate): `mdk_sha256__buildTail`'s
+# row is gone, `mdk_sha256__sha256AssumeByteDomainFrom` gains a row shaped
+# like `mdk_sha256__sha256AssumeByteDomain`'s own (straight-line, no branch),
+# 190 -> 191. `mdk_sha256__sha256FoldKeyBlock` does not appear — this route
+# never reaches `hmacSha256Key`/`hmacSha256WithKey`, only `hmacSha256FixedBytes`.
+if [ "$public_closure_grade" != '3214628818 5382' ] || [ "$public_control_grade" != '675978239 8074' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
 
 # Same inlined-guard reasoning as the internal native-symbol list above.
+# The ThinLTO link (#3374) inlines compressRounds, scNegateCt and, in this
+# consumer only, rfc6979NonceSchedule, so they left this list as they left the
+# internal one. What is lost is only the claim that each is a distinct function
+# in this linked binary. All three stay in the public union above, whose exact
+# control grade pins their branches, comparisons and indexing; scNegateCt's
+# low-S route is pinned in source (red under M09); and rfc6979NonceSchedule is
+# still required as a linked symbol of the internal carrier.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
-  mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_hmac__hmacSha256FixedBytes \
-  mdk_sha256__compressRounds \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
   mdk_lib_scalar__scInverse \
-  mdk_lib_scalar__scSelect \
-  mdk_lib_scalar__scNegateCt
+  mdk_lib_scalar__scSelect
 do require_native_symbol "$symbol"; done
 pass 'linked public consumer retains the audited HMAC/SHA, signing, point, inverse, and arithmetic-selection leaves'
 
@@ -888,7 +1003,7 @@ EOF
 
 build_taint_probe() {
   output=$1
-  MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O2 MEDAKA_RT_OBJ="$WORK/taint-rt-shim.o" \
+  MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O2 MEDAKA_NO_LTO=1 MEDAKA_RT_OBJ="$WORK/taint-rt-shim.o" \
     "$MEDAKA" build "$TAINT_PROBE" -o "$output" > "$output.build.log" 2>&1 || {
     cat "$output.build.log" >&2
     fail "memcheck taint probe builds at -O2 ($output)"
@@ -948,7 +1063,10 @@ is_conditional_jump() {
 
 write_taint_probe
 write_taint_shim
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O2 "$MEDAKA" build --emit-rt-obj "$WORK/taint-rt.o" > "$WORK/taint-rt.log" 2>&1 || {
+# The shim is merged into the runtime with `ld -r`, which needs a native
+# object, so this probe and its builds take the plain link (MEDAKA_NO_LTO)
+# rather than the ThinLTO link `medaka build` ships.
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O2 MEDAKA_NO_LTO=1 "$MEDAKA" build --emit-rt-obj "$WORK/taint-rt.o" > "$WORK/taint-rt.log" 2>&1 || {
   cat "$WORK/taint-rt.log" >&2
   fail 'runtime object for the memcheck taint probe builds'
 }

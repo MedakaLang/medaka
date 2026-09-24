@@ -98,7 +98,9 @@ fail=0
 checked=0
 
 # ── the linkable runtime+fixture object ─────────────────────────────────────
-if ! "$MEDAKA" build --emit-rt-obj "$W/rt.o" >"$W/rt.log" 2>&1 || [ ! -f "$W/rt.o" ]; then
+# `ld -r` below cannot merge ThinLTO bitcode, so the runtime object is built
+# with the plain link (MEDAKA_NO_LTO).
+if ! MEDAKA_NO_LTO=1 "$MEDAKA" build --emit-rt-obj "$W/rt.o" >"$W/rt.log" 2>&1 || [ ! -f "$W/rt.o" ]; then
   echo "FAIL: could not --emit-rt-obj"; cat "$W/rt.log"; exit 1
 fi
 if ! "$CC" -O2 -c "$FIXDIR/ffi_abi_probe.c" -o "$W/probe.o" >"$W/cc.log" 2>&1; then

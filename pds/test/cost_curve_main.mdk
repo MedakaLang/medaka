@@ -115,7 +115,8 @@ benchNonce : Array Int
 benchNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 benchContext : RequestContext
-benchContext = RequestContext { nowSeconds = benchInstant, nonce = benchNonce }
+benchContext =
+  RequestContext { nowSeconds = benchInstant, nonce = benchNonce, login = None }
 
 benchToken : String
 benchToken =

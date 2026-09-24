@@ -119,9 +119,9 @@ import lib.repo.{
 }
 import lib.credential.{
   CredentialRecord,
-  credentialUpgrade,
-  credentialVerify,
-  defaultIterations,
+  LoginOutcome(..),
+  LoginVerdict,
+  loginOutcome,
 }
 import lib.jwt.{mintToken}
 import lib.resource_limits.{maxBlobBytes}
@@ -136,7 +136,9 @@ import lib.server_core.{
   accountDid,
   accountHandle,
   accountHostname,
+  createSessionNsid,
   getServiceAuthNsid,
+  identifiesAccount,
   makeServer,
   refreshAudience,
   serviceAuthUnavailableResponse,
@@ -245,9 +247,6 @@ subscribeReposNsid = "com.atproto.sync.subscribeRepos"
 
 resolveHandleNsid : String
 resolveHandleNsid = "com.atproto.identity.resolveHandle"
-
-createSessionNsid : String
-createSessionNsid = "com.atproto.server.createSession"
 
 refreshSessionNsid : String
 refreshSessionNsid = "com.atproto.server.refreshSession"
@@ -1906,31 +1905,31 @@ sessionExpiry context = context.nowSeconds + refreshTokenSeconds
 familyEnd : RequestContext -> Int
 familyEnd context = context.nowSeconds + sessionFamilyLifetimeSeconds
 
-{- | Whether the identifier a login presented names this account.
+{- | The one place a login is decided. A wrong password and an identifier that
+   names nobody are the same refusal, deliberately.
 
-   atproto lets a client log in with either its handle or its DID. A handle is
-   compared case-insensitively (atproto handles are domain names, which are);
-   a DID is compared exactly, because DID method-specific identifiers are
-   case-sensitive. -}
-identifiesAccount : Account -> String -> Bool
-identifiesAccount account identifier =
-  toLower identifier == toLower (accountHandle account)
-    || identifier == accountDid account
-
--- The one place a password is graded. A wrong password and an identifier that
--- names nobody are the same refusal, deliberately.
+   The password was graded before this request reached the store
+   (`classifyLogin`, `lib.server_core`), against the record the store held
+   then. It is accepted here only if `credential`, the record the store holds
+   now, is still that record: a verdict against a record since replaced is
+   refused whatever it says. A request that carries no verdict is refused the
+   same way, so a login that was never graded never succeeds. On success the
+   answer is the record to re-store the credential as, if the login earned an
+   upgrade. -}
 checkLogin : Account ->
   String ->
-  String ->
+  Option LoginVerdict ->
   CredentialRecord ->
-  Result Response Unit
-checkLogin account identifier password credential =
+  Result Response (Option CredentialRecord)
+checkLogin account identifier verdict credential =
   let identified = identifiesAccount account identifier
-  let verified = credentialVerify password credential
-  if identified && verified then
-    Ok ()
-  else
-    Err (authenticationRequired "Invalid identifier or password")
+  let outcome = match verdict
+    None => LoginRefused
+    Some graded => loginOutcome graded credential
+  match (identified, outcome)
+    (True, LoginAccepted) => Ok None
+    (True, LoginAcceptedUpgrading upgraded) => Ok (Some upgraded)
+    _ => Err (authenticationRequired "Invalid identifier or password")
 
 {- | `com.atproto.server.createSession`: exchange the account password for a
    token pair.
@@ -1938,7 +1937,11 @@ checkLogin account identifier password credential =
    A wrong password, an unknown identifier, and a server with no credential
    configured are answered IDENTICALLY, and deliberately: the differences
    between them are exactly what an attacker probing for a valid identifier is
-   asking about. Nothing in the refusal repeats what was sent. -}
+   asking about. Nothing in the refusal repeats what was sent.
+
+   The `password` field is still required here, for the refusal a body without
+   one is owed, but its value was graded before the request arrived: this
+   handler reads only the verdict `context.login` carries. -}
 applyCreateSession : Account ->
   RequestContext ->
   Store ->
@@ -1947,7 +1950,7 @@ applyCreateSession : Account ->
 applyCreateSession account context store body = do
   () <- requireObject body
   identifier <- requiredString "identifier" body
-  password <- requiredString "password" body
+  _ <- requiredString "password" body
   secret <- match storeServerSecret store
     None =>
       Err
@@ -1957,38 +1960,27 @@ applyCreateSession account context store body = do
   credential <- toResult
     (authenticationRequired "Invalid identifier or password")
     (storeCredential store)
-  () <- checkLogin account identifier password credential
+  upgrade <- checkLogin account identifier context.login credential
   let (access, refresh) = mintSessionTokens account secret context
   Ok (
     storeSessionOpen
       (sessionFingerprint access)
       (sessionFingerprint refresh)
       (familyEnd context)
-      (storeSessionsPrune
-        context.nowSeconds
-        (rehashed context password credential store)),
+      (storeSessionsPrune context.nowSeconds (rehashed upgrade store)),
     sessionOutput account access refresh,
   )
 
-{- | The store this login leaves the account credential in: re-derived at
-   today's `defaultIterations` when the stored record predates it, and
-   untouched otherwise.
+{- | The store this login leaves the account credential in: the record the
+   verdict re-derived at today's count when the stored record predated it,
+   and untouched otherwise.
 
-   It runs only past `checkLogin`, and `credentialUpgrade` grades the password
-   itself besides, so a refused login cannot reach it and could not rewrite the
-   record if it did. A wrong `defaultIterations`-vs-record comparison is the
-   only cost here: an up-to-date record answers before any derivation.
-
-   The request nonce is the new salt. A salt is not a secret — it is stored in
-   the clear in `<data>/credential` and its whole job is to be unique per
-   record — and the nonce is exactly `lib.credential`'s `saltBytes` of fresh
-   OS entropy, drawn once per request (`pds/shell/server.mdk`, where that
-   length is pinned to this use). -}
-rehashed : RequestContext -> String -> CredentialRecord -> Store -> Store
-rehashed context password credential store =
-  match credentialUpgrade password context.nonce defaultIterations credential
-    None => store
-    Some upgraded => storeWithCredential upgraded store
+   The re-derivation was paid for before the request reached the store,
+   against the record `checkLogin` has just confirmed is still the one stored,
+   so the record it replaces is the record it was derived from. -}
+rehashed : Option CredentialRecord -> Store -> Store
+rehashed None store = store
+rehashed (Some upgraded) store = storeWithCredential upgraded store
 
 {- | `com.atproto.server.refreshSession`: rotate the presented refresh token.
 
