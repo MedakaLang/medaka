@@ -81,9 +81,15 @@ it.
   name two suppliers bind gets a recovery scheme, and the fresh variable it
   instantiates to is poisoned. Poison now propagates through variable binding
   (`propagatePoison`), which is what makes an applied occurrence's result
-  variable quiet too. The alias pass's synthesized method admission is
-  recognised by its fingerprint (a second `DUse` of the same module at the
-  alias's own location) and never counts as a supplier.
+  variable quiet too. The resolver counts interface methods as value exports,
+  and typecheck's own alias pass (`deAliasMethodImports`, run/build path only)
+  synthesizes admissions the resolver never saw: every method of an
+  alias-imported module, and a member-aliased method with its alias dropped.
+  The pass records them per module in `graphAdmittedMethodsRef`
+  (`synthesizedAdmissions`), and the import seed never counts an admission as
+  a supplier. Shadow cell I22 (`{size as sz}` beside `fmod.{size}`) is what
+  caught the first cut, which keyed on the alias import's location and missed
+  the member-alias rewrite.
 - *Diagnostic quality:* the new inclusion judgment had replaced several
   site-specific laundering messages with one generic sentence. It now has one
   message that names what escaped (concrete labels, or the caller's whole row)
@@ -93,6 +99,15 @@ it.
 - *LSP hover doubled the forcing row* (`main : <IO> <IO> Unit`): the scheme
   renderer now prints a binding's forcing row itself, so the hover-side
   workaround that re-read the written leading effect is deleted.
+
+**WasmGC emitter defect, predating this session:** compiling the compiler to
+Wasm (the `wasm` CI job, `playground/build_playground_wasm.sh`) fails
+validation in the lambda for `declaredEffectsAt` (`typecheck.mdk`): a record
+literal whose field is `map (map f) xs`, the outer callback a partial
+application of `map`, is mis-sequenced by `compiler/backend/wasm_emit.mdk`
+(`struct.new` receives an `i32` where a boxed field belongs). The first full CI
+run failed the same way. It is a backend bug to fix in the emitter as a general
+rule, not by rewriting the source around it.
 
 **Intentional changes whose goldens were re-derived (each diff read):**
 function arrows render their open row tails (`(a -> <b> c)`), nullary bindings

@@ -18,7 +18,6 @@ addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
-admittedBesideAlias : Option (String, Loc) -> String -> Loc -> Bool
 admittedCandIfaces : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List IfaceRef
 admittedDeclHits : ImplEnv -> String -> IfaceRef -> List Mono -> Option Bool
 admittedDeclHitters : ImplEnv -> String -> List IfaceRef -> List Mono -> Option (List IfaceRef)
@@ -26,6 +25,7 @@ admittedIdxMax : String -> List IfaceRef -> Option Int
 admittedIfaceFor : String -> Option IfaceRef
 admittedIfaceSets : List Decl -> Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> Map String (List IfaceRef) -> Map String (List IfaceRef)
 admittedIfacesFor : String -> List IfaceRef
+admittedIn : String -> List (String, String)
 admittedMonoHits : ImplEnv -> String -> IfaceRef -> Mono -> Option Bool
 admittedMonoHitters : ImplEnv -> String -> List IfaceRef -> Mono -> Option Bool
 admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
@@ -538,6 +538,7 @@ containerArgMsg : Option String -> String -> String
 containerParamScalarArg : Mono -> Mono -> Option String
 containsI : Int -> List Int -> Bool
 containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
+containsPair : (String, String) -> List (String, String) -> Bool
 containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
 contraRowCheck : List Atom -> List Atom -> List Atom -> Unit
@@ -1265,8 +1266,7 @@ importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, a)) -> UsePath -> List (String, a) -> List (String, a)
 importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
-importSeed : List (String, a) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
-importSeedGo : List (String, a) -> Option (String, Loc) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
+importSeed : List (String, a) -> List (String, String) -> List Decl -> List (String, List (String, a)) -> List (String, (Option String, a))
 importShadowsOfDecl : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> Decl -> List (String, String, Option Ty, Ty, Loc)
 importTableMid : UsePath -> String
 importedBindingWinners : List (String, (Option String, ExportBinding)) -> Map String Unit -> Map String Unit -> List (String, ExportBinding)
@@ -2314,7 +2314,6 @@ runStampCtxs : List StampCtx -> Unit
 runStampStep : StampCtx -> StampStep -> Unit
 runStampSteps : StampCtx -> List StampStep -> Unit
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
-sameLoc : Loc -> Loc -> Bool
 sameRootId : Int -> Mono -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
 sameTraceEvId : EvId -> EvId -> Bool
@@ -2475,6 +2474,7 @@ suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String
 survivorObligationEntailed : String -> List String -> String -> String -> Ty -> Bool
+synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
 tabKeyElem : List TabKey -> TabKey -> Bool
 tagAllLitLocs : Mono -> String -> Unit
 tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit

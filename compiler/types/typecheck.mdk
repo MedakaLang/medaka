@@ -7250,6 +7250,10 @@ data DriverState = DriverState {
   effectDomains : Ref (List (String, Param)),
   graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
   graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
+  -- Per module: the (dependency id, method name) pairs `deAliasMethodImports`
+  -- admitted for dispatch without the program binding that bare name, so the
+  -- import seed can tell an admission from a written binding.
+  graphAdmittedMethodsRef : Ref (OrdMap (List (String, String))),
   graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
   declEnvsRef : Ref DeclEnvs,
   abstractRecordTypesRef : Ref (OrdMap Unit),
@@ -7293,6 +7297,7 @@ freshDriverState _ = DriverState {
   effectDomains = Ref [],
   graphMethodExportsRef = Ref omEmpty,
   graphIfaceMethodsRef = Ref omEmpty,
+  graphAdmittedMethodsRef = Ref omEmpty,
   graphCtorExportsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref omEmpty,
@@ -41881,7 +41886,44 @@ renameAliasedMethods : List Decl ->
 renameAliasedMethods coreDecls modules =
   let coreEntry = ("core", declMethodNames coreDecls)
   let methodsPerMid = coreEntry :: methodsPerMidGo [coreEntry] modules
+  driverState.value.graphAdmittedMethodsRef :=
+    omFromPairs
+      (map
+        ((mid, prog) => (mid, synthesizedAdmissions methodsPerMid prog))
+        modules)
+      omEmpty
   map (renameAliasedMethodsIn methodsPerMid) modules
+
+admittedIn : String -> List (String, String)
+admittedIn mid =
+  optionOr [] (omLookup mid driverState.value.graphAdmittedMethodsRef.value)
+
+-- The method names half (b) below admits WITHOUT a binding the resolver counted:
+-- every method of an alias-imported module, and every member-aliased method
+-- whose alias is dropped. `importSeed` reads this so such a row never makes a
+-- bare name look supplied twice.
+synthesizedAdmissions : List (String, List String) ->
+  List Decl ->
+  List (String, String)
+synthesizedAdmissions _ [] = []
+synthesizedAdmissions mm ((DAttrib _ d) :: rest) =
+  synthesizedAdmissions mm (d :: rest)
+synthesizedAdmissions mm ((DUse _ path _) :: rest) =
+  let mid = usePathModuleId path
+  let here = match lookupAssoc mid mm
+    None => []
+    Some methods => match path
+      UseAlias _ _ => map (n => (mid, n)) methods
+      UseGroup _ ms =>
+        flatMap
+          (m => match m
+            UseMember n _ _ (Some _) =>
+              if contains n methods then [(mid, n)] else []
+            _ => [])
+          ms
+      _ => []
+  here ++ synthesizedAdmissions mm rest
+synthesizedAdmissions mm (_ :: rest) = synthesizedAdmissions mm rest
 
 -- A module's method set is what it DECLARES *plus what it RE-EXPORTS*, folded in
 -- dependency-first (loader) order so a re-export resolves against its source's
@@ -42391,10 +42433,9 @@ renameAliasedMethodsIn methodsPerMid (mid, prog) =
 --   `import m as A`                  → keep it (its non-method values are still `A.f`)
 --                                      and ADD `import m.{…m's methods…}`, the origin
 --                                      name `resolveAliasMethodSpellings` resolves
---                                      `A.area` to once inference is done. The added
---                                      decl sits right after the alias at the alias's
---                                      own location: `importSeedGo` reads that pair as
---                                      the synthesized admission it is.
+--                                      `A.area` to once inference is done.
+--   Both rewrites are recorded in `graphAdmittedMethodsRef` (`synthesizedAdmissions`),
+--   because the resolver never saw them: it counted `sz`, or nothing, as bound.
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodImports mm (DAttrib attrs d) =
   map (DAttrib attrs) (deAliasMethodImports mm d)
@@ -42789,62 +42830,43 @@ andList (x :: rest) = "\{x}, \{andList rest}"
 -- admitted for dispatch, a mangled twin) carries no supplier, and core is exempt
 -- there as it is in the resolver.
 importSeed : List (String, a) ->
+  List (String, String) ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed coreV prog depEnv = importSeedGo coreV None prog depEnv
-
--- [prev] is the module and location of the alias import walked just before, so
--- the admission `deAliasMethodImports` appends beside it is recognised.
-importSeedGo : List (String, a) ->
-  Option (String, Loc) ->
-  List Decl ->
-  List (String, List (String, a)) ->
-  List (String, (Option String, a))
-importSeedGo _ _ [] _ = []
-importSeedGo coreV prev ((DAttrib _ d) :: rest) depEnv =
-  importSeedGo coreV prev (d :: rest) depEnv
-importSeedGo coreV prev ((DUse _ path loc) :: rest) depEnv =
+importSeed _ _ [] _ = []
+importSeed coreV admitted ((DAttrib _ d) :: rest) depEnv =
+  importSeed coreV admitted (d :: rest) depEnv
+importSeed coreV admitted ((DUse _ path _) :: rest) depEnv =
   let depId = usePathModuleId path
-  let next = match path
-    UseAlias _ _ => Some (depId, loc)
-    _ => None
   if depId == "core" then
     map (suppliedBy None) (coreAliasSchemes path coreV)
-      ++ importSeedGo coreV next rest depEnv
+      ++ importSeed coreV admitted rest depEnv
   else match lookupAssoc depId depEnv
-    None => importSeedGo coreV next rest depEnv
+    None => importSeed coreV admitted rest depEnv
     Some depSchemes =>
-      let bound =
-        if admittedBesideAlias prev depId loc then
-          Some omEmpty
-        else
-          boundNames path
+      let bound = boundNames path
       map
           (row =>
             suppliedBy
-              (if bindsName bound (fst row) then Some depId else None)
+              (if bindsName bound (fst row)
+                && not (containsPair (depId, fst row) admitted) then
+                Some depId
+              else
+                None)
               row)
           (importFormSchemes depEnv path depSchemes)
-        ++ importSeedGo coreV next rest depEnv
-importSeedGo coreV _ (_ :: rest) depEnv = importSeedGo coreV None rest depEnv
+        ++ importSeed coreV admitted rest depEnv
+importSeed coreV admitted (_ :: rest) depEnv =
+  importSeed coreV admitted rest depEnv
 
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 suppliedBy mid (name, row) = (name, (mid, row))
 
--- `deAliasMethodImports` appends the method admission of `import m as A` as a
--- second `DUse` of `m` at the alias's own location, immediately after it. Two
--- written imports never share a location, so that pair identifies the
--- synthesized one: it admits m's methods for dispatch under their origin names
--- and binds nothing the resolver counted.
-admittedBesideAlias : Option (String, Loc) -> String -> Loc -> Bool
-admittedBesideAlias (Some (mid, aliasLoc)) depId loc =
-  mid == depId && sameLoc aliasLoc loc
-admittedBesideAlias None _ _ = False
-
-sameLoc : Loc -> Loc -> Bool
-sameLoc (Loc f1 a1 b1 c1 d1) (Loc f2 a2 b2 c2 d2) =
-  f1 == f2 && a1 == a2 && b1 == b2 && c1 == c2 && d1 == d2
+containsPair : (String, String) -> List (String, String) -> Bool
+containsPair _ [] = False
+containsPair (a, b) ((x, y) :: rest) =
+  a == x && b == y || containsPair (a, b) rest
 
 -- The names an import form binds, as the resolver counts them
 -- (`importedNamesMM`): a member list binds its locals, a single dotted name its
@@ -43740,11 +43762,13 @@ foldModules : Bool ->
   acc
 foldModules _ _ _ _ base _ _ _ _ _ [] = base
 foldModules _wantData _wantAll worker collect base baseSeed coreV depEnv accData accAll [(mid, prog)] =
-  let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
+  let seed =
+    moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
   let (_, extra) = worker mid seed accData accAll prog
   collect True mid extra base
 foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData accAll ((mid, prog) :: rest) =
-  let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
+  let seed =
+    moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
   let (schemes, extra) = worker mid seed accData accAll prog
   let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
   collect
@@ -43864,6 +43888,7 @@ copyDriverState d = DriverState {
   effectDomains = Ref d.effectDomains.value,
   graphMethodExportsRef = Ref d.graphMethodExportsRef.value,
   graphIfaceMethodsRef = Ref d.graphIfaceMethodsRef.value,
+  graphAdmittedMethodsRef = Ref d.graphAdmittedMethodsRef.value,
   graphCtorExportsRef = Ref d.graphCtorExportsRef.value,
   declEnvsRef = Ref d.declEnvsRef.value,
   abstractRecordTypesRef = Ref d.abstractRecordTypesRef.value,
@@ -44942,13 +44967,15 @@ chainGo : List (String, Scheme) ->
   (List ModDiags, List ChainStep)
 chainGo _ _ _ _ _ results _ [] = (results, [])
 chainGo baseSeed coreV depEnv accData accAll results _ [(mid, prog)] =
-  let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
+  let seed =
+    moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
   let (schemes, (_, _, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
   let _ = setMainSchemeIfEntry True schemes.mbSchemes
   ((mid, (schemes.mbSchemes, errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
-  let seed = moduleImportSeed baseSeed (importSeed coreV prog depEnv)
+  let seed =
+    moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
   let (schemes, (_, _, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
   let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
