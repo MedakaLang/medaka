@@ -48,6 +48,7 @@ FIXDIR="$ROOT/test/check_json_fixtures"
 export MEDAKA_ROOT="$ROOT"
 
 pass=0; fail=0
+mdk_require_marker || fail=$((fail+1))
 
 for mdk in "$FIXDIR"/*.mdk; do
   name="$(basename "$mdk" .mdk)"

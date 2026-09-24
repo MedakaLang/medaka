@@ -43,6 +43,12 @@
 #  24. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
 #                          arrayGetUnsafe call sites) with no flag → clean.
 #                          #42's cell, bought by `compiler/medaka.toml`'s key.
+#  25. nested-stdlib-entry: `medaka check` on a module in a stdlib
+#                          SUBDIRECTORY that calls a kernel → clean, no flag.
+#                          Its own directory is the first search root, so the
+#                          trust must come from the file lying under stdlib/,
+#                          not from the root it resolved under.
+#  26. nested-stdlib-import: a user program importing that module → clean.
 #
 # Usage:  sh test/diff_compiler_internal_extern.sh
 set -u
@@ -56,6 +62,7 @@ bound() { perl -e 'alarm 120; exec @ARGV' "$@"; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
+mdk_require_marker || fail=$((fail+1))
 
 # A user file that references an internal-only extern directly.
 cat > "$TMP/u.mdk" <<'EOF'
@@ -354,6 +361,38 @@ case "$clean" in
   *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL compiler-self-check (#42 regression: [%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
   *) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   compiler-self-check (compiler/support/util.mdk clean, no flag)%s\n' "$(mdk_stale_suffix "$out")"
      else fail=$((fail+1)); printf 'FAIL compiler-self-check (exit %d: [%s])%s\n' "$code" "$out" "$(mdk_stale_suffix "$out")"; fi ;;
+esac
+
+# 25/26: no real stdlib subdirectory module calls a kernel, so these run
+# against a scratch MEDAKA_ROOT whose stdlib is the real one plus `nest/`.
+# That root's fingerprint can never match the binary, so every run warns
+# stale, and the warning line is stripped.
+NR="$TMP/nested-root"
+mkdir -p "$NR/stdlib/nest"
+ln -s "$ROOT/compiler" "$NR/compiler"
+for f in "$ROOT"/stdlib/*.mdk; do ln -s "$f" "$NR/stdlib/"; done
+printf 'export\nprobeGet : Array Int -> Int\nprobeGet a = arrayGetUnsafe 0 a\n' > "$NR/stdlib/nest/probe.mdk"
+printf 'import nest.probe.{probeGet}\n\nmain = println (probeGet [|7|])\n' > "$TMP/nested_user.mdk"
+
+# 25. nested-stdlib-entry
+out="$(MEDAKA_ROOT="$NR" bound "$MEDAKA" check "$NR/stdlib/nest/probe.mdk" 2>&1)"
+code=$?
+clean="$(mdk_strip_stale "$out")"
+case "$clean" in
+  *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL nested-stdlib-entry (false positive on stdlib/nest/probe.mdk: [%s])\n' "$clean" ;;
+  *) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   nested-stdlib-entry (stdlib/nest/probe.mdk clean, no flag)\n'
+     else fail=$((fail+1)); printf 'FAIL nested-stdlib-entry (exit %d: [%s])\n' "$code" "$clean"; fi ;;
+esac
+
+# 26. nested-stdlib-import
+out="$(MEDAKA_ROOT="$NR" bound "$MEDAKA" run "$TMP/nested_user.mdk" 2>&1)"
+code=$?
+clean="$(mdk_strip_stale "$out")"
+case "$clean" in
+  *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL nested-stdlib-import (false positive: [%s])\n' "$clean" ;;
+  7) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   nested-stdlib-import (importer of nest.probe runs, no flag)\n'
+     else fail=$((fail+1)); printf 'FAIL nested-stdlib-import (exit %d: [%s])\n' "$code" "$clean"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL nested-stdlib-import (exit %d: [%s])\n' "$code" "$clean" ;;
 esac
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"

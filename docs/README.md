@@ -79,6 +79,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
 | [`GAP3-SLICE7-DESIGN.md`](design/GAP3-SLICE7-DESIGN.md) | Gap 3 — slice-7 arg-tag dispatch on a generic prelude free function | OPEN |
 | [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | PARTIAL |
+| [`INTEGER-TYPES-DESIGN.md`](design/INTEGER-TYPES-DESIGN.md) | The integer stack | — |
 | [`INTERFACE-CANDIDATES.md`](design/INTERFACE-CANDIDATES.md) | INTERFACE-CANDIDATES.md — which built-in constructs could generalize behind an interface | PARTIAL |
 | [`JEV-DESIGN.md`](design/JEV-DESIGN.md) | Jev judgment tools: calibrated judgments between lint and LLM review | PROPOSED, 2026-09-16 |
 | [`JEV-LEDGER.md`](design/JEV-LEDGER.md) | Jev: the experiment ledger | — |
