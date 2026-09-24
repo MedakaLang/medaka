@@ -1,6 +1,7 @@
 #!/bin/sh
 # Native structural closure and transactional contract controls for #1700
-# step 4. This is a source/IR/link audit, not a timing benchmark or Wasm claim.
+# step 4. This is a source/IR/link audit plus a memcheck taint run over the
+# linked -O2 binary (#3361); it is not a timing benchmark or Wasm claim.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -718,6 +719,294 @@ for symbol in \
   mdk_lib_scalar__scNegateCt
 do require_native_symbol "$symbol"; done
 pass 'linked public consumer retains the audited HMAC/SHA, signing, point, inverse, and arithmetic-selection leaves'
+
+# ── Memcheck taint over the linked -O2 binary (#3361) ─────────────────────
+#
+# The audits above read source, IR and disassembly. This arm runs the linked
+# binary: a probe-only C shim marks the 32 key bytes undefined with a memcheck
+# client request, hands them to Medaka through user FFI externs, and memcheck
+# reports every conditional jump, and every address or syscall argument, that
+# depends on them. The signing path must produce no such report at all.
+#
+# The probe drives the internal entry points (scSecretCandidate,
+# publicPointForSecret/pointCompressed, ecdsaSignDigest,
+# ecdsaSignatureCompact), not lib.sign. The two aggregate validity bits are
+# declassified results, and the only branches on them are in lib.sign, which is
+# pure and so cannot call a declassification hook. The probe takes those two
+# branches itself, each on a ctDeclassify'd copy, and declassifies the public
+# key and signature bytes before printing them. Those ctDeclassify calls are
+# the whole of the licensed set: no PC inside the -O2 signing code is exempt.
+#
+# Scope: the collector is held off (GC_DONT_GC=1, asserted by the probe's own
+# collection count), so this covers the Medaka code and the runtime helpers it
+# calls, not Boehm's conservative marking. With collections running, marking
+# branches on key-derived heap words. That is exaggerated under valgrind,
+# whose collector heap sits near 2^26-2^27 where small key-derived integers
+# can pass for pointers, against about 2^47 natively. It is still not
+# eliminated, and is disclosed rather than measured here (#3361).
+#
+# The mutant control points the scalar reduction back at the checked carry
+# pass (carryGo), whose top-limb panic guard is a branch on the secret carry.
+# It must be reported, at a conditional jump that survived -O2 inside carryGo.
+# The unmutated run must not mention either carry pass.
+
+TAINT_PROBE="$WORK/pds/test/constant_time_taint_probe_main.mdk"
+TAINT_KEYS='0 8 9'
+
+taint_toolchain_ok() {
+  command -v valgrind >/dev/null 2>&1 || return 1
+  printf '#include <valgrind/memcheck.h>\n' > "$WORK/memcheck-header.c"
+  clang -E "$WORK/memcheck-header.c" -o /dev/null > /dev/null 2>&1
+}
+
+if ! taint_toolchain_ok; then
+  if [ -n "${CI:-}" ]; then fail 'valgrind and valgrind/memcheck.h are installed for the memcheck taint arm'; fi
+  printf 'skip: valgrind (with valgrind/memcheck.h) not on PATH; the memcheck taint arm needs it\n' >&2
+  exit 2
+fi
+
+write_taint_probe() {
+  cat > "$TAINT_PROBE" <<'EOF'
+import hex.{encode}
+import lib.scalar.{scSecretCandidate}
+import lib.secp256k1.{
+  ecdsaSignDigest,
+  ecdsaSignatureCompact,
+  pointCompressed,
+  publicPointForSecret,
+}
+
+extern ctTaintLoad : Int -> <FFI> Int
+extern ctSecretByte : Int -> <FFI> Int
+extern ctDeclassify : Int -> <FFI> Int
+extern ctVbits : Int -> <FFI> Int
+extern ctGcCount : Int -> <FFI> Int
+extern ctLoadAddress : Int -> <FFI> Int
+
+digestBytes : Array Int
+digestBytes = arrayMake 32 0
+
+declassifyAll : Array Int -> <FFI> Array Int
+declassifyAll bytes =
+  arrayMakeWith (arrayLength bytes) (i => ctDeclassify bytes[i])
+
+probeKey : Int -> <IO, FFI> Unit
+probeKey k =
+  let _ = ctTaintLoad k
+  let secretBytes = arrayMakeWith 32 ctSecretByte
+  let (secretValid, scalar) = scSecretCandidate secretBytes
+  if ctDeclassify secretValid /= 1 then
+    println "key \{k} rejected"
+  else
+    let pub = pointCompressed (publicPointForSecret scalar)
+    let pubPublic = declassifyAll pub
+    let (validBit, signature) = ecdsaSignDigest scalar digestBytes
+    let validVbits = ctVbits validBit
+    if ctDeclassify validBit == 1 then
+      let compact = ecdsaSignatureCompact signature
+      let sigPublic = declassifyAll compact
+      println
+        "key \{k} vbits \{validVbits} \{ctVbits pub[5]} \{ctVbits compact[0]} pub \{encode pubPublic} sig \{encode sigPublic}"
+    else
+      println "key \{k} exhausted"
+
+tagProbe : Unit -> <IO, FFI> Unit
+tagProbe () =
+  let _ = ctTaintLoad 1
+  let heapBytes = arrayMakeWith 32 ctSecretByte
+  println
+    "tag \{ctVbits heapBytes[31]} \{ctVbits heapBytes[0]} \{ctVbits (heapBytes[30] + heapBytes[31])}"
+
+main : <IO, FFI> Unit
+main =
+  let gc0 = ctGcCount 0
+  let () = println "load \{ctLoadAddress 0}"
+  let () = tagProbe ()
+  let () = probeKey 0
+  let () = probeKey 1
+  let () = probeKey 2
+  println "gc \{ctGcCount 0 - gc0}"
+EOF
+}
+
+# The key rows come from the signing corpus inputs, in file order.
+write_taint_shim() {
+  awk -v wanted=" $TAINT_KEYS " '$1 == "key" && index(wanted, " " $2 " ") {
+    printf "  {"
+    for (i = 0; i < 32; i++) printf "%s0x%s", (i ? ", " : ""), substr($3, 2 * i + 1, 2)
+    printf "},\n"
+  }' "$ROOT/pds/tools/signing_inputs.txt" > "$WORK/taint-keys.rows"
+  [ "$(wc -l < "$WORK/taint-keys.rows")" -eq 3 ] || fail 'taint probe keys 0, 8 and 9 come from pds/tools/signing_inputs.txt'
+  {
+    cat <<'EOF'
+#include <stdint.h>
+#include <string.h>
+#include <valgrind/memcheck.h>
+
+extern unsigned long GC_get_gc_no(void);
+
+static const uint8_t ct_keys[3][32] = {
+EOF
+    cat "$WORK/taint-keys.rows"
+    cat <<'EOF'
+};
+
+static uint8_t secret[32];
+
+/* Loads one key and marks all 32 bytes undefined: memcheck then tracks
+   every value computed from them. A no-op outside valgrind. */
+int64_t ctTaintLoad(int64_t k) {
+  memcpy(secret, ct_keys[k], 32);
+  VALGRIND_MAKE_MEM_UNDEFINED(secret, 32);
+  return 0;
+}
+
+int64_t ctSecretByte(int64_t i) { return secret[i]; }
+
+/* Returns a copy of v that memcheck treats as defined. */
+int64_t ctDeclassify(int64_t v) {
+  volatile int64_t t = v;
+  VALGRIND_MAKE_MEM_DEFINED((void *)&t, sizeof t);
+  return t;
+}
+
+/* The undefined-bit mask of v (1 bits undefined), read without branching
+   on v. */
+int64_t ctVbits(int64_t v) {
+  int64_t word = v;
+  uint64_t vbits = 0;
+  VALGRIND_GET_VBITS(&word, &vbits, sizeof word);
+  return (int64_t)vbits;
+}
+
+int64_t ctGcCount(int64_t unused) { (void)unused; return (int64_t)GC_get_gc_no(); }
+
+/* The run-time address of ctTaintLoad; minus its link-time address, the
+   load bias that maps a reported PC back into the objdump listing. */
+int64_t ctLoadAddress(int64_t unused) { (void)unused; return (int64_t)(intptr_t)&ctTaintLoad; }
+EOF
+  } > "$WORK/taint-shim.c"
+}
+
+build_taint_probe() {
+  output=$1
+  MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O2 MEDAKA_RT_OBJ="$WORK/taint-rt-shim.o" \
+    "$MEDAKA" build "$TAINT_PROBE" -o "$output" > "$output.build.log" 2>&1 || {
+    cat "$output.build.log" >&2
+    fail "memcheck taint probe builds at -O2 ($output)"
+  }
+}
+
+run_memcheck() {
+  bin=$1
+  GC_DONT_GC=1 valgrind --tool=memcheck --error-limit=no --num-callers=30 --track-origins=yes \
+    "$bin" > "$bin.out" 2> "$bin.memcheck" || {
+    tail -40 "$bin.memcheck" >&2
+    fail "memcheck taint probe runs to completion ($bin)"
+  }
+}
+
+# One row per uninitialised-value report: top-frame PC, top-frame function,
+# origin (client = the key taint, other = a stack or heap allocation, none =
+# memcheck recorded no origin).
+memcheck_uninit_reports() {
+  awk '
+    function emit() {
+      if (kind != "") printf "%s\t%s\t%s\n", pc, fn, origin
+      kind = ""
+    }
+    { sub(/^==[0-9]+== ?/, "") }
+    /^(Conditional jump or move depends on uninitialised|Use of uninitialised value|Syscall param .* uninitialised)/ {
+      emit(); kind = $0; pc = "-"; fn = "-"; origin = "none"; next
+    }
+    kind != "" && pc == "-" && /^ +(at|by) 0x/ { pc = $2; sub(/:$/, "", pc); fn = $3; next }
+    kind != "" && /Uninitialised value was created by a client request/ { origin = "client"; next }
+    kind != "" && /Uninitialised value was created by/ { origin = "other"; next }
+    kind != "" && /^$/ { emit() }
+    END { emit() }
+  ' "$1"
+}
+
+# The probe must see real taint, or a clean report proves nothing: the key
+# bytes survive the tagged heap round trip with exactly their eight bits
+# undefined, and the validity bit, public key and signature all carry taint
+# before they are declassified.
+taint_run_is_live() {
+  bin=$1
+  [ "$(grep -c '^key ' "$bin.out")" -eq 3 ] || return 1
+  grep -x -q 'tag 255 255 511' "$bin.out" || return 1
+  grep -x -q 'gc 0' "$bin.out" || return 1
+  if awk '$1 == "key" && ($4 == 0 || $5 == 0 || $6 == 0 || $3 != "vbits")' "$bin.out" | grep -q .; then return 1; fi
+  return 0
+}
+
+is_conditional_jump() {
+  case $(uname -m) in
+    x86_64|amd64) grep -E -q '[[:space:]]j(a|ae|b|be|c|e|g|ge|l|le|na|nae|nb|nbe|nc|ne|ng|nge|nl|nle|no|np|ns|nz|o|p|pe|po|s|z)[[:space:]]' ;;
+    arm64|aarch64) grep -E -q '[[:space:]](b\.[a-z]+|cbz|cbnz|tbz|tbnz)[[:space:]]' ;;
+    *) return 2 ;;
+  esac
+}
+
+write_taint_probe
+write_taint_shim
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O2 "$MEDAKA" build --emit-rt-obj "$WORK/taint-rt.o" > "$WORK/taint-rt.log" 2>&1 || {
+  cat "$WORK/taint-rt.log" >&2
+  fail 'runtime object for the memcheck taint probe builds'
+}
+clang -O2 -c "$WORK/taint-shim.c" -o "$WORK/taint-shim.o" || fail 'memcheck taint shim compiles'
+ld -r "$WORK/taint-rt.o" "$WORK/taint-shim.o" -o "$WORK/taint-rt-shim.o" || fail 'memcheck taint shim links into the runtime object'
+
+apply_mutation M-carry-guard "$WORK/pds/lib/scalar.mdk" \
+  'carryAllUnchecked w = carryGoUnchecked w 0 0' \
+  's/carryAllUnchecked w = carryGoUnchecked w 0 0/carryAllUnchecked w = carryGo w 0 0/'
+build_taint_probe "$WORK/taint-mutant"
+cp "$ROOT/pds/lib/scalar.mdk" "$WORK/pds/lib/scalar.mdk"
+cmp "$ROOT/pds/lib/scalar.mdk" "$WORK/pds/lib/scalar.mdk" >/dev/null || fail 'M-carry-guard restores scalar.mdk byte-exactly'
+run_memcheck "$WORK/taint-mutant"
+taint_run_is_live "$WORK/taint-mutant" || { cat "$WORK/taint-mutant.out" >&2; fail 'M-carry-guard probe carries live taint with no collection'; }
+memcheck_uninit_reports "$WORK/taint-mutant.memcheck" > "$WORK/taint-mutant.reports"
+awk -F '\t' '$3 == "client"' "$WORK/taint-mutant.reports" > "$WORK/taint-mutant.tainted"
+[ -s "$WORK/taint-mutant.tainted" ] || fail 'M-carry-guard secret carry branch unexpectedly unreported by memcheck'
+if awk -F '\t' '$2 != "mdk_lib_scalar__carryGo"' "$WORK/taint-mutant.tainted" | grep -q .; then
+  cat "$WORK/taint-mutant.tainted" >&2
+  fail 'M-carry-guard reports land only in mdk_lib_scalar__carryGo'
+fi
+load_runtime=$(awk '$1 == "load" { print $2 }' "$WORK/taint-mutant.out")
+load_link=$(nm "$WORK/taint-mutant" | awk '{ name = $3; sub(/^_/, "", name); if (name == "ctTaintLoad") print $1 }')
+[ -n "$load_runtime" ] && [ -n "$load_link" ] || fail 'M-carry-guard load bias is derivable from the probe and its symbol table'
+load_bias=$((load_runtime - 0x$load_link))
+cut -f1 "$WORK/taint-mutant.tainted" | LC_ALL=C sort -u > "$WORK/taint-mutant.pcs"
+while IFS= read -r pc; do
+  offset=$(printf '%x' $((pc - load_bias)))
+  objdump -d --start-address="0x$offset" --stop-address=$((0x$offset + 16)) "$WORK/taint-mutant" > "$WORK/taint-mutant.pc.asm"
+  grep -F -q '<mdk_lib_scalar__carryGo+' "$WORK/taint-mutant.pc.asm" || fail "M-carry-guard PC $pc (0x$offset) lies inside mdk_lib_scalar__carryGo"
+  grep -E "^ *$offset:" "$WORK/taint-mutant.pc.asm" > "$WORK/taint-mutant.pc.insn" || fail "M-carry-guard PC $pc (0x$offset) is an instruction boundary"
+  is_conditional_jump < "$WORK/taint-mutant.pc.insn" || fail "M-carry-guard PC $pc is a conditional jump ($(cat "$WORK/taint-mutant.pc.insn"))"
+  printf 'receipt: M-carry-guard reported at 0x%s:%s\n' "$offset" "$(cut -f3- "$WORK/taint-mutant.pc.insn")"
+done < "$WORK/taint-mutant.pcs"
+pass "M-carry-guard checked carry pass is caught by memcheck at an -O2 conditional jump in carryGo ($(wc -l < "$WORK/taint-mutant.tainted") reports)"
+
+for rel in pds/lib/field.mdk pds/lib/scalar.mdk pds/lib/hmac_sha256.mdk pds/lib/secp256k1.mdk; do
+  cmp "$ROOT/$rel" "$WORK/$rel" >/dev/null || fail "memcheck taint probe builds against the unmutated $rel"
+done
+build_taint_probe "$WORK/taint-clean"
+run_memcheck "$WORK/taint-clean"
+taint_run_is_live "$WORK/taint-clean" || { cat "$WORK/taint-clean.out" >&2; fail 'memcheck taint probe carries live taint with no collection'; }
+corpus_row=$(awk '$1 == "sign" && $2 == 0 { print "pub " $5 " sig " $10 }' "$ROOT/pds/test/vectors/prehashed_signing_corpus.txt")
+[ "$(awk '$1 == "key" && $2 == 0 { print $7, $8, $9, $10 }' "$WORK/taint-clean.out")" = "$corpus_row" ] ||
+  fail 'memcheck taint probe key 0 reproduces the corpus public key and RFC 6979 signature'
+memcheck_uninit_reports "$WORK/taint-clean.memcheck" > "$WORK/taint-clean.reports"
+if awk -F '\t' '$3 == "client" || $3 == "none"' "$WORK/taint-clean.reports" | grep -q .; then
+  cat "$WORK/taint-clean.reports" >&2
+  fail 'signing path has no memcheck report tainted by the key'
+fi
+if grep -E -q 'mdk_lib_scalar__carry(Go|All)' "$WORK/taint-clean.memcheck"; then
+  fail 'memcheck run mentions no carry pass (carryGo, carryGoUnchecked, carryAll, carryAllUnchecked)'
+fi
+pass "linked -O2 signing path for keys $TAINT_KEYS has zero key-tainted memcheck reports, none in either carry pass"
+printf 'receipt: %s\n' "$(valgrind --version)"
+printf 'receipt: memcheck %s\n' "$(grep 'ERROR SUMMARY' "$WORK/taint-clean.memcheck" | sed 's/^==[0-9]*== //')"
 
 printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"

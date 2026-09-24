@@ -552,7 +552,7 @@ run = "pds/test/constant_time_signing.sh"
 oracles = []
 sources = ["pds/*"]
 corpus = []
-toolchain = ["clang"]
+toolchain = ["clang", "valgrind"]
 
 [[gate]]
 name = "pds/test/dagcbor_cid_vectors"
