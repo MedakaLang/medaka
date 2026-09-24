@@ -90,6 +90,7 @@ import lib.ratelimit.{
   step,
 }
 import hex.{encode}
+import map.{Map(..), delete, get, set}
 import lib.event_log_record.{
   EventLogEntry(..),
   eventLogFirstSeq,
@@ -1836,7 +1837,7 @@ makeServing trustedProxy egress inFlight =
     (ProxyCensus inFlight (Ref 0) (Ref []))
     (newBufferCensus ())
     (newEgressCensus ())
-    (DerivationCensus (Ref 0))
+    (DerivationCensus (Ref 0) (Ref Tip))
     (Ref False)
 
 export
@@ -2810,7 +2811,12 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 NotServiceAuth => defer
                   let requestBytes =
                     sliceClamped 0 boundary (readBufferBacking buf)
-                  login <- settleLogin server serving storeRef parsed
+                  login <- settleLogin
+                    server
+                    serving
+                    storeRef
+                    parsed
+                    (chargedIdentity identified)
                   match login
                     LoginOverCeiling =>
                       sendAndContinue
@@ -2988,23 +2994,69 @@ kdfSliceIterations = 16
 maxConcurrentDerivations : Int
 maxConcurrentDerivations = 4
 
-{- | How many login derivations are running right now, bounded by
-   `maxConcurrentDerivations`. A type of its own, riding on `Serving`, for the
-   reason `ProxyCensus` is one. -}
-data DerivationCensus = DerivationCensus (Ref Int)
+{- | How many of the shared ceiling one identity may hold at once (#3399).
+   Well below `maxConcurrentDerivations`, so a flood of wrong-password logins
+   from one identity can claim only a fraction of it, leaving slots for every
+   OTHER identity — the account's own owner, logging in from a different
+   address, among them. `ClientIdentity` is the same last-hop-of-`X-Forwarded-
+   For` identity `pds/lib/ratelimit.mdk` already charges `CreateSessionClass`
+   to, and it is exempt from this ceiling for the same reason it is exempt
+   from that module's own identities-tracked capacity check: a deployment
+   with no trusted proxy configured funnels every caller into the one shared
+   `directIdentity` bucket regardless, so capping THAT bucket would not
+   isolate an attacker from the owner — both already share it — and would
+   only lower the ceiling for every legitimate concurrent login on such a
+   deployment, for no protection bought. The mitigation needs a proxy that
+   can tell callers apart, same as the rest of that module's per-identity
+   accounting. -}
+maxConcurrentDerivationsPerIdentity : Int
+maxConcurrentDerivationsPerIdentity = 2
 
--- | Take a derivation slot if one is free. `False` means every slot is taken
--- and nothing was charged.
-claimDerivation : DerivationCensus -> Bool
-claimDerivation (DerivationCensus running) =
+{- | How many login derivations are running right now, bounded by
+   `maxConcurrentDerivations`, and how many of them belong to each identity
+   other than `directIdentity`, bounded by `maxConcurrentDerivationsPerIdentity`.
+   A type of its own, riding on `Serving`, for the reason `ProxyCensus` is one.
+
+   The per-identity map's own cardinality needs no separate cap: every row
+   in it corresponds to at least one in-flight derivation charged to that
+   identity, and the total across all rows is bounded by `running`, which
+   `maxConcurrentDerivations` already bounds. -}
+data DerivationCensus = DerivationCensus (Ref Int) (Ref (Map String Int))
+
+-- | Take a derivation slot if one is free under BOTH ceilings. `False` means
+-- one of them is full and nothing was charged. `directIdentity` clears only
+-- the shared ceiling, per this module's own exemption above.
+claimDerivation : DerivationCensus -> ClientIdentity -> Bool
+claimDerivation (DerivationCensus running perIdentity) identity =
   if !running >= maxConcurrentDerivations then
     False
   else
-    let () = running := !running + 1
-    True
+    let key = identityLabel identity
+    if key == identityLabel directIdentity then
+      let () = running := !running + 1
+      True
+    else
+      let ownShare = match get key !perIdentity
+        Some n => n
+        None => 0
+      if ownShare >= maxConcurrentDerivationsPerIdentity then
+        False
+      else
+        let () = running := !running + 1
+        let () = perIdentity := set key (ownShare + 1) !perIdentity
+        True
 
-releaseDerivation : DerivationCensus -> Unit
-releaseDerivation (DerivationCensus running) = running := !running - 1
+releaseDerivation : DerivationCensus -> ClientIdentity -> Unit
+releaseDerivation (DerivationCensus running perIdentity) identity =
+  let () = running := !running - 1
+  let key = identityLabel identity
+  if key == identityLabel directIdentity then
+    ()
+  else match get key !perIdentity
+    Some n =>
+      perIdentity :=
+        if n <= 1 then delete key !perIdentity else set key (n - 1) !perIdentity
+    None => ()
 
 -- | What a login past `maxConcurrentDerivations` is told: the rate-limit
 -- refusal's status and body, because it is the same instruction to the
@@ -3027,7 +3079,10 @@ deriveLogin check = match loginCheckVerdict check
     deriveLogin (loginCheckAdvance kdfSliceIterations check)
 
 {- | Pay for this request's password derivations, if it needs any, and gate
-   it on `maxConcurrentDerivations`.
+   it on `maxConcurrentDerivations` and `maxConcurrentDerivationsPerIdentity`.
+   `identity` is the same value the request was already rate-limit-charged
+   under (`chargedIdentity identified` at the call site) — never re-derived
+   here, so a login is gated on the identity it was actually charged to.
 
    The claim and the release are in this one function, around the only step
    between them, for the reason `admitSubscription`'s are: the derivation is
@@ -3037,18 +3092,19 @@ settleLogin : Server ->
   Serving ->
   Ref Store ->
   Result HttpParseFailure Request ->
+  ClientIdentity ->
   Async <Rand | e> LoginGate
-settleLogin server serving storeRef parsed = defer
+settleLogin server serving storeRef parsed identity = defer
   started <- liftIO (u => loginCheckFor server storeRef parsed)
   match started
     None => deferPure NotALogin
     Some check =>
       let census = servingDerivationCensus serving
-      if not (claimDerivation census) then
+      if not (claimDerivation census identity) then
         deferPure LoginOverCeiling
       else defer
         verdict <- deriveLogin check
-        _ <- liftIO (u => releaseDerivation census)
+        _ <- liftIO (u => releaseDerivation census identity)
         deferPure (LoginDerived verdict)
 
 {- | What a client that asked for a service credential is answered: the
