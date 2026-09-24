@@ -1,5 +1,5 @@
 # META
-source_lines=6084
+source_lines=6086
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -355,7 +355,9 @@ internalExterns = [
   "arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill",
   "bytesToFloat64", "byteBlockGetUnsafe", "byteBlockSetUnsafe",
   "byteBlockCopyUnsafe", "byteBlockMake", "byteBlockFromIntArray",
-  "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout"
+  "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout", "u8Truncate",
+  "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt", "intBitAnd",
+  "intBitOr", "intBitXor", "intBitNot", "intShiftLeft", "intShiftRight"
 ]
 
 -- The internal-extern guard list for a module given whether internal access is
@@ -1746,7 +1748,7 @@ tupleCtorTyNames = ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
 primitiveTypes : List String
 primitiveTypes = [
   "Int", "Float", "String", "Char", "Bool", "Unit", "List", "Ref", "Array",
-  "ByteBlock"
+  "ByteBlock", "U8", "U16", "U32"
 ]
 
 primitiveConstructors : List String
@@ -6135,7 +6137,7 @@ takeOriginTrace _ =
 (DFunDef false "resErrorLoc" ((PCon "DuplicateInterfaceMethod" PWild PWild PWild (PVar "l"))) (EVar "l"))
 (DData Public "Env" () ((variant "Env" (ConNamed (field "values" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctors" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "fields" (TyApp (TyCon "List") (TyCon "String"))) (field "fieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "fieldOwnersIdx" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "interfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ifaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "effects" (TyApp (TyCon "List") (TyCon "String"))) (field "imported" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "importedModuleValues" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ambiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAliasShadow" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "aliasAbstractCtor" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "typeAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ifaceAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "internalGuard" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "sugValuesMemo" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "SugCand"))))) (field "sugTypesMemo" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "SugCand"))))) (field "localValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "internalExterns" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "internalExterns" () (EListLit (ELit (LString "arrayGetUnsafe")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout"))))
+(DFunDef false "internalExterns" () (EListLit (ELit (LString "arrayGetUnsafe")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout")) (ELit (LString "u8Truncate")) (ELit (LString "u8ToInt")) (ELit (LString "u16Truncate")) (ELit (LString "u16ToInt")) (ELit (LString "u32Truncate")) (ELit (LString "u32ToInt")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intBitNot")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight"))))
 (DTypeSig true "internalGuardFor" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "internalGuardFor" ((PCon "True")) (EListLit))
 (DFunDef false "internalGuardFor" ((PCon "False")) (EVar "internalExterns"))
@@ -6499,7 +6501,7 @@ takeOriginTrace _ =
 (DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "tupleCtorTyNames" () (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__"))))
 (DTypeSig false "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")) (ELit (LString "ByteBlock"))))
+(DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")) (ELit (LString "ByteBlock")) (ELit (LString "U8")) (ELit (LString "U16")) (ELit (LString "U32"))))
 (DTypeSig false "primitiveConstructors" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveConstructors" () (EListLit (ELit (LString "True")) (ELit (LString "False"))))
 (DTypeSig false "externNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -7596,7 +7598,7 @@ takeOriginTrace _ =
 (DFunDef false "resErrorLoc" ((PCon "DuplicateInterfaceMethod" PWild PWild PWild (PVar "l"))) (EVar "l"))
 (DData Public "Env" () ((variant "Env" (ConNamed (field "values" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctors" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "fields" (TyApp (TyCon "List") (TyCon "String"))) (field "fieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "fieldOwnersIdx" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "interfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ifaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "effects" (TyApp (TyCon "List") (TyCon "String"))) (field "imported" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "importedModuleValues" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ambiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAliasShadow" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "aliasAbstractCtor" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "typeAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ifaceAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "internalGuard" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "sugValuesMemo" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "SugCand"))))) (field "sugTypesMemo" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "SugCand"))))) (field "localValues" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "internalExterns" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "internalExterns" () (EListLit (ELit (LString "arrayGetUnsafe")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout"))))
+(DFunDef false "internalExterns" () (EListLit (ELit (LString "arrayGetUnsafe")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout")) (ELit (LString "u8Truncate")) (ELit (LString "u8ToInt")) (ELit (LString "u16Truncate")) (ELit (LString "u16ToInt")) (ELit (LString "u32Truncate")) (ELit (LString "u32ToInt")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intBitNot")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight"))))
 (DTypeSig true "internalGuardFor" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "internalGuardFor" ((PCon "True")) (EListLit))
 (DFunDef false "internalGuardFor" ((PCon "False")) (EVar "internalExterns"))
@@ -7960,7 +7962,7 @@ takeOriginTrace _ =
 (DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "tupleCtorTyNames" () (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__"))))
 (DTypeSig false "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")) (ELit (LString "ByteBlock"))))
+(DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array")) (ELit (LString "ByteBlock")) (ELit (LString "U8")) (ELit (LString "U16")) (ELit (LString "U32"))))
 (DTypeSig false "primitiveConstructors" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveConstructors" () (EListLit (ELit (LString "True")) (ELit (LString "False"))))
 (DTypeSig false "externNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
