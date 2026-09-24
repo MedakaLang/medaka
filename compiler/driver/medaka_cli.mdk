@@ -3392,9 +3392,9 @@ collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readFile target
     let md = computeModuleDoc rsrc csrc tsrc target roots
     map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
 
--- A library page is named for its module's DERIVED name (`mdName`, the
--- basename minus `.mdk`), so two targets in different directories that share a
--- basename claim the SAME page: `writeLibraryPages` wrote one and then
+-- A library page is named for its module's DERIVED name (`mdName`: a stdlib
+-- module's import id, otherwise the basename minus `.mdk`), so two non-stdlib
+-- targets in different directories that share a basename claim the SAME page: `writeLibraryPages` wrote one and then
 -- overwrote it with the other, the index grew a dead link plus two
 -- identically-titled sections, and `inventory.json` filed both modules' entries
 -- under one name — all silently, at exit 0.  Refuse instead, BEFORE writing

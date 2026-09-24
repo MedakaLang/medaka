@@ -1,5 +1,5 @@
 {- | Driver for the Wycheproof HMAC-SHA256 corpus (S-hmac, #3362
-   S-more-answer-keys round 2). Grades `stdlib/hmac.mdk`'s `hmacSha256FixedBytes`
+   S-more-answer-keys round 2). Grades `stdlib/crypto/hmac.mdk`'s `hmacSha256FixedBytes`
    against `pds/test/vectors/wycheproof_hmac_sha256.txt` — never a
    self-captured golden (G5).
 
@@ -19,7 +19,9 @@
    to `hmacSha256FixedBytes`'s result on the same key and message (S-hmac-
    midstate, #3371 Part B). -}
 
-import hmac.{ctEq, hmacSha256FixedBytes, hmacSha256Key, hmacSha256WithKey}
+import crypto.hmac.{
+  ctEq, hmacSha256FixedBytes, hmacSha256Key, hmacSha256WithKey
+}
 import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import array.{take}

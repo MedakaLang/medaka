@@ -100,7 +100,7 @@ import hash_map.{
 import list.{take, drop, last}
 import string.{drop as strDrop, toLower, words}
 import tools.printer.{declToString, exprToString, ppTy}
-import support.path.{dirOf, modIdOf}
+import support.path.{dirOf, stripMdk}
 import support.char.{isAlnum, isLower, isUpper}
 import regex.{
   Regex,
@@ -733,6 +733,20 @@ restampSeverity sev f =
 isStdlibPath : String -> Bool
 isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
 
+-- The import id a path under `stdlib/` names: the segments after the last
+-- `stdlib` segment, dot-joined, so `stdlib/crypto/hmac.mdk` is `crypto.hmac`.
+-- `None` for a path with no `stdlib` segment.
+stdlibModuleOf : String -> Option String
+stdlibModuleOf path = stdlibModuleGo (splitOnChar '/' (stripMdk path)) None
+
+stdlibModuleGo : List String -> Option String -> Option String
+stdlibModuleGo [] found = found
+stdlibModuleGo (seg :: rest) found =
+  if seg == "stdlib" then
+    stdlibModuleGo rest (Some (joinWith "." rest))
+  else
+    stdlibModuleGo rest found
+
 -- ── the stdlib reference index ────────────────────────────────────────────────
 -- A name → DECLARED-SIGNATURE map for every exported stdlib binding, built by
 -- PARSING `<MEDAKA_ROOT>/stdlib/*.mdk` and reading each exported `DTypeSig`.
@@ -880,10 +894,9 @@ exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
 -- rule-logic change does (#2327).
 export
 stdlibFingerprint : <IO> String
-stdlibFingerprint = match listDir lintStdlibDir
-  Err _ => ""
-  Ok entries =>
-    let names = stdlibMdkNames entries
+stdlibFingerprint = match stdlibMemberPaths lintStdlibDir
+  None => ""
+  Some names =>
     let joined = stdlibFingerprintGo lintStdlibDir names
     -- Hashed down to a fixed-size digest rather than stored raw: this string
     -- lands in EVERY shard's `stamp` field (`lint_cache.storeEntries`), so
@@ -901,14 +914,14 @@ stdlibFingerprintGo dir (n :: rest) =
   "\{n}:\{h};\{stdlibFingerprintGo dir rest}"
 
 -- (module, name, declared type) for every exported signature in the stdlib's
--- top-level `.mdk` files.  A directory that will not list yields [] — the
+-- `.mdk` files.  A directory that will not list yields [] — the
 -- degradation path, silent by design (lint printing compiler-internal chatter to
 -- stdout would break every caller that diffs its output, exactly as
 -- `lintCacheCtx` argues for `--cache`).
 stdlibSigTriples : String -> <IO> List (String, String, Ty)
-stdlibSigTriples dir = match listDir dir
-  Err _ => []
-  Ok entries => flatMap (stdlibFileSigs dir) (stdlibMdkNames entries)
+stdlibSigTriples dir = match stdlibMemberPaths dir
+  None => []
+  Some paths => flatMap (stdlibFileSigs dir) paths
 
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
 -- Appending rather than overwriting is the whole point: `setInPlace` alone
@@ -928,23 +941,35 @@ groupStdlibSigsInto ((modName, name, ty) :: rest) m =
   let _ = setInPlace name (findWithDefault [] name m ++ [(modName, ty)]) m
   groupStdlibSigsInto rest m
 
--- Top-level `.mdk` members only, dot-entries dropped, sorted for determinism.
--- Deliberately NOT recursive: the stdlib is flat, and anything nested under the
--- same root is somebody else's tree, not stdlib API.
-stdlibMdkNames : List String -> List String
-stdlibMdkNames names = sortUniqS (filterList isStdlibMember names)
+-- The `.mdk` members under `dir` as `dir`-relative paths (`list.mdk`,
+-- `crypto/hmac.mdk`), dot-entries dropped, sorted for determinism.  `None`
+-- when `dir` itself will not list.
+stdlibMemberPaths : String -> <IO> Option (List String)
+stdlibMemberPaths dir = match listDir dir
+  Err _ => None
+  Ok entries => Some (sortUniqS (memberPathsGo dir "" entries))
 
-isStdlibMember : String -> Bool
-isStdlibMember n = endsWith ".mdk" n && not (startsWith "." n)
+memberPathsGo : String -> String -> List String -> <IO> List String
+memberPathsGo _ _ [] = []
+memberPathsGo dir prefix (n :: rest) =
+  let here =
+    if startsWith "." n then
+      []
+    else if endsWith ".mdk" n then
+      ["\{prefix}\{n}"]
+    else match listDir "\{dir}/\{prefix}\{n}"
+      Err _ => []
+      Ok sub => memberPathsGo dir "\{prefix}\{n}/" sub
+  here ++ memberPathsGo dir prefix rest
 
 -- One stdlib file's exported signatures, stamped with the module name the rest
--- of the compiler uses for it (the basename, no `.mdk` — `list`, `string`, …).
+-- of the compiler uses for it (the import id — `list`, `crypto.hmac`, …).
 -- `readFileSafe` yields "" on any read error and "" parses to [], so an
 -- unreadable member drops out of the index instead of failing the whole build.
 stdlibFileSigs : String -> String -> <IO> List (String, String, Ty)
-stdlibFileSigs dir fileName =
-  let modName = modIdOf fileName
-  let (decls, _) = parseWithPositions (readFileSafe "\{dir}/\{fileName}")
+stdlibFileSigs dir relPath =
+  let modName = joinWith "." (splitOnChar '/' (stripMdk relPath))
+  let (decls, _) = parseWithPositions (readFileSafe "\{dir}/\{relPath}")
   flatMap (d => stampModule modName (exportedSigPair d)) decls
 
 stampModule : String -> List (String, Ty) -> List (String, String, Ty)
@@ -1914,12 +1939,12 @@ tyHeadName _ = None
 -- `listReverse` does not OWN `list.reverse`, so a blanket "this path is under
 -- stdlib/" skip would wrongly exempt it too (#2248 Miss 1).  Ownership is
 -- decided per matched candidate, not per file: `path`'s own module
--- (`modIdOf path`) is threaded through so a candidate whose module IS that
+-- (`stdlibModuleOf path`) is threaded through so a candidate whose module IS that
 -- file is never offered as a match (`firstMatchingModule` below).
 --
 -- Ownership needs BOTH conjuncts.  A basename match alone is not ownership:
 -- `/tmp/whatever/list.mdk` is not `stdlib/list.mdk`, and keying the exemption
--- on `modIdOf path` ALONE re-created #2248 Miss 1 one level down — any file
+-- on the basename ALONE re-created #2248 Miss 1 one level down — any file
 -- anywhere named `list.mdk` became blanket-exempt from every `list` export.
 -- So the linted file must ALSO actually be under `stdlib/` (`isStdlibPath`)
 -- before it can own anything; outside stdlib the owner is `None` and no
@@ -1933,7 +1958,7 @@ ruleStdlibReimpl : StdlibIndex ->
 ruleStdlibReimpl idx path _ pos prog =
   -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
   -- key set on every call, and the signature map is one pass over the file.
-  let ownMod = if isStdlibPath path then Some (modIdOf path) else None
+  let ownMod = stdlibModuleOf path
   let names = stdlibIndexNames idx
   let sigs = sigTyMapOf prog
   -- every NAME this file itself declares in a type-ish namespace (#2327

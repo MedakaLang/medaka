@@ -47,9 +47,9 @@
    here is graded only against this implementation. -}
 
 import base64.{decodeUrlSafe, encodeUrlSafe}
-import hmac.{ctEq}
+import crypto.hmac.{ctEq}
 import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import string.{fromUtf8, split, stripSuffix, toUtf8}
 import lib.atsyntax.{stripDidFragment}
 import lib.hmac_sha256.{hmacSha256FixedKey}

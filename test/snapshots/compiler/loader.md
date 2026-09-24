@@ -1,5 +1,5 @@
 # META
-source_lines=1365
+source_lines=1382
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -436,16 +436,33 @@ findImportLoc mid (_ :: rest) = findImportLoc mid rest
 -- (not the project/CWD root): the stdlib set is the stable, canonical "which
 -- module did you mean" list, whereas the project root can hold loose `.mdk`
 -- files (e.g. sibling test fixtures) that would pollute the suggestion and
--- churn the golden.  Only top-level entries are considered (the stdlib layout
--- is flat).  `core`/`runtime` are excluded: they are the implicit prelude,
--- never spelled in an `import`.  Deduped + sorted (`sortUniqS`) so the result
--- is deterministic regardless of `listDir`'s on-disk ordering — required for a
--- stable golden.
+-- churn the golden.  A subdirectory contributes dotted ids (`crypto/hmac.mdk`
+-- is `crypto.hmac`).  `core`/`runtime` are excluded: they are the implicit
+-- prelude, never spelled in an `import`.  Deduped + sorted (`sortUniqS`) so
+-- the result is deterministic regardless of `listDir`'s on-disk ordering —
+-- required for a stable golden.
 export
 availableModuleIds : String -> <IO> List String
-availableModuleIds stdlibDir = match listDir stdlibDir
+availableModuleIds stdlibDir = sortUniqS (moduleIdsUnder stdlibDir "")
+
+-- The module ids under `dir`, each spelled with `prefix` in front.  An entry
+-- that is neither a `.mdk` file nor a listable directory contributes nothing.
+moduleIdsUnder : String -> String -> <IO> List String
+moduleIdsUnder dir prefix = match listDir dir
   Err _ => []
-  Ok entries => sortUniqS (filterMap mdkBaseName entries)
+  Ok entries => entryModuleIds dir prefix entries
+
+entryModuleIds : String -> String -> List String -> <IO> List String
+entryModuleIds _ _ [] = []
+entryModuleIds dir prefix (name :: rest) =
+  let here = match mdkBaseName name
+    Some base => ["\{prefix}\{base}"]
+    None =>
+      if startsWith "." name then
+        []
+      else
+        moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
+  here ++ entryModuleIds dir prefix rest
 
 -- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, and the two implicit
 -- prelude modules are dropped.
@@ -1458,7 +1475,12 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "findImportLoc" ((PVar "mid") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "findImportLoc" ((PVar "mid") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EVar "rest")))
 (DTypeSig true "availableModuleIds" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "availableModuleIds" ((PVar "stdlibDir")) (EMatch (EApp (EVar "listDir") (EVar "stdlibDir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterMap") (EVar "mdkBaseName")) (EVar "entries"))))))
+(DFunDef false "availableModuleIds" ((PVar "stdlibDir")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "moduleIdsUnder") (EVar "stdlibDir")) (ELit (LString "")))))
+(DTypeSig false "moduleIdsUnder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "moduleIdsUnder" ((PVar "dir") (PVar "prefix")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "entries")))))
+(DTypeSig false "entryModuleIds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "entryModuleIds" (PWild PWild (PList)) (EListLit))
+(DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -1667,7 +1689,12 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "findImportLoc" ((PVar "mid") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "findImportLoc" ((PVar "mid") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EVar "rest")))
 (DTypeSig true "availableModuleIds" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "availableModuleIds" ((PVar "stdlibDir")) (EMatch (EApp (EVar "listDir") (EVar "stdlibDir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "filterMap") (EVar "mdkBaseName")) (EVar "entries"))))))
+(DFunDef false "availableModuleIds" ((PVar "stdlibDir")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "moduleIdsUnder") (EVar "stdlibDir")) (ELit (LString "")))))
+(DTypeSig false "moduleIdsUnder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "moduleIdsUnder" ((PVar "dir") (PVar "prefix")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "entries")))))
+(DTypeSig false "entryModuleIds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "entryModuleIds" (PWild PWild (PList)) (EListLit))
+(DFunDef false "entryModuleIds" ((PVar "dir") (PVar "prefix") (PCons (PVar "name") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EVar "mdkBaseName") (EVar "name")) (arm (PCon "Some" (PVar "base")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")) (EListLit) (EApp (EApp (EVar "moduleIdsUnder") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "prefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EVar "entryModuleIds") (EVar "dir")) (EVar "prefix")) (EVar "rest"))))))
 (DTypeSig false "mdkBaseName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "mdkBaseName" ((PVar "name")) (EIf (EBinOp "&&" (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "name")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "name")))) (EBlock (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 4)))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "base") (ELit (LString "core"))) (EBinOp "==" (EVar "base") (ELit (LString "runtime")))) (EVar "None") (EApp (EVar "Some") (EVar "base"))))) (EVar "None")))
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))

@@ -29,7 +29,7 @@ import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{Mst, mstFromEntries, mstNodeBlocks, mstRootCid}
 import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
 import lib.tid.{Tid, tidParse, tidToString}
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import shell.blobfile.{blobFileWrite}
 import shell.persist.{persistSave}
 

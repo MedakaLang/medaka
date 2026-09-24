@@ -18,6 +18,7 @@ dropKey : String -> List (String, List Decl) -> List (String, List Decl)
 dropPathTriple : (String, String, List Decl) -> (String, List Decl)
 dropPrefix : Int -> String -> String
 entryModIdOf : List (String, List Decl) -> String
+entryModuleIds : String -> String -> List String -> <IO> List String
 entrySearchRoots : String -> <IO> List String
 fileOfModuleId : String -> String -> String
 findImportLoc : String -> List Decl -> Option Loc
@@ -47,6 +48,7 @@ manifestAllowsInternal : String -> <IO> Bool
 mdkBaseName : String -> Option String
 modIdToPath : (String, String, List Decl) -> (String, String)
 moduleIdOfPath : List String -> String -> String
+moduleIdsUnder : String -> String -> <IO> List String
 noteLoadedSource : String -> String -> Unit
 parentDir : String -> String
 parentGo : String -> Int -> String

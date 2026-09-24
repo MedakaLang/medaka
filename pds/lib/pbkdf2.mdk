@@ -10,7 +10,7 @@
 
 import array.{blit, concat, copy, make, setInPlace}
 import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
-import hmac.{HmacSha256Key, hmacSha256Key, hmacSha256WithKey}
+import crypto.hmac.{HmacSha256Key, hmacSha256Key, hmacSha256WithKey}
 
 hashBytes : Int
 hashBytes = 32

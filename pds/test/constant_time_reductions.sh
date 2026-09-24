@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fixed-control regression for #1724's field/scalar reduction contract, and a
 # source census that pds credential, JWT and session comparisons on secret
-# bytes go only through hmac.ctEq (#2953).
+# bytes go only through crypto.hmac.ctEq (#2953).
 # POSIX sh; runs on Linux and macOS. Value correctness remains owned by the
 # 944-row field and 1028-row scalar corpus gates.
 set -eu
@@ -564,7 +564,7 @@ cteq_tautologies() {
 }
 
 # The password-digest, JWT-signature and session-fingerprint comparisons reach
-# secret bytes only through hmac.ctEq. Per file: ctEq is the imported one (no
+# secret bytes only through crypto.hmac.ctEq. Per file: ctEq is the imported one (no
 # local definition shadows it), its occurrence count is the call-site roster,
 # and no `==`, `/=` or `compare` line names a secret-bearing identifier except
 # through `arrayLength`, whose value is public. Per comparing function: its
@@ -609,7 +609,7 @@ secret_comparisons_ok() {
     rest=${spec#*:}
     expected_calls=${rest%%:*}
     secrets=${rest#*:}
-    [ "$(grep -F -x -c 'import hmac.{ctEq}' "$file" || true)" -eq 1 ] || return 1
+    [ "$(grep -F -x -c 'import crypto.hmac.{ctEq}' "$file" || true)" -eq 1 ] || return 1
     [ "$(grep -c '^ctEq[[:space:]]' "$file" || true)" -eq 0 ] || return 1
     [ "$(count_word ctEq "$file")" -eq "$expected_calls" ] || return 1
     leaks=$(awk -v secrets="$secrets" '
@@ -994,8 +994,8 @@ pass 'field helper conditional-select mutation is rejected by source structure'
 CREDENTIAL="$ROOT/pds/lib/credential.mdk"
 JWT="$ROOT/pds/lib/jwt.mdk"
 STORE="$ROOT/pds/lib/store.mdk"
-secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through hmac.ctEq'
-pass 'credential, JWT and session secret comparisons go only through hmac.ctEq'
+secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
+pass 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 
 awk '
   /^  ctEq digest \(pbkdf2HmacSha256 / {
@@ -1166,9 +1166,9 @@ fi
 pass 'credential tautological ctEq through a partial application is rejected by the secret-comparison census'
 
 awk '
-  /^import hmac\.\{ctEq\}$/ {
+  /^import crypto\.hmac\.\{ctEq\}$/ {
     print
-    print "import hmac as H"
+    print "import crypto.hmac as H"
     next
   }
   /^      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh\)$/ {

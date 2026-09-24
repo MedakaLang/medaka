@@ -129,11 +129,12 @@ What's in the standard library, what's planned, module-by-module status.
 | [`byteparser.md`](stdlib/byteparser.md) | byteparser | — |
 | [`bytes.md`](stdlib/bytes.md) | bytes | — |
 | [`core.md`](stdlib/core.md) | core | — |
+| [`crypto.hmac.md`](stdlib/crypto.hmac.md) | crypto.hmac | — |
+| [`crypto.sha256.md`](stdlib/crypto.sha256.md) | crypto.sha256 | — |
 | [`fs.md`](stdlib/fs.md) | fs | — |
 | [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
 | [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |
 | [`hex.md`](stdlib/hex.md) | hex | — |
-| [`hmac.md`](stdlib/hmac.md) | hmac | — |
 | [`http.md`](stdlib/http.md) | http | — |
 | [`index.md`](stdlib/index.md) | Library Index | — |
 | [`io.md`](stdlib/io.md) | io | — |
@@ -149,7 +150,6 @@ What's in the standard library, what's planned, module-by-module status.
 | [`regex.md`](stdlib/regex.md) | regex | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |
 | [`set.md`](stdlib/set.md) | set | — |
-| [`sha256.md`](stdlib/sha256.md) | sha256 | — |
 | [`string.md`](stdlib/string.md) | string | — |
 | [`test.md`](stdlib/test.md) | test | — |
 | [`test_process.md`](stdlib/test_process.md) | test_process | — |

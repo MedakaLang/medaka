@@ -11,7 +11,7 @@
 
 import array.{concat, make, setInPlace}
 import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
-import sha256.{
+import crypto.sha256.{
   sha256, sha256AssumeByteDomainFrom, sha256FixedBytes, sha256FoldKeyBlock
 }
 

@@ -26,22 +26,30 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 cd "$ROOT" || exit 1
-"$MEDAKA" doc --out "$TMPDIR" stdlib/*.mdk >/dev/null 2>&1
+"$MEDAKA" doc --out "$TMPDIR" stdlib/*.mdk stdlib/*/*.mdk >/dev/null 2>&1
 status=$?
 if [ "$status" -ne 0 ]; then
-  printf 'FAIL generator exited %d ("%s" doc --out %s stdlib/*.mdk) — refusing to check a partial/crashed run\n' "$status" "$MEDAKA" "$TMPDIR"
+  printf 'FAIL generator exited %d ("%s" doc --out %s stdlib/*.mdk stdlib/*/*.mdk) — refusing to check a partial/crashed run\n' "$status" "$MEDAKA" "$TMPDIR"
   exit 1
 fi
 
+# The import id of each stdlib module, one per line: `list`, `crypto.hmac`.
+stdlib_module_ids() {
+  for f in "$ROOT"/stdlib/*.mdk "$ROOT"/stdlib/*/*.mdk; do
+    [ -f "$f" ] || continue
+    rel="${f#"$ROOT"/stdlib/}"
+    printf '%s\n' "${rel%.mdk}" | tr / .
+  done
+}
+
 # Expected file set, derived INDEPENDENTLY of whatever the generator actually
-# wrote: one .md per stdlib/*.mdk module, plus index.md and inventory.json.
+# wrote: one .md per stdlib module, plus index.md and inventory.json.
 # Iterating this list (rather than "whatever landed in $TMPDIR") is what
 # catches a partial run — a generator that writes 2 of 31 files and exits 0
 # would otherwise report "2 ok, 0 failing".
 expected="$TMPDIR/.expected"
 : > "$expected"
-for f in "$ROOT"/stdlib/*.mdk; do
-  name="$(basename "$f" .mdk)"
+for name in $(stdlib_module_ids); do
   printf '%s.md\n' "$name" >> "$expected"
 done
 printf 'index.md\ninventory.json\n' >> "$expected"
@@ -65,7 +73,7 @@ while IFS= read -r name; do
     printf 'ok   %s\n' "$name"
   else
     fail=$((fail + 1))
-    printf 'FAIL %s (committed docs/stdlib/%s differs from a fresh regen — run: ./medaka doc --out docs/stdlib stdlib/*.mdk)\n' "$name" "$name"
+    printf 'FAIL %s (committed docs/stdlib/%s differs from a fresh regen — run: ./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk)\n' "$name" "$name"
   fi
 done < "$expected"
 
@@ -88,7 +96,9 @@ done < "$expected"
 EXC="$ROOT/test/STDLIB-DOC-NAME-EXCEPTIONS.txt"
 KEYWORDS='match if then else let in data type impl interface import export public deriving where do defer extern prop test newtype True False not otherwise main'
 BUILTINS='Int Float String Bool Char Unit List Array Ref Option Result Effect Type'
-MODULES="$(for f in "$ROOT"/stdlib/*.mdk; do basename "$f" .mdk; done | tr '\n' ' ')"
+# A namespace directory (`crypto`) counts too, since `crypto.hmac.ctEq`
+# qualifies with it.
+MODULES="$( (stdlib_module_ids; for d in "$ROOT"/stdlib/*/; do [ -d "$d" ] && basename "$d"; done) | tr '\n' ' ')"
 if [ ! -f "$TMPDIR/core.md" ] || [ ! -f "$TMPDIR/runtime.md" ]; then
   fail=$((fail + 1))
   printf 'FAIL name visibility (no core.md/runtime.md to derive the prelude set from)\n'
@@ -152,7 +162,7 @@ fi
 
 # 0-checked must fail: a gate that iterated no output proves nothing.
 if [ "$((pass + fail))" -eq 0 ]; then
-  printf '\nNO GENERATED FILES PRODUCED by "%s doc --out %s stdlib/*.mdk" — 0 checked, refusing to pass\n' "$MEDAKA" "$TMPDIR"
+  printf '\nNO GENERATED FILES PRODUCED by "%s doc --out %s stdlib/*.mdk stdlib/*/*.mdk" — 0 checked, refusing to pass\n' "$MEDAKA" "$TMPDIR"
   exit 1
 fi
 

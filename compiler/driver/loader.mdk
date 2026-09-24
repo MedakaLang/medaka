@@ -432,16 +432,33 @@ findImportLoc mid (_ :: rest) = findImportLoc mid rest
 -- (not the project/CWD root): the stdlib set is the stable, canonical "which
 -- module did you mean" list, whereas the project root can hold loose `.mdk`
 -- files (e.g. sibling test fixtures) that would pollute the suggestion and
--- churn the golden.  Only top-level entries are considered (the stdlib layout
--- is flat).  `core`/`runtime` are excluded: they are the implicit prelude,
--- never spelled in an `import`.  Deduped + sorted (`sortUniqS`) so the result
--- is deterministic regardless of `listDir`'s on-disk ordering — required for a
--- stable golden.
+-- churn the golden.  A subdirectory contributes dotted ids (`crypto/hmac.mdk`
+-- is `crypto.hmac`).  `core`/`runtime` are excluded: they are the implicit
+-- prelude, never spelled in an `import`.  Deduped + sorted (`sortUniqS`) so
+-- the result is deterministic regardless of `listDir`'s on-disk ordering —
+-- required for a stable golden.
 export
 availableModuleIds : String -> <IO> List String
-availableModuleIds stdlibDir = match listDir stdlibDir
+availableModuleIds stdlibDir = sortUniqS (moduleIdsUnder stdlibDir "")
+
+-- The module ids under `dir`, each spelled with `prefix` in front.  An entry
+-- that is neither a `.mdk` file nor a listable directory contributes nothing.
+moduleIdsUnder : String -> String -> <IO> List String
+moduleIdsUnder dir prefix = match listDir dir
   Err _ => []
-  Ok entries => sortUniqS (filterMap mdkBaseName entries)
+  Ok entries => entryModuleIds dir prefix entries
+
+entryModuleIds : String -> String -> List String -> <IO> List String
+entryModuleIds _ _ [] = []
+entryModuleIds dir prefix (name :: rest) =
+  let here = match mdkBaseName name
+    Some base => ["\{prefix}\{base}"]
+    None =>
+      if startsWith "." name then
+        []
+      else
+        moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
+  here ++ entryModuleIds dir prefix rest
 
 -- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, and the two implicit
 -- prelude modules are dropped.

@@ -15,7 +15,7 @@ stages=DESUGAR,MARK
 
 import array.{concat, make, setInPlace}
 import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
-import sha256.{
+import crypto.sha256.{
   sha256, sha256AssumeByteDomainFrom, sha256FixedBytes, sha256FoldKeyBlock
 }
 
@@ -166,7 +166,7 @@ hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
-(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FixedBytes" false) (mem "sha256FoldKeyBlock" false))))
+(DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FixedBytes" false) (mem "sha256FoldKeyBlock" false))))
 (DTypeSig false "ctEqAccum" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "index") (EVar "a")) (EVar "i"))) (EApp (EApp (EVar "index") (EVar "b")) (EVar "i")))))))
 (DTypeSig true "ctEq" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bool"))))
@@ -189,7 +189,7 @@ hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
 # MARK
 (DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
-(DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FixedBytes" false) (mem "sha256FoldKeyBlock" false))))
+(DUse false (UseGroup ("crypto" "sha256") ((mem "sha256" false) (mem "sha256AssumeByteDomainFrom" false) (mem "sha256FixedBytes" false) (mem "sha256FoldKeyBlock" false))))
 (DTypeSig false "ctEqAccum" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EMethodRef "index") (EVar "a")) (EVar "i"))) (EApp (EApp (EMethodRef "index") (EVar "b")) (EVar "i")))))))
 (DTypeSig true "ctEq" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bool"))))
