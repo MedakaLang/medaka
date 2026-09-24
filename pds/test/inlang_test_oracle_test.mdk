@@ -262,6 +262,7 @@ libExempt = [
   ("lexjson", "0 assertions"),
   ("mst", "0 assertions"),
   ("nsid", "0 assertions"),
+  ("pbkdf2", "0 assertions"),
   ("proxy", "0 assertions"),
   ("query_params", "0 assertions"),
   ("ratelimit", "0 assertions"),

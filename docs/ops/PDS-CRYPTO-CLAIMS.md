@@ -22,7 +22,7 @@ source's SHA-256 and the committed file's SHA-256.
 - SHA-256: `stdlib/sha256.mdk`.
 - HMAC-SHA-256: `stdlib/hmac.mdk`. The fixed 32-byte-key form in
   `pds/lib/hmac_sha256.mdk` signs session tokens (JWT HS256) and drives RFC 6979.
-- PBKDF2-HMAC-SHA-256: `stdlib/pbkdf2.mdk`. The password credential that uses
+- PBKDF2-HMAC-SHA-256: `pds/lib/pbkdf2.mdk`. The password credential that uses
   it is `pds/lib/credential.mdk`.
 - secp256k1: field and scalar arithmetic, points, RFC 6979 deterministic
   nonces, low-S signing and 64-byte compact verification, in

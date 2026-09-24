@@ -305,7 +305,7 @@ PDS ever shipping.
 
 Account bootstrap and `createSession` (both landed, §6 Phase 4) need to turn a
 user password into a storable credential without keeping the password itself. Chosen
-algorithm: **PBKDF2-HMAC-SHA-256** (`stdlib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
+algorithm: **PBKDF2-HMAC-SHA-256** (`pds/lib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
 this server signs and serves one account, so there is no attacker-throughput budget
 that a memory-hard KDF is defending against, and PBKDF2-HMAC-SHA-256 reuses the
 already-audited `stdlib/sha256.mdk` rather than adding a new primitive family. It is

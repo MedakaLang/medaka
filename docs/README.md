@@ -146,7 +146,6 @@ What's in the standard library, what's planned, module-by-module status.
 | [`net_async.md`](stdlib/net_async.md) | net_async | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
 | [`path.md`](stdlib/path.md) | path | — |
-| [`pbkdf2.md`](stdlib/pbkdf2.md) | pbkdf2 | — |
 | [`regex.md`](stdlib/regex.md) | regex | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |
 | [`set.md`](stdlib/set.md) | set | — |

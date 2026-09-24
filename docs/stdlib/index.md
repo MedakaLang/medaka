@@ -740,12 +740,6 @@ Manipulation of `/`-separated paths as text.
 - [`stripPrefix`](path.md#stripprefix)
 - [`normalize`](path.md#normalize)
 
-## [`pbkdf2`](pbkdf2.md)
-
-PBKDF2 key derivation with HMAC-SHA-256 (RFC 2898).
-
-- [`pbkdf2HmacSha256`](pbkdf2.md#pbkdf2hmacsha256)
-
 ## [`regex`](regex.md)
 
 Regular expressions, matched in linear time.

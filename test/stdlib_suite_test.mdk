@@ -217,7 +217,6 @@ rosterNames = map fst suites
 zeroAssertionModules : List (String, Engine)
 zeroAssertionModules = [
   ("net_async", Eval),
-  ("pbkdf2", Eval),
   ("runtime", Eval),
   ("sha256", Eval),
 ]
@@ -437,8 +436,6 @@ zeroExpectation name = match lookup name zeroResults
         "\{intToString ran} assertions"
 
 test "stdlib/net_async.mdk runs 0 assertions" = zeroExpectation "net_async"
-
-test "stdlib/pbkdf2.mdk runs 0 assertions" = zeroExpectation "pbkdf2"
 
 test "stdlib/runtime.mdk runs 0 assertions" = zeroExpectation "runtime"
 
