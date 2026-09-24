@@ -338,20 +338,52 @@ because process start and heap growth are amortized over fewer iterations, not
 because the loop is superlinear.)
 
 *The budget.* 500 ms per derivation, chosen as a **login-latency** budget rather than
-the bootstrap budget the previous count was set against. The derivation now runs
-inside `applyRequest`'s single indivisible sequence (`pds/shell/server.mdk`), so it is
-also the time one `com.atproto.server.createSession` attempt — including a WRONG one —
-blocks every other connection for. `maxCreateSessionPerWindow` is 30 per 60 s per
+the bootstrap budget the previous count was set against. `maxCreateSessionPerWindow` is 30 per 60 s per
 identity (`pds/lib/resource_limits.mdk`), so at the 500 ms budget one identity can
-hold the server for **15 s of each minute**, and at the chosen count's measured
-~440 ms for **~13 s**. Two things sharpen that further, and both are load-bearing:
-the derivation is inside an indivisible sequence, so those seconds are the whole
-single-threaded server, not one connection's share of it; and **without
-`--trusted-proxy` every caller shares the one `"direct"` identity bucket** (see
-"The identity a request is charged against", below), so the 30 are 30 logins *in
-total* — wrong passwords
-included — and any client can spend them. The budget is set where that stays a
-fraction rather than a majority of the window; it does not make it a small one.
+spend **15 s of each minute** of derivation, and at the chosen count's measured
+~440 ms **~13 s**. **Without `--trusted-proxy` every caller shares the one
+`"direct"` identity bucket** (see "The identity a request is charged against",
+below), so the 30 are 30 logins *in total* — wrong passwords included — and any
+client can spend them.
+
+*Where the derivation runs.* Not inside `applyRequest`'s indivisible sequence: that
+would make each of those seconds the whole single-threaded server's. A login's
+derivations (the password check, and the re-derivation below when the record is
+outdated) run BEFORE `applyRequest`, in Async code that yields to the scheduler
+between slices of `kdfSliceIterations` HMAC calls (`settleLogin`,
+`pds/shell/server.mdk`; the resumable loop is `LoginCheck`, `pds/lib/credential.mdk`).
+At most `maxConcurrentDerivations` = 4 derive at once; a login past that is refused
+429 `RateLimitExceeded` without deriving.
+
+*The slice size.* Measured on this box (2026-09-24, `medaka build`, 5 × 20,000
+iterations of `pbkdf2HmacSha256` in one process, three runs), one HMAC call costs
+**7.0 / 7.1 / 7.5 µs**. Every suspension another request makes waits behind one slice
+of each running derivation, and answering a `getRecord` makes about thirty (the
+latencies below over the slice's duration), so the slice sets how much a login slows
+everything else. Measured on a scratch instance
+under the unit's own limits (`systemd-run --scope -p CPUWeight=20 -p MemoryMax=512M`,
+per `pds/pds.service`), with the account's credential at 100,000 iterations so one
+wrong-password login derives for ~0.75 s, and a `getRecord` sent 100 ms into it
+(`serve_client_main.mdk`'s `kdf-yield`, five runs; `kdf-flood`, eight logins at once
+against the ceiling of four, one run; the 256 row is two such sessions). An idle
+`getRecord` takes 0.9–2.0 ms:
+
+| slice (HMAC calls) | `getRecord` during one login | login | `getRecord` during four | the eight-login flood |
+|---|---|---|---|---|
+| 256 | 41–119 ms | 0.67–1.06 s | 219–249 ms | 3.03–3.13 s |
+| 64 | 13–18 ms | 0.76–0.80 s | 63 ms | 3.22 s |
+| 16 | 3.0–4.9 ms | 0.70–0.82 s | 16 ms | 2.97 s |
+| 4 | 1.0–1.7 ms | 0.73–0.85 s | 3.9 ms | 3.40 s |
+
+The latency a login adds is proportional to the slice; the scheduler pass each slice
+costs first shows at 4, as a longer flood. **`kdfSliceIterations` is 16**, the smallest
+of these at which it does not.
+
+The verdict names the credential record it was computed against, and
+`applyRequest` refuses it (401) if the stored record is no longer that one — a
+concurrent login's re-derivation, or any other replacement, lands between the
+derivation and the store transition — so a stale verdict can neither let a
+password in nor overwrite a newer record.
 
 *The chosen count.* 0.147 ms × 3,000 = **~440 ms**, the largest round count inside the
 budget. `defaultIterations = 3000` (`pds/lib/credential.mdk`), pinned by a cell in
@@ -370,10 +402,12 @@ floor-compliant server.
 
 *Migration.* A record carries the count it was derived at, so raising the constant
 locks nobody out. A stored record derived at any other count is re-derived onto the
-current one by **one successful login** (`credentialUpgrade`, `pds/lib/credential.mdk`;
-called from `applyCreateSession` and persisted by `persistCredentialHalf`). A FAILED
-login never rewrites the record: `credentialUpgrade` grades the password itself and
-returns nothing without it, so the property holds at the function rather than at its
+current one by **one successful login**: the `LoginCheck` that graded the password
+goes on to derive the replacement under a fresh salt, its `LoginVerdict` carries it,
+`applyCreateSession` stores it, and `persistCredentialHalf` persists it. A FAILED
+login never rewrites the record: a `LoginCheck` derives a replacement only after the
+password has verified, so a verdict for a wrong password carries none, and the
+property holds at `loginCheckAdvance` (`pds/lib/credential.mdk`) rather than at its
 call site.
 
 ### 4.2.1 Secrets at rest, through 0.1.0

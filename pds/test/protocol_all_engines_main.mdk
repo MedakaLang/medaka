@@ -159,7 +159,8 @@ testNonce : Array Int
 testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 testContext : RequestContext
-testContext = RequestContext { nowSeconds = 1700000000, nonce = testNonce }
+testContext =
+  RequestContext { nowSeconds = 1700000000, nonce = testNonce, login = None }
 
 server : Server
 server = makeServer account registry handler

@@ -49,6 +49,7 @@ import async.{
   spawn,
   waitFlag,
   waitRead,
+  yield,
 }
 import lib.accesslog.{
   AccessEvent(..),
@@ -60,8 +61,12 @@ import lib.accesslog.{
 import lib.cid.{Cid, cidToString}
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
+  LoginCheck,
+  LoginVerdict,
   credentialDigest,
   credentialIterations,
+  loginCheckAdvance,
+  loginCheckVerdict,
   saltBytes,
 }
 import hmac.{ctEq}
@@ -73,6 +78,8 @@ import lib.ratelimit.{
   TrustedProxy,
   capacityMessage,
   classMessage,
+  derivationCeilingHeaderList,
+  derivationCeilingMessage,
   directIdentity,
   identifyClient,
   identityLabel,
@@ -128,6 +135,7 @@ import lib.server_core.{
   UpgradeAdmission(..),
   UpgradeDecision(..),
   accountDid,
+  classifyLogin,
   classifyProxy,
   classifyServiceAuth,
   classifyUpgrade,
@@ -253,15 +261,10 @@ lingerDrainReads = 128
    `lib.server_core`), so it is drawn from `osEntropyBytes` and never from
    `randomInt`, whose generator is a seeded SplitMix64 and predictable by
    construction. Sixteen bytes is the usual floor for a value an attacker must
-   not be able to guess ahead of time.
-
-   It is ALSO the salt a login's credential rehash is derived under
-   (`applyCreateSession`, `pds/lib/handlers.mdk`), which is the only entropy a
-   pure handler has, so the length is `lib.credential`'s `saltBytes` rather
-   than its own sixteen: a nonce of some other length would make every rehash
-   fail its salt admission and leave the credential silently unupgraded. -}
+   not be able to guess ahead of time. A login's re-derivation salt is drawn
+   separately (`loginCheckFor`), at `lib.credential`'s `saltBytes`. -}
 requestNonceBytes : Int
-requestNonceBytes = saltBytes
+requestNonceBytes = 16
 
 {- | How many connections may be in flight at once. An accepted connection past
    the ceiling is closed immediately, without a read: answering it would need
@@ -521,18 +524,26 @@ persistFailureBytes =
    SINGLE `liftIO`.
 
    A persist that fails does not publish: the in-memory store and the disk stay
-   the same store, and the client is told the write did not happen. -}
+   the same store, and the client is told the write did not happen.
+
+   A login's password derivations are NOT in this sequence: they are paid for
+   before it, a slice at a time (`settleLogin`), and `login` is only their
+   verdict. The handler accepts that verdict only against the credential the
+   store read here still holds, so a verdict that a concurrent request made
+   stale while it was being derived is refused rather than applied. -}
 applyRequest : Server ->
   String ->
   Ref Store ->
+  Option LoginVerdict ->
   Bytes ->
   <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Array Int
-applyRequest server dir storeRef bytes =
+applyRequest server dir storeRef login bytes =
   let store = !storeRef
   let nowSeconds = floatToInt (now ())
   let context = RequestContext {
     nowSeconds = nowSeconds,
     nonce = osEntropyBytes requestNonceBytes,
+    login = login,
   }
   let (next, response) = handleBytes server context store bytes
   let did = accountDid (serverAccount server)
@@ -1811,9 +1822,10 @@ readBufferLive (ReadBuffer b _) =
    them on the same argument: it is charged by the inbound read and given back
    by the connection's retirement, and both of those already hold this. The
    egress budget joins them for the proxied-call census's reason: only the
-   outbound path charges it. -}
+   outbound path charges it. The derivation census joins them on the same
+   argument: only the login path charges it, and it already holds this. -}
 export data Serving =
-  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus (Ref Bool)
+  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus DerivationCensus (Ref Bool)
 
 export
 makeServing : TrustedProxy -> Option Egress -> Ref Int -> Serving
@@ -1824,27 +1836,31 @@ makeServing trustedProxy egress inFlight =
     (ProxyCensus inFlight (Ref 0) (Ref []))
     (newBufferCensus ())
     (newEgressCensus ())
+    (DerivationCensus (Ref 0))
     (Ref False)
 
 export
 servingStopping : Serving -> Ref Bool
-servingStopping (Serving _ _ _ _ _ stopping) = stopping
+servingStopping (Serving _ _ _ _ _ _ stopping) = stopping
 
 export
 servingTrustedProxy : Serving -> TrustedProxy
-servingTrustedProxy (Serving trustedProxy _ _ _ _ _) = trustedProxy
+servingTrustedProxy (Serving trustedProxy _ _ _ _ _ _) = trustedProxy
 
 servingEgress : Serving -> Option Egress
-servingEgress (Serving _ egress _ _ _ _) = egress
+servingEgress (Serving _ egress _ _ _ _ _) = egress
 
 servingProxyCensus : Serving -> ProxyCensus
-servingProxyCensus (Serving _ _ census _ _ _) = census
+servingProxyCensus (Serving _ _ census _ _ _ _) = census
 
 servingBufferCensus : Serving -> BufferCensus
-servingBufferCensus (Serving _ _ _ census _ _) = census
+servingBufferCensus (Serving _ _ _ census _ _ _) = census
 
 servingEgressCensus : Serving -> EgressCensus
-servingEgressCensus (Serving _ _ _ _ census _) = census
+servingEgressCensus (Serving _ _ _ _ census _ _) = census
+
+servingDerivationCensus : Serving -> DerivationCensus
+servingDerivationCensus (Serving _ _ _ _ _ census _) = census
 
 -- ── the stats line ──────────────────────────────────────────────────────────
 
@@ -2792,25 +2808,46 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     trace
                     (serializeResponse (withAllowOrigin refusal))
                 NotServiceAuth => defer
-                  response <- liftIO (u =>
-                    applyRequest
-                      server
-                      dir
-                      storeRef
-                      (sliceClamped 0 boundary (readBufferBacking buf)))
-                  sendAndContinue
-                    server
-                    dir
-                    storeRef
-                    limiterRef
-                    census
-                    serving
-                    conn
-                    slot
-                    rest
-                    keepAlive
-                    trace
-                    response
+                  let requestBytes =
+                    sliceClamped 0 boundary (readBufferBacking buf)
+                  login <- settleLogin server serving storeRef parsed
+                  match login
+                    LoginOverCeiling =>
+                      sendAndContinue
+                        server
+                        dir
+                        storeRef
+                        limiterRef
+                        census
+                        serving
+                        conn
+                        slot
+                        rest
+                        keepAlive
+                        trace
+                        (serializeResponse
+                          (withAllowOrigin derivationCeilingResponse))
+                    _ => defer
+                      response <- liftIO (u =>
+                        applyRequest
+                          server
+                          dir
+                          storeRef
+                          (gateVerdict login)
+                          requestBytes)
+                      sendAndContinue
+                        server
+                        dir
+                        storeRef
+                        limiterRef
+                        census
+                        serving
+                        conn
+                        slot
+                        rest
+                        keepAlive
+                        trace
+                        response
 
 -- ── the appview-proxy path ──────────────────────────────────────────────────
 
@@ -2846,6 +2883,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
     RequestContext {
       nowSeconds = nowSeconds,
       nonce = osEntropyBytes requestNonceBytes,
+      login = None,
     }
     (map egressAppviews (servingEgress serving))
     !storeRef
@@ -2884,10 +2922,130 @@ serviceAuthDecisionFor server serving storeRef nowSeconds (Ok request) =
     RequestContext {
       nowSeconds = nowSeconds,
       nonce = osEntropyBytes requestNonceBytes,
+      login = None,
     }
     (map egressAppviews (servingEgress serving))
     !storeRef
     request
+
+-- ── the login derivation path ───────────────────────────────────────────────
+
+{- | What a request's password derivations came to: it needed none, it needed
+   some and `maxConcurrentDerivations` were already running, or it needed
+   some and this is their verdict. -}
+data LoginGate = NotALogin | LoginOverCeiling | LoginDerived LoginVerdict
+
+-- | The verdict `applyRequest` is handed for a request that was admitted.
+gateVerdict : LoginGate -> Option LoginVerdict
+gateVerdict (LoginDerived verdict) = Some verdict
+gateVerdict NotALogin = None
+gateVerdict LoginOverCeiling = None
+
+{- | The password derivations this request needs, asked of the pure core
+   (`lib.server_core`'s `classifyLogin`) after the service-credential question
+   and before `applyRequest`.
+
+   The salt drawn here is the one an outdated credential is re-derived under
+   if this login succeeds, so it comes from `osEntropyBytes` per request, the
+   same source the other classifications draw their nonces from. The store is
+   read for the record the password is graded against, and the verdict names
+   that record, which is what lets `applyRequest` refuse the verdict if the
+   record has been replaced by the time it runs. -}
+loginCheckFor : Server ->
+  Ref Store ->
+  Result HttpParseFailure Request ->
+  <Rand> Option LoginCheck
+loginCheckFor _ _ (Err _) = None
+loginCheckFor server storeRef (Ok request) =
+  classifyLogin server (osEntropyBytes saltBytes) !storeRef request
+
+{- | How many HMAC calls one slice of a login's derivation pays for before it
+   yields to every other connection.
+
+   Every suspension another request makes, and answering one takes about
+   thirty, waits behind one slice of each running derivation, so a request's
+   added latency is proportional to this. Each slice also costs one pass
+   through the scheduler, which is what bounds it from below. 16 calls is
+   about 0.12 ms at 7.0 to 7.5 µs per call, and is the smallest count measured
+   at which that pass cost did not show; the measurements that chose it are in
+   `docs/design/ATPROTO-PDS-DESIGN.md` §4.2. -}
+kdfSliceIterations : Int
+kdfSliceIterations = 16
+
+{- | How many logins may be deriving at once. A login past the ceiling is
+   refused 429 without deriving anything.
+
+   Derivations share the one scheduler thread with everything else, a slice at
+   a time, so each running derivation adds a slice to every other connection's
+   wait and lengthens every other login. The ceiling bounds both: past it a
+   burst of logins costs a refusal each, not a share of the thread.
+   `CreateSessionClass` (`pds/lib/ratelimit.mdk`) bounds the RATE of logins per
+   identity; this bounds how many run at the same moment, across all of them. -}
+maxConcurrentDerivations : Int
+maxConcurrentDerivations = 4
+
+{- | How many login derivations are running right now, bounded by
+   `maxConcurrentDerivations`. A type of its own, riding on `Serving`, for the
+   reason `ProxyCensus` is one. -}
+data DerivationCensus = DerivationCensus (Ref Int)
+
+-- | Take a derivation slot if one is free. `False` means every slot is taken
+-- and nothing was charged.
+claimDerivation : DerivationCensus -> Bool
+claimDerivation (DerivationCensus running) =
+  if !running >= maxConcurrentDerivations then
+    False
+  else
+    let () = running := !running + 1
+    True
+
+releaseDerivation : DerivationCensus -> Unit
+releaseDerivation (DerivationCensus running) = running := !running - 1
+
+-- | What a login past `maxConcurrentDerivations` is told: the rate-limit
+-- refusal's status and body, because it is the same instruction to the
+-- client, to come back shortly.
+derivationCeilingResponse : Response
+derivationCeilingResponse =
+  xrpcFailureResponse
+    (rateLimitFailureWithHeaders
+      derivationCeilingMessage
+      (derivationCeilingHeaderList maxConcurrentDerivations))
+
+{- | A login check run to its verdict, `kdfSliceIterations` HMAC calls at a
+   time, yielding to the scheduler before every slice so that every other
+   connection runs between two slices of it. -}
+deriveLogin : LoginCheck -> Async e LoginVerdict
+deriveLogin check = match loginCheckVerdict check
+  Some verdict => deferPure verdict
+  None => defer
+    _ <- yield
+    deriveLogin (loginCheckAdvance kdfSliceIterations check)
+
+{- | Pay for this request's password derivations, if it needs any, and gate
+   it on `maxConcurrentDerivations`.
+
+   The claim and the release are in this one function, around the only step
+   between them, for the reason `admitSubscription`'s are: the derivation is
+   pure and cannot fail, so there is no exit between the two that skips the
+   release. -}
+settleLogin : Server ->
+  Serving ->
+  Ref Store ->
+  Result HttpParseFailure Request ->
+  Async <Rand | e> LoginGate
+settleLogin server serving storeRef parsed = defer
+  started <- liftIO (u => loginCheckFor server storeRef parsed)
+  match started
+    None => deferPure NotALogin
+    Some check =>
+      let census = servingDerivationCensus serving
+      if not (claimDerivation census) then
+        deferPure LoginOverCeiling
+      else defer
+        verdict <- deriveLogin check
+        _ <- liftIO (u => releaseDerivation census)
+        deferPure (LoginDerived verdict)
 
 {- | What a client that asked for a service credential is answered: the
    credential, signed here with the account's own repo key.
@@ -3123,6 +3281,7 @@ upgradeDecision server storeRef nowSeconds (Ok request) =
     RequestContext {
       nowSeconds = nowSeconds,
       nonce = osEntropyBytes requestNonceBytes,
+      login = None,
     }
     !storeRef
     request
@@ -3353,7 +3512,7 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds s
         deferPure sent
     None => defer
       response <- liftIO (u =>
-        applyRequest server dir storeRef (readBufferLive buf))
+        applyRequest server dir storeRef None (readBufferLive buf))
       sent <- A.sendAllWithin writeTimeout conn response
       _ <- liftIO (u => logAccessBytes trace response)
       deferPure sent

@@ -72,6 +72,7 @@ testContext : RequestContext
 testContext = RequestContext {
   nowSeconds = testInstant,
   nonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256),
+  login = None,
 }
 
 account : Account

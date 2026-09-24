@@ -467,8 +467,11 @@ inboundNonce : Array Int
 inboundNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 inboundContext : RequestContext
-inboundContext =
-  RequestContext { nowSeconds = inboundInstant, nonce = inboundNonce }
+inboundContext = RequestContext {
+  nowSeconds = inboundInstant,
+  nonce = inboundNonce,
+  login = None,
+}
 
 inboundHost : String
 inboundHost = "perf.example"

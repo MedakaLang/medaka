@@ -23,6 +23,13 @@ import http.{
 }
 import bytes.{Bytes, toArray}
 import hex as Hex
+import json.{Json(..), get}
+import lib.credential.{
+  LoginCheck,
+  LoginVerdict,
+  defaultIterations,
+  loginCheckBegin,
+}
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
 import string.{contains, fromUtf8, splitAt, toInt, toLower, trim}
@@ -58,6 +65,7 @@ import lib.store.{
   Store,
   sessionFingerprint,
   storeAccessActive,
+  storeCredential,
   storeRefreshActive,
   storeServerSecret,
 }
@@ -88,10 +96,16 @@ import lib.xrpc.{
    Without it two tokens minted for the same subject and audience in the same
    second would be byte-identical, so a refresh token rotated in the second it
    was issued would be indistinguishable from the one it replaced and the reuse
-   detection in `lib.store`'s rotation would have nothing to detect. -}
+   detection in `lib.store`'s rotation would have nothing to detect.
+
+   `login` is the verdict of a `com.atproto.server.createSession` request's
+   password derivations, paid for before this request reached the store
+   (`classifyLogin`). Every other request carries `None`, and so does a login
+   that was never classified; `createSession` refuses on `None`. -}
 public export data RequestContext = RequestContext {
   nowSeconds : Int,
   nonce : Array Int,
+  login : Option LoginVerdict,
 }
 
 {- | What the seam resolved about the caller's credentials, handed to every
@@ -1081,6 +1095,53 @@ classifyServiceAuth (Server account registry _) context table store request =
                 Ok claims => ServiceAuthMinted claims
             refused => ServiceAuthRefused (refusalFor refused)
         _ => NotServiceAuth
+
+-- ── the login derivation seam ───────────────────────────────────────────────
+
+{- | The route whose answer rests on a password derivation. Registered by
+   `lib.handlers` under this same constant, so the nsid `classifyLogin`
+   recognizes and the nsid the registry holds cannot drift. -}
+export
+createSessionNsid : String
+createSessionNsid = "com.atproto.server.createSession"
+
+{- | The password derivations a request for `com.atproto.server.createSession`
+   needs, not yet paid for, or `None` when the request needs none.
+
+   It exists so that the derivations run outside the store transition: the
+   shell pays for the returned check a slice at a time, between other
+   connections' work, and hands the verdict to `handle` through
+   `RequestContext`'s `login`. The verdict names the credential record it was
+   computed against, which is the record `store` holds here, and the handler
+   accepts it only if the store it transitions still holds that record.
+
+   `None` is every request the handler will refuse without grading a
+   password: another route, a body with no string `identifier` or `password`,
+   or a store with no credential. The registry is consulted rather than
+   trusted, as in `classifyServiceAuth`, so a request the router would not
+   dispatch to `createSession` costs no derivation. `salt` is the fresh salt a
+   successful login re-derives an outdated record under. -}
+export
+classifyLogin : Server -> Array Int -> Store -> Request -> Option LoginCheck
+classifyLogin (Server _ registry _) salt store request =
+  match requestNsid request
+    None => None
+    Some named =>
+      if not (sameNsidIdentity named createSessionNsid) then
+        None
+      else match routeRequest registry request
+        RouteCall _ (ProcedureJsonCall nsid _ body) =>
+          if nsid /= createSessionNsid then
+            None
+          else match (
+            get "identifier" body,
+            get "password" body,
+            storeCredential store,
+          )
+            (Some (JString _), Some (JString presented), Some record) =>
+              Some (loginCheckBegin presented salt defaultIterations record)
+            _ => None
+        _ => None
 
 -- ── framing raw bytes into a request ────────────────────────────────────────
 

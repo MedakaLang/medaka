@@ -156,7 +156,8 @@ accountHostText = "pds.example"
 -- Nothing this file drives mints a token or reads a clock: every route here
 -- is a public query. The context only has to be fixed.
 testContext : RequestContext
-testContext = RequestContext { nowSeconds = 1700000000, nonce = [||] }
+testContext =
+  RequestContext { nowSeconds = 1700000000, nonce = [||], login = None }
 
 mustHex : String -> Array Int
 mustHex text = resultOrPanic "sync_car_shapes: malformed hex" (decode text)

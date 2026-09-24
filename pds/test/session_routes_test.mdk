@@ -14,7 +14,8 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import bytes.{fromArray}
+import bytes.{Bytes, fromArray}
+import http.{parseRequestClassified}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
 import test.{
@@ -26,7 +27,16 @@ import test.{
   expectSatisfies,
   expectTrue,
 }
-import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
+import lib.credential.{
+  CredentialRecord,
+  LoginCheck,
+  LoginVerdict,
+  credentialIterations,
+  defaultIterations,
+  loginCheckAdvance,
+  loginCheckVerdict,
+  makeCredential,
+}
 import lib.handlers.{
   pdsServer,
   refreshTokenSeconds,
@@ -37,10 +47,17 @@ import lib.server_core.{
   Account,
   RequestContext(..),
   Server,
+  classifyLogin,
   handleBytes,
   makeAccount,
 }
-import lib.store.{Store, storeEmpty, storeWithCredential, storeWithServerSecret}
+import lib.store.{
+  Store,
+  storeCredential,
+  storeEmpty,
+  storeWithCredential,
+  storeWithServerSecret,
+}
 
 accountDidText : String
 accountDidText = "did:plc:s-sessions-test-account"
@@ -95,6 +112,37 @@ configuredStore = match storeWithServerSecret testSecret storeEmpty
   Ok withSecret => storeWithCredential credential withSecret
   Err message => panic "session_routes_test: session secret: \{message}"
 
+-- | The same store holding a credential for the same password derived at an
+-- older, lower count, which a successful login upgrades.
+outdatedStore : Store
+outdatedStore =
+  let older =
+    makeCredential
+      (arrayMakeWith 16 (i => (i * 5 + 9) % 256))
+      (defaultIterations / 10)
+      password
+  match older
+    Ok made => storeWithCredential made configuredStore
+    Err message => panic "session_routes_test: older credential: \{message}"
+
+-- | The same store after the account's password changed.
+changedPasswordStore : Store
+changedPasswordStore =
+  let changed =
+    makeCredential
+      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
+      defaultIterations
+      "a different password"
+  match changed
+    Ok made => storeWithCredential made configuredStore
+    Err message => panic "session_routes_test: changed credential: \{message}"
+
+-- | The verdict the shell would derive for `bytes` against `store`.
+verdictFor : Array Int -> Store -> Option LoginVerdict
+verdictFor bytes store = match fromArray bytes
+  Some packed => verdictAgainst store packed
+  None => panic "session_routes: request fixture holds a non-byte element"
+
 -- | The same store with no credential at all, which is what a server that was
 -- never given a password would hold.
 credentiallessStore : Store
@@ -118,7 +166,7 @@ nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
    below relies on exactly that to prove the nonce is what separates them. -}
 contextAt : Int -> Int -> RequestContext
 contextAt instant seed =
-  RequestContext { nowSeconds = instant, nonce = nonceAt seed }
+  RequestContext { nowSeconds = instant, nonce = nonceAt seed, login = None }
 
 -- # Requests and responses
 
@@ -193,11 +241,53 @@ fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
 
 -- # Driving
 
--- | One request against `store` at `context`, giving the store it left behind
--- and the response bytes.
+{- | One request against `store` at `context`, giving the store it left behind
+   and the response bytes.
+
+   A login's password is graded the way the shell grades it: before the
+   request reaches the store, against the record `store` holds, with the
+   verdict handed in on the context (`settleLogin`, `pds/shell/server.mdk`).
+   The shell pays for it a slice at a time between other connections' work;
+   here nothing else is running, so it is paid for at once. -}
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
-  Some packed => handleBytes server context store packed
+  Some packed =>
+    handleBytes
+      server
+      { context | login = verdictAgainst store packed }
+      store
+      packed
+  None => panic "session_routes: request fixture holds a non-byte element"
+
+-- The salt a login that earns an upgrade re-derives the credential under.
+upgradeSalt : Array Int
+upgradeSalt = arrayMakeWith 16 (i => (i * 29 + 17) % 256)
+
+-- | The verdict of `packed`'s password derivations against the credential
+-- `store` holds, or `None` for a request that needs none.
+verdictAgainst : Store -> Bytes -> Option LoginVerdict
+verdictAgainst store packed = match parseRequestClassified packed
+  Err _ => None
+  Ok request => map settled (classifyLogin server upgradeSalt store request)
+
+settled : LoginCheck -> LoginVerdict
+settled check = match loginCheckVerdict check
+  Some verdict => verdict
+  None => settled (loginCheckAdvance 256 check)
+
+-- | One request against `store`, carrying a verdict computed elsewhere rather
+-- than against `store` itself.
+sendWithVerdict : Option LoginVerdict ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+sendWithVerdict verdict store bytes = match fromArray bytes
+  Some packed =>
+    handleBytes
+      server
+      { contextAt testInstant 40 | login = verdict }
+      store
+      packed
   None => panic "session_routes: request fixture holds a non-byte element"
 
 createSessionNsid : String
@@ -290,6 +380,66 @@ test "a login with the wrong password is refused" =
       (contextAt testInstant 1)
       configuredStore
       (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+  expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
+
+{- | A login whose verdict was computed against a credential the store no
+   longer holds.
+
+   The shell derives a login's verdict outside the store transition, so
+   another request can replace the credential while it is being derived.
+   Two cases: a second login's upgrade landing first, and the account's
+   password changing (stood in for by a record derived from another
+   password, since no route changes it). In both the verdict graded the right
+   password against the record it saw, and in both it is refused, because the
+   record it saw is not the record it would be applied to. -}
+test "a login verdict computed against a replaced credential is refused" =
+  let loginBytes =
+    postJson "" createSessionNsid (loginJson accountHandleText password)
+  let (raced, first) =
+    sendWithVerdict
+      (verdictFor loginBytes outdatedStore)
+      outdatedStore
+      loginBytes
+  let (_, second) =
+    sendWithVerdict (verdictFor loginBytes outdatedStore) raced loginBytes
+  let (_, afterChange) =
+    sendWithVerdict
+      (verdictFor loginBytes configuredStore)
+      changedPasswordStore
+      loginBytes
+  let (_, fresh) =
+    sendWithVerdict (verdictFor loginBytes raced) raced loginBytes
+  expectEach [
+    (
+      "the first login lands and upgrades the credential",
+      expectEqual
+        ("200 OK", Some defaultIterations)
+        (outcome first, map credentialIterations (storeCredential raced)),
+    ),
+    (
+      "the second verdict, against the record the upgrade replaced",
+      expectEqual (outcome second) "401 Unauthorized AuthenticationRequired",
+    ),
+    (
+      "a verdict against the password the account no longer has",
+      expectEqual
+        (outcome afterChange)
+        "401 Unauthorized AuthenticationRequired",
+    ),
+    (
+      "a verdict against the upgraded record itself",
+      expectEqual (outcome fresh) "200 OK",
+    ),
+  ]
+
+-- A login that reaches the handler with no verdict at all was never graded,
+-- and is refused the way a wrong password is.
+test "a login that carries no verdict is refused" =
+  let (_, response) =
+    sendWithVerdict
+      None
+      configuredStore
+      (postJson "" createSessionNsid (loginJson accountHandleText password))
   expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
 
 {- | The three ways a login can fail are ONE answer, byte for byte. The

@@ -601,7 +601,7 @@ secret_comparisons_ok() {
   dir=$4
   mkdir -p "$dir"
   for spec in \
-    "$credential:2:digest password" \
+    "$credential:3:digest password derived stored" \
     "$jwt:2:secret expected sigSeg" \
     "$store:9:secret wanted access refresh token fingerprint family consumed previous"
   do
@@ -639,6 +639,7 @@ secret_comparisons_ok() {
   roster_store=0
   for spec in \
     "credentialVerify:credential:1" \
+    "digestIs:credential:1" \
     "verifySegments:jwt:1" \
     "liveRefresh:store:1" \
     "consumedRefresh:store:1" \

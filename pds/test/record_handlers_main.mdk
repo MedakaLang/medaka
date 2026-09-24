@@ -124,7 +124,8 @@ testNonce : Array Int
 testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 testContext : RequestContext
-testContext = RequestContext { nowSeconds = testInstant, nonce = testNonce }
+testContext =
+  RequestContext { nowSeconds = testInstant, nonce = testNonce, login = None }
 
 {- | The store a replayed write is applied to: it carries the session secret
    the fixture token was minted from, and the open session that token belongs
