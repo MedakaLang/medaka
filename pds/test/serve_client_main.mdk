@@ -2005,6 +2005,10 @@ derivationHeadStart = millis 100
 derivationCeiling : Int
 derivationCeiling = 4
 
+-- | The server's `maxConcurrentDerivationsPerIdentity` (`pds/shell/server.mdk`, #3399).
+perIdentityDerivationCeiling : Int
+perIdentityDerivationCeiling = 2
+
 -- | One login request sent on a fresh connection, not yet answered.
 sendLogin : Int -> String -> String -> <Net "_"> Connection
 sendLogin port identifier password =
@@ -2013,6 +2017,22 @@ sendLogin port identifier password =
     mustSend
       conn
       (postRequest "" createSessionPath (createSessionJson identifier password))
+  conn
+
+-- | `sendLogin`, carrying a forwarded-for identity instead of a bearer
+-- token — lets two logins be attributed to two different callers behind a
+-- trusted proxy (`kdf-flood-xff`).
+sendLoginXff : Int -> String -> String -> String -> <Net "_"> Connection
+sendLoginXff port xff identifier password =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequestXff
+        xff
+        ""
+        createSessionPath
+        (createSessionJson identifier password))
   conn
 
 statusOnly : Result String (Int, Array Int, Array Int) -> Int
@@ -2131,9 +2151,46 @@ runKdfFlood port identifier password count did collection rkey =
       && readSeconds * 10.0 <= floodSeconds)
     "\{intToString derived} logins derived and refused 401, \{intToString refused} refused 429 at the ceiling, getRecord \{intToString readStatus} in \{floatToString readSeconds}s of a \{floatToString floodSeconds}s flood"
 
+{- | `count` wrong-password logins flooded from one forwarded-for identity
+   (the attacker), with a legitimate login from a DIFFERENT identity (the
+   owner) sent while the flood is in flight (#3399).
+
+   The attacker's own flood is capped at `perIdentityDerivationCeiling`,
+   never the whole-server `derivationCeiling` — the rest are refused 429
+   without deriving. The owner's login, attributed to its own identity, is
+   never counted against the attacker's share, so it succeeds regardless of
+   how much of the attacker's own cap the flood has claimed. -}
+runKdfFloodOwnerLockout : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff ownerPassword =
+  let logins =
+    map
+      (_ => sendLoginXff port attackerXff identifier wrongPassword)
+      [1..=count]
+  let () = sleep derivationHeadStart
+  let ownerLogin = sendLoginXff port ownerXff identifier ownerPassword
+  let ownerResult = readResponse ownerLogin [||]
+  let () = ignoreResult (close ownerLogin)
+  let results = map (conn => readResponse conn [||]) logins
+  let () = closeAll logins
+  let refused = length (filter isCeilingRefusal results)
+  let derived = length (filter isAuthRefusal results)
+  report
+    "KDFFLOODOWNERLOCKOUT"
+    (refused == count - perIdentityDerivationCeiling
+      && derived == perIdentityDerivationCeiling
+      && statusOnly ownerResult == 200)
+    "attacker: \{intToString derived} derived and refused 401, \{intToString refused} refused 429 at the per-identity ceiling; owner login answered \{intToString (statusOnly ownerResult)} (wanted 200)"
+
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|login-race> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -2276,6 +2333,15 @@ main = match args ()
       did
       collection
       rkey
+  ["kdf-flood-xff", port, attackerXff, identifier, wrongPassword, count, ownerXff, ownerPassword] =>
+    runKdfFloodOwnerLockout
+      (mustPort port)
+      attackerXff
+      identifier
+      wrongPassword
+      (mustCount count)
+      ownerXff
+      ownerPassword
   ["login-race", port, identifier, password] =>
     runLoginRace (mustPort port) identifier password
   ["credential-at", count, password] =>
