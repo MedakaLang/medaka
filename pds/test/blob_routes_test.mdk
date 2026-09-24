@@ -20,7 +20,6 @@ import lib.credential.{
   CredentialRecord,
   LoginCheck,
   LoginVerdict,
-  defaultIterations,
   loginCheckAdvance,
   loginCheckVerdict,
   makeCredential,
@@ -63,13 +62,13 @@ server =
 testSecret : Array Int
 testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
 
+-- | The account credential, derived at a small fixed count rather than
+-- `defaultIterations`, so this file's cost does not grow when the shipped
+-- count does. What is under test here is the blob routes, not the login.
 credential : CredentialRecord
 credential =
   let derived =
-    makeCredential
-      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
-      defaultIterations
-      password
+    makeCredential (arrayMakeWith 16 (i => (i * 13 + 3) % 256)) 4 password
   match derived
     Ok made => made
     Err message => panic "blob_routes_test: credential: \{message}"
@@ -213,6 +212,8 @@ stringEntries (_ :: rest) = stringEntries rest
 
 -- A login's verdict is derived before the request reaches the store, as the
 -- shell derives it (`settleLogin`, `pds/shell/server.mdk`), all at once here.
+-- The salt it offers is empty, which offers no upgrade: the shell's would
+-- re-derive the low-count `credential` at the shipped count on login.
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
   Some packed =>
@@ -226,7 +227,7 @@ send context store bytes = match fromArray bytes
 verdictAgainst : Store -> Bytes -> Option LoginVerdict
 verdictAgainst store packed = match parseRequestClassified packed
   Err _ => None
-  Ok request => map settled (classifyLogin server (nonceAt 97) store request)
+  Ok request => map settled (classifyLogin server [||] store request)
 
 settled : LoginCheck -> LoginVerdict
 settled check = match loginCheckVerdict check

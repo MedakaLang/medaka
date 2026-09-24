@@ -3398,8 +3398,8 @@ wait "$CONTROL_PID" || CONTROL_RC=$?
   || fail "case 70: non-PDS SIGTERM status $CONTROL_RC, expected 143"
 
 # ── a dedicated --data dir: login derivations off the store transition (#3372)
-# The account's credential is re-derived at a count far above the shipped one,
-# so one derivation takes long enough (~0.7 s here) to be measured against:
+# The account's credential is re-derived at a count above the shipped one, so
+# one derivation takes long enough (~0.7 s here) to be measured against:
 # a request that has to wait out a whole derivation cannot pass for one that
 # waited a slice of it. A record is written first, while the shipped-count
 # credential is still the one on disk, so there is something to read.

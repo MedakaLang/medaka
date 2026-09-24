@@ -89,17 +89,23 @@ server =
 testSecret : Array Int
 testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
 
-{- | The account credential, derived at the SHIPPED iteration count.
+{- | The iteration count this file's credentials are derived at.
 
-   `pds/test/credential_test.mdk` derives cheaply because it is grading the
-   record; this file pays the real cost once, so that what the login cells
-   grade is the credential an operator's server would actually hold. -}
+   It is NOT `defaultIterations`: every derivation here is paid for in gate
+   wall time, and a fixture at the shipped count would make that cost grow
+   with every raise of it. A login at this count grades the password exactly
+   as one at the shipped count does, so the only cell that derives at the
+   shipped count is the one about moving a record onto it. -}
+cheapIterations : Int
+cheapIterations = 4
+
+-- | The account credential.
 credential : CredentialRecord
 credential =
   let derived =
     makeCredential
       (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
-      defaultIterations
+      cheapIterations
       password
   match derived
     Ok made => made
@@ -112,14 +118,15 @@ configuredStore = match storeWithServerSecret testSecret storeEmpty
   Ok withSecret => storeWithCredential credential withSecret
   Err message => panic "session_routes_test: session secret: \{message}"
 
--- | The same store holding a credential for the same password derived at an
--- older, lower count, which a successful login upgrades.
+-- | The same store holding a credential for the same password under another
+-- salt, which a successful login offered an upgrade moves onto the shipped
+-- count.
 outdatedStore : Store
 outdatedStore =
   let older =
     makeCredential
       (arrayMakeWith 16 (i => (i * 5 + 9) % 256))
-      (defaultIterations / 10)
+      cheapIterations
       password
   match older
     Ok made => storeWithCredential made configuredStore
@@ -131,16 +138,17 @@ changedPasswordStore =
   let changed =
     makeCredential
       (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
-      defaultIterations
+      cheapIterations
       "a different password"
   match changed
     Ok made => storeWithCredential made configuredStore
     Err message => panic "session_routes_test: changed credential: \{message}"
 
--- | The verdict the shell would derive for `bytes` against `store`.
-verdictFor : Array Int -> Store -> Option LoginVerdict
-verdictFor bytes store = match fromArray bytes
-  Some packed => verdictAgainst store packed
+-- | The verdict the shell would derive for `bytes` against `store`, offering
+-- `salt` as the upgrade.
+verdictFor : Array Int -> Array Int -> Store -> Option LoginVerdict
+verdictFor salt bytes store = match fromArray bytes
+  Some packed => verdictAgainst salt store packed
   None => panic "session_routes: request fixture holds a non-byte element"
 
 -- | The same store with no credential at all, which is what a server that was
@@ -248,13 +256,19 @@ fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
    request reaches the store, against the record `store` holds, with the
    verdict handed in on the context (`settleLogin`, `pds/shell/server.mdk`).
    The shell pays for it a slice at a time between other connections' work;
-   here nothing else is running, so it is paid for at once. -}
+   here nothing else is running, so it is paid for at once.
+
+   No upgrade is offered, so a login here is graded the way the shipped
+   server grades one against a record already at its count: the password is
+   verified and the record kept. The shell always offers one, and against
+   this file's `cheapIterations` records it would re-derive at the shipped
+   count on every successful login. -}
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
   Some packed =>
     handleBytes
       server
-      { context | login = verdictAgainst store packed }
+      { context | login = verdictAgainst noUpgradeSalt store packed }
       store
       packed
   None => panic "session_routes: request fixture holds a non-byte element"
@@ -263,12 +277,18 @@ send context store bytes = match fromArray bytes
 upgradeSalt : Array Int
 upgradeSalt = arrayMakeWith 16 (i => (i * 29 + 17) % 256)
 
+-- A salt of the wrong length, which `loginCheckBegin` takes as an offer of no
+-- upgrade at all.
+noUpgradeSalt : Array Int
+noUpgradeSalt = [||]
+
 -- | The verdict of `packed`'s password derivations against the credential
--- `store` holds, or `None` for a request that needs none.
-verdictAgainst : Store -> Bytes -> Option LoginVerdict
-verdictAgainst store packed = match parseRequestClassified packed
+-- `store` holds, offering `salt` as the upgrade, or `None` for a request that
+-- needs none.
+verdictAgainst : Array Int -> Store -> Bytes -> Option LoginVerdict
+verdictAgainst salt store packed = match parseRequestClassified packed
   Err _ => None
-  Ok request => map settled (classifyLogin server upgradeSalt store request)
+  Ok request => map settled (classifyLogin server salt store request)
 
 settled : LoginCheck -> LoginVerdict
 settled check = match loginCheckVerdict check
@@ -391,24 +411,23 @@ test "a login with the wrong password is refused" =
    password changing (stood in for by a record derived from another
    password, since no route changes it). In both the verdict graded the right
    password against the record it saw, and in both it is refused, because the
-   record it saw is not the record it would be applied to. -}
+   record it saw is not the record it would be applied to.
+
+   This is the one cell that derives at the shipped count, twice: the upgrade
+   the first login carries, and the check of the record it left behind. -}
 test "a login verdict computed against a replaced credential is refused" =
   let loginBytes =
     postJson "" createSessionNsid (loginJson accountHandleText password)
-  let (raced, first) =
-    sendWithVerdict
-      (verdictFor loginBytes outdatedStore)
-      outdatedStore
-      loginBytes
-  let (_, second) =
-    sendWithVerdict (verdictFor loginBytes outdatedStore) raced loginBytes
+  let upgrading = verdictFor upgradeSalt loginBytes outdatedStore
+  let (raced, first) = sendWithVerdict upgrading outdatedStore loginBytes
+  let (_, second) = sendWithVerdict upgrading raced loginBytes
   let (_, afterChange) =
     sendWithVerdict
-      (verdictFor loginBytes configuredStore)
+      (verdictFor noUpgradeSalt loginBytes configuredStore)
       changedPasswordStore
       loginBytes
   let (_, fresh) =
-    sendWithVerdict (verdictFor loginBytes raced) raced loginBytes
+    sendWithVerdict (verdictFor upgradeSalt loginBytes raced) raced loginBytes
   expectEach [
     (
       "the first login lands and upgrades the credential",
