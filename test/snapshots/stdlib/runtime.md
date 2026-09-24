@@ -1,5 +1,5 @@
 # META
-source_lines=754
+source_lines=804
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -608,6 +608,56 @@ extern arrayFill : a -> Array a -> Unit
 -- | A new array holding the elements of a list.
 extern arrayFromList : List a -> Array a
 
+-- # Fixed-width integers
+
+-- `U8`, `U16` and `U32` share `Int`'s tagged word; only the static type
+-- differs, and a value is always held in `0 .. 2^n - 1`.  These are the
+-- kernel conversions the `u8`/`u16`/`u32` modules build their surface on.
+-- The truncating forms keep the low `n` bits; the `ToInt` forms are the
+-- identity on the word.  Restricted to the standard library and to modules
+-- compiled with `--allow-internal`.
+
+-- | The low eight bits of an `Int`, as a `U8`.
+extern u8Truncate : Int -> U8
+
+-- | A `U8` as an `Int`.
+extern u8ToInt : U8 -> Int
+
+-- | The low sixteen bits of an `Int`, as a `U16`.
+extern u16Truncate : Int -> U16
+
+-- | A `U16` as an `Int`.
+extern u16ToInt : U16 -> Int
+
+-- | The low thirty-two bits of an `Int`, as a `U32`.
+extern u32Truncate : Int -> U32
+
+-- | A `U32` as an `Int`.
+extern u32ToInt : U32 -> Int
+
+-- The `Int` bit primitives again, under names a module can still reach after
+-- it defines its own `bitAnd`, `shiftLeft` and the rest (the `u8`, `u16` and
+-- `u32` modules do).  Each is the primitive above it in this file, exactly.
+-- Restricted like the conversions.
+
+-- | `bitAnd`, under a name a module's own `bitAnd` does not shadow.
+extern intBitAnd : Int -> Int -> Int
+
+-- | `bitOr`, under a name a module's own `bitOr` does not shadow.
+extern intBitOr : Int -> Int -> Int
+
+-- | `bitXor`, under a name a module's own `bitXor` does not shadow.
+extern intBitXor : Int -> Int -> Int
+
+-- | `bitNot`, under a name a module's own `bitNot` does not shadow.
+extern intBitNot : Int -> Int
+
+-- | `shiftLeft`, under a name a module's own `shiftLeft` does not shadow.
+extern intShiftLeft : Int -> Int -> Int
+
+-- | `shiftRight`, under a name a module's own `shiftRight` does not shadow.
+extern intShiftRight : Int -> Int -> Int
+
 -- # Byte blocks
 
 -- `ByteBlock` is a mutable buffer holding one byte per element, so a block of
@@ -890,6 +940,18 @@ extern stringToLower : String -> String
 (DExtern false "arrayBlit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "arrayFill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
 (DExtern false "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
+(DExtern false "u8Truncate" (TyFun (TyCon "Int") (TyCon "U8")))
+(DExtern false "u8ToInt" (TyFun (TyCon "U8") (TyCon "Int")))
+(DExtern false "u16Truncate" (TyFun (TyCon "Int") (TyCon "U16")))
+(DExtern false "u16ToInt" (TyFun (TyCon "U16") (TyCon "Int")))
+(DExtern false "u32Truncate" (TyFun (TyCon "Int") (TyCon "U32")))
+(DExtern false "u32ToInt" (TyFun (TyCon "U32") (TyCon "Int")))
+(DExtern false "intBitAnd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intBitOr" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intBitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intBitNot" (TyFun (TyCon "Int") (TyCon "Int")))
+(DExtern false "intShiftLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intShiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "byteBlockMake" (TyFun (TyCon "Int") (TyCon "ByteBlock")))
 (DExtern false "byteBlockLength" (TyFun (TyCon "ByteBlock") (TyCon "Int")))
 (DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))
@@ -1057,6 +1119,18 @@ extern stringToLower : String -> String
 (DExtern false "arrayBlit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "arrayFill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
 (DExtern false "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
+(DExtern false "u8Truncate" (TyFun (TyCon "Int") (TyCon "U8")))
+(DExtern false "u8ToInt" (TyFun (TyCon "U8") (TyCon "Int")))
+(DExtern false "u16Truncate" (TyFun (TyCon "Int") (TyCon "U16")))
+(DExtern false "u16ToInt" (TyFun (TyCon "U16") (TyCon "Int")))
+(DExtern false "u32Truncate" (TyFun (TyCon "Int") (TyCon "U32")))
+(DExtern false "u32ToInt" (TyFun (TyCon "U32") (TyCon "Int")))
+(DExtern false "intBitAnd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intBitOr" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intBitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intBitNot" (TyFun (TyCon "Int") (TyCon "Int")))
+(DExtern false "intShiftLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern false "intShiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "byteBlockMake" (TyFun (TyCon "Int") (TyCon "ByteBlock")))
 (DExtern false "byteBlockLength" (TyFun (TyCon "ByteBlock") (TyCon "Int")))
 (DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))

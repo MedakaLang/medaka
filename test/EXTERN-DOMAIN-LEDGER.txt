@@ -200,3 +200,15 @@ exit	EXEMPT	terminates the process, produces no comparable value
 __fallthrough__	EXEMPT	compiler-generated guard-fallthrough sentinel, never user-evaluated
 enableRunStdoutFlush	EXEMPT	IO plumbing (stdout flush control), returns Unit
 stashRunStdout	EXEMPT	IO plumbing (stdout capture), returns Unit
+u8Truncate	TOTAL	total over Int: keeps the low 8 bits
+u8ToInt	TOTAL	identity on the word, every U8 is an Int
+u16Truncate	TOTAL	total over Int: keeps the low 16 bits
+u16ToInt	TOTAL	identity on the word, every U16 is an Int
+u32Truncate	TOTAL	total over Int: keeps the low 32 bits
+u32ToInt	TOTAL	identity on the word, every U32 is an Int
+intBitAnd	TOTAL	total bitwise op (bitAnd under an unshadowable name)
+intBitOr	TOTAL	total bitwise op (bitOr under an unshadowable name)
+intBitXor	TOTAL	total bitwise op (bitXor under an unshadowable name)
+intBitNot	TOTAL	total bitwise op (bitNot under an unshadowable name)
+intShiftLeft	PENDING	#476 shiftLeft under an unshadowable name; shift amount >= 64 or negative is the edge
+intShiftRight	PENDING	#476 shiftRight under an unshadowable name; shift amount >= 64 or negative is the edge
