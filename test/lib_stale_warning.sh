@@ -29,12 +29,27 @@
 # Echoes the fixed (non-variable) PREFIX of the staleness warning, read live
 # from compiler/driver/medaka_cli.mdk's:
 #   let msg = "warning: this ./medaka was built ... differs from " ++ compilerDir ++ " ..."
-# i.e. everything up to where the variable compilerDir is spliced in.
-# Echoes "" if that source no longer has this shape.
+# i.e. everything up to where the variable compilerDir is spliced in. The
+# source is read as one line, so the match does not depend on where `medaka
+# fmt` breaks the expression. Echoes "" if that source no longer has this shape.
 mdk_stale_marker() {
   _mdk_cli="${MDK_CLI_SRC:-${ROOT:-.}/compiler/driver/medaka_cli.mdk}"
   [ -f "$_mdk_cli" ] || return 0
-  sed -n 's/.*let msg = "\([^"]*\)" ++ compilerDir.*/\1/p' "$_mdk_cli" | head -1
+  tr '\n' ' ' < "$_mdk_cli" |
+    sed -n 's/.*let msg = *"\([^"]*\)" *++ *compilerDir.*/\1/p'
+}
+
+# mdk_require_marker
+# Fails (exit 1, with a message) when the source exists but the marker cannot
+# be derived from it. Every other function here degrades to "can't tell" on an
+# empty marker, which is what let a reformat break them unnoticed; a gate that
+# sources this file calls this once so that breakage is a red gate instead.
+mdk_require_marker() {
+  _rm_cli="${MDK_CLI_SRC:-${ROOT:-.}/compiler/driver/medaka_cli.mdk}"
+  [ -f "$_rm_cli" ] || return 0
+  [ -n "$(mdk_stale_marker)" ] && return 0
+  printf 'FAIL lib_stale_warning.sh: cannot derive the staleness-warning marker from %s (its `let msg = "…" ++ compilerDir` changed shape)\n' "$_rm_cli"
+  return 1
 }
 
 # mdk_is_stale <text>
