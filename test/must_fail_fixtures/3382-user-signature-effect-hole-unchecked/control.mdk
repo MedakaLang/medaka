@@ -1,0 +1,7 @@
+-- #3382 control: the same literal path and the same bound, read directly
+-- through the extern, so call-site hole filling and the escape check are
+-- intact.
+cfg : Unit -> <FileRead "config/*"> Result String String
+cfg _ = readFile "config/app.toml"
+
+main = println 1
