@@ -7,11 +7,13 @@ dTypeAliasUnresolved : Bool -> String -> List String -> List (Option KindAnn) ->
 deriveRefName : DeriveRef -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
+fixedWidthMask : String -> Option Int
 identOriginBuiltin : IdentOrigin
 identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginOf : TyConOrigin -> Option IdentOrigin
 ifaceIdMatches : String -> String -> Bool
 ifaceIdentity : TyConOrigin -> String -> String
+isFixedWidthHead : String -> Bool
 kindAnnArg : KindAnn -> String
 kindAnnSource : KindAnn -> String
 lookupTab : TabKey -> List (TabKey, a) -> Option a

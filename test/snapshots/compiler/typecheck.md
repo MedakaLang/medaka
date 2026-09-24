@@ -1,5 +1,5 @@
 # META
-source_lines=46888
+source_lines=46890
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -23057,12 +23057,13 @@ binopBuiltinHead method tag =
 -- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
 -- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
--- channel stamps only Float (Int is the arithmetic primitive default already;
--- leaving Int operands RNone avoids perturbing every integer binop's emitted IR)
--- — `RScalar "Int"` is stampOpRouteVal's, on comparison sites.  Never overwrites a
--- route another pass already set (a comparison op has a different node/ref; an
--- arithmetic route starts RNone) — the guard is: stamp only if the site is still
--- RNone AND grounds to Float.
+-- channel stamps Float and the fixed-width heads with their own tag (Int is the
+-- arithmetic primitive default already; leaving Int operands RNone avoids
+-- perturbing every integer binop's emitted IR) — `RScalar "Int"` is
+-- stampOpRouteVal's, on comparison sites.  Never overwrites a route another pass
+-- already set (a comparison op has a different node/ref; an arithmetic route
+-- starts RNone) — the guard is: stamp only if the site is still RNone AND grounds
+-- to Float or a fixed-width head.
 resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveArithSites [] = ()
 resolveArithSites ((dref, m) :: rest) =
@@ -23314,8 +23315,9 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
--- Int/Float heads bypass method dispatch; a user Num impl for any other head,
--- including String/Bool/Char, is selected through the exact interface identity.
+-- Int/Float and fixed-width U8/U16/U32 heads bypass method dispatch; a user Num
+-- impl for any other head, including String/Bool/Char, is selected through the
+-- exact interface identity.
 stampPredicateOpRouteVal : String ->
   ScopeId ->
   String ->
@@ -29112,16 +29114,6 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
       EApp
         (EMethodAt "fromInt" "" (mintMethodCellWith 1 (fst split) (snd split)))
         (ELit (LInt n))
--- A literal routed to a fixed-width head's `fromInt` is that head's word already
--- when it is in range (the heads share Int's tagged word), so it needs no call.  The
--- range is checked HERE, on the value, not assumed from the module check: an
--- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
-fixedWidthLiteralFits : Route -> Int -> Bool
-fixedWidthLiteralFits (RKey tag _) n = match fixedWidthMask tag
-  Some mask => n >= 0 && n <= mask
-  None => False
-fixedWidthLiteralFits _ _ = False
-
 -- Roadmap #18c: rewrite each *stamped* EUnOp (`-` → `negate`) into its Num
 -- method application via EMethodAt, exactly like the EBinOp arm above.  Only
 -- nodes resolveUnopSites stamped (ground non-primitive operand) carry a
@@ -29132,6 +29124,16 @@ rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
   RNone => EUnOp op e routeRef
   _ => unopMethodApp op e routeRef
 rewriteBinopExpr e = e
+
+-- A literal routed to a fixed-width head's `fromInt` is that head's word already
+-- when it is in range (the heads share Int's tagged word), so it needs no call.  The
+-- range is checked HERE, on the value, not assumed from the module check: an
+-- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
+fixedWidthLiteralFits : Route -> Int -> Bool
+fixedWidthLiteralFits (RKey tag _) n = match fixedWidthMask tag
+  Some mask => n >= 0 && n <= mask
+  None => False
+fixedWidthLiteralFits _ _ = False
 
 -- split the stamped RKey route into a bare-tag route (reqs dropped) + the element
 -- dict routes, so the dicts ride on the EMethodAt impl-dict ref (where emitMethod /
@@ -51592,11 +51594,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteBinopExpr" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef")))))
 (DFunDef false "rewriteBinopExpr" ((PCon "ENumLit" (PVar "n") (PVar "fref") (PVar "dref") PWild)) (EMatch (EUnOp "!" (EVar "fref")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "dref")) (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "fixedWidthLiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EVar "mintMethodCellWith") (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
+(DFunDef false "rewriteBinopExpr" ((PCon "EUnOp" (PVar "op") (PVar "e") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "routeRef"))) (arm PWild () (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "op")) (EVar "e")) (EVar "routeRef")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "fixedWidthLiteralFits" (TyFun (TyCon "Route") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "fixedWidthLiteralFits" ((PCon "RKey" (PVar "tag") PWild) (PVar "n")) (EMatch (EApp (EVar "fixedWidthMask") (EVar "tag")) (arm (PCon "Some" (PVar "mask")) () (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBinOp "<=" (EVar "n") (EVar "mask")))) (arm (PCon "None") () (EVar "False"))))
 (DFunDef false "fixedWidthLiteralFits" (PWild PWild) (EVar "False"))
-(DFunDef false "rewriteBinopExpr" ((PCon "EUnOp" (PVar "op") (PVar "e") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "routeRef"))) (arm PWild () (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "op")) (EVar "e")) (EVar "routeRef")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "binopRouteSplit" (TyFun (TyCon "Route") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "binopRouteSplit" ((PCon "RKey" (PVar "tag") (PVar "reqs"))) (ETuple (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EVar "reqs")))
 (DFunDef false "binopRouteSplit" ((PVar "r")) (ETuple (EVar "r") (EListLit)))
@@ -58763,11 +58765,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteBinopExpr" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef")))))
 (DFunDef false "rewriteBinopExpr" ((PCon "ENumLit" (PVar "n") (PVar "fref") (PVar "dref") PWild)) (EMatch (EUnOp "!" (EVar "fref")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "dref")) (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") ((GBool (EApp (EApp (EVar "fixedWidthLiteralFits") (EVar "route")) (EVar "n")))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EVar "mintMethodCellWith") (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
+(DFunDef false "rewriteBinopExpr" ((PCon "EUnOp" (PVar "op") (PVar "e") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "routeRef"))) (arm PWild () (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "op")) (EVar "e")) (EVar "routeRef")))))
+(DFunDef false "rewriteBinopExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "fixedWidthLiteralFits" (TyFun (TyCon "Route") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "fixedWidthLiteralFits" ((PCon "RKey" (PVar "tag") PWild) (PVar "n")) (EMatch (EApp (EVar "fixedWidthMask") (EVar "tag")) (arm (PCon "Some" (PVar "mask")) () (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBinOp "<=" (EVar "n") (EVar "mask")))) (arm (PCon "None") () (EVar "False"))))
 (DFunDef false "fixedWidthLiteralFits" (PWild PWild) (EVar "False"))
-(DFunDef false "rewriteBinopExpr" ((PCon "EUnOp" (PVar "op") (PVar "e") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "e")) (EVar "routeRef"))) (arm PWild () (EApp (EApp (EApp (EVar "unopMethodApp") (EVar "op")) (EVar "e")) (EVar "routeRef")))))
-(DFunDef false "rewriteBinopExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "binopRouteSplit" (TyFun (TyCon "Route") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "binopRouteSplit" ((PCon "RKey" (PVar "tag") (PVar "reqs"))) (ETuple (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EVar "reqs")))
 (DFunDef false "binopRouteSplit" ((PVar "r")) (ETuple (EVar "r") (EListLit)))

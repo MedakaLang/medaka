@@ -23053,12 +23053,13 @@ binopBuiltinHead method tag =
 -- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
 -- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
--- channel stamps only Float (Int is the arithmetic primitive default already;
--- leaving Int operands RNone avoids perturbing every integer binop's emitted IR)
--- — `RScalar "Int"` is stampOpRouteVal's, on comparison sites.  Never overwrites a
--- route another pass already set (a comparison op has a different node/ref; an
--- arithmetic route starts RNone) — the guard is: stamp only if the site is still
--- RNone AND grounds to Float.
+-- channel stamps Float and the fixed-width heads with their own tag (Int is the
+-- arithmetic primitive default already; leaving Int operands RNone avoids
+-- perturbing every integer binop's emitted IR) — `RScalar "Int"` is
+-- stampOpRouteVal's, on comparison sites.  Never overwrites a route another pass
+-- already set (a comparison op has a different node/ref; an arithmetic route
+-- starts RNone) — the guard is: stamp only if the site is still RNone AND grounds
+-- to Float or a fixed-width head.
 resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveArithSites [] = ()
 resolveArithSites ((dref, m) :: rest) =
@@ -23310,8 +23311,9 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
--- Int/Float heads bypass method dispatch; a user Num impl for any other head,
--- including String/Bool/Char, is selected through the exact interface identity.
+-- Int/Float and fixed-width U8/U16/U32 heads bypass method dispatch; a user Num
+-- impl for any other head, including String/Bool/Char, is selected through the
+-- exact interface identity.
 stampPredicateOpRouteVal : String ->
   ScopeId ->
   String ->
@@ -29108,16 +29110,6 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
       EApp
         (EMethodAt "fromInt" "" (mintMethodCellWith 1 (fst split) (snd split)))
         (ELit (LInt n))
--- A literal routed to a fixed-width head's `fromInt` is that head's word already
--- when it is in range (the heads share Int's tagged word), so it needs no call.  The
--- range is checked HERE, on the value, not assumed from the module check: an
--- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
-fixedWidthLiteralFits : Route -> Int -> Bool
-fixedWidthLiteralFits (RKey tag _) n = match fixedWidthMask tag
-  Some mask => n >= 0 && n <= mask
-  None => False
-fixedWidthLiteralFits _ _ = False
-
 -- Roadmap #18c: rewrite each *stamped* EUnOp (`-` → `negate`) into its Num
 -- method application via EMethodAt, exactly like the EBinOp arm above.  Only
 -- nodes resolveUnopSites stamped (ground non-primitive operand) carry a
@@ -29128,6 +29120,16 @@ rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
   RNone => EUnOp op e routeRef
   _ => unopMethodApp op e routeRef
 rewriteBinopExpr e = e
+
+-- A literal routed to a fixed-width head's `fromInt` is that head's word already
+-- when it is in range (the heads share Int's tagged word), so it needs no call.  The
+-- range is checked HERE, on the value, not assumed from the module check: an
+-- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
+fixedWidthLiteralFits : Route -> Int -> Bool
+fixedWidthLiteralFits (RKey tag _) n = match fixedWidthMask tag
+  Some mask => n >= 0 && n <= mask
+  None => False
+fixedWidthLiteralFits _ _ = False
 
 -- split the stamped RKey route into a bare-tag route (reqs dropped) + the element
 -- dict routes, so the dicts ride on the EMethodAt impl-dict ref (where emitMethod /

@@ -1,5 +1,5 @@
 # META
-source_lines=243
+source_lines=245
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -86,6 +86,8 @@ public export data CExpr =
   -- operand ("Float"/"Int"; "" = unstamped → today's structural/dict path).  The
   -- native emitter reads it (emitBin → fieldNameToLTy → LTFloat) to bypass the
   -- type-lost `staticIsFloat` blind spot (SHARED-FLOAT-RESIDUAL-DESIGN §3(C)).
+  -- A fixed-width tag ("U8"/"U16"/"U32", `ast.fixedWidthMask`) is not only a hint:
+  -- every engine MUST reduce an arithmetic result modulo 2^n on it.
   | CBinPrim String CExpr CExpr String
   | CUnOp String CExpr
   | CTuple (List CExpr)
