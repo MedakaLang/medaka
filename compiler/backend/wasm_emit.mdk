@@ -191,6 +191,8 @@ import frontend.ast.{
   Route(..),
   Loc(..),
   ifaceIdMatches,
+  isFixedWidthHead,
+  fixedWidthMask,
 }
 import ir.core_ir.{
   CProgram(..),
@@ -1805,6 +1807,23 @@ isLeafExternW name = contains
     "bitXor",
     "bitNot",
     "intBitsToFloat",
+    -- the fixed-width kernel conversions (Int -> U8/U16/U32 truncation, and the
+    -- identity back to Int).  A fixed-width value is an Int word, so these are an
+    -- `i64.and` over the box/unbox seam and a no-op respectively.
+    "u8Truncate",
+    "u8ToInt",
+    "u16Truncate",
+    "u16ToInt",
+    "u32Truncate",
+    "u32ToInt",
+    -- the Int bit primitives under their unshadowable names (`intBitAnd` is
+    -- `bitAnd`, exactly); emitLeafExternRef forwards each to its original.
+    "intBitAnd",
+    "intBitOr",
+    "intBitXor",
+    "intBitNot",
+    "intShiftLeft",
+    "intShiftRight",
     -- #101: libm math externs.  IEEE-exact ops lower to native f64 opcodes
     -- (sqrt/floor/ceil/trunc → f64.sqrt/floor/ceil/trunc; round → $mdk_round, C-round
     -- half-away-from-zero); transcendentals lower to JS `Math.*` HOST IMPORTS ($mdk_<name>,
@@ -1961,6 +1980,7 @@ externArityW name =
       "args",
       "readFileBytes",
       "bitNot",
+      "intBitNot",
       "intBitsToFloat",
       "sqrt",
       "floor",
@@ -2032,6 +2052,11 @@ externArityW name =
       "bytesToFloat64",
       "bitOr",
       "bitXor",
+      "intBitAnd",
+      "intBitOr",
+      "intBitXor",
+      "intShiftLeft",
+      "intShiftRight",
       "pow",
       "atan2",
       "hypot",
@@ -3177,8 +3202,8 @@ emitScalarExpr : WasmEmit ->
 emitScalarExpr emit fnNames valNames env (CLit l) = emitLitI32 emit l
 emitScalarExpr emit fnNames valNames env (CVar x _) =
   emitVarI32 emit fnNames valNames env x
-emitScalarExpr emit fnNames valNames env (CBinPrim op l r _) =
-  emitBinI32 emit fnNames valNames env op l r
+emitScalarExpr emit fnNames valNames env (CBinPrim op l r tag) =
+  emitBinI32 emit fnNames valNames env op l r tag
 emitScalarExpr emit fnNames valNames env (CUnOp op x) =
   emitUnI32 emit fnNames valNames env op x
 emitScalarExpr emit fnNames valNames env (CIf c t f) =
@@ -3243,6 +3268,33 @@ normInt64 = ["i64.const 1", "i64.shl", "i64.const 1", "i64.shr_s"]
 scalarNeedsNorm : String -> Bool
 scalarNeedsNorm op = contains op ["+", "-", "*", "/"]
 
+-- `uNTruncate x` in ref mode: unbox, keep the head's low bits, rebox.
+emitTruncateRef : Prog -> List String -> Int -> String -> CExpr -> List String
+emitTruncateRef prog env d head a = match fixedWidthMask head
+  Some mask =>
+    emitRefExpr prog env d a
+      ++ [
+        "call $mdk_unbox_int",
+        "i64.const " ++ intToString mask,
+        "i64.and",
+        "call $mdk_box_int",
+      ]
+  None => gapLP prog ("wasm: '" ++ head ++ "' is not a fixed-width head")
+
+-- A `U8`/`U16`/`U32` arithmetic site (`CBinPrim`'s tag names the head) computes the
+-- Int op and then keeps the low `n` bits, so `+ - *` wrap modulo 2^n
+-- (`docs/design/INTEGER-TYPES-DESIGN.md` §4).  The mask is applied to the raw i64
+-- result, whose low 32 bits are exact even when the Int product overflowed 64 bits.
+-- `/` and `%` of in-range operands are already in range and take the Int path as is.
+fixedWidthWrapW : String -> String -> List String
+fixedWidthWrapW tag op = match fixedWidthMask tag
+  Some mask =>
+    if contains op ["+", "-", "*"] then
+      ["i64.const " ++ intToString mask, "i64.and"]
+    else
+      []
+  None => []
+
 emitBinI32 : WasmEmit ->
   List String ->
   List String ->
@@ -3250,8 +3302,9 @@ emitBinI32 : WasmEmit ->
   String ->
   CExpr ->
   CExpr ->
+  String ->
   (List String, WTy)
-emitBinI32 emit fnNames valNames env op l r =
+emitBinI32 emit fnNames valNames env op l r tag =
   let (li, _) = emitScalarExpr emit fnNames valNames env l
   let (ri, _) = emitScalarExpr emit fnNames valNames env r
   let nrm = if scalarNeedsNorm op then normInt64 else []
@@ -3273,7 +3326,10 @@ emitBinI32 emit fnNames valNames env op l r =
       binOpTy op,
     )
   else
-    (li ++ ri ++ [wasmBinOp64 emit op] ++ nrm, binOpTy op)
+    (
+      li ++ ri ++ [wasmBinOp64 emit op] ++ nrm ++ fixedWidthWrapW tag op,
+      binOpTy op,
+    )
 
 emitUnI32 : WasmEmit ->
   List String ->
@@ -6965,7 +7021,13 @@ emitBinRef prog env d "::" l r _ =
 -- operands ground to concrete Float) provides a direct route — additive over the
 -- structural check, so an absent/non-Float tag falls back to today's path.
 emitBinRef prog env d op l r tag =
-  if isArithOrCmp op
+  -- a fixed-width tag is the typechecker's grounded operand type, so it outranks
+  -- the structural Float test and the poly-`Num` value dispatch below: an impl
+  -- method's unsigned params (`add a b = a + b`) look poly to the emitter, and
+  -- `$mdk_value_add` would not wrap.
+  if isArithOp op && isFixedWidthHead tag then
+    emitIntBinRef prog env d op l r tag
+  else if isArithOrCmp op
     && (tag == "Float"
       || cexprIsFloat prog env l
       || cexprIsFloat prog env r) then
@@ -7021,22 +7083,39 @@ emitBinRef prog env d op l r tag =
       ++ emitRefExpr prog env d r
       ++ ["call $mdk_value_" ++ valueArithName op]
   else
-    -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
-    -- seam ($mdk_unbox_int / $mdk_box_int), so values outside ±2^30 no longer
-    -- truncate.  Arithmetic re-boxes the i64 result; comparisons yield an i31 Bool.
-    let li = emitRefExpr prog env d l ++ ["call $mdk_unbox_int"]
-    let ri = emitRefExpr prog env d r ++ ["call $mdk_unbox_int"]
-    -- B5: concrete-Int `/`/`%` get a divisor-zero guard emitting the coded trap line
-    -- (peer of the native emitIntDivZeroChecked) before the raw i64.div_s/rem_s.
-    if op == "/" || op == "%" then
-      li
-        ++ ri
-        ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
-        ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
-    else if isCmpOp op then
-      li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "ref.i31"]
-    else
-      li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
+    emitIntBinRef prog env d op l r tag
+
+-- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
+-- seam ($mdk_unbox_int / $mdk_box_int), so values outside ±2^30 no longer
+-- truncate.  Arithmetic re-boxes the i64 result (a fixed-width site masks it
+-- first, `fixedWidthWrapW`); comparisons yield an i31 Bool.  A `U32` above 2^30
+-- boxes into `$boxint` like any other large Int.
+emitIntBinRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  CExpr ->
+  CExpr ->
+  String ->
+  List String
+emitIntBinRef prog env d op l r tag =
+  let li = emitRefExpr prog env d l ++ ["call $mdk_unbox_int"]
+  let ri = emitRefExpr prog env d r ++ ["call $mdk_unbox_int"]
+  -- B5: concrete-Int `/`/`%` get a divisor-zero guard emitting the coded trap line
+  -- (peer of the native emitIntDivZeroChecked) before the raw i64.div_s/rem_s.
+  if op == "/" || op == "%" then
+    li
+      ++ ri
+      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
+  else if isCmpOp op then
+    li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "ref.i31"]
+  else
+    li
+      ++ ri
+      ++ [wasmBinOp64 (progEmit prog) op]
+      ++ fixedWidthWrapW tag op
+      ++ ["call $mdk_box_int"]
 
 -- A1: a binop with a POLYMORPHIC `Num`/`Ord` operand — a bare CVar bound to a param
 -- seeded into numPolyLocals.  Only such operands route to the runtime value-dispatch
@@ -7262,6 +7341,7 @@ cexprIsFloat prog env (CVar x _) =
 -- Float binop whose operands are type-lost but the typecheck stamped the node).
 cexprIsFloat prog env (CBinPrim op l r tag) =
   isArithOp op
+    && not (isFixedWidthHead tag)
     && (tag == "Float" || cexprIsFloat prog env l || cexprIsFloat prog env r)
 cexprIsFloat prog env (CUnOp "-" x) = cexprIsFloat prog env x
 cexprIsFloat prog env (CLet _ (PVar x _) _ b) = cexprIsFloat prog (x :: env) b
@@ -7957,6 +8037,19 @@ emitLeafExternRef prog env d "sliceError" [lo, hi] =
   wasmTrap (progEmit prog) "E-SLICE-OOB" "slice out of bounds"
 emitLeafExternRef prog env d "sliceError" _ =
   gapLP prog "wasm #670: sliceError takes exactly two arguments"
+-- The `int`-prefixed bit externs are the originals under unshadowable names.
+emitLeafExternRef prog env d "intBitAnd" args =
+  emitLeafExternRef prog env d "bitAnd" args
+emitLeafExternRef prog env d "intBitOr" args =
+  emitLeafExternRef prog env d "bitOr" args
+emitLeafExternRef prog env d "intBitXor" args =
+  emitLeafExternRef prog env d "bitXor" args
+emitLeafExternRef prog env d "intBitNot" args =
+  emitLeafExternRef prog env d "bitNot" args
+emitLeafExternRef prog env d "intShiftLeft" args =
+  emitLeafExternRef prog env d "shiftLeft" args
+emitLeafExternRef prog env d "intShiftRight" args =
+  emitLeafExternRef prog env d "shiftRight" args
 -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
 -- unbox both to i64 via $mdk_unbox_int, apply the i64 op, rebox via $mdk_box_int.
 -- shiftRight uses i64.shr_u (LOGICAL) — shiftRight is defined as logical in runtime/medaka_rt.c
@@ -8006,6 +8099,18 @@ emitLeafExternRef prog env d "bitNot" [a] =
 emitLeafExternRef prog env d "intBitsToFloat" [a] =
   emitRefExpr prog env d a
     ++ ["call $mdk_unbox_int", "f64.reinterpret_i64", "struct.new $float"]
+-- `u8Truncate`/`u16Truncate`/`u32Truncate` keep the low n bits of the Int (a
+-- non-negative result, so a U32 above 2^30 reboxes into `$boxint`); the `ToInt`
+-- forms are the identity on the word.
+emitLeafExternRef prog env d "u8Truncate" [a] =
+  emitTruncateRef prog env d "U8" a
+emitLeafExternRef prog env d "u16Truncate" [a] =
+  emitTruncateRef prog env d "U16" a
+emitLeafExternRef prog env d "u32Truncate" [a] =
+  emitTruncateRef prog env d "U32" a
+emitLeafExternRef prog env d "u8ToInt" [a] = emitRefExpr prog env d a
+emitLeafExternRef prog env d "u16ToInt" [a] = emitRefExpr prog env d a
+emitLeafExternRef prog env d "u32ToInt" [a] = emitRefExpr prog env d a
 -- #101: libm math externs.  IEEE-exact unary ops → native f64 opcodes (correctly-rounded,
 -- byte-match native libm); round → $mdk_round (C round(): half away from zero);
 -- transcendentals → JS Math.* host imports; binary pow/atan2/hypot → host imports;

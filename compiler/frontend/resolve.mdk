@@ -352,7 +352,8 @@ internalExterns = [
   "bytesToFloat64", "byteBlockGetUnsafe", "byteBlockSetUnsafe",
   "byteBlockCopyUnsafe", "byteBlockMake", "byteBlockFromIntArray",
   "byteBlockBlit", "byteBlockToString", "byteBlockWriteStdout", "u8Truncate",
-  "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt"
+  "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt", "intBitAnd",
+  "intBitOr", "intBitXor", "intBitNot", "intShiftLeft", "intShiftRight"
 ]
 
 -- The internal-extern guard list for a module given whether internal access is
