@@ -32,7 +32,7 @@
    residue for that reason.
 
    **Directory barriers.** A directory this module creates is barriered into
-   the directory `mkdirAll` wrote its dentry into, on `pds/shell/blockfile.mdk`'s
+   the directory `mkdirAllDurably` wrote its dentry into, on `pds/shell/blockfile.mdk`'s
    rule and for its reason — a shard whose own entry a crash loses takes every
    blob beneath it, however durable those blobs' bytes already are. Only a
    creation owes it, so a shard costs one fsync once in the life of the store
@@ -101,7 +101,8 @@
 
 import hex.{decode, encode}
 import string.{endsWith, stripSuffix, take}
-import fs.{isDir, mkdirAll}
+import fs.{isDir, mkdirAllDurably}
+import io.{writeFilePrivate}
 import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
 import lib.resource_limits.{checkBlobBytes}
 -- The shard layout is `shell.blockfile`'s, so the two predicates that decide
@@ -141,30 +142,19 @@ admitted bytes = match checkBlobBytes (arrayLength bytes)
       "blobfile: refusing to persist a blob pds/lib/blob.mdk would not have admitted: \{message}"
   Ok () => Ok ()
 
--- The blob area itself, created if it is not there, with the dentry that
--- created barriered into the data directory. Every path that writes beneath
--- `blobs/` runs this first, so no caller has to supply the barrier. See the
--- header's "Directory barriers".
-ensureBlobsDir : String -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureBlobsDir dir =
-  if fileExists (blobDir dir) then
-    Ok ()
-  else do
-    () <- mkdirAll (blobDir dir)
-    fsync dir
-
 -- One shard directory, created if it is not there, with the dentry that
--- created barriered into `blobs/`. See the header's "Directory barriers".
+-- created barriered into `blobs/`, and `blobs/` itself created first and
+-- barriered into the data directory when it is missing. See the header's
+-- "Directory barriers".
 ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureShard dir cid = do
-  () <- ensureBlobsDir dir
-  let shard = blobShardDir dir cid
-  if fileExists shard then
-    Ok ()
-  else do
-    () <- mkdirAll shard
-    fsync (blobDir dir)
+ensureShard dir cid = mkdirAllDurably (blobShardDir dir cid)
 
+-- Not `fs.replaceDurably`: the sidecar and the bytes file share ONE shard
+-- barrier after both renames (see "Write order" above), which the composite's
+-- one-write-one-barrier shape cannot express. The sidecar is fixed-mode
+-- (`writeFilePrivate`); the bytes half has no mode-setting counterpart and
+-- stays at whatever the process umask gives it (0600 only under
+-- `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
 writeOne : String ->
   Cid ->
   String ->
@@ -174,7 +164,7 @@ writeOne dir cid mimeType bytes = do
   () <- admitted bytes
   () <- ensureShard dir cid
   let stagedMime = "\{blobDir dir}/\{stagingName}/\{cidKey cid}\{mimeSuffix}"
-  () <- writeFile stagedMime mimeType
+  () <- writeFilePrivate stagedMime mimeType
   () <- fsync stagedMime
   () <- rename stagedMime "\{blobFilePath dir cid}\{mimeSuffix}"
   let staged = "\{blobDir dir}/\{stagingName}/\{cidKey cid}"
@@ -184,18 +174,11 @@ writeOne dir cid mimeType bytes = do
   fsync (blobShardDir dir cid)
 
 -- The staging directory, created if it is not there, with the dentry that
--- created barriered into `blobs/` — which `ensureBlobsDir` has already put on
--- disk, so the two dentries are barriered into their own parents rather than
--- one `mkdirAll` publishing both and only the inner one being ordered.
+-- created barriered into `blobs/`, and `blobs/` itself created first and
+-- barriered into the data directory when it is missing: each dentry is
+-- barriered into its own parent.
 ensureStaging : String -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureStaging dir = do
-  () <- ensureBlobsDir dir
-  let staging = "\{blobDir dir}/\{stagingName}"
-  if fileExists staging then
-    Ok ()
-  else do
-    () <- mkdirAll staging
-    fsync (blobDir dir)
+ensureStaging dir = mkdirAllDurably "\{blobDir dir}/\{stagingName}"
 
 writeRows : String ->
   List (Cid, String, Array Int) ->

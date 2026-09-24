@@ -1,5 +1,5 @@
 # META
-source_lines=316
+source_lines=318
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -25,8 +25,10 @@ import string.{split, startsWith, endsWith, contains}
 
 {- | The directory part of a path: everything before the last `/`.
 
-   `"."` when the path has no `/`. A trailing `/` is ignored, so the last
-   segment before it is still the part removed.
+   `"."` when the path has no `/`. A trailing `/` is itself the last `/`, so
+   it is stripped without also dropping the segment before it: `dirname "a/"`
+   is `"a"`, not `"."`. Apply `normalize` first to collapse a trailing slash
+   when that segment should be dropped as well.
 
    > dirname "a/b/c.txt"
    "a/b"

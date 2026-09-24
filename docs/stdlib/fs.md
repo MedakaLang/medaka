@@ -6,8 +6,9 @@ The primitives are in scope without an import: `readFile`, `writeFile`,
 `appendFile`, `readFileBytes`, `writeFileBytes`, `fileExists`, `listDir`,
 `makeDir`, `removeFile`, `rename`, `removeDir`, `statFile`, and
 `canonicalizePath`. This module adds a `FileStat` record over
-`statFile`'s tuple and the composed operations `copyFile`, `mkdirAll`,
-`walkDir`, `isDir`, `isFile`, and `fileSize`.
+`statFile`'s tuple and the composed operations `copyFile`,
+`replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `isDir`,
+`isFile`, and `fileSize`.
 
 Every operation returns `Result String a`, with the host's error message
 in `Err`. File operations run only in a built program, not under the
@@ -78,6 +79,34 @@ Copies the bytes of `src` to `dst`, replacing any existing `dst`.
 
 A read failure is reported before anything is written.
 
+### `replaceDurably`
+
+```
+replaceDurably : String -> String -> String -> <FileWrite _> Result String Unit
+replaceDurably staged target content
+```
+
+Replaces `target` with `content` so that a crash leaves either the
+old file or the new one, never a partial write.
+
+The content is written to `staged` at `io.ownerOnlyMode` (`0600`),
+`staged` is flushed, renamed onto `target`, and then the directory that
+holds `target` is flushed, in that order. The first step that fails
+returns its `Err` and the rest do not run. The mode is set before any
+byte is written, so neither the umask nor a leftover `staged` at a wider
+mode can widen it.
+
+`staged` must be on the same filesystem as `target`. A crash before the
+rename leaves `staged` behind, so a caller that stages into a directory
+it later lists must remove that residue itself. The directory holding
+`staged` is not flushed, and neither is the entry of `target`'s
+directory in its own parent; `mkdirAllDurably` covers that.
+
+```medaka
+> replaceDurably "stdlib/no-such-doctest-dir/r.tmp" "stdlib/no-such-doctest-dir/r" "v1"
+Err "No such file or directory"
+```
+
 ### `mkdirAll`
 
 ```
@@ -88,6 +117,33 @@ mkdirAll path
 Creates a directory and every missing parent, like `mkdir -p`.
 
 A directory that already exists is not an error.
+
+### `mkdirAllDurably`
+
+```
+mkdirAllDurably : String -> <FileRead _, FileWrite _> Result String Unit
+mkdirAllDurably path
+```
+
+Creates a directory and every missing parent, like `mkdirAll`, and
+makes each directory it creates durable by flushing that directory's
+parent right after creating it.
+
+A path that already exists is left alone and nothing is flushed, so a
+call on an existing directory costs one existence check.
+
+Known limit: a directory that already exists is taken to be durable.
+That is false for a directory whose creator stopped between creating it
+and flushing its parent. A later call finds it present and skips the
+flush, so a crash after that can still lose it. Closing the gap would
+mean flushing the parent on every call.
+
+```medaka
+> mkdirAllDurably "stdlib"
+Ok ()
+> mkdirAllDurably "stdlib/fs.mdk/sub"
+Err "Not a directory"
+```
 
 ### `walkDir`
 

@@ -29,8 +29,8 @@
 # deliberately blind to, each within ONE process: which half of a transition
 # reached the disk first (#3057), whether a commit's shard-directory
 # barriers came after its block promotes or in between them (#3058), and
-# whether the blob area's own dentry is barriered on a write that runs no repo
-# half, where the concatenated trace lets another process pay for it.
+# whether the blob area's own dentry is barriered before the first blob it
+# publishes, on a write that runs no repo half.
 # Case 13 grades what one upload COSTS the disk rather than what it leaves on
 # it: the blob area is stamped either side of a single upload into an account
 # that already holds 99 blobs, and only the blob being uploaded may have been
@@ -678,6 +678,90 @@ expect_stray events-name "$EVENTS_REFUSED"
 expect_named events-name events
 echo 'case 11d: 15 entries no store wrote, one per level and shape; each skipped or refused as its module states, each refusal naming its own path, and no other store disturbed'
 
+# ── 11e. every file the stores write, at the mode it owes ──────────────────
+# A fresh data directory is populated by every write path once under umask
+# 022 and once under umask 077, and every regular file in it is graded by
+# where it sits. Here rather than after case 12 because it needs no strace.
+#
+# Every text file (head, preferences, sessions, credential, each event-log
+# file, each blob's MIME sidecar) is written at 0600 whatever the umask. A
+# block's bytes and a blob's bytes are not: `writeFileBytes` sets no mode, so
+# they follow the process umask, and only a server started under umask 077
+# (`pds.service`'s `UMask=0077`) keeps them at 0600. The 022 run asserts
+# those stay 0644 so that the gap is graded rather than assumed away; the 077
+# run asserts it closes.
+mode_of() {
+  stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
+}
+
+# Populate a fresh `$2` under umask `$1` through every route that writes a
+# kind of file this store keeps.
+mode_genesis() {
+  for _route in save blob-save prefs-save sessions-save credential-save \
+    event-recover-owed
+  do
+    if ! (umask "$1" && exec "$WORK/driver" "$_route" "$2") \
+      > "$WORK/mode.$1.$_route.out" 2> "$WORK/mode.$1.$_route.err"
+    then
+      cat "$WORK/mode.$1.$_route.err" >&2
+      fail "case 11e: the $_route route failed under umask $1"
+    fi
+    require_empty "$WORK/mode.$1.$_route.err" "$_route under umask $1"
+    case $(tail -1 "$WORK/mode.$1.$_route.out") in
+      *': PASS' | *': OK') ;;
+      *) fail "case 11e: the $_route route did not pass under umask $1" ;;
+    esac
+  done
+}
+
+# One line per regular file under `$2`: its class, its mode, the mode it owes,
+# and its path. `$3` is what a block's or a blob's bytes owe under this umask.
+mode_survey() {
+  find "$2" -type f | LC_ALL=C sort | while read -r _f; do
+    _rel=${_f#"$2"/}
+    case $_rel in
+      blocks/*) _class=bytes _want=$3 ;;
+      blobs/*.mime) _class=text _want=600 ;;
+      blobs/*) _class=bytes _want=$3 ;;
+      *) _class=text _want=600 ;;
+    esac
+    printf '%s %s %s %s\n' "$_class" "$(mode_of "$_f")" "$_want" "$_rel"
+  done > "$WORK/modes.$1"
+}
+
+# Grade the survey for umask `$1`, after asserting every kind of file was
+# actually written — a survey over a tree missing one grades nothing about it.
+mode_grade() {
+  for _want in ' head$' ' preferences$' ' sessions$' ' credential$' \
+    ' events/\.last$' ' events/entries/[^/]*$' ' blocks/[0-9a-f][0-9a-f]/' \
+    ' blobs/[0-9a-f][0-9a-f]/[0-9a-f]*\.mime$' \
+    ' blobs/[0-9a-f][0-9a-f]/[0-9a-f]*$'
+  do
+    grep -q -- "$_want" "$WORK/modes.$1" || {
+      cat "$WORK/modes.$1" >&2
+      fail "case 11e: umask $1 wrote no file matching '$_want', so its mode is ungraded"
+    }
+  done
+  awk '$2 != $3' "$WORK/modes.$1" > "$WORK/modes.$1.wrong"
+  [ ! -s "$WORK/modes.$1.wrong" ] || {
+    echo "class mode owed path" >&2
+    cat "$WORK/modes.$1.wrong" >&2
+    fail "case 11e: under umask $1, $(wc -l < "$WORK/modes.$1.wrong" | tr -d ' ') file(s) are not at the mode they owe"
+  }
+}
+
+MODES="$WORK/modes"
+mkdir -p "$MODES"
+mode_genesis 022 "$MODES/umask022"
+mode_survey 022 "$MODES/umask022" 644
+mode_grade 022
+mode_genesis 077 "$MODES/umask077"
+mode_survey 077 "$MODES/umask077" 600
+mode_grade 077
+TEXT_FILES=$(grep -c '^text ' "$WORK/modes.022")
+BYTE_FILES=$(grep -c '^bytes ' "$WORK/modes.022")
+echo "case 11e: umask 022 — $TEXT_FILES text file(s) at 600, $BYTE_FILES block and blob byte file(s) at 644; umask 077 — all $(wc -l < "$WORK/modes.077" | tr -d ' ') at 600"
+
 # ── 12. every promote is barriered, staged file first and directory after ──
 # The only case here that reads the syscall STREAM rather than the resulting
 # tree, because that is where the claim lives: after a power loss what survives
@@ -700,12 +784,12 @@ echo 'case 11d: 15 entries no store wrote, one per level and shape; each skipped
 # stores create a directory only when it is absent, so the steady-state cost of
 # this is zero and the trace says so.
 #
-# Where that barrier comes from is not required to be the module that created
-# the directory, and two of them deliberately are not: `<data>/blocks` and
-# `<data>/blobs` are created by the two stores and barriered by the `fsync` of
-# the data directory that `shell.persist` performs afterwards. The rule grades
-# that coupling instead of assuming it — reorder the calls and the barrier
-# stops following the creation, and this reports it.
+# Where that barrier comes from is not required to be the call that created
+# the directory. Every store barriers each directory it creates as it creates
+# it (`stdlib/fs`'s `mkdirAllDurably`), `<data>/blocks` and `<data>/blobs`
+# included, but the rule grades only that a barrier follows the creation in
+# the same process, so a barrier moved to a later call still passes and a
+# barrier dropped is reported.
 #
 # The second rule tolerates a writer that promotes a batch and then barriers the
 # distinct directories it touched, which `blockfile.mdk` does: a directory's
@@ -784,9 +868,10 @@ trace_route() {
   fi
   require_empty "$WORK/trace.$_route.err" "traced $_route"
   # Kept per route as well as concatenated: an ORDER claim about two writes
-  # only holds inside ONE process, and `$WORK/promotes` interleaves five.
+  # only holds inside ONE process, and `$WORK/promotes` concatenates them all.
   normalize_trace "$WORK/trace.$_route" > "$WORK/events.$_route"
   cat "$WORK/events.$_route" >> "$WORK/promotes"
+  TRACED_ROUTES="$TRACED_ROUTES $_route"
 }
 
 # The line number of the first or last normalized event in file $2 matching the
@@ -805,11 +890,13 @@ trace_count() {
 }
 
 : > "$WORK/promotes"
+TRACED_ROUTES=
 TRACED="$PHYS/traced"
 mkdir -p "$TRACED"
 trace_route save "$TRACED/repo"
 trace_route blob-save "$TRACED/repo"
 trace_route prefs-save "$TRACED/repo"
+trace_route sessions-save "$TRACED/repo"
 trace_route credential-save "$TRACED/repo"
 trace_route event-recover-owed "$TRACED/events"
 
@@ -881,12 +968,9 @@ echo "case 12b: $SAVED_BLOCKS block promote(s), all before the first shard-direc
 
 # ── 12c. the blob area's own dentry, on a write that runs no repo half ─────
 # `blobs/` is created by `blobfile.mdk`, and its dentry sits one level up, in
-# the data directory. The universal rule below accepts a barrier from anywhere
-# in `$WORK/promotes`, which concatenates five processes — so a data-directory
-# `fsync` some OTHER route performed discharges this creation there, and the
-# route that writes blobs and nothing else goes ungraded across the boundary
-# that a crash actually respects. Read out of the blob-save route's OWN trace
-# for that reason, like 12a.
+# the data directory. The universal rule below accepts that barrier anywhere
+# after the creation; this case also requires it BEFORE the first blob the
+# route promotes. Read out of the blob-save route's OWN trace, like 12a.
 #
 # The route is the one `com.atproto.repo.uploadBlob` takes: it moves blobs and
 # advances no repository, so `persistTransition`'s repo half is skipped and
@@ -915,7 +999,13 @@ FIRST_PROMOTE_AT=$(trace_index first "$BLOBSAVE" '^R ')
 }
 echo "case 12c: blob area created at event $MKBLOBS_AT and barriered into the data directory at event $DATA_FSYNC_AT, before the first promote at event $FIRST_PROMOTE_AT, with no repo half on the route"
 
-awk '
+# ── the universal rule: every promote and every creation, barriered ────────
+# Graded one route at a time, over that route's OWN trace. A later process's
+# `fsync` of the same directory lands after this one has already reported its
+# write durable, and a crash in between loses it; graded over the
+# concatenation, that later `fsync` would discharge the barrier anyway.
+grade_barriers() {
+  awk -v route="$1" '
   { ev[++n] = $0 }
   END {
     for (i = 1; i <= n; i++) {
@@ -978,13 +1068,27 @@ awk '
         mkpath[k], mkpar[k]
       bad++
     }
-    printf "graded %d rename(s) and %d directory creation(s), %d unbarriered\n",
-      renames, mk, bad
+    printf "%s: graded %d rename(s) and %d directory creation(s), %d unbarriered\n",
+      route, renames, mk, bad
     exit (bad > 0)
   }
-' "$WORK/promotes" > "$WORK/promotes.verdict" || {
+' "$WORK/events.$1"
+}
+
+: > "$WORK/promotes.verdict"
+UNBARRIERED_ROUTES=
+for ROUTE in $TRACED_ROUTES; do
+  grade_barriers "$ROUTE" >> "$WORK/promotes.verdict" \
+    || UNBARRIERED_ROUTES="$UNBARRIERED_ROUTES $ROUTE"
+done
+# Each route line reads `<route>: graded R rename(s) and M directory
+# creation(s), B unbarriered`, so fields 3, 6 and 9 are the three counts.
+awk '/: graded / { r += $3; m += $6; b += $9 }
+  END { printf "graded %d rename(s) and %d directory creation(s) across all routes, %d unbarriered\n", r, m, b }' \
+  "$WORK/promotes.verdict" >> "$WORK/promotes.verdict"
+[ -z "$UNBARRIERED_ROUTES" ] || {
   cat "$WORK/promotes.verdict" >&2
-  fail 'a rename or a mkdir published a name no barrier had put on disk'
+  fail "a rename or a mkdir published a name no barrier had put on disk, on route(s):$UNBARRIERED_ROUTES"
 }
 cat "$WORK/promotes.verdict"
 
@@ -1001,15 +1105,17 @@ POINTER_PROMOTES=$(promote_count '.*/events/\..*')
 HEAD_PROMOTES=$(promote_count '.*/head')
 PREFS_PROMOTES=$(promote_count '.*/preferences')
 CREDENTIAL_PROMOTES=$(promote_count '.*/credential')
+SESSIONS_PROMOTES=$(promote_count '.*/sessions')
 for PAIR in "blockfile:$BLOCK_PROMOTES" "blobfile sidecar:$BLOB_MIME_PROMOTES" \
   "blobfile bytes:$BLOB_BYTE_PROMOTES" "eventlog entry:$ENTRY_PROMOTES" \
   "eventlog pointer:$POINTER_PROMOTES" "persist head:$HEAD_PROMOTES" \
-  "persist preferences:$PREFS_PROMOTES" "persist credential:$CREDENTIAL_PROMOTES"
+  "persist preferences:$PREFS_PROMOTES" "persist credential:$CREDENTIAL_PROMOTES" \
+  "persist sessions:$SESSIONS_PROMOTES"
 do
   [ "${PAIR#*:}" -ge 1 ] \
     || fail "no ${PAIR%:*} promote was traced; that path is no longer graded"
 done
-echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
+echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES, sessions $SESSIONS_PROMOTES"
 
 # The same floor for the directory-creation rule. The stores create a directory
 # only when it is absent, so a traced run over a data directory that already

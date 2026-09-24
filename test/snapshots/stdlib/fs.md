@@ -1,5 +1,5 @@
 # META
-source_lines=218
+source_lines=276
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -8,14 +8,16 @@ stages=DESUGAR,MARK
    `appendFile`, `readFileBytes`, `writeFileBytes`, `fileExists`, `listDir`,
    `makeDir`, `removeFile`, `rename`, `removeDir`, `statFile`, and
    `canonicalizePath`. This module adds a `FileStat` record over
-   `statFile`'s tuple and the composed operations `copyFile`, `mkdirAll`,
-   `walkDir`, `isDir`, `isFile`, and `fileSize`.
+   `statFile`'s tuple and the composed operations `copyFile`,
+   `replaceDurably`, `mkdirAll`, `mkdirAllDurably`, `walkDir`, `isDir`,
+   `isFile`, and `fileSize`.
 
    Every operation returns `Result String a`, with the host's error message
    in `Err`. File operations run only in a built program, not under the
    interpreter. -}
 
 import core.{Result(..)}
+import io.{ownerOnlyMode}
 import path.{dirname, joinPath}
 import string.{contains}
 
@@ -67,6 +69,35 @@ copyFile src dst = match readFileBytes src
   Ok bytes => writeFileBytes dst bytes
   Err e => Err e
 
+{- | Replaces `target` with `content` so that a crash leaves either the
+   old file or the new one, never a partial write.
+
+   The content is written to `staged` at `io.ownerOnlyMode` (`0600`),
+   `staged` is flushed, renamed onto `target`, and then the directory that
+   holds `target` is flushed, in that order. The first step that fails
+   returns its `Err` and the rest do not run. The mode is set before any
+   byte is written, so neither the umask nor a leftover `staged` at a wider
+   mode can widen it.
+
+   `staged` must be on the same filesystem as `target`. A crash before the
+   rename leaves `staged` behind, so a caller that stages into a directory
+   it later lists must remove that residue itself. The directory holding
+   `staged` is not flushed, and neither is the entry of `target`'s
+   directory in its own parent; `mkdirAllDurably` covers that.
+
+   > replaceDurably "stdlib/no-such-doctest-dir/r.tmp" "stdlib/no-such-doctest-dir/r" "v1"
+   Err "No such file or directory" -}
+export
+replaceDurably : String ->
+  String ->
+  String ->
+  <FileWrite "_"> Result String Unit
+replaceDurably staged target content = do
+  () <- writeFileMode staged ownerOnlyMode content
+  () <- fsync staged
+  () <- rename staged target
+  fsync (dirname target)
+
 {- | Creates a directory and every missing parent, like `mkdir -p`.
 
    A directory that already exists is not an error. -}
@@ -81,6 +112,33 @@ mkdirAll path =
       Ok _ => Ok ()
       -- EEXIST (strerror "File exists") is success; other errors propagate.
       Err e2 => if contains "exists" e2 then Ok () else Err e2
+
+{- | Creates a directory and every missing parent, like `mkdirAll`, and
+   makes each directory it creates durable by flushing that directory's
+   parent right after creating it.
+
+   A path that already exists is left alone and nothing is flushed, so a
+   call on an existing directory costs one existence check.
+
+   Known limit: a directory that already exists is taken to be durable.
+   That is false for a directory whose creator stopped between creating it
+   and flushing its parent. A later call finds it present and skips the
+   flush, so a crash after that can still lose it. Closing the gap would
+   mean flushing the parent on every call.
+
+   > mkdirAllDurably "stdlib"
+   Ok ()
+   > mkdirAllDurably "stdlib/fs.mdk/sub"
+   Err "Not a directory" -}
+export
+mkdirAllDurably : String -> <FileRead "_", FileWrite "_"> Result String Unit
+mkdirAllDurably path =
+  if path == "" || path == "." || path == "/" || fileExists path then
+    Ok ()
+  else do
+    () <- mkdirAllDurably (dirname path)
+    () <- mkdirAll path
+    fsync (dirname path)
 
 {- | Every path under a directory, files and subdirectories both, depth
    first.
@@ -222,6 +280,7 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
     && debug x == debug y == False
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Result" true))))
+(DUse false (UseGroup ("io") ((mem "ownerOnlyMode" false))))
 (DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
@@ -237,8 +296,12 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "fileSize" ((PVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "size"))) (EApp (EVar "stat") (EVar "p"))))
 (DTypeSig true "copyFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileRead") (hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "copyFile" ((PVar "src") (PVar "dst")) (EMatch (EApp (EVar "readFileBytes") (EVar "src")) (arm (PCon "Ok" (PVar "bytes")) () (EApp (EApp (EVar "writeFileBytes") (EVar "dst")) (EVar "bytes"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig true "replaceDurably" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DFunDef false "replaceDurably" ((PVar "staged") (PVar "target") (PVar "content")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "staged")) (EVar "ownerOnlyMode")) (EVar "content"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "fsync") (EVar "staged"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "target"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "target")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig true "mkdirAll" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "mkdirAll" ((PVar "path")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "path") (ELit (LString ""))) (EBinOp "==" (EVar "path") (ELit (LString ".")))) (EBinOp "==" (EVar "path") (ELit (LString "/")))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EVar "mkdirAll") (EApp (EVar "dirname") (EVar "path"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeDir") (EVar "path")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e2")) () (EIf (EApp (EApp (EVar "contains") (ELit (LString "exists"))) (EVar "e2")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e2")))))))))
+(DTypeSig true "mkdirAllDurably" (TyFun (TyCon "String") (TyEffect ((hole "FileRead") (hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "mkdirAllDurably" ((PVar "path")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "path") (ELit (LString ""))) (EBinOp "==" (EVar "path") (ELit (LString ".")))) (EBinOp "==" (EVar "path") (ELit (LString "/")))) (EApp (EVar "fileExists") (EVar "path"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAllDurably") (EApp (EVar "dirname") (EVar "path")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EVar "andThen") (EApp (EVar "mkdirAll") (EVar "path"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "path")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig true "walkDir" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "walkDir" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "entries")) (EListLit)))))
 (DTypeSig false "walkEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -260,6 +323,7 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DProp false "Debug FileStat separates records that Eq separates" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "x") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoLet false false (PVar "y") (EVariantUpdate "FileStat" (EVar "x") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n"))))))) (EBinOp "==" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (EVar "y"))) (EVar "False"))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Result" true))))
+(DUse false (UseGroup ("io") ((mem "ownerOnlyMode" false))))
 (DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
@@ -275,8 +339,12 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DFunDef false "fileSize" ((PVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "size"))) (EApp (EVar "stat") (EVar "p"))))
 (DTypeSig true "copyFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileRead") (hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "copyFile" ((PVar "src") (PVar "dst")) (EMatch (EApp (EVar "readFileBytes") (EVar "src")) (arm (PCon "Ok" (PVar "bytes")) () (EApp (EApp (EVar "writeFileBytes") (EVar "dst")) (EVar "bytes"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig true "replaceDurably" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DFunDef false "replaceDurably" ((PVar "staged") (PVar "target") (PVar "content")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "staged")) (EVar "ownerOnlyMode")) (EVar "content"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "fsync") (EVar "staged"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "target"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "target")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig true "mkdirAll" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "mkdirAll" ((PVar "path")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "path") (ELit (LString ""))) (EBinOp "==" (EVar "path") (ELit (LString ".")))) (EBinOp "==" (EVar "path") (ELit (LString "/")))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EVar "mkdirAll") (EApp (EVar "dirname") (EVar "path"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "makeDir") (EVar "path")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e2")) () (EIf (EApp (EApp (EVar "contains") (ELit (LString "exists"))) (EVar "e2")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e2")))))))))
+(DTypeSig true "mkdirAllDurably" (TyFun (TyCon "String") (TyEffect ((hole "FileRead") (hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "mkdirAllDurably" ((PVar "path")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "path") (ELit (LString ""))) (EBinOp "==" (EVar "path") (ELit (LString ".")))) (EBinOp "==" (EVar "path") (ELit (LString "/")))) (EApp (EVar "fileExists") (EVar "path"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAllDurably") (EApp (EVar "dirname") (EVar "path")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "mkdirAll") (EVar "path"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "fsync") (EApp (EVar "dirname") (EVar "path")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig true "walkDir" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "walkDir" ((PVar "root")) (EMatch (EApp (EVar "listDir") (EVar "root")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "walkEntries") (EVar "root")) (EVar "entries")) (EListLit)))))
 (DTypeSig false "walkEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))

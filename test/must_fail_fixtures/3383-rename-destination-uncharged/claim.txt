@@ -1,0 +1,15 @@
+issue: 3383
+what: rename writes two paths, but its <FileWrite "_"> hole is filled from the
+what: application's FIRST argument only, so `rename "tmp/a" "/etc/passwd"`
+what: satisfies a <FileWrite "tmp/*"> bound.  Swapping the arguments makes the
+what: same call reject with `performs <FileWrite "/etc/passwd">`.
+cmd: check main.mdk
+exit: 0
+stdout-line: mv : Unit -> <FileWrite "tmp/*"> Result String Unit
+control: check control.mdk
+why-control: control.mdk makes the SAME rename call with an in-bound destination
+why-control: ("tmp/b").  It must check clean at exit 0, proving rename's hole fill
+why-control: and the escape check are intact; the bug is specifically the
+why-control: uncharged second path.
+why-note: Charging the destination (a join over both determining arguments, or a
+why-note: top <FileWrite> row) makes main.mdk exit 1, draining this row.
