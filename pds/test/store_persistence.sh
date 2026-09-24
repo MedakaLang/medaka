@@ -896,6 +896,7 @@ mkdir -p "$TRACED"
 trace_route save "$TRACED/repo"
 trace_route blob-save "$TRACED/repo"
 trace_route prefs-save "$TRACED/repo"
+trace_route sessions-save "$TRACED/repo"
 trace_route credential-save "$TRACED/repo"
 trace_route event-recover-owed "$TRACED/events"
 
@@ -1104,15 +1105,17 @@ POINTER_PROMOTES=$(promote_count '.*/events/\..*')
 HEAD_PROMOTES=$(promote_count '.*/head')
 PREFS_PROMOTES=$(promote_count '.*/preferences')
 CREDENTIAL_PROMOTES=$(promote_count '.*/credential')
+SESSIONS_PROMOTES=$(promote_count '.*/sessions')
 for PAIR in "blockfile:$BLOCK_PROMOTES" "blobfile sidecar:$BLOB_MIME_PROMOTES" \
   "blobfile bytes:$BLOB_BYTE_PROMOTES" "eventlog entry:$ENTRY_PROMOTES" \
   "eventlog pointer:$POINTER_PROMOTES" "persist head:$HEAD_PROMOTES" \
-  "persist preferences:$PREFS_PROMOTES" "persist credential:$CREDENTIAL_PROMOTES"
+  "persist preferences:$PREFS_PROMOTES" "persist credential:$CREDENTIAL_PROMOTES" \
+  "persist sessions:$SESSIONS_PROMOTES"
 do
   [ "${PAIR#*:}" -ge 1 ] \
     || fail "no ${PAIR%:*} promote was traced; that path is no longer graded"
 done
-echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
+echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES, sessions $SESSIONS_PROMOTES"
 
 # The same floor for the directory-creation rule. The stores create a directory
 # only when it is absent, so a traced run over a data directory that already

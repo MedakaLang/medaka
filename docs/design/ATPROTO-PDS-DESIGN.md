@@ -531,7 +531,7 @@ archive — that is a forced re-login per restart, which is not the behavior any
 PDS on the network has and not one a client can be asked to absorb.
 
 The two objections that ruling raised are answered rather than dismissed. **Mode**:
-the file is written through `io.writeFilePrivate` at 0600 like the credential record,
+the file is written through `fs.replaceDurably` at 0600 like the credential record,
 and `pds serve` refuses to start on a wider one (`requirePrivateMode`), so it fails
 closed exactly where the secret files do. **Staleness**: the set is pruned against the
 current instant as it is read, so a row that expired while nothing was running is
@@ -548,11 +548,12 @@ The credential record is persisted for the older and simpler reason: a server th
 forgot the account password on restart could not accept a login at all.
 
 **Secrets at rest are owner-only, and a wider one is refused rather than warned
-about.** The generated session secret and the stored credential record are written
-through `io.writeFilePrivate` over the `writeFileMode` primitive, which sets the mode
-on the open descriptor before the first byte is written — so the contents never exist
-at a wider mode, and neither the process umask nor a pre-existing file's own mode can
-widen them. In the other direction, `pds/serve.mdk` grades every hex secret file it
+about.** The generated session secret is written through `io.writeFilePrivate` and
+the stored credential record through `fs.replaceDurably`, both over the same
+`writeFileMode` primitive, which sets the mode on the open descriptor before the
+first byte is written — so the contents never exist at a wider mode, and neither the
+process umask nor a pre-existing file's own mode can widen them. In the other
+direction, `pds/serve.mdk` grades every hex secret file it
 READS (`--key` and `--token-secret`) with `fileMode` and refuses to start when any
 account but the owner can read one: a signing key the rest of the box can read has
 already been exposed, and serving anyway would hide that. The refusal names the path
@@ -833,8 +834,13 @@ the same name fails rather than succeeding twice, and a generation number is
 never reclaimed or reused: a takeover always creates the NEXT number rather
 than removing or renaming the loser's — reclaiming a name a winner's claim
 depends on is exactly what would let a loser's cleanup delete the winner's
-fresh lock and leave both processes holding one. `mkdir` gives no release on
-death, and this server has no shutdown path to release one in (there is no
+fresh lock and leave both processes holding one. Once a claim succeeds, every
+generation strictly below the new one is removed as best-effort cleanup (so a
+directory restarted many times does not accumulate stale generations) — this
+runs only AFTER the claim, never touches the fresh generation just taken, and
+no contender's success depends on it running or on it working. `mkdir` gives
+no release on death, and this server has no shutdown path to release one in
+(there is no
 signal handling in the runtime), so a killed holder ALWAYS leaves its
 generation behind and existence cannot be the test. A holder therefore beats a
 heartbeat into its generation for as long as it runs, and a contender grades

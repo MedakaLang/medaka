@@ -32,7 +32,7 @@
    residue for that reason.
 
    **Directory barriers.** A directory this module creates is barriered into
-   the directory `mkdirAll` wrote its dentry into, on `pds/shell/blockfile.mdk`'s
+   the directory `mkdirAllDurably` wrote its dentry into, on `pds/shell/blockfile.mdk`'s
    rule and for its reason — a shard whose own entry a crash loses takes every
    blob beneath it, however durable those blobs' bytes already are. Only a
    creation owes it, so a shard costs one fsync once in the life of the store
@@ -149,6 +149,12 @@ admitted bytes = match checkBlobBytes (arrayLength bytes)
 ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
 ensureShard dir cid = mkdirAllDurably (blobShardDir dir cid)
 
+-- Not `fs.replaceDurably`: the sidecar and the bytes file share ONE shard
+-- barrier after both renames (see "Write order" above), which the composite's
+-- one-write-one-barrier shape cannot express. The sidecar is fixed-mode
+-- (`writeFilePrivate`); the bytes half has no mode-setting counterpart and
+-- stays at whatever the process umask gives it (0600 only under
+-- `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
 writeOne : String ->
   Cid ->
   String ->

@@ -279,6 +279,13 @@ contend force dir attempts =
 -- directory again rather than retrying the same number, and grades the winner
 -- with no `force`, since losing means a server started here just now and the
 -- operator asserted nothing about that one.
+--
+-- No parent barrier follows this `mkdir`, unlike every directory the stores
+-- create: a crash that loses this dentry costs nothing but a re-run of
+-- `contend` on the next start, which recomputes the same next-number claim
+-- from whatever generations are actually on disk. Nothing durable is ever
+-- read back FROM a generation directory's existence the way a block's shard
+-- or the event log's own directory is.
 claim : String ->
   Int ->
   String ->

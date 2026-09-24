@@ -94,6 +94,9 @@ blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
 ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
 ensureShard dir cid = mkdirAllDurably (blockShardDir dir cid)
 
+-- Not `fs.replaceDurably`: `writeFileBytes` has no mode-setting counterpart,
+-- so a block's bytes stay at whatever mode the process umask gives them
+-- (0600 only under `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
 writeOne : String ->
   Cid ->
   Array Int ->
