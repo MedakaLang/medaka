@@ -192,7 +192,9 @@ serveSpec = spec "serve" [
     ["--bind"]
     "ADDR"
     "address to bind, default 127.0.0.1 (loopback); a non-loopback address is refused unless --trusted-proxy is also given",
-  switch ["--init"] "create the genesis repository in an empty data directory",
+  switch
+    ["--init"]
+    "create the genesis repository; refused if the data directory already holds a repository head",
   switch
     ["--force-lock"]
     "take the data directory's single-writer lock even though another process appears to hold it; for a lock left behind by a server that is gone, never for one that is still running",
