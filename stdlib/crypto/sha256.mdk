@@ -17,13 +17,14 @@
    stack on a message longer than about 25 kilobytes. `sha256FixedBytes` and
    native builds hash messages of a megabyte and more. -}
 
--- Arithmetic contract. Every word is an `Int` in [0, 2^32). `mask32 x =
--- bitAnd x 4294967295`, and every `+`, `shiftLeft` and `bitNot` result is
--- immediately followed by `mask32`. `shiftRight` needs no mask: it is
--- logical/unsigned (`stdlib/runtime.mdk`) and its input is already masked. A
--- sum of up to five 32-bit values is < 2^35, well inside the 63-bit fixnum
--- (`stdlib/bits64.mdk`), so no intermediate overflows; the mask enforces the
--- modulus, not fixnum safety.
+-- Arithmetic contract. Every word is a `U32`, so `+` is addition modulo 2^32
+-- and every bit operation, shift and rotate stays within 32 bits. Bytes stay
+-- `Int`. A word is assembled from four bytes in `Int` and enters `U32`
+-- through `U32.truncate`, and a digest byte leaves through `U32.toInt`.
+-- Neither conversion branches. Under HMAC every word derives from secret
+-- bytes, so the checked conversions (`fromInt`, `tryFromInt`), which branch
+-- on the value, are never applied to a word. Every shift and rotate amount is
+-- a constant.
 --
 -- Message words are big-endian (FIPS 180-4 §3.1) and the digest is emitted in
 -- H0..H7 order.
@@ -37,11 +38,12 @@
 -- The two now emit and inline identically, so migrating is mechanical;
 -- re-measure the hot loops when you do.
 import array.{setInPlace, make, blit}
+import u32 as U32
 
 -- ── Constants ────────────────────────────────────────────────────────
 
 -- FIPS 180-4 §5.3.3 initial hash value H(0).
-h0Init : (Int, Int, Int, Int, Int, Int, Int, Int)
+h0Init : (U32, U32, U32, U32, U32, U32, U32, U32)
 h0Init = (
   0x6a09e667,
   0xbb67ae85,
@@ -54,7 +56,7 @@ h0Init = (
 )
 
 -- FIPS 180-4 §4.2.2 round constants K[0..63].
-k : Array Int
+k : Array U32
 k = [|
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
   0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
@@ -71,29 +73,36 @@ k = [|
 
 -- ── Bit / word arithmetic ────────────────────────────────────────────
 
-mask32 : Int -> Int
-mask32 x = bitAnd x 4294967295
+ch : U32 -> U32 -> U32 -> U32
+ch x y z = U32.bitXor (U32.bitAnd x y) (U32.bitAnd (U32.bitNot x) z)
 
-rotr32 : Int -> Int -> Int
-rotr32 n x = mask32 (bitOr (shiftRight x n) (shiftLeft x (32 - n)))
+maj : U32 -> U32 -> U32 -> U32
+maj x y z =
+  U32.bitXor (U32.bitXor (U32.bitAnd x y) (U32.bitAnd x z)) (U32.bitAnd y z)
 
-ch : Int -> Int -> Int -> Int
-ch x y z = bitXor (bitAnd x y) (bitAnd (mask32 (bitNot x)) z)
+bigSigma0 : U32 -> U32
+bigSigma0 x =
+  U32.bitXor
+    (U32.bitXor (U32.rotateRight x 2) (U32.rotateRight x 13))
+    (U32.rotateRight x 22)
 
-maj : Int -> Int -> Int -> Int
-maj x y z = bitXor (bitXor (bitAnd x y) (bitAnd x z)) (bitAnd y z)
+bigSigma1 : U32 -> U32
+bigSigma1 x =
+  U32.bitXor
+    (U32.bitXor (U32.rotateRight x 6) (U32.rotateRight x 11))
+    (U32.rotateRight x 25)
 
-bigSigma0 : Int -> Int
-bigSigma0 x = bitXor (bitXor (rotr32 2 x) (rotr32 13 x)) (rotr32 22 x)
+smallSigma0 : U32 -> U32
+smallSigma0 x =
+  U32.bitXor
+    (U32.bitXor (U32.rotateRight x 7) (U32.rotateRight x 18))
+    (U32.shiftRight x 3)
 
-bigSigma1 : Int -> Int
-bigSigma1 x = bitXor (bitXor (rotr32 6 x) (rotr32 11 x)) (rotr32 25 x)
-
-smallSigma0 : Int -> Int
-smallSigma0 x = bitXor (bitXor (rotr32 7 x) (rotr32 18 x)) (shiftRight x 3)
-
-smallSigma1 : Int -> Int
-smallSigma1 x = bitXor (bitXor (rotr32 17 x) (rotr32 19 x)) (shiftRight x 10)
+smallSigma1 : U32 -> U32
+smallSigma1 x =
+  U32.bitXor
+    (U32.bitXor (U32.rotateRight x 17) (U32.rotateRight x 19))
+    (U32.shiftRight x 10)
 
 -- In-bounds indexing via the panicking `arr[i]` form: every call site below
 -- only ever indexes within a known length, so the panic is unreachable, and
@@ -101,7 +110,7 @@ smallSigma1 x = bitXor (bitXor (rotr32 17 x) (rotr32 19 x)) (shiftRight x 10)
 byteAt : Array Int -> Int -> Int
 byteAt arr i = arr[i]
 
-wordAt : Array Int -> Int -> Int
+wordAt : Array U32 -> Int -> U32
 wordAt arr i = arr[i]
 
 -- ── Message schedule ─────────────────────────────────────────────────
@@ -109,18 +118,18 @@ wordAt arr i = arr[i]
 -- Big-endian 32-bit word starting at byte index `i*4`, read through an
 -- arbitrary byte accessor (so the caller decides whether bytes come from
 -- the original message or a synthesized tail block).
-scheduleWord : (Int -> Int) -> Int -> Int
+scheduleWord : (Int -> Int) -> Int -> U32
 scheduleWord byteOf i =
   let b0 = byteOf (i * 4)
   let b1 = byteOf (i * 4 + 1)
   let b2 = byteOf (i * 4 + 2)
   let b3 = byteOf (i * 4 + 3)
-  mask32
+  U32.truncate
     (bitOr
       (bitOr (bitOr (shiftLeft b0 24) (shiftLeft b1 16)) (shiftLeft b2 8))
       b3)
 
-fillFirst16 : Array Int -> (Int -> Int) -> Int -> Unit
+fillFirst16 : Array U32 -> (Int -> Int) -> Int -> Unit
 fillFirst16 w byteOf i =
   if i >= 16 then
     ()
@@ -128,44 +137,38 @@ fillFirst16 w byteOf i =
     setInPlace i (scheduleWord byteOf i) w
     fillFirst16 w byteOf (i + 1)
 
-extendSchedule : Array Int -> Int -> Unit
+extendSchedule : Array U32 -> Int -> Unit
 extendSchedule w i =
   if i >= 64 then
     ()
   else
     let s0 = smallSigma0 (wordAt w (i - 15))
     let s1 = smallSigma1 (wordAt w (i - 2))
-    let v =
-      mask32 (mask32 (mask32 (wordAt w (i - 16) + s0) + wordAt w (i - 7)) + s1)
+    let v = wordAt w (i - 16) + s0 + wordAt w (i - 7) + s1
     setInPlace i v w
     extendSchedule w (i + 1)
 
 -- Build the 64-word message schedule for one block from a byte accessor
 -- covering that block's 64 bytes (offsets 0..63).
-buildSchedule : (Int -> Int) -> Array Int
+buildSchedule : (Int -> Int) -> Array U32
 buildSchedule byteOf =
-  let w = make 64 0
+  let w = make 64 (0 : U32)
   fillFirst16 w byteOf 0
   extendSchedule w 16
   w
 
 -- ── Compression ──────────────────────────────────────────────────────
 
-type State = (Int, Int, Int, Int, Int, Int, Int, Int)
+type State = (U32, U32, U32, U32, U32, U32, U32, U32)
 
-compressRounds : Array Int -> State -> Int -> State
+compressRounds : Array U32 -> State -> Int -> State
 compressRounds w (a, b, c, d, e, f, g, h) t =
   if t >= 64 then
     (a, b, c, d, e, f, g, h)
   else
-    let t1 =
-      mask32
-        (mask32 (mask32 (mask32 (h + bigSigma1 e) + ch e f g) + wordAt k t)
-          + wordAt w t)
-    let t2 = mask32 (bigSigma0 a + maj a b c)
-    let a' = mask32 (t1 + t2)
-    let e' = mask32 (d + t1)
-    compressRounds w (a', a, b, c, e', e, f, g) (t + 1)
+    let t1 = h + bigSigma1 e + ch e f g + wordAt k t + wordAt w t
+    let t2 = bigSigma0 a + maj a b c
+    compressRounds w (t1 + t2, a, b, c, d + t1, e, f, g) (t + 1)
 
 -- One 64-byte block, addressed via `byteOf` (offsets 0..63 relative to the
 -- block start), folded into the running hash state.
@@ -174,16 +177,7 @@ compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
   let w = buildSchedule byteOf
   let (a, b, c, d, e, f, g, h) =
     compressRounds w (h0, h1, h2, h3, h4, h5, h6, h7) 0
-  (
-    mask32 (h0 + a),
-    mask32 (h1 + b),
-    mask32 (h2 + c),
-    mask32 (h3 + d),
-    mask32 (h4 + e),
-    mask32 (h5 + f),
-    mask32 (h6 + g),
-    mask32 (h7 + h),
-  )
+  (h0 + a, h1 + b, h2 + c, h3 + d, h4 + e, h5 + f, h6 + g, h7 + h)
 
 -- ── Driving the blocks ───────────────────────────────────────────────
 
@@ -263,7 +257,7 @@ byteDomainOk msg len i =
 -- that key; not part of the digest API — reach for `sha256`/
 -- `sha256FixedBytes` to hash an ordinary message.
 export
-sha256AssumeByteDomainFrom : (Int, Int, Int, Int, Int, Int, Int, Int) ->
+sha256AssumeByteDomainFrom : (U32, U32, U32, U32, U32, U32, U32, U32) ->
   Int ->
   Array Int ->
   Array Int
@@ -284,7 +278,7 @@ sha256AssumeByteDomain msg = sha256AssumeByteDomainFrom h0Init 0 msg
 -- `sha256AssumeByteDomainFrom` continues from. Internal machinery for
 -- `hmac`'s keyed entry point; not part of the digest API.
 export
-sha256FoldKeyBlock : Array Int -> (Int, Int, Int, Int, Int, Int, Int, Int)
+sha256FoldKeyBlock : Array Int -> (U32, U32, U32, U32, U32, U32, U32, U32)
 sha256FoldKeyBlock block = compressBlock (byteAt block) h0Init
 
 -- This entry exists for `hmac`, whose every input byte comes from a fixed
@@ -312,8 +306,9 @@ sha256 msg =
   else
     sha256AssumeByteDomain msg
 
-digestWord : Array Int -> Int -> Int -> Unit
-digestWord out i word =
+digestWord : Array Int -> Int -> U32 -> Unit
+digestWord out i h =
+  let word = U32.toInt h
   setInPlace (i * 4) (bitAnd (shiftRight word 24) 255) out
   setInPlace (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
   setInPlace (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out

@@ -19,14 +19,14 @@ native builds hash messages of a megabyte and more.
 ## `sha256AssumeByteDomainFrom`
 
 ```
-sha256AssumeByteDomainFrom : (Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Array Int -> Array Int
+sha256AssumeByteDomainFrom : (U32, U32, U32, U32, U32, U32, U32, U32) -> Int -> Array Int -> Array Int
 sha256AssumeByteDomainFrom priorState priorBytes msg
 ```
 
 ## `sha256FoldKeyBlock`
 
 ```
-sha256FoldKeyBlock : Array Int -> (Int, Int, Int, Int, Int, Int, Int, Int)
+sha256FoldKeyBlock : Array Int -> (U32, U32, U32, U32, U32, U32, U32, U32)
 sha256FoldKeyBlock block
 ```
 

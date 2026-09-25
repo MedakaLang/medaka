@@ -11,20 +11,23 @@
 import array.{blit, concat, copy, make, setInPlace}
 import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import crypto.hmac.{HmacSha256Key, hmacSha256Key, hmacSha256WithKey}
+import u32 as U32
 
 hashBytes : Int
 hashBytes = 32
 
 -- Big-endian 4-byte encoding of the PBKDF2 block index (RFC 2898 §5.2,
--- `INT (i)`).
+-- `INT (i)`). An index that does not fit 32 bits is refused rather than
+-- reduced: two blocks of one key would otherwise share an index, and the
+-- RFC stops with "derived key too long" there. The index is public, so the
+-- checked conversion's branch reveals nothing.
 export
 int32Be : Int -> Array Int
-int32Be n = [|
-  bitAnd (shiftRight n 24) 255,
-  bitAnd (shiftRight n 16) 255,
-  bitAnd (shiftRight n 8) 255,
-  bitAnd n 255,
-|]
+int32Be n = match U32.tryFromInt n
+  Some index => toArray (U32.toBytesBE index)
+  None =>
+    panic
+      "pbkdf2: block index \{n} is outside 0..4294967295; derived key too long"
 
 xorInto : Array Int -> Array Int -> Int -> Unit
 xorInto acc u i =
