@@ -18,7 +18,7 @@ import hex.{decode}
 import list.{somes}
 import string.{toInt, trim, words}
 import io.{readLines}
-import lib.pbkdf2.{pbkdf2HmacSha256}
+import lib.pbkdf2.{int32Be, pbkdf2HmacSha256}
 
 -- "passwd"
 passwd : Array Int
@@ -184,6 +184,16 @@ test "shorter dkLen truncates the same block stream rather than re-deriving" =
   expectEach [
     ("arrayLength short == 20", expectEqual 20 (arrayLength short)),
     ("short == take 20 full", expectEqual (take 20 full) short),
+  ]
+
+test "INT (i) is the block index as 4 big-endian bytes, up to 2^32 - 1" = expectEach
+  [
+    ("int32Be 1", expectEqual [|0, 0, 0, 1|] (int32Be 1)),
+    ("int32Be 16909060", expectEqual [|1, 2, 3, 4|] (int32Be 16909060)),
+    (
+      "int32Be 4294967295",
+      expectEqual [|255, 255, 255, 255|] (int32Be 4294967295),
+    ),
   ]
 
 test "does not mutate its Array Int inputs" =
