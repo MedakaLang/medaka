@@ -151,6 +151,16 @@ u16Truncate	TOTAL	total: the low sixteen bits of any Int
 u16ToInt	TOTAL	total: identity on the word
 u32Truncate	TOTAL	total: the low thirty-two bits of any Int
 u32ToInt	TOTAL	total: identity on the word
+# U64 kernels: the value modulo 2^64 on the way in, the low 63 bits on the way
+# out, and the bitwise and shift operations wrap or give 0 by design.
+u64Truncate	TOTAL	total: any Int modulo 2^64 (two's complement)
+u64TruncateToInt	TOTAL	total: the low 63 bits of any U64 as a signed Int
+u64BitAnd	TOTAL	total bitwise op
+u64BitOr	TOTAL	total bitwise op
+u64BitXor	TOTAL	total bitwise op
+u64ShiftLeft	TOTAL	total: an amount outside 0 .. 63 gives 0 by design
+u64ShiftRight	TOTAL	total: an amount outside 0 .. 63 gives 0 by design
+u64MulHigh	TOTAL	total: the high 64 bits of the 128-bit product
 intToString	TOTAL	total: decimal render of any Int (incl. intMinBound)
 # Hashes (except hashFloat): total over their domains.
 hashBool	TOTAL	total over Bool
