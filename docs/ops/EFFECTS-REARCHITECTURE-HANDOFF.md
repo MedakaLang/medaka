@@ -245,8 +245,8 @@ is owed, not the design.
   uses; AGENTS.md's `[T-EMITTER-BENCH]` says so for codegen changes and it
   holds for the parser too.
 - The `compiler-soundness` job's must-fail step runs BEFORE the whole-source
-  typecheck and the fixpoint, so a drained pin skips both in CI; they were run
-  locally instead (`test/typecheck_compiler_source.sh`,
+  typecheck and the fixpoint, so a drained pin skips both in CI; while the pins
+  were in the tree they were run locally instead (`test/typecheck_compiler_source.sh`,
   `test/selfcompile_fixpoint.sh`, C3a and C3b yes). That source typecheck also
   carries the `OriginUnresolved` producer ratchet: the parser may not name the
   sentinel, so `effectDeclUnstamped` (`frontend/ast.mdk`) is the helper the
@@ -257,11 +257,10 @@ is owed, not the design.
   `profile_main`/`profile_modules_main` oracles, which the effects oracle set
   does not build; a SYNTAX.md example must be in the formatter's canonical
   wrapping and an extern in it must name `FFI`.
-- The `must_fail` gate's drain instruction is `git rm -r` of the pin directory;
-  this session's tool policy refused that deletion ("security test removal"),
-  so the three drained pins are still in the tree and the `soundness` job's
-  must-fail step will report `3382`/`3383` DRAINED and `3391` CONTROL-BROKE
-  until Val removes them. Nothing else is owed for those issues.
+- The `must_fail` gate's drain instruction is the removal of the pin
+  directory; this session's tool policy refused that at first ("security test
+  removal"), and Val authorized it. The three drained pins are removed and the
+  gate reads 25 still reproduce, 0 drained.
 
 **Receipts on the final source state (build 11, oracles rebuilt after it):**
 
@@ -285,8 +284,8 @@ is owed, not the design.
   passes through `medaka gate run` (the bare runner leaves `MEDAKA_ROOT`
   unset, which silences the reimpl lint rows, as the test's own header says);
   `diff_compiler_check_wrapper_callers` passes after the ledger row for the
-  matrix sibling; `diff_compiler_must_fail` reports 3382/3383 DRAINED and 3391
-  CONTROL-BROKE, the drain this session could not delete.
+  matrix sibling; `diff_compiler_must_fail` reported 3382/3383 DRAINED and 3391
+  CONTROL-BROKE until the pins were removed, and is green after.
 - Snapshots re-blessed for the 33 moved compiler/stdlib sources plus the
   diff fixture, `--new` for `effect_authority.mdk`; LEG A re-captured (the
   removed lines are the deleted and re-typed helpers); lextok goldens for the
@@ -299,15 +298,15 @@ is owed, not the design.
 
 **Owed after this session:**
 
-1. Delete `test/must_fail_fixtures/3382-*`, `3383-*`, `3391-*` (drained; the
-   regressions live under `test/typecheck_error_fixtures/effect_*`) and close
-   #3382, #3383, #3391 when the PR merges.
+1. Close #3382, #3383, #3391 when the PR merges (the PR body carries the
+   closing keywords; their regressions live under
+   `test/typecheck_error_fixtures/effect_*`).
 2. The data half of #3385 (delivery item 6 in the architecture).
 3. A located `R-AMBIGUOUS-EFFECT` (an `EffAtomTy` carries no `Loc`).
 4. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
    lambda parameter without a directed flow lose the qualifier: conservative,
    documented in the architecture, not a launder.
-5. The whole-diff adversarial review and the CI run on the final head.
+5. The whole-diff adversarial review.
 
 ## Delivered code and invariants to preserve
 
@@ -381,12 +380,11 @@ list is not a claim that an independent full-head review found nothing else.
 2. Qualified data fields, constructor proof sources and existentials (#3385's
    data half). Named authorities on arrows, the underscore's retirement, label
    identity and the prefix-join canonical form are delivered.
-3. Removal of the three drained must-fail pins (see "Owed after this session").
-4. General qualified directed residual constraints in schemes, plus fully
+3. General qualified directed residual constraints in schemes, plus fully
    delayed unknown-shape produced-value joins.
-5. Shared invocation-protocol summaries for policy/manifest consumers rather
+4. Shared invocation-protocol summaries for policy/manifest consumers rather
    than re-deriving semantics by structural traversal.
-6. Final performance, cross-engine, self-hosting and CI verification after all
+5. Final performance, cross-engine, self-hosting and CI verification after all
    semantic changes. Earlier successful subsets do not discharge this.
 
 The branch also changed `819-impl-head-tyvar-pinned`; recheck its current contract.
