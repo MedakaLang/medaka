@@ -1,0 +1,90 @@
+-- U64 (#3422, epic #3417), the boxed 64-bit tier, at the magnitudes where a 63-bit
+-- `Int`, a signed 64-bit reading, or one 32-bit half would go wrong: 2^62 (past
+-- `Int`), 2^63 (the sign bit of an i64), 2^64 - 1, sums and products past 2^64,
+-- division and comparison above 2^63 (unsigned), and the full 128-bit product.
+-- Every value above 2^62 is a wide literal (#3423).
+--
+-- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): the same magnitudes
+-- as plain `Int` keep `Int` semantics (63-bit wrap), and `hash` on an `Int` is
+-- unchanged.
+--
+-- Expected values were computed independently of every engine (Python, `% 2**64`);
+-- the pin is test/engine_value_pins/engine/u64_boxed.pin.
+
+import u64 as U64
+import u32 as U32
+
+double : Num a => a -> a
+double x = x + x
+
+ws : List U64
+ws = [
+  0,
+  1,
+  0x3FFFFFFFFFFFFFFF,
+  0x4000000000000000,
+  0x7FFFFFFFFFFFFFFF,
+  0x8000000000000000,
+  0xFFFFFFFFFFFFFFFE,
+  0xFFFFFFFFFFFFFFFF,
+]
+
+main =
+  println "u64 literals"
+  println ws
+  println "u64 +"
+  println (map (x => x + 1) ws)
+  println (map (x => x + 0x8000000000000000) ws)
+  println "u64 -"
+  println (map (x => x - 1) ws)
+  println (map (x => 0 - x) ws)
+  println "u64 *"
+  println (map (x => x * 0x9E3779B97F4A7C15) ws)
+  println (map (x => x * x) ws)
+  println "u64 / %"
+  println (map (x => x / 7) ws)
+  println (map (x => x % 1000000007) ws)
+  println (0xFFFFFFFFFFFFFFFF / 0x8000000000000000 : U64)
+  println (0xFFFFFFFFFFFFFFFF % 0x8000000000000001 : U64)
+  println "u64 compare"
+  println (map (x => x < 0x8000000000000000) ws)
+  println (map (x => x >= 0x7FFFFFFFFFFFFFFF) ws)
+  println (map (x => x == 0xFFFFFFFFFFFFFFFF) ws)
+  println (compare 0x8000000000000000 (1 : U64))
+  println (max 1 (0xFFFFFFFFFFFFFFFF : U64))
+  println "u64 bits"
+  println (map (x => U64.bitAnd x 0xF0F0F0F0F0F0F0F0) ws)
+  println (map (x => U64.bitXor x 0xFFFFFFFF00000000) ws)
+  println (map (x => U64.shiftRight x 33) ws)
+  println (map (x => U64.shiftLeft x 31) ws)
+  println (map (x => U64.rotateLeft x 13) ws)
+  println (U64.shiftLeft 1 63)
+  println (U64.shiftLeft 1 64)
+  println (U64.shiftRight 0xFFFFFFFFFFFFFFFF 64)
+  println (map U64.popCount ws)
+  println (map U64.leadingZeros ws)
+  println (map U64.trailingZeros ws)
+  println "u64 wide"
+  println (map (x => U64.mulWide x 0xFFFFFFFFFFFFFFFF) ws)
+  println (U64.addCarry 0xFFFFFFFFFFFFFFFF 0xFFFFFFFFFFFFFFFF True)
+  println (U64.subBorrow 0 0xFFFFFFFFFFFFFFFF True)
+  println (U32.mulWide 4294967295 4294967295)
+  println "u64 conversions"
+  println (map U64.toInt ws)
+  println (map U64.truncateToInt ws)
+  println (U64.truncate (-1))
+  println (U64.truncate (0 - 4611686018427387903 - 1))
+  println (U64.tryFromInt (-1))
+  println (map U64.toHex ws)
+  println (map (x => U32.toInt (U32.truncateU64 x)) ws)
+  println "u64 hash"
+  println (map hash ws)
+  println (hash (42 : U64) == hash 42)
+  println "u64 generic"
+  println (double (0x8000000000000001 : U64))
+  println (sum ws)
+  println (product [3, 0x5555555555555556 : U64])
+  println "int bystanders"
+  println (4611686018427387903 + 1)
+  println (9007199254740993 * 3)
+  println (hash 42)
