@@ -169,7 +169,10 @@ dsubN : Param -> Param -> Bool
 dsubN PUnit PUnit = True
 dsubN _ (PPrefix None) = True
 dsubN (PPrefix (Some a)) (PPrefix (Some b)) =
-  startsWith (prefixConcrete b) (prefixConcrete a)
+  if isPrefixPattern b then
+    startsWith (prefixConcrete b) (prefixConcrete a)
+  else
+    a == b
 dsubN (PPrefix None) (PPrefix (Some _)) = False
 dsubN _ (PSet None) = True
 dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b
@@ -177,6 +180,15 @@ dsubN (PSet None) (PSet (Some _)) = False
 dsubN _ (PProduct []) = True
 dsubN (PProduct ax) (PProduct bx) = allList (axisSub ax) bx
 dsubN _ _ = False
+
+-- A pattern ends in `*` and admits every element it is a prefix of; any
+-- other element is exact and admits only itself: `"/etc/host"` does not
+-- admit `/etc/hostname`.
+export
+isPrefixPattern : String -> Bool
+isPrefixPattern s =
+  let n = stringLength s
+  n > 0 && stringSlice (n - 1) n s == "*"
 
 export
 axisSub : List (String, Param) -> (String, Param) -> Bool

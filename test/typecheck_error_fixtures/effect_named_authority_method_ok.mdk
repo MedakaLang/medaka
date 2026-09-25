@@ -1,0 +1,37 @@
+-- The honest controls for effect_named_authority_method_launder, and the
+-- three definition shapes a named signature admits beside a clause: a method
+-- body forwards its named parameter (supplied and default), a lambda-form
+-- definition binds its parameter from the signature, and a qualified result
+-- is returned.
+interface Loader a where
+  load : a -> (p : String) -> <FileRead p> Result String String
+
+data X = X
+
+impl Loader X where
+  load _ p = readFile p
+
+interface Reader a where
+  fetch : a -> (p : String) -> <FileRead p> Result String String
+  fetch _ p = readFile (p ++ "/x")
+
+data Y = Y
+
+impl Reader Y where
+
+lam : (p : String) -> <FileRead p> Result String String
+lam = p => readFile p
+
+idp : (p : String) -> <FileRead p> String @p
+idp p = p
+
+viaId : (p : String) -> <FileRead p> Result String String
+viaId p = readFile (idp p)
+
+cfg : Unit -> <FileRead "config/*"> Result String String
+cfg _ = load X "config/a"
+
+dflt : Unit -> <FileRead "config/*"> Result String String
+dflt _ = fetch Y "config/b"
+
+main = println 1

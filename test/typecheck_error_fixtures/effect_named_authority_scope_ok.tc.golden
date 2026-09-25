@@ -1,0 +1,3 @@
+chain : Unit -> <FileRead "config/*"> Result String String
+main : <IO> Unit
+renameArm : (p : String) -> <FileRead p> Result String String

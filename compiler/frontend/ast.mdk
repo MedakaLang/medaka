@@ -742,6 +742,22 @@ effAtomBare : String -> EffAtomTy
 effAtomBare l =
   EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = EPTop }
 
+-- The names a pattern binds, in source order.
+export
+patBoundNames : Pat -> List String
+patBoundNames (PVar x _) = [x]
+patBoundNames (PCon _ args) = flatMap patBoundNames args
+patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
+patBoundNames (PTuple ps) = flatMap patBoundNames ps
+patBoundNames (PList ps) = flatMap patBoundNames ps
+patBoundNames (PAs x _ p) = x :: patBoundNames p
+patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
+patBoundNames _ = []
+
+recPatFieldNames : RecPatField -> List String
+recPatFieldNames (RecPatField label _ None) = [label]
+recPatFieldNames (RecPatField _ _ (Some p)) = patBoundNames p
+
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
 export

@@ -1,0 +1,27 @@
+-- A method contract's named authority is rigid inside every body that
+-- implements it, supplied or default, and stays rigid when the body reaches
+-- the effect through a module binding the value restriction keeps
+-- monomorphic: the obligation is decided at the body, never solved later
+-- as if the contract's variable were flexible.
+interface Loader a where
+  load : a -> (p : String) -> <FileRead p> Result String String
+
+data X = X
+
+comp = (f => f) readFile
+
+impl Loader X where
+  load _ p = comp "/etc/hostname"
+
+interface Reader a where
+  fetch : a -> (p : String) -> <FileRead p> Result String String
+  fetch _ p = comp "/etc/hostname"
+
+data Y = Y
+
+impl Reader Y where
+
+cfg : Unit -> <FileRead "config/*"> Result String String
+cfg _ = load X "config/a"
+
+main = println 1

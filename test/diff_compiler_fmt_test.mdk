@@ -726,7 +726,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 116
+typecheckErrorFixtureCount = 123
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -734,6 +734,13 @@ typecheckErrorFixtureCount = 116
    the prelude-aware driver; every other fixture runs through both. -}
 typecheckPreludeDep : List String
 typecheckPreludeDep = [
+  "effect_named_authority_scope_launder.mdk",
+  "effect_named_authority_scope_ok.mdk",
+  "effect_named_authority_method_launder.mdk",
+  "effect_named_authority_method_ok.mdk",
+  "effect_catalog_position_launder.mdk",
+  "effect_catalog_position_ok.mdk",
+  "effect_prefix_exact.mdk",
   "effect_named_authority_launder.mdk",
   "effect_named_authority_ok.mdk",
   "effect_named_authority_dynamic_launder.mdk",

@@ -1,0 +1,15 @@
+-- The honest controls for effect_named_authority_scope_launder: an arm that
+-- merely renames the scrutinee reads it, a let chain reads each right-hand
+-- side in the scope it was bound in.
+renameArm : (p : String) -> <FileRead p> Result String String
+renameArm p = readFile (match p
+  q => q)
+
+chain : Unit -> <FileRead "config/*"> Result String String
+chain _ =
+  let x = "config/app"
+  let q = x
+  let x = "/etc/hostname"
+  readFile q
+
+main = println 1

@@ -223,6 +223,64 @@ is owed, not the design.
   with `Ref inner` undirectedly, which erased the stored qualifier; `refStored`
   reads it verbatim (the `Ref` invariance pair pins both directions).
 
+**The adversarial review (2026-09-25, at `35654f79f`) and what it changed.**
+Fourteen findings; five S0/S1, every one reproduced with this session's binary
+before it was fixed. Each fix is a general rule, and each has a regression
+under `test/typecheck_error_fixtures/effect_*` beside its honest control:
+
+- *S0: `α` resolved names by spelling.* A match arm, a let pattern or a local
+  definition that rebound the named argument's name read the outer binder's
+  qualifier, and a let chain read a later rebinding. Now a local binder
+  enters the α scope (`AlphaBinder`, innermost first): a let with its
+  right-hand side (`ALet`), a parameter or pattern the environment types
+  (`AParam`, read through the checked type), or a binder inside the argument
+  itself whose value nothing can see (`AOpaque`, the top; an arm that merely
+  renames the scrutinee reads it). A let's right-hand side is read in the
+  scope it was bound in (`letInScope`). The first cut kept a flat name list
+  and deleted entries on rebinding, which lost the older let a still-older
+  let referred to; the second cut marked a parameter as opaque, which hid the
+  parameter's own qualifier. `patBoundNames` lives in `frontend/ast.mdk`.
+- *S0: a method contract's binder was solved at the root.* Its variables are
+  minted before the body's scope opens, so the level test called them outer
+  and the module residue solved them. A declared universal is rigid wherever
+  it was minted (`localRigidAuth` asks only the rigid set).
+- *S0: the catalog-row cover check was blind to positions.* Both rows are now
+  lifted with one authority variable per argument position (`positionCells`,
+  `positionalSigVars`; the catalog map carries each row's binder order), so a
+  redeclaration covers the catalog only when its binders name the same
+  arguments; a bare label still covers, a binder never covers a bare one.
+- *S1: method bodies, lambda-form definitions and qualified results.* A
+  method's parameters bind from the contract verbatim (`unifyParamsExpected`
+  through `bindFrom`; the generic default check used to pass no expected
+  domains at all), a lambda meeting a known arrow binds its parameters before
+  its body is inferred (`inferExpected`'s `ELam` arm, through `normalize`,
+  since the expected type arrives behind a link), and a clause's produced
+  value flows into the binding's result slot (`publishProducedResults` through
+  `bindFrom`): the same directed-flow rule as arguments and calls.
+- *Pre-existing S0 at the merge base:* a written Prefix element containing a
+  `/` anywhere was a prefix, so `"/etc/host"` admitted `/etc/hostname`. An
+  element without a trailing `*` is exact (`isPrefixPattern`; §2.3 amended).
+  The one fixture that pinned the old algebra, `ffi_libname_wildcard_accept`
+  ("a wildcard library name is the same set as the bare name"), now pins the
+  one direction the order admits: the exact name lies within the pattern.
+- *Ratification 4:* the tight `String@p` lexed as a qualifier; `@` adjacent to
+  any identifier character is now `TAsAt`, and the parser refuses a tight
+  qualifier naming the spaced spelling.
+- *§11 overclaimed:* residual constraints do not travel with a generalized
+  scheme; the module-level residue is decided over the module instead. The
+  sentence now says so.
+
+Still open from the review, none a launder: error locations that land on an
+honest body or a last arm rather than the call (S2); the "declared row admits
+only X" wording when X is a solved bound rather than the written one (S2); a
+symbolic join renders as `(src | dst)`, which no signature can spell (S2); the
+manifest and the policy checker key labels by bare name, so two modules'
+same-spelled labels produce duplicate TOML keys (S2, needs a format decision);
+one defect can report twice (S2); `literalAuthority` hard-codes the Product
+axis `Host` and no declared axis schema exists (S3, the data half); a PLAUSIBLE
+`unifyIntoN` arm that binds a value's variable to a qualified type in positive
+position without evidence (every attempt was caught at a later application).
+
 **Traps paid for in this session:**
 
 - Every `compiler/**.mdk` or `stdlib/**.mdk` edit after a build starts makes

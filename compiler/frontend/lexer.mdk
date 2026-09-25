@@ -1804,15 +1804,14 @@ malformedLeadingDotTok src len pos =
     pos
     "malformed float literal `\{bad}`: a float needs a digit before the decimal point — write `0\{bad}`"
 
--- `@` is the as-pattern operator (AS_AT) when it immediately follows an
--- identifier (no intervening space), else the impl-hint prefix (AT).  The
--- adjacency test: only a lowercase/underscore
--- identifier counts (an UPPER ctor or a number does not).
+-- `@` is the adjacent operator (AS_AT) when it immediately follows an
+-- identifier character, whatever its case — the as-pattern `x@(…)`, and the
+-- shape the parser refuses for a tight qualifier `String@p` — else the spaced
+-- `@` (AT) of a qualifier `String @p`.
 atToken : Array Char -> Int -> Token
 atToken src pos
   | pos <= 0 = TAt
-  | isAlnum (at src (pos - 1))
-    && identStartLower src (identRunStart src (pos - 1)) = TAsAt
+  | isAlnum (at src (pos - 1)) = TAsAt
   | otherwise = TAt
 
 -- A bare `-` lexes as TMinusTight (a distinct token the parser can grab as a
@@ -1827,15 +1826,6 @@ minusTok src len pos
     && isSpace (at src (pos - 1))
     && isDigit (at src (pos + 1)) = TMinusTight
   | otherwise = TMinus
-
-identRunStart : Array Char -> Int -> Int
-identRunStart src p
-  | p <= 0 = 0
-  | isAlnum (at src (p - 1)) = identRunStart src (p - 1)
-  | otherwise = p
-
-identStartLower : Array Char -> Int -> Bool
-identStartLower src p = isLower (at src p) || at src p == '_'
 
 -- `{` and `}` route through interp depth when inside a `\{ … }` interpolation.
 -- `id` encodes that depth: positive = inside a single-quoted-string interp,

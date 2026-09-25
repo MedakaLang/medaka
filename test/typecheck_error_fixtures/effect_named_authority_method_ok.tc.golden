@@ -1,0 +1,8 @@
+cfg : Unit -> <FileRead "config/*"> Result String String
+dflt : Unit -> <FileRead "config/*"> Result String String
+fetch : a -> (p : String) -> <FileRead p> Result String String
+idp : (p : String) -> <FileRead p> String @p
+lam : (p : String) -> <FileRead p> Result String String
+load : a -> (p : String) -> <FileRead p> Result String String
+main : <IO> Unit
+viaId : (p : String) -> <FileRead p> Result String String

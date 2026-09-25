@@ -1,5 +1,5 @@
 # META
-source_lines=2188
+source_lines=2204
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -745,6 +745,22 @@ export
 effAtomBare : String -> EffAtomTy
 effAtomBare l =
   EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = EPTop }
+
+-- The names a pattern binds, in source order.
+export
+patBoundNames : Pat -> List String
+patBoundNames (PVar x _) = [x]
+patBoundNames (PCon _ args) = flatMap patBoundNames args
+patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
+patBoundNames (PTuple ps) = flatMap patBoundNames ps
+patBoundNames (PList ps) = flatMap patBoundNames ps
+patBoundNames (PAs x _ p) = x :: patBoundNames p
+patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
+patBoundNames _ = []
+
+recPatFieldNames : RecPatField -> List String
+recPatFieldNames (RecPatField label _ None) = [label]
+recPatFieldNames (RecPatField _ _ (Some p)) = patBoundNames p
 
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
@@ -2253,6 +2269,18 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
 (DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")))))
+(DTypeSig true "patBoundNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
+(DFunDef false "patBoundNames" ((PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "args")))
+(DFunDef false "patBoundNames" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patBoundNames") (EVar "h")) (EApp (EVar "patBoundNames") (EVar "t"))))
+(DFunDef false "patBoundNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps")))
+(DFunDef false "patBoundNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps")))
+(DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
+(DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
+(DFunDef false "patBoundNames" (PWild) (EListLit))
+(DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild (PCon "None"))) (EListLit (EVar "label")))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Decl")))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom")) (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "OriginUnresolved")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
@@ -2571,6 +2599,18 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
 (DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")))))
+(DTypeSig true "patBoundNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
+(DFunDef false "patBoundNames" ((PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "args")))
+(DFunDef false "patBoundNames" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patBoundNames") (EVar "h")) (EApp (EVar "patBoundNames") (EVar "t"))))
+(DFunDef false "patBoundNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps")))
+(DFunDef false "patBoundNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps")))
+(DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
+(DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
+(DFunDef false "patBoundNames" (PWild) (EListLit))
+(DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild (PCon "None"))) (EListLit (EVar "label")))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Decl")))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom")) (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "OriginUnresolved")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))

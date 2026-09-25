@@ -174,8 +174,13 @@ otherwise the order in §2.4 is ill-defined.) A v1 atomic label `Foo` is exactly
 pattern; `⊤` = `None` (any). The refinement order:
 
 ```
-p₁ ⊑ p₂   iff   p₂ = ⊤,  or  p₂ is a pattern and p₁'s concrete part STARTS WITH p₂'s concrete part
+p₁ ⊑ p₂   iff   p₂ = ⊤,
+             or  p₂ is a pattern (ends in `*`) and p₁'s concrete part STARTS WITH p₂'s concrete part,
+             or  p₂ is an exact element and p₁ = p₂
 ```
+
+An element written without a trailing `*` is exact and admits only itself:
+`"/etc/host"` does not admit `/etc/hostname`, `"/etc/host*"` does.
 
 so `Net "a.com/api/v1" ⊑ Net "a.com/api/*" ⊑ Net "a.com/*" ⊑ Net ⊤`. **Raw-prefix
 matching is unsound for authority** — `"a.com"` is a string-prefix of
@@ -373,7 +378,11 @@ from signature binders. Partial applications retain the instantiated relationshi
 Binders are lexical and signature-local: an atom or qualifier may name only a
 binder written to its left in the same signature (`R-UNBOUND-AUTHORITY`), and a
 named argument is well-formed only immediately left of an arrow
-(`R-MISPLACED-AUTHORITY-BINDER`). A binder must have type `String`
+(`R-MISPLACED-AUTHORITY-BINDER`). Inside a body, `α` reads a name by its
+binding: a match arm, a let pattern or a local definition that rebinds a name
+shadows every outer let and every outer checked type of that name (an arm that
+merely renames the scrutinee reads the scrutinee), and a let's right-hand side
+is read in the scope it was bound in, never against a later rebinding. A binder must have type `String`
 (`T-AUTHORITY-BINDER`) and serves labels of one domain (`T-AUTHORITY-DOMAIN`).
 A qualifier is written with a spaced `@`: `String @p`.
 
@@ -984,7 +993,10 @@ The active migration and its explicit completed/remaining work are recorded in
 [Effects within the typechecker](../../compiler/EFFECTS-ARCHITECTURE.md).
 The named-authority checkpoint there implements §4.1's named arrows, qualified
 values, resolved label identity, the abstraction `α`, the scoped authority
-solver and publication; qualified data fields, constructor proof sources and
+solver and publication as far as a binding's own scope: a residual obligation
+over a variable no scope owns is decided over the module, not carried in a
+generalized scheme, so "residual constraints travel with a generalized scheme"
+is not implemented; qualified data fields, constructor proof sources and
 authority-indexed existentials remain the proposed surface of §4.1, not
 implemented. No conformance claim may turn a pending proof into success or
 describe the whole effects system as laundering-free while a known channel

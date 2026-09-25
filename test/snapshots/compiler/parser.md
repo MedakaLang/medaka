@@ -1,5 +1,5 @@
 # META
-source_lines=5740
+source_lines=5745
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2326,6 +2326,11 @@ tyQualTailFor ty TAt (TIdent n) = defer
   advance
   advance
   deferPure (TyQual ty n)
+tyQualTailFor _ TAsAt (TIdent n) = defer
+  pos <- getPos
+  fatalAtP
+    "an authority qualifier is written with a space before the `@`: `String @\{n}`"
+    pos
 tyQualTailFor ty _ _ = deferPure ty
 
 tyApplyAll : Ty -> List Ty -> Ty
@@ -6504,6 +6509,7 @@ parseResultWith src tokList offList =
 (DFunDef false "tyQualTail" ((PVar "ty")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EApp (EVar "tyQualTailFor") (EVar "ty")) (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "tyQualTailFor" (TyFun (TyCon "Ty") (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))))
 (DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "TyQual") (EVar "ty")) (EVar "n"))))))))
+(DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "an authority qualifier is written with a space before the `@`: `String @")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`")))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" ((PVar "ty") PWild PWild) (EApp (EVar "deferPure") (EVar "ty")))
 (DTypeSig false "tyApplyAll" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty"))))
 (DFunDef false "tyApplyAll" ((PVar "head") (PList)) (EVar "head"))
@@ -8143,6 +8149,7 @@ parseResultWith src tokList offList =
 (DFunDef false "tyQualTail" ((PVar "ty")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EApp (EVar "tyQualTailFor") (EVar "ty")) (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "tyQualTailFor" (TyFun (TyCon "Ty") (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))))
 (DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "TyQual") (EVar "ty")) (EVar "n"))))))))
+(DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "an authority qualifier is written with a space before the `@`: `String @")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`")))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" ((PVar "ty") PWild PWild) (EApp (EMethodRef "deferPure") (EVar "ty")))
 (DTypeSig false "tyApplyAll" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty"))))
 (DFunDef false "tyApplyAll" ((PVar "head") (PList)) (EVar "head"))

@@ -1,5 +1,5 @@
 # META
-source_lines=2775
+source_lines=2765
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -1808,15 +1808,14 @@ malformedLeadingDotTok src len pos =
     pos
     "malformed float literal `\{bad}`: a float needs a digit before the decimal point — write `0\{bad}`"
 
--- `@` is the as-pattern operator (AS_AT) when it immediately follows an
--- identifier (no intervening space), else the impl-hint prefix (AT).  The
--- adjacency test: only a lowercase/underscore
--- identifier counts (an UPPER ctor or a number does not).
+-- `@` is the adjacent operator (AS_AT) when it immediately follows an
+-- identifier character, whatever its case — the as-pattern `x@(…)`, and the
+-- shape the parser refuses for a tight qualifier `String@p` — else the spaced
+-- `@` (AT) of a qualifier `String @p`.
 atToken : Array Char -> Int -> Token
 atToken src pos
   | pos <= 0 = TAt
-  | isAlnum (at src (pos - 1))
-    && identStartLower src (identRunStart src (pos - 1)) = TAsAt
+  | isAlnum (at src (pos - 1)) = TAsAt
   | otherwise = TAt
 
 -- A bare `-` lexes as TMinusTight (a distinct token the parser can grab as a
@@ -1831,15 +1830,6 @@ minusTok src len pos
     && isSpace (at src (pos - 1))
     && isDigit (at src (pos + 1)) = TMinusTight
   | otherwise = TMinus
-
-identRunStart : Array Char -> Int -> Int
-identRunStart src p
-  | p <= 0 = 0
-  | isAlnum (at src (p - 1)) = identRunStart src (p - 1)
-  | otherwise = p
-
-identStartLower : Array Char -> Int -> Bool
-identStartLower src p = isLower (at src p) || at src p == '_'
 
 -- `{` and `}` route through interp depth when inside a `\{ … }` interpolation.
 -- `id` encodes that depth: positive = inside a single-quoted-string interp,
@@ -3297,13 +3287,9 @@ collectComments s =
 (DTypeSig false "malformedLeadingDotTok" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))
 (DFunDef false "malformedLeadingDotTok" ((PVar "src") (PVar "len") (PVar "pos")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "digitsEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "expEnd") (EVar "src")) (EVar "len")) (EVar "d"))) (DoLet false false (PVar "bad") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "malformed float literal `")) (EApp (EVar "display") (EVar "bad"))) (ELit (LString "`: a float needs a digit before the decimal point — write `0"))) (EApp (EVar "display") (EVar "bad"))) (ELit (LString "`")))))))
 (DTypeSig false "atToken" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Token"))))
-(DFunDef false "atToken" ((PVar "src") (PVar "pos")) (EIf (EBinOp "<=" (EVar "pos") (ELit (LInt 0))) (EVar "TAt") (EIf (EBinOp "&&" (EApp (EVar "isAlnum") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1))))) (EApp (EApp (EVar "identStartLower") (EVar "src")) (EApp (EApp (EVar "identRunStart") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1)))))) (EVar "TAsAt") (EIf (EVar "otherwise") (EVar "TAt") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "atToken" ((PVar "src") (PVar "pos")) (EIf (EBinOp "<=" (EVar "pos") (ELit (LInt 0))) (EVar "TAt") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1))))) (EVar "TAsAt") (EIf (EVar "otherwise") (EVar "TAt") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "minusTok" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Token")))))
 (DFunDef false "minusTok" ((PVar "src") (PVar "len") (PVar "pos")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "pos") (ELit (LInt 0))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EApp (EVar "isSpace") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isDigit") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EVar "TMinusTight") (EIf (EVar "otherwise") (EVar "TMinus") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "identRunStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "identRunStart" ((PVar "src") (PVar "p")) (EIf (EBinOp "<=" (EVar "p") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "p") (ELit (LInt 1))))) (EApp (EApp (EVar "identRunStart") (EVar "src")) (EBinOp "-" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "identStartLower" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "identStartLower" ((PVar "src") (PVar "p")) (EBinOp "||" (EApp (EVar "isLower") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_")))))
 (DTypeSig false "openBrace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "openBrace" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EIf (EBinOp ">" (EVar "id") (ELit (LInt 0))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TLBrace")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EBinOp "+" (EVar "id") (ELit (LInt 1))))) (EIf (EBinOp "<" (EVar "id") (ELit (LInt 0))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TLBrace")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EBinOp "-" (EVar "id") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TLBrace")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "id"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "closeBrace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
@@ -4068,13 +4054,9 @@ collectComments s =
 (DTypeSig false "malformedLeadingDotTok" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))
 (DFunDef false "malformedLeadingDotTok" ((PVar "src") (PVar "len") (PVar "pos")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "digitsEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "expEnd") (EVar "src")) (EVar "len")) (EVar "d"))) (DoLet false false (PVar "bad") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "malformed float literal `")) (EApp (EMethodRef "display") (EVar "bad"))) (ELit (LString "`: a float needs a digit before the decimal point — write `0"))) (EApp (EMethodRef "display") (EVar "bad"))) (ELit (LString "`")))))))
 (DTypeSig false "atToken" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Token"))))
-(DFunDef false "atToken" ((PVar "src") (PVar "pos")) (EIf (EBinOp "<=" (EVar "pos") (ELit (LInt 0))) (EVar "TAt") (EIf (EBinOp "&&" (EApp (EVar "isAlnum") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1))))) (EApp (EApp (EVar "identStartLower") (EVar "src")) (EApp (EApp (EVar "identRunStart") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1)))))) (EVar "TAsAt") (EIf (EVar "otherwise") (EVar "TAt") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "atToken" ((PVar "src") (PVar "pos")) (EIf (EBinOp "<=" (EVar "pos") (ELit (LInt 0))) (EVar "TAt") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1))))) (EVar "TAsAt") (EIf (EVar "otherwise") (EVar "TAt") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "minusTok" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Token")))))
 (DFunDef false "minusTok" ((PVar "src") (PVar "len") (PVar "pos")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "pos") (ELit (LInt 0))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EApp (EVar "isSpace") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "pos") (ELit (LInt 1)))))) (EApp (EVar "isDigit") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))) (EVar "TMinusTight") (EIf (EVar "otherwise") (EVar "TMinus") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "identRunStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "identRunStart" ((PVar "src") (PVar "p")) (EIf (EBinOp "<=" (EVar "p") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "-" (EVar "p") (ELit (LInt 1))))) (EApp (EApp (EVar "identRunStart") (EVar "src")) (EBinOp "-" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "identStartLower" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "identStartLower" ((PVar "src") (PVar "p")) (EBinOp "||" (EApp (EVar "isLower") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_")))))
 (DTypeSig false "openBrace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "openBrace" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EIf (EBinOp ">" (EVar "id") (ELit (LInt 0))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TLBrace")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EBinOp "+" (EVar "id") (ELit (LInt 1))))) (EIf (EBinOp "<" (EVar "id") (ELit (LInt 0))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TLBrace")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EBinOp "-" (EVar "id") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TLBrace")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "id"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "closeBrace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))

@@ -49,7 +49,9 @@ mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
 mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
 mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 orElseLoc : Option Loc -> Option Loc -> Option Loc
+patBoundNames : Pat -> List String
 qualifiedLocal : String -> String -> String
+recPatFieldNames : RecPatField -> List String
 requireUnresolved : String -> List Ty -> Require
 sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
 superUnresolved : String -> List String -> Super

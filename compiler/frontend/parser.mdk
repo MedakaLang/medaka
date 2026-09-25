@@ -2322,6 +2322,11 @@ tyQualTailFor ty TAt (TIdent n) = defer
   advance
   advance
   deferPure (TyQual ty n)
+tyQualTailFor _ TAsAt (TIdent n) = defer
+  pos <- getPos
+  fatalAtP
+    "an authority qualifier is written with a space before the `@`: `String @\{n}`"
+    pos
 tyQualTailFor ty _ _ = deferPure ty
 
 tyApplyAll : Ty -> List Ty -> Ty

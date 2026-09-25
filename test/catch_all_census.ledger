@@ -47,7 +47,7 @@ implTysIfMatch	Decl	1/14
 importOverlayDecls	Decl	2/14
 importShadowsOfDecl	Decl	2/14
 infer	Expr	29/41
-inferExpected	Expr	1/41
+inferExpected	Expr	2/41
 inferOneIfaceDefaults	Decl	2/14
 inferOneImpl	Decl	2/14
 isCtorAppSpine	Expr	5/41

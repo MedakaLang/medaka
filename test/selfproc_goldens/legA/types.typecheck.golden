@@ -874,7 +874,7 @@ entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
 entryHeadMatches : Ty -> List Ty -> List Mono -> Bool
 entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
 entryReportFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> String
-envAlphaLets : TcEnv -> List (String, Expr)
+envAlphaLets : TcEnv -> List (String, AlphaBinder)
 envVarType : TcEnv -> String -> Option Mono
 eqCompareOp : Mono -> Mono -> Mono
 eqInt : Int -> Int -> Bool
@@ -920,11 +920,11 @@ extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
-externSigsToMap : List Decl -> Map String (String, List EffAtomTy) -> Map String (String, List EffAtomTy)
+externSigsToMap : List Decl -> Map String (String, List EffAtomTy, List (String, Int)) -> Map String (String, List EffAtomTy, List (String, Int))
 ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
 ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
-ffiCheckCatalogRowOne : String -> Ty -> List EffAtomTy -> Unit
+ffiCheckCatalogRowOne : String -> Ty -> List EffAtomTy -> List (String, Int) -> Unit
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
@@ -1829,6 +1829,8 @@ monosTvarIds : List Int -> List Mono -> List Int
 nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceRows : List Decl -> List (String, List String)
 nameableIfaceShadows : List Decl -> List String -> List String
+namedArgOrder : Ty -> List (String, Int)
+namedArgPositions : Ty -> Int -> List (String, Int)
 namedArgTypes : Ty -> List (String, Ty)
 namedAtomBinder : EffAtomTy -> List (String, Param)
 namedAtomBinders : Ty -> List (String, Param)
@@ -1999,6 +2001,8 @@ popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List P
 populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
 populateGo : List Decl -> Unit
 populateUnitsGo : List (String, List Decl) -> Unit
+positionCells : List (String, Int) -> List (Int, Ref Authvar)
+positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 ppSchemeNamed : String -> Scheme -> String
 ppSchemeNamedFull : String -> Scheme -> String
 prePassDeclScoped : ArgRw -> Decl -> Decl

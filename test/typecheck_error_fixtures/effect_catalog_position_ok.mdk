@@ -1,0 +1,9 @@
+-- The honest controls for effect_catalog_position_launder: the catalog's own
+-- row under other binder spellings, and a wider (bare) row.
+extern writeFile : (target : String) -> String -> <FileWrite target> Result String Unit
+
+extern rename : (from : String) -> (to : String) -> <FileWrite from, FileWrite to> Result String Unit
+
+extern readFile : String -> <FileRead> Result String String
+
+main = println 1

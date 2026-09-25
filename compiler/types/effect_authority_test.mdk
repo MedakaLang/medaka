@@ -170,6 +170,65 @@ test "a binder has one domain and a String type" = expectAll [
       (codes "n : (k : Int) -> <Store k> Int\nn k = anyStore ()\n")),
 ]
 
+test "a name is read by its binding: rebinding shadows the outer authority" = expectAll
+  [
+    expectTrue
+      (rejects
+        "arm : (p : String) -> <Store p> Int\narm p = load (match \"/etc/x\"\n  p => p)\n"),
+    expectTrue
+      (rejects
+        "pat : (p : String) -> <Store p> Int\npat p = load (let (p, _) = (\"/etc/x\", 1) in p)\n"),
+    expectFalse
+      (accepts
+        "outer : String -> <Store \"cfg/*\"> Int\nouter input =\n  let q = \"cfg/app\"\n  match Some input\n    Some q => load q\n    None => 0\n"),
+    expectFalse
+      (accepts
+        "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"/etc/x\"\n  let q = x\n  let x = \"cfg/app\"\n  load q\n"),
+    expectTrue
+      (accepts
+        "rename : (p : String) -> <Store p> Int\nrename p = load (match p\n  q => q)\n"),
+    expectTrue
+      (accepts
+        "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"cfg/app\"\n  let q = x\n  let x = \"/etc/x\"\n  load q\n"),
+  ]
+
+test "a method contract's binder is rigid in every body that implements it" = expectAll
+  [
+    expectTrue
+      (rejects
+        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\ncomp = (f => f) load\nimpl Loader X where\n  get _ p = comp \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\nimpl Loader X where\n  get _ p = load p\n"),
+    expectTrue
+      (accepts
+        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\n  get _ p = load (p ++ \"/x\")\ndata X = X\nimpl Loader X where\n"),
+  ]
+
+test "a lambda-form definition and a qualified result follow the signature" = expectAll
+  [
+    expectTrue
+      (accepts "lam : (p : String) -> <Store p> Int\nlam = p => load p\n"),
+    expectTrue
+      (rejects
+        "lam : (p : String) -> <Store p> Int\nlam = p => load \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "idp : (p : String) -> <Store p> String @p\nidp p = p\nvia : (p : String) -> <Store p> Int\nvia p = load (idp p)\n"),
+  ]
+
+test "a written prefix element without a star is exact" = expectAll [
+  expectFalse
+    (accepts
+      "exact : Unit -> <Store \"/etc/host\"> Int\nexact _ = load \"/etc/hostname\"\n"),
+  expectTrue
+    (accepts
+      "pat : Unit -> <Store \"/etc/host*\"> Int\npat _ = load \"/etc/hostname\"\n"),
+  expectTrue
+    (accepts
+      "same : Unit -> <Store \"/etc/host\"> Int\nsame _ = load \"/etc/host\"\n"),
+]
+
 test "the authority algebra" =
   let top = AConst (PPrefix None)
   let a = AConst (PPrefix (Some "a/*"))

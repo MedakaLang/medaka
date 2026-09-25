@@ -1,0 +1,32 @@
+-- The abstraction reads a name by its binding, never by a spelling an outer
+-- binder shares.  A match arm, a let pattern or a local binding that rebinds
+-- the named argument's name, or a name an outer let bound to a literal, must
+-- not lend that name's authority to a value it does not derive from.
+armRebind : (p : String) -> <FileRead p> Result String String
+armRebind p = readFile (match "/etc/hostname"
+  p => p)
+
+letRebind : (p : String) -> <FileRead p> Result String String
+letRebind p = readFile (let (p, _) = ("/etc/hostname", 1) in p)
+
+outerLet : String -> <FileRead "config/*"> Result String String
+outerLet input =
+  let q = "config/app"
+  match Some input
+    Some q => readFile q
+    None => Err "x"
+
+localFn : String -> <FileRead "config/*"> Result String String
+localFn input =
+  let q = "config/app"
+  let g q = readFile q
+  g input
+
+chain : Unit -> <FileRead "config/*"> Result String String
+chain _ =
+  let x = "/etc/hostname"
+  let q = x
+  let x = "config/app"
+  readFile q
+
+main = println 1

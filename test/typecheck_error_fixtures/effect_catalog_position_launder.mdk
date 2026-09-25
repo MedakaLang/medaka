@@ -1,0 +1,8 @@
+-- A redeclaration of a catalog extern must agree with the catalog on WHICH
+-- argument each authority names: naming the wrong position, or dropping one
+-- of two determining positions, is a narrower row and must reject.
+extern writeFile : String -> (content : String) -> <FileWrite content> Result String Unit
+
+extern rename : (src : String) -> (dst : String) -> <FileWrite src> Result String Unit
+
+main = println 1

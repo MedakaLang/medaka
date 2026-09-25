@@ -871,7 +871,7 @@ parseErrorsRun : <Exec, FileRead, IO> Expectation
 parseErrorsRun = match parseErrorFixtures
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths =>
-    let expected = 39
+    let expected = 40
     if length paths /= expected then
       fail
         "test/parse_error_fixtures: expected \{intToString expected} fixtures, found \{intToString (length paths)}"

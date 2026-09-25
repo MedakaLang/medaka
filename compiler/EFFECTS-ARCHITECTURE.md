@@ -512,15 +512,23 @@ What landed, in the order the decision record prescribed:
    named like a prelude method, whose spine `unifySpineResult` now applies
    through `applicationRow`) alike. `fillHolesInRow`, `spineFirstArg` and the
    alpha-based hole filling are deleted. Undirected unification erases a
-   top-level qualifier; `bindFrom` carries it verbatim into a declared parameter,
-   a match scrutinee, a let pattern and an application's result; `refStored`
-   reads a cell's stored type verbatim; a flexible receiving slot takes an
-   allowance above the value's authority. The scoped solver (`effect_solver.mdk`)
+   top-level qualifier; `bindFrom` carries it verbatim into a declared parameter
+   (a clause's, a method body's or a lambda's against a known arrow), a match
+   scrutinee, a let pattern, an application's result and a binding's produced
+   result; `refStored` reads a cell's stored type verbatim; a flexible
+   receiving slot takes an allowance above the value's authority. `α` reads a
+   name by its binding (`AlphaBinder`): a let carries its right-hand side, a
+   parameter or pattern the environment types is read through its checked
+   type, a binder inside the argument itself is opaque (a bare rename of the
+   scrutinee reads it), and a let's right-hand side is read in the scope it
+   was bound in. The scoped solver (`effect_solver.mdk`)
    records wanteds, solves each scope's owned flexible variables to their least
    solution (SCC-collapsed), transfers what an enclosing scope owns, and
    `closeRootAuthorities` decides the module-level residue of value bindings the
-   value restriction keeps monomorphic. An ill-typed binder binds no authority
-   (`binderIsString`), so its diagnostic does not cascade into the body.
+   value restriction keeps monomorphic. A declared universal is rigid wherever
+   it was minted, a method contract's included, so no obligation over one is
+   handed outward. An ill-typed binder binds no authority (`binderIsString`),
+   so its diagnostic does not cascade into the body.
 6. **Publication.** `generalizeBinding` quantifies authority variables that have a
    qualified-argument source and publishes the rest as the domain's top. The
    policy checker (`tools/check_policy.mdk`) reads authorities through `authSub`
@@ -529,8 +537,13 @@ What landed, in the order the decision record prescribed:
    `net_async`, `test` and `test_process` declare named arrows wherever the body
    forwards or prefix-extends the argument; `rename` carries both paths. The
    effect-parameter fixture corpora declare named externs.
-8. **Prefix join.** Two prefixes join to their longest common prefix spelled
-   `lcp*`, written syntax a signature accepts (#3391).
+8. **Prefix join and exact elements.** Two prefixes join to their longest
+   common prefix spelled `lcp*`, written syntax a signature accepts (#3391); an
+   element without a trailing `*` is exact and admits only itself.
+9. **Catalog redeclaration.** A user `extern` redeclaring a catalog name is
+   checked against the catalog's row with one authority variable per argument
+   position, so a binder covers the catalog's only when it names the same
+   argument (`ffiCheckCatalogRowOne`).
 
 Not delivered, and stated as such in the semantics: qualified data fields,
 constructor proof sources and existentials. A destructured qualified value

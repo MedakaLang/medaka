@@ -636,10 +636,12 @@ outerFlexibleAuth scope rigid cell = match !cell
       && not (M.has id rigid)
   ALink _ _ => False
 
+-- A declaration universal is rigid wherever it was minted: a contract's
+-- variables are allocated before the body's scope opens, and an obligation
+-- over one is decided by the scope that saw it, never handed outward.
 localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
-localRigidAuth scope rigid cell = match !cell
-  AUnbound id level _ _ =>
-    M.has id rigid && level >= scope.essLevel && id > scope.essEffvarFloor
+localRigidAuth _ rigid cell = match !cell
+  AUnbound id _ _ _ => M.has id rigid
   ALink _ _ => False
 
 -- Every owned flexible variable takes the join of its lower bounds, its

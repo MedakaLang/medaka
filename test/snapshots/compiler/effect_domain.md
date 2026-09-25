@@ -1,5 +1,5 @@
 # META
-source_lines=194
+source_lines=206
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -173,7 +173,10 @@ dsubN : Param -> Param -> Bool
 dsubN PUnit PUnit = True
 dsubN _ (PPrefix None) = True
 dsubN (PPrefix (Some a)) (PPrefix (Some b)) =
-  startsWith (prefixConcrete b) (prefixConcrete a)
+  if isPrefixPattern b then
+    startsWith (prefixConcrete b) (prefixConcrete a)
+  else
+    a == b
 dsubN (PPrefix None) (PPrefix (Some _)) = False
 dsubN _ (PSet None) = True
 dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b
@@ -181,6 +184,15 @@ dsubN (PSet None) (PSet (Some _)) = False
 dsubN _ (PProduct []) = True
 dsubN (PProduct ax) (PProduct bx) = allList (axisSub ax) bx
 dsubN _ _ = False
+
+-- A pattern ends in `*` and admits every element it is a prefix of; any
+-- other element is exact and admits only itself: `"/etc/host"` does not
+-- admit `/etc/hostname`.
+export
+isPrefixPattern : String -> Bool
+isPrefixPattern s =
+  let n = stringLength s
+  n > 0 && stringSlice (n - 1) n s == "*"
 
 export
 axisSub : List (String, Param) -> (String, Param) -> Bool
@@ -271,7 +283,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig true "dsubN" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
 (DFunDef false "dsubN" ((PCon "PUnit") (PCon "PUnit")) (EVar "True"))
 (DFunDef false "dsubN" (PWild (PCon "PPrefix" (PCon "None"))) (EVar "True"))
-(DFunDef false "dsubN" ((PCon "PPrefix" (PCon "Some" (PVar "a"))) (PCon "PPrefix" (PCon "Some" (PVar "b")))) (EApp (EApp (EVar "startsWith") (EApp (EVar "prefixConcrete") (EVar "b"))) (EApp (EVar "prefixConcrete") (EVar "a"))))
+(DFunDef false "dsubN" ((PCon "PPrefix" (PCon "Some" (PVar "a"))) (PCon "PPrefix" (PCon "Some" (PVar "b")))) (EIf (EApp (EVar "isPrefixPattern") (EVar "b")) (EApp (EApp (EVar "startsWith") (EApp (EVar "prefixConcrete") (EVar "b"))) (EApp (EVar "prefixConcrete") (EVar "a"))) (EBinOp "==" (EVar "a") (EVar "b"))))
 (DFunDef false "dsubN" ((PCon "PPrefix" (PCon "None")) (PCon "PPrefix" (PCon "Some" PWild))) (EVar "False"))
 (DFunDef false "dsubN" (PWild (PCon "PSet" (PCon "None"))) (EVar "True"))
 (DFunDef false "dsubN" ((PCon "PSet" (PCon "Some" (PVar "a"))) (PCon "PSet" (PCon "Some" (PVar "b")))) (EApp (EApp (EVar "subsetStr") (EVar "a")) (EVar "b")))
@@ -279,6 +291,8 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "dsubN" (PWild (PCon "PProduct" (PList))) (EVar "True"))
 (DFunDef false "dsubN" ((PCon "PProduct" (PVar "ax")) (PCon "PProduct" (PVar "bx"))) (EApp (EApp (EVar "allList") (EApp (EVar "axisSub") (EVar "ax"))) (EVar "bx")))
 (DFunDef false "dsubN" (PWild PWild) (EVar "False"))
+(DTypeSig true "isPrefixPattern" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isPrefixPattern" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "*")))))))
 (DTypeSig true "axisSub" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "Bool"))))
 (DFunDef false "axisSub" ((PVar "ax") (PTuple (PVar "name") (PVar "bp"))) (EApp (EApp (EVar "dsubN") (EApp (EApp (EApp (EVar "lookupAxisOrTop") (EVar "name")) (EVar "ax")) (EVar "bp"))) (EVar "bp")))
 (DTypeSig true "lookupAxisOrTop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Param") (TyCon "Param")))))
@@ -361,7 +375,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig true "dsubN" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
 (DFunDef false "dsubN" ((PCon "PUnit") (PCon "PUnit")) (EVar "True"))
 (DFunDef false "dsubN" (PWild (PCon "PPrefix" (PCon "None"))) (EVar "True"))
-(DFunDef false "dsubN" ((PCon "PPrefix" (PCon "Some" (PVar "a"))) (PCon "PPrefix" (PCon "Some" (PVar "b")))) (EApp (EApp (EVar "startsWith") (EApp (EVar "prefixConcrete") (EVar "b"))) (EApp (EVar "prefixConcrete") (EVar "a"))))
+(DFunDef false "dsubN" ((PCon "PPrefix" (PCon "Some" (PVar "a"))) (PCon "PPrefix" (PCon "Some" (PVar "b")))) (EIf (EApp (EVar "isPrefixPattern") (EVar "b")) (EApp (EApp (EVar "startsWith") (EApp (EVar "prefixConcrete") (EVar "b"))) (EApp (EVar "prefixConcrete") (EVar "a"))) (EBinOp "==" (EVar "a") (EVar "b"))))
 (DFunDef false "dsubN" ((PCon "PPrefix" (PCon "None")) (PCon "PPrefix" (PCon "Some" PWild))) (EVar "False"))
 (DFunDef false "dsubN" (PWild (PCon "PSet" (PCon "None"))) (EVar "True"))
 (DFunDef false "dsubN" ((PCon "PSet" (PCon "Some" (PVar "a"))) (PCon "PSet" (PCon "Some" (PVar "b")))) (EApp (EApp (EVar "subsetStr") (EVar "a")) (EVar "b")))
@@ -369,6 +383,8 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "dsubN" (PWild (PCon "PProduct" (PList))) (EVar "True"))
 (DFunDef false "dsubN" ((PCon "PProduct" (PVar "ax")) (PCon "PProduct" (PVar "bx"))) (EApp (EApp (EVar "allList") (EApp (EVar "axisSub") (EVar "ax"))) (EVar "bx")))
 (DFunDef false "dsubN" (PWild PWild) (EVar "False"))
+(DTypeSig true "isPrefixPattern" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isPrefixPattern" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "*")))))))
 (DTypeSig true "axisSub" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "Bool"))))
 (DFunDef false "axisSub" ((PVar "ax") (PTuple (PVar "name") (PVar "bp"))) (EApp (EApp (EVar "dsubN") (EApp (EApp (EApp (EVar "lookupAxisOrTop") (EVar "name")) (EVar "ax")) (EVar "bp"))) (EVar "bp")))
 (DTypeSig true "lookupAxisOrTop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "Param") (TyCon "Param")))))

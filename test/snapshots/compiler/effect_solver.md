@@ -1,5 +1,5 @@
 # META
-source_lines=1134
+source_lines=1136
 stages=DESUGAR,MARK
 # SOURCE
 -- Binding-owned effect equations. Operational lower bounds and compatibility
@@ -640,10 +640,12 @@ outerFlexibleAuth scope rigid cell = match !cell
       && not (M.has id rigid)
   ALink _ _ => False
 
+-- A declaration universal is rigid wherever it was minted: a contract's
+-- variables are allocated before the body's scope opens, and an obligation
+-- over one is decided by the scope that saw it, never handed outward.
 localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
-localRigidAuth scope rigid cell = match !cell
-  AUnbound id level _ _ =>
-    M.has id rigid && level >= scope.essLevel && id > scope.essEffvarFloor
+localRigidAuth _ rigid cell = match !cell
+  AUnbound id _ _ _ => M.has id rigid
   ALink _ _ => False
 
 -- Every owned flexible variable takes the join of its lower bounds, its
@@ -1237,7 +1239,7 @@ relationProven escape rel =
 (DTypeSig false "outerFlexibleAuth" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))))
 (DFunDef false "outerFlexibleAuth" ((PVar "scope") (PVar "rigid") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") PWild PWild) () (EBinOp "&&" (EBinOp "||" (EBinOp "<" (EVar "level") (EFieldAccess (EVar "scope") "essLevel")) (EBinOp "<=" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor"))) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "rigid"))))) (arm (PCon "ALink" PWild PWild) () (EVar "False"))))
 (DTypeSig false "localRigidAuth" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))))
-(DFunDef false "localRigidAuth" ((PVar "scope") (PVar "rigid") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") PWild PWild) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "rigid")) (EBinOp ">=" (EVar "level") (EFieldAccess (EVar "scope") "essLevel"))) (EBinOp ">" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor")))) (arm (PCon "ALink" PWild PWild) () (EVar "False"))))
+(DFunDef false "localRigidAuth" (PWild (PVar "rigid") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "rigid"))) (arm (PCon "ALink" PWild PWild) () (EVar "False"))))
 (DTypeSig false "solveOwnedAuthorities" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "solveOwnedAuthorities" ((PVar "scope") (PVar "rigid")) (EApp (EApp (EVar "solveAuthorities") (EApp (EApp (EVar "ownedFlexibleAuth") (EVar "scope")) (EVar "rigid"))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))
 (DTypeSig false "solveAuthorities" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "AuthWanted") (TyVar "c"))) (TyCon "Unit"))))
@@ -1410,7 +1412,7 @@ relationProven escape rel =
 (DTypeSig false "outerFlexibleAuth" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))))
 (DFunDef false "outerFlexibleAuth" ((PVar "scope") (PVar "rigid") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") PWild PWild) () (EBinOp "&&" (EBinOp "||" (EBinOp "<" (EVar "level") (EFieldAccess (EVar "scope") "essLevel")) (EBinOp "<=" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor"))) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "rigid"))))) (arm (PCon "ALink" PWild PWild) () (EVar "False"))))
 (DTypeSig false "localRigidAuth" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")))))
-(DFunDef false "localRigidAuth" ((PVar "scope") (PVar "rigid") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "level") PWild PWild) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "rigid")) (EBinOp ">=" (EVar "level") (EFieldAccess (EVar "scope") "essLevel"))) (EBinOp ">" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor")))) (arm (PCon "ALink" PWild PWild) () (EVar "False"))))
+(DFunDef false "localRigidAuth" (PWild (PVar "rigid") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild) () (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "rigid"))) (arm (PCon "ALink" PWild PWild) () (EVar "False"))))
 (DTypeSig false "solveOwnedAuthorities" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "solveOwnedAuthorities" ((PVar "scope") (PVar "rigid")) (EApp (EApp (EVar "solveAuthorities") (EApp (EApp (EVar "ownedFlexibleAuth") (EVar "scope")) (EVar "rigid"))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))
 (DTypeSig false "solveAuthorities" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "AuthWanted") (TyVar "c"))) (TyCon "Unit"))))
