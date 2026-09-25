@@ -30,6 +30,7 @@ import array.{make}
 import vector.{Vector, new, push, toArray}
 import bytes as B
 import bytes.{Bytes}
+import u8 as U8
 import test.{expectEqual}
 
 -- ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ refillBits n r =
     Ok ()
   else match B.get r.pos.value r.src
     Some b =>
-      r.hold := bitOr r.hold.value (shiftLeft b r.count.value)
+      r.hold := bitOr r.hold.value (shiftLeft (U8.toInt b) r.count.value)
       r.count := r.count.value + 8
       r.pos := r.pos.value + 1
       refillBits n r
@@ -222,7 +223,7 @@ putBytesAlignedGo bytes i n w
   | i >= n = ()
   | otherwise = match B.get i bytes
     Some b =>
-      let _ = push b w.buf
+      let _ = push (U8.toInt b) w.buf
       putBytesAlignedGo bytes (i + 1) n w
     None => ()
 
