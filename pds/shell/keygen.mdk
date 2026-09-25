@@ -78,7 +78,7 @@ keygenSummary bytes = do
    disk under a failure exit code, which an operator reading the exit code
    would take as "nothing happened". -}
 export
-keygenRefusePath : String -> String -> <FileRead "_"> Result String Unit
+keygenRefusePath : String -> String -> <FileRead> Result String Unit
 keygenRefusePath label path =
   if fileExists path then
     Err
@@ -91,7 +91,7 @@ keygenRefusePath label path =
 keygenWrite : String ->
   String ->
   Array Int ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 keygenWrite label path bytes = match keygenRefusePath label path
   Err message => Err message
   Ok () => match writeFilePrivate path "\{encode bytes}\n"
@@ -102,7 +102,7 @@ keygenWrite label path bytes = match keygenRefusePath label path
 -- that identify it. The scalar itself goes to the file and nowhere else.
 export
 keygenSigningKey : String ->
-  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+  <FileRead, FileWrite, Rand, Stdout> Result String Unit
 keygenSigningKey path = do
   bytes <- keygenSecretBytes keygenAttempts
   (publicHex, did) <- keygenSummary bytes
@@ -115,7 +115,7 @@ keygenSigningKey path = do
 -- | Generate the session-token secret `--token-secret` names.
 export
 keygenTokenSecret : String ->
-  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+  <FileRead, FileWrite, Rand, Stdout> Result String Unit
 keygenTokenSecret path = do
   () <- keygenWrite
     "session-token secret"
@@ -133,7 +133,7 @@ keygenTokenSecret path = do
 export
 keygenSigningKeyAndTokenSecret : String ->
   String ->
-  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+  <FileRead, FileWrite, Rand, Stdout> Result String Unit
 keygenSigningKeyAndTokenSecret keyPath secretPath = do
   keyBytes <- keygenSecretBytes keygenAttempts
   (publicHex, did) <- keygenSummary keyBytes

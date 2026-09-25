@@ -1,11 +1,11 @@
--- WS-3b ENV hole-fill ⊆ ACCEPT.  `getEnv : String -> <Env _> …` carries the
+-- WS-3b ENV hole-fill ⊆ ACCEPT.  `getEnv : String -> <Env> …` carries the
 -- universal inferred-hole `_`; the call-site α recovers the literal first arg
 -- "HOME" and the DOMAIN-DIRECTED fill builds the singleton authority set
 -- <Env {"HOME"}> (Set domain, not a Prefix pattern).  Declared bound is the
 -- SUPERSET {"HOME","PATH"} ⇒ {"HOME"} ⊆ {"HOME","PATH"} ⇒ ACCEPT.
 effect Env Set
 
-extern getEnv : String -> <Env _> Option String
+extern getEnv : String -> <Env> Option String
 
 readHome : Unit -> <Env {"HOME", "PATH"}, FFI> Option String
 readHome _ = getEnv "HOME"

@@ -250,7 +250,7 @@ families = [
    An `Err` here is a structural failure of the row, never a skip: a corpus
    that cannot be read is the one outcome a snapshot suite must not report as
    a pass. -}
-filesOf : Family -> <FileRead "_", IO> Result String (List String)
+filesOf : Family -> <FileRead, IO> Result String (List String)
 filesOf f = match f.corpus
   OneFile rel => Ok ["\{medakaRoot}/\{rel}"]
   Dir rel => flatMdk "\{medakaRoot}/\{rel}"
@@ -261,7 +261,7 @@ filesOf f = match f.corpus
    `fixtureFiles` walks recursively and carries its own anti-vacuity floor, so
    a directory that reads cleanly but holds nothing is an `Err` rather than a
    green run over zero files; only the top level is corpus. -}
-flatMdk : String -> <FileRead "_"> Result String (List String)
+flatMdk : String -> <FileRead> Result String (List String)
 flatMdk dir = match fixtureFiles dir
   Err e => Err e
   Ok paths =>
@@ -275,7 +275,7 @@ flatMdk dir = match fixtureFiles dir
    lists, and the same exclusion its `--bless` arm refuses on. -}
 compilerFiles : List String ->
   List String ->
-  <FileRead "_", IO> Result String (List String)
+  <FileRead, IO> Result String (List String)
 compilerFiles [] [] = Err "no compiler sources found"
 compilerFiles [] acc = Ok (sort acc)
 compilerFiles (d :: rest) acc = match flatMdk "\{medakaRoot}/compiler/\{d}"
@@ -350,7 +350,7 @@ badLines ls = filter (l => contains ": FAIL" l || contains ": ERROR" l) ls
    `medaka fmt` that joins the two degrades this to the same `""`. That is a
    lost hint on an already-failing row, never a wrong verdict: `staleNote`
    appends nothing when the marker is `""`. -}
-staleMarker : <FileRead "_", IO> String
+staleMarker : <FileRead, IO> String
 staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
   Err _ => ""
   Ok src => markerBefore "" (lines src)
@@ -441,12 +441,12 @@ countFailures f c note = somes [
     None,
 ]
 
-gradeFamily : String -> Family -> <Exec "_", FileRead "_", IO> Outcome
+gradeFamily : String -> Family -> <Exec, FileRead, IO> Outcome
 gradeFamily _ f = match filesOf f
   Err e => Outcome { sub = f.sub, graded = 0, failures = ["\{f.sub}: \{e}"] }
   Ok paths => runFamily f paths
 
-runFamily : Family -> List String -> <Exec "_", FileRead "_", IO> Outcome
+runFamily : Family -> List String -> <Exec, FileRead, IO> Outcome
 runFamily f paths =
   match boundedInTree familyTimeoutSeconds medakaBin (checkArgs f paths)
     Err e => Outcome {
@@ -519,7 +519,7 @@ toolTableStart = "# ── FAMILY TABLE BEGIN"
 toolTableEnd : String
 toolTableEnd = "# ── FAMILY TABLE END"
 
-toolRows : <FileRead "_", IO> Result String (List String)
+toolRows : <FileRead, IO> Result String (List String)
 toolRows = match readFile "\{medakaRoot}/test/snapshot_bless.sh"
   Err e => Err "cannot read test/snapshot_bless.sh: \{e}"
   Ok src => match between toolTableStart toolTableEnd (lines src)

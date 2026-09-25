@@ -110,7 +110,7 @@ stagingDir dir = "\{eventLogDir dir}/\{stagingName}"
 promoteText : String ->
   String ->
   String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 promoteText dir name text = do
   () <- mkdirAllDurably (stagingDir dir)
   let staged = "\{stagingDir dir}/\{name}"
@@ -127,7 +127,7 @@ promoteText dir name text = do
    beside it, which no reader ever consulted and which an entry announcing no
    commit has nothing to put there. -}
 export
-eventLogLast : String -> <FileRead "_"> Result String (Option Int)
+eventLogLast : String -> <FileRead> Result String (Option Int)
 eventLogLast dir =
   if not (fileExists (lastPath dir)) then
     Ok None
@@ -143,7 +143,7 @@ eventLogLast dir =
    Derived from what is on disk, so it survives a restart: the in-memory
    server holds no counter to lose. -}
 export
-eventLogNextSequence : String -> <FileRead "_"> Result String Int
+eventLogNextSequence : String -> <FileRead> Result String Int
 eventLogNextSequence dir = match eventLogLast dir
   Err message => Err message
   Ok None => Ok eventLogFirstSeq
@@ -157,19 +157,18 @@ eventLogNextSequence dir = match eventLogLast dir
 export
 eventLogStage : String ->
   EventLogEntry ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 eventLogStage dir entry = promoteText dir stagedName (eventLogEncodeEntry entry)
 
 -- | Forget a pending entry whose commit did not persist.
 export
-eventLogDiscardStaged : String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogDiscardStaged : String -> <FileRead, FileWrite> Result String Unit
 eventLogDiscardStaged dir =
   if fileExists (stagedPath dir) then removeFile (stagedPath dir) else Ok ()
 
 -- | The pending entry, if there is one.
 export
-eventLogStaged : String -> <FileRead "_"> Result String (Option EventLogEntry)
+eventLogStaged : String -> <FileRead> Result String (Option EventLogEntry)
 eventLogStaged dir =
   if not (fileExists (stagedPath dir)) then
     Ok None
@@ -180,9 +179,7 @@ eventLogStaged dir =
 -- Write one entry's own file. Its name is a function of the entry, so a
 -- repeated promotion overwrites the same path with the same bytes and no
 -- duplicate can be created.
-writeEntry : String ->
-  EventLogEntry ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+writeEntry : String -> EventLogEntry -> <FileRead, FileWrite> Result String Unit
 writeEntry dir entry = do
   () <- mkdirAllDurably (entriesDir dir)
   () <- mkdirAllDurably (stagingDir dir)
@@ -204,7 +201,7 @@ export
 eventLogPromote : String ->
   Int ->
   Int ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 eventLogPromote dir retentionSeconds nowSeconds = match eventLogStaged dir
   Err message => Err message
   Ok None => Ok ()
@@ -214,7 +211,7 @@ promoteEntry : String ->
   Int ->
   Int ->
   EventLogEntry ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 promoteEntry dir retentionSeconds nowSeconds entry = do
   () <- writeEntry dir entry
   () <- promoteText dir lastName (intToString entry.seq)
@@ -225,7 +222,7 @@ sweepIfDue : String ->
   Int ->
   Int ->
   Int ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 sweepIfDue dir retentionSeconds nowSeconds seq =
   if not (eventLogSweepsAt seq) then
     Ok ()
@@ -250,7 +247,7 @@ public export data EventLogRecovery =
 export
 eventLogPlanRecovery : String ->
   Option String ->
-  <FileRead "_"> Result String EventLogRecovery
+  <FileRead> Result String EventLogRecovery
 eventLogPlanRecovery dir headCommitCid = match eventLogStaged dir
   Err message => Err message
   Ok None => Ok EventLogSettled
@@ -267,7 +264,7 @@ eventLogApplyRecovery : String ->
   EventLogRecovery ->
   Int ->
   Int ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 eventLogApplyRecovery _ EventLogSettled _ _ = Ok ()
 eventLogApplyRecovery dir EventLogOwed retentionSeconds nowSeconds =
   eventLogPromote dir retentionSeconds nowSeconds
@@ -281,7 +278,7 @@ eventLogApplyRecovery dir EventLogOrphaned _ _ = eventLogDiscardStaged dir
 -- rather than passed to `removeFile`, which fails on a directory.
 removeStagingResidue : String ->
   List String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 removeStagingResidue _ [] = Ok ()
 removeStagingResidue dir (name :: rest) = match isDir "\{dir}/\{name}"
   Ok True => removeStagingResidue dir rest
@@ -302,8 +299,7 @@ removeStagingResidue dir (name :: rest) = match isDir "\{dir}/\{name}"
    than a promotion this process has in flight. A data directory that has
    never staged an entry reads as nothing to sweep, not as a failure. -}
 export
-eventLogSweepStaging : String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogSweepStaging : String -> <FileRead, FileWrite> Result String Unit
 eventLogSweepStaging dir =
   let staging = stagingDir dir
   if not (fileExists staging) then
@@ -349,7 +345,7 @@ entryRows entries (name :: rest) acc = match eventLogParseEntryName name
    is content-addressed and independently verified downstream, so a skipped
    one cannot become a wrong answer, while a missing event silently becomes
    one. -}
-listEntryRows : String -> <FileRead "_"> Result String (List (Int, Int, String))
+listEntryRows : String -> <FileRead> Result String (List (Int, Int, String))
 listEntryRows dir =
   if not (fileExists (entriesDir dir)) then
     Ok []
@@ -370,7 +366,7 @@ listEntryRows dir =
 
    Linear in the live log, so it belongs at startup and not on an append. -}
 export
-eventLogHasEntries : String -> <FileRead "_"> Result String Bool
+eventLogHasEntries : String -> <FileRead> Result String Bool
 eventLogHasEntries dir = match listEntryRows dir
   Err message => Err message
   Ok [] => Ok False
@@ -379,7 +375,7 @@ eventLogHasEntries dir = match listEntryRows dir
 dropRows : String ->
   List (Int, Int, String) ->
   Int ->
-  <FileWrite "_"> Result String Int
+  <FileWrite> Result String Int
 dropRows _ [] dropped = Ok dropped
 dropRows dir ((_, _, name) :: rest) dropped =
   match removeFile "\{entriesDir dir}/\{name}"
@@ -392,10 +388,7 @@ dropRows dir ((_, _, name) :: rest) dropped =
    many left. An entry's timestamp is in its file name, so deciding this opens
    nothing. -}
 export
-eventLogSweep : String ->
-  Int ->
-  Int ->
-  <FileRead "_", FileWrite "_"> Result String Int
+eventLogSweep : String -> Int -> Int -> <FileRead, FileWrite> Result String Int
 eventLogSweep dir retentionSeconds nowSeconds = match listEntryRows dir
   Err message => Err message
   Ok rows =>
@@ -405,7 +398,7 @@ eventLogSweep dir retentionSeconds nowSeconds = match listEntryRows dir
 readRows : String ->
   List (Int, Int, String) ->
   List EventLogEntry ->
-  <FileRead "_"> Result String (List EventLogEntry)
+  <FileRead> Result String (List EventLogEntry)
 readRows _ [] acc = Ok (reverse acc)
 readRows dir ((seq, timeSeconds, name) :: rest) acc =
   match readFile "\{entriesDir dir}/\{name}"
@@ -441,9 +434,7 @@ readRows dir ((seq, timeSeconds, name) :: rest) acc =
    `eventLogAfterCursor` still fixes what a cursor MEANS, and it is applied to
    the decoded entries as before. -}
 export
-eventLogRead : String ->
-  Int ->
-  <FileRead "_"> Result String (List EventLogEntry)
+eventLogRead : String -> Int -> <FileRead> Result String (List EventLogEntry)
 eventLogRead dir cursor = match listEntryRows dir
   Err message => Err message
   Ok rows =>

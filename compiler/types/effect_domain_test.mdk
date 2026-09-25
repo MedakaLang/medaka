@@ -1,7 +1,6 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
-import types.effect_domain.{
-  Atom(..), Param(..), atomsDiff, atomsUnion, djoin, drender, dsub, renderAtoms
-}
+import types.effect_domain.{Param(..), djoin, drender, dsub}
+import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
 
 test "prefix coverage is directed and respects the host boundary" = expectAll [
   expectTrue
@@ -27,8 +26,8 @@ test "the empty prefix is the domain top under join, coverage and rendering" = e
       "FileWrite"
       (renderAtoms
         (atomsUnion
-          [Atom "FileWrite" (PPrefix (Some ""))]
-          [Atom "FileWrite" (PPrefix (Some "/a"))])),
+          [atomBuiltin "FileWrite" (PPrefix (Some ""))]
+          [atomBuiltin "FileWrite" (PPrefix (Some "/a"))])),
   ]
 
 test "set coverage includes every possible authority" =
@@ -50,25 +49,32 @@ test "a missing product axis is unconstrained rather than empty" =
   ]
 
 test "a row retains a same-label authority which exceeds its bound" =
-  let actual = [Atom "FileWrite" (PPrefix (Some "/etc/passwd"))]
-  let bound = [Atom "FileWrite" (PPrefix (Some "tmp/*"))]
+  let actual = [atomBuiltin "FileWrite" (PPrefix (Some "/etc/passwd"))]
+  let bound = [atomBuiltin "FileWrite" (PPrefix (Some "tmp/*"))]
   expectEqual "FileWrite \"/etc/passwd\"" (renderAtoms (atomsDiff actual bound))
 
 test "combining different capabilities never discards either label" =
   expectEqual
     "Clock, Env {\"HOME\"}"
     (renderAtoms
-      (atomsUnion [Atom "Env" (PSet (Some ["HOME"]))] [Atom "Clock" PUnit]))
+      (atomsUnion
+        [atomBuiltin "Env" (PSet (Some ["HOME"]))]
+        [atomBuiltin "Clock" PUnit]))
 
 test "larger rows use the canonical label index without changing order" =
   let all =
     atomsUnion
-      [Atom "F" PUnit, Atom "D" PUnit, Atom "B" PUnit]
-      [Atom "E" PUnit, Atom "C" PUnit, Atom "A" PUnit]
+      [atomBuiltin "F" PUnit, atomBuiltin "D" PUnit, atomBuiltin "B" PUnit]
+      [atomBuiltin "E" PUnit, atomBuiltin "C" PUnit, atomBuiltin "A" PUnit]
   let remaining =
     atomsDiff
-      [Atom "F" PUnit, Atom "D" PUnit, Atom "B" PUnit, Atom "A" PUnit]
-      [Atom "D" PUnit, Atom "A" PUnit, Atom "C" PUnit]
+      [
+        atomBuiltin "F" PUnit,
+        atomBuiltin "D" PUnit,
+        atomBuiltin "B" PUnit,
+        atomBuiltin "A" PUnit,
+      ]
+      [atomBuiltin "D" PUnit, atomBuiltin "A" PUnit, atomBuiltin "C" PUnit]
   expectAll [
     expectEqual "A, B, C, D, E, F" (renderAtoms all),
     expectEqual "B, F" (renderAtoms remaining),

@@ -77,7 +77,7 @@ spawnTimeoutSeconds = 60
 export
 boundedVerb : String ->
   List String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec> Result String (Int, String, String)
 boundedVerb cmd args = boundedVerbSeconds spawnTimeoutSeconds cmd args
 
 {- | `boundedVerb` with the time limit given as `secs`, for a spawn that
@@ -96,7 +96,7 @@ export
 boundedVerbSeconds : Int ->
   String ->
   List String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec> Result String (Int, String, String)
 boundedVerbSeconds secs cmd args =
   runVerb
     "perl"
@@ -111,7 +111,7 @@ boundedVerbSeconds secs cmd args =
    > map (startsWith "/") scratchDir
    Ok True -}
 export
-scratchDir : <Exec "_"> Result String String
+scratchDir : <Exec> Result String String
 scratchDir = match runVerb "mktemp" ["-d"]
   Err e => Err e
   Ok (0, out, _) => Ok (trim out)
@@ -129,7 +129,7 @@ scratchDir = match runVerb "mktemp" ["-d"]
    > expectSpawnOk "false" []
    Fail "`false` exited 1: \"\"" "exit 0" "exit 1" -}
 export
-expectSpawnOk : String -> List String -> <Exec "_"> Expectation
+expectSpawnOk : String -> List String -> <Exec> Expectation
 expectSpawnOk cmd args =
   let line = unwords (cmd :: args)
   match runVerb cmd args
@@ -156,7 +156,7 @@ expectSpawnOk cmd args =
    > expectSpawnFails "true" [] "boom"
    Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing \"boom\"" "exit 0, output \"\"" -}
 export
-expectSpawnFails : String -> List String -> String -> <Exec "_"> Expectation
+expectSpawnFails : String -> List String -> String -> <Exec> Expectation
 expectSpawnFails cmd args needle =
   let line = unwords (cmd :: args)
   let want = "nonzero exit, output containing \{debug needle}"
@@ -190,10 +190,7 @@ expectSpawnFails cmd args needle =
    > expectSpawnFailsAll "true" [] ["alpha"]
    Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing [\"alpha\"]" "exit 0, output \"\"" -}
 export
-expectSpawnFailsAll : String ->
-  List String ->
-  List String ->
-  <Exec "_"> Expectation
+expectSpawnFailsAll : String -> List String -> List String -> <Exec> Expectation
 expectSpawnFailsAll cmd args needles =
   let line = unwords (cmd :: args)
   let want = "nonzero exit, output containing \{debug needles}"
@@ -224,7 +221,7 @@ expectSpawnFailsAll cmd args needles =
    > expectSpawnOkLine "echo" ["said hi"] "hi"
    Fail "`echo said hi` exited 0 but no output line equals \"hi\": \"said hi\\n\"" "exit 0, output with a line \"hi\"" "exit 0, output \"said hi\\n\"" -}
 export
-expectSpawnOkLine : String -> List String -> String -> <Exec "_"> Expectation
+expectSpawnOkLine : String -> List String -> String -> <Exec> Expectation
 expectSpawnOkLine cmd args wantLine =
   let line = unwords (cmd :: args)
   let want = "exit 0, output with a line \{debug wantLine}"
@@ -293,7 +290,7 @@ outputTail text = outputTailOf failureOutputTailChars text
    exits nonzero is an `Err`, never a smaller count. The `Err` for a
    failing run carries the tail of its output. -}
 export
-testAssertionCount : String -> List String -> <Exec "_", IO> Result String Int
+testAssertionCount : String -> List String -> <Exec, IO> Result String Int
 testAssertionCount path extraArgs =
   let args = ["test"] ++ extraArgs ++ [path, "--json"]
   let line = unwords (medakaBin :: args)
@@ -352,7 +349,7 @@ missingUnits namer wanted entries =
 export
 unrosteredTestFiles : String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 unrosteredTestFiles dir known = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
   Ok names => Ok (unrosteredUnits testFileStem known names)
@@ -363,7 +360,7 @@ unrosteredTestFiles dir known = match listDir dir
 export
 missingTestFiles : String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 missingTestFiles dir wanted = match listDir dir
   Err e => Err "could not list \{dir}: \{e}"
   Ok names => Ok (missingUnits testFileStem wanted names)

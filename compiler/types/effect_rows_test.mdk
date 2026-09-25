@@ -1,8 +1,8 @@
 import test.{expectAll, expectEqual, expectTrue}
-import types.effect_domain.{Atom(..), Param(..), renderAtoms}
+import types.effect_domain.{Param(..)}
 import types.effect_rows.{
-  EffRow(..), Effvar(..), dedupCells, effrowLabels, rowFlat, joinRows, effvarId,
-  effrowNorm, isJoinCell, linkRow
+  Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), dedupCells,
+  effrowLabels, rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
 }
 import support.util.{listLen}
 import support.opcount.{setOpCounting, opSnap}
@@ -25,8 +25,8 @@ test "sequencing joins independent rows without solving either input" =
         EUnbound id _ => id
         _ => 0)
       (snd (rowFlat joined))
-  linkRow left (EffRow [Atom "Stdout" PUnit] None)
-  linkRow right (EffRow [Atom "Clock" PUnit] None)
+  linkRow left (EffRow [atomBuiltin "Stdout" PUnit] None)
+  linkRow right (EffRow [atomBuiltin "Clock" PUnit] None)
   expectAll [
     expectEqual [1, 2] ids,
     expectEqual [1, 2] (map effvarId [left, right]),
@@ -39,10 +39,10 @@ test "repeated normalization of a join preserves linked atoms" =
   let a = Ref (EUnbound 1 0)
   let b = Ref (EUnbound 2 0)
   let joined = EffRow [] (Some (Ref (EJoin 3 0 [a, b])))
-  linkRow a (EffRow [Atom "Stdout" PUnit] None)
+  linkRow a (EffRow [atomBuiltin "Stdout" PUnit] None)
   let first = renderAtoms (effrowLabels joined)
   let second = renderAtoms (effrowLabels joined)
-  linkRow b (EffRow [Atom "Clock" PUnit] None)
+  linkRow b (EffRow [atomBuiltin "Clock" PUnit] None)
   expectAll [
     expectEqual "Stdout" first,
     expectEqual "Stdout" second,
@@ -54,7 +54,7 @@ test "a shared join member contributes its effects exactly once" =
   let a = Ref (EUnbound 1 0)
   let joined = EffRow [] (Some (Ref (EJoin 2 0 [a, a])))
   let members = listLen (snd (rowFlat joined))
-  linkRow a (EffRow [Atom "Env" (PSet (Some ["HOME"]))] None)
+  linkRow a (EffRow [atomBuiltin "Env" (PSet (Some ["HOME"]))] None)
   expectAll [
     expectEqual 1 members,
     expectEqual "Env {\"HOME\"}" (renderAtoms (effrowLabels joined)),
@@ -63,15 +63,15 @@ test "a shared join member contributes its effects exactly once" =
 test "a deep shared join diamond is flattened once per live cell" =
   let leaf = Ref (EUnbound 1 0)
   let joined = EffRow [] (Some (deepDiamond 22 leaf))
-  linkRow leaf (EffRow [Atom "Clock" PUnit] None)
+  linkRow leaf (EffRow [atomBuiltin "Clock" PUnit] None)
   expectAll [
     expectEqual "Clock" (renderAtoms (effrowLabels joined)),
     expectEqual 0 (listLen (snd (rowFlat joined))),
   ]
 
 test "linked cells retain distinct identities and deduplicate shared references" =
-  let left = Ref (ELink 1 (EffRow [Atom "Clock" PUnit] None))
-  let right = Ref (ELink 2 (EffRow [Atom "Stdout" PUnit] None))
+  let left = Ref (ELink 1 (EffRow [atomBuiltin "Clock" PUnit] None))
+  let right = Ref (ELink 2 (EffRow [atomBuiltin "Stdout" PUnit] None))
   expectEqual 2 (listLen (dedupCells [left, right, left]))
 
 linkChain : Int -> Ref Effvar -> Ref Effvar
@@ -81,14 +81,14 @@ linkChain depth leaf =
 
 test "flattening compresses link chains and retains their labels" =
   let leaf = Ref (EUnbound 17 0)
-  let below = Ref (ELink 18 (EffRow [Atom "Clock" PUnit] (Some leaf)))
+  let below = Ref (ELink 18 (EffRow [atomBuiltin "Clock" PUnit] (Some leaf)))
   let root = linkChain 512 below
-  let row = EffRow [Atom "Stdout" PUnit] (Some root)
+  let row = EffRow [atomBuiltin "Stdout" PUnit] (Some root)
   let first = renderAtoms (fst (rowFlat row))
   let target = match !root
     ELink _ (EffRow _ (Some tail)) => effvarId tail
     _ => 0
-  linkRow leaf (EffRow [Atom "Audit" PUnit] None)
+  linkRow leaf (EffRow [atomBuiltin "Audit" PUnit] None)
   expectAll [
     expectEqual "Clock, Stdout" first,
     expectEqual 18 target,
@@ -102,7 +102,7 @@ labelChain depth leaf =
     (ELink
       (1000 + depth)
       (EffRow
-        [Atom ("E" ++ intToString depth) PUnit]
+        [atomBuiltin ("E" ++ intToString depth) PUnit]
         (Some (labelChain (depth - 1) leaf))))
 
 test "label-bearing chains normalize once without copying every suffix" =

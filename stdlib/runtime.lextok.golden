@@ -116,7 +116,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -129,7 +128,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -147,7 +145,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -158,40 +155,31 @@ IDENT "writeFileBytes"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
-NEWLINE
-DEDENT
 NEWLINE
 EXTERN
 IDENT "writeFileMode"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "Int"
 ARROW
-NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
-NEWLINE
-DEDENT
 NEWLINE
 EXTERN
 IDENT "appendFile"
@@ -202,7 +190,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -215,7 +202,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Bool"
 NEWLINE
@@ -226,7 +212,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -239,7 +224,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "String"
 NEWLINE
@@ -250,7 +234,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -266,7 +249,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -279,7 +261,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -294,7 +275,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -307,7 +287,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -320,7 +299,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -333,7 +311,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -365,7 +342,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Env"
-STRING "_"
 GT
 UPPER "Option"
 UPPER "String"
@@ -421,7 +397,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -512,7 +487,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -530,7 +504,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -545,7 +518,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -558,7 +530,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -571,7 +542,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -587,7 +557,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -605,7 +574,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -620,7 +588,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -638,7 +605,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -651,7 +617,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -666,11 +631,32 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+EXTERN
+IDENT "pdsSignalStart"
+COLON
+UPPER "Unit"
+ARROW
+LT
+UPPER "Net"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "pdsSignalRequested"
+COLON
+UPPER "Unit"
+ARROW
+LT
+UPPER "Net"
+GT
+UPPER "Bool"
 NEWLINE
 EXTERN
 IDENT "ioPoll"
@@ -678,16 +664,13 @@ COLON
 UPPER "Array"
 UPPER "Int"
 ARROW
-INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
-NEWLINE
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -695,8 +678,6 @@ LPAREN
 UPPER "Array"
 UPPER "Int"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 EXTERN
 IDENT "netSetNonblock"
@@ -707,7 +688,6 @@ UPPER "Bool"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -720,7 +700,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -738,7 +717,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -751,7 +729,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -769,7 +746,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -786,12 +762,10 @@ IDENT "netTryRecvBytes"
 COLON
 UPPER "Int"
 ARROW
-INDENT
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -799,8 +773,6 @@ LPAREN
 UPPER "Option"
 UPPER "ByteBlock"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 EXTERN
 IDENT "netTrySend"
@@ -812,7 +784,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -835,7 +806,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"

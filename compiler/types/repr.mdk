@@ -13,11 +13,9 @@
 -- Effect domains and rows have their own owners. Import those representations
 -- directly from effect_domain/effect_rows rather than through this module.
 
-import types.effect_domain.{
+import types.effect_rows.{
   renderAtoms,
   Atom(..),
-}
-import types.effect_rows.{
   effrowNorm,
   effrowLabels,
   rowFlat,
@@ -26,7 +24,9 @@ import types.effect_rows.{
   EffRow(..),
   Effvar(..),
 }
-import frontend.ast.{Ty(..), Constraint(..), TyConOrigin(..)}
+import frontend.ast.{
+  Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface
+}
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
@@ -632,12 +632,14 @@ ppTy (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
 ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
+ppTy (TyNamed n t) = "(\{n} : \{ppTy t})"
+ppTy (TyQual t n) = "\{ppTyAtom t} @\{n}"
 
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
 export
-ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffInsideTy : List EffAtomTy -> List String -> String
 ppEffInsideTy effs tails =
   let labs = map ppEffAtomTy effs
   match tails
@@ -648,13 +650,10 @@ ppEffInsideTy effs tails =
         [] => tls
         _ => "\{joinWith ", " labs} | \{tls}"
 
--- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
+-- effect atom renderer for ppTy: the label and its written parameter.
 export
-ppEffAtomTy : (String, Option String) -> String
-ppEffAtomTy (l, None) = l
--- Intentional cross-file duplicate of the same helper in doc.mdk AND eval.mdk's ppEffAtomK; not consolidating (tiny helper / divergent-by-design backend trio).
--- lint-disable-next-line rule-duplicate-body
-ppEffAtomTy (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
+ppEffAtomTy : EffAtomTy -> String
+ppEffAtomTy a = effAtomSurface escStr a
 
 -- single constraint: no outer parens; multiple: wrap in parens (mirrors OCaml)
 export

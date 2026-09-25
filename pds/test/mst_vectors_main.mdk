@@ -499,7 +499,7 @@ runProofCorpus (line :: rest) current totals =
         )
     _ => panic "mst_vectors: malformed proof corpus row: \{line}"
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath, proofPath] => match (readLines corpusPath, readLines proofPath)
     (Err message, _) => panic "mst_vectors: cannot read corpus: \{message}"

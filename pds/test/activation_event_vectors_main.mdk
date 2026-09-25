@@ -331,7 +331,7 @@ soleBlockBytes _ blocks =
   panic
     "activation_event: corpus CAR holds \{intToString (length blocks)} blocks, expected 1"
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "activation_event: cannot read corpus: \{message}"

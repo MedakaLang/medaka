@@ -5,8 +5,10 @@
 import test.{expectAll, expectEqual, expectGreaterThan, expectLessThan}
 import list.{range, replicate}
 import support.opcount.{opBump, opSnap, setOpCounting}
-import types.effect_domain.{Atom(..), Param(..), atomsUnion, renderAtoms}
-import types.effect_rows.{EffRow(..), effrowLabels}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  atomBuiltin, atomsUnion, renderAtoms, EffRow(..), effrowLabels
+}
 import types.effect_values.{ValueJoinOps(..), joinProduced}
 import types.repr.{Mono(..), Tyvar(..), normalize}
 
@@ -92,10 +94,10 @@ pureRow : EffRow
 pureRow = EffRow [] None
 
 auditRow : EffRow
-auditRow = EffRow [Atom "Audit" PUnit] None
+auditRow = EffRow [atomBuiltin "Audit" PUnit] None
 
 clockRow : EffRow
-clockRow = EffRow [Atom "Clock" PUnit] None
+clockRow = EffRow [atomBuiltin "Clock" PUnit] None
 
 rowLabels : EffRow -> String
 rowLabels row = renderAtoms (effrowLabels row)

@@ -15,25 +15,25 @@ import string.{fromUtf8}
 spins : Int
 spins = 200000
 
-spinner : Ref Int -> Async <Clock, Net "_", Stdout | e> Unit
+spinner : Ref Int -> Async <Clock, Net, Stdout | e> Unit
 spinner n = defer
   _ <- liftIO (u => n := !n + 1)
   _ <- yield
   if !n >= spins then deferPure () else spinner n
 
 -- True iff the sleeper woke while the spinner was still running.
-sleeper : Ref Int -> Async <Clock, Net "_", Stdout | e> Bool
+sleeper : Ref Int -> Async <Clock, Net, Stdout | e> Bool
 sleeper n = defer
   _ <- sleep (millis 1)
   deferPure (!n < spins)
 
-echo : Connection -> Async <Clock, Net "_", Stdout | e> (Result String Unit)
+echo : Connection -> Async <Clock, Net, Stdout | e> (Result String Unit)
 echo c = deferThen (A.recv c 64) (r => match r
   Ok bs => A.sendAll c bs
   Err e => deferPure (Err e))
 
 -- The reply, and whether it arrived while the spinner was still running.
-client : Int -> Ref Int -> Async <Clock, Net "_", Stdout | e> String
+client : Int -> Ref Int -> Async <Clock, Net, Stdout | e> String
 client port n = defer
   cr <- liftIO (u => connect "127.0.0.1" port)
   match cr
@@ -48,7 +48,7 @@ showR : Result String (Array Int) -> String
 showR (Ok bs) = fromUtf8 bs
 showR (Err e) = "Err " ++ e
 
-main : Async <Clock, Net "_", Stdout> Unit
+main : Async <Clock, Net, Stdout> Unit
 main = defer
   lr <- liftIO (u => listen "127.0.0.1" 0)
   match lr

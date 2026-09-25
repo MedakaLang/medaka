@@ -26,7 +26,7 @@ stripTrailingNewlines s = match stripSuffix "\n" s
   Some rest => stripTrailingNewlines rest
   None => s
 
-expectManifest : String -> String -> String -> <Exec "_", IO> Expectation
+expectManifest : String -> String -> String -> <Exec, IO> Expectation
 expectManifest name fn expected =
   match runMedaka ["manifest", fixture name, "--fn", fn]
     Err e => fail "\{name}: could not run `medaka manifest`: \{e}"

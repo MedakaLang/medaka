@@ -51,6 +51,9 @@ import frontend.ast.{
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
   Ty(..),
+  EffAtomTy(..),
+  effAtomSurface,
+  EffParamTy(..),
   KindAnn(..),
   TyConOrigin(..),
   Ns(..),
@@ -179,11 +182,7 @@ import types.repr.{
   wrapIf,
 }
 import types.effect_domain.{
-  effHoleSrc,
-  isHoleStr,
   canonParam,
-  atomLabel,
-  atomParam,
   subTopOf,
   lookupAxis,
   djoin,
@@ -202,20 +201,39 @@ import types.effect_domain.{
   renderProductLit,
   renderAxis,
   renderAxisVal,
+  prefixConcrete,
+  dsub,
+  Param(..),
+}
+import types.effect_authority.{
+  Authority(..),
+  Authvar(..),
+  authvarId,
+  authConst,
+  authIsTop,
+  authJoin,
+  authSub,
+}
+import types.effect_rows.{
+  EffLabel(..),
+  Atom(..),
+  effLabelName,
+  labelKey,
+  builtinLabel,
+  atomLabel,
+  atomLabelOf,
+  atomKey,
+  atomAuth,
+  atomConst,
+  atomBuiltin,
+  atomWith,
   renderAtom,
   renderAtoms,
   atomInsert,
   atomsNorm,
-  atomsNormGo,
   atomsUnion,
-  prefixConcrete,
-  dsub,
   atomsDiff,
   findAtom,
-  Param(..),
-  Atom(..),
-}
-import types.effect_rows.{
   collectRows,
   joinRows,
   effrowNorm,
@@ -469,15 +487,13 @@ tconFrom o n = TCon n o
 tconUnresolved : String -> Mono
 tconUnresolved n = TCon n OriginUnresolved
 
-isHoleParam : Param -> Bool
-isHoleParam (PPrefix (Some s)) = isHoleStr s
-isHoleParam _ = False
--- ── effect-label DOMAIN registry (v2 Stage 2a) ─────────────────────────────
--- Maps a label to the ⊤-param of its declared domain.  A `PPrefix None` entry
--- means "Prefix-domain (carries a pattern)"; absence ⇒ atomic (Unit).  Seeded
--- with the builtin Prefix labels (Net/FileRead/FileWrite) and extended per
--- program from `effect Net Prefix` decls.  An assoc-list Ref (the label set is
--- tiny).
+-- ── effect-label DOMAIN registry ───────────────────────────────────────────
+-- Maps a label's identity key (`labelKey`) to the ⊤-param of its declared
+-- domain.  A `PPrefix None` entry means "Prefix-domain (carries a pattern)";
+-- absence ⇒ atomic (Unit).  Seeded with the builtin labels and extended per
+-- program from `effect Net Prefix` decls, each under its declaration's own
+-- identity, so two modules' same-spelled labels own separate schemas.  An
+-- assoc-list Ref (the label set is tiny).
 
 seedEffectDomains : Unit -> Unit
 seedEffectDomains _ =
@@ -493,9 +509,9 @@ seedEffectDomains _ =
 
 -- register a label's domain from its `effect` decl: Some "Prefix" ⇒ Prefix;
 -- None ⇒ atomic.
-registerEffectDomain : String -> Option String -> Unit
-registerEffectDomain name domain =
-  let entry = (name, domainParam domain)
+registerEffectDomain : EffLabel -> Option String -> Unit
+registerEffectDomain label domain =
+  let entry = (labelKey label, domainParam domain)
   driverState.value.effectDomains :=
     entry :: driverState.value.effectDomains.value
 
@@ -528,8 +544,8 @@ populateUnitsGo ((_, prog) :: rest) =
 
 populateGo : List Decl -> Unit
 populateGo [] = ()
-populateGo ((DEffect _ name domain) :: rest) =
-  let _ = registerEffectDomain name domain
+populateGo ((DEffect _ name domain origin) :: rest) =
+  let _ = registerEffectDomain (EffLabel name origin) domain
   populateGo rest
 populateGo (_ :: rest) = populateGo rest
 
@@ -543,16 +559,20 @@ lookupDomain l ((k, p) :: rest) = if l == k then p else lookupDomain l rest
 -- declaration; dtopFor picks the ⊤ of the label's domain (all PUnit in Stage 1).
 -- ⊤ parameter for a label's domain (design §2.1): consults the registry;
 -- labels with no Prefix entry are atomic ⇒ PUnit.
-dtopFor : String -> Param
-dtopFor label = match lookupDomain label driverState.value.effectDomains.value
-  PPrefix None => PPrefix None
-  PSet None => PSet None
-  PProduct _ => PProduct []  -- WS-4: product domain ⊤ (no axis constrained)
-  _ => PUnit
+dtopFor : EffLabel -> Param
+dtopFor label =
+  match lookupDomain (labelKey label) driverState.value.effectDomains.value
+    PPrefix None => PPrefix None
+    PSet None => PSet None
+    PProduct _ => PProduct []  -- WS-4: product domain ⊤ (no axis constrained)
+    _ => PUnit
 
--- lift a bare AST label to a ⊤-param atom (Stage 1: every annotation atomic)
+-- lift one of the language's own labels to its ⊤-param atom
 atomOfLabel : String -> Atom
-atomOfLabel l = Atom l (dtopFor l)
+atomOfLabel l = atomWith (builtinLabel l) (dtopFor (builtinLabel l))
+
+ioLabel : EffLabel
+ioLabel = builtinLabel "IO"
 
 -- ── v2 Stage 3: the `IO` widening union alias (design §3.2) ─────────────────
 -- `IO` is the coarse security alias: in a BOUND/annotation row it stands for
@@ -583,7 +603,7 @@ ioAliasLabels = [
 -- never expanded (the bound has no IO) ⇒ escapes (IO ⊑ narrow rejects).  `IO`
 -- stays in the expansion (atomsNorm keeps it) so inferred IO-vs-IO matches.
 expandIoInBound : List Atom -> List Atom
-expandIoInBound b = match findAtom "IO" b
+expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
   Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
 
@@ -592,23 +612,31 @@ expandIoInBound b = match findAtom "IO" b
 atomsEscape : List Atom -> List Atom -> List Atom
 atomsEscape a b = atomsDiff a (expandIoInBound b)
 
--- build an atom from a WRITTEN annotation label, threading its optional param.
--- A bare label takes the domain ⊤; a written param becomes PPrefix (Some pat)
--- when the label's domain is Prefix, else (atomic label) stays ⊤ (the param is
--- diagnosed + dropped by checkEffectParams).  Pure: validation is a separate pass.
-atomOfWritten : (String, Option String) -> Atom
-atomOfWritten (l, None) = Atom l (dtopFor l)
-atomOfWritten (l, Some pat) =
-  -- the universal inferred-hole marker `_`: recognized REGARDLESS of the label's
-  -- domain (a Set-domain `<Env _>` must stay a hole, not become `PSet ["_"]`).
-  -- The domain-directed fillHoleAtom replaces it with the correct domain param.
-  if isHoleStr pat then
-    Atom l (PPrefix (Some pat))
-  else match dtopFor l
-    PPrefix None => Atom l (canonParam (PPrefix (Some pat)))
-    PSet None => Atom l (PSet (Some (decodeSetParam pat)))
-    PProduct _ => Atom l (decodeProductParam pat)
-    _ => Atom l (dtopFor l)
+-- build an atom from a WRITTEN annotation atom.  A bare label takes the
+-- domain's top; a written parameter becomes the element of the label's domain
+-- it spells; a parameter of the wrong shape for the domain is diagnosed by
+-- `checkOneEffectParam` and takes the top here.  Pure: validation is a
+-- separate pass.  A named parameter is a binder-bound authority; until the
+-- authority representation lands it elaborates as the top.
+atomOfWritten : EffAtomTy -> Atom
+atomOfWritten a =
+  let l = EffLabel a.eatLabel a.eatOrigin
+  atomWith l (writtenParam (dtopFor l) a.eatParam)
+
+writtenParam : Param -> EffParamTy -> Param
+writtenParam top EPTop = top
+writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
+writtenParam (PSet None) (EPLit s) = PSet (Some [s])
+writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
+writtenParam (PProduct _) (EPLit s) =
+  productNorm [("Host", canonParam (PPrefix (Some s)))]
+writtenParam (PProduct _) (EPProduct axes) = productNorm (map writtenAxis axes)
+writtenParam top _ = top
+
+writtenAxis : (String, EffParamTy) -> (String, Param)
+writtenAxis (name, EPLit s) = (name, PPrefix (Some s))
+writtenAxis (name, EPSet xs) = (name, PSet (Some (sortUniqS xs)))
+writtenAxis (name, _) = (name, PUnit)
 
 -- A Set-domain written param is carried in the `Option String` carrier as a
 -- brace-delimited, comma-separated literal `{a,b,c}` (the parser's `effParamFor`
@@ -710,88 +738,8 @@ splitOnCommaGo s start i acc =
   else
     splitOnCommaGo s start (i + 1) acc
 
-atomsOfWritten : List (String, Option String) -> List Atom
+atomsOfWritten : List EffAtomTy -> List Atom
 atomsOfWritten ls = atomsNorm (map atomOfWritten ls)
-
--- ── v2 Stage 2b: known-literal-prefix abstract analysis α (design §2.4) ─────
--- Abstract a DESUGARED core string-producing expr to a known literal prefix or
--- Unknown.  Intraprocedural (fork (c)): EApp results, fn-parameter EVars, field
--- access ⇒ Unknown ⇒ ⊤.  `lets` carries let-bound RHSs in scope for the EVar
--- rule.
-data KP = Known String | Unknown
-
--- longest common prefix as a KP (Unknown if empty)
-kpLcp : String -> String -> KP
-kpLcp a b =
-  let k = commonPrefixLen a b 0
-  if k == 0 then Unknown else Known (stringSlice 0 k a)
-
--- `++`: the left operand's known prefix is fixed regardless of the right (§2.4)
-alphaLeftPrefix : KP -> KP
-alphaLeftPrefix (Known pa) = Known pa
-alphaLeftPrefix Unknown = Unknown
-
-alpha : List (String, Expr) -> Expr -> KP
-alpha lets (ELoc _ e) = alpha lets e
-alpha lets (EDoOrigin _ e) = alpha lets e
-alpha lets (EAnnot e _) = alpha lets e
-alpha lets (EHeadAnnot e _) = alpha lets e
-alpha _ (ELit (LString s)) = Known s
-alpha lets (EBinOp op a _ _)
-  | op == "++" = alphaLeftPrefix (alpha lets a)
-alpha _ (EBinOp _ _ _ _) = Unknown
-alpha lets (EVar x) = match lookupAssoc x lets
-  Some rhs => alpha lets rhs
-  None => Unknown
-alpha lets (EVarId x _) = match lookupAssoc x lets
-  Some rhs => alpha lets rhs
-  None => Unknown
-alpha lets (ELet _ _ (PVar x _) e1 e2) = alpha ((x, e1) :: lets) e2
-alpha lets (ELet _ _ _ _ e2) = alpha lets e2
-alpha lets (ELetGroup binds body) = alpha (alphaCollectBinds binds lets) body
-alpha lets (EIf _ t f) = match alpha lets t
-  Known a => match alpha lets f
-    Known b => kpLcp a b
-    Unknown => Unknown
-  Unknown => Unknown
-alpha lets (EMatch _ arms) = alphaArms lets None arms
-alpha _ _ = Unknown
-
--- propagate single-clause zero-param where-bindings (`x = e`) into scope
-alphaCollectBinds : List LetBind -> List (String, Expr) -> List (String, Expr)
-alphaCollectBinds [] acc = acc
-alphaCollectBinds ((LetBind n clauses) :: rest) acc = match clauses
-  [FunClause [] rhs] => alphaCollectBinds rest ((n, rhs) :: acc)
-  _ => alphaCollectBinds rest acc
-
--- LCP of all arm results if every arm is Known; else Unknown
-alphaArms : List (String, Expr) -> Option String -> List Arm -> KP
-alphaArms _ (Some s) [] = Known s
-alphaArms _ None [] = Unknown
-alphaArms lets acc ((Arm _ _ rhs) :: rest) = match alpha lets rhs
-  Unknown => Unknown
-  Known s => match acc
-    None => alphaArms lets (Some s) rest
-    Some a => match kpLcp a s
-      Known c => alphaArms lets (Some c) rest
-      Unknown => Unknown
-
--- the FIRST argument of an application spine: `f a b c` ⇒ Some a (locked dec 1)
-spineFirstArg : Expr -> Option Expr
-spineFirstArg (ELoc _ e) = spineFirstArg e
-spineFirstArg (EDoOrigin _ e) = spineFirstArg e
-spineFirstArg (EApp f x) = match spineHeadIsApp f
-  True => spineFirstArg f
-  False => Some x
-spineFirstArg _ = None
-
--- is the application head itself a (curried) application?  `EApp (EApp ..) _`
--- ⇒ recurse left; `EApp (EVar/leaf) x` ⇒ x is the first arg.
-spineHeadIsApp : Expr -> Bool
-spineHeadIsApp (ELoc _ e) = spineHeadIsApp e
-spineHeadIsApp (EDoOrigin _ e) = spineHeadIsApp e
-spineHeadIsApp (EApp _ _) = True
-spineHeadIsApp _ = False
 
 -- the delimiter footgun guard (design §2.5 / fork (b)): a written Prefix pattern
 -- must end in `*` or contain a `/` delimiter; a bare prefix is ambiguous.
@@ -853,49 +801,6 @@ freshInferenceEffvar _ =
 
 openRow : Unit -> EffRow
 openRow _ = EffRow [] (Some (freshInferenceEffvar ()))
-
--- v2 Stage 2b: fill inferred-hole atoms in a freshly-incurred call effect row.
--- Returns a row whose head labels have every hole atom replaced by α of the
--- call's first spine argument (Unknown / no-arg ⇒ ⊤); non-hole atoms and the
--- open tail are preserved.  When no hole is present the row is unchanged.
--- `lets` is the enclosing function body's α-let scope (EFFECTS WS-2): seeded into
--- α so an outer-body `let dest = "…"; fetch dest` recovers the literal prefix.
-fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
-fillHolesInRow lets eff firstArg = match effrowNorm eff
-  EffRow labels tail =>
-    if anyHoleAtom labels then
-      EffRow (map (fillHoleAtom lets firstArg) labels) tail
-    else
-      eff
-
-anyHoleAtom : List Atom -> Bool
-anyHoleAtom [] = False
-anyHoleAtom (a :: rest) =
-  if isHoleParam (atomParam a) then True else anyHoleAtom rest
-
-fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
-fillHoleAtom lets firstArg a =
-  if isHoleParam (atomParam a) then
-    Atom (atomLabel a) (holeFillParam (atomLabel a) lets firstArg)
-  else
-    a
-
--- DOMAIN-DIRECTED hole fill (WS-3b): the recovered literal becomes the right
--- shape for the LABEL's domain.  Prefix-domain (Net/Exec) ⇒ `PPrefix (Some s)`;
--- Set-domain (Env) ⇒ a singleton authority set `PSet (Some [s])`.  No recovery
--- (no arg / Unknown) ⇒ the domain's ⊤ (`dtopFor label`), NOT a hardcoded
--- `PPrefix None` — an unfilled Env hole must degrade to `PSet None`, not Prefix-⊤.
--- WS-4: Product-domain (Net) ⇒ Host=recovered-literal, Method=⊤ (α has no method
--- info — a sound over-approximation).
-holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
-holeFillParam label lets (Some e) = match alpha lets e
-  Known s => match dtopFor label
-    PSet None => PSet (Some (sortUniqS [s]))
-    PPrefix None => canonParam (PPrefix (Some s))
-    PProduct _ => productNorm [("Host", canonParam (PPrefix (Some s)))]
-    _ => dtopFor label
-  Unknown => dtopFor label
-holeFillParam label _ None = dtopFor label
 
 effvarLevel : Ref Effvar -> Int
 effvarLevel cell = match !cell
@@ -1670,6 +1575,8 @@ tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOcc p (TyVar n) = n == p
 tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
 tyVarTypeOcc _ (TyRow _ _ _) = False
+tyVarTypeOcc p (TyNamed _ t) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyQual t _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
 tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
 tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
@@ -1967,9 +1874,7 @@ methodEffArgOccs _ _ = []
 -- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
 -- collector below reports them all: a caller reads the row at each var
 -- independently, so a var left out would be a var nothing constrains.
-occsOfTails : List String ->
-  List (String, Option String) ->
-  List (String, List Atom)
+occsOfTails : List String -> List EffAtomTy -> List (String, List Atom)
 occsOfTails tails labels =
   let atoms = atomsOfWritten labels
   map (n => (n, atoms)) tails
@@ -2515,57 +2420,86 @@ checkEffectParamsTys (t :: ts) =
   let _ = checkEffectParamsTy t
   checkEffectParamsTys ts
 
-checkEffectAtoms : List (String, Option String) -> Unit
+checkEffectAtoms : List EffAtomTy -> Unit
 checkEffectAtoms [] = ()
-checkEffectAtoms ((_, None) :: rest) = checkEffectAtoms rest
-checkEffectAtoms ((l, Some pat) :: rest) =
-  let _ = checkOneEffectParam l pat
+checkEffectAtoms (a :: rest) =
+  let _ = match a.eatParam
+    EPTop => ()
+    p =>
+      let l = EffLabel a.eatLabel a.eatOrigin
+      checkOneEffectParam a.eatLabel (dtopFor l) p
   checkEffectAtoms rest
 
-checkOneEffectParam : String -> String -> Unit
-checkOneEffectParam l pat = match dtopFor l
-  PPrefix None =>
-    -- v2 Stage 2b: the inferred hole "_" carries no written pattern to validate.
-    if isHoleStr pat then
-      ()
-    else if l == "FFI" then
-      -- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
-      -- BARE host/path prefix is ambiguous — "example.com" would silently admit
-      -- "example.com.evil.net", and "/etc/pass" would admit "/etc/passwd", so a
-      -- written Net/FileRead/FileWrite/Exec pattern must say `*` or carry a `/`.
-      -- An FFI parameter names a LIBRARY, and library names have neither
-      -- delimiter structure nor a sibling-extension hazard: `<FFI "libcurl">`
-      -- read as a prefix is exactly what the author meant, and demanding
-      -- `<FFI "libcurl*">` was pure ceremony (the two are already the SAME set —
-      -- `prefixConcrete` strips a trailing `*`, so `dsub` cannot tell them
-      -- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
-      -- is still rejected, since `<FFI "">` names no library and, being the
-      -- prefix of everything, would silently mean ⊤.
+-- A written parameter must be an element of its label's domain: a Prefix
+-- label takes one delimiter-terminated pattern (an FFI library name is
+-- exempt from the delimiter rule), a Set label takes a set or a single
+-- member, a Product label takes its axes or a bare host pattern, and an
+-- atomic label takes nothing.  A named authority is checked at its binder.
+checkOneEffectParam : String -> Param -> EffParamTy -> Unit
+checkOneEffectParam _ _ (EPName _) = ()
+checkOneEffectParam _ _ EPTop = ()
+checkOneEffectParam l (PPrefix None) (EPLit pat) = checkPrefixLiteral l pat
+checkOneEffectParam _ (PSet None) (EPLit _) = ()
+checkOneEffectParam l (PProduct _) (EPLit pat) =
+  checkOneAxis l "Host" (PPrefix (Some pat))
+checkOneEffectParam l _ (EPLit _) = atomicLabelParamError l
+checkOneEffectParam _ (PSet None) (EPSet _) = ()
+checkOneEffectParam l (PPrefix None) (EPSet _) =
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg l "label '\{l}' takes a prefix pattern, not a set")
+checkOneEffectParam l (PProduct _) (EPSet _) =
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg
+      l
+      "label '\{l}' takes named axes (`Host=… Method=…`), not a bare set")
+checkOneEffectParam l _ (EPSet _) = atomicLabelParamError l
+checkOneEffectParam l (PProduct _) (EPProduct axes) =
+  checkProductAxes l (productNorm (map writtenAxis axes))
+checkOneEffectParam l PUnit (EPProduct _) = atomicLabelParamError l
+checkOneEffectParam l _ (EPProduct _) =
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg l "label '\{l}' is not a product domain and takes no axes")
 
-      if stringLength pat > 0 then
-        ()
-      else
-        pushTypeError
-          "T-EFFECT-PARAM"
-          (effectParamMsg
-            l
-            "the library pattern is empty; name the library, e.g. <FFI \"curl\">")
-    else if prefixPatternOk pat then
+-- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
+-- BARE host/path prefix is ambiguous — "example.com" would silently admit
+-- "example.com.evil.net", and "/etc/pass" would admit "/etc/passwd", so a
+-- written Net/FileRead/FileWrite/Exec pattern must say `*` or carry a `/`.
+-- An FFI parameter names a LIBRARY, and library names have neither
+-- delimiter structure nor a sibling-extension hazard: `<FFI "libcurl">`
+-- read as a prefix is exactly what the author meant, and demanding
+-- `<FFI "libcurl*">` was pure ceremony (the two are already the SAME set —
+-- `prefixConcrete` strips a trailing `*`, so `dsub` cannot tell them
+-- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
+-- is still rejected, since `<FFI "">` names no library and, being the
+-- prefix of everything, would silently mean ⊤.
+checkPrefixLiteral : String -> String -> Unit
+checkPrefixLiteral l pat =
+  if l == "FFI" then
+    if stringLength pat > 0 then
       ()
     else
       pushTypeError
         "T-EFFECT-PARAM"
-        (effectParamMsg l (prefixPatternErrMsg "pattern" pat))
-  PSet None =>
-    -- Set-domain param is a brace-set literal `{a,b}` (parser-encoded); always well-formed.
+        (effectParamMsg
+          l
+          "the library pattern is empty; name the library, e.g. <FFI \"curl\">")
+  else if prefixPatternOk pat then
     ()
-  PProduct _ => checkProductAxes l (decodeProductParam pat)
-  _ =>
+  else
     pushTypeError
       "T-EFFECT-PARAM"
-      (effectParamMsg
-        l
-        "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)")
+      (effectParamMsg l (prefixPatternErrMsg "pattern" pat))
+
+atomicLabelParamError : String -> Unit
+atomicLabelParamError l =
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg
+      l
+      "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)")
 
 -- WS-4: validate a decoded product's axes: a Host (Prefix) axis must pass
 -- prefixPatternOk; a Method (Set) axis is always well-formed; any other axis name
@@ -7266,7 +7200,7 @@ data DriverState = DriverState {
   coherenceUserDecls : Ref (List Decl),
   stdlibOwnedModsRef : Ref (OrdMap Unit),
   flatEntryIsStdlibRef : Ref Bool,
-  builtinExternNamesRef : Ref (OrdMap (String, List (String, Option String))),
+  builtinExternNamesRef : Ref (OrdMap (String, List EffAtomTy)),
   superDeclsRef : Ref (List Decl),
   standaloneValuesRef : Ref (OrdMap Unit),
   methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -11182,6 +11116,8 @@ tyVarNames (TyConstrained _ t) = tyVarNames t
 -- type-variable occurrence (its own tail var, if any, is a row-namespace
 -- name captured by `effTailNames`/`rowArgNames`, not this one).
 tyVarNames (TyRow _ _ _) = []
+tyVarNames (TyNamed _ t) = tyVarNames t
+tyVarNames (TyQual t _) = tyVarNames t
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
 -- type).  `tyVarNames` deliberately skips TyConstrained's constraints, so a constraint
@@ -11219,6 +11155,8 @@ tyConNamesInTy (TyFun a b) = tyConNamesInTy a ++ tyConNamesInTy b
 tyConNamesInTy (TyTuple ts) = flatMap tyConNamesInTy ts
 tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
 tyConNamesInTy (TyRow _ _ _) = []
+tyConNamesInTy (TyNamed _ t) = tyConNamesInTy t
+tyConNamesInTy (TyQual t _) = tyConNamesInTy t
 tyConNamesInTy (TyConstrained cs t) =
   flatMap tyConNamesInConstraint cs ++ tyConNamesInTy t
 
@@ -11419,6 +11357,8 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- `rowArgNames`; this arm's over-counting is a residual channel of the same
 -- shape as that pre-existing gap, not a new one — see #784.
 effTailNames (TyRow _ tail _) = tail
+effTailNames (TyNamed _ t) = effTailNames t
+effTailNames (TyQual t _) = effTailNames t
 
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffMap [] = []
@@ -11533,7 +11473,7 @@ fromAstTypeE etbl tvs (TyRow labels tail loc) =
 -- visible yet at this point in the file, so render the row body directly with
 -- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
 -- forward reference, fine: this module is resolved as a whole, not top-down).
-rowKindMismatchMsg : List (String, Option String) -> List String -> String
+rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowKindMismatchMsg labels tail =
   "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
 
@@ -18741,12 +18681,7 @@ inferApp lets appExpr ft xt =
         -- an effect-allowing slot is accepted, the reverse is not.  A callee whose
         -- type is still a variable has no domain to direct against yet.
         let eff = applicationRow ft xt r
-        -- v2 Stage 2b: if f resolves to a leaf extern carrying an inferred-hole
-        -- Prefix atom (`<Net _>`), fill it by α of the application spine's FIRST
-        -- argument before the row propagates / is checked against any bound.  `lets`
-        -- seeds α with the enclosing body's let scope (EFFECTS WS-2).
-        let eff2 = fillHolesInRow lets eff (spineFirstArg appExpr)
-        let _ = performEffect perRun.value.curEffect eff2
+        let _ = performEffect perRun.value.curEffect eff
         r
 
 -- All callable eliminations recover the selected arrow's row unchanged.
@@ -19683,10 +19618,7 @@ paramRowAtomOccs p (TyConstrained _ t) = paramRowAtomOccs p t
 paramRowAtomOccs _ _ = []
 
 -- The row's written atoms, once per tail var that IS [p] (a join names several).
-paramRowAtomsFor : String ->
-  List String ->
-  List (String, Option String) ->
-  List (List Atom)
+paramRowAtomsFor : String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsFor p tails labels =
   map (_ => atomsOfWritten labels) (filterList (== p) tails)
 
@@ -19762,6 +19694,8 @@ paramOccPolarities tab p pol (TyEffect _ _ t) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyConstrained _ t) =
   paramOccPolarities tab p pol t
 paramOccPolarities _ _ _ (TyRow _ _ _) = []
+paramOccPolarities tab p pol (TyNamed _ t) = paramOccPolarities tab p pol t
+paramOccPolarities tab p pol (TyQual t _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3): same record pattern as
   -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
@@ -26263,6 +26197,8 @@ tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
 -- concreteness even for a wrapping `TyEffect`, so a bare row atom — with no
 -- wrapped type at all — is vacuously concrete too.
 tyIsConcrete (TyRow _ _ _) = True
+tyIsConcrete (TyNamed _ t) = tyIsConcrete t
+tyIsConcrete (TyQual t _) = tyIsConcrete t
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
 -- concrete is fully ground).
@@ -27088,6 +27024,8 @@ tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
 -- does). A bare row atom has no wrapped type to recurse into, so it
 -- vacuously matches anything in this position.
 tyStep (TyRow _ _ _) _ = MOk
+tyStep (TyNamed _ t1) s = MKids [(t1, stripTyWrap s)]
+tyStep (TyQual t1 _) s = MKids [(t1, stripTyWrap s)]
 
 eqStr : String -> String -> Bool
 eqStr a b = a == b
@@ -27095,6 +27033,8 @@ eqStr a b = a == b
 stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
+stripTyWrap (TyNamed _ t) = stripTyWrap t
+stripTyWrap (TyQual t _) = stripTyWrap t
 stripTyWrap t = t
 
 -- structural equality of two AST type patterns (rigid; TyVar names must match).
@@ -32381,6 +32321,8 @@ substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
 -- untouched by this substitution) a row's tail var is never one of `sub`'s
 -- ordinary type-var names — a bare row atom substitutes to itself.
 substTyVars _ (TyRow es eff l) = TyRow es eff l
+substTyVars sub (TyNamed n t) = TyNamed n (substTyVars sub t)
+substTyVars sub (TyQual t n) = TyQual (substTyVars sub t) n
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
 -- un-implementable for an ordinary interface (no `impl Display (a -> b)` exists).
@@ -34789,8 +34731,8 @@ noteBuiltinExternNames ds =
     externSigsToMap ds driverState.value.builtinExternNamesRef.value
 
 externSigsToMap : List Decl ->
-  OrdMap (String, List (String, Option String)) ->
-  OrdMap (String, List (String, Option String))
+  OrdMap (String, List EffAtomTy) ->
+  OrdMap (String, List EffAtomTy)
 externSigsToMap [] m = m
 externSigsToMap ((DExtern _ n ty) :: rest) m =
   externSigsToMap rest (omInsert n (ffiSigShapeKey ty, ffiWrittenRow ty) m)
@@ -34964,9 +34906,9 @@ ffiResultRowHasFFI _ = False
 -- By LABEL, not by atom: a written `<FFI "libcurl*">` satisfies the rule with its
 -- own param.  Position in the list is not observable — the renderer SORTS atoms,
 -- so `<Net "a.com/*", FFI>` prints as `<FFI, Net "a.com/*">`.
-ffiHasAtom : List (String, Option String) -> Bool
+ffiHasAtom : List EffAtomTy -> Bool
 ffiHasAtom [] = False
-ffiHasAtom ((l, _) :: rest) = l == "FFI" || ffiHasAtom rest
+ffiHasAtom (a :: rest) = a.eatLabel == "FFI" || ffiHasAtom rest
 
 -- ── the FFI-ABI.md §1 CROSSABLE SET ─────────────────────────────────────────
 --
@@ -35039,7 +34981,7 @@ ffiCheckExternsGo (_ :: rest) = ffiCheckExternsGo rest
 --   extern bitAnd : Int -> Int -> <FFI> Int      -- deliberately narrow local row
 --   ⇒ ./out prints 240 for `bitAnd 255 240`      -- the real builtin ran
 --
---   extern getEnv : String -> <Env "_"> Option String   -- non-crossable row
+--   extern getEnv : String -> <Env> Option String   -- non-crossable row
 --   ⇒ ./out prints the REAL environment variable        -- the real builtin ran,
 --                                                       -- not an unbound symbol
 --
@@ -35136,7 +35078,7 @@ ffiShadowMsg n want got =
 -- 🚨 THE FIFTH DECLARATION RULE, AND IT IS ABOUT THE EFFECT ROW, NOT THE SHAPE.
 --
 -- `ffiCheckExternsShadow` above compares TYPE HEADS and walks THROUGH effect rows
--- on purpose, so `<>` and `<FileWrite "_">` are one shape to it.  That left R2's
+-- on purpose, so `<>` and `<FileWrite>` are one shape to it.  That left R2's
 -- own escape-hatch sentence live for all 138 catalog names: a local
 --
 --   extern writeFile : String -> String -> <> Result Unit String
@@ -35192,7 +35134,7 @@ ffiCheckCatalogRowGo ((DExtern _ n ty) :: rest) =
   ffiCheckCatalogRowGo rest
 ffiCheckCatalogRowGo (_ :: rest) = ffiCheckCatalogRowGo rest
 
-ffiCheckCatalogRowOne : String -> Ty -> List (String, Option String) -> Unit
+ffiCheckCatalogRowOne : String -> Ty -> List EffAtomTy -> Unit
 ffiCheckCatalogRowOne n ty catRow =
   let catAtoms = atomsOfWritten catRow
   let declAtoms = atomsOfWritten (ffiWrittenRow ty)
@@ -35210,7 +35152,7 @@ ffiCatalogNarrowMsg n cat decl missing =
 
 -- S3-1 (`ffi-boundary-honesty` review round): a parameterised label whose param is
 -- ⊤ renders as the BARE LABEL — `drenderN (PPrefix None)` is "" by design, and a
--- surviving `"_"` hole normalises to ⊤ first, so the catalog's `<FileWrite "_">`
+-- surviving `"_"` hole normalises to ⊤ first, so the catalog's `<FileWrite>`
 -- prints as `<FileWrite>`.  Against a declaration that narrows by a CONCRETE
 -- parameter (`<FileWrite "/tmp/allowed/*">`) that reads BACKWARDS: the widest
 -- possible row is rendered as the barest possible text, and a reader takes
@@ -35236,7 +35178,9 @@ ffiCatalogTopNote missing =
 -- ⊤ in a PARAMETERISED domain (see `ffiCatalogTopNote`): `PUnit` is excluded on
 -- purpose — it is "no parameter", not "any value".
 atomParamIsTop : Atom -> Bool
-atomParamIsTop a = paramIsTopDomain (canonParam (atomParam a))
+atomParamIsTop a = match atomConst a
+  Some p => paramIsTopDomain (canonParam p)
+  None => False
 
 paramIsTopDomain : Param -> Bool
 paramIsTopDomain (PPrefix None) = True
@@ -35252,7 +35196,7 @@ paramIsTopDomain _ = False
 -- which is the honest reading (`extern f : Int -> Int` performs nothing).
 -- `expandAliasHeadTy` at each step for `ffiSigShapeKey`'s reason: an alias-named
 -- arrow is invisible to a purely syntactic walk.
-ffiWrittenRow : Ty -> List (String, Option String)
+ffiWrittenRow : Ty -> List EffAtomTy
 ffiWrittenRow ty = match expandAliasHeadTy ty
   TyConstrained _ inner => ffiWrittenRow inner
   TyFun _ r => ffiWrittenRow r
@@ -40887,7 +40831,7 @@ tyAlphaGo m (TyFun a b) (TyFun c d) = match tyAlphaGo m a c
   Some m2 => tyAlphaGo m2 b d
 tyAlphaGo m (TyTuple xs) (TyTuple ys) = tyAlphaList m xs ys
 tyAlphaGo m (TyEffect e1 t1 a) (TyEffect e2 t2 b)
-  | e1 == e2 && t1 == t2 = tyAlphaGo m a b
+  | sameWrittenAtoms e1 e2 && t1 == t2 = tyAlphaGo m a b
   | otherwise = None
 -- BODY FIRST, then the constraints, and the order is load-bearing rather than
 -- stylistic: the body is where a scheme's type variables are pinned, so matching it
@@ -40901,9 +40845,15 @@ tyAlphaGo m (TyConstrained c1 a) (TyConstrained c2 b)
     None => None
     Some m2 => tyAlphaConstraints m2 c1 c2
 tyAlphaGo m (TyRow e1 t1 _) (TyRow e2 t2 _)
-  | e1 == e2 && t1 == t2 = Some m
+  | sameWrittenAtoms e1 e2 && t1 == t2 = Some m
   | otherwise = None
 tyAlphaGo _ _ _ = None
+
+-- Two written rows agree when their atoms spell the same; the declaration
+-- identity is not part of alpha-equivalence, which compares source shapes.
+sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
+sameWrittenAtoms e1 e2 =
+  map (effAtomSurface escStr) e1 == map (effAtomSurface escStr) e2
 
 tyAlphaList : List (String, String) ->
   List Ty ->

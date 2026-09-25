@@ -131,7 +131,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -169,7 +168,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -216,7 +214,6 @@ IDENT "scratchDir"
 COLON
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -282,7 +279,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Expectation"
 NEWLINE
@@ -387,7 +383,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Expectation"
 NEWLINE
@@ -518,21 +513,16 @@ IDENT "expectSpawnFailsAll"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "List"
 UPPER "String"
 ARROW
-NEWLINE
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Expectation"
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "expectSpawnFailsAll"
 IDENT "cmd"
@@ -683,7 +673,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Expectation"
 NEWLINE
@@ -917,7 +906,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 COMMA
 UPPER "IO"
 GT
@@ -1205,7 +1193,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1259,7 +1246,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"

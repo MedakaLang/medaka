@@ -70,7 +70,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -126,7 +125,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -156,7 +154,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -186,7 +183,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -218,10 +214,8 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 COMMA
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -256,21 +250,16 @@ IDENT "replaceDurably"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "String"
 ARROW
-NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "replaceDurably"
 IDENT "staged"
@@ -316,7 +305,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -402,10 +390,8 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 COMMA
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -473,7 +459,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -520,7 +505,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -631,7 +615,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -695,7 +678,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -756,7 +738,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -820,7 +801,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"

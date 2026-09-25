@@ -3,7 +3,7 @@
 -- the escape check REJECTS (a TYPE ERROR performing <Env {"HOME"}>).
 effect Env Set
 
-extern getEnv : String -> <Env _> Option String
+extern getEnv : String -> <Env> Option String
 
 readHome : Unit -> <Env {"PATH"}> Option String
 readHome _ = getEnv "HOME"

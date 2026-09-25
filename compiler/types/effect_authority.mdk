@@ -1,0 +1,194 @@
+-- Authority terms: the parameter of an effect atom as inference sees it. A
+-- term is a concrete element of the label's domain, a scoped authority
+-- variable, or a symbolic join of terms. A join stays symbolic while any
+-- operand is a variable; concrete operands fold through the domain join.
+-- Coverage is decided only where it is provable now: a variable covers itself
+-- and is covered by top, a join is covered when every operand is and covers
+-- when any operand does. Anything else is not proven, never assumed.
+
+import types.effect_domain.{
+  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf
+}
+import support.util.{joinWith}
+import string.{trimLeft}
+import map as M
+import map.{Map(..)}
+
+public export data Authority =
+  | AConst Param
+  | AVar (Ref Authvar)
+  | AJoin (List Authority)
+
+-- id, inference level, the domain's top, and the source binder's name when
+-- the variable came from a written signature. Identity belongs to the cell
+-- and survives linking, as an effect variable's does.
+public export data Authvar =
+  | AUnbound Int Int Param (Option String)
+  | ALink Int Authority
+
+export
+authvarId : Ref Authvar -> Int
+authvarId cell = match !cell
+  AUnbound id _ _ _ => id
+  ALink id _ => id
+
+export
+authvarLevel : Ref Authvar -> Int
+authvarLevel cell = match !cell
+  AUnbound _ level _ _ => level
+  ALink _ a => authLevelOf a
+
+authLevelOf : Authority -> Int
+authLevelOf (AVar cell) = authvarLevel cell
+authLevelOf (AJoin ms) = fold (acc m => max acc (authLevelOf m)) 0 ms
+authLevelOf _ = 0
+
+export
+authvarDomain : Ref Authvar -> Param
+authvarDomain cell = match !cell
+  AUnbound _ _ top _ => top
+  ALink _ a => authDomainTop a
+
+export
+authvarName : Ref Authvar -> Option String
+authvarName cell = match !cell
+  AUnbound _ _ _ name => name
+  ALink _ _ => None
+
+export
+linkAuthvar : Ref Authvar -> Authority -> Unit
+linkAuthvar cell a = cell := ALink (authvarId cell) a
+
+export
+authTop : Param -> Authority
+authTop top = AConst (subTopOf top)
+
+-- The domain's top for a term: from a constant's shape, or a variable's
+-- declared domain. An empty join has no domain; callers never build one.
+export
+authDomainTop : Authority -> Param
+authDomainTop (AConst p) = subTopOf p
+authDomainTop (AVar cell) = authvarDomain cell
+authDomainTop (AJoin (m :: _)) = authDomainTop m
+authDomainTop (AJoin []) = PUnit
+
+-- Canonical form: links followed, joins flattened, constants folded into at
+-- most one operand, variables deduplicated by identity, a top constant
+-- absorbing everything, and a one-operand join collapsed.
+export
+authNorm : Authority -> Authority
+authNorm a =
+  let (const, vars) = collect [a] None Tip
+  match const
+    Some c => if isSubTop c then AConst c else assemble (Some c) vars
+    None => assemble None vars
+
+collect : List Authority ->
+  Option Param ->
+  Map Int (Ref Authvar) ->
+  (Option Param, Map Int (Ref Authvar))
+collect [] const vars = (const, vars)
+collect ((AConst p) :: rest) const vars =
+  collect rest (Some (foldConst const (canonParam p))) vars
+collect ((AVar cell) :: rest) const vars = match !cell
+  ALink _ target => collect (target :: rest) const vars
+  AUnbound id _ _ _ => collect rest const (M.set id cell vars)
+collect ((AJoin ms) :: rest) const vars = collect (ms ++ rest) const vars
+
+foldConst : Option Param -> Param -> Param
+foldConst None p = p
+foldConst (Some c) p = djoin c p
+
+assemble : Option Param -> Map Int (Ref Authvar) -> Authority
+assemble const vars =
+  let members = map AVar (M.values vars)
+  match (const, members)
+    (None, []) => AJoin []
+    (None, [m]) => m
+    (None, ms) => AJoin ms
+    (Some c, []) => AConst c
+    (Some c, ms) => AJoin (AConst c :: ms)
+
+export
+authJoin : Authority -> Authority -> Authority
+authJoin a b = authNorm (AJoin [a, b])
+
+export
+authJoinAll : List Authority -> Authority
+authJoinAll ms = authNorm (AJoin ms)
+
+-- The concrete element a term denotes, when it has no variable left.
+export
+authConst : Authority -> Option Param
+authConst a = match authNorm a
+  AConst p => Some p
+  _ => None
+
+export
+authIsTop : Authority -> Bool
+authIsTop a = match authNorm a
+  AConst p => isSubTop p
+  _ => False
+
+-- The unbound variables a term mentions, deduplicated by identity.
+export
+authVars : Authority -> List (Ref Authvar)
+authVars a =
+  let (_, vars) = collect [a] None Tip
+  M.values vars
+
+export
+authHasVars : Authority -> Bool
+authHasVars a = match authVars a
+  [] => False
+  _ => True
+
+-- `lo ⊑ hi`, decided only where provable now. False means "not proven": the
+-- caller decides whether that is a failure or a pending obligation.
+export
+authSub : Authority -> Authority -> Bool
+authSub lo hi = authSubN (authNorm lo) (authNorm hi)
+
+authSubN : Authority -> Authority -> Bool
+authSubN (AConst c) (AConst d) = dsub c d
+authSubN _ (AConst d)
+  | isSubTop d = True
+authSubN _ (AConst _) = False
+authSubN (AJoin ms) hi = allSub ms hi
+authSubN lo (AJoin ms) = anySub lo ms
+authSubN (AVar v) (AVar w) = authvarId v == authvarId w
+authSubN _ _ = False
+
+allSub : List Authority -> Authority -> Bool
+allSub [] _ = True
+allSub (m :: ms) hi = authSubN m hi && allSub ms hi
+
+anySub : Authority -> List Authority -> Bool
+anySub _ [] = False
+anySub lo (m :: ms) = authSubN lo m || anySub lo ms
+
+-- Render with a caller-supplied variable namer, so a scheme printer can share
+-- its naming context. A join renders its operands separated by ` | `.
+export
+renderAuthorityWith : (Ref Authvar -> String) -> Authority -> String
+renderAuthorityWith name a = match authNorm a
+  AConst p => drender p
+  AVar cell => " " ++ name cell
+  AJoin ms => " (" ++ joinWith " | " (map (renderOperand name) ms) ++ ")"
+
+renderOperand : (Ref Authvar -> String) -> Authority -> String
+renderOperand _ (AConst p) = trimLeft (drender p)
+renderOperand name (AVar cell) = name cell
+renderOperand name a = renderAuthorityWith name a
+
+-- The default namer: a binder's own name where the variable came from a
+-- signature, else a stable id-based spelling.
+export
+authvarDefaultName : Ref Authvar -> String
+authvarDefaultName cell = match authvarName cell
+  Some n => n
+  None => "k" ++ intToString (authvarId cell)
+
+export
+renderAuthority : Authority -> String
+renderAuthority a = renderAuthorityWith authvarDefaultName a

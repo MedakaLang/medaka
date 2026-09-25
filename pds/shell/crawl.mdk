@@ -58,7 +58,7 @@ requestCrawlBytes target hostname = do
 export
 requestCrawl : RelayTarget ->
   String ->
-  Async <Clock, Net "_" | e> (Result String Unit)
+  Async <Clock, Net | e> (Result String Unit)
 requestCrawl target hostname = match requestCrawlBytes target hostname
   Err message =>
     deferPure (Err "crawl: outbound request is not serializable: \{message}")

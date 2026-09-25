@@ -3373,7 +3373,7 @@ runDocLibraryTargets outDir targets =
 -- `FileStat` type into this hot module for a single directory create
 -- ([T-STDLIB-IMPORT]: a bare new-type import measurably doubled Ir on a
 -- throwaway program).
-ensureOutDir : String -> <FileWrite "_"> Result String Unit
+ensureOutDir : String -> <FileWrite> Result String Unit
 ensureOutDir dir = match makeDir dir
   Ok _ => Ok ()
   Err e => if isSome (stringIndexOf "exists" e) then Ok () else Err e

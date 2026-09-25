@@ -72,7 +72,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -111,7 +110,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -140,11 +138,9 @@ UPPER "Result"
 UPPER "String"
 UPPER "Int"
 ARROW
-INDENT
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -153,8 +149,6 @@ UPPER "Result"
 UPPER "String"
 UPPER "Connection"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "connectStarted"
 LPAREN
@@ -184,7 +178,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -234,7 +227,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -319,7 +311,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -360,7 +351,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -377,7 +367,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -418,7 +407,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -434,7 +422,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -477,7 +464,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -491,7 +477,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -536,7 +521,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -558,7 +542,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -662,7 +645,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -706,7 +688,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -746,7 +727,6 @@ UPPER "Listener"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -833,7 +813,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -916,7 +895,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -964,7 +942,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1025,7 +1002,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1122,7 +1098,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1163,7 +1138,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1180,7 +1154,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1231,7 +1204,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1259,7 +1231,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1382,7 +1353,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1425,7 +1395,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1461,7 +1430,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1546,7 +1514,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1640,7 +1607,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1681,7 +1647,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1698,7 +1663,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1741,7 +1705,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1766,7 +1729,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1848,7 +1810,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1868,7 +1829,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1935,7 +1895,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -1981,7 +1940,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -2037,7 +1995,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2125,7 +2082,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2159,7 +2115,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2227,16 +2182,13 @@ IDENT "trySendFrom"
 COLON
 UPPER "Connection"
 ARROW
-INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
-NEWLINE
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -2244,8 +2196,6 @@ LPAREN
 UPPER "Option"
 UPPER "Int"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "trySendFrom"
 LPAREN
@@ -2299,7 +2249,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2401,7 +2350,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2443,7 +2391,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2464,7 +2411,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2544,7 +2490,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2565,7 +2510,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2619,7 +2563,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2648,7 +2591,6 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2753,7 +2695,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2783,7 +2724,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2815,7 +2755,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2851,7 +2790,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2866,7 +2804,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2907,7 +2844,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2927,7 +2863,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -2989,7 +2924,6 @@ ARROW
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -3007,7 +2941,6 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT

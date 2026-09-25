@@ -114,7 +114,7 @@ structuralRow base note = Row {
   note = note,
 }
 
-gradeOne : String -> String -> <Exec "_", FileRead "_", IO> Row
+gradeOne : String -> String -> <Exec, FileRead, IO> Row
 gradeOne scratch path =
   let base = stem path
   let sibling = "\{corpus}/\{base}"
@@ -160,7 +160,7 @@ summarizeAgreement what graded failures =
   fail
     "\{intToString (length failures)} of \{intToString graded} fixtures \{what}:\n\{unlines failures}"
 
-sweep : List String -> <Exec "_", FileRead "_", IO> Expectation
+sweep : List String -> <Exec, FileRead, IO> Expectation
 sweep entries =
   sweepUnits
     entries
@@ -173,7 +173,7 @@ sweep entries =
    nothing is an `Err` rather than a green run over zero rows; it walks
    recursively, and `lib/` holds imported modules rather than entry points,
    so only the root's own files are fixtures. -}
-mdkFixtures : <FileRead "_", IO> Result String (List String)
+mdkFixtures : <FileRead, IO> Result String (List String)
 mdkFixtures = match fixtureFiles corpus
   Err e => Err e
   Ok paths =>
@@ -181,7 +181,7 @@ mdkFixtures = match fixtureFiles corpus
       [] => Err "no top-level .mdk fixtures"
       fixtures => Ok fixtures
 
-pinnedVerdict : String -> <FileRead "_", IO> Option String
+pinnedVerdict : String -> <FileRead, IO> Option String
 pinnedVerdict path = match readFile "\{corpus}/\{stem path}.expected"
   Err _ => Some "  \{stem path}: no .expected file pinning ACCEPT or REJECT"
   Ok raw =>

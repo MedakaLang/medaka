@@ -35,6 +35,8 @@
 --     keep the match total.
 
 import frontend.ast.{
+  EffAtomTy(..),
+  effAtomSurface,
   DeriveRef(..),
   deriveRefName,
   dDataUnresolved,
@@ -984,6 +986,11 @@ printType (TyRow es tail _) =
   Cat (text "<") (Cat (effectInside es tail) (text ">"))
 printType (TyConstrained cs t) =
   Cat (constraintsDoc cs) (Cat (text " => ") (printType t))
+printType (TyNamed n t) =
+  Cat
+    (text "(")
+    (Cat (text n) (Cat (text " : ") (Cat (printType t) (text ")"))))
+printType (TyQual t n) = Cat (printTypeAtom t) (text " @\{n}")
 
 constraintsDoc : List Constraint -> Doc
 constraintsDoc [c] = printConstraint c
@@ -1007,7 +1014,7 @@ arrowChain (TyFun a b) =
   Cat (printTypeFunLhs a) (Cat (text " ->") (Cat Line (arrowChain b)))
 arrowChain t = printType t
 
-effectInside : List (String, Option String) -> List String -> Doc
+effectInside : List EffAtomTy -> List String -> Doc
 effectInside es [] = sepBy (text ", ") (map effAtomDoc es)
 effectInside [] tails = text (joinWith " | " tails)
 effectInside es tails =
@@ -1015,10 +1022,9 @@ effectInside es tails =
     (sepBy (text ", ") (map effAtomDoc es))
     (Cat (text " | ") (text (joinWith " | " tails)))
 
--- one row atom as a Doc: the label, or label + space + quoted param.
-effAtomDoc : (String, Option String) -> Doc
-effAtomDoc (l, None) = text l
-effAtomDoc (l, Some s) = text "\{l} \{escStringLit s}"
+-- one row atom as a Doc: the label, or label + space + its written parameter.
+effAtomDoc : EffAtomTy -> Doc
+effAtomDoc a = text (effAtomSurface escStringLit a)
 
 printConstraint : Constraint -> Doc
 printConstraint (Constraint { constraintHead = iface, constraintArgs = args }) =
@@ -1030,6 +1036,8 @@ printTypeAtom (TyVar n) = text n
 printTypeAtom (TyTuple ts) = printType (TyTuple ts)
 -- A bare row atom is already a complete atom (`<Stdout>`) — print it bare.
 printTypeAtom (TyRow es tail loc) = printType (TyRow es tail loc)
+-- A binder already carries its own parentheses.
+printTypeAtom (TyNamed n t) = printType (TyNamed n t)
 -- A `TyEffect` in argument position keeps its parentheses: its wrapped type can
 -- be a genuine payload (`Foo (<Stdout> Int)`), and nothing in the AST
 -- distinguishes that from the pre-#997 filler spelling — dropping the parens
@@ -2274,7 +2282,7 @@ printDecl (DUse pub path _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (text "import ") (printUsePath path !importForcedRef))
-printDecl (DEffect pub name domain) =
+printDecl (DEffect pub name domain _) =
   Cat (effDeclHead pub) (Cat (text name) (effDomainDoc domain))
 printDecl (DProp pub propName propParams propBody) =
   Cat
@@ -2412,21 +2420,22 @@ ppTyPrec p (TyEffect effs tail t) =
 ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
   "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
+ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
+ppTyPrec _ (TyQual t n) = "\{ppTyPrec 2 t} @\{n}"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c
     _ => "(" ++ joinWith ", " (map ppConstr cs) ++ ")"
   "\{csStr} => \{ppTyPrec 0 t}"
 
-ppEffInside : List (String, Option String) -> List String -> String
+ppEffInside : List EffAtomTy -> List String -> String
 ppEffInside effs [] = joinWith ", " (map ppEffAtom effs)
 ppEffInside [] tails = joinWith " | " tails
 ppEffInside effs tails =
   "\{joinWith ", " (map ppEffAtom effs)} | \{joinWith " | " tails}"
 
-ppEffAtom : (String, Option String) -> String
-ppEffAtom (l, None) = l
-ppEffAtom (l, Some s) = "\{l} \{escStringLit s}"
+ppEffAtom : EffAtomTy -> String
+ppEffAtom a = effAtomSurface escStringLit a
 
 effDomainDoc : Option String -> Doc
 effDomainDoc None = Nil

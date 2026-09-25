@@ -1,14 +1,12 @@
-import types.effect_domain.{
-  canonParam,
-  atomLabel,
-  atomParam,
-  atomsUnion,
-  drender,
-  dsub,
-  Param(..),
-  Atom(..),
-}
+import types.effect_domain.{canonParam, drender, Param(..)}
+import types.effect_authority.{Authority(..), authSub}
 import types.effect_rows.{
+  atomLabel,
+  atomAuth,
+  atomConst,
+  atomsUnion,
+  renderAtom,
+  Atom(..),
   effrowLabels,
   EffRow(..),
 }
@@ -311,8 +309,7 @@ schemeEffects (Forall _ _ force mono) =
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
 -- identical to WS-1a for ⊤ params (drender ⊤ = "").
 atomLabels : List Atom -> List String
-atomLabels [] = []
-atomLabels (a :: rest) = atomLabel a ++ drender (atomParam a) :: atomLabels rest
+atomLabels atoms = map renderAtom atoms
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
 fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
@@ -389,12 +386,13 @@ filterForbidden (a :: rest) policy =
   else
     atomLabel a :: filterForbidden rest policy
 
--- Permitted iff the label is in the policy AND the inferred param is ⊑ the
--- policy param.
+-- Permitted iff the label is in the policy AND the inferred authority is
+-- provably within the policy's: an authority still symbolic at the manifest
+-- boundary is not proven and is not permitted.
 atomPermitted : Atom -> List (String, Param) -> Bool
 atomPermitted a policy = match lookupParam (atomLabel a) policy
   None => False
-  Some pp => dsub (atomParam a) pp
+  Some pp => authSub (atomAuth a) (AConst pp)
 
 -- ── 7. accept: run the plugin on a sample request with stub capabilities ─────
 -- Synthetic stub funDefs that shadow the user-declared platform externs.  Parsed
@@ -571,14 +569,18 @@ listIsEmpty _ = False
 -- Render one atom as a TOML key-value line.
 -- PPrefix (Some s) → 'Label = "s"'
 -- PUnit / PPrefix None → 'Label = true'
+-- An authority left symbolic at the host boundary is reported conservatively
+-- as the bare grant (`Label = true`), never omitted.
 atomToToml : Atom -> String
 atomToToml a =
   let label = atomLabel a
-  match canonParam (atomParam a)
-    PPrefix (Some s) => "\{label} = \"\{s}\""
-    PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
-    PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
-    _ => label ++ " = true"
+  match atomConst a
+    Some p => match canonParam p
+      PPrefix (Some s) => "\{label} = \"\{s}\""
+      PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
+      PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
+      _ => label ++ " = true"
+    None => label ++ " = true"
 
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
 -- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
@@ -687,10 +689,10 @@ manifestToAllowStr atoms =
 atomToAllowTok : Atom -> String
 atomToAllowTok a =
   let label = atomLabel a
-  match atomParam a
-    PPrefix (Some s) => "\{label}=\{s}"
-    PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
-    PProduct ax => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
+  match atomConst a
+    Some (PPrefix (Some s)) => "\{label}=\{s}"
+    Some (PSet (Some xs)) => "\{label}={\{joinWith "," xs}}"
+    Some (PProduct ax) => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
     _ => label
 
 -- WS-4: render product axes as a policy `--allow` rhs `Host="…";Method={…}` —

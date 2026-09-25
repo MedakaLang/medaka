@@ -1,7 +1,7 @@
 import test.{expectAll, expectEqual}
 import types.repr.{Scheme(..), Mono(..), ppScheme}
-import types.effect_rows.{EffRow(..), Effvar(..)}
-import types.effect_domain.{Atom(..), Param(..)}
+import types.effect_rows.{EffRow(..), Effvar(..), atomBuiltin}
+import types.effect_domain.{Param(..)}
 
 test "arrow rendering preserves open tails and shared row identities" =
   let input = Ref (EUnbound 7 0)
@@ -9,7 +9,8 @@ test "arrow rendering preserves open tails and shared row identities" =
   let joined = Ref (EJoin 9 0 [input, other])
   let unit = TRigid "Unit"
   let callback = TFun unit (EffRow [] (Some input)) unit
-  let body = TFun callback (EffRow [Atom "Audit" PUnit] (Some joined)) unit
+  let body =
+    TFun callback (EffRow [atomBuiltin "Audit" PUnit] (Some joined)) unit
   expectAll [
     expectEqual
       "(Unit -> <a> Unit) -> <Audit | a | b> Unit"
@@ -24,14 +25,14 @@ test "binding renderers distinguish forcing from a latent arrow" = expectAll [
   expectEqual
     "<Audit> Unit"
     (ppScheme
-      (Forall [] [] (EffRow [Atom "Audit" PUnit] None) (TRigid "Unit"))),
+      (Forall [] [] (EffRow [atomBuiltin "Audit" PUnit] None) (TRigid "Unit"))),
   expectEqual
     "<Audit> (Unit -> Unit)"
     (ppScheme
       (Forall
         []
         []
-        (EffRow [Atom "Audit" PUnit] None)
+        (EffRow [atomBuiltin "Audit" PUnit] None)
         (TFun (TRigid "Unit") (EffRow [] None) (TRigid "Unit")))),
 ]
 
@@ -43,5 +44,6 @@ test "force and value indices share rendered quantified row names" =
     expectEqual "<a> Box a" (ppScheme (Forall [] [7] row body)),
     expectEqual
       "<Audit | a> Box a"
-      (ppScheme (Forall [] [7] (EffRow [Atom "Audit" PUnit] (Some cell)) body)),
+      (ppScheme
+        (Forall [] [7] (EffRow [atomBuiltin "Audit" PUnit] (Some cell)) body)),
   ]

@@ -281,12 +281,12 @@ schemeLine line = isMatch schemeLineRe line
    signature, and whether its `build` produced a binary. -}
 data Trial = Trial { sigText : String, emitText : String, madeBinary : Bool }
 
-verb : List String -> <Exec "_", IO> Result String (Int, String, String)
+verb : List String -> <Exec, IO> Result String (Int, String, String)
 verb args = boundedInTree perSpawnSeconds medakaBin args
 
 executed : Int ->
   String ->
-  <Exec "_", FileRead "_", IO> Result String (Option (Int, String))
+  <Exec, FileRead, IO> Result String (Option (Int, String))
 executed 0 binPath =
   if fileExists binPath then
     map
@@ -299,7 +299,7 @@ executed _ _ = Ok None
 signatureFor : String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Result String (String, Bool)
+  <Exec, FileRead, IO> Result String (String, Bool)
 signatureFor work entry binPath =
   let path = "\{work}/\{entry}"
   match verb ["check", "--json", path]
@@ -335,7 +335,7 @@ signatureFor work entry binPath =
    stdlib module exits 1 "unknown module" for the emitter alone, which would
    classify as DISAGREE for a root-set reason that has nothing to do with a
    compiler defect. -}
-emitVerdictFor : String -> String -> <Exec "_", IO> Result String String
+emitVerdictFor : String -> String -> <Exec, IO> Result String String
 emitVerdictFor work entry =
   let roots = [
     "\{medakaRoot}/stdlib/runtime.mdk",
@@ -399,7 +399,7 @@ specField key spec = match somes (map (stripPrefix "\{key}:") (lines spec))
    ordering identically, which the invariance check cannot see. -}
 stageCase : String ->
   String ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> Result String Unit
+  <Exec, FileRead, FileWrite, IO> Result String Unit
 stageCase dir work = match mkdirAll work
   Err e => Err "could not create \{work}: \{e}"
   Ok _ => match runVerb "cp" ["-a", "\{dir}/.", "\{work}/"]
@@ -423,7 +423,7 @@ trialFor : String ->
   Source ->
   Int ->
   List Int ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> Result String Trial
+  <Exec, FileRead, FileWrite, IO> Result String Trial
 trialFor caseScratch dir entry src k order =
   let work = "\{caseScratch}/p\{intToString k}"
   match stageCase dir work
@@ -441,7 +441,7 @@ trialFor caseScratch dir entry src k order =
             })
             (emitVerdictFor work entry)
 
-runCase : String -> String -> <Exec "_", FileRead "_", FileWrite "_", IO> Case
+runCase : String -> String -> <Exec, FileRead, FileWrite, IO> Case
 runCase scratch unit =
   let dir = "\{corpus}/\{unit}"
   match readFile "\{dir}/case.txt"
@@ -719,10 +719,10 @@ summarizeCensus cases blocks = fail "\{census cases}\n\{unlines blocks}"
 
 -- # The units
 
-corpusUnits : <FileRead "_", IO> Result String (List String)
+corpusUnits : <FileRead, IO> Result String (List String)
 corpusUnits = map (ds => sort (map basename ds)) (fixtureDirs corpus)
 
-readLedger : String -> Int -> <FileRead "_", IO> Result String (List Row)
+readLedger : String -> Int -> <FileRead, IO> Result String (List Row)
 readLedger path pinAt = match readFile path
   Err e => Err "could not read \{path}: \{e}"
   Ok text => match ledgerRows pinAt text
@@ -738,7 +738,7 @@ test "every case declares an entry with at least two import clauses" =
         fail
           "\{intToString (length failures)} of \{intToString (length units)} case(s) cannot be permuted:\n\{unlines failures}"
 
-declarationFailure : String -> <FileRead "_", IO> Option String
+declarationFailure : String -> <FileRead, IO> Option String
 declarationFailure unit =
   let dir = "\{corpus}/\{unit}"
   match readFile "\{dir}/case.txt"
@@ -787,7 +787,7 @@ test "neither ledger names a case that is not in the corpus" = match corpusUnits
    `emit=127:noir`, so every ledgered DISAGREE row observes AGREE and reads as
    DRAINED — pointing a reader at deleting four live rows for four open bugs.
    Named as a precondition instead, before any row is graded. -}
-emitterPrecondition : <FileRead "_", IO> Option String
+emitterPrecondition : <FileRead, IO> Option String
 emitterPrecondition =
   let bin = emitterBin
   if fileExists bin then
@@ -800,7 +800,7 @@ test "the answer does not depend on import-clause order" =
     Some why => fail why
     None => gradedCorpus
 
-gradedCorpus : <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+gradedCorpus : <Exec, FileRead, FileWrite, IO> Expectation
 gradedCorpus = match corpusUnits
   Err e => fail "\{corpus}: \{e}"
   Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)

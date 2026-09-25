@@ -95,7 +95,7 @@ checkAll rows =
   let truncated = length (filter (r => r.tagBits < 256) rows)
   (ok, failed, truncated)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [path] => match readLines path
     Err e =>

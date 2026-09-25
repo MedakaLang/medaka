@@ -212,7 +212,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -233,13 +232,11 @@ IDENT "runCommandOk"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -248,8 +245,6 @@ UPPER "String"
 COMMA
 UPPER "String"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "runCommandOk"
 IDENT "cmd"
@@ -327,13 +322,11 @@ IDENT "runVerb"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -344,8 +337,6 @@ UPPER "String"
 COMMA
 UPPER "String"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "runVerb"
 IDENT "cmd"

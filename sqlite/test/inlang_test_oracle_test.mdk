@@ -141,7 +141,7 @@ libModuleStem name = stripSuffix ".mdk" name
 
 -- Runs one `sqlite/lib/` module and returns its executed-assertion count,
 -- or an error naming the file and what went wrong.
-runLibSuite : String -> <Exec "_", IO> Result String Int
+runLibSuite : String -> <Exec, IO> Result String Int
 runLibSuite name =
   match testAssertionCount (underRoot "sqlite/lib/\{name}.mdk") []
     Err e => Err "sqlite/lib/\{name}.mdk: \{e}"
@@ -149,11 +149,11 @@ runLibSuite name =
 
 -- Every `sqlite/lib/` module run exactly once, shared by every assertion
 -- below — memoized the same way `results` is.
-libResults : <Exec "_", IO> List (String, (Int, Result String Int))
+libResults : <Exec, IO> List (String, (Int, Result String Int))
 libResults = map ((name, floor) => (name, (floor, runLibSuite name))) libSuites
 
 -- Grades one `sqlite/lib/` module's floor, same shape as `floorExpectation`.
-libFloorExpectation : String -> <Exec "_", IO> Expectation
+libFloorExpectation : String -> <Exec, IO> Expectation
 libFloorExpectation name = match lookup name libResults
   None => Fail "sqlite/lib/\{name}.mdk has no `libResults` entry" "" ""
   Some (floor, Err e) =>
@@ -209,7 +209,7 @@ test "sqlite/lib/varint.mdk executed >= 11 assertions" =
 test "sqlite/lib/writer.mdk executed >= 4 assertions" =
   libFloorExpectation "writer"
 
-libUnrosteredFiles : <FileRead "_", IO> Result String (List String)
+libUnrosteredFiles : <FileRead, IO> Result String (List String)
 libUnrosteredFiles = match listDir (underRoot "sqlite/lib")
   Err e => Err "could not list sqlite/lib: \{e}"
   Ok names =>
@@ -225,7 +225,7 @@ test "every sqlite/lib/*.mdk module has a `libSuites` or `libExempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-libPhantomExemptions : <FileRead "_", IO> Result String (List String)
+libPhantomExemptions : <FileRead, IO> Result String (List String)
 libPhantomExemptions = match listDir (underRoot "sqlite/lib")
   Err e => Err "could not list sqlite/lib: \{e}"
   Ok names => Ok (missingUnits libModuleStem libExemptNames names)
@@ -242,7 +242,7 @@ test "every `libExempt` row names a module that exists" =
 
 -- Runs one suite under the default (eval) engine and returns its
 -- executed-assertion count, or an error naming the file and what went wrong.
-runSuite : String -> <Exec "_", IO> Result String Int
+runSuite : String -> <Exec, IO> Result String Int
 runSuite name =
   match testAssertionCount (underRoot "sqlite/test/\{name}.mdk") []
     Err e => Err "sqlite/test/\{name}.mdk: \{e}"
@@ -252,12 +252,12 @@ runSuite name =
 -- top-level nullary bindings are memoized (a spawn placed in a shared
 -- top-level binding and read from two `test` decls was confirmed, by
 -- probe, to execute once, not twice).
-results : <Exec "_", IO> List (String, (Int, Result String Int))
+results : <Exec, IO> List (String, (Int, Result String Int))
 results = map ((name, floor) => (name, (floor, runSuite name))) suites
 
 -- Grades one suite's floor: the message names both the file and both
 -- numbers on a miss, per the migration's own acceptance check.
-floorExpectation : String -> <Exec "_", IO> Expectation
+floorExpectation : String -> <Exec, IO> Expectation
 floorExpectation name = match lookup name results
   None => Fail "sqlite/test/\{name}.mdk has no `results` entry" "" ""
   Some (floor, Err e) =>
@@ -304,7 +304,7 @@ ranCountOf : (String, (Int, Result String Int)) -> Int
 ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
-totalRan : <Exec "_", IO> Int
+totalRan : <Exec, IO> Int
 totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
 
 test "sqlite in-language suite ran at least one assertion" =
@@ -322,7 +322,7 @@ test "sqlite in-language suite ran at least one assertion" =
 -- `_test.mdk` file under `sqlite/test/` is accounted for by a row in
 -- `suites` above or a reasoned row in `exempt`.
 
-unrosteredFiles : <FileRead "_", IO> Result String (List String)
+unrosteredFiles : <FileRead, IO> Result String (List String)
 unrosteredFiles =
   unrosteredTestFiles (underRoot "sqlite/test") (rosterNames ++ exemptNames)
 
@@ -336,7 +336,7 @@ test "every sqlite/test/*_test.mdk file has a `suites` or `exempt` row" =
         "no unrostered files"
         "\{debug extras}"
 
-phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions : <FileRead, IO> Result String (List String)
 phantomExemptions = missingTestFiles (underRoot "sqlite/test") exemptNames
 
 test "every `exempt` row names a file that exists" = match phantomExemptions

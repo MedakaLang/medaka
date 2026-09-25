@@ -43,6 +43,11 @@ import frontend.ast.{
   Ty(..),
   Constraint(..),
   TyConOrigin(..),
+  EffAtomTy(..),
+  EffParamTy(..),
+  effAtomSurface,
+  effAtomBare,
+  effAtomWith,
   Route,
   EvId(..),
   EvVal(..),
@@ -340,6 +345,10 @@ rkTy (TyEffect effs tail t) = "<\{rkRowBody effs tail}> \{rkTy t}"
 -- A bare row atom (#997) wraps no type, so there is nothing to fall back to.
 rkTy (TyRow effs tail _) = "<\{rkRowBody effs tail}>"
 rkTy (TyConstrained cs t) = "\{rkConstraints cs} => \{rkTy t}"
+-- A binder's name is lexical to its signature and is not part of the word;
+-- the qualifier IS (it changes what the argument means), so it is kept.
+rkTy (TyNamed _ t) = rkTy t
+rkTy (TyQual t n) = "\{rkTyAtom t} @\{n}"
 
 -- argument of `->`: wrap `TyFun` (prec ≥ 1) but not `TyApp` (prec < 2).
 rkTyFunArg : Ty -> String
@@ -353,7 +362,7 @@ rkTyAtom (TyApp a b) = "(" ++ rkTy (TyApp a b) ++ ")"
 rkTyAtom t = rkTy t
 
 -- shared `<…>` row-body renderer for the `TyEffect`/`TyRow` arms above.
-rkRowBody : List (String, Option String) -> List String -> String
+rkRowBody : List EffAtomTy -> List String -> String
 rkRowBody effs [] = joinWith ", " (map rkEffAtom effs)
 rkRowBody [] tails = joinWith " | " tails
 rkRowBody effs tails =
@@ -387,10 +396,8 @@ rkRowBody effs tails =
 -- The finding is REPORTED at the declaration's first line, which is a
 -- decl-level anchor and NOT the line the directive is matched against; putting
 -- the directive where the diagnostic points is the natural move and it fails.
-rkEffAtom : (String, Option String) -> String
-rkEffAtom (l, None) = l
--- lint-disable-next-line rule-duplicate-body
-rkEffAtom (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
+rkEffAtom : EffAtomTy -> String
+rkEffAtom a = effAtomSurface escStr a
 
 -- single constraint: no outer parens; multiple: parenthesised.
 rkConstraints : List Constraint -> String
@@ -528,23 +535,23 @@ rkTyList =
 -- The three arms where this printer is the COMPLETE one and `eval`'s
 -- `ppTyAtomK` is not (see the header). These assertions are the record of what
 -- a later bite's caller collapse would change on the eval side.
--- > rkTy (TyEffect [("Stdout", None)] [] rkTyInt)
+-- > rkTy (TyEffect [effAtomBare "Stdout"] [] rkTyInt)
 -- "<Stdout> Int"
--- > rkTy (TyRow [("Stdout", None)] [] None)
+-- > rkTy (TyRow [effAtomBare "Stdout"] [] None)
 -- "<Stdout>"
--- > rkTy (TyRow [("Stdout", None), ("Rand", None)] [] None)
+-- > rkTy (TyRow [effAtomBare "Stdout", effAtomBare "Rand"] [] None)
 -- "<Stdout, Rand>"
 -- > rkTy (TyRow [] ["e"] None)
 -- "<e>"
--- > rkTy (TyRow [("Stdout", None)] ["e"] None)
+-- > rkTy (TyRow [effAtomBare "Stdout"] ["e"] None)
 -- "<Stdout | e>"
 
 -- A domain parameter is kept, so two rows differing only by domain do not
 -- collide onto one word.
--- > rkTy (TyRow [("Net", Some "a/*")] [] None) == rkTy (TyRow [("Net", Some "b/*")] [] None)
+-- > rkTy (TyRow [effAtomWith "Net" (EPLit "a/*")] [] None) == rkTy (TyRow [effAtomWith "Net" (EPLit "b/*")] [] None)
 -- False
--- > rkTy (TyRow [("Net", Some "_")] [] None)
--- "<Net _>"
+-- > rkTy (TyRow [effAtomWith "Net" (EPName "host")] [] None)
+-- "<Net host>"
 
 -- A constraint prefix: bare for one, parenthesised for two.
 -- > rkTy (TyConstrained [constraintUnresolved "Eq" [TyVar "a"]] (TyVar "a"))
@@ -554,5 +561,5 @@ rkTyList =
 
 -- Two impls differing ONLY in an effect row get distinct words here — the
 -- property eval's printer does not have today.
--- > implRouteKeyWord OriginUnresolved "A" [TyEffect [("Stdout", None)] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [("Rand", None)] [] rkTyInt] None
+-- > implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Stdout"] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Rand"] [] rkTyInt] None
 -- False

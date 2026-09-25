@@ -91,18 +91,18 @@ public export data Row = Row {
    directory whose top-level `.mdk` files are its fixtures, sorted. Only the
    directory's own level: a corpus with fixture subdirectories belongs to a
    different shape, not to a row here. -}
-entriesOf : Row -> <FileRead "_", IO> Result String (List String)
+entriesOf : Row -> <FileRead, IO> Result String (List String)
 entriesOf r = corpusEntries (map (p => "\{medakaRoot}/\{p}") r.corpus) []
 
 corpusEntries : List String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 corpusEntries [] acc = Ok acc
 corpusEntries (src :: rest) acc = match sourceEntries src
   Err e => Err e
   Ok ps => corpusEntries rest (acc ++ ps)
 
-sourceEntries : String -> <FileRead "_"> Result String (List String)
+sourceEntries : String -> <FileRead> Result String (List String)
 sourceEntries src
   | endsWith ".mdk" src = match isFile src
     Err e => Err "\{src}: \{e}"
@@ -168,7 +168,7 @@ comparable r out =
   let text = chompNewlines (if r.stripUnit then stripUnitAutoPrint out else out)
   if r.sorted then chompNewlines (unlines (sort (lines text))) else text
 
-valueFailure : Row -> String -> String -> <FileRead "_", IO> Option String
+valueFailure : Row -> String -> String -> <FileRead, IO> Option String
 valueFailure r path actual = match readFile (goldenPath r path)
   Err e => Some "\{labelOf path}: no readable golden \{goldenPath r path}: \{e}"
   Ok raw =>
@@ -209,7 +209,7 @@ data Outcome = Outcome { gate : String, graded : Int, failures : List String }
 argsFor : Row -> String -> <IO> List String
 argsFor r path = map (p => "\{medakaRoot}/\{p}") r.prelude ++ [path]
 
-oneFixture : Row -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture : Row -> String -> <Exec, FileRead, IO> Option String
 oneFixture r path =
   match boundedVerb "\{medakaRoot}/\{r.probe}" (argsFor r path)
     Err e => Some "\{labelOf path}: could not spawn \{r.probe}: \{e}"
@@ -217,7 +217,7 @@ oneFixture r path =
       Some m => Some m
       None => valueFailure r path (comparable r out)
 
-gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow : String -> Row -> <Exec, FileRead, IO> Outcome
 gradeRow _ r = match entriesOf r
   Err e => Outcome { gate = r.gate, graded = 0, failures = [e] }
   Ok paths =>
@@ -249,7 +249,7 @@ rowFailure o = match o.failures
    This is the whole of a migrated gate's body. A gate module adds rows to
    its own table and calls this; nothing else about a row is code. -}
 export
-gradeProbeRows : List Row -> <Exec "_", FileRead "_", IO> Expectation
+gradeProbeRows : List Row -> <Exec, FileRead, IO> Expectation
 gradeProbeRows rows = sweepUnits rows gradeRow rowFailure summarizeSweep
 
 -- # Scratch space
@@ -263,7 +263,7 @@ gradeProbeRows rows = sweepUnits rows gradeRow rowFailure summarizeSweep
    it finishes. A test that writes therefore has to make its directory
    rather than assume one; `mkdirAll` remakes the root on the way and is not
    an error when it is still there. -}
-ownScratch : String -> <Exec "_", FileWrite "_"> Result String String
+ownScratch : String -> <Exec, FileWrite> Result String String
 ownScratch name = match scratchDir
   Err e => Err e
   Ok root =>
@@ -277,7 +277,7 @@ ownScratch name = match scratchDir
    `fixtureFiles` walks recursively and carries the anti-vacuity floor, so a
    scaffolder that produced an empty directory is an `Err` rather than a
    tree that trivially matches nothing. -}
-treeFiles : String -> <FileRead "_"> Result String (List String)
+treeFiles : String -> <FileRead> Result String (List String)
 treeFiles root = match fixtureFiles root
   Err e => Err "\{root}: \{e}"
   Ok paths => Ok (sort (somes (map (stripPrefix root) paths)))
@@ -292,7 +292,7 @@ treeFiles root = match fixtureFiles root
 spawnIn : String ->
   String ->
   String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec> Result String (Int, String, String)
 spawnIn dir probe name = boundedVerb "sh" [
   "-c", "cd \"$1\" && exec \"$2\" \"$3\"", "sh", dir, probe, name
 ]
@@ -316,7 +316,7 @@ scaffoldFailures : String ->
   String ->
   String ->
   Int ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> List String
+  <Exec, FileRead, FileWrite, IO> List String
 scaffoldFailures probe name golden files = match ownScratch "new"
   Err e => ["\{name}: could not make a scratch directory: \{e}"]
   Ok scratch =>
@@ -330,7 +330,7 @@ scaffoldFailures probe name golden files = match ownScratch "new"
     let _ = runVerb "rm" ["-rf", scratch]
     found
 
-treeFailures : Int -> String -> String -> <FileRead "_", IO> List String
+treeFailures : Int -> String -> String -> <FileRead, IO> List String
 treeFailures files got want = match treeFiles want
   Err e => ["golden tree unreadable: \{e}"]
   Ok wantFiles => match treeFiles got
@@ -351,7 +351,7 @@ treeFailures files got want = match treeFiles want
 only : List String -> List String -> List String
 only these those = filter (f => not (elem f those)) these
 
-fileFailure : String -> String -> String -> <FileRead "_", IO> Option String
+fileFailure : String -> String -> String -> <FileRead, IO> Option String
 fileFailure got want rel = match readFile "\{want}/\{rel}"
   Err e => Some "\{rel}: golden unreadable: \{e}"
   Ok expected => match readFile "\{got}/\{rel}"
@@ -372,7 +372,7 @@ fileFailure got want rel = match readFile "\{want}/\{rel}"
    that printed a diagnostic and fell through to a 0 exit yields an EMPTY
    artifact plus SUCCESS (#440) — and the message lands on stderr, which the
    near-universal `2>/dev/null` idiom hides. -}
-expectFails : String -> String -> List String -> <Exec "_", IO> Option String
+expectFails : String -> String -> List String -> <Exec, IO> Option String
 expectFails label probe args = match boundedVerb probe args
   Err e => Some "\{label}: could not spawn \{probe}: \{e}"
   Ok (code, out, err) =>
@@ -390,7 +390,7 @@ expectFails label probe args = match boundedVerb probe args
 
 {- | The CONTROL, and the load-bearing half: a probe broken into
    always-failing would satisfy every `expectFails` above it. -}
-expectEmits : String -> List String -> String -> <Exec "_", IO> Option String
+expectEmits : String -> List String -> String -> <Exec, IO> Option String
 expectEmits probe args needle = match boundedVerb probe args
   Err e => Some "valid program: could not spawn \{probe}: \{e}"
   Ok (code, out, err) =>
@@ -429,7 +429,7 @@ undispSrc = "data Foo = Foo\n\nmain = Foo\n"
 export
 errorPathFailures : String ->
   Int ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> List String
+  <Exec, FileRead, FileWrite, IO> List String
 errorPathFailures probe checks = match ownScratch "entry"
   Err e => ["could not make a scratch directory: \{e}"]
   Ok scratch =>

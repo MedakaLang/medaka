@@ -63,7 +63,7 @@ queryTimeoutSeconds = 120
 
 -- # Small process-backed primitives every row below is built from.
 
-rowScratch : String -> <Exec "_"> Result String String
+rowScratch : String -> <Exec> Result String String
 -- deliberate copy of dml_oracle_test.mdk's own, see the header note above
 -- the imports
 -- lint-disable-next-line rule-duplicate-body
@@ -71,7 +71,7 @@ rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
   Ok dir => Ok "\{dir}/\{name}"
 
-buildBin : String -> String -> <Exec "_", IO> Result String Unit
+buildBin : String -> String -> <Exec, IO> Result String Unit
 buildBin entry bin =
   map
     (_ => ())
@@ -82,10 +82,10 @@ buildBin entry bin =
       bin,
     ])
 
-sqlite3Query : String -> String -> <Exec "_", IO> Result String String
+sqlite3Query : String -> String -> <Exec, IO> Result String String
 sqlite3Query db sql = spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
 
-sqlite3Lines : String -> String -> <Exec "_", IO> Result String (List String)
+sqlite3Lines : String -> String -> <Exec, IO> Result String (List String)
 sqlite3Lines db sql = map outLines (sqlite3Query db sql)
 
 -- # Page-layout structural checks
@@ -99,7 +99,7 @@ pageTypesSql : String -> String
 pageTypesSql db =
   "SELECT p, hex(substr(readfile('\{db}'), CASE WHEN p=1 THEN 101 ELSE (p-1)*(SELECT page_size FROM pragma_page_size)+1 END, 1)) FROM (WITH RECURSIVE seq(p) AS (SELECT 1 UNION ALL SELECT p+1 FROM seq WHERE p < (SELECT page_count FROM pragma_page_count)) SELECT p FROM seq) ORDER BY p;"
 
-pageHexes : String -> <Exec "_", IO> Result String (List String)
+pageHexes : String -> <Exec, IO> Result String (List String)
 pageHexes db = map (map hexOfRow) (sqlite3Lines db (pageTypesSql db))
 
 -- Page COUNT, independent of `PRAGMA page_count` (a 4-byte field the writer
@@ -112,7 +112,7 @@ filePagesSql : String -> String
 filePagesSql db =
   "SELECT length(readfile('\{db}')) / (SELECT page_size FROM pragma_page_size);"
 
-filePages : String -> <Exec "_", IO> Result String String
+filePages : String -> <Exec, IO> Result String String
 filePages db = map trim (sqlite3Query db (filePagesSql db))
 
 hexOfRow : String -> String
@@ -182,7 +182,7 @@ writerExpectedLines = [
   "42|Eve|127",
 ]
 
-writerResult : <Exec "_", IO> Result String WriterRun
+writerResult : <Exec, IO> Result String WriterRun
 writerResult = match rowScratch "writer"
   Err e => Err e
   Ok prefix =>
@@ -193,7 +193,7 @@ writerResult = match rowScratch "writer"
     let _ = runVerb "rm" ["-rf", db, writer, reader]
     out
 
-runWriter : String -> String -> String -> <Exec "_", IO> Result String WriterRun
+runWriter : String -> String -> String -> <Exec, IO> Result String WriterRun
 runWriter db writer reader = do
   _ <- buildBin "sqlite/writer_demo.mdk" writer
   _ <- buildBin "sqlite/main.mdk" reader
@@ -264,7 +264,7 @@ runApiSchema : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String WriterApiSchema
+  <Exec, IO> Result String WriterApiSchema
 runApiSchema writer reader cmd db header selectLabel selectSql = do
   _ <- spawnOut queryTimeoutSeconds writer [cmd, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
@@ -371,7 +371,7 @@ writerApiExpectedLines = [
   "5|",
 ]
 
-writerApiResult : <Exec "_", IO> Result String WriterApiRun
+writerApiResult : <Exec, IO> Result String WriterApiRun
 writerApiResult = match rowScratch "writer-api"
   Err e => Err e
   Ok prefix =>
@@ -391,7 +391,7 @@ runWriterApi : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String WriterApiRun
+  <Exec, IO> Result String WriterApiRun
 runWriterApi writer reader dbUsers dbKv dbBlob dbReals = do
   _ <- buildBin "sqlite/writer_api_demo.mdk" writer
   _ <- buildBin "sqlite/main.mdk" reader
@@ -538,7 +538,7 @@ multipageExpectedLines = [
   "700|item_700",
 ]
 
-multipageResult : <Exec "_", IO> Result String MultipageRun
+multipageResult : <Exec, IO> Result String MultipageRun
 multipageResult = match rowScratch "multipage-write"
   Err e => Err e
   Ok prefix =>
@@ -552,7 +552,7 @@ multipageResult = match rowScratch "multipage-write"
 runMultipage : String ->
   String ->
   String ->
-  <Exec "_", IO> Result String MultipageRun
+  <Exec, IO> Result String MultipageRun
 runMultipage db writer reader = do
   _ <- buildBin "sqlite/multipage_write_demo.mdk" writer
   _ <- buildBin "sqlite/main.mdk" reader
@@ -713,7 +713,7 @@ multitableExpectedLines = [
   "700|item_700",
 ]
 
-multitableResult : <Exec "_", IO> Result String MultitableRun
+multitableResult : <Exec, IO> Result String MultitableRun
 multitableResult = match rowScratch "multitable-write"
   Err e => Err e
   Ok prefix =>
@@ -727,7 +727,7 @@ multitableResult = match rowScratch "multitable-write"
 runMultitable : String ->
   String ->
   String ->
-  <Exec "_", IO> Result String MultitableRun
+  <Exec, IO> Result String MultitableRun
 runMultitable db writer reader = do
   _ <- buildBin "sqlite/multitable_write_demo.mdk" writer
   _ <- buildBin "sqlite/main.mdk" reader
@@ -907,7 +907,7 @@ rowidExpectedLines = [
   "9|9|carol",
 ]
 
-rowidResult : <Exec "_", IO> Result String RowidRun
+rowidResult : <Exec, IO> Result String RowidRun
 rowidResult = match rowScratch "rowid-roundtrip"
   Err e => Err e
   Ok prefix =>
@@ -923,7 +923,7 @@ runRowid : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String RowidRun
+  <Exec, IO> Result String RowidRun
 runRowid src dst probe reader = do
   _ <- buildBin "sqlite/rowid_roundtrip_demo.mdk" probe
   _ <- buildBin "sqlite/main.mdk" reader

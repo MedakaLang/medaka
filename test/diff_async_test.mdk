@@ -73,7 +73,7 @@ test "diff_async: exactly 3 fixtures on disk, matching the roster" =
 -- once, without ever invoking `medaka run` — see the file header for why.
 buildAndRun : String ->
   String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 buildAndRun scratch name =
   let entry = "\{corpus}/\{name}.mdk"
   let binPath = "\{scratch}/\{name}"
@@ -95,10 +95,10 @@ buildAndRun scratch name =
 
 -- `name`'s committed expected stdout, without its trailing newlines — the
 -- same comparison the retired shell gate made via `$(cat …)`.
-wantOutput : String -> <FileRead "_", IO> Result String String
+wantOutput : String -> <FileRead, IO> Result String String
 wantOutput name = map chompNewlines (readFile "\{corpus}/\{name}.expected")
 
-gradeFixture : String -> String -> <Exec "_", FileRead "_", IO> Option String
+gradeFixture : String -> String -> <Exec, FileRead, IO> Option String
 gradeFixture scratch name = match wantOutput name
   Err e => Some "  \{name}: \{e}"
   Ok want => match buildAndRun scratch name

@@ -29,17 +29,17 @@ showBytes r = match r
 -- one index, and `main`'s index is the join of all of them.
 
 -- Echo everything until the peer closes.
-echo : Connection -> Async <Net "_" | e> (Result String Unit)
+echo : Connection -> Async <Net | e> (Result String Unit)
 echo conn = deferThen (A.recv conn 64) (r => echoStep conn r)
 
-echoStep : Connection -> Result String (Array Int) -> Async <Net "_" | e> (Result String Unit)
+echoStep : Connection -> Result String (Array Int) -> Async <Net | e> (Result String Unit)
 echoStep conn (Ok bs) =
   if length bs == 0 then deferPure (Ok ())
   else deferThen (A.sendAll conn bs) (_ => echo conn)
 echoStep _ (Err e) = deferPure (Err e)
 
 -- The slow client: two messages with a nap in between.
-slowClient : Int -> Async <Clock, Net "_" | e> Unit
+slowClient : Int -> Async <Clock, Net | e> Unit
 slowClient port = defer
   conn <- liftIO (u => connect "127.0.0.1" port)
   match conn
@@ -56,7 +56,7 @@ slowClient port = defer
       note "slow done"
 
 -- The fast client: one round trip, started after the slow one.
-fastClient : Int -> Async <Clock, Net "_" | e> Unit
+fastClient : Int -> Async <Clock, Net | e> Unit
 fastClient port = defer
   _ <- sleep (millis 50)
   conn <- liftIO (u => connect "127.0.0.1" port)
@@ -70,7 +70,7 @@ fastClient port = defer
       note "fast done"
 
 -- A client whose server never answers: the deadline fires.
-silentClient : Int -> Async <Clock, Net "_" | e> Unit
+silentClient : Int -> Async <Clock, Net | e> Unit
 silentClient port = defer
   conn <- liftIO (u => connect "127.0.0.1" port)
   match conn
@@ -82,10 +82,10 @@ silentClient port = defer
       note "silent done"
 
 -- A server that accepts and holds the connection open without replying.
-hold : Connection -> Async <Clock, Net "_" | e> (Result String Unit)
+hold : Connection -> Async <Clock, Net | e> (Result String Unit)
 hold _ = deferThen (sleep (millis 400)) (_ => deferPure (Ok ()))
 
-main : Async <Clock, Net "_", Stdout> Unit
+main : Async <Clock, Net, Stdout> Unit
 main = defer
   lis <- liftIO (u => listen "127.0.0.1" 0)
   quiet <- liftIO (u => listen "127.0.0.1" 0)

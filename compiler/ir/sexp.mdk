@@ -3,6 +3,8 @@
 -- the AST/parser; new variants get a matching clause here.
 
 import frontend.ast.{
+  EffAtomTy(..),
+  EffParamTy(..),
   DeriveRef(..),
   deriveRefName,
   Lit(..),
@@ -94,6 +96,8 @@ tySexp (TyRow labels tail _) =
   node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
+tySexp (TyNamed n t) = node "TyNamed" [escStr n, tySexp t]
+tySexp (TyQual t n) = node "TyQual" [tySexp t, escStr n]
 
 constraintSexp : Constraint -> String
 constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
@@ -112,11 +116,20 @@ optStrSexp : Option String -> String
 optStrSexp (Some s) = node "Some" [escStr s]
 optStrSexp None = "None"
 
--- a row atom: a bare label, or `(atom Net "pat")` when parameterized.
-effAtomSexp : (String, Option String) -> String
-effAtomSexp (l, None) = escStr l
-effAtomSexp (l, Some "_") = node "hole" [escStr l]  -- v2 Stage 2b inferred hole
-effAtomSexp (l, Some s) = node "atom" [escStr l, escStr s]
+-- a row atom: a bare label, or `(atom Net <param>)` when parameterized.  The
+-- declaration identity is not rendered, like every other origin carrier.
+effAtomSexp : EffAtomTy -> String
+effAtomSexp a = match a.eatParam
+  EPTop => escStr a.eatLabel
+  p => node "atom" [escStr a.eatLabel, effParamSexp p]
+
+effParamSexp : EffParamTy -> String
+effParamSexp EPTop = "None"
+effParamSexp (EPLit s) = escStr s
+effParamSexp (EPName n) = node "name" [escStr n]
+effParamSexp (EPSet xs) = node "set" (map escStr xs)
+effParamSexp (EPProduct axes) =
+  node "product" (map (ax => node (fst ax) [effParamSexp (snd ax)]) axes)
 
 guardSexp : Guard -> String
 guardSexp (GBool e) = node "GBool" [exprSexp e]
@@ -260,7 +273,7 @@ declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, 
     slist (map (d => escStr (deriveRefName d)) ds),
   ]
 declSexp (DUse pub path _) = node "DUse" [boolStr pub, usePathSexp path]
-declSexp (DEffect pub n dom) =
+declSexp (DEffect pub n dom _) =
   node "DEffect" [boolStr pub, escStr n, optStrSexp dom]
 declSexp (DProp pub name params body) = node "DProp" [
   boolStr pub,

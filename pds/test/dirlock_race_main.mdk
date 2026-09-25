@@ -32,7 +32,7 @@ import string.{toInt}
 import time.{millis, sleep}
 
 -- Beat until the deadline, and report whether the lock survived to it.
-beatUntil : DataLock -> Int -> <Clock, FileRead "_", FileWrite "_"> LockBeat
+beatUntil : DataLock -> Int -> <Clock, FileRead, FileWrite> LockBeat
 beatUntil lock remaining =
   if remaining <= 0 then
     LockHeld
@@ -45,7 +45,7 @@ beatUntil lock remaining =
 beatMillis : Int
 beatMillis = 100
 
-run : String -> Bool -> Int -> <IO, Clock, FileRead "_", FileWrite "_"> Unit
+run : String -> Bool -> Int -> <IO, Clock, FileRead, FileWrite> Unit
 run dir force holdMillis = match acquireDataLock force dir
   Err message => println "REFUSED \{message}"
   Ok (lock, _) =>
@@ -58,7 +58,7 @@ mustInt : String -> Int
 mustInt text =
   optionOrPanic "dirlock_race: malformed integer: \{text}" (toInt text)
 
-main : <IO, Clock, Env, FileRead "_", FileWrite "_"> Unit
+main : <IO, Clock, Env, FileRead, FileWrite> Unit
 main = match args ()
   [dir, "force", holdText] => run dir True (mustInt holdText)
   [dir, "wait", holdText] => run dir False (mustInt holdText)

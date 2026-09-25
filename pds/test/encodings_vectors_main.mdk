@@ -92,7 +92,7 @@ erratum arm claimed actual = putStrLn "ERRATUM\t\{arm}\t\{claimed}\t\{actual}"
 -- with 0/1/2 leading 0x00 bytes) — an input is not an answer key, only the
 -- file's own base58btc ROW (the expected output) is graded from the file.
 
-multibaseArm : String -> Array Int -> <Stdout, FileRead "_"> List Int
+multibaseArm : String -> Array Int -> <Stdout, FileRead> List Int
 multibaseArm fname bytes = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
@@ -119,7 +119,7 @@ multibaseArm fname bytes = match readFile fname
 
 -- ── Arm: base58 spec vectors (draft-msporny-base58-02) ─────────────────────
 
-base58SpecArm : String -> <Stdout, FileRead "_"> List Int
+base58SpecArm : String -> <Stdout, FileRead> List Int
 base58SpecArm fname = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
@@ -199,7 +199,7 @@ erratumReports (l :: rest) = match split "\t" l
 
 -- ── Arm: multicodec table ───────────────────────────────────────────────
 
-multicodecArm : String -> <Stdout, FileRead "_"> List Int
+multicodecArm : String -> <Stdout, FileRead> List Int
 multicodecArm fname = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
@@ -227,7 +227,7 @@ nameConstCheck ls (name, constant) =
 
 -- ── Arm: unsigned-varint examples ───────────────────────────────────────
 
-varintArm : String -> <Stdout, FileRead "_"> List Int
+varintArm : String -> <Stdout, FileRead> List Int
 varintArm fname = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
@@ -274,7 +274,7 @@ varintRejectChecks line = match split "\t" line
 
 -- ── main ─────────────────────────────────────────────────────────────────
 
-runVectorFile : String -> <Stdout, FileRead "_"> List Int
+runVectorFile : String -> <Stdout, FileRead> List Int
 runVectorFile fname = match basename fname
   "multibase_basic.csv" => multibaseArm fname (toUtf8 "yes mani !")
   "multibase_leading_zero.csv" =>
@@ -287,7 +287,7 @@ runVectorFile fname = match basename fname
   other =>
     panic "encodings_vectors: ledger selected unsupported corpus: \{other}"
 
-runVectorFiles : List String -> <Stdout, FileRead "_"> List Int
+runVectorFiles : List String -> <Stdout, FileRead> List Int
 runVectorFiles [] = []
 runVectorFiles (fname :: rest) = runVectorFile fname ++ runVectorFiles rest
 

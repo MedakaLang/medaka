@@ -100,7 +100,7 @@ runRows counts (row :: rest) lineNo =
   let () = runRow counts lineNo row
   runRows counts rest (lineNo + 1)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [path] => match readLines path
     Err message => panic "rfc6979_vectors: cannot read corpus: \{message}"

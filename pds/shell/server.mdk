@@ -491,7 +491,7 @@ headerTimeout = seconds 5
    because it cannot: a bind address is a deployment fact, not something this
    process can verify about its own socket. -}
 export
-bindAddress : String -> Int -> <Net "_"> Result String Listener
+bindAddress : String -> Int -> <Net> Result String Listener
 bindAddress addr port = listen addr port
 
 -- ── applying a request and persisting the store ─────────────────────────────
@@ -537,7 +537,7 @@ applyRequest : Server ->
   Ref Store ->
   Option LoginVerdict ->
   Bytes ->
-  <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Array Int
+  <Clock, FileRead, FileWrite, Rand, Stderr> Array Int
 applyRequest server dir storeRef login bytes =
   let store = !storeRef
   let nowSeconds = floatToInt (now ())
@@ -579,7 +579,7 @@ persistTransition : String ->
   Int ->
   Store ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 persistTransition dir did nowSeconds before after = do
   () <- if blobsMoved before after then
     persistBlobHalf dir before after
@@ -606,7 +606,7 @@ persistTransition dir did nowSeconds before after = do
 persistSessionsHalf : String ->
   Store ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 persistSessionsHalf dir before after =
   if storeSessionRows before == storeSessionRows after then
     Ok ()
@@ -621,7 +621,7 @@ persistSessionsHalf dir before after =
 persistPreferencesHalf : String ->
   Store ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 persistPreferencesHalf dir before after =
   if storePreferences before == storePreferences after then
     Ok ()
@@ -639,7 +639,7 @@ persistPreferencesHalf dir before after =
 persistCredentialHalf : String ->
   Store ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 persistCredentialHalf dir before after = match (
   storeCredential before,
   storeCredential after,
@@ -677,7 +677,7 @@ persistRepoHalf : String ->
   Int ->
   Store ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 persistRepoHalf dir did nowSeconds before after = match storeRepo after
   None => Ok ()
   Some next =>
@@ -700,7 +700,7 @@ stageCommitEvent : String ->
   Int ->
   Option Repo ->
   Repo ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 stageCommitEvent dir did nowSeconds before after = do
   seq <- eventLogNextSequence dir
   let time = formatIso (fromEpochSeconds nowSeconds)
@@ -757,7 +757,7 @@ completeGenesisEvents : String ->
   String ->
   Int ->
   Repo ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 completeGenesisEvents dir did handle nowSeconds repo = do
   () <- requireRecoveryApplied dir
   resumeAt <- eventLogNextSequence dir
@@ -779,7 +779,7 @@ completeGenesisEvents dir did handle nowSeconds repo = do
    in the caller: a precondition written into the caller moves when the two
    calls it orders are swapped, which is the one mutation it exists to
    catch. -}
-requireRecoveryApplied : String -> <FileRead "_"> Result String Unit
+requireRecoveryApplied : String -> <FileRead> Result String Unit
 requireRecoveryApplied dir = match eventLogStaged dir
   Err message => Err message
   Ok None => Ok ()
@@ -801,7 +801,7 @@ requireRecoveryApplied dir = match eventLogStaged dir
    Deciding only, like `eventLogPlanRecovery`: naming what an operator has to
    look at is the whole of the answer, because which of the two files is the
    damaged one is not something this process can know. -}
-refuseLostPointer : String -> Int -> <FileRead "_"> Result String Unit
+refuseLostPointer : String -> Int -> <FileRead> Result String Unit
 refuseLostPointer dir resumeAt =
   if resumeAt /= eventLogFirstSeq then
     Ok ()
@@ -836,7 +836,7 @@ genesisFrom : Int ->
   String ->
   Int ->
   Repo ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 genesisFrom 1 dir did handle nowSeconds repo = do
   let identityFrame = seq time => syncIdentityFrame seq time did handle
   () <- emitUnanchored dir nowSeconds identityFrame
@@ -876,7 +876,7 @@ headSyncFrame did repo seq time =
 emitUnanchored : String ->
   Int ->
   (Int -> String -> Result String (Array Int)) ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 emitUnanchored dir nowSeconds build = do
   seq <- eventLogNextSequence dir
   frame <- build seq (formatIso (fromEpochSeconds nowSeconds))
@@ -959,7 +959,7 @@ blobRowsOwed before after (cid :: rest) =
 persistBlobHalf : String ->
   Store ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 persistBlobHalf dir before after = do
   rows <- blobRowsOwed before after (storeBlobCids after)
   blobFileWrite dir rows
@@ -967,7 +967,7 @@ persistBlobHalf dir before after = do
 headText : Repo -> String
 headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
 
-persistRepo : String -> Repo -> <FileRead "_", FileWrite "_"> Result String Unit
+persistRepo : String -> Repo -> <FileRead, FileWrite> Result String Unit
 persistRepo dir repo = do
   blocks <- repoExportBlocks repo
   persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
@@ -1875,7 +1875,7 @@ emitStats : String ->
   Ref Int ->
   Ref Int ->
   Ref Int ->
-  <FileRead "_", Stdout> Unit
+  <FileRead, Stdout> Unit
 emitStats dir storeRef active unframed subs =
   let store = !storeRef
   let (rev, blocks) = match storeRepo store
@@ -1919,7 +1919,7 @@ statsLoop : String ->
   Ref Int ->
   Duration ->
   Ref Bool ->
-  Async <Clock, FileRead "_", Stdout | e> Unit
+  Async <Clock, FileRead, Stdout | e> Unit
 statsLoop dir storeRef active unframed subs interval stopping = defer
   if !stopping then
     deferPure ()
@@ -1943,7 +1943,7 @@ runServer : Server ->
   Serving ->
   Duration ->
   Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 runServer server dir storeRef lis serving statsInterval signalFd = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
@@ -2010,7 +2010,7 @@ drainPending active until = defer
 -- The signal pipe and listener share the same scheduler poller and wait set.
 acceptOrSignal : Listener ->
   Int ->
-  Async <Net "_" | e> (Result String (Option Connection))
+  Async <Net | e> (Result String (Option Connection))
 acceptOrSignal (Listener fd) signalFd = defer
   requested <- liftIO (u => pdsSignalRequested ())
   if requested then
@@ -2047,7 +2047,7 @@ acceptLoop : Server ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 acceptLoop server dir storeRef lis active unframed limiterRef census serving signalFd =
   defer
     accepted <- acceptOrSignal lis signalFd
@@ -2075,7 +2075,7 @@ acceptStep : Server ->
   Serving ->
   Int ->
   Result String (Option Connection) ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
 acceptStep _ _ _ (Listener fd) _ _ _ _ serving _ (Ok None) = defer
   _ <- liftIO (u => servingStopping serving := True)
@@ -2146,7 +2146,7 @@ serveConnection : Server ->
   Connection ->
   Ref Int ->
   Ref Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
 serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
@@ -2193,7 +2193,7 @@ connectionLoop : Server ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 connectionLoop server dir storeRef limiterRef census serving conn slot pending firstRequest =
   defer
     stopping <- liftIO (u => pdsSignalRequested ())
@@ -2230,11 +2230,11 @@ frameLoop : Server ->
   Serving ->
   Connection ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> ->
+  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   let scanned =
     scanRequestBoundaryWithin (readBufferBacking buf) (readBufferLen buf) 0 scan
@@ -2285,11 +2285,11 @@ framePending : Server ->
   Serving ->
   Connection ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> ->
+  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 framePending server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   match deadlines
     Deadlines headerDeadline deadline => defer
@@ -2322,11 +2322,11 @@ readMore : Server ->
   Serving ->
   Connection ->
   UnframedSlot ->
-  Deadlines <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> ->
+  Deadlines <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
     reserved <- reserveReadBuffer (servingBufferCensus serving) buf scan
@@ -2449,7 +2449,7 @@ reserveReadBuffer census buf scan =
    back, which is what lets the waiters behind it proceed. -}
 refuseOverBudget : Connection ->
   HttpScan ->
-  Async <Clock, Net "_", Stdout | e> (Result String Unit)
+  Async <Clock, Net, Stdout | e> (Result String Unit)
 refuseOverBudget conn scan =
   if httpScanInHeaders scan then
     deferPure (Err "in-flight request buffer budget exceeded")
@@ -2477,7 +2477,7 @@ refuseOverBudget conn scan =
    reads and the one short wait that finds the queue already empty. A peer
    still sending past that is told by the reset instead, which is the answer
    it left this server no room for. -}
-drainRefused : Connection -> Int -> Async <Clock, Net "_" | e> Unit
+drainRefused : Connection -> Int -> Async <Clock, Net | e> Unit
 drainRefused conn left =
   if left <= 0 then
     deferPure ()
@@ -2608,7 +2608,7 @@ respond : Server ->
   ReadBuffer ->
   Int ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 respond server dir storeRef limiterRef census serving conn slot buf boundary firstRequest =
   defer
     nowSeconds <- liftIO (u => floatToInt (now ()))
@@ -2643,7 +2643,7 @@ respondAt : Server ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 respondAt server dir storeRef limiterRef census serving conn slot buf boundary firstRequest nowSeconds startedAt =
   let parsed = parseRequestAt (readBufferBacking buf) 0 boundary
   let keepAlive = match parsed
@@ -3180,7 +3180,7 @@ forwardProxied : Server ->
   ClientIdentity ->
   RequestTrace ->
   ProxyAdmission ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 forwardProxied server dir storeRef limiterRef census serving conn slot rest keepAlive nowSeconds identity trace admission =
   match applyRateLimit limiterRef identity [ProxyClass] nowSeconds
     Some refusal =>
@@ -3376,7 +3376,7 @@ admitSubscription : Server ->
   ReadBuffer ->
   RequestTrace ->
   UpgradeAdmission ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 admitSubscription server dir storeRef limiterRef census serving conn slot rest trace admission =
   if not (claimSubscription census) then
     sendAndContinue
@@ -3448,7 +3448,7 @@ sendAndContinue : Server ->
   Bool ->
   RequestTrace ->
   Array Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
@@ -3484,7 +3484,7 @@ continueAfterSend : Server ->
   Int ->
   Int ->
   Result String Unit ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 continueAfterSend server dir storeRef limiterRef census serving conn slot rest keepAlive trace statusCode byteLength sent =
   defer
     -- Logged after the write and whatever it returned: a response this server
@@ -3525,7 +3525,7 @@ rejectBuffer : Server ->
   Connection ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
   nowSeconds <- liftIO (u => floatToInt (now ()))
   startedAt <- liftIO (u => monotonic ())
@@ -3549,7 +3549,7 @@ rejectBufferAt : Server ->
   Bool ->
   Int ->
   Float ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds startedAt =
   let charged =
     applyRateLimit

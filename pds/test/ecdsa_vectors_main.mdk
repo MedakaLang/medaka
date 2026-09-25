@@ -426,7 +426,7 @@ runVerificationRows counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx (r
     rest
     (lineNo + 1)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [signingPath, wycheproofPath, bitcoinPath] => match readLines signingPath
     Err message => panic "ecdsa_vectors: cannot read signing corpus: \{message}"

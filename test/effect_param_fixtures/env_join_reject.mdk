@@ -3,7 +3,7 @@
 -- {"A","B"} ⊄ {"A"} ⇒ REJECT (performs <Env {"A", "B"}>).
 effect Env Set
 
-extern getEnv : String -> <Env _> Option String
+extern getEnv : String -> <Env> Option String
 
 both : Unit -> <Env {"A"}> (Option String, Option String)
 both _ = (getEnv "A", getEnv "B")

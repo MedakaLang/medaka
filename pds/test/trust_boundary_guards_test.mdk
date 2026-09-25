@@ -55,7 +55,7 @@ probe = underRoot "pds/test/guard_probes_main.mdk"
    `grep -q "^…$"`, and a substring accepts a probe that printed
    `NOT OK sha256-edges len=32` for the line `OK sha256-edges len=32`, which
    is the exact inversion a control case exists to catch. -}
-expectControlCase : String -> String -> <Exec "_", IO> Expectation
+expectControlCase : String -> String -> <Exec, IO> Expectation
 expectControlCase caseName wantLine =
   expectSpawnOkLine medakaBin ["run", probe, caseName] wantLine
 
@@ -94,7 +94,7 @@ cells = [
 cellFloor : Int
 cellFloor = 11
 
-runCell : (String, Result String String) -> <Exec "_", IO> (String, Expectation)
+runCell : (String, Result String String) -> <Exec, IO> (String, Expectation)
 runCell (name, Err wantMessage) =
   (name, expectSpawnFails medakaBin ["run", probe, name] wantMessage)
 runCell (name, Ok wantLine) = (name, expectControlCase name wantLine)
@@ -102,10 +102,10 @@ runCell (name, Ok wantLine) = (name, expectControlCase name wantLine)
 -- Every cell spawned exactly once, shared by every assertion below —
 -- top-level nullary bindings are memoized, so a spawn placed here and read
 -- from several `test` decls executes once, not twice.
-results : <Exec "_", IO> List (String, Expectation)
+results : <Exec, IO> List (String, Expectation)
 results = map runCell cells
 
-cellExpectation : String -> <Exec "_", IO> Expectation
+cellExpectation : String -> <Exec, IO> Expectation
 cellExpectation name = match lookup name results
   None => Fail "\{name} has no `results` entry" "" ""
   Some e => e

@@ -33,7 +33,7 @@ public export data FileStat = FileStat {
 {- | The metadata of a path as a `FileStat`, or `Err` when the path cannot
    be examined, for instance because it does not exist. -}
 export
-stat : String -> <FileRead "_"> Result String FileStat
+stat : String -> <FileRead> Result String FileStat
 stat p =
   map
     ((sz, d, f, m) => FileStat { size = sz, isDir = d, isFile = f, mtime = m })
@@ -41,17 +41,17 @@ stat p =
 
 {- | Whether a path exists and is a directory. -}
 export
-isDir : String -> <FileRead "_"> Result String Bool
+isDir : String -> <FileRead> Result String Bool
 isDir p = map (st => st.isDir) (stat p)
 
 {- | Whether a path exists and is a regular file. -}
 export
-isFile : String -> <FileRead "_"> Result String Bool
+isFile : String -> <FileRead> Result String Bool
 isFile p = map (st => st.isFile) (stat p)
 
 {- | The size of a file in bytes. -}
 export
-fileSize : String -> <FileRead "_"> Result String Int
+fileSize : String -> <FileRead> Result String Int
 fileSize p = map (st => st.size) (stat p)
 
 -- # Operations
@@ -60,7 +60,7 @@ fileSize p = map (st => st.size) (stat p)
 
    A read failure is reported before anything is written. -}
 export
-copyFile : String -> String -> <FileRead "_", FileWrite "_"> Result String Unit
+copyFile : String -> String -> <FileRead, FileWrite> Result String Unit
 copyFile src dst = match readFileBytes src
   Ok bytes => writeFileBytes dst bytes
   Err e => Err e
@@ -84,10 +84,7 @@ copyFile src dst = match readFileBytes src
    > replaceDurably "stdlib/no-such-doctest-dir/r.tmp" "stdlib/no-such-doctest-dir/r" "v1"
    Err "No such file or directory" -}
 export
-replaceDurably : String ->
-  String ->
-  String ->
-  <FileWrite "_"> Result String Unit
+replaceDurably : String -> String -> String -> <FileWrite> Result String Unit
 replaceDurably staged target content = do
   () <- writeFileMode staged ownerOnlyMode content
   () <- fsync staged
@@ -98,7 +95,7 @@ replaceDurably staged target content = do
 
    A directory that already exists is not an error. -}
 export
-mkdirAll : String -> <FileWrite "_"> Result String Unit
+mkdirAll : String -> <FileWrite> Result String Unit
 mkdirAll path =
   if path == "" || path == "." || path == "/" then
     Ok ()
@@ -127,7 +124,7 @@ mkdirAll path =
    > mkdirAllDurably "stdlib/fs.mdk/sub"
    Err "Not a directory" -}
 export
-mkdirAllDurably : String -> <FileRead "_", FileWrite "_"> Result String Unit
+mkdirAllDurably : String -> <FileRead, FileWrite> Result String Unit
 mkdirAllDurably path =
   if path == "" || path == "." || path == "/" || fileExists path then
     Ok ()
@@ -142,7 +139,7 @@ mkdirAllDurably path =
    Each result is the full path, joined onto `root`. `Err` on the first
    directory that cannot be read or entry that cannot be examined. -}
 export
-walkDir : String -> <FileRead "_"> Result String (List String)
+walkDir : String -> <FileRead> Result String (List String)
 walkDir root = match listDir root
   Err e => Err e
   Ok entries => walkEntries root entries []
@@ -150,7 +147,7 @@ walkDir root = match listDir root
 walkEntries : String ->
   List String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 walkEntries _ [] acc = Ok acc
 walkEntries root (name :: rest) acc =
   let full = joinPath root name
@@ -163,7 +160,7 @@ walkEntries root (name :: rest) acc =
       else
         walkEntries root rest (acc ++ [full])
 
-filesOnly : List String -> <FileRead "_"> Result String (List String)
+filesOnly : List String -> <FileRead> Result String (List String)
 filesOnly [] = Ok []
 filesOnly (p :: rest) = match isFile p
   Err e => Err e
@@ -183,7 +180,7 @@ filesOnly (p :: rest) = match isFile p
    > map (all (contains "/effect_set_fixtures/")) (fixtureFiles "test/effect_set_fixtures")
    Ok True -}
 export
-fixtureFiles : String -> <FileRead "_"> Result String (List String)
+fixtureFiles : String -> <FileRead> Result String (List String)
 fixtureFiles root = match walkDir root
   Err e => Err e
   Ok paths => match filesOnly paths
@@ -191,7 +188,7 @@ fixtureFiles root = match walkDir root
     Ok [] => Err "\{root}: no fixture files found"
     Ok fs => Ok fs
 
-dirsOnly : List String -> <FileRead "_"> Result String (List String)
+dirsOnly : List String -> <FileRead> Result String (List String)
 dirsOnly [] = Ok []
 dirsOnly (p :: rest) = match isDir p
   Err e => Err e
@@ -210,7 +207,7 @@ dirsOnly (p :: rest) = match isDir p
    > map (all (contains "/import_order_fixtures/")) (fixtureDirs "test/import_order_fixtures")
    Ok True -}
 export
-fixtureDirs : String -> <FileRead "_"> Result String (List String)
+fixtureDirs : String -> <FileRead> Result String (List String)
 fixtureDirs root = match listDir root
   Err e => Err e
   Ok names => match dirsOnly (map (joinPath root) names)

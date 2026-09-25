@@ -1,10 +1,192 @@
--- Effect row cells and their normalized views. A join retains every member's
--- atoms: compressing it to only its unbound leaves would erase effects.
+-- Effect atoms and rows. An atom is a resolved label refined by an authority
+-- term; a row is a finite label map plus an optional tail. Two atoms on one
+-- label are never two members: they collapse to one by the authority join.
+-- A row's tail is a DAG of cells; a join retains every member's atoms, since
+-- compressing it to only its unbound leaves would erase effects.
 
-import support.util.{reverseL}
+import support.util.{reverseL, joinWith}
 import support.opcount.{opBump}
-import types.effect_domain.{Atom, atomsUnion}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+import types.effect_domain.{Param}
+import types.effect_authority.{
+  Authority(..), Authvar, authJoin, authSub, authConst, renderAuthority,
+  renderAuthorityWith
+}
+import frontend.ast.{TyConOrigin(..)}
 import map.{Map(..), has, set}
+
+-- A label is its spelling together with the identity of the declaration it
+-- names: `OriginBuiltin` for the language's own labels, the declaring module
+-- for a user `effect`, unresolved in a flat program. The key an atom map uses
+-- is the identity, so two modules' same-spelled labels are two atoms.
+public export data EffLabel = EffLabel String TyConOrigin
+
+public export data Atom = Atom EffLabel Authority
+
+export
+effLabelName : EffLabel -> String
+effLabelName (EffLabel n _) = n
+
+export
+effLabelOrigin : EffLabel -> TyConOrigin
+effLabelOrigin (EffLabel _ o) = o
+
+export
+labelKey : EffLabel -> String
+labelKey (EffLabel n o) = match o
+  OriginModule m => "\{m}::\{n}"
+  _ => n
+
+export
+builtinLabel : String -> EffLabel
+builtinLabel n = EffLabel n OriginBuiltin
+
+export
+atomLabel : Atom -> String
+atomLabel (Atom l _) = effLabelName l
+
+export
+atomLabelOf : Atom -> EffLabel
+atomLabelOf (Atom l _) = l
+
+export
+atomKey : Atom -> String
+atomKey (Atom l _) = labelKey l
+
+export
+atomAuth : Atom -> Authority
+atomAuth (Atom _ a) = a
+
+-- The concrete parameter an atom carries, when nothing symbolic is left in it.
+export
+atomConst : Atom -> Option Param
+atomConst (Atom _ a) = authConst a
+
+export
+atomBuiltin : String -> Param -> Atom
+atomBuiltin n p = Atom (builtinLabel n) (AConst p)
+
+export
+atomWith : EffLabel -> Param -> Atom
+atomWith l p = Atom l (AConst p)
+
+-- Rendering order is by spelling first, then by identity, so a row prints the
+-- way it always has and only a genuine same-spelling collision orders by module.
+sortKey : Atom -> String
+sortKey a = "\{atomLabel a} \{atomKey a}"
+
+export
+renderAtom : Atom -> String
+renderAtom a = atomLabel a ++ renderAuthority (atomAuth a)
+
+export
+renderAtomWith : (Ref Authvar -> String) -> Atom -> String
+renderAtomWith name a = atomLabel a ++ renderAuthorityWith name (atomAuth a)
+
+export
+renderAtoms : List Atom -> String
+renderAtoms atoms = joinWith ", " (map renderAtom (atomsNorm atoms))
+
+export
+renderAtomsWith : (Ref Authvar -> String) -> List Atom -> String
+renderAtomsWith name atoms =
+  joinWith ", " (map (renderAtomWith name) (atomsNorm atoms))
+
+export
+atomInsert : Atom -> List Atom -> List Atom
+atomInsert x [] = [x]
+atomInsert x (y :: ys) = match stringCompare (sortKey x) (sortKey y)
+  Lt => x :: y :: ys
+  Eq => Atom (atomLabelOf y) (authJoin (atomAuth x) (atomAuth y)) :: ys
+  Gt => y :: atomInsert x ys
+
+export
+atomsNorm : List Atom -> List Atom
+atomsNorm [] = []
+atomsNorm [x] = [x]
+atomsNorm [x, y] = atomInsert y [x]
+atomsNorm [x, y, z] = atomInsert z (atomInsert y [x])
+atomsNorm xs = atomsFromIndex (atomIndex xs omEmpty)
+
+-- Rows normally contain one or two labels, where a tree would be needless
+-- allocation. Once a row grows past that fixed small case, index by the sort
+-- key. The map's in-order keys also retain the canonical rendering order.
+-- `authJoin x old` deliberately matches atomInsert: a later occurrence is
+-- joined into the earlier one in the same direction.
+atomIndex : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndex [] m = m
+atomIndex (x :: xs) m =
+  let k = sortKey x
+  let next = match omLookup k m
+    None => x
+    Some old => Atom (atomLabelOf old) (authJoin (atomAuth x) (atomAuth old))
+  atomIndex xs (omInsert k next m)
+
+atomIndexFirst : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndexFirst [] m = m
+atomIndexFirst (x :: xs) m = match omLookup (sortKey x) m
+  None => atomIndexFirst xs (omInsert (sortKey x) x m)
+  Some _ => atomIndexFirst xs m
+
+atomsFromIndex : OrdMap Atom -> List Atom
+atomsFromIndex m = atomsFromKeys (omKeys m) m
+
+atomsFromKeys : List String -> OrdMap Atom -> List Atom
+atomsFromKeys [] _ = []
+atomsFromKeys (k :: ks) m = match omLookup k m
+  Some atom => atom :: atomsFromKeys ks m
+  None => atomsFromKeys ks m
+
+export
+atomsUnion : List Atom -> List Atom -> List Atom
+atomsUnion a b = atomsNorm (a ++ b)
+
+-- The atoms of [xs] not proven covered by [ys]: a label absent from [ys], or
+-- present with an authority that does not provably cover. A symbolic pair
+-- that cannot be decided yet stays in the difference; the caller decides
+-- whether that is an escape or a pending obligation.
+export
+atomsDiff : List Atom -> List Atom -> List Atom
+atomsDiff [] _ = []
+atomsDiff xs [] = xs
+atomsDiff [x] ys = atomsDiffOne x ys
+atomsDiff [x, y] ys = atomsDiffOne x ys ++ atomsDiffOne y ys
+atomsDiff xs [y] = atomsDiffOneAgainst xs y
+atomsDiff xs ys = reverseL (atomsDiffIndexed xs (atomIndexFirst ys omEmpty) [])
+
+atomsDiffOne : Atom -> List Atom -> List Atom
+atomsDiffOne x ys = match findAtom (atomKey x) ys
+  None => [x]
+  Some y => if authSub (atomAuth x) (atomAuth y) then [] else [x]
+
+atomsDiffOneAgainst : List Atom -> Atom -> List Atom
+atomsDiffOneAgainst xs y = reverseL (atomsDiffOneAgainstGo xs y [])
+
+atomsDiffOneAgainstGo : List Atom -> Atom -> List Atom -> List Atom
+atomsDiffOneAgainstGo [] _ acc = acc
+atomsDiffOneAgainstGo (x :: xs) y acc =
+  if atomKey x == atomKey y && authSub (atomAuth x) (atomAuth y) then
+    atomsDiffOneAgainstGo xs y acc
+  else
+    atomsDiffOneAgainstGo xs y (x :: acc)
+
+atomsDiffIndexed : List Atom -> OrdMap Atom -> List Atom -> List Atom
+atomsDiffIndexed [] _ acc = acc
+atomsDiffIndexed (x :: xs) index acc = match omLookup (sortKey x) index
+  Some y =>
+    if authSub (atomAuth x) (atomAuth y) then
+      atomsDiffIndexed xs index acc
+    else
+      atomsDiffIndexed xs index (x :: acc)
+  None => atomsDiffIndexed xs index (x :: acc)
+
+-- The atom whose label has identity key [k], by first occurrence.
+export
+findAtom : String -> List Atom -> Option Atom
+findAtom _ [] = None
+findAtom k (y :: ys) = if k == atomKey y then Some y else findAtom k ys
+
+-- ── rows ──────────────────────────────────────────────────────────────────
 
 public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
 

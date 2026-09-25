@@ -461,7 +461,7 @@ octalMode mode =
    This is a startup check, not a warning: a group- or world-readable signing
    key has already been exposed to every other account on the box for as long
    as it has been there, and a server that serves anyway hides that. -}
-requirePrivateMode : String -> String -> <FileRead "_"> Result String Unit
+requirePrivateMode : String -> String -> <FileRead> Result String Unit
 requirePrivateMode label path = do
   mode <- match fileMode path
     Err message => Err "unreadable \{label} \{path}: \{message}"
@@ -474,7 +474,7 @@ requirePrivateMode label path = do
 
 -- Neither key reaches a diagnostic: the mode and read errors name the path,
 -- and `hex.decode`'s own messages do not echo what they were given.
-readHexBytes : String -> String -> <FileRead "_"> Result String (Array Int)
+readHexBytes : String -> String -> <FileRead> Result String (Array Int)
 readHexBytes label path = do
   () <- requirePrivateMode label path
   text <- match readFile path
@@ -532,8 +532,7 @@ admitSessionSecret path bytes =
    `randomInt`, whose SplitMix64 generator is seeded deterministically and
    would make every session token on every deployment forgeable from a public
    constant. -}
-generateSessionSecret : String ->
-  <FileWrite "_", Rand> Result String (Array Int)
+generateSessionSecret : String -> <FileWrite, Rand> Result String (Array Int)
 generateSessionSecret dir = do
   let bytes = osEntropyBytes serverSecretBytes
   () <- match writeFilePrivate (sessionSecretPath dir) "\{encode bytes}\n"
@@ -552,7 +551,7 @@ generateSessionSecret dir = do
    needed it. -}
 suppliedSessionSecret : Args ->
   String ->
-  <FileRead "_"> Result String (Option (Array Int))
+  <FileRead> Result String (Option (Array Int))
 suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
   Some path => map Some (readSessionSecret path)
   None =>
@@ -564,7 +563,7 @@ suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
 -- Both arms above read a secret somebody else chose — the flag's file, or one
 -- a previous run left in the data directory — so both are graded, and the one
 -- this program generates below is graded by construction instead.
-readSessionSecret : String -> <FileRead "_"> Result String (Array Int)
+readSessionSecret : String -> <FileRead> Result String (Array Int)
 readSessionSecret path = do
   bytes <- readHexBytes "session-token secret" path
   admitSessionSecret path bytes
@@ -572,7 +571,7 @@ readSessionSecret path = do
 -- The WRITE half: generate the secret only when the read half found none.
 establishSessionSecret : String ->
   Option (Array Int) ->
-  <FileWrite "_", Rand> Result String (Array Int)
+  <FileWrite, Rand> Result String (Array Int)
 establishSessionSecret _ (Some bytes) = Ok bytes
 establishSessionSecret dir None = generateSessionSecret dir
 
@@ -601,13 +600,13 @@ data CredentialSource = Kept CredentialRecord | Bootstrap String
    takes a caller-supplied salt and draws no entropy of its own. -}
 bootstrapCredential : String ->
   String ->
-  <FileWrite "_", Rand> Result String CredentialRecord
+  <FileWrite, Rand> Result String CredentialRecord
 bootstrapCredential dir password = do
   record <- makeCredential (osEntropyBytes saltBytes) defaultIterations password
   () <- persistCredential dir record
   Ok record
 
-loadCredential : String -> <FileRead "_"> Result String CredentialRecord
+loadCredential : String -> <FileRead> Result String CredentialRecord
 loadCredential dir = do
   () <- requirePrivateMode "credential" (credentialPath dir)
   text <- match readFile (credentialPath dir)
@@ -635,7 +634,7 @@ loadCredential dir = do
    refusing every login — would look identical to a correctly configured
    server right up until somebody tried to use it, and the fix would be
    invisible from the outside. -}
-planCredential : Args -> String -> <FileRead "_"> Result String CredentialSource
+planCredential : Args -> String -> <FileRead> Result String CredentialSource
 planCredential parsed dir =
   let exists = fileExists (credentialPath dir)
   match (exists, flagValue "--password-file" parsed)
@@ -650,7 +649,7 @@ planCredential parsed dir =
 
 -- The supplied password, admitted: unreadable or empty is a rejection here,
 -- where nothing has been written yet.
-readPassword : String -> <FileRead "_"> Result String String
+readPassword : String -> <FileRead> Result String String
 readPassword path = do
   () <- requirePrivateMode "password file" path
   text <- match readFile path
@@ -663,7 +662,7 @@ readPassword path = do
 -- The WRITE half: derive and keep only the password the read half admitted.
 establishCredential : String ->
   CredentialSource ->
-  <FileWrite "_", Rand> Result String CredentialRecord
+  <FileWrite, Rand> Result String CredentialRecord
 establishCredential _ (Kept record) = Ok record
 establishCredential dir (Bootstrap password) = bootstrapCredential dir password
 
@@ -677,8 +676,7 @@ establishCredential dir (Bootstrap password) = bootstrapCredential dir password
    EVERY destination is refused-or-admitted before ANY of them is written, the
    shape `configure` takes for #2659 item 4: a run rejected for its second
    file must leave no secret behind from its first. -}
-runKeygen : Args ->
-  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+runKeygen : Args -> <FileRead, FileWrite, Rand, Stdout> Result String Unit
 runKeygen parsed = match (
   flagValue "--key" parsed,
   flagValue "--token-secret" parsed,
@@ -708,7 +706,7 @@ requireDistinctDestinations keyPath secretPath =
   else
     Ok ()
 
-requireDir : String -> <FileRead "_"> Result String Unit
+requireDir : String -> <FileRead> Result String Unit
 requireDir dir = match isDir dir
   Err message => Err "data directory \{dir}: \{message}"
   Ok False => Err "data directory \{dir} is not a directory"
@@ -723,7 +721,7 @@ genesisTid u = tidEncode (floatToInt (now u * 1000000.0)) 0
 initRepo : String ->
   String ->
   Array Int ->
-  <Clock, FileRead "_", FileWrite "_"> Result String Repo
+  <Clock, FileRead, FileWrite> Result String Repo
 initRepo dir did keyBytes = do
   genesis <- genesisTid ()
   repo <- repoInitFromKeyBytes did keyBytes genesis
@@ -739,7 +737,7 @@ initRepo dir did keyBytes = do
    file name spells (`blockStorePut`, the very check `blockStoreFromBlocks`
    folds over the repository half), so a tampered blob file refuses the whole
    startup rather than being served. -}
-loadBlobs : Store -> String -> <FileRead "_"> Result String Store
+loadBlobs : Store -> String -> <FileRead> Result String Store
 loadBlobs store dir = do
   rows <- blobFileRead dir
   admitBlobRows rows store
@@ -760,7 +758,7 @@ admitBlobRows ((cid, mimeType, bytes) :: rest) store =
     Err message => Err "persisted blob \{cidToString cid} rejected: \{message}"
     Ok next => admitBlobRows rest next
 
-loadRepo : String -> String -> SecretKey -> <FileRead "_"> Result String Repo
+loadRepo : String -> String -> SecretKey -> <FileRead> Result String Repo
 loadRepo dir did secret = do
   (head, blocks) <- persistLoad dir
   repoFromBlocks did secret head blocks
@@ -770,7 +768,7 @@ openRepo : Bool ->
   String ->
   Array Int ->
   SecretKey ->
-  <Clock, FileRead "_", FileWrite "_"> Result String Repo
+  <Clock, FileRead, FileWrite> Result String Repo
 openRepo False dir did _ secret = loadRepo dir did secret
 openRepo True dir did keyBytes secret =
   if persistHasHead dir then match loadRepo dir did secret
@@ -792,7 +790,7 @@ openRepo True dir did keyBytes secret =
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String)
+  <Clock, Env, FileRead, FileWrite, Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -1031,7 +1029,7 @@ reportOutcome (Err message) = abort "serve: accept loop ended: \{message}"
    #2906, #2659 item 4). -}
 announceToRelay : RelayTarget ->
   String ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
 announceToRelay target hostname = defer
   outcome <- requestCrawl target hostname
   match outcome
@@ -1049,7 +1047,7 @@ announce : String ->
   Option RelayTarget ->
   Duration ->
   Int ->
-  Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
 announce bind port lis store dir server serving relay statsInterval signalFd =
   defer
     _ <- liftIO (u => ready bind port)
@@ -1069,7 +1067,7 @@ bound : String ->
   Option RelayTarget ->
   Duration ->
   Result String Listener ->
-  Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
 bound _ _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
 bound bind server store dir serving relay statsInterval (Ok lis) = defer
@@ -1107,7 +1105,7 @@ bound bind server store dir serving relay statsInterval (Ok lis) = defer
    every other task shares. -}
 lockBeatLoop : DataLock ->
   Ref Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Stderr | e> Unit
+  Async <Clock, FileRead, FileWrite, Stderr | e> Unit
 lockBeatLoop lock stopping = defer
   if !stopping then
     deferPure ()
@@ -1137,7 +1135,7 @@ reportBeat (LockLost message) =
   ePutStrLn "serve: data directory lock lost: \{message}"
 
 start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String) ->
-  Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, lines)) =
   defer
@@ -1149,7 +1147,7 @@ start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, 
 
 -- A `keygen` run touches no socket and no repository, so it finishes inside
 -- one synchronous step rather than entering the scheduler.
-keygen : List String -> <FileRead "_", FileWrite "_", Rand, Stderr, Stdout> Unit
+keygen : List String -> <FileRead, FileWrite, Rand, Stderr, Stdout> Unit
 keygen rest = match parseArgs keygenSpec rest
   -- `args` already renders a finished sentence naming the verb.
   Err message => abort message
@@ -1157,7 +1155,7 @@ keygen rest = match parseArgs keygenSpec rest
     Err message => abort "keygen: \{message}"
     Ok () => ()
 
-main : Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout> Unit
+main : Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout> Unit
 main = defer
   argv <- liftIO (u => args ())
   match argv

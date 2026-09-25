@@ -81,13 +81,12 @@ import test_process.{scratchDir, underRoot}
    `fixtureFiles` carries the anti-vacuity floor: a directory that reads
    cleanly but holds no files is an `Err`, so a scan of nothing cannot
    report clean. -}
-sourcesUnder : String -> <FileRead "_"> Result String (List (String, String))
+sourcesUnder : String -> <FileRead> Result String (List (String, String))
 sourcesUnder dir = match fixtureFiles dir
   Err e => Err "could not walk \{dir}: \{e}"
   Ok paths => withContents (filter (endsWith ".mdk") paths)
 
-withContents : List String ->
-  <FileRead "_"> Result String (List (String, String))
+withContents : List String -> <FileRead> Result String (List (String, String))
 withContents [] = Ok []
 withContents (p :: rest) = match readFile p
   Err e => Err "could not read \{p}: \{e}"
@@ -95,7 +94,7 @@ withContents (p :: rest) = match readFile p
 
 -- | The one file `path`, paired with its content, as a one-element source
 -- list.
-sourceFile : String -> <FileRead "_"> Result String (List (String, String))
+sourceFile : String -> <FileRead> Result String (List (String, String))
 sourceFile path = withContents [path]
 
 libDir : <IO> String
@@ -107,13 +106,13 @@ shellDir = underRoot "pds/shell"
 entryPath : <IO> String
 entryPath = underRoot "pds/serve.mdk"
 
-libSources : <FileRead "_", IO> Result String (List (String, String))
+libSources : <FileRead, IO> Result String (List (String, String))
 libSources = sourcesUnder libDir
 
-shellSources : <FileRead "_", IO> Result String (List (String, String))
+shellSources : <FileRead, IO> Result String (List (String, String))
 shellSources = sourcesUnder shellDir
 
-entrySources : <FileRead "_", IO> Result String (List (String, String))
+entrySources : <FileRead, IO> Result String (List (String, String))
 entrySources = sourceFile entryPath
 
 {- | The two source sets checks 4 and 5 sweep: a directory plus the entry
@@ -123,7 +122,7 @@ entrySources = sourceFile entryPath
    invocations — it is where the secrets are read, so it is in scope for
    whichever half is being graded. -}
 plusEntry : Result String (List (String, String)) ->
-  <FileRead "_", IO> Result String (List (String, String))
+  <FileRead, IO> Result String (List (String, String))
 plusEntry (Err e) = Err e
 plusEntry (Ok sources) = map (sources ++ _) entrySources
 
@@ -532,7 +531,7 @@ serverPath = underRoot "pds/shell/server.mdk"
 -- retired script's `printf … >>` did, as a one-element source set.
 injected : String ->
   List String ->
-  <FileRead "_"> Result String (List (String, String))
+  <FileRead> Result String (List (String, String))
 injected path extra = match readFile path
   Err e => Err "could not read \{path}: \{e}"
   Ok content => Ok [
@@ -566,7 +565,7 @@ test "mutation control: an injected effect-bearing export is caught" =
    walk that stopped at the top level would see `top.mdk` and miss
    `nested/probe.mdk`. `scratchDir` hands out a name nothing else holds, so
    concurrent gate runs do not write over each other. -}
-nestedTree : <Exec "_", FileRead "_", FileWrite "_"> Result String String
+nestedTree : <Exec, FileRead, FileWrite> Result String String
 nestedTree = match scratchDir
   Err e => Err "could not make a scratch directory: \{e}"
   Ok dir =>
@@ -582,7 +581,7 @@ nestedTree = match scratchDir
 cleanProbe : List String
 cleanProbe = ["export", "topProbeForTest : Int -> Int", "topProbeForTest x = x"]
 
-nestedSources : <Exec "_", FileRead "_", FileWrite "_"> Result String (List (String, String))
+nestedSources : <Exec, FileRead, FileWrite> Result String (List (String, String))
 nestedSources = match nestedTree
   Err e => Err e
   Ok root => sourcesUnder root
@@ -604,7 +603,7 @@ unsignedProbe = [
   "boundaryUnsignedProbeForTest x = println x",
 ]
 
-unsignedMutant : <FileRead "_", IO> Result String (List (String, String))
+unsignedMutant : <FileRead, IO> Result String (List (String, String))
 unsignedMutant = injected repoPath unsignedProbe
 
 test "mutation control: the effect check misses an unannotated export" =
@@ -657,7 +656,7 @@ argumentProbe = [
   "accessLogProbeForTest password = accessLogLine password",
 ]
 
-argumentMutant : <FileRead "_", IO> Result String (List (String, String))
+argumentMutant : <FileRead, IO> Result String (List (String, String))
 argumentMutant = injected repoPath argumentProbe
 
 test "mutation control: the interpolation check misses a secret passed as an argument" =
@@ -703,7 +702,7 @@ test "mutation control: a secret in an AccessEvent record field is caught" =
 realCallSite : String
 realCallSite = "logAccessBytes trace responseBytes"
 
-serverContent : <FileRead "_", IO> Result String String
+serverContent : <FileRead, IO> Result String String
 serverContent = match readFile serverPath
   Err e => Err "could not read \{serverPath}: \{e}"
   Ok content => Ok content
@@ -737,7 +736,7 @@ test "mutation control: a secret at a real pds/shell call site is caught" = expe
    one file out of thirty-five would report every check clean. The floor is
    the count at the time of writing, less a small margin for a module being
    deleted. -}
-sourceCount : <FileRead "_", IO> Result String Int
+sourceCount : <FileRead, IO> Result String Int
 sourceCount = match plusEntry libSources
   Err e => Err e
   Ok lib => map (shell => length lib + length shell) shellSources

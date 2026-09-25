@@ -10,7 +10,7 @@ import types.typecheck.{
 }
 import types.repr.{Scheme(..), ppScheme}
 import types.effect_rows.{effrowLabels, rowFlat}
-import types.effect_domain.{renderAtoms}
+import types.effect_rows.{renderAtoms}
 import support.util.{contains, lookupAssoc}
 
 effectPrelude : String
@@ -387,7 +387,7 @@ test "repeated top-prefix writes inside a continuation stay within a bare contra
     "data Res a = Ok a | Err String\n"
       ++ "interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
       ++ "impl Monad Res where\n  andThen r k = match r\n    Ok x => k x\n    Err e => Err e\n"
-      ++ "fsync : String -> <FileWrite \"_\"> Res Unit\nfsync _ = Ok ()\n"
+      ++ "fsync : String -> <FileWrite> Res Unit\nfsync _ = Ok ()\n"
   expectAll [
     expectEqual
       []

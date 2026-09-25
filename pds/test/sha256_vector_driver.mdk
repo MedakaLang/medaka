@@ -250,7 +250,7 @@ checkRecords path maxBytes (r :: rest) =
         "MISMATCH \{path} Len=\{r.lenBits} Repeat=\{r.repeatN} expected=\{r.mdHex} actual=\{actual}"
       (c + 1, f + 1, s)
 
-runFile : String -> Int -> <IO, FileRead "_"> Result String (Int, Int, Int)
+runFile : String -> Int -> <IO, FileRead> Result String (Int, Int, Int)
 runFile path maxBytes =
   if isMonteFile path then
     map (checkMonte path maxBytes) (readLines path)
@@ -265,7 +265,7 @@ printFileSummary path checked failed skipped =
 
 -- ── Driving all files, then the process exit code ───────────────────
 
-runAll : List String -> Int -> Int -> Int -> Int -> <IO, FileRead "_"> Unit
+runAll : List String -> Int -> Int -> Int -> Int -> <IO, FileRead> Unit
 runAll [] maxBytes totalChecked totalFailed totalSkipped =
   if totalFailed > 0 || totalChecked == 0 then exit 1 else exit 0
 runAll (f :: rest) maxBytes totalChecked totalFailed totalSkipped =
@@ -288,7 +288,7 @@ parseArgs ("--max-bytes" :: nStr :: rest) = match toInt nStr
   None => panic "sha256_vector_driver: --max-bytes needs an integer argument"
 parseArgs files = (-1, files)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main =
   let (maxBytes, files) = parseArgs (args ())
   if files == [] then

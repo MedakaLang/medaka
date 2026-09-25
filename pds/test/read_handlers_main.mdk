@@ -685,9 +685,9 @@ runRead : Result String (List String) -> <IO> Unit
 runRead (Err message) = panic "read_handlers: cannot read corpus: \{message}"
 runRead (Ok raw) = runRows (filter meaningful raw)
 
-runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain : List String -> <IO, Env, FileRead> Unit
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain _ = panic "usage: read_handlers_main <ledger-owned-corpus>"
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = runMain (args ())

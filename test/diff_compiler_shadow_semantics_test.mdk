@@ -1208,7 +1208,7 @@ binName entry = replaceAll "/" "_" entry
 gradePasses : String -> Bool
 gradePasses grade = grade == "-" || grade == "ok" || grade == "n/a"
 
-gradeOne : String -> Row -> <Exec "_", FileRead "_", IO> Graded
+gradeOne : String -> Row -> <Exec, FileRead, IO> Graded
 gradeOne scratch r =
   let entrypath = "\{corpus}/\{r.entry}"
   let binPath = "\{scratch}/\{binName r.entry}.bin"
@@ -1255,7 +1255,7 @@ cellRowFailure g =
     Some
       "  \{padRight 60 ' ' g.entry} check=\{padRight 7 ' ' g.checkV} run=\{padRight 7 ' ' g.runV} build=\{padRight 7 ' ' g.buildV} value=\{g.grade}\{g.note}"
 
-sweep : <Exec "_", FileRead "_", IO> Expectation
+sweep : <Exec, FileRead, IO> Expectation
 sweep = sweepUnits table gradeOne cellRowFailure summarizeSweep
 
 -- A row may name a secondary entry point inside a fixture directory
@@ -1276,7 +1276,7 @@ roster = map unitOf (map rowEntry table)
    or a whole directory. `fixtureDirs` carries the anti-vacuity floor, so a
    corpus that reads cleanly but holds nothing is an `Err` rather than a
    green run over zero cells. -}
-corpusUnits : <FileRead "_", IO> Result String (List String)
+corpusUnits : <FileRead, IO> Result String (List String)
 corpusUnits = match fixtureDirs corpus
   Err e => Err e
   Ok dirs =>

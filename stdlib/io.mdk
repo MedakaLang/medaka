@@ -105,7 +105,7 @@ isPrivateMode mode = bitAnd mode 63 == 0
    The contents never exist at a wider mode: an existing file at a wider one
    is narrowed before they are written. Use it for a secret. -}
 export
-writeFilePrivate : String -> String -> <FileWrite "_"> Result String Unit
+writeFilePrivate : String -> String -> <FileWrite> Result String Unit
 writeFilePrivate path content = writeFileMode path ownerOnlyMode content
 
 -- # Commands
@@ -120,9 +120,7 @@ writeFilePrivate path content = writeFileMode path ownerOnlyMode content
    > runCommandOk "true" []
    Ok ("", "") -}
 export
-runCommandOk : String ->
-  List String ->
-  <Exec "_"> Result String (String, String)
+runCommandOk : String -> List String -> <Exec> Result String (String, String)
 runCommandOk cmd args = match runCommand cmd args
   Err e => Err "\{cmd}: \{e}"
   Ok (0, out, err) => Ok (out, err)
@@ -156,9 +154,7 @@ runCommandOk cmd args = match runCommand cmd args
    > runVerb "sh" ["-c", "printf err >&2; exit 3"]
    Ok (3, "", "err") -}
 export
-runVerb : String ->
-  List String ->
-  <Exec "_"> Result String (Int, String, String)
+runVerb : String -> List String -> <Exec> Result String (Int, String, String)
 runVerb cmd args = match runCommand cmd args
   Err e => Err "\{cmd}: \{e}"
   Ok (code, out, err) => Ok (code, out, err)

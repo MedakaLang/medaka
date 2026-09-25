@@ -65,23 +65,20 @@ queryTimeoutSeconds = 120
 -- One row's two line lists, ready to compare.
 data RowOutput = RowOutput { actual : List String, expected : List String }
 
-buildDemo : OracleRow -> String -> <Exec "_", IO> Result String Unit
+buildDemo : OracleRow -> String -> <Exec, IO> Result String Unit
 buildDemo row bin =
   let args = ["build"] ++ row.buildFlags ++ [underRoot row.entry, "-o", bin]
   map (_ => ()) (spawnOut buildTimeoutSeconds medakaBin args)
 
-pieceLines : String ->
-  String ->
-  Piece ->
-  <Exec "_", IO> Result String (List String)
+pieceLines : String -> String -> Piece -> <Exec, IO> Result String (List String)
 pieceLines _ _ (PLine l) = Ok [l]
 pieceLines bin db (PRun extra) =
   map outLines (spawnOut queryTimeoutSeconds bin (db :: extra))
 
-sqlite3Rows : String -> List String -> <Exec "_", IO> Result String String
+sqlite3Rows : String -> List String -> <Exec, IO> Result String String
 sqlite3Rows db args = spawnOut queryTimeoutSeconds "sqlite3" (db :: args)
 
-stepLines : String -> Step -> <Exec "_", IO> Result String (List String)
+stepLines : String -> Step -> <Exec, IO> Result String (List String)
 stepLines _ (Line l) = Ok [l]
 stepLines db (Rows sql) = map outLines (sqlite3Rows db [sql])
 stepLines db (NullRows sql) =
@@ -92,7 +89,7 @@ stepLines db (TypedRows sql) =
 rowOutput : OracleRow ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Result String RowOutput
+  <Exec, FileRead, IO> Result String RowOutput
 rowOutput row db bin = match seedDb db row.seed
   Err e => Err "\{row.name}: seeding the database: \{e}"
   Ok _ => match buildDemo row bin
@@ -113,19 +110,17 @@ rowOutput row db bin = match seedDb db row.seed
    files — a row that removed the directory would delete the next row's
    workspace out from under it. Concurrency across gate runs is still covered,
    since the directory itself is a per-process `mktemp -d`. -}
-rowPrefix : OracleRow -> <Exec "_"> Result String String
+rowPrefix : OracleRow -> <Exec> Result String String
 rowPrefix row = match scratchDir
   Err e => Err "\{row.name}: \{e}"
   Ok dir => Ok "\{dir}/\{row.name}"
 
-runRow : OracleRow -> <Exec "_", FileRead "_", IO> Result String RowOutput
+runRow : OracleRow -> <Exec, FileRead, IO> Result String RowOutput
 runRow row = match rowPrefix row
   Err e => Err e
   Ok prefix => runRowIn row prefix
 
-runRowIn : OracleRow ->
-  String ->
-  <Exec "_", FileRead "_", IO> Result String RowOutput
+runRowIn : OracleRow -> String -> <Exec, FileRead, IO> Result String RowOutput
 runRowIn row prefix =
   let out = rowOutput row "\{prefix}.db" "\{prefix}.demo"
   let _ = runVerb "rm" ["-rf", "\{prefix}.db", "\{prefix}.demo"]
@@ -463,24 +458,24 @@ typedRow = OracleRow {
 -- Every row run exactly once and shared by every assertion below: a top-level
 -- nullary binding is memoized, so the ten builds happen once rather than once
 -- per `test` block that reads them.
-results : <Exec "_", FileRead "_", IO> List (String, Result String RowOutput)
+results : <Exec, FileRead, IO> List (String, Result String RowOutput)
 results = map (r => (r.name, runRow r)) rows
 
-resultOf : String -> <Exec "_", FileRead "_", IO> Result String RowOutput
+resultOf : String -> <Exec, FileRead, IO> Result String RowOutput
 resultOf name = match lookup name results
   None => Err "no `results` entry for row \{name} — is it in `rows`?"
   Some r => r
 
 -- The differential itself: the demo's own output against the answer the real
 -- sqlite3 CLI gave, at run time, for the equivalent SQL.
-oracleExpectation : String -> <Exec "_", FileRead "_", IO> Expectation
+oracleExpectation : String -> <Exec, FileRead, IO> Expectation
 oracleExpectation name = match resultOf name
   Err e => Fail e "sqlite3's own answer" "the row did not run"
   Ok out => expectEqualLines (join "\n" out.expected) (join "\n" out.actual)
 
 -- The golden leg, for the two rows whose scripts diffed BOTH. Read-only: a
 -- missing or unreadable golden fails here, it is never written.
-goldenExpectation : String -> String -> <Exec "_", FileRead "_", IO> Expectation
+goldenExpectation : String -> String -> <Exec, FileRead, IO> Expectation
 goldenExpectation name path = match resultOf name
   Err e => Fail e "the committed golden" "the row did not run"
   Ok out => match readFile (underRoot path)
@@ -530,20 +525,20 @@ test "typed: typed query output matches sqlite3" = oracleExpectation "typed"
    computed this with python3 and printed a warning when it was not `05`; a
    warning nobody reads is how a multi-page traversal test quietly becomes a
    single-page one, so it is an assertion here. -}
-multipageRootPageType : <Exec "_", FileRead "_", IO> Result String String
+multipageRootPageType : <Exec, FileRead, IO> Result String String
 multipageRootPageType = match scratchDir
   Err e => Err e
   Ok dir => rootPageTypeIn "\{dir}/multipage-pagetype.db"
 
 -- Its own database, not the `multipage` row's: `scratchDir` is shared (see
 -- `rowPrefix`), and that row removes its file as soon as it is graded.
-rootPageTypeIn : String -> <Exec "_", FileRead "_", IO> Result String String
+rootPageTypeIn : String -> <Exec, FileRead, IO> Result String String
 rootPageTypeIn db =
   let out = rootPageTypeOf db
   let _ = runVerb "rm" ["-rf", db]
   out
 
-rootPageTypeOf : String -> <Exec "_", FileRead "_", IO> Result String String
+rootPageTypeOf : String -> <Exec, FileRead, IO> Result String String
 rootPageTypeOf db =
   match seedDb db [SeedSql multipageSchema, SeedSql multipageInsert]
     Err e => Err e

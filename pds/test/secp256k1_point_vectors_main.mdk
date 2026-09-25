@@ -128,7 +128,7 @@ go c (x :: xs) i =
   let () = line c i x
   go c xs (i + 1)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [file] => match readLines file
     Err e => panic "cannot read point corpus: \{e}"

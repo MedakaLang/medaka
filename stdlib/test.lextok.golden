@@ -2032,7 +2032,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Expectation"
 NEWLINE

@@ -72,7 +72,7 @@ queryTimeoutSeconds = 120
 
 -- # Small process-backed primitives every row below is built from.
 
-rowScratch : String -> <Exec "_"> Result String String
+rowScratch : String -> <Exec> Result String String
 -- deliberate copy of writer_oracle_test.mdk's own, see the header note
 -- above the imports
 -- lint-disable-next-line rule-duplicate-body
@@ -80,7 +80,7 @@ rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
   Ok dir => Ok "\{dir}/\{name}"
 
-buildBin : List String -> String -> String -> <Exec "_", IO> Result String Unit
+buildBin : List String -> String -> String -> <Exec, IO> Result String Unit
 buildBin flags entry bin =
   map
     (_ => ())
@@ -89,15 +89,15 @@ buildBin flags entry bin =
       medakaBin
       (["build"] ++ flags ++ [underRoot entry, "-o", bin]))
 
-copyFile : String -> String -> <Exec "_", IO> Result String Unit
+copyFile : String -> String -> <Exec, IO> Result String Unit
 copyFile src dst = map (_ => ()) (spawnOut queryTimeoutSeconds "cp" [src, dst])
 
-sqlite3Args : String -> List String -> <Exec "_", IO> Result String String
+sqlite3Args : String -> List String -> <Exec, IO> Result String String
 sqlite3Args db args =
   let full = db :: args
   spawnOut queryTimeoutSeconds "sqlite3" full
 
-sqlite3Query : String -> String -> <Exec "_", IO> Result String String
+sqlite3Query : String -> String -> <Exec, IO> Result String String
 sqlite3Query db sql = sqlite3Args db [sql]
 
 byteUnchanged : Bool -> Expectation
@@ -166,7 +166,7 @@ deleteExpectedLines = [
   "a|10",
 ]
 
-deleteResult : <Exec "_", IO> Result String DeleteRun
+deleteResult : <Exec, IO> Result String DeleteRun
 deleteResult = match rowScratch "dml-delete"
   Err e => Err e
   Ok prefix =>
@@ -177,7 +177,7 @@ deleteResult = match rowScratch "dml-delete"
     let _ = runVerb "rm" ["-rf", db, deleter, reader]
     out
 
-runDelete : String -> String -> String -> <Exec "_", IO> Result String DeleteRun
+runDelete : String -> String -> String -> <Exec, IO> Result String DeleteRun
 runDelete db deleter reader = do
   _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
   _ <- buildBin [] "sqlite/main.mdk" reader
@@ -252,7 +252,7 @@ negativeReport r = flatLines [
   r.rowsAfter,
 ]
 
-negativeResult : <Exec "_", FileRead "_", IO> Result String NegativeRun
+negativeResult : <Exec, FileRead, IO> Result String NegativeRun
 negativeResult = match rowScratch "dml-delete-negative"
   Err e => Err e
   Ok prefix =>
@@ -262,9 +262,7 @@ negativeResult = match rowScratch "dml-delete-negative"
     let _ = runVerb "rm" ["-rf", db, deleter]
     out
 
-runNegative : String ->
-  String ->
-  <Exec "_", FileRead "_", IO> Result String NegativeRun
+runNegative : String -> String -> <Exec, FileRead, IO> Result String NegativeRun
 runNegative db deleter = do
   _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
   _ <- seedDb db [SeedSql negativeSeedSql]
@@ -368,7 +366,7 @@ updateExpectedLines = [
   "0",
 ]
 
-updateResult : <Exec "_", FileRead "_", IO> Result String UpdateRun
+updateResult : <Exec, FileRead, IO> Result String UpdateRun
 updateResult = match rowScratch "dml-update"
   Err e => Err e
   Ok prefix =>
@@ -382,7 +380,7 @@ updateResult = match rowScratch "dml-update"
 runUpdate : String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Result String UpdateRun
+  <Exec, FileRead, IO> Result String UpdateRun
 runUpdate db dbIpk updater = do
   let usersArgs = [db, "users", "age", "int", "99", "age", "ge", "30"]
   let kvArgs = [db, "kv", "v", "int", "0", "v", "gt", "25"]
@@ -465,7 +463,7 @@ data UpdateExprRun = UpdateExprRun {
   tableDiffs : List Expectation,
 }
 
-updateExprResult : <Exec "_", FileRead "_", IO> Result String UpdateExprRun
+updateExprResult : <Exec, FileRead, IO> Result String UpdateExprRun
 updateExprResult = match rowScratch "dml-update-expr"
   Err e => Err e
   Ok prefix =>
@@ -479,7 +477,7 @@ updateExprResult = match rowScratch "dml-update-expr"
 runUpdateExpr : String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Result String UpdateExprRun
+  <Exec, FileRead, IO> Result String UpdateExprRun
 runUpdateExpr dbm dbs probe = do
   _ <- buildBin ["--allow-internal"] "sqlite/update_expr_demo.mdk" probe
   _ <- seedDb dbm [SeedSql updateExprSeedSql]
@@ -494,10 +492,7 @@ runUpdateExpr dbm dbs probe = do
     tableDiffs = diffs,
   }
 
-tableDiff : String ->
-  String ->
-  String ->
-  <Exec "_", IO> Result String Expectation
+tableDiff : String -> String -> String -> <Exec, IO> Result String Expectation
 tableDiff dbm dbs t = do
   let args =
     [".mode list", ".nullvalue NULL", "SELECT * FROM \{t} ORDER BY id;"]
@@ -535,7 +530,7 @@ bothFailures : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String (List String)
+  <Exec, IO> Result String (List String)
 bothFailures cli mdb sdb sql = do
   (_, mout, merr) <- spawnRaw queryTimeoutSeconds cli [mdb, sql]
   (scode, sout, serr) <- spawnRaw queryTimeoutSeconds "sqlite3" [sdb, sql]
@@ -555,7 +550,7 @@ runCorpus : String ->
   String ->
   String ->
   List String ->
-  <Exec "_", IO> Result String (List String)
+  <Exec, IO> Result String (List String)
 runCorpus cli mdb sdb sqls =
   map flatLines (traverse (bothFailures cli mdb sdb) sqls)
 
@@ -564,7 +559,7 @@ noFailures _ [] = Pass "no refusals" "no refusals"
 noFailures label fs =
   Fail "\{label}: \{join "; " fs}" "no refusals" (join "; " fs)
 
-dumpOneTable : String -> String -> <Exec "_", IO> Result String (List String)
+dumpOneTable : String -> String -> <Exec, IO> Result String (List String)
 dumpOneTable db tbl = do
   let colsSql =
     "SELECT group_concat('typeof(\"' || name || '\"), hex(\"' || name || '\")', ', ') FROM pragma_table_info('\{tbl}');"
@@ -574,7 +569,7 @@ dumpOneTable db tbl = do
     "SELECT rowid, \{trim colsRaw} FROM \"\{tbl}\" ORDER BY rowid;"
   Ok (["# table \{tbl}"] ++ outLines rows)
 
-dumpDb : String -> <Exec "_", IO> Result String (List String)
+dumpDb : String -> <Exec, IO> Result String (List String)
 dumpDb db = do
   let tblSql =
     "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
@@ -588,10 +583,7 @@ dumpDb db = do
 -- Both databases read back through sqlite3, never through the Medaka CLI:
 -- comparing through the ENGINE the corpus is meant to agree with is the
 -- point — a Medaka-vs-Medaka diff would only prove self-consistency.
-compareDbs : String ->
-  String ->
-  String ->
-  <Exec "_", IO> Result String Expectation
+compareDbs : String -> String -> String -> <Exec, IO> Result String Expectation
 compareDbs label mdb sdb = do
   icRaw <- sqlite3Query mdb "PRAGMA integrity_check;"
   let ic = trim icRaw
@@ -607,7 +599,7 @@ runCorpusSection : String ->
   String ->
   String ->
   List String ->
-  <Exec "_", IO> Result String Expectation
+  <Exec, IO> Result String Expectation
 runCorpusSection cli label mdb sdb sqls = do
   failures <- runCorpus cli mdb sdb sqls
   cmp <- compareDbs label mdb sdb
@@ -667,7 +659,7 @@ dmlAuthored = [
 ]
 
 -- ── section 3: OVERFLOW (multi-KB values through the DML path) ──────────
-overflowLengths : String -> <Exec "_", IO> Result String Expectation
+overflowLengths : String -> <Exec, IO> Result String Expectation
 overflowLengths db = do
   raw <- sqlite3Query db "SELECT length(body) FROM docs ORDER BY rowid;"
   Ok
@@ -699,7 +691,7 @@ cliSelectOne : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String Expectation
+  <Exec, IO> Result String Expectation
 cliSelectOne cli mdb sdb q = do
   (_, mout, merr) <- spawnRaw queryTimeoutSeconds cli [mdb, q]
   (_, sout, serr) <- spawnRaw queryTimeoutSeconds "sqlite3" [sdb, q]
@@ -713,7 +705,7 @@ cliSelectOne cli mdb sdb q = do
 cliSelectExpectation : String ->
   String ->
   String ->
-  <Exec "_", IO> Result String Expectation
+  <Exec, IO> Result String Expectation
 cliSelectExpectation cli mdb sdb = do
   diffs <- traverse (cliSelectOne cli mdb sdb) dmlSelects
   Ok (expectAll diffs)
@@ -764,7 +756,7 @@ dmlRejects = [
 checkReject : String ->
   String ->
   String ->
-  <Exec "_", IO> Result String (List String)
+  <Exec, IO> Result String (List String)
 checkReject cli db sql = do
   (code, out, err) <- spawnRaw queryTimeoutSeconds cli [db, sql]
   let combined = trim (out ++ err)
@@ -778,7 +770,7 @@ checkReject cli db sql = do
 
 runRejections : String ->
   String ->
-  <Exec "_", FileRead "_", IO> Result String Expectation
+  <Exec, FileRead, IO> Result String Expectation
 runRejections cli db = do
   before <- readFileBytes db
   failLists <- traverse (checkReject cli db) dmlRejects
@@ -806,7 +798,7 @@ checkSchemaRefusal : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String Expectation
+  <Exec, IO> Result String Expectation
 checkSchemaRefusal label cli db insertSql = do
   (code, out, err) <- spawnRaw queryTimeoutSeconds cli [db, insertSql]
   let combined = trim (out ++ err)
@@ -819,7 +811,7 @@ checkSchemaRefusal label cli db insertSql = do
       combined)
 
 -- ── section 6: PARSE PROBE (native binary, no database) ──────────────────
-parseProbeExpectation : String -> <Exec "_", IO> Result String Expectation
+parseProbeExpectation : String -> <Exec, IO> Result String Expectation
 parseProbeExpectation probe = do
   out <- spawnOut queryTimeoutSeconds probe []
   Ok (if contains "TOTAL: PASS" out then
@@ -835,12 +827,12 @@ data DmlOutcome = DmlOutcome {
   parseProbe : Expectation,
 }
 
-dmlOutcome : <Exec "_", FileRead "_", IO> Result String DmlOutcome
+dmlOutcome : <Exec, FileRead, IO> Result String DmlOutcome
 dmlOutcome = match rowScratch "dml"
   Err e => Err e
   Ok prefix => runDmlOutcome prefix
 
-runDmlOutcome : String -> <Exec "_", FileRead "_", IO> Result String DmlOutcome
+runDmlOutcome : String -> <Exec, FileRead, IO> Result String DmlOutcome
 runDmlOutcome prefix = do
   let cli = "\{prefix}-cli"
   let probe = "\{prefix}-probe"

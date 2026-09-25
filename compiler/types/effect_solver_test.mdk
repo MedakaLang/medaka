@@ -5,8 +5,11 @@ import test.{expectAll, expectEqual, expectGreaterThan, expectLessThan}
 import map as M
 import map.{Map(..)}
 import support.opcount.{opSnap, setOpCounting}
-import types.effect_domain.{Atom(..), Param(..), atomsDiff, renderAtoms}
-import types.effect_rows.{EffRow(..), Effvar(..), effvarId, rowFlat}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  Atom, atomBuiltin, atomsDiff, renderAtoms, EffRow(..), Effvar(..), effvarId,
+  rowFlat
+}
 import types.effect_solver.{
   SummaryFailure(..),
   SummarySolver,
@@ -21,7 +24,7 @@ import types.effect_solver.{
 }
 
 auditAtom : Atom
-auditAtom = Atom "Audit" PUnit
+auditAtom = atomBuiltin "Audit" PUnit
 
 pureRow : EffRow
 pureRow = EffRow [] None

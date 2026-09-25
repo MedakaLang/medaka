@@ -4,10 +4,9 @@
 -- any cells are linked, including filtered cycles through higher-order calls.
 import map as M
 import map.{Map(..)}
-import types.effect_domain.{Atom, atomsUnion, atomsDiff}
 import types.effect_rows.{
-  EffRow(..), Effvar(..), effvarId, rowFlat, rowFlatMembers, rowHasSummary,
-  linkRow, solveSummaryCell
+  Atom, atomsUnion, atomsDiff, EffRow(..), Effvar(..), effvarId, rowFlat,
+  rowFlatMembers, rowHasSummary, linkRow, solveSummaryCell
 }
 import support.util.{reverseL, isNonEmptyL, isEmptyL}
 import support.scc.{tarjanSCCs}

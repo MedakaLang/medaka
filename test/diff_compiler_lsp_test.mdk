@@ -1116,7 +1116,7 @@ sessionTimeoutSeconds = 180
    speaks on stdout and says nothing on stderr, so a line there is the CLI's
    own staleness warning or a server that was not well — either of which makes
    every answer below untrustworthy however right it looks. -}
-drive : List Json -> <Exec "_", IO> (List String, String)
+drive : List Json -> <Exec, IO> (List String, String)
 drive msgs =
   let stream = join "" (map frame msgs)
   let args = ["-c", "printf '%s' \"$1\" | \"$2\" lsp", "sh", stream, medakaBin]
@@ -1138,7 +1138,7 @@ data Outcome = Outcome { name : String, findings : List String }
 
 gradeProbe : String ->
   Probe ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> Outcome
+  <Exec, FileRead, FileWrite, IO> Outcome
 gradeProbe scratch p =
   let dir = "\{scratch}/\{p.name}"
   match layOut dir p.files
@@ -1154,7 +1154,7 @@ gradeProbe scratch p =
    later row opened a buffer beside it. -}
 layOut : String ->
   List (String, String) ->
-  <FileWrite "_", IO> Result String Unit
+  <FileWrite, IO> Result String Unit
 layOut _ [] = Ok ()
 layOut dir files = match mkdirAll dir
   Err e => Err "could not make \{dir}: \{e}"
@@ -1162,13 +1162,13 @@ layOut dir files = match mkdirAll dir
 
 writeAll : String ->
   List (String, String) ->
-  <FileWrite "_", IO> Result String Unit
+  <FileWrite, IO> Result String Unit
 writeAll _ [] = Ok ()
 writeAll dir ((rel, text) :: rest) = match writeFile "\{dir}/\{rel}" text
   Err e => Err "could not write \{dir}/\{rel}: \{e}"
   Ok _ => writeAll dir rest
 
-decodeAndGrade : Probe -> String -> <FileRead "_", IO> List String
+decodeAndGrade : Probe -> String -> <FileRead, IO> List String
 decodeAndGrade p out = match decodeFrames out
   Err e => ["the response stream is not well framed: \{e}"]
   Ok objs => match readOracle p.oracle
@@ -1176,7 +1176,7 @@ decodeAndGrade p out = match decodeFrames out
     Ok (gold, goldText) =>
       p.grade Seen { objs = objs, gold = gold, goldText = goldText }
 
-readOracle : Oracle -> <FileRead "_", IO> Result String (List Json, String)
+readOracle : Oracle -> <FileRead, IO> Result String (List Json, String)
 readOracle NoOracle = Ok ([], "")
 readOracle (Text name) = map (text => ([], text)) (goldenText name)
 readOracle (Frames name) = match goldenText name
@@ -1185,7 +1185,7 @@ readOracle (Frames name) = match goldenText name
     Err e => Err "test/lsp_goldens/\{name}: \{e}"
     Ok objs => Ok (objs, text)
 
-goldenText : String -> <FileRead "_", IO> Result String String
+goldenText : String -> <FileRead, IO> Result String String
 goldenText name = match readFile "\{medakaRoot}/test/lsp_goldens/\{name}"
   Err e => Err "could not read test/lsp_goldens/\{name}: \{e}"
   Ok text => Ok text
@@ -1223,7 +1223,7 @@ warmSessionScript = "test/lsp_warm_session.sh"
    `test/diff_compiler_tier_drift.sh` reads this call to derive when
    `lsp_warm_session` runs — this module IS that gate's only invocation site,
    and a name in front of the list hides it. -}
-runWarmSession : <Exec "_", IO> Result String (Int, String, String)
+runWarmSession : <Exec, IO> Result String (Int, String, String)
 runWarmSession = boundedInTree sessionTimeoutSeconds "sh" [
   "\{medakaRoot}/\{warmSessionScript}",
 ]
@@ -1259,7 +1259,7 @@ toolTableStart = "# ── GOLDEN TABLE BEGIN"
 toolTableEnd : String
 toolTableEnd = "# ── GOLDEN TABLE END"
 
-toolGoldens : <FileRead "_", IO> Result String (List String)
+toolGoldens : <FileRead, IO> Result String (List String)
 toolGoldens = match readFile "\{medakaRoot}/test/lsp_bless.sh"
   Err e => Err "cannot read test/lsp_bless.sh: \{e}"
   Ok src => match between toolTableStart toolTableEnd (lines src)

@@ -4,7 +4,7 @@
 -- union ⇒ ACCEPT.
 effect Env Set
 
-extern getEnv : String -> <Env _> Option String
+extern getEnv : String -> <Env> Option String
 
 both : Unit -> <Env {"A", "B"}, FFI> (Option String, Option String)
 both _ = (getEnv "A", getEnv "B")

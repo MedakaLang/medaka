@@ -1366,7 +1366,7 @@ runCells corpus =
     let () = println "TOTAL: FAIL"
     exit 1
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message =>

@@ -558,6 +558,8 @@ tyReaches tydefs seen (TyFun a b) target =
   tyReaches tydefs seen a target || tyReaches tydefs seen b target
 tyReaches tydefs seen (TyTuple ts) target = anyTyReaches tydefs seen ts target
 tyReaches tydefs seen (TyEffect _ _ t) target = tyReaches tydefs seen t target
+tyReaches tydefs seen (TyNamed _ t) target = tyReaches tydefs seen t target
+tyReaches tydefs seen (TyQual t _) target = tyReaches tydefs seen t target
 tyReaches tydefs seen (TyConstrained _ t) target =
   tyReaches tydefs seen t target
 tyReaches _ _ _ _ = False
@@ -595,6 +597,8 @@ tyCanDiverge tydefs (TyApp a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyFun a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyTuple ts) = anyTyCanDiverge tydefs ts
 tyCanDiverge tydefs (TyEffect _ _ t) = tyCanDiverge tydefs t
+tyCanDiverge tydefs (TyNamed _ t) = tyCanDiverge tydefs t
+tyCanDiverge tydefs (TyQual t _) = tyCanDiverge tydefs t
 tyCanDiverge tydefs (TyConstrained _ t) = tyCanDiverge tydefs t
 tyCanDiverge _ _ = False
 

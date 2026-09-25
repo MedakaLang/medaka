@@ -74,7 +74,7 @@ stripRootPaths s = replaceAll medakaRoot "<ROOT>" s
 -- `expectGolden` chomps neither, so a golden saved with (or without) a
 -- final newline as a text-file convention disagrees with a spawn's output
 -- on a blank last line that carries no information either author intended.
-compareGolden : String -> String -> <FileRead "_", IO> Expectation
+compareGolden : String -> String -> <FileRead, IO> Expectation
 compareGolden goldenPath actual = match readFile goldenPath
   Err e => fail "expected golden \{goldenPath}: \{e}"
   Ok raw => expectEqualText (chompNewlines raw) (chompNewlines actual)
@@ -84,7 +84,7 @@ compareGolden goldenPath actual = match readFile goldenPath
 checkOrRunGolden : String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Expectation
+  <Exec, FileRead, IO> Expectation
 checkOrRunGolden verb entry goldenPath = match runMedaka [verb, entry]
   Err e => fail "could not run `medaka \{verb} \{entry}`: \{e}"
   Ok (code, out) =>
@@ -106,7 +106,7 @@ checkOrRunGolden verb entry goldenPath = match runMedaka [verb, entry]
 buildAndRunGolden : String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Expectation
+  <Exec, FileRead, IO> Expectation
 buildAndRunGolden binName entry goldenPath = match scratchDir
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
@@ -186,7 +186,7 @@ evalProbeScript = "cd \"$1\" && exec \"$2\" test \"$3\" 2>&1"
 -- Spawns `medaka test [--native] probeRelPath` from a cwd of `medakaRoot`,
 -- with `MEDAKA_STRICT=1` so a stale binary fails loudly rather than
 -- answering from source that predates this gate.
-relativeProbeRun : String -> <Exec "_", IO> Result String (Int, String)
+relativeProbeRun : String -> <Exec, IO> Result String (Int, String)
 relativeProbeRun script =
   let args = [
     "MEDAKA_ROOT=\{medakaRoot}",
@@ -206,7 +206,7 @@ relativeProbeRun script =
 
 -- Both probe engines print one "N/N passed" line per probe kind
 -- (doctest, then `test "…"`); the fixture carries exactly one of each.
-expectTwoProbesPassed : String -> String -> <Exec "_", IO> Expectation
+expectTwoProbesPassed : String -> String -> <Exec, IO> Expectation
 expectTwoProbesPassed verbDesc script = match relativeProbeRun script
   Err e => fail "could not spawn `\{verbDesc} \{probeRelPath}`: \{e}"
   Ok (code, out) =>

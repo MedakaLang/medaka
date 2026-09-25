@@ -313,7 +313,7 @@ rows = [
    One path per fixture either way: the fixture's own file for a file-shaped
    corpus, the root module inside the fixture's directory for a
    directory-shaped one. -}
-entriesOf : Row -> <FileRead "_", IO> Result String (List String)
+entriesOf : Row -> <FileRead, IO> Result String (List String)
 entriesOf r =
   let dir = "\{medakaRoot}/\{r.corpus}"
   match r.shape
@@ -329,7 +329,7 @@ entriesOf r =
    `test/diff_fixtures`' `numlit_*` fixtures are excluded: they need the
    typed `fromInt` elaboration that no entry behind these oracles performs,
    and the typed gates cover them. -}
-flatEntries : Row -> String -> <FileRead "_"> Result String (List String)
+flatEntries : Row -> String -> <FileRead> Result String (List String)
 flatEntries r dir = match fixtureFiles dir
   Err e => Err e
   Ok paths =>
@@ -349,7 +349,7 @@ isGraded r p = match r.shape
    A directory holding no file matching `spec` is an `Err` naming it, not a
    skip: the retired scripts printed `skip <name>` and went on, so a fixture
    whose entry was renamed away stopped being graded and nothing said so. -}
-dirEntries : String -> String -> <FileRead "_"> Result String (List String)
+dirEntries : String -> String -> <FileRead> Result String (List String)
 dirEntries dir spec = match fixtureDirs dir
   Err e => Err e
   Ok dirs => entriesIn spec (sort dirs) []
@@ -357,13 +357,13 @@ dirEntries dir spec = match fixtureDirs dir
 entriesIn : String ->
   List String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 entriesIn _ [] acc = Ok (reverse acc)
 entriesIn spec (d :: rest) acc = match entryIn spec d
   Err e => Err e
   Ok p => entriesIn spec rest (p :: acc)
 
-entryIn : String -> String -> <FileRead "_"> Result String String
+entryIn : String -> String -> <FileRead> Result String String
 entryIn spec d = match listDir d
   Err e => Err e
   Ok names => match sort (filter (matchesSpec spec) names)
@@ -392,7 +392,7 @@ matchesSpec spec name =
   isFullMatch (mustCompile (join ".*" (map escape (split "*" spec)))) name
 
 -- | The expected value for one fixture, read from its committed golden.
-goldenOf : Row -> String -> <FileRead "_", IO> Result String String
+goldenOf : Row -> String -> <FileRead, IO> Result String String
 goldenOf r path =
   let sibling = "\{dirname path}/\{stem path}"
   match r.shape
@@ -507,7 +507,7 @@ labelOf r path = match r.shape
   DirFixture _ _ => basename (dirname path)
   _ => stem path
 
-valueFailure : Row -> String -> String -> <FileRead "_", IO> Option String
+valueFailure : Row -> String -> String -> <FileRead, IO> Option String
 valueFailure r path actual =
   let label = labelOf r path
   let exempt = elem (unitOf r path) noEvalGolden
@@ -524,10 +524,10 @@ valueFailure r path actual =
 {- | A row that spawns the oracle once per fixture: the shape eleven of the
    twelve retired scripts had, and the reference the `_batch` rows are
    compared against. -}
-perFixture : Row -> List String -> <Exec "_", FileRead "_", IO> List String
+perFixture : Row -> List String -> <Exec, FileRead, IO> List String
 perFixture r paths = somes (map (oneFixture r) paths)
 
-oneFixture : Row -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture : Row -> String -> <Exec, FileRead, IO> Option String
 oneFixture r path =
   match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r path)
     Err e => Some "\{labelOf r path}: could not spawn \{r.oracle}: \{e}"
@@ -553,7 +553,7 @@ argsFor r path =
 {- | A row that spawns the oracle ONCE over the whole corpus and cuts its
    delimited stdout back apart — the property no per-fixture row can state,
    since a leak between two fixtures needs both of them in one heap. -}
-batchedRow : Row -> List String -> <Exec "_", FileRead "_", IO> List String
+batchedRow : Row -> List String -> <Exec, FileRead, IO> List String
 batchedRow r paths =
   let args = map (p => "\{medakaRoot}/\{p}") r.prelude ++ paths
   match boundedVerb "\{medakaRoot}/\{r.oracle}" args
@@ -567,7 +567,7 @@ batchedRow r paths =
         Some m => m :: values
         None => values
 
-gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow : String -> Row -> <Exec, FileRead, IO> Outcome
 gradeRow _ r = match entriesOf r
   Err e => structural r e
   Ok paths =>
@@ -632,14 +632,14 @@ wallNeedles = [
    rather than by hand-rolling the whole environment again. -}
 strictly : String ->
   List String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 strictly cmd args =
   boundedInTree spawnTimeoutSeconds "env" (["MEDAKA_STRICT=1", cmd] ++ args)
 
 -- | `None` when `cmd` stopped at the wall: exit 1, with both needles in its
 -- output. Stdout and stderr are read together, since which stream the
 -- diagnostic lands on is not what this asserts.
-expectWall : String -> String -> List String -> <Exec "_", IO> Option String
+expectWall : String -> String -> List String -> <Exec, IO> Option String
 expectWall label cmd args = match strictly cmd args
   Err e => Some "\{label}: could not spawn \{cmd}: \{e}"
   Ok (code, out, err) =>
@@ -656,7 +656,7 @@ expectWall label cmd args = match strictly cmd args
 
    A classifier that recorded the first program's extern and never cleared it
    would reject the second, which declares no extern at all. -}
-expectStateReset : String -> <Exec "_", IO> Option String
+expectStateReset : String -> <Exec, IO> Option String
 expectStateReset scratch =
   let args = [
     "\{medakaRoot}/\{coreMod}",
@@ -675,7 +675,7 @@ expectStateReset scratch =
         Some
           "ffi-state-reset-same-process: expected exit 0 printing \"9\", got exit \{intToString code}: \{debug text}"
 
-writeAll : List (String, String) -> <FileWrite "_"> Result String Unit
+writeAll : List (String, String) -> <FileWrite> Result String Unit
 writeAll [] = Ok ()
 writeAll ((path, src) :: rest) = match writeFile path src
   Err e => Err "\{path}: \{e}"
@@ -689,14 +689,14 @@ writeAll ((path, src) :: rest) = match writeFile path src
    does when it finishes. A second test in one module therefore has to make
    its directory rather than assume one; `mkdirAll` remakes the root on the
    way and is not an error when it is still there. -}
-ffiScratch : <Exec "_", FileWrite "_"> Result String String
+ffiScratch : <Exec, FileWrite> Result String String
 ffiScratch = match scratchDir
   Err e => Err e
   Ok root =>
     let dir = "\{root}/ffi"
     map (() => dir) (mkdirAll dir)
 
-ffiEngineWall : <Exec "_", FileWrite "_", IO> Expectation
+ffiEngineWall : <Exec, FileWrite, IO> Expectation
 ffiEngineWall = match ffiScratch
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>

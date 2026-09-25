@@ -28,6 +28,8 @@ mustCid text =
     (cidFromString text)
 
 fixtureValue : String -> DagCbor
+-- The fixture names are string literals keyed from the vector corpus, which a
+-- clause-per-name definition cannot express without one clause per literal.
 -- lint-disable-next-line rule-match-on-param
 fixtureValue name = match name
   "array-2" => DcArray [DcInt 2]
@@ -110,6 +112,8 @@ runRows (line :: rest) count =
     runRows rest (count + runRow line)
 
 rejectContains : String -> String -> Result String a -> <IO> Int
+-- The match sits after the label and witness so the report line can name them
+-- in both arms without repeating the parameters per clause.
 -- lint-disable-next-line rule-match-on-param
 rejectContains label witness result = match result
   Err message =>
@@ -241,7 +245,7 @@ runMalformed =
   ]
   sum checks
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "dagcbor_cid_vectors: cannot read corpus: \{message}"

@@ -126,7 +126,7 @@ runMalformed keyBytes canonicalDid =
     reject "invalid-sec1-nonsquare" (payloadDid (prefix ++ nonsquareXZero))
   r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10 + r11 + r12 + r13 + r14
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "did_key_all_engines: cannot read corpus: \{message}"

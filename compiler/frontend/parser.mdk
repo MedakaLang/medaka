@@ -21,6 +21,10 @@ import frontend.ast.{
   DeriveRef(..),
   Lit(..),
   Ty(..),
+  EffAtomTy(..),
+  EffParamTy(..),
+  effAtomWith,
+  TyConOrigin(..),
   KindAnn(..),
   Constraint(..),
   Pat(..),
@@ -2090,15 +2094,15 @@ parseEffectTy = defer
   inner <- parseTy
   deferPure (mkEffect body inner)
 
-mkEffect : (List (String, Option String), List String) -> Ty -> Ty
+mkEffect : (List EffAtomTy, List String) -> Ty -> Ty
 mkEffect (labels, tail) inner = TyEffect labels tail inner
 
-effectBody : Parser (List (String, Option String), List String)
+effectBody : Parser (List EffAtomTy, List String)
 effectBody = defer
   t <- peekP
   effectBodyFor t
 
-effectBodyFor : Token -> Parser (List (String, Option String), List String)
+effectBodyFor : Token -> Parser (List EffAtomTy, List String)
 effectBodyFor (TUpper _) = defer
   labels <- sepBy1 effAtomP (expectTok TComma)
   tail <- pipeTail
@@ -2111,16 +2115,16 @@ effectBodyFor (TIdent _) = defer
   deferPure ([], v :: rest)
 effectBodyFor _ = deferPure ([], [])
 
--- a row atom is a label with an optional Prefix-pattern param:
--- `Foo` (atomic), `Net "a.com/*"` (written param), or `Net _` (an inferred
--- hole — filled at each call site by the known-prefix analysis, v2 Stage 2b).
-effAtomP : Parser (String, Option String)
+-- a row atom is a label with an optional parameter: `Foo` (the domain's top),
+-- `Net "a.com/*"` (a literal), `Env {"HOME"}` (a set), `Net Host="…" Method={…}`
+-- (a product).  The identity is acquired by resolve.
+effAtomP : Parser EffAtomTy
 effAtomP = defer
   l <- upperNameP
   p <- effParamP
-  deferPure (l, p)
+  deferPure (effAtomWith l p)
 
-effParamP : Parser (Option String)
+effParamP : Parser EffParamTy
 effParamP = defer
   t <- peekP
   t2 <- peek2P
@@ -2132,94 +2136,78 @@ effParamP = defer
 -- ambiguity point: a bare `TUpper` with NO following `=` is the next comma-less
 -- atom — but atoms are comma-SEPARATED, so a label-juxtaposed upper can only be a
 -- product axis; the `= ` lookahead distinguishes it cleanly with zero collision.
-effParamDispatch : Token -> Token -> Parser (Option String)
+effParamDispatch : Token -> Token -> Parser EffParamTy
 effParamDispatch (TUpper _) TEqual = productParamP
 effParamDispatch t _ = effParamFor t
 
 -- parse `Host="…" Method={…} …` (space-separated axes; loop while peek is an
--- upper-name followed by `=`).  Encode into the carrier sentinel `@P{…;…}`.
-productParamP : Parser (Option String)
+-- upper-name followed by `=`).
+productParamP : Parser EffParamTy
 productParamP = defer
   axes <- productAxes
-  deferPure (Some (encodeProductParam axes))
+  deferPure (EPProduct axes)
 
-productAxes : Parser (List (String, String))
+productAxes : Parser (List (String, EffParamTy))
 productAxes = defer
   a <- productAxis
   rest <- productAxesMore
   deferPure (a :: rest)
 
-productAxesMore : Parser (List (String, String))
+productAxesMore : Parser (List (String, EffParamTy))
 productAxesMore = defer
   t <- peekP
   t2 <- peek2P
   productAxesMoreFor t t2
 
-productAxesMoreFor : Token -> Token -> Parser (List (String, String))
+productAxesMoreFor : Token -> Token -> Parser (List (String, EffParamTy))
 productAxesMoreFor (TUpper _) TEqual = productAxes
 productAxesMoreFor _ _ = deferPure []
 
--- one `Axis=val` axis: val is `"…"` (Prefix) or `{a,b}` (Set).  Returns the
--- axis name and the per-axis carrier value (`"…"` kept quoted; `{a,b}` re-encoded).
-productAxis : Parser (String, String)
+-- one `Axis=val` axis: val is `"…"` (Prefix) or `{a,b}` (Set).
+productAxis : Parser (String, EffParamTy)
 productAxis = defer
   name <- upperNameP
   expectTok TEqual
   v <- productAxisVal
   deferPure (name, v)
 
-productAxisVal : Parser String
+productAxisVal : Parser EffParamTy
 productAxisVal = defer
   t <- peekP
   productAxisValFor t
 
-productAxisValFor : Token -> Parser String
+productAxisValFor : Token -> Parser EffParamTy
 productAxisValFor (TString s) = defer
   advance
-  deferPure ("\"" ++ s ++ "\"")  -- Prefix axis: keep quoted for the decoder
-productAxisValFor TLBrace = defer
-  expectTok TLBrace
-  elems <- sepBy1 stringLitP (expectTok TComma)
-  expectTok TRBrace
-  deferPure (encodeSetParam elems)  -- Set axis: `{a,b}` (same as the Set carrier)
+  deferPure (EPLit s)
+productAxisValFor TLBrace = effSetLiteralP
 productAxisValFor _ = failP "expected product axis value (\"prefix\" or {set})"
 
-effParamFor : Token -> Parser (Option String)
+-- A parameter nothing in the signature determines would be an unchecked
+-- claim, so `_` (quoted or bare) is rejected with the three admissible forms
+-- named: an argument's authority is bound through the arrow that names it.
+effParamFor : Token -> Parser EffParamTy
 effParamFor (TString s) = defer
+  pos <- getPos
   advance
-  deferPure (Some s)
+  if s == "_" then fatalAtP effHoleRetiredMsg pos else deferPure (EPLit s)
 effParamFor TUnderscore = defer
-  advance
-  deferPure (Some "_")  -- v2 Stage 2b inferred hole (`<Net _>`)
-effParamFor TLBrace = defer
-  -- v2 WS-3 Set-domain literal `<Foo {"a", "b"}>`.  Encode the element strings
-  -- into the existing `Option String` carrier as `{a,b}` (sentinel `{` prefix);
-  -- `atomOfWritten`/`decodeSetParam` (typecheck) decode it.  This keeps the
-  -- carrier type unchanged ⇒ no `TyEffect` AST ripple.
+  pos <- getPos
+  fatalAtP effHoleRetiredMsg pos
+effParamFor TLBrace = effSetLiteralP
+effParamFor _ = deferPure EPTop
+
+-- The Set-domain literal `{"a", "b"}`, as an atom's parameter or a product axis.
+effSetLiteralP : Parser EffParamTy
+effSetLiteralP = defer
   expectTok TLBrace
   elems <- sepBy1 stringLitP (expectTok TComma)
   expectTok TRBrace
-  deferPure (Some (encodeSetParam elems))
-effParamFor _ = deferPure None
+  deferPure (EPSet elems)
 
--- join Set elements into the `{a,b,c}` carrier form (commas separate; Set
--- authority tokens contain no commas/braces).
-encodeSetParam : List String -> String
-encodeSetParam elems = "{" ++ joinWith "," elems ++ "}"
-
--- WS-4: encode product axes into the carrier sentinel `@P{Axis=val;Axis=val}`
--- (mirror of `encodeSetParam`; `decodeProductParam` in typecheck.mdk decodes it).
--- Each val is already in its per-axis carrier form (`"prefix"` or `{a,b}`).  The
--- sentinel `@P{` prefix + `;` separator round-trips through the `Option String`
--- carrier with no AST `TyEffect` ripple.
-encodeProductParam : List (String, String) -> String
-encodeProductParam axes = "@P{" ++ joinSemi (map encodeAxis axes) ++ "}"
-
-encodeAxis : (String, String) -> String
-encodeAxis (name, v) = "\{name}=\{v}"
-
-joinSemi : List String -> String
-joinSemi xs = joinWith ";" xs
+effHoleRetiredMsg : String
+effHoleRetiredMsg =
+  "the `_` effect parameter is no longer accepted. Write the label bare for any authority (`<FileRead>`), a literal pattern (`<FileRead \"cfg/*\">`), or name the argument that determines it: `(path : String) -> <FileRead path> …`"
 
 -- Zero or more `| name` tail variables.  Several make the row a JOIN (#821):
 -- `<Stdout | e | e2>` is the row of Stdout together with everything e or e2
@@ -2391,7 +2379,7 @@ parseBareEffectAtom = defer
   q <- getPos
   deferPure (mkRow body (locOfSpan s q))
 
-mkRow : (List (String, Option String), List String) -> Loc -> Ty
+mkRow : (List EffAtomTy, List String) -> Loc -> Ty
 mkRow (labels, tail) loc = TyRow labels tail (Some loc)
 
 tyTupleOrSingle : List Ty -> Ty
@@ -2963,7 +2951,7 @@ parseEffect pub = defer
   name <- upperNameP
   dom <- effDomainP
   skipNewlines
-  deferPure (DEffect pub name dom)
+  deferPure (DEffect pub name dom OriginUnresolved)
 
 effDomainP : Parser (Option String)
 effDomainP = defer
@@ -4301,7 +4289,7 @@ declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DEffect _ _ _) i =
+declNameTokIdxAt toks (DEffect _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DProp _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
