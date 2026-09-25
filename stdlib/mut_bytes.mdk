@@ -8,8 +8,8 @@
    shares storage with its source.
 
    `length` is the byte count, `get` reads one byte as an `Option`, and
-   `mb[i]` is the panicking form. Every write checks both the index and the
-   `0` to `255` range.
+   `mb[i]` is the panicking form. A byte is a `U8`, as in `Bytes`, so a
+   write cannot be out of range; every write checks its index.
 
    `length` is also a prelude name, and `make`, `get`, `setInPlace`, `fill`
    and `blit` are also exported by `array`. Import the module qualified, as
@@ -29,6 +29,7 @@ import core.{Debug, Index, Option}
 import bytes.{
   Bytes, adoptByteBlockUnsafe, encodeUtf8, lendByteBlockUnsafe, toArray
 }
+import u8 as U8
 
 {- | The mutable byte-string type.
 
@@ -45,8 +46,8 @@ export newtype MutBytes = MutBytes ByteBlock
 
    Panics when `n` is negative.
 
-   > get 2 (make 3)
-   Some 0 -}
+   > get 2 (make 3) |> option (-1) U8.toInt
+   0 -}
 export
 make : Int -> MutBytes
 make n =
@@ -70,19 +71,19 @@ length (mb@(MutBytes bb)) = byteBlockLength bb
    `mb[i]` is the panicking form: on the same out-of-range index, `get`
    answers `None` where `mb[i]` raises an index error.
 
-   > get 1 (make 2)
-   Some 0
+   > get 1 (make 2) |> option (-1) U8.toInt
+   0
    > get 2 (make 2)
    None
    > get (-1) (make 2)
    None -}
 export
-get : Int -> MutBytes -> Option Int
+get : Int -> MutBytes -> Option U8
 get i (mb@(MutBytes bb)) =
   if i < 0 || i >= byteBlockLength bb then
     None
   else
-    Some (byteBlockGetUnsafe i bb)
+    Some (u8Truncate (byteBlockGetUnsafe i bb))
 
 {- | `mb[i]` reads the byte at `i` in `O(1)`.
 
@@ -91,49 +92,40 @@ get i (mb@(MutBytes bb)) =
 
    > let mb = make 3 in let _ = setInPlace 1 8 mb in mb[1]
    8 -}
-export impl Index MutBytes Int Int where
+export impl Index MutBytes Int U8 where
   index (MutBytes bb) i =
     if i < 0 || i >= byteBlockLength bb then
       indexErrorAt i
     else
-      byteBlockGetUnsafe i bb
+      u8Truncate (byteBlockGetUnsafe i bb)
 
 -- # Writing
 
 {- | Replaces the byte at index `i` of `mb` with `v`.
 
-   Panics when `i` is out of range, and when `v` falls outside `0` to `255`.
-   The value is never masked to its low eight bits.
+   Panics when `i` is out of range.
 
-   > let mb = make 2 in let _ = setInPlace 0 65 mb in get 0 mb
-   Some 65 -}
+   > let mb = make 2 in let _ = setInPlace 0 65 mb in get 0 mb |> option (-1) U8.toInt
+   65 -}
 export
-setInPlace : Int -> Int -> MutBytes -> Unit
+setInPlace : Int -> U8 -> MutBytes -> Unit
 setInPlace i v (mb@(MutBytes bb)) =
-  if v < 0 || v > 255 then
-    panic "MutBytes.setInPlace: value out of range 0..255"
-  else if i < 0 || i >= byteBlockLength bb then
+  if i < 0 || i >= byteBlockLength bb then
     panic "MutBytes.setInPlace: index out of bounds"
   else
-    byteBlockSetUnsafe i v bb
+    byteBlockSetUnsafe i (u8ToInt v) bb
 
 {- | Replaces every byte of `mb` with `v`.
-
-   Panics when `v` falls outside `0` to `255`.
 
    > let mb = make 3 in let _ = fill 7 mb in debug mb
    "MutBytes \"070707\"" -}
 export
-fill : Int -> MutBytes -> Unit
-fill v (mb@(MutBytes bb)) =
-  if v < 0 || v > 255 then
-    panic "MutBytes.fill: value out of range 0..255"
-  else
-    fillFrom v bb 0 (byteBlockLength bb)
+fill : U8 -> MutBytes -> Unit
+fill v (mb@(MutBytes bb)) = fillFrom (u8ToInt v) bb 0 (byteBlockLength bb)
 
 -- The runtime has no block-fill primitive, so the bytes go one at a time
--- through the unchecked setter, with the domain and the bounds established
--- by `fill` above.
+-- through the unchecked setter, with the bounds established by `fill`
+-- above.
 fillFrom : Int -> ByteBlock -> Int -> Int -> Unit
 fillFrom v bb i n
   | i >= n = ()

@@ -1,7 +1,9 @@
 {- | Parser combinators over byte arrays.
 
    A `ByteParser a` reads an `Array Int` of bytes, each `0` to `255`, from a
-   position and produces a value or a positioned error. Build one from the
+   position and produces a value or a positioned error. The single-byte
+   primitives hand out a `U8`, and an element outside `0` to `255` is a
+   parse error there rather than a byte. Build a parser from the
    primitives (`byte`, `satisfy`, `takeBytes`, the integer and float
    readers) and the combinators (`many`, `orElse`, `choice`, `between`),
    sequence parsers with `defer` notation, and run the result with
@@ -16,6 +18,7 @@
 import array.{reverse as arrayReverse}
 import bytes.{Bytes, fromArray, toArray}
 import list.{reverse}
+import u8 as U8
 
 -- # Results and parsers
 
@@ -114,26 +117,32 @@ failWith msg = ByteParserE (_ pos => BErr msg pos)
 
 {- | One byte that satisfies `pred`.
 
+   Fails without consuming anything when the element at the position is
+   outside `0` to `255`, whatever `pred` would say.
+
    > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
    Ok 65
    > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
-   Err "unexpected byte at byte 0" -}
+   Err "unexpected byte at byte 0"
+   > runByteParser (satisfy (_ => True)) (arrayFromList [300])
+   Err "not a byte at byte 0" -}
 export
-satisfy : (Int -> Bool) -> ByteParser Int
+satisfy : (U8 -> Bool) -> ByteParser U8
 satisfy pred = ByteParserE (satisfyStep pred)
 
-satisfyStep : (Int -> Bool) -> Array Int -> Int -> BResult Int
+satisfyStep : (U8 -> Bool) -> Array Int -> Int -> BResult U8
 satisfyStep pred input pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | pred input[pos] = BOk input[pos] (pos + 1)
-  | otherwise = BErr "unexpected byte" pos
+  | otherwise = match U8.tryFromInt input[pos]
+    None => BErr "not a byte" pos
+    Some b => if pred b then BOk b (pos + 1) else BErr "unexpected byte" pos
 
 {- | Any one byte.
 
    > runByteParser anyByte (arrayFromList [42])
    Ok 42 -}
 export
-anyByte : ByteParser Int
+anyByte : ByteParser U8
 anyByte = satisfy (_ => True)
 
 {- | Exactly the byte `b`.
@@ -143,7 +152,7 @@ anyByte = satisfy (_ => True)
    > runByteParser (byte 0x00) (arrayFromList [1])
    Err "unexpected byte at byte 0" -}
 export
-byte : Int -> ByteParser Int
+byte : U8 -> ByteParser U8
 byte b = satisfy (== b)
 
 {- | Succeeds at the end of the input, consuming nothing.
@@ -162,14 +171,15 @@ eofStep input pos
   | otherwise = BErr "expected end of input" pos
 
 -- | The byte at the current position, without consuming it. Fails at the
--- end of the input.
+-- end of the input, and on an element outside `0` to `255`.
 export
-peek : ByteParser Int
+peek : ByteParser U8
 peek = ByteParserE (input pos =>
   if pos >= arrayLength input then
     BErr "unexpected end of input" pos
-  else
-    BOk input[pos] pos)
+  else match U8.tryFromInt input[pos]
+    None => BErr "not a byte" pos
+    Some b => BOk b pos)
 
 -- # Combinators
 
