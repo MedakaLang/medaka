@@ -295,6 +295,10 @@ compileRefusals = [
     "fill_literal_256",
     literalRefused "fill_literal_256.mdk:7:" "256" "U8 (0..255)",
   ),
+  (
+    "fromu8array_literal_300",
+    literalRefused "fromu8array_literal_300.mdk:6:" "300" "U8 (0..255)",
+  ),
 ]
 
 fromIntRefused : String -> String -> RuntimeOutcome
@@ -314,7 +318,10 @@ runtimeRefusals = [
     "byteparser_non_byte_element",
     Aborts "E-PANIC" "byteparser: element 300 at 1 is not a byte in 0..255",
   ),
-  ("bytes_in_range_control", Prints "[|255, 200|]\n[|255, 7|]"),
+  (
+    "bytes_in_range_control",
+    Prints "[|255, 200|]\n[|255, 7|]\nBytes \"1fff\"",
+  ),
   (
     "in_range_control",
     Prints

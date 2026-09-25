@@ -1,5 +1,5 @@
 # META
-source_lines=986
+source_lines=1022
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -7,15 +7,17 @@ stages=DESUGAR,MARK
    `Bytes` holds a sequence of bytes that cannot be changed once built. A
    byte is a `U8`, from `0` to `255`: `get`, `b[i]`, `fold` and the other
    element-wise functions hand one out, and `map` and `elemIndex` take one.
-   Indices, lengths and offsets are `Int`. Use it for data that is bytes, such as a file's
-   contents, a hash digest, or a UTF-8 encoding, and `Array Int` for a
-   sequence of numbers that happen to be small. A byte string of `n` bytes
-   occupies `n` bytes.
+   Indices, lengths and offsets are `Int`. Use it for data that is bytes,
+   such as a file's contents, a hash digest, or a UTF-8 encoding, and
+   `Array Int` for a sequence of numbers that happen to be small. A byte
+   string of `n` bytes occupies `n` bytes.
 
-   `fromArray` builds a byte string from an `Array Int` and answers `None`
-   when an element is outside `0` to `255`, so no `Bytes` value holds
-   anything else. `encodeUtf8` builds one from a `String`. `toArray` and
-   `decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
+   `fromU8Array` builds a byte string from an `Array U8`, so a constant is
+   written `fromU8Array [|0x1f, 0x8b|]` and an element out of range is a
+   compile-time error. `fromArray` builds one from an `Array Int` and
+   answers `None` when an element is outside `0` to `255`, so no `Bytes`
+   value holds anything else. `encodeUtf8` builds one from a `String`.
+   `toU8Array`, `toArray` and `decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
    sibling, for building a byte string a byte at a time.
 
    `length` is the byte count, `get` reads one byte as an `Option`, and
@@ -139,6 +141,40 @@ fromArrayAssumeByteDomain arr = Bytes (byteBlockFromIntArray arr)
 export
 toArray : Bytes -> Array Int
 toArray (Bytes bb) = byteBlockToIntArray bb
+
+-- Writes `arr[i ..]` into the block `bb`, which is exactly as long as `arr`.
+fromU8ArrayFill : Array U8 -> ByteBlock -> Int -> Unit
+fromU8ArrayFill arr bb i
+  | i >= arrayLength arr = ()
+  | otherwise =
+    let _ = byteBlockSetUnsafe i (u8ToInt arr[i]) bb
+    fromU8ArrayFill arr bb (i + 1)
+
+{- | The byte string holding the elements of `arr`, in order.
+
+   Every element is a byte by its type, so nothing is checked or masked. A
+   literal element outside `0` to `255` is a compile-time error.
+
+   > debug (fromU8Array [|0x1f, 0x8b, 0|])
+   "Bytes \"1f8b00\""
+   > length (fromU8Array [||])
+   0 -}
+export
+fromU8Array : Array U8 -> Bytes
+fromU8Array arr =
+  let bb = byteBlockMake (arrayLength arr)
+  let _ = fromU8ArrayFill arr bb 0
+  Bytes bb
+
+{- | The bytes of `b` as an array of `U8`, in order.
+
+   > toU8Array (encodeUtf8 "hi") == [|104, 105|]
+   True
+   > toU8Array (fromU8Array [|7, 255|]) == [|7, 255|]
+   True -}
+export
+toU8Array : Bytes -> Array U8
+toU8Array (Bytes bb) = arrayMakeWith (byteBlockLength bb) (i => byteAt i bb)
 
 -- # Reading
 
@@ -1002,6 +1038,12 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "fromArrayAssumeByteDomain" ((PVar "arr")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr"))))
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
+(DTypeSig false "fromU8ArrayFill" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
+(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EVar "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "fromU8Array" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyCon "Bytes")))
+(DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
+(DTypeSig true "toU8Array" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "U8"))))
+(DFunDef false "toU8Array" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "byteBlockLength") (EVar "bb"))) (ELam ((PVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DTypeSig true "length" (TyFun (TyCon "Bytes") (TyCon "Int")))
 (DFunDef false "length" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
 (DTypeSig true "isEmpty" (TyFun (TyCon "Bytes") (TyCon "Bool")))
@@ -1131,6 +1173,12 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "fromArrayAssumeByteDomain" ((PVar "arr")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr"))))
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
+(DTypeSig false "fromU8ArrayFill" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Unit")))))
+(DFunDef false "fromU8ArrayFill" ((PVar "arr") (PVar "bb") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EVar "u8ToInt") (EApp (EApp (EMethodRef "index") (EVar "arr")) (EVar "i")))) (EVar "bb"))) (DoExpr (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "fromU8Array" (TyFun (TyApp (TyCon "Array") (TyCon "U8")) (TyCon "Bytes")))
+(DFunDef false "fromU8Array" ((PVar "arr")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "byteBlockMake") (EApp (EVar "arrayLength") (EVar "arr")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fromU8ArrayFill") (EVar "arr")) (EVar "bb")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "Bytes") (EVar "bb")))))
+(DTypeSig true "toU8Array" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "U8"))))
+(DFunDef false "toU8Array" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "byteBlockLength") (EVar "bb"))) (ELam ((PVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DTypeSig true "length#shadow" (TyFun (TyCon "Bytes") (TyCon "Int")))
 (DFunDef false "length#shadow" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
 (DTypeSig true "isEmpty#shadow" (TyFun (TyCon "Bytes") (TyCon "Bool")))

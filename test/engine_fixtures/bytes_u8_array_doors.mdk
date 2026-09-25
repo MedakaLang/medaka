@@ -1,0 +1,18 @@
+-- `fromU8Array` and `toU8Array` round-trip every byte value on every engine,
+-- including 128..255, which a signed or unmasked element would corrupt.
+
+import bytes as B
+import u8 as U8
+
+allBytes : Array U8
+allBytes = arrayMakeWith 256 (i => U8.truncate i)
+
+main =
+  let b = B.fromU8Array allBytes
+  let back = B.toU8Array b
+  (
+    B.length b,
+    back == allBytes,
+    U8.toInt back[255],
+    B.toArray (B.fromU8Array [|0, 127, 128, 255|]),
+  )

@@ -296,11 +296,17 @@ carried it out. What it changed here:
   `U8` and wrap; the migration widened every such fold.
 - **`Hashable Bytes` is unchanged.** A byte string still hashes as the
   `Array Int` of its bytes, and a `U8` hashes as its `Int`.
-- **Not settled here:** a total `Array U8 -> Bytes` door (#3412) and a
-  `toArray` over `Array U8` are new names, so they wait for a proposal. The
-  comparison `b[i] == 13` does not type-check yet, because the literal
-  defaults to `Int` before `Index` fixes the element type (#3437); code
-  writes `u8.toInt b[i] == 13` until that is fixed.
+- **Two `U8` doors (Val, 2026-09-25).** `fromU8Array : Array U8 -> Bytes`
+  is total: its elements are bytes by type, and a literal out of range is a
+  compile-time error, so a constant is `fromU8Array [|0x1f, 0x8b|]`. It is
+  the replacement #3412 asked for, which lets B6 delete
+  `fromArrayAssumeByteDomain`. `toU8Array : Bytes -> Array U8` is its
+  inverse. `fromArray`/`toArray` stay on `Array Int`: it is the FFI's
+  sequence type, and data from outside arrives as `Int` and needs the
+  refusing door.
+- **Not settled here:** the comparison `b[i] == 13` does not type-check yet,
+  because the literal defaults to `Int` before `Index` fixes the element type
+  (#3437); code writes `u8.toInt b[i] == 13` until that is fixed.
 
 `adoptByteBlockUnsafe`, `lendByteBlockUnsafe`, and `fromByteBlockPrefix` are
 the only exports naming `ByteBlock` directly (`stdlib/bytes.mdk`'s

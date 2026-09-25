@@ -14,3 +14,4 @@ main =
   MB.setInPlace 0 255 mb
   MB.setInPlace 1 (fromInt (length [1..=7])) mb
   println (B.toArray (MB.freeze mb))
+  println (debug (B.fromU8Array [|0x1f, 255|]))

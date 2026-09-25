@@ -3,15 +3,17 @@
    `Bytes` holds a sequence of bytes that cannot be changed once built. A
    byte is a `U8`, from `0` to `255`: `get`, `b[i]`, `fold` and the other
    element-wise functions hand one out, and `map` and `elemIndex` take one.
-   Indices, lengths and offsets are `Int`. Use it for data that is bytes, such as a file's
-   contents, a hash digest, or a UTF-8 encoding, and `Array Int` for a
-   sequence of numbers that happen to be small. A byte string of `n` bytes
-   occupies `n` bytes.
+   Indices, lengths and offsets are `Int`. Use it for data that is bytes,
+   such as a file's contents, a hash digest, or a UTF-8 encoding, and
+   `Array Int` for a sequence of numbers that happen to be small. A byte
+   string of `n` bytes occupies `n` bytes.
 
-   `fromArray` builds a byte string from an `Array Int` and answers `None`
-   when an element is outside `0` to `255`, so no `Bytes` value holds
-   anything else. `encodeUtf8` builds one from a `String`. `toArray` and
-   `decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
+   `fromU8Array` builds a byte string from an `Array U8`, so a constant is
+   written `fromU8Array [|0x1f, 0x8b|]` and an element out of range is a
+   compile-time error. `fromArray` builds one from an `Array Int` and
+   answers `None` when an element is outside `0` to `255`, so no `Bytes`
+   value holds anything else. `encodeUtf8` builds one from a `String`.
+   `toU8Array`, `toArray` and `decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
    sibling, for building a byte string a byte at a time.
 
    `length` is the byte count, `get` reads one byte as an `Option`, and
@@ -135,6 +137,40 @@ fromArrayAssumeByteDomain arr = Bytes (byteBlockFromIntArray arr)
 export
 toArray : Bytes -> Array Int
 toArray (Bytes bb) = byteBlockToIntArray bb
+
+-- Writes `arr[i ..]` into the block `bb`, which is exactly as long as `arr`.
+fromU8ArrayFill : Array U8 -> ByteBlock -> Int -> Unit
+fromU8ArrayFill arr bb i
+  | i >= arrayLength arr = ()
+  | otherwise =
+    let _ = byteBlockSetUnsafe i (u8ToInt arr[i]) bb
+    fromU8ArrayFill arr bb (i + 1)
+
+{- | The byte string holding the elements of `arr`, in order.
+
+   Every element is a byte by its type, so nothing is checked or masked. A
+   literal element outside `0` to `255` is a compile-time error.
+
+   > debug (fromU8Array [|0x1f, 0x8b, 0|])
+   "Bytes \"1f8b00\""
+   > length (fromU8Array [||])
+   0 -}
+export
+fromU8Array : Array U8 -> Bytes
+fromU8Array arr =
+  let bb = byteBlockMake (arrayLength arr)
+  let _ = fromU8ArrayFill arr bb 0
+  Bytes bb
+
+{- | The bytes of `b` as an array of `U8`, in order.
+
+   > toU8Array (encodeUtf8 "hi") == [|104, 105|]
+   True
+   > toU8Array (fromU8Array [|7, 255|]) == [|7, 255|]
+   True -}
+export
+toU8Array : Bytes -> Array U8
+toU8Array (Bytes bb) = arrayMakeWith (byteBlockLength bb) (i => byteAt i bb)
 
 -- # Reading
 
