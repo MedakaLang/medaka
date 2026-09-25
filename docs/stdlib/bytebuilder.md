@@ -56,11 +56,11 @@ copy, so emitting more afterwards does not reach it.
 ### `emitU8`
 
 ```
-emitU8 : Int -> Builder -> Unit
-emitU8 b _
+emitU8 : U8 -> Builder -> Unit
+emitU8 v _
 ```
 
-Appends one byte. Panics when `b` falls outside `0` to `255`.
+Appends one byte.
 
 ### `emitBytes`
 

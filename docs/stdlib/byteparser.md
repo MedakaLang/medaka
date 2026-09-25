@@ -3,7 +3,9 @@
 Parser combinators over byte arrays.
 
 A `ByteParser a` reads an `Array Int` of bytes, each `0` to `255`, from a
-position and produces a value or a positioned error. Build one from the
+position and produces a value or a positioned error. The single-byte
+primitives hand out a `U8`, and an element outside `0` to `255` is a
+parse error there rather than a byte. Build a parser from the
 primitives (`byte`, `satisfy`, `takeBytes`, the integer and float
 readers) and the combinators (`many`, `orElse`, `choice`, `between`),
 sequence parsers with `defer` notation, and run the result with
@@ -119,23 +121,28 @@ A parser that always fails with `msg`, consuming nothing.
 ### `satisfy`
 
 ```
-satisfy : (Int -> Bool) -> ByteParser Int
+satisfy : (U8 -> Bool) -> ByteParser U8
 satisfy pred
 ```
 
 One byte that satisfies `pred`.
+
+Fails without consuming anything when the element at the position is
+outside `0` to `255`, whatever `pred` would say.
 
 ```medaka
 > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
 Ok 65
 > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
 Err "unexpected byte at byte 0"
+> runByteParser (satisfy (_ => True)) (arrayFromList [300])
+Err "not a byte at byte 0"
 ```
 
 ### `anyByte`
 
 ```
-anyByte : ByteParser Int
+anyByte : ByteParser U8
 ```
 
 Any one byte.
@@ -148,7 +155,7 @@ Ok 42
 ### `byte`
 
 ```
-byte : Int -> ByteParser Int
+byte : U8 -> ByteParser U8
 byte b
 ```
 
@@ -179,11 +186,11 @@ Err "expected end of input at byte 0"
 ### `peek`
 
 ```
-peek : ByteParser Int
+peek : ByteParser U8
 ```
 
 The byte at the current position, without consuming it. Fails at the
-end of the input.
+end of the input, and on an element outside `0` to `255`.
 
 ## Combinators
 

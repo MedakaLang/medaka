@@ -1,5 +1,5 @@
 # META
-source_lines=434
+source_lines=440
 stages=DESUGAR,MARK
 # SOURCE
 {- | A buffer for building byte arrays.
@@ -25,6 +25,7 @@ import bytes.{
   Bytes, adoptByteBlockUnsafe, fromArrayAssumeByteDomain, fromByteBlockPrefix,
   lendByteBlockUnsafe, encodeUtf8, toArray
 }
+import u8 as U8
 
 -- # The builder
 
@@ -60,15 +61,15 @@ buildBytes (Builder backing len) = fromByteBlockPrefix !len !backing
 
 -- # Emitting
 
--- | Appends one byte. Panics when `b` falls outside `0` to `255`.
+-- | Appends one byte.
 export
-emitU8 : Int -> Builder -> Unit
-emitU8 b (Builder backing len)
-  | b < 0 || b > 255 = panic "Builder.emitU8: value out of range 0..255"
-  | !len < byteBlockLength !backing =
+emitU8 : U8 -> Builder -> Unit
+emitU8 v (Builder backing len) =
+  let b = u8ToInt v
+  if !len < byteBlockLength !backing then
     byteBlockSetUnsafe !len b !backing
     len := !len + 1
-  | otherwise =
+  else
     -- Capacity doubles, so the blit cost amortizes to O(1) per byte, exactly
     -- as `vector.push`'s does.
     let oldBlock = !backing
@@ -79,6 +80,11 @@ emitU8 b (Builder backing len)
     byteBlockSetUnsafe oldLen b newBlock
     backing := newBlock
     len := oldLen + 1
+
+-- Appends the low 8 bits of `v`. The multi-byte emitters split an `Int` into
+-- its bytes with it; the bits above the width they write are dropped.
+emitLowByte : Int -> Builder -> Unit
+emitLowByte v buf = emitU8 (U8.truncate v) buf
 
 -- The smallest doubling of `cap` that is at least `needed`, starting from 1
 -- when `cap` is 0.  `emitU8` only ever needs one `* 2` step because it adds
@@ -136,54 +142,54 @@ builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
 export
 emitU16BE : Int -> Builder -> Unit
 emitU16BE v buf =
-  emitU8 (bitAnd (shiftRight v 8) 255) buf
-  emitU8 (bitAnd v 255) buf
+  emitLowByte (shiftRight v 8) buf
+  emitLowByte v buf
 
 -- | Appends a three-byte unsigned integer, most significant byte first.
 -- The inverse of `beUint 3`.
 export
 emitU24BE : Int -> Builder -> Unit
 emitU24BE v buf =
-  emitU8 (bitAnd (shiftRight v 16) 255) buf
-  emitU8 (bitAnd (shiftRight v 8) 255) buf
-  emitU8 (bitAnd v 255) buf
+  emitLowByte (shiftRight v 16) buf
+  emitLowByte (shiftRight v 8) buf
+  emitLowByte v buf
 
 -- | Appends a four-byte unsigned integer, most significant byte first. The
 -- inverse of `beUint 4`.
 export
 emitU32BE : Int -> Builder -> Unit
 emitU32BE v buf =
-  emitU8 (bitAnd (shiftRight v 24) 255) buf
-  emitU8 (bitAnd (shiftRight v 16) 255) buf
-  emitU8 (bitAnd (shiftRight v 8) 255) buf
-  emitU8 (bitAnd v 255) buf
+  emitLowByte (shiftRight v 24) buf
+  emitLowByte (shiftRight v 16) buf
+  emitLowByte (shiftRight v 8) buf
+  emitLowByte v buf
 
 -- | Appends a two-byte unsigned integer, least significant byte first. The
 -- inverse of `leUint 2`.
 export
 emitU16LE : Int -> Builder -> Unit
 emitU16LE v buf =
-  emitU8 (bitAnd v 255) buf
-  emitU8 (bitAnd (shiftRight v 8) 255) buf
+  emitLowByte v buf
+  emitLowByte (shiftRight v 8) buf
 
 -- | Appends a three-byte unsigned integer, least significant byte first.
 -- The inverse of `leUint 3`.
 export
 emitU24LE : Int -> Builder -> Unit
 emitU24LE v buf =
-  emitU8 (bitAnd v 255) buf
-  emitU8 (bitAnd (shiftRight v 8) 255) buf
-  emitU8 (bitAnd (shiftRight v 16) 255) buf
+  emitLowByte v buf
+  emitLowByte (shiftRight v 8) buf
+  emitLowByte (shiftRight v 16) buf
 
 -- | Appends a four-byte unsigned integer, least significant byte first. The
 -- inverse of `leUint 4`.
 export
 emitU32LE : Int -> Builder -> Unit
 emitU32LE v buf =
-  emitU8 (bitAnd v 255) buf
-  emitU8 (bitAnd (shiftRight v 8) 255) buf
-  emitU8 (bitAnd (shiftRight v 16) 255) buf
-  emitU8 (bitAnd (shiftRight v 24) 255) buf
+  emitLowByte v buf
+  emitLowByte (shiftRight v 8) buf
+  emitLowByte (shiftRight v 16) buf
+  emitLowByte (shiftRight v 24) buf
 
 -- `beSint n` reads `n` bytes as unsigned, then if the value >= 2^(8n-1)
 -- (sign bit set) subtracts 2^(8n) to get the negative.  Inverse: for v >= 0,
@@ -205,7 +211,7 @@ emitBeUint : Int -> Int -> Builder -> Unit
 emitBeUint 0 _ _ = ()
 emitBeUint n v buf =
   emitBeUint (n - 1) (shiftRight v 8) buf
-  emitU8 (bitAnd v 255) buf
+  emitLowByte v buf
 
 -- | Appends a signed integer as `nbytes` bytes in two's complement, least
 -- significant byte first. The inverse of `leSint nbytes`.
@@ -221,7 +227,7 @@ export
 emitLeUint : Int -> Int -> Builder -> Unit
 emitLeUint 0 _ _ = ()
 emitLeUint n v buf =
-  emitU8 (bitAnd v 255) buf
+  emitLowByte v buf
   emitLeUint (n - 1) (shiftRight v 8) buf
 
 -- ---------------------------------------------------------------------------
@@ -440,6 +446,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DUse false (UseGroup ("array") ((mem "reverse" false "arrayReverse"))))
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseAlias ("u8") "U8"))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
 (DFunDef false "newBuilder" (PWild) (EApp (EApp (EVar "Builder") (EApp (EVar "Ref") (EApp (EVar "byteBlockMake") (ELit (LInt 0))))) (EApp (EVar "Ref") (ELit (LInt 0)))))
@@ -447,8 +454,10 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DFunDef false "buildArray" ((PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "bb") (EUnOp "!" (EVar "backing"))) (DoExpr (EApp (EApp (EVar "arrayMakeWith") (EUnOp "!" (EVar "len"))) (ELam ((PVar "i")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))))
 (DTypeSig true "buildBytes" (TyFun (TyCon "Builder") (TyCon "Bytes")))
 (DFunDef false "buildBytes" ((PCon "Builder" (PVar "backing") (PVar "len"))) (EApp (EApp (EVar "fromByteBlockPrefix") (EUnOp "!" (EVar "len"))) (EUnOp "!" (EVar "backing"))))
-(DTypeSig true "emitU8" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU8" ((PVar "b") (PCon "Builder" (PVar "backing") (PVar "len"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 255)))) (EApp (EVar "panic") (ELit (LString "Builder.emitU8: value out of range 0..255"))) (EIf (EBinOp "<" (EUnOp "!" (EVar "len")) (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EUnOp "!" (EVar "len"))) (EVar "b")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EUnOp "!" (EVar "len")) (ELit (LInt 1)))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "oldBlock") (EUnOp "!" (EVar "backing"))) (DoLet false false (PVar "oldLen") (EUnOp "!" (EVar "len"))) (DoLet false false (PVar "newCap") (EIf (EBinOp "==" (EVar "oldLen") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "oldLen") (ELit (LInt 2))))) (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EVar "newCap"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "oldBlock")) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EVar "oldLen"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "oldLen")) (EVar "b")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EVar "oldLen") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig true "emitU8" (TyFun (TyCon "U8") (TyFun (TyCon "Builder") (TyCon "Unit"))))
+(DFunDef false "emitU8" ((PVar "v") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "u8ToInt") (EVar "v"))) (DoExpr (EIf (EBinOp "<" (EUnOp "!" (EVar "len")) (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EUnOp "!" (EVar "len"))) (EVar "b")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EUnOp "!" (EVar "len")) (ELit (LInt 1)))))) (EBlock (DoLet false false (PVar "oldBlock") (EUnOp "!" (EVar "backing"))) (DoLet false false (PVar "oldLen") (EUnOp "!" (EVar "len"))) (DoLet false false (PVar "newCap") (EIf (EBinOp "==" (EVar "oldLen") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "oldLen") (ELit (LInt 2))))) (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EVar "newCap"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "oldBlock")) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EVar "oldLen"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "oldLen")) (EVar "b")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EVar "oldLen") (ELit (LInt 1))))))))))
+(DTypeSig false "emitLowByte" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
+(DFunDef false "emitLowByte" ((PVar "v") (PVar "buf")) (EApp (EApp (EVar "emitU8") (EApp (EVar "U8.truncate") (EVar "v"))) (EVar "buf")))
 (DTypeSig false "growTo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
 (DTypeSig true "emitBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Builder") (TyCon "Unit"))))
@@ -456,27 +465,27 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "Bytes") (TyCon "Int"))))
 (DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
 (DTypeSig true "emitU16BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU16BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU16BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitU24BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU24BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU24BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitU32BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU32BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU32BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitU16LE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU16LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU16LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf")))))
 (DTypeSig true "emitU24LE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU24LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU24LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf")))))
 (DTypeSig true "emitU32LE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU32LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU32LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (EVar "buf")))))
 (DTypeSig true "emitBeSint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitBeSint" ((PVar "nbytes") (PVar "v") (PVar "buf")) (EBlock (DoLet false false (PVar "unsigned") (EIf (EBinOp ">=" (EVar "v") (ELit (LInt 0))) (EVar "v") (EBinOp "+" (EVar "v") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EBinOp "*" (ELit (LInt 8)) (EVar "nbytes")))))) (DoExpr (EApp (EApp (EApp (EVar "emitBeUint") (EVar "nbytes")) (EVar "unsigned")) (EVar "buf")))))
 (DTypeSig true "emitBeUint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitBeUint" ((PLit (LInt 0)) PWild PWild) (ELit LUnit))
-(DFunDef false "emitBeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitBeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitBeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitBeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitLeSint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitLeSint" ((PVar "nbytes") (PVar "v") (PVar "buf")) (EBlock (DoLet false false (PVar "unsigned") (EIf (EBinOp ">=" (EVar "v") (ELit (LInt 0))) (EVar "v") (EBinOp "+" (EVar "v") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EBinOp "*" (ELit (LInt 8)) (EVar "nbytes")))))) (DoExpr (EApp (EApp (EApp (EVar "emitLeUint") (EVar "nbytes")) (EVar "unsigned")) (EVar "buf")))))
 (DTypeSig true "emitLeUint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitLeUint" ((PLit (LInt 0)) PWild PWild) (ELit LUnit))
-(DFunDef false "emitLeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EApp (EVar "emitLeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf")))))
+(DFunDef false "emitLeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EApp (EVar "emitLeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf")))))
 (DTypeSig false "build1" (TyFun (TyFun (TyCon "Builder") (TyCon "Unit")) (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "build1" ((PVar "f")) (EBlock (DoLet false false (PVar "buf") (EApp (EVar "newBuilder") (ELit LUnit))) (DoExpr (EApp (EVar "f") (EVar "buf"))) (DoExpr (EApp (EVar "buildArray") (EVar "buf")))))
 (DProp false "emitU16LE/leUint 2 round-trip" ((pp "v" (TyCon "Int"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 65535)))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "leUint") (ELit (LInt 2)))) (EApp (EVar "build1") (EApp (EVar "emitU16LE") (EVar "w")))) (arm (PCon "Ok" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "w"))) (arm (PCon "Err" PWild) () (EVar "False"))))))
@@ -487,6 +496,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DUse false (UseGroup ("array") ((mem "reverse" false "arrayReverse"))))
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseAlias ("u8") "U8"))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
 (DFunDef false "newBuilder" (PWild) (EApp (EApp (EVar "Builder") (EApp (EVar "Ref") (EApp (EVar "byteBlockMake") (ELit (LInt 0))))) (EApp (EVar "Ref") (ELit (LInt 0)))))
@@ -494,8 +504,10 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DFunDef false "buildArray" ((PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "bb") (EUnOp "!" (EVar "backing"))) (DoExpr (EApp (EApp (EVar "arrayMakeWith") (EUnOp "!" (EVar "len"))) (ELam ((PVar "i")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))))
 (DTypeSig true "buildBytes" (TyFun (TyCon "Builder") (TyCon "Bytes")))
 (DFunDef false "buildBytes" ((PCon "Builder" (PVar "backing") (PVar "len"))) (EApp (EApp (EVar "fromByteBlockPrefix") (EUnOp "!" (EVar "len"))) (EUnOp "!" (EVar "backing"))))
-(DTypeSig true "emitU8" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU8" ((PVar "b") (PCon "Builder" (PVar "backing") (PVar "len"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 255)))) (EApp (EVar "panic") (ELit (LString "Builder.emitU8: value out of range 0..255"))) (EIf (EBinOp "<" (EUnOp "!" (EVar "len")) (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EUnOp "!" (EVar "len"))) (EVar "b")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EUnOp "!" (EVar "len")) (ELit (LInt 1)))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "oldBlock") (EUnOp "!" (EVar "backing"))) (DoLet false false (PVar "oldLen") (EUnOp "!" (EVar "len"))) (DoLet false false (PVar "newCap") (EIf (EBinOp "==" (EVar "oldLen") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "oldLen") (ELit (LInt 2))))) (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EVar "newCap"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "oldBlock")) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EVar "oldLen"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "oldLen")) (EVar "b")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EVar "oldLen") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig true "emitU8" (TyFun (TyCon "U8") (TyFun (TyCon "Builder") (TyCon "Unit"))))
+(DFunDef false "emitU8" ((PVar "v") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "u8ToInt") (EVar "v"))) (DoExpr (EIf (EBinOp "<" (EUnOp "!" (EVar "len")) (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EUnOp "!" (EVar "len"))) (EVar "b")) (EUnOp "!" (EVar "backing")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EUnOp "!" (EVar "len")) (ELit (LInt 1)))))) (EBlock (DoLet false false (PVar "oldBlock") (EUnOp "!" (EVar "backing"))) (DoLet false false (PVar "oldLen") (EUnOp "!" (EVar "len"))) (DoLet false false (PVar "newCap") (EIf (EBinOp "==" (EVar "oldLen") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "oldLen") (ELit (LInt 2))))) (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EVar "newCap"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "oldBlock")) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EVar "oldLen"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "oldLen")) (EVar "b")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EBinOp "+" (EVar "oldLen") (ELit (LInt 1))))))))))
+(DTypeSig false "emitLowByte" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
+(DFunDef false "emitLowByte" ((PVar "v") (PVar "buf")) (EApp (EApp (EVar "emitU8") (EApp (EVar "U8.truncate") (EVar "v"))) (EVar "buf")))
 (DTypeSig false "growTo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
 (DTypeSig true "emitBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Builder") (TyCon "Unit"))))
@@ -503,27 +515,27 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "Bytes") (TyCon "Int"))))
 (DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
 (DTypeSig true "emitU16BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU16BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU16BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitU24BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU24BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU24BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitU32BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU32BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU32BE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitU16LE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU16LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU16LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf")))))
 (DTypeSig true "emitU24LE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU24LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU24LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf")))))
 (DTypeSig true "emitU32LE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "emitU32LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitU32LE" ((PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 16)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 24)))) (EVar "buf")))))
 (DTypeSig true "emitBeSint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitBeSint" ((PVar "nbytes") (PVar "v") (PVar "buf")) (EBlock (DoLet false false (PVar "unsigned") (EIf (EBinOp ">=" (EVar "v") (ELit (LInt 0))) (EVar "v") (EBinOp "+" (EVar "v") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EBinOp "*" (ELit (LInt 8)) (EVar "nbytes")))))) (DoExpr (EApp (EApp (EApp (EVar "emitBeUint") (EVar "nbytes")) (EVar "unsigned")) (EVar "buf")))))
 (DTypeSig true "emitBeUint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitBeUint" ((PLit (LInt 0)) PWild PWild) (ELit LUnit))
-(DFunDef false "emitBeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitBeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf")))))
+(DFunDef false "emitBeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "emitBeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf")))))
 (DTypeSig true "emitLeSint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitLeSint" ((PVar "nbytes") (PVar "v") (PVar "buf")) (EBlock (DoLet false false (PVar "unsigned") (EIf (EBinOp ">=" (EVar "v") (ELit (LInt 0))) (EVar "v") (EBinOp "+" (EVar "v") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EBinOp "*" (ELit (LInt 8)) (EVar "nbytes")))))) (DoExpr (EApp (EApp (EApp (EVar "emitLeUint") (EVar "nbytes")) (EVar "unsigned")) (EVar "buf")))))
 (DTypeSig true "emitLeUint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit")))))
 (DFunDef false "emitLeUint" ((PLit (LInt 0)) PWild PWild) (ELit LUnit))
-(DFunDef false "emitLeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 255)))) (EVar "buf"))) (DoExpr (EApp (EApp (EApp (EVar "emitLeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf")))))
+(DFunDef false "emitLeUint" ((PVar "n") (PVar "v") (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "v")) (EVar "buf"))) (DoExpr (EApp (EApp (EApp (EVar "emitLeUint") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "shiftRight") (EVar "v")) (ELit (LInt 8)))) (EVar "buf")))))
 (DTypeSig false "build1" (TyFun (TyFun (TyCon "Builder") (TyCon "Unit")) (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "build1" ((PVar "f")) (EBlock (DoLet false false (PVar "buf") (EApp (EVar "newBuilder") (ELit LUnit))) (DoExpr (EApp (EVar "f") (EVar "buf"))) (DoExpr (EApp (EVar "buildArray") (EVar "buf")))))
 (DProp false "emitU16LE/leUint 2 round-trip" ((pp "v" (TyCon "Int"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 65535)))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "leUint") (ELit (LInt 2)))) (EApp (EVar "build1") (EApp (EVar "emitU16LE") (EVar "w")))) (arm (PCon "Ok" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "w"))) (arm (PCon "Err" PWild) () (EVar "False"))))))
