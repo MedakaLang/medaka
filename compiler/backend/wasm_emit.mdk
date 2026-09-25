@@ -1870,7 +1870,10 @@ isLeafExternW name = contains
 
 -- the `U64` kernel externs: each consumes or produces a `$u64` cell, so each
 -- demands the `$u64` type and `u64RuntimeLines` (the shifts and `u64MulHigh`).
+-- The list duplicates llvm_emit.mdk's `isU64Extern` on purpose: each backend
+-- names the kernels it implements, which is what the capability matrix reads.
 isU64ExternW : String -> Bool
+-- lint-disable-next-line rule-duplicate-body
 isU64ExternW name = contains name [
   "u64Truncate",
   "u64TruncateToInt",
@@ -6829,12 +6832,12 @@ utf8BytesW cp =
   else if cp < 2048 then
     [192 + cp / 64, 128 + cp % 64]
   else if cp < 65536 then
-    [224 + cp / 4096, 128 + (cp / 64) % 64, 128 + cp % 64]
+    [224 + cp / 4096, 128 + cp / 64 % 64, 128 + cp % 64]
   else
     [
       240 + cp / 262144,
-      128 + (cp / 4096) % 64,
-      128 + (cp / 64) % 64,
+      128 + cp / 4096 % 64,
+      128 + cp / 64 % 64,
       128 + cp % 64,
     ]
 

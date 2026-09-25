@@ -2479,11 +2479,11 @@ utf8Bytes : Int -> List Int
 utf8Bytes cp
   | cp < 128 = [cp]
   | cp < 2048 = [192 + cp / 64, 128 + cp % 64]
-  | cp < 65536 = [224 + cp / 4096, 128 + (cp / 64) % 64, 128 + cp % 64]
+  | cp < 65536 = [224 + cp / 4096, 128 + cp / 64 % 64, 128 + cp % 64]
   | otherwise = [
     240 + cp / 262144,
-    128 + (cp / 4096) % 64,
-    128 + (cp / 64) % 64,
+    128 + cp / 4096 % 64,
+    128 + cp / 64 % 64,
     128 + cp % 64,
   ]
 
@@ -3808,7 +3808,11 @@ emitFixedWidthToInt e env args = match emitArgs e env args
 -- an Int amount and give 0 for any amount outside `0 .. 63`, by a select rather
 -- than a branch; the amount is masked first, so the `shl`/`lshr` itself never sees
 -- an out-of-range count.
+-- Each backend names the kernels it implements itself, and
+-- test/diff_compiler_capability_matrix.sh reads the list from each backend's own
+-- source, so the list is duplicated in wasm_emit.mdk's `isU64ExternW` on purpose.
 isU64Extern : String -> Bool
+-- lint-disable-next-line rule-duplicate-body
 isU64Extern name = contains name [
   "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr", "u64BitXor",
   "u64ShiftLeft", "u64ShiftRight", "u64MulHigh"

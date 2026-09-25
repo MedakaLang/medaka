@@ -72,6 +72,7 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import eval.u64_halves as H
+import u64 as U64
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
 -- program-global `ctorToTypeRef`.  `backend/private_mangle.mdk` imports only
@@ -3176,51 +3177,32 @@ optionToValue : Option (Value e) -> Value e
 optionToValue None = VCon "None" []
 optionToValue (Some v) = VCon "Some" [v]
 
--- ── uint64 over two 32-bit halves ─────────────────────────────────────────
--- Medaka's Int is a 63-bit fixnum, so the SplitMix64 RNG and the SplitMix64/
--- FNV-1a hashers in runtime/medaka_rt.c, which are pure uint64 arithmetic, run
--- here on the interpreter's own `U64` representation: two 32-bit halves `(hi, lo)`
--- and the arithmetic in `eval/u64_halves.mdk`.  The results are byte-identical to
--- the C runtime (mix64(42)&mask == 803958421; the first SplitMix64 draw from state
--- 42 gives `%6+1 == 2`), which is what keeps the eval-vs-native RNG/hash streams
--- equal (issue #98).
+-- ── SplitMix64 and FNV-1a on U64 ──────────────────────────────────────────
+-- The SplitMix64 RNG and the SplitMix64/FNV-1a hashers in runtime/medaka_rt.c
+-- are pure uint64 arithmetic, and run here on the builtin `U64`, whose `+` and
+-- `*` wrap modulo 2^64 exactly as C's `unsigned long long` does.  The results
+-- are byte-identical to the C runtime (mix64(42)&mask == 803958421; the first
+-- SplitMix64 draw from state 42 gives `%6+1 == 2`), which is what keeps the
+-- eval-vs-native RNG/hash streams equal (issue #98).  The interpreted program's
+-- own `U64` values are a separate matter: `VU64` carries two halves.
 
--- Golden ratio increment 0x9E3779B97F4A7C15.
-u64Golden : (Int, Int)
-u64Golden = (2654435769, 2135587861)
-
--- SplitMix64 finalizer multipliers 0xBF58476D1CE4E5B9 and 0x94D049BB133111EB.
-u64Const1 : (Int, Int)
-u64Const1 = (3210233709, 484763065)
-
-u64Const2 : (Int, Int)
-u64Const2 = (2496678331, 321982955)
-
--- FNV-1a 64-bit offset basis 0xCBF29CE484222325 and prime 0x100000001B3.
-u64FnvBasis : (Int, Int)
-u64FnvBasis = (3421674724, 2216829733)
-
-u64FnvPrime : (Int, Int)
-u64FnvPrime = (256, 435)
+u64Golden : U64
+u64Golden = 0x9E3779B97F4A7C15
 
 -- SplitMix64 finalizer, then `mix64 x = finalize (x + golden)`, identical to
 -- mdk_hash_mix64, and one SplitMix64 step (state += golden; finalize).
-u64Finalize : (Int, Int) -> (Int, Int)
+u64Finalize : U64 -> U64
 u64Finalize z =
-  let z1 = H.mul (H.bitXorU64 z (H.shiftRight64 z 30)) u64Const1
-  let z2 = H.mul (H.bitXorU64 z1 (H.shiftRight64 z1 27)) u64Const2
-  H.bitXorU64 z2 (H.shiftRight64 z2 31)
+  let z1 = U64.bitXor z (U64.shiftRight z 30) * 0xBF58476D1CE4E5B9
+  let z2 = U64.bitXor z1 (U64.shiftRight z1 27) * 0x94D049BB133111EB
+  U64.bitXor z2 (U64.shiftRight z2 31)
 
-u64Mix : (Int, Int) -> (Int, Int)
-u64Mix x = u64Finalize (H.add x u64Golden)
+u64Mix : U64 -> U64
+u64Mix x = u64Finalize (x + u64Golden)
 
 -- Low 30 bits (the native MDK_HASH_MASK = 2^30 - 1) as a non-negative Int.
-u64Low30 : (Int, Int) -> Int
-u64Low30 (_, lo) = bitAnd lo 1073741823
-
--- Bit 63, the sign bit under a two's-complement (signed long long) reading.
-u64Bit63 : (Int, Int) -> Int
-u64Bit63 (hi, _) = shiftRight hi 31
+u64Low30 : U64 -> Int
+u64Low30 x = U64.truncateToInt (U64.bitAnd x 0x3FFFFFFF)
 
 -- ── deterministic SplitMix64 RNG — byte-identical to runtime/medaka_rt.c ─────
 -- State is a uint64 (limb tuple), default 0; `setSeed n` sets state = n. Each
@@ -3235,13 +3217,13 @@ export
 rngStateRef : Ref Int
 rngStateRef = Ref 123456789
 
-rngU64Ref : Ref (Int, Int)
-rngU64Ref = Ref (0, 0)
+rngU64Ref : Ref U64
+rngU64Ref = Ref 0
 
 -- One SplitMix64 step: advance the global state and return the finalized draw.
-rngDraw : Unit -> (Int, Int)
+rngDraw : Unit -> U64
 rngDraw _ =
-  let s = H.add !rngU64Ref u64Golden
+  let s = !rngU64Ref + u64Golden
   rngU64Ref := s
   u64Finalize s
 
@@ -3254,33 +3236,31 @@ rngDraw _ =
 -- so no bare 63-bit Int op is ever asked to hold a value it cannot (issue #98).
 pRandomInt : Value e -> Value e -> <e> Value e
 pRandomInt (VInt lo) (VInt hi) =
-  let loU = H.fromInt lo
-  let rangeU = H.add (H.sub (H.fromInt hi) loU) (0, 1)
-  if H.isZero rangeU || u64Bit63 rangeU == 1 then
+  let loU = U64.truncate lo
+  let rangeU = U64.truncate hi - loU + 1
+  if rangeU == 0 || rangeU >= 0x8000000000000000 then
     VInt lo
   else
-    let rem = snd (H.divMod (rngDraw ()) rangeU)
+    let rem = rngDraw () % rangeU
     -- `lo + rem` lies in [lo, hi], so its signed 64-bit reading fits `Int` and
     -- bits 63 and 62 agree: the low 63 bits are the number.
-    VInt (H.truncateToInt (H.add loU rem))
+    VInt (U64.truncateToInt (loU + rem))
 pRandomInt _ _ = panic "randomInt: expected Int Int"
 
 pRandomBool : Value e -> <e> Value e
-pRandomBool _ = VBool (bitAnd (snd (rngDraw ())) 1 == 1)
+pRandomBool _ = VBool (U64.bitAnd (rngDraw ()) 1 == 1)
 
 pRandomFloat : Value e -> <e> Value e
 pRandomFloat _ =
   -- `intToFloat 9007199254740992` is the double 2^53 (the mantissa scale); written
   -- via an Int literal because `medaka fmt` corrupts a >= 1e15 float literal (#51).
-  let bits = H.truncateToInt (H.shiftRight64 (rngDraw ()) 11)
+  let bits = U64.truncateToInt (U64.shiftRight (rngDraw ()) 11)
   VFloat (intToFloat bits * (1.0 / intToFloat 9007199254740992) * 2.0 - 1.0)
 
 pRandomChar : Value e -> <e> Value e
 pRandomChar _ =
   VChar
-    (charToStr
-      (charFromCodeUnsafe
-        (32 + H.truncateToInt (snd (H.divMod (rngDraw ()) (0, 95))))))
+    (charToStr (charFromCodeUnsafe (32 + U64.truncateToInt (rngDraw () % 95))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -3291,7 +3271,7 @@ charFromCodeUnsafe n = match charFromCode n
 
 pSetSeed : Value e -> <e> Value e
 pSetSeed (VInt seed) =
-  rngU64Ref := H.fromInt seed
+  rngU64Ref := U64.truncate seed
   VUnit
 pSetSeed _ = panic "setSeed: expected Int"
 
@@ -3582,41 +3562,41 @@ pFloatToBytes64 _ = panic "floatToBytes64: not a Float"
 
 -- ── Interpreter Hashable hashers — byte-identical to runtime/medaka_rt.c ─────
 -- The native mdk_hash_* are a SplitMix64/FNV-1a spec over uint64. We reproduce
--- them faithfully on the two-halves uint64 above (issue #98: an approximate
+-- them faithfully on `U64` above (issue #98: an approximate
 -- mixer made `medaka run` and `medaka build` disagree on hash values, both silent).
 -- hashInt/hashChar/hashFloat = mix64 then mask to [0, 2^30); hashString = 64-bit
 -- FNV-1a; hashBool = 0/1. `n`/codepoint arrive as the untagged native Int, so a
 -- negative Int's two's-complement 64-bit value flows straight into
--- `H.fromInt`.
+-- `U64.truncate`.
 
 -- One 64-bit FNV-1a step: h = (h XOR byte) * prime (low 64 bits).
-fnvStep64 : (Int, Int) -> Int -> (Int, Int)
-fnvStep64 (hi, lo) byte = H.mul (hi, bitXor lo byte) u64FnvPrime
+fnvStep64 : U64 -> Int -> U64
+fnvStep64 h byte = U64.bitXor h (U64.truncate byte) * 0x100000001B3
 
-fnvFold64 : List Int -> (Int, Int) -> (Int, Int)
+fnvFold64 : List Int -> U64 -> U64
 fnvFold64 [] h = h
 fnvFold64 (x :: xs) h = fnvFold64 xs (fnvStep64 h x)
 
--- 8 big-endian bytes (bs[0] = MSB, as floatToBytes64 emits) -> uint64 halves.
-bytesBEToU64 : Array Int -> (Int, Int)
-bytesBEToU64 bs = (bytesBEWord bs 0, bytesBEWord bs 4)
+-- 8 big-endian bytes (bs[0] = MSB, as floatToBytes64 emits) -> uint64.
+bytesBEToU64 : Array Int -> U64
+bytesBEToU64 bs = bytesBEGo bs 0 0
 
-bytesBEWord : Array Int -> Int -> Int
-bytesBEWord bs i =
-  arrayGetUnsafe i bs * 16777216
-    + arrayGetUnsafe (i + 1) bs * 65536
-    + arrayGetUnsafe (i + 2) bs * 256
-    + arrayGetUnsafe (i + 3) bs
+bytesBEGo : Array Int -> Int -> U64 -> U64
+bytesBEGo bs i acc =
+  if i >= 8 then
+    acc
+  else
+    bytesBEGo bs (i + 1) (acc * 256 + U64.truncate (arrayGetUnsafe i bs))
 
 pHashInt : Value e -> <e> Value e
-pHashInt (VInt n) = VInt (u64Low30 (u64Mix (H.fromInt n)))
+pHashInt (VInt n) = VInt (u64Low30 (u64Mix (U64.truncate n)))
 pHashInt _ = panic "hashInt: not an Int"
 
 pHashChar : Value e -> <e> Value e
 pHashChar (VChar s) =
   VInt
     (u64Low30
-      (u64Mix (H.fromInt (charCode (arrayGetUnsafe 0 (stringToChars s))))))
+      (u64Mix (U64.truncate (charCode (arrayGetUnsafe 0 (stringToChars s))))))
 pHashChar _ = panic "hashChar: not a Char"
 
 pHashBool : Value e -> <e> Value e
@@ -3645,7 +3625,9 @@ pHashFloat _ = panic "hashFloat: not a Float"
 
 pHashString : Value e -> <e> Value e
 pHashString (VString s) =
-  VInt (u64Low30 (fnvFold64 (arrayToListG (stringToUtf8Bytes s)) u64FnvBasis))
+  VInt
+    (u64Low30
+      (fnvFold64 (arrayToListG (stringToUtf8Bytes s)) 0xCBF29CE484222325))
 pHashString _ = panic "hashString: not a String"
 
 pFloatToString : Value e -> <e> Value e
