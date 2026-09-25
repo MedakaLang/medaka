@@ -1,0 +1,1354 @@
+# Historical effects design and implementation audits
+
+Preserved from commit `c8d1ffe38`, before the effects architecture migration.
+This is historical material, not normative semantics or a current issue-status
+report. It contains superseded rules and contradictory enforcement claims; see
+[the current semantics](../EFFECTS-SEMANTICS.md) for the contract. Source line
+numbers and relative links below are retained as historical citations.
+
+## 6. Polymorphism: effect variables, generalization, and effect-poly data
+
+**Effect-variable generalization (the HM rule for effects).**
+`gen(Γ, τ, φ)` quantifies the type *and* effect variables free in `(τ, φ)` but not
+free in `Γ`:
+
+```
+gen(Γ, τ, φ) = ∀(ᾱ = ftv(τ,φ)\ftv(Γ)). ∀(μ̄ = fev(τ,φ)\fev(Γ)). τ
+```
+
+so a higher-order function gets an **effect-polymorphic** scheme. The canonical
+example:
+
+```
+map : (a →^e b) → List a →^e List b              -- one effect var e on the callback AND the result
+```
+
+The callback's latent row `e` is *the same variable* as `map`'s own latent row:
+applying `map` to a pure function instantiates `e := ⟨ ⟩` (the whole call is pure);
+applying it to an `<IO>` function instantiates `e := <IO>` (the call performs
+`<IO>`). This is effect parametricity — the engine of `do`-notation, `fold`,
+`andThen`, and every stdlib combinator threading caller effects through.
+
+**The value restriction.** Naïvely generalizing an effect variable that escapes
+into a mutable/aliased position is unsound (the classic ML let-generalization
+hazard, transposed to effects). The spec requires generalizing effect variables
+only at **syntactic values** (or, equivalently, only re-opening rows at covariant
+positions per §5) so a generalized `μ` cannot be captured at two incompatible
+instantiations. This is the effect analogue of the type-system value restriction
+and is what keeps `gen` + open-row unification sound together.
+
+**Well-formedness of interface-method effect variables (the no-laundering side
+condition).** A quantified effect variable that occurs in an interface method's
+**return-position** row must **also** occur in an **argument** position of that
+method's signature — either as a callback's latent arrow effect (`(a →^e b)`) or as
+an `Effect`-kinded type-constructor argument (`Async e a`, §"effect-polymorphic data"
+below). An effect variable that appears **only** in the return row, determined by no
+argument, is **ill-formed** (an ambiguous / under-determined quantified variable, the
+effect analogue of a class method whose return type mentions a type variable pinned
+by nothing). It is rejected at the interface declaration.
+
+The reason is soundness, not taste. If `speak : a →^e String` quantifies `e` with
+nothing to pin it, a caller instantiates `e := ⟨ ⟩` at the use site and obtains a
+value the effect system certifies **pure** — yet the *dispatched* impl of `speak`
+may perform `<Stdout>`, selected by the dictionary at the call site, invisibly to
+the caller's effect. The effect would be **laundered** away (§5's no-laundering law
+violated with no error). Argument-carried polymorphism (`map`, `andThen`, `fold`,
+`traverse`) at least *gives the caller a handle on* `e`: it appears in an argument
+(a callback's effect row, or an `Effect`-kinded constructor parameter), so the instantiated
+`e` is visible in the call's type rather than materialising out of nowhere. This
+well-formedness condition is what makes the *generalization* of a method effect
+variable meaningful in the presence of dictionary dispatch — and it is decided
+**without** consulting the dictionary (it is a purely syntactic property of the
+*declared* signature), so it preserves the dictionary/effect orthogonality restated
+below: the alternative of lower-bounding a return-only effect var by the *dispatched*
+impl's latent effect was rejected because it would make the effect depend on
+dispatch, violating that orthogonality.
+
+**The dual condition: argument-occurrence coverage (ENFORCED).** Option A constrains
+where a *return*-row variable must also appear; its dual constrains what an
+*argument*-position occurrence may carry. An effect variable's argument occurrences
+(a callback's row, an `Effect`-kinded argument) are rows an impl can **perform** by using
+that argument — so the method's own rows must account for them, at declaration:
+
+- **argument-only** — `use : a → (Unit →^e Unit) → Int`, where `e` appears in *no*
+  non-argument row: an impl applying the callback performs `e` with no row charging
+  it (a pure-typed wrapper silently prints; verified). Ill-formed.
+- **uncovered atoms** — `act1 : a → (Unit →^{Stdout ⊔ e} Unit) →^e Unit`: the
+  callback's concrete `Stdout` pours into a row declared bare `⟨e⟩`, which a caller
+  instantiates to `⟨ ⟩` (verified launder). Ill-formed unless **every** non-argument
+  occurrence of `e` covers (IO-expanded) the union of `e`'s argument-side atoms —
+  `⟨Stdout ⊔ e⟩` at both callback and return is fine, as is an `⟨IO ⊔ e⟩` return.
+
+Like Option A this is decided from the declared signature alone (dispatch never
+consulted). It must live at the declaration: once unification runs, the same-tail
+row arm (`⟨e⟩ ∼ ⟨Stdout ⊔ e⟩`) succeeds without recording the atom anywhere, so no
+post-hoc inspection can recover the loss.
+
+**Scope of Option A, and the impl-body bound that completes it (#803, ENFORCED).**
+Option A's side condition is a *necessary* well-formedness rule about the shape of the
+**declared signature**; on its own it does **not** bound the **impl body's** latent
+effect. A method whose signature *does* carry `e` in an argument can still *attempt* to
+launder — and in **two** shapes, not one: an impl may **ignore** the effect argument and
+perform its own *intrinsic* effect, **or** it may legitimately **use** the effect
+argument (apply the callback, run the `Effect`-kinded data value) *and additionally* perform
+an intrinsic effect alongside it. For example `speak : a → (Unit →^e Unit) →^e String`
+is well-formed under Option A, yet an impl `speak d k = k (); putStr "…"; "woof"`
+performs `<Stdout>` while a caller instantiates `e := ⟨ ⟩` — laundering that *applying*
+the callback does not excuse.
+
+This is now **rejected** by a companion rule that bounds the impl **body's own latent
+effect** — on **every arrow of the method's declared type, down to its final return** —
+by what its arguments and signature justify. Writing `φ_i^{decl}` and `φ_i^{body}` for the
+declared and inferred effect on the *i*-th arrow of a method of declared arity *n*:
+
+```
+    ∀ i ≤ n.   atoms(φ_i^{body})  ⊆  atoms(φ_i^{decl})  ∪  atoms(argContributable)
+```
+
+where **argContributable** is the union of the effect rows an impl may perform by *using*
+its arguments — each function-typed argument's arrow latent row, each `Effect`-kinded data
+argument's effect row — and `atoms(·)` / the containment are IO-expanded exactly as the
+binding-boundary escape check of §5. Any atom of `φ_i^{body}` outside that bound is an
+intrinsic effect the caller cannot see, and is **rejected** (`T-EFFECT-LAUNDER`).
+
+**Why every arrow, not just the last.** An impl may write **fewer patterns** than the
+method's arity and return a lambda for the rest (`speak d k = u => …`), an ordinary
+curried idiom; its intrinsic effect then lands on a **returned-lambda arrow beyond the
+impl's pattern count** but still *within* the method's declared arrows. Bounding only the
+final arrow — or only the impl's own pattern count — misses exactly that effect (the
+smoking gun: `speak d k u = …` and `speak d k = u => …` must be judged identically).
+
+**Why it is exact.** The bound is checked **before** the body's rows are unified into the
+declared type, and there every parameter is still a fresh variable — so `argContributable`
+is entirely effect *variables* carrying no atoms, and an effect the body performs *through
+an argument* (applying a callback, running an effectful data value) appears on its arrow as
+that same variable, never a concrete atom. Consequently the per-arrow residual reduces to
+*concrete atoms of `φ_i^{body}` minus `φ_i^{decl}`*: a variable is visible to the caller and
+cannot lie, so only a concrete atom can launder. This makes the rule sound *and* precise —
+not the blanket *"no effect var may carry a concrete effect"* ban that would break
+`map`/`traverse`:
+
+- an impl that **threads** the effect (`map`, `traverse`, or any impl — curried or not —
+  that *applies* its callback / *runs* its effectful data argument) contributes only that
+  argument's **variable** to each `φ_i^{body}` — no atom — so it is **accepted**;
+- an impl whose callback carries a **concrete** effect (`Unit →^{Stdout} Unit`) which the
+  method's return honestly declares is **arg-contributed and declared**, so it too is
+  **accepted** — the reason `argContributable` cannot be dropped from the rule as stated;
+- an impl that **honestly declares** its own effect (`<Stdout | e>`) has that atom in the
+  matching `φ_i^{decl}`, so it is **accepted**;
+- only an **intrinsic** effect — a concrete atom on some arrow justified by neither the
+  arguments nor the declared effect at that arrow — **escapes** and is **rejected**,
+  whether the impl ignores its effect argument, uses it, or is written point-free/curried.
+
+So an argument-carried effect variable is bounded by the effect that actually *flows from
+the method's arguments*: the caller sees `e` in the call's type, and — with this rule —
+the instantiation **cannot lie**, because the dispatched impl can perform on that row only
+what its arguments justify or its signature declares. Together, Option A (signature shape)
+and this impl-body bound close the laundering hole for effect-variable interface methods.
+(Was tracked as #803.) They do **not** yet close the *type-variable* channel — an impl can
+still smuggle a row inside the instantiation of a quantified **type** variable, off the
+arrow spine the bound walks. That channel is closed by method-scheme rigidity, next.
+
+**Method-scheme rigidity (the instantiation channel; #814).** The two rules above
+constrain the *signature's shape* and the *declared arrows*. The remaining laundering
+channel is the **instantiation of the method's quantified variables themselves**: with the
+body checked against the method type via ordinary (flexible) unification, an impl of
+`mk : a → b` can pin `b := Unit →^⟨Stdout⟩ String` — or a tuple or data type containing
+such an arrow — while every caller instantiates `b` freshly and may pin it to the *pure*
+arrow: a certified-pure value performs IO, and no arrow of the declared spine ever carried
+an atom for the #803 bound to see. The same flexibility is a **type**-soundness hole with
+no effects involved at all (`mk d = 42` pinned `b := Int`; a caller instantiates
+`b := String` and evaluation crashes), which is why the fix is not effect-specific.
+
+The rule (the effect reading of `DICT-SEMANTICS.md` §3 **W3**, which owns the formal
+statement): an impl or default method body is checked against the method's declared type
+with every quantified variable not bound by the interface head — **type variables and
+effect variables alike** — held **rigid**. For a type variable, rigid means what it means
+in any skolem check: it may not be instantiated to a constructed type, identified with
+another method variable, or identified with an instance-head variable. For an effect
+variable `μ`, rigid means the row it stands for may acquire **no concrete atom beyond
+what the declared row at each of `μ`'s occurrences already carries** (IO-expanded,
+exactly as §5's escape check), and two distinct declared effect variables may not be
+identified — an atom that reaches `μ` from nowhere in the signature is precisely an
+intrinsic effect the caller can erase by instantiating `μ := ⟨ ⟩`.
+
+Consequences, and the division of labour with the #803 bound:
+
+- pinning `b` is rejected *outright* — effectful, pure, nested in tuples or data-type
+  arguments, it makes no difference, so the tuple/data-nesting variants need no
+  variance-aware descent: there is nothing to descend into once `b` cannot be pinned;
+- an intrinsic atom poured into an argument-pinned `e` at a position **off the arrow
+  spine** (e.g. a method returning `(Unit →^e Unit, Int)`, the atom inside the tuple) is
+  caught by the effect-variable half — the one laundering shape the per-arrow #803 walk
+  is structurally blind to;
+- the #803 per-arrow bound remains the *diagnostic* seam for spine positions (it names
+  the offending arrow pre-unification); in the idealized semantics it is subsumed by
+  rigidity — a rigid `μ` on a declared arrow cannot absorb an intrinsic atom.
+
+**Former residual (#817) — RETIRED with #823.** One identification *was* deliberately admitted: a method
+effect variable unifying with an **instance-head effect parameter** (`impl Mappable
+(Async e)`, whose `Suspend` arm stores the callback and thereby forces the method's
+`e'` ≈ the head's `e`). It is a real laundering channel — the callback's effect is
+charged at *build* time but performed at *force* time, so a pure-typed thunk obtained
+through the container performs the deferred effect (verified; tracked as #817) — but
+the sound result row `e ⊔ e'` is inexpressible while the instance head fixes the
+container's row, so rejecting the identification would outlaw effect-polymorphic
+data's shipped functor/monad instances outright. The resolution is design-scoped and
+owned by #817 — and now specified: **graded interfaces** (below, and #820) make the
+container's index absorb the callback row by signature shape, after which this
+exception retires — and has: `stdlib/async.mdk` implements the `Deferred*`
+family, and a method effect variable identified with an instance-head row
+parameter is now `T-IMPL-TOO-SPECIFIC` (`aliasesHeadRowMsg`). The type-variable
+half never had such an exception (a method type variable may never alias an
+instance-head type variable).
+
+Two deliberate design notes. **First**, rigidity is an over-approximation in one corner:
+an atom entering a rigid `μ` at a *purely contravariant* occurrence (the impl returns a
+function that merely *demands* a more-effectful callback than the caller need supply)
+cannot actually be performed, yet is rejected. That is the §4 stance transposed —
+over-rejection is a completeness gap, never a soundness hole — and the corner is
+unreachable anyway for honestly-shaped signatures. **Second**, the alternative that was
+considered and **rejected**: keeping the flexible instantiation and adding a
+variance-aware structural walk of the (declared, inferred) type pair that hunts effect
+atoms in covariant positions of the pinned types. It would have needed per-datatype
+variance machinery the type system does not track, and — decisively — it *presumes the
+pinning survives*, which the `b := Int` crash shows is unsound independently of effects.
+Rigidity closes both axes with no new machinery, and is the standard obligation of the
+dictionary translation besides (an instance method must inhabit the method's scheme at
+the instance head — Wadler–Blott; `DICT-SEMANTICS.md` §3 W3).
+
+**Effect-polymorphic data (effects as type-constructor arguments).** A row may
+occupy a **type-constructor argument** position, so a data type can be parameterized
+*by an effect*:
+
+```
+data Async (e : Effect) a = Done a | Suspend (Unit →^e Async e a)
+runAsync : Async e a →^e a
+```
+
+Here `e` has kind **`Effect`** (distinct from the `Type` kind of `a`), **declared**
+on the head per §6.1. (This paragraph said "row-kinded (kind `Row`), *inferred*
+from its use in an effect position" until the declared-kinds decision; both the
+name and the inference are superseded — see §6.1 and §6.8.) The effect stored in a
+`Suspend` thunk *is* `e`; `runAsync` performs exactly the row the value carries —
+an obligation §6.7 names and shows to be **unenforced** on the implementation
+today. This is how
+Medaka expresses an *effectful computation as a first-class value* **without** an
+`<Async>` effect label: async-ness rides in the *type* (`Async e a`), exactly as
+error-ness rides in `Result e a` — composition is ordinary `do`/monad structure,
+not a tracked row label and not a handler. (Decided invariant.)
+
+**Two families, differing in WHEN — the intuition first.** Everything below turns
+on one distinction that is easy to miss because *both* families are effectful. The
+prelude's plain interfaces already carry effect variables:
+
+```
+map     : (a →^e b) → f a →^e f b
+andThen : m a → (a →^e m b) →^e m b
+```
+
+The effect variable sits on the **method's own arrow**, so the effects are
+**produced at the call site, immediately**. That is exactly right for a strict
+container (`List`, `Option`, `Result`): `map` really does run the callback now.
+
+The graded family instead records the effect in the **container's index**. Compare
+the same shape, deliberately spelled with a *different* method name — the two
+families must not share one (§6.9 Q1), so showing them under one name here would
+misrepresent the design:
+
+```
+gandThen : f e a → (a →^e f e b) → f e b        -- graded-LITE (one shared grade)
+```
+
+This is the **graded-lite** degenerate — one variable doing duty as both the
+callback's row and the index — chosen here because it makes the *where does the
+effect live* contrast legible in one line. The normative family below uses
+independent grades joined in result position (`f (e ⊔ e₂) b`); the intuition is the
+same and the algebra is #821's.
+
+so effects are **registered now and produced later**. In the project owner's own
+words, which convey it better than the formal statement does:
+
+> The deferred one is just constructing a datatype that represents a set of
+> effects that will *eventually* be produced but for now are just registered as
+> part of the datatype that is being produced.
+
+The picture that goes with it is **corking and uncorking**, and it is literally
+realized by `stdlib/async.mdk`'s two boundary functions:
+
+```
+liftIO   : (Unit →^e a) → Async e a       -- cork:   arrow effect  ⟶  index
+runAsync : Async e a →^e a                -- uncork: index         ⟶  arrow effect
+```
+
+Corking moves an effect off the arrow and into the type; uncorking moves it back.
+The index is the label on the bottle. `map`/`andThen` on a corked value merge
+bottles and union labels — which is *why* the grade monoid is the row join `⊔`
+(§2.4): associative, commutative, **idempotent**, unit `⟨ ⟩`. Registering the same
+effect twice registers it once, and the order of registration is not observable.
+
+So the two families differ in **WHEN effects happen, not whether**. Neither
+subsumes the other (§6.6), and this is the actual root cause of #817 and #825: an
+`Async`/parser-shaped impl needs to *register an effect for later*, but the
+interface it implements says *produce it now*, so the impl identified the method's
+effect variable with the container row and laundered.
+
+**Graded (`Deferred*`) interfaces (effect-indexed constructors; the sound
+composition surface for effect-polymorphic data).** Effect-polymorphic data exposes
+a gap the plain interface system cannot close. An ordinary functor signature at
+`f := Async e`
+reads `map : (a →^{e'} b) → Async e a →^{e'} Async e b` — the result carries the
+**same** index `e` as the input, yet any implementation of the `Suspend` arm must
+store the callback inside the container, so the stored thunk's row is really
+`e ⊔ e'`. The impl can only typecheck by privately identifying `e' ≈ e`, which the
+caller never sees: `e'` is charged at the *build* site (the `map` application) while
+the stored effect fires at the *force* site (`runAsync`), charged only `e`. The
+result is the deferred-effect launder tracked as the W3 carve-out (#817) — and it is
+not an implementation accident: with `f` fixed to `Async e`, the sound result type
+is **inexpressible**. The two candidate patches both fail on principle: propagating
+the impl's identification to call sites is dispatch-dependent effect refinement
+(violating the orthogonality below, the same reason #784's Option B was rejected),
+and widening `runAsync` to a blanket row destroys the precision that makes the
+index worth having.
+
+The principled closure is **grading** (Katsumata's parametric effect monads): an
+interface over an **effect-indexed constructor** `f : Effect → Type → Type`, whose
+method signatures compose indices by the row join, in **result position**. The
+family is named `Deferred*` and **mirrors the plain hierarchy exactly, `requires`
+chain included** — because the two families are peers (§6.6), not a general and a
+special case:
+
+```
+interface DeferredMappable (f : Effect → Type → Type) where
+  gmap     : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b
+
+interface DeferredApplicative (f : Effect → Type → Type)
+  requires DeferredMappable f where
+  gpure    : a → f ⟨ ⟩ a
+  gap      : f e (a → b) → f e₂ a → f (e ⊔ e₂) b
+
+interface DeferredThenable (f : Effect → Type → Type)
+  requires DeferredApplicative f where
+  gandThen : f e a → (a →^{e₂} f e₃ b) → f (e ⊔ e₂ ⊔ e₃) b
+```
+
+with, **not** as a method,
+
+```
+grun     : f e a →^{e} a                    -- per-type eliminator (runAsync)
+```
+
+— see §6.7 for why the eliminator cannot be a member of the family and what
+obligation replaces it.
+
+⚠️ **The METHOD names above are not decided, and are not even all attested.**
+`gandThen`/`gmap`/`grun` are spelled in `test/engine_fixtures/graded_iface_async.mdk`;
+`gpure` in `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`;
+**`gap` is attested nowhere as a graded method name** — it exists only in this
+document. (Careful with that one: `compiler/backend/wasm_emit.mdk:9320` defines an
+unrelated `gap : String → a`, the W3 scope-wall panic helper. A symbol gate would
+therefore *resolve* `gap` and silently vouch for a name no graded fixture uses.)
+The
+*interface* names `Deferred*` are decided, the `g`-prefix on the methods is
+not, and `DeferredMappable.gmap` is at minimum an inconsistent pairing. Open
+question, §6.9 (Q1). What *is* settled is that the method names must stay
+**distinct from the plain family's**: sharing `map`/`andThen` was investigated and
+rejected during the #824 design work — the unqualified `andThen` that `do` desugars
+to would have to pick one interface, and picking the graded one breaks the
+prelude's own containers. (Reported there as probe-established; not re-verified
+here.)
+
+A **grade** is an ordinary effect row used as a type index; grade composition is
+the row join `⊔` of §2.4 — associative, commutative, idempotent, with unit `⟨ ⟩` —
+so the graded monad laws are the plain monad laws with indices multiplied out (unit
+grade `⟨ ⟩`, join associativity). Three consequences, each independently valuable:
+
+- **Soundness with no exception.** The `Suspend` arm's stored thunk types at
+  `e ⊔ e₂`, and the declared result index *says so* — the impl inhabits the graded
+  scheme at full generality, so W3 (§6 above, DICT-SEMANTICS §3) holds for graded
+  impls with **no carve-out**; the #817 exemption retires when the stdlib migrates.
+- **Construction is genuinely pure.** The plain signature charges the callback row
+  at the build site — an over-approximation in the *other* direction (the effect
+  is paid where nothing runs). Graded signatures charge nothing until `grun`, the
+  sole discharge point: the accounting finally matches the operational story of a
+  deferred computation.
+- **Erasure and dispatch are untouched.** A grade is a row: it erases (§8), it
+  rides no dictionary, and graded elaboration is the ordinary dictionary
+  translation — one instance per constructor *family* (`impl DeferredMappable
+  Async`), with no overlap-on-grade dimension. The orthogonality invariant below
+  survives verbatim.
+
+**Well-formedness and decidability.** Joins may appear only in result/index
+positions of graded method signatures; unification never *decomposes* a join —
+instantiation is checked by grade **subsumption** (`e ≤ e₁ ⊔ e₂` per §2.4's order),
+the direction the escape check already decides. This is the same discipline that
+keeps the parameter domains decidable (§2.3): expressiveness bounded exactly where
+decidability demands it. A **degenerate form is the right first destination**
+("graded-lite"): all grades in a signature collapsed to one shared variable
+(`gandThen : f e a → (a →^e f e b) → f e b`), realizing the join by unification.
+Its *semantics* is sound — when the grade is genuinely a row and genuinely shared
+across the signature, it rejects the #817 and #825 deferred-effect laundering at
+the correct site, the same discipline the full family gives.
+
+**Status correction (this paragraph replaces one that is now out of date).** An
+earlier revision said graded-lite "is not admissible today" because interface
+parameter kinds did not exist. That was true when written and is **no longer**:
+#822 shipped an interface-parameter kind, and the graded-lite signature declares
+on the current binary (`interface DThenable f where gandThen : f e a -> (a -> <e>
+f e b) -> f e b` → `check` exit 0; probed 2026-07-26). What #822 shipped is a kind
+that is **inferred**, which is the very rule §6.8 retires — declaration replaces
+it, and the surface above is written against the declared form.
+
+**The eager-arm fork is still open (#823) — but it is no longer speculative, and
+what is at stake is not what this document previously said (see #1095).** A prior
+revision recorded that no probe was possible; one is now, and it fires. On a binary
+built from `main` (2026-07-26) a graded-lite `DeferredThenable`-shaped interface
+whose impl **applies** its callback rather than storing it launders the callback's
+row, with `check` green:
+
+```
+data Later e a = Now a | Wait (Unit -> <e> Later e a)
+
+interface DThenable f where
+  gandThen : f e a -> (a -> <e> f e b) -> f e b
+
+impl DThenable Later where
+  gandThen (Now a) k = k a                                -- EAGER: performs <e>
+  gandThen (Wait t) k = Wait (u => gandThen (t u) k)
+
+step : Int -> <IO> Later <IO> Int
+step n =
+  let _ = println "BOOM — this ran at BUILD time"
+  Now (n + 1)
+
+build : Unit -> Later <IO> Int                            -- NO row on the arrow
+build u = gandThen (Now 1) step
+
+main =
+  let _ = println "before"
+  let v = build ()
+  println "after"
+```
+
+`check` exit 0; `run` prints `before` / `BOOM — this ran at BUILD time` / `after`,
+exit 0.
+
+⚠️ **`build` must actually be applied, and the result must be reached from `main`.**
+An earlier revision of this section printed this program with the last four lines
+missing — no `main`, and `build` never applied — while asserting the same output.
+That version does not run at all (`E-NO-MAIN`), and merely adding a bare `main`
+still prints nothing, because a top-level nullary binding is lazy and the
+application is never forced. The defect is precisely the one this document exists
+to warn about: **a probe that looks like it passed.** It is recorded rather than
+quietly corrected.
+
+The mechanism is structural, not a
+missing check: a graded signature deliberately carries **no row on the method's
+own arrows** — that is the whole point of moving the effect into the index — so an
+impl that performs rather than defers has nothing to charge it. The per-arrow
+bound of #803 cannot see it either, because applying the callback contributes only
+the *variable* `e`, never a concrete atom (the bound's own precision argument,
+above, says exactly this). §6.7 states the obligation this exposes.
+
+`stdlib/async.mdk`'s `map`/`pure` still apply the callback
+**eagerly**, inline in the constructor arm (`map f (Done a) = Done (f a)`,
+`stdlib/async.mdk`). Two candidate resolutions were named neutrally here while
+the fork stood; the verdict follows them:
+
+- **defer the arm** (`gmap g (Done a) = Suspend (u => Done (g a))`), keeping
+  construction pure per the discharge-at-`grun` story above, at the cost of an
+  operational-semantics change to Async's eager fast path; or
+- **keep the arm eager** and charge the callback's row on the method's own
+  arrow instead of only its result index, which changes the signature
+  discipline described above rather than the impl.
+
+**RESOLVED (owner: Val, 2026-08-17; recorded on #823): DEFER the arm.** Graded
+impls suspend the constructor fast path (`deferMap g (Done a)` builds
+`Suspend (u => Done (g a))` rather than applying `g` inline); construction
+stays genuinely pure and the callback's row fires at force time, per the
+discharge story above. Accepted costs: a map/bind on an already-`Done` value
+allocates a `Suspend` and pays one extra force round, and the eager reduction
+is not preserved in the graded family. The eager-and-charge option was declined
+because the charge lands on the method's *declared* arrow — every impl and call
+site pays it — which rejects the pure-context builder that is this discipline's
+central use case. An explicitly-charged eager sibling method remains addable
+later as a separate decision. #823 migrates Async against this verdict.
+
+⚠️ **Read the fork correctly — and this document had it a notch wrong.** An earlier
+revision of this paragraph said the probe makes the choice load-bearing because
+"option 2 is what makes an eager impl expressible without laundering", implying
+option 1 is merely the safe one and option 2 the enabling one. Per #1095, **both
+options above are sound as stated**: deferring is silent at construction, and an
+explicit `→^{e}` on the method arrow *is* correctly enforced at the call site. What
+is false is that the choice is **free**. The unsound shape is neither of them — it
+is the *uncharged* signature this section's own examples give (`gmap : (a →^{e} b)
+→ f e a → f e b`, no row on the method's arrows), which is what the probe above
+exercises and what #823 was on course to ship while the fork stood unmade (it
+is now made — the resolution above). §6.7, finding 2, gives the mechanism.
+
+**Independent grades (#821) are LANDED.** A row's tail cell may stand for a
+JOIN of several tails (`EJoin` in `compiler/types/typecheck.mdk`); written
+`<L | e | e2>` for a row with labels and `f (e | e2) b` in an index slot. The
+discipline above holds in the implementation: unification never decomposes a
+join — a join is solved only by binding its FLEXIBLE members to the other
+side's residue (the open-absorbs rule generalized to sets), a rigid member (a
+method effect variable inside the impl body being checked) is never bound,
+and a rigid member with nothing to match is a mismatch (`unifyJoinRows`). A
+join with fewer than two unbound members is a plain row again, so joins are
+only ever visible where two genuinely distinct variables meet: inside a graded
+impl body, where performing `e` (forcing the argument) and `e2` (applying the
+callback) into one ambient row now yields `e ⊔ e2` instead of forcing
+`e ~ e2` (`performEffect` joins rather than links when a tail is rigid), and
+in a written join. Graded-lite (one shared grade) remains valid and is what
+the prelude's `Deferred*` family ships; the join form is the general one.
+Design driver and phased plan: #820 (interface heads / kinds first — #822 —
+then the graded-lite surface; stdlib/Async migration #823; `do`-notation
+routing #824; the join algebra #821).
+
+**Orthogonality to dictionaries (restated).** When an interface method's signature
+carries an effect variable (`andThen : m a → (a →^e m b) →^e m b`), the effect var
+generalizes and instantiates exactly as above and is **independent** of the
+dictionary that resolves `m`'s instance. Parameters ride as inert data on the row;
+the dict machinery keys on labels/methods and never inspects a parameter. A change
+to effect parameters touches unification and the escape check **only** — never
+dispatch. Graded interfaces preserve this: a grade rides the *type index*, joined
+by signature shape at elaboration — never routed, never inspected by dispatch.
+
+---
+
+### 6.1 The kind grammar, and the `Effect` kind
+
+A type-parameter kind is written on the **declaration head**:
+
+```
+Kind   ::=  Type  |  Effect  |  Kind → Kind  |  ( Kind )
+TyParam ::= name  |  ( name : Kind )
+```
+
+The arrow **associates to the right**, as everywhere else: `Effect → Type → Type`
+is `Effect → (Type → Type)`, the kind of a constructor that takes an effect row
+first and a value type second. Parenthesisation is the only way to write a
+left-nested kind (`(Type → Type) → Type`).
+
+`Effect` is the kind of an effect row `φ` (§1). A parameter of kind `Effect` may be
+instantiated only by a row — a closed one (`⟨ ⟩`, `⟨Stdout⟩`), an open one, or an
+effect variable — and may occur only where §1's grammar admits a `φ`: an arrow's
+latent row, or an `Effect`-kinded argument position of some type constructor. A
+parameter of kind `Type` may not.
+
+**Why this is a grammar addition and not a keyword.** A `data` head's *effect*
+parameter needs only the atomic kind `Effect`; if that were the whole feature, a
+marker word would do. An **interface** parameter is a type *constructor* — the
+whole point of `DeferredThenable` is to abstract over `f`, not over `f e a` — so
+its kind is an arrow, `Effect → Type → Type`, and arrows compose. That forces a
+grammar for kinds rather than a fixed vocabulary of them.
+
+**Arrow kinds on `data` heads are in scope too, because Medaka already has them.**
+This was probed, not assumed: on a binary built from `main` (2026-07-26) both
+
+```
+data Wrap f a = W (f a)                     -- f : Type → Type
+data Fix f = In (f (Fix f))                 -- f : Type → Type, recursively
+```
+
+typecheck (`check` exit 0) and the first also runs. So a `data` parameter can
+already be higher-kinded by inference, and the grammar must be able to *write*
+what inference already accepts. (§6.3 nevertheless keeps that particular kind
+inferred.)
+
+### 6.2 Where a kind annotation is legal
+
+A kind annotation binds a **parameter**, so it is legal exactly where a
+declaration binds type parameters:
+
+| Form | Annotation |
+|---|---|
+| `data T (p : κ) … = …` | yes |
+| `newtype T (p : κ) … = …` | yes |
+| `type T (p : κ) … = …` (alias) | yes |
+| `interface I (p : κ) … where …` | yes |
+| `impl I …` | **no** |
+
+**`impl` heads carry no annotation.** An impl head *names types*; it does not bind
+parameters (`DImpl { iface, tys : List Ty, … }` in `compiler/frontend/ast.mdk` —
+the head is a list of **types**, where every other head is a list of parameters).
+Type variables do occur in an impl head — `impl Mappable (Async e)` — but they are
+*implicitly* bound and their kinds are already fixed from two sides at once: by the
+interface's declared parameter kind, and by the head constructor's own declared
+kinds. Admitting an annotation there would create a third source of truth for a
+kind that has no freedom left, and there is nothing it could express that the two
+declarations do not already say. The same reasoning covers `requires` clauses.
+
+A signature (`f : …`) also binds type variables implicitly and likewise takes no
+kind annotation; the kinds of the variables in a signature are determined by the
+constructors they are applied to.
+
+### 6.3 Partial annotation, and the surgical rule
+
+**Partial annotation is legal, and is the common case.** `data Async (e : Effect)
+a` annotates `e` and leaves `a` bare. Requiring all-or-nothing per head would force
+`(a : Type)` noise onto the one declaration in a file that happens to need an
+effect index.
+
+**Declaration replaces inference of `Effect`-kindedness ONLY.** This is the
+surgical rule, and it is the whole scope of the change:
+
+```
+                          κ contains NO occurrence of Effect, anywhere in it
+(kind-default)  ─────────────────────────────────────────────────────────────
+                an UNANNOTATED parameter may be inferred at κ
+```
+
+The side condition has to be stated over the *whole* kind, not over its result:
+`{Type, arrow kinds}` would admit `Effect → Type`, which is precisely what the rule
+forbids, and "excluded from the codomain" is wrong for the same reason — in
+`Effect → Type → Type` the `Effect` sits in the **domain**.
+
+An unannotated parameter still gets its `Type`-versus-arrow structure from how it
+is used — `interface Mappable f` still infers `f : Type → Type` from `f a`, and
+`data Wrap f a = W (f a)` still infers `f : Type → Type` (§6.1). What an
+unannotated parameter can **never** be is `Effect`, or any kind with an `Effect`
+inside it: that kind is reachable only by writing it. So the defaulting rule is not
+"unannotated means `Type`" — it is "unannotated means *whatever arity inference
+determines, drawn from the `Effect`-free kinds*."
+
+**A parameter's RESOLVED kind** is its declared kind where one is written, and its
+inferred kind otherwise. Every rule below is stated over the resolved kind, which
+is what makes partial annotation (a `data Async (e : Effect) a` whose `a` is bare)
+well-defined rather than leaving `a` with no κ to check against.
+
+**Corollary: the migration is compulsory, not opportunistic.** `data Async e a =
+Done a | Suspend (Unit →^e Async e a)` — today's spelling, no annotation — becomes
+**ill-kinded** under this rule: the `Suspend` field demands `Effect` at `e`, and an
+unannotated parameter cannot be `Effect`. That is a deliberate consequence of
+*replace* rather than *augment* (nothing keeps a spooky fallback alive), and it is
+why the migration list below is a hard prerequisite rather than a cleanup. It also
+makes the change **loud**: every existing `Effect`-kinded declaration fails with a
+kind error rather than silently re-kinding. (Loud, but not necessarily *at the
+head* — §6.4's rule detects the contradiction at the **field** whose effect tail
+demands `Effect`, which is where the evidence is. Whether the diagnostic should
+also point back at the unannotated head is a presentation choice for the
+implementation.)
+
+**The alternative, considered and rejected: annotate everything.** Full annotation
+— every parameter of every `data`/`newtype`/`type`/`interface` head carries its
+kind, and nothing is inferred — is the more uniform language and would have made
+§6.4's consistency rule a plain equality check with no inference to reconcile
+against. It was rejected on migration cost. Derived, not estimated:
+
+```sh
+# every parameterised declaration head in the shipped tree
+grep -rEc '^(public )?(export )?(data|newtype|type|interface) [A-Za-z_][A-Za-z0-9_]* [a-z]' \
+  stdlib/*.mdk compiler/*/*.mdk sqlite/lib/*.mdk | awk -F: '{s+=$2} END {print s}'
+```
+
+**47** heads at the time of writing — every prelude interface in `stdlib/core.mdk`
+(`Mappable f`, `Applicative f`, `Thenable m`, `Foldable t`, `Traversable t`, `Eq
+a`, `Ord a`, …) among them. Against that, the surgical rule's migration is the set
+of declarations that are `Effect`-kinded **today** — same file scope, so the two
+numbers compare:
+
+```sh
+awk '
+function flush() { if (inbody && hit) print decl; inbody=0; hit=0 }
+/^(public )?(export )?(data|newtype) [A-Za-z_][A-Za-z0-9_]* [a-z]/ {
+  flush(); decl=FILENAME":"FNR; inbody=1; hit=0; if ($0 ~ /<[a-z][a-z0-9]*>/) hit=1; next }
+/^[^ \t]/ { flush() }
+{ if (inbody && $0 ~ /<[a-z][a-z0-9]*>/) hit=1 }
+END { flush() }' stdlib/*.mdk compiler/*/*.mdk sqlite/lib/*.mdk
+```
+
+**Two**, at the time of writing: `stdlib/async.mdk:26` (`export data Async e a`)
+and `compiler/eval/eval.mdk:90` (`public export data Value e`). For the fixtures,
+the glob must be built with `find` — **there are no `.mdk` files directly under
+`test/`**, so a `test/*.mdk` argument makes `awk` exit fatal having matched
+nothing:
+
+```sh
+find test -name '*.mdk' -print0 | xargs -0 awk '<the same program>'
+```
+
+which yields **13**.
+
+⚠️ **That is a floor, not the fixture total.** The census program matches
+`data|newtype` only, so it is structurally blind to `interface` and `type` heads —
+and the graded fixtures (`test/typecheck_error_fixtures/graded_*.mdk`,
+`test/engine_fixtures/graded_iface_async.mdk`, and the `check_module_fixtures`
+graded/row families) declare `Effect`-kinded *interfaces*. No single grep decides
+that for you, because today's interface rule is the slot-and-tail **co-occurrence**
+rule of §6.8, not a textual pattern — enumerate those families by hand. No shipped
+**interface** is `Effect`-kinded yet, so the `stdlib/` interface half of the
+migration is greenfield; the *fixture* half is not.
+
+⚠️ The decision record for this feature said **one** (`stdlib/async.mdk` alone,
+"the migration is ONE LINE"). That count was wrong: `Value e` is `Effect`-kinded
+too, via `VPrim (Value e →^e Value e)` and `VThunk (Unit →^e Value e)`. Two is
+still small enough that the rationale stands — but this is now the *third* count in
+this arc asserted and found wrong (the third being a `test/*.mdk` recipe on this
+very page that matched nothing while printing a correct number), so **run the
+command, do not trust the number**, including every one on this page.
+
+Both writings are recorded here so the project owner can overrule the choice with
+the costs in front of them.
+
+### 6.4 Kind consistency: the two directions, which are NOT symmetric
+
+Declaring a kind creates an obligation between the head and the body. It runs in
+two directions and they behave differently.
+
+**(a) Declared kind CONTRADICTED by usage — an error.** If a parameter is declared
+`Type` but occurs where §1's grammar demands a row, or declared `Effect` but occurs
+where a monotype is demanded, the declaration is ill-kinded:
+
+```
+                Δ = the head's RESOLVED kinds (§6.3: declared where written,
+                    inferred otherwise)
+                Δ ⊢ τ : κ   for every field/method type τ of the declaration
+(kind-decl)  ────────────────────────────────────────────────────────────────
+                the declaration is well-kinded
+```
+
+so `data Async (e : Type) a = Mk (Unit →^e a)` fails: the field's arrow puts `e` in
+latent-row position, which demands `Effect`, and the head says `Type`. Symmetrically
+`data Box (e : Effect) a = Mk e` fails: `Mk`'s field position demands a monotype.
+
+The diagnostic is **`T-EFFECT-KIND-MISMATCH`**. That name also **renames the
+shipped `T-ROW-KIND-MISMATCH`** (done), which reports the *use*-site half of the
+same rule ("a row was written here, but this type-argument position isn't
+row-kinded"); the rename follows the kind's name, since every other effect
+diagnostic already says *effect* (`T-EFFECT-LEAK`, `T-EFFECT-UNDETERMINED`,
+`T-EFFECT-ARG-UNCOVERED`, `T-EFFECT-LAUNDER`). Whether the *declaration*-site
+contradiction above should share that one code or take its own is a taxonomy
+question this spec does not settle — see §6.9 (Q2).
+
+**(b) Declared `Effect`, never used in effect-tail position — a *phantom* index.**
+`data Box (e : Effect) a = Mk a`. This is the direction the two are not symmetric
+in, and it needs splitting into two questions that were previously run together.
+
+*What today's inference does, stated precisely.* Under the retired rule this was
+not "rejected" — the parameter was simply **never `Effect`-kinded**, since
+`inferParamKinds` reads kindedness off a field's effect tail and there is no such
+field. Writing a row in that slot then drew the *use*-site error. Probed
+(2026-07-26): `data Box e a = Mk a` with `useBox : Box <Stdout> Int → Int` →
+`T-EFFECT-KIND-MISMATCH` at the row; the control `data Box e a = Mk (Unit →^e a)` →
+`check` exit 0. So the phantom shape was unreachable rather than diagnosed.
+
+*As a declaration, in isolation: **legal**.* A phantom `Effect` parameter cannot
+launder, and the argument closes against this document's own laws rather than by
+appeal to intuition:
+
+- §5's **no-laundering law** governs *elimination of an effectful value*. A phantom
+  index means **no field's type mentions `e`**, so no row can be *stored* under it;
+  with nothing stored, no elimination can fail to charge what was stored. There is
+  no effectful value to eliminate on account of `e`.
+- §8's **erasure** gives `e` no runtime meaning, so §8's single-meaning law is
+  untouched: the value a program computes cannot depend on a parameter that indexes
+  nothing.
+- §9's **capability confinement** bounds the authority exercised at each label by
+  the manifest. A phantom index adds no atom to any inferred row (nothing performs
+  through it), so it cannot *lower* a bound; at worst a downstream signature
+  demands a row that is never produced, which is **over**-approximation — §4's
+  stance exactly: over-rejection is a completeness gap, never a soundness hole.
+
+*A consequence worth naming: a shipped fixture's verdict changes.*
+`test/typecheck_error_fixtures/graded_ctor_phantom_arg.mdk` pins today's rejection
+of exactly this shape (`data Box e a = Mk a` used as `Box e Unit` in a method
+signature), and its own comment explains that the pair with
+`graded_ctor_row_arg_ok.mdk` "differs by ONE constructor field" — the field being
+what *infers* the kind. Once the kind is written, the field stops being the
+discriminator and that pair no longer proves what it was built to prove. Whether
+the phantom half should then be accepted, or rejected for a different reason, has
+to be re-decided when the feature lands; this spec's answer for the *declaration*
+is "legal", which is not by itself an answer for that fixture's method signature.
+
+*As a **graded instance head**: NOT established — see §6.9 (Q3).* The three
+arguments above are about a declaration standing alone; none of them licenses
+`impl DeferredThenable Box` for a phantom-indexed `Box`. Reason to doubt: a graded
+method's arrows carry no row by design (§6.7), so the family's soundness rests on
+impls *storing* the callback rather than performing it — and a phantom-indexed
+container has nowhere to store one. Its only possible `gandThen` must apply the
+callback, which is precisely the shape probed to launder in §6 above. This spec
+therefore settles the declaration and explicitly leaves the instance-head question
+open, rather than deciding it by extension.
+
+### 6.5 `requires`-chain kind agreement
+
+A superinterface constraint applies the subinterface's parameters to the
+superinterface, so it is an ordinary kind application and must check as one:
+
+```
+                interface I p … requires J p
+                κ  = p's RESOLVED kind in I   (§6.3)
+                κ' = the RESOLVED kind of J's corresponding parameter
+(kind-req)  ──────────────────────────────────────────────────────────
+                well-kinded iff κ = κ'
+```
+
+pointwise over every argument of every `requires` head, and over the whole chain
+transitively. A mismatch is an error **at the declaration of `I`** — not at an
+impl, not at a use site — since it is decidable from the two declarations alone.
+
+Kind equality here is syntactic on the grammar of §6.1: there is no subkinding and
+no coercion between `Type` and `Effect`.
+
+The `Deferred*` family is therefore uniformly `Effect → Type → Type` along its
+chain:
+
+```
+interface DeferredApplicative (f : Effect → Type → Type)
+  requires DeferredMappable f where …
+```
+
+and, for the same rule, `interface DeferredApplicative (f : Effect → Type → Type)
+requires Mappable f` is **ill-kinded**: `Mappable`'s parameter is `Type → Type`.
+That is not an accident of naming — it is §6.6's "neither family subsumes the
+other", showing up as a kind error.
+
+### 6.6 Two families, and why neither subsumes the other
+
+§6's opening states the semantic difference (effects *now*, on the method arrow,
+versus effects *registered now and produced later*, in the index). The structural
+consequence is that the plain and `Deferred*` hierarchies are **peers**: neither
+can be derived from the other, and the `requires` rule of §6.5 forbids chaining
+them.
+
+A fully general signature would unify them —
+
+```
+andThen : m e a → (a →^{e₂} m e' b) →^{e₂} m (e ⊔ e') b
+```
+
+— since a strict container is the case `e = e' = ⟨ ⟩`. Getting there needs one of
+two things, both far larger than this arc:
+
+- **a phantom index on every ordinary container**, so `List` becomes `List ⟨ ⟩ a`
+  and every existing signature, impl, and error message grows a slot that means
+  nothing for it; or
+- **kind polymorphism**, so a `Type → Type` constructor can fill an
+  `Effect → Type → Type` slot (`∀κ. (κ → Type → Type) → …`), which is a change to
+  the kind grammar of §6.1 and to unification, not a change to the stdlib.
+
+Two families is therefore the *semantically honest* factoring, not an encoding
+accident: the families really do differ in when the effect is produced, and the
+type system says so.
+
+⚠️ **Declared kinds also dissolved a constraint that shaped the earlier design.**
+Under the retired inference rule an interface is `Effect`-kinded only if some
+method uses the *same variable* both at the index slot and in an effect tail, so
+the family's factoring was partly forced by what inference could see rather than by
+what reads well. With kinds written, factoring is a free choice — which is why
+`Deferred*` can mirror the plain hierarchy exactly, `requires` chain and all.
+
+Be precise about **which** methods that constraint actually bit, because a coarser
+version of this claim was wrong and is corrected here. The first two cases are
+**probed** (2026-07-26); the third is **derived**, and says so — it cannot be
+probed, for a reason that is itself worth recording:
+
+- `gpure : a → f e a` alone — **not** `Effect`-kinded. *Observed:* nothing puts `e`
+  in an effect tail, so a plain two-parameter instance head is accepted, `check`
+  exit 0 (§6.8's non-locality pair turns on exactly this).
+- **graded-lite** `gmap : (a →^{e} b) → f e a → f e b` alone — **`Effect`-kinded
+  after all.** The callback's row and the index are the *same* variable, so the
+  co-occurrence rule fires. *Observed:* a sole-method interface already treats `f`
+  as `Effect → Type → Type`, and a plain head draws `T-IMPL-KIND-MISMATCH`. An
+  earlier revision said `gmap` could not stand alone; that is **false** in this
+  form.
+- the **join** form `gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b` — index and
+  callback row are *distinct* names, so the co-occurrence rule does not fire.
+  (Historical: until #821 landed the join spelling did not parse — a type-level
+  row join was unrepresentable while `EffRow` carried one optional tail. It
+  parses now, `f (e | e2) b` / `<L | e | e2>`; the point below describes the
+  pre-#821 tree.)
+  The result is read off `anySlotIsRow` (`compiler/types/typecheck.mdk:8299-8302`),
+  which fires only when a **bare name** at slot *i* also appears in that same
+  signature's tail set. The nearest *expressible* analogue —
+  `gmap : (a →^{e₂} b) → f e a → f e b`, distinct names, no join — is **observed**
+  to fail with `T-EFFECT-ARG-UNCOVERED` rather than `T-IMPL-KIND-MISMATCH`, i.e.
+  the interface is never kinded graded at all. That is the form the earlier claim
+  was true of, and the form §6's signature block uses.
+
+So the constraint is real but narrower than stated: it bites the **join** family,
+and `gpure`-shaped methods in either family.
+
+### 6.7 The elimination-form obligation
+
+The graded family moves the effect off the method's arrows and into the index. That
+buys "construction is genuinely pure" — and it means **the entire discharge of the
+effect happens at the eliminator**. So the eliminator carries an obligation, and it
+is stated here because it does not appear to be written down anywhere else:
+
+> **Deferred-elimination obligation.** For an effect-indexed constructor
+> `F : Effect → Type → Type`, every elimination form that *runs* a computation
+> registered in `F`'s index must **charge that index on its own latent row**: its
+> type must have the shape `F e τ̄ → … →^{φ} …` with `e ≤ φ` (§2.4). An
+> elimination form that inspects without running (a pattern match that returns the
+> stored thunk, a `isDone`-style predicate) is exempt — it discharges nothing.
+
+`runAsync : Async e a →^e a` satisfies it at `φ = e`. An `F`-eliminator that drops
+the `→^e` has re-created #817 in a new place.
+
+**It cannot be an interface method, and that is why `grun` sits outside the
+`Deferred*` block above.** The eliminator is not uniform across the family:
+`Async`'s is `f e a →^e a`, a parser-shaped container's is
+`f e a → String →^e Option a`, a resource-scoped one's takes a handle. A method
+must have *one* declared type for the whole family, and these differ in arity and
+in argument types. What generalizes is the **invariant on `φ`**, not a signature —
+so the obligation is a checkable property of each declared eliminator, not
+something an interface can impose.
+
+**Both halves are now enforced.** The index is checked at unification (#1094,
+below), and — since D-3 (#1095) — an interface method whose only non-argument
+occurrences of an argument-carried effect variable are result INDICES is
+checked at the **impl body**: the variable must stay OPEN. An impl that
+applies its `<e>`-callback (or forces an `<e>`-indexed argument) performs `e`
+on an arrow the signature declares pure, which closes `e := ⟨ ⟩` — and that
+closing is the whole signal, because the deferred arm (`Susp (u => g a)`)
+unifies `e` with the container's own thunk row and leaves it open. Reported as
+`T-EFFECT-INDEX-EAGER` from `checkImplEffVarRigidity`
+(`checkIndexOnlyEffVarsOpen`). The rule is deliberately scoped to index-only
+variables: a variable the method's own arrow charges may still close (that is
+#825's channel, pinned and out of scope). The eliminator obligation for
+ordinary functions is a consequence of §5's escape check (§6.9 Q4); for
+interface methods it is this rule.
+
+⚠️ **Status, 2026-07-30 (superseded above, kept as the record): Finding 1 is
+CLOSED; Finding 2 was OPEN until D-3.** The two findings
+below were both live when this section was written and their statuses have since
+diverged. **#1094 closed 2026-07-27** (PR #1102): `unifyN (TEff r1) (TEff r2) =
+unifyIndexRow r1 r2` (`compiler/types/typecheck.mdk:3396`) now routes an
+`Effect`-kinded index slot through `unifyIndexRow:1040` / `unifyIndexRowN:1043` /
+`indexRowEqCheck:1056`, which enforces exactly the invariant-equality rule §9
+specifies. **#1095 remains OPEN.** Finding 1's text is kept below because it is the
+record of what was wrong and why the fix had to land at unification rather than
+downstream — but every present-tense claim in it that the slot is unchecked is
+**historical**, and the corrections at its end say which. The division of labour the
+two findings' closing note describes is unchanged: fixing either always left the
+other standing, and one of them is still standing.
+
+**Finding 1 (CLOSED — #1094, fixed 2026-07-27) — the `Effect`-kinded argument slot
+was not checked at unification.** On the shipped `Async`, as of 2026-07-26:
+
+```
+import async.{Async, liftIO, runAsync}
+noisy : Async <IO> Int
+noisy = liftIO (u => let _ = println "LAUNDERED" in 1)
+pureNow : Async <> Int
+pureNow = noisy                    -- accepted
+sneaky : Int                       -- NO row at all
+sneaky = runAsync pureNow
+main = println sneaky
+```
+
+`check` exit 0; `run` prints `LAUNDERED`. The control discriminates cleanly:
+swapping the *value* slot instead (`Async <IO> String` where `Async <IO> Int` is
+demanded) is rejected with `Type mismatch: String vs Int`, so the hole is specific
+to the `Effect`-kinded slot. #1094's own repro is smaller still — **no import, no
+interface and no impl** (`data Box e a = MkBox (Unit →^e a)`, a `Box <Stdout> Int`
+rebound as `Box ⟨ ⟩ Int`, then unboxed into a binding typed plain `Int` that
+prints) — and both engines are equally wrong, with no divergence to expose it. So
+it is neither #1028's cross-module kind loss nor #804's cross-module spurious
+*rejection* (both closed, both cross-module), and not #817 or #825, both of which
+are dispatch-side.
+
+The mechanism, per #1094, is worth stating here because it says exactly *which*
+part of this section the implementation is missing. An `Effect`-kinded argument
+elaborates through `kindArgMono … KRow` to `TEff (rowArgOf …)`. For the shape at
+issue — a **written closed row** (`<Stdout>`, `⟨ ⟩`) in the index slot — `rowArgOf`
+yields a closed `EffRow atoms None`; `unifyN (TEff r₁) (TEff r₂)` then routes to
+the arrow-row unifier, whose closed-versus-closed arm — `unifyRowN (EffRow _ None)
+(EffRow _ None) = ()`, `compiler/types/typecheck.mdk:981` — is a **documented
+silent no-op**. Its comment justifies the leniency for *arrows*, where direction is
+recovered later by `launderEscapeFromLog`, and signs off with *"a genuine mismatch
+elsewhere surfaces as a caller-level type mismatch"*. That justification does not
+transfer: **an index is invariant and has no later consumer.**
+
+(`rowArgOf` is not closed-only in general — `compiler/types/typecheck.mdk:4131-4146`:
+its `TyVar` arm yields an **open** `EffRow [] (Some cell)` when the name resolves
+through the shared `etbl`, and its catch-all yields `pureRow`. The closed reading
+above is scoped to the written-closed-row case the probe exercises.)
+
+Per #1094, giving either side an **open tail** reaches the guarded arms, which run
+`effectLeakCheck` and reject the identical program — the sharpest available
+evidence that the rule this section states is *implementable*, and merely unreached,
+in this position. Note the open-tail arms are not one uniform path: a bare `<e>`
+target can silently absorb, with the rejection landing downstream rather than at the
+index, so "open tail rejects" should be read as *the machinery exists and fires*,
+not as a drop-in specification of where the diagnostic belongs. A corollary #1094
+also records: because `rowArgOf`'s catch-all returns the pure row, an ordinary
+**type** written in the index slot (`Box Int Int`) is silently read as
+`Box ⟨ ⟩ Int`.
+
+**Resolution (2026-07-27, PR #1102).** The fix landed exactly where the paragraph
+above predicted it had to: `unifyN`'s `(TEff, TEff)` case no longer reaches the
+arrow-row unifier at all. It dispatches to `unifyIndexRow`, whose closed-vs-closed
+and same-tail-open arms are **equality-only**, falling through to ordinary
+`unifyRowN` only when the two tails are provably distinct metavariables (a genuine
+instantiation, not an interchange). The probe above is rejected on a current binary.
+The sentence this paragraph used to end with — *"until #1094 is addressed the index
+is decorative: the graded story's soundness is currently resting on a check that does
+not run"* — was true when written and is **no longer true**; it is quoted rather than
+deleted because it is the clearest statement of what the missing check cost.
+
+⚠️ Two of Finding 1's sub-observations were **not** part of #1094's headline and
+should be re-probed rather than assumed closed with it: that `rowArgOf`'s catch-all
+returns `pureRow`, so an ordinary **type** written in the index slot (`Box Int Int`)
+reads as `Box ⟨ ⟩ Int`; and that a bare `<e>` open-tail target can absorb silently,
+landing the rejection downstream of the index. Both are recorded in this section's
+own text above, and the target architecture carries the first as a task
+(*"`rowArgOf`'s catch-all must be a kind error, not `pureRow`"*).
+
+**Finding 2 — the eager-arm fork is a soundness question, not a preference (see
+#1095).** The refinement matters and this document previously got it a notch wrong.
+Both options named in §6 above — *defer the arm*, or *keep it eager and charge the
+callback's row on the method's own arrow* — are in fact **sound as stated**:
+deferring is silent at construction, and an explicit `→^{e}` on the method arrow
+**is** correctly enforced at the call site. What is false is that the choice is
+**free**. The unsound thing is not a third *signature* — it is the **combination**
+that results from leaving the fork unmade: §6's uncharged signature,
+
+```
+gmap : (a →^{e} b) → f e a → f e b            -- no row on the method's own arrows
+```
+
+— which is exactly the signature option 1 also uses — **paired with an eager
+impl**.
+
+⚠️ **The two options are NOT symmetric, and that asymmetry is the whole content of
+the fork.** Option 1 avoids the pairing **by convention**: nothing enforces it, as
+the mechanism below shows — the B2 program printed in §6 is option 1's exact
+signature with an eager impl, `check` exit 0, and it prints. Option 2 forecloses
+the pairing **in the type system**: the row on the method's own arrow makes an
+eager impl a `T-EFFECT-LEAK` at any pure caller. So option 2 closes the hole for
+**every** impl, including ones written elsewhere by people who never read this
+document; option 1 closes it only for impls that choose to defer. (An earlier
+revision of this paragraph said option 1 "makes that pairing impossible by changing
+the impl" — false, and contradicted by the four lines immediately below it.)
+
+Ship the uncharged signature and then write an eager impl anyway, which is what
+#823 is on course to do if the fork is left unmade, and the result is **silently
+accepted** and unsound. Per #1095 the
+mechanism is `methodEffRetOccs` (`compiler/types/typecheck.mdk:1157-1164`), which
+counts a row-kinded **result-index** occurrence as discharging
+`checkArgEffVarCoverage` — but an index is a promise about *force* time, not a
+charge at *call* time, so the coverage rule of §6 ("argument-occurrence coverage")
+is satisfied by something that does not in fact charge anything. That is the
+precise seam at which the deferred family departs from the plain one, and it is why
+the eliminator obligation above cannot be left implicit.
+
+Note the division of labour between the two findings: #1094 is about the index not
+being *checked*, #1095 about an index being *miscounted as a charge*. Fixing either
+leaves the other standing.
+
+### 6.8 What declaration retires
+
+Declaring the kind replaces two *different* inference rules for one concept, and
+the fact that there were two, disagreeing, is most of the reason to retire them.
+
+- **On `data`/`newtype` heads** (`inferParamKinds`): a parameter is `Effect`-kinded
+  **iff its name appears in a field's effect-tail position**.
+- **On `interface` heads** (`declGradedScope` → `ifaceParamKindsOf` →
+  `anySlotIsRow`): a parameter's slot *i* is `Effect`-kinded **iff some single
+  method** puts a bare name at slot *i* and uses *that same name* in effect-tail
+  position in *that same signature*.
+
+Two properties motivate retiring them, both probe-established rather than argued:
+
+**1. The interface rule makes a kind a NON-LOCAL property of the method set.**
+Adding or removing an unrelated method silently re-kinds the interface. The
+resulting error names **the kinds** — prominently and well — but not **the method
+that moved**, which is the fact the writer needs and the only one the diagnostic
+cannot recover. Verified with a two-file pair differing by exactly one line
+(2026-07-26):
+
+```
+data Pair x y = MkPair y
+interface DApplicative f where
+  gpure : a -> f e a
+impl DApplicative Pair where
+  gpure a = MkPair a                 -- check exit 0
+```
+
+Adding one sibling method — `gandThen : f e a -> (a -> <e> f e b) -> f e b` — to
+that interface, changing nothing else, makes the *impl* fail:
+
+```
+Instance head has the wrong kind for interface 'DApplicative': the interface's
+type parameter is graded — kind `Row -> Type -> Type` — but `Pair` has kind
+`Type -> Type -> Type` …
+```
+
+The first program is not merely accepted, it is accepted **at a different kind**:
+`f : Type → Type → Type` in one, `Effect → Type → Type` in the other, decided by a
+method the writer of `Pair` never saw.
+
+**2. The `data` rule is not transitive**, so a parameter that *is* an effect index
+one level down is inferred `Type`. `compiler/eval/eval.mdk:88` documents this in
+shipped source and works around it by threading `Value e` whole rather than
+parameterising over the row. Verified:
+
+```
+data Later e a = Now a | Wait (Unit -> <e> Later e a)
+data Holder e = H (Later e Int)      -- `e` is inferred Type, not Effect
+useIt : Holder <IO> -> Int           -- T-EFFECT-KIND-MISMATCH at the row
+```
+
+A declared `data Holder (e : Effect) = H (Later e Int)` states the intent directly
+and needs no transitive analysis.
+
+**3. The two rules are different from each other** for the same concept — slot
+co-occurrence within one method signature versus a name in any field's tail — so
+the same idea has two definitions and a writer must know which declaration form
+they are in to predict the kind. Declaring collapses all three problems: the kind is
+written where it is bound, is local to the declaration, is transitive by
+construction, and is the same notion on every head.
+
+⚠️ **One thing declaration does NOT retire**, recorded so it is not re-derived: a
+head-declared kind does not remove an importer's dependence on the cross-module
+parameter-kind table, because `export data` (abstract export) does not publish its
+constructors and the importer therefore still reads the kind from a table rather
+than from the fields. Declared kinds kill the *variant-inference* dependency and
+the non-local rule; the table's own hazards are a separate matter (#1069).
+
+### 6.9 Open questions this spec deliberately does not settle
+
+Listed rather than smoothed over, because a guessed answer here has cost this
+document three public retractions already (PRs #999/#1001).
+
+- **Q1 — the `Deferred*` METHOD names. RESOLVED (Val, 2026-08-17; recorded on
+  #824): descriptive `defer*` words** — `deferMap` / `deferThen` / `deferPure`,
+  with the discharge method spelled `force`. This respects the binding
+  constraint (distinct from the plain family's names, since sharing them would
+  make the unqualified `andThen` that `do` desugars to pick one interface and
+  break the prelude's containers, #824) and matches the decided `Deferred*`
+  interface names rather than the fixtures' `g*` prefix. The `g*` spellings
+  this entry previously catalogued (`gandThen`/`gmap`/`grun` in
+  `test/engine_fixtures/graded_iface_async.mdk`, `gpure` in
+  `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`, the
+  fixture-internal `gth`, and `gap` — this document's own invention) are
+  historical until #823/#824 land the surface; do not add new ones. The
+  criticism that motivated the choice stands recorded: `DeferredMappable.gmap`
+  paired a descriptive interface name with a cryptic, not-even-self-consistent
+  prefix.
+- **Q2 — one diagnostic code or two. RESOLVED with the implementation: ONE code.**
+  `T-EFFECT-KIND-MISMATCH` (the renamed `T-ROW-KIND-MISMATCH`) covers the use-site
+  check, the declaration-site contradictions of §6.4 (a)/(b), the interface-head
+  cases, and the `requires`-chain disagreement of §6.5; the message text names
+  which seam fired. `compiler/DIAGNOSTIC-CODES-DESIGN.md` records the row.
+- **Q3 — a phantom-`Effect`-indexed type as a GRADED INSTANCE HEAD.** §6.4 settles
+  the declaration (legal) and explicitly does not settle this. The reason to doubt
+  is stated there; it needs deciding alongside #823's eager-arm fork, which is the
+  same question seen from the impl side.
+- **Q4 — is the §6.7 obligation a rule, or a consequence? PARTIALLY RESOLVED: a
+  consequence for ordinary eliminators, still a rule for interface methods.** This
+  was recorded as undeterminable; it is now determinable in one half, because the
+  discriminator turns out not to depend on #1094 at all — it only needs the index
+  made *concrete*. Probed:
+
+  ```
+  data Later e a = Now a | Wait (Unit -> <e> Later e a)
+  forceIO : Later <IO> a -> a                    -- declared pure, index concrete
+  forceIO (Now a) = a
+  forceIO (Wait t) = forceIO (t ())
+  ```
+
+  → **rejected**, `T-EFFECT-LEAK`: *"Function 'forceIO' declared with <> but also
+  performs <IO>"*. So the ordinary §5 binding-boundary escape check **already
+  discharges the obligation** for a declared eliminator; no separate rule is needed
+  for that case. The earlier probe that appeared to show otherwise
+  (`forceBad : Later e a → a`, accepted) is explained rather than contradicted: with
+  a *variable* index the same escape check pins `e := ⟨ ⟩`, which is honest, and the
+  launder then arrives entirely through the call site — i.e. through #1094 and
+  nothing else. **So finding 2 of §6.7's earlier framing was #1094 wearing a
+  different hat**, and the "rule vs consequence" question for ordinary eliminators
+  resolves to *consequence*, parked on #1094 for confirmation once the index is
+  checked.
+
+  The other half — interface method signatures, where #1095 showed a result-index
+  occurrence being miscounted as a charge (§6.7, finding 2) — is **now a rule with
+  something enforcing it (D-3, #1095 closed)**: an index-only effect variable must
+  stay open through the impl body, `T-EFFECT-INDEX-EAGER` otherwise (§6.7). So Q4
+  resolves as *consequence* for declared eliminators and *rule* for methods, and
+  the rule is enforced at the one seam that can see the eager application. Falsifier
+  for the resolved half, should anyone find one: an eliminator that *runs* a
+  registered computation, carries a concrete non-empty index, and is nevertheless
+  accepted. None was found.
+- **Q5 — `type` aliases with an `Effect` parameter.** §6.2 admits the annotation on
+  an alias head by symmetry with the other binding forms. Whether an alias may
+  *abstract over* a row in a way its expansion does not (partial application,
+  an alias whose right-hand side drops the parameter) was not investigated and no
+  behaviour is asserted. One cheap fact that bounds the question: **today an alias
+  parameter can never be `Effect`-kinded at all.** Probed —
+
+  ```
+  data Later e a = Now a | Wait (Unit -> <e> Later e a)
+  type LaterInt e = Later e Int
+  useIt : LaterInt <IO> -> Int          -- T-EFFECT-KIND-MISMATCH at the row
+  ```
+
+  — because the retired inference rule reads kindedness off a *variant field's*
+  effect tail and an alias has no variants (the same non-transitivity as §6.8's
+  point 2). So there is no existing behaviour to preserve or contradict here: the
+  alias case is entirely greenfield, which makes Q5 cheap to settle and means
+  nothing depends on settling it now.
+- **Q6 — the `do`-routing keyword's spelling** (#824). **RESOLVED (Val,
+  2026-08-17; recorded on #824): `defer`.** A separate keyword mirroring `do`
+  was already decided; the word is now too. The objection this entry recorded —
+  `defer` reads as "run at scope exit" to anyone arriving from Go or Zig — was
+  weighed and accepted, not dropped: Medaka has no scope-exit construct for it
+  to collide with, and `defer` is family-coherent across the whole surface
+  (`Deferred*` interfaces, `defer*` methods, `defer` blocks), which is the
+  argument that won.
+
+---
+
+
+## 9. Soundness statements (targets for a later proof/audit)
+
+- **Effect preservation (subject reduction).** If `Γ ⊢ e : τ ! φ` and `e ⟶ e'`,
+  then `Γ ⊢ e' : τ ! φ'` with `φ' ≤ φ`. Reduction never *introduces* an effect the
+  type did not already permit; the row is an upper bound preserved under evaluation.
+- **Effect progress / containment.** A running program performs, at each step, only
+  atoms within its whole-program row. No reachable primitive performs an
+  unaccounted-for label.
+- **α-soundness.** For every parameterized primitive application, the runtime
+  authority of the determining argument is admitted by the recorded parameter:
+  `⟦e_k⟧ ∈ γ(α(e_k))`. (Over-approximation; §4.)
+- **Capability confinement.** If a module type-checks with manifest `M`, every
+  authority it exercises at a label `L` is `⊑ M(L)` (§7). With a host that
+  honors `M`, the module cannot act outside its declared capabilities.
+- **Index fidelity (effect-indexed data).** For a constructor of kind
+  `Effect → Type → Type`, the index is part of the type and is checked as such:
+  `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable only when `φ₁ = φ₂`. **The index is
+  invariant**, not sub-effected — no direction of `≤` (§2.4) is licensed at this
+  slot. Without this the index carries no guarantee at all, and every statement
+  below that mentions a registered effect is vacuous.
+
+  **Correction — the rule as PR #1093 first stated it was unsound, and
+  self-contradicting.** That revision said the two were interchangeable "only
+  where the row order `≤` permits, exactly as any other type argument": covariant
+  widening, gated by `≤`. Four lines later its own ⚠️ said the arrow-unifier's
+  leniency "does not transfer to an invariant index" — the operative sentence and
+  the caveat sentence could not both be true, and this is the document's second
+  correction in this area (§6.7 finding 2 already corrected the eager-arm
+  asymmetry; see also PRs #999/#1001). It is recorded rather than quietly
+  rewritten, per that same convention.
+
+  The `≤` rule is not just internally inconsistent — it is disproven. A
+  **contravariant** `Effect`-indexed type is expressible and its kind is inferred
+  correctly:
+  ```
+  data Sink e = MkSink ((Unit -> <e> Unit) -> Int)
+  ```
+  Widening `pureSink : Sink <>` to `Sink <Stdout>` is exactly the `<> ≤ <Stdout>`
+  step the old rule licensed, and it makes a binding typed `Int` — carrying no
+  effect row at all — print at runtime, on both engines. **Why not covariance:** at
+  the time this rule was established, a parameter's polarity in `F` (co-, contra-,
+  or non-variant) was not knowable without a variance analysis, and Medaka had
+  none; the widening direction that is safe for a covariant occurrence is exactly
+  the direction that is unsafe for a contravariant one, so no uniform direction of
+  weakening could be sound. **Update (D-2, #1119, this sprint):** Medaka now
+  computes a per-parameter polarity for ordinary first-order `data` declarations
+  (`dataParamPolarityRef`), enforced at non-covariant type-constructor ARGUMENTS
+  via `T-EFFECT-PARAM-VARIANCE` — closing the analogous #1098/#1121 launder family
+  for write channels (`Ref`/`Array`) and contravariant function arguments, and (F1,
+  this sprint) closing the transitive-fixpoint gap so a forward-declared type
+  constructor converges to the correct polarity regardless of declaration order.
+  That does not reopen THIS index slot to a polarity-gated `≤`, though:
+  `unifyIndexRow` treats an `Effect`-kinded type-constructor argument as invariant
+  unconditionally, by KIND rather than by a computed polarity — which stays the
+  correct and simpler rule for indices, since equality is what the argument above
+  establishes is needed even where the polarity happens to be knowable. The
+  per-parameter analysis does not yet cover higher-kinded type-constructor heads or
+  type aliases (open follow-ups #2107, #2108). **Why invariance costs almost
+  nothing:** with *inferred* indices,
+  open-row unification already computes the join before invariance is ever asked
+  to compare two closed rows — an `if` across two branches with different tails
+  yields one joined row (`Async <Stdin, Stdout | a>`), not two concrete rows for
+  invariance to reject. Invariance only bites when a program writes two different
+  **concrete** rows into the same slot, which is exactly the case that should be
+  flagged rather than silently widened. (Established by probe.)
+
+  The removed clause — "exactly as any other type argument" — was also
+  independently wrong, and is not replaced with a repaired version of the same
+  appeal: ordinary type arguments are precisely where this covariant-widening bug
+  lives today (see #1098 — `Ref (Unit -> <> Unit)` widens to `Ref (Unit ->
+  <Stdout> Unit)`, and a write through the alias makes a no-row read print). Index
+  invariance does not rest on how sibling type-argument positions behave; it
+  stands on the variance argument above alone.
+
+  ✅ **ENFORCED since 2026-07-27 (#1094 closed, PR #1102).** This bullet read
+  *"Probed and currently FALSE on the implementation"* until 2026-07-30, and by then
+  the statement was two days stale: `unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2`
+  (`compiler/types/typecheck.mdk:3396`) routes an `Effect`-kinded index slot to
+  `unifyIndexRow:1040` / `unifyIndexRowN:1043` / `indexRowEqCheck:1056`, which is
+  equality-only on the closed-vs-closed (`:1044`) and same-tail-open (`:1046-1048`)
+  forms and falls through to ordinary `unifyRowN` (`:1049`) only when the tails are
+  distinct metavariables. The arrow-row unifier's closed-vs-closed silent no-op still
+  exists and is still correct **for arrows** — the fix was to stop routing indices
+  through it, not to change it. The *rule* stated above was never wrong; only this
+  note about the implementation was. (Also unaffected by the correction above: the
+  implementation was never enforcing `≤` at this slot either.)
+- **Deferred discharge.** Every elimination form of an effect-indexed type that
+  *runs* a registered computation charges that computation's index on its own
+  latent row (§6.7). Together with index fidelity this is what makes "registered
+  now, produced later" a conservation law rather than a convention: an effect
+  corked into an index is uncorked into a row, never dropped. For an ordinary
+  declared eliminator the §5 escape check already delivers this (§6.9 Q4). For an
+  **interface method** it does not: a result-index occurrence is currently
+  miscounted as a charge — see #1095 — so the graded family's methods are the one
+  place this statement has no enforcement behind it.
+- **Principality.** Inference computes the `≤`-least row for every term (§3); the
+  manifest is therefore the *tightest* sound description, not a conservative blanket.
+- **Coherence with erasure.** Under §8, the denotation is independent of the row;
+  well-typedness and the manifest are the only observable consequences of the
+  effect system.
+
+---
+
+## 10. How to read the conformance gaps against this spec
+
+Not the audit (separate document), but the lens. Each anticipated shortfall maps to
+a clause:
+
+- **Parameter domain coverage** → §2.1: the spec defines the `Unit/Prefix/Set/
+  Product` family; an implementation realizing only `Unit + Prefix` is *domain-
+  incomplete*, inexpressive but not unsound. Suspect any `<L {…}>`/structured-param
+  surface that fails to parse.
+- **α precision** → §4: an abstraction weaker than the idealized table
+  (missing let/`if`/`match` propagation, no interprocedural recovery) is sound but
+  *over-rejects*. Suspect a pinned-bound program refused where the spec's α would
+  accept (a `let`-bound or branch-joined literal authority collapsing to `⊤`).
+- **Manifest realization** → §7: the verified row is the deliverable; if no
+  toolchain path extracts/emits/verifies `M` on the canonical binary, the headline
+  capability feature is unreachable even though the *typing* is sound. Suspect a
+  policy/manifest command stranded on a non-canonical tool, or one checking labels
+  but not parameters.
+- **Effect-poly / data-effect threading** → §6: the `<e>` on combinators and the
+  `Effect`-kinded data parameter must generalize and instantiate as HM-for-effects.
+  Suspect a combinator that fixes a concrete label where the spec demands a variable.
+- **Declared kinds** → §6.1–§6.5: a parameter's kind is *written* on the head, and
+  only the `Type`-versus-arrow structure is still inferred (§6.3). An
+  implementation that infers `Effect`-kindedness from a field's effect tail, or
+  from slot co-occurrence in a method signature, is running the retired rule of
+  §6.8 — suspect a declaration whose kind changes when an unrelated method is added
+  or removed, and a parameter that is an effect index one level down being inferred
+  `Type`.
+- **Index fidelity and deferred discharge** → §6.7, §9: the `Effect`-kinded
+  argument slot must be checked at unification like any other, and an eliminator
+  that runs a registered computation must charge its index. Suspect a value of
+  `F <IO> τ` accepted where `F ⟨ ⟩ τ` is demanded — the *value* slot being checked
+  is not evidence that the index slot is, and an ordinary type accepted in the
+  index slot (`F Int τ` read as `F ⟨ ⟩ τ`) is the same gap seen from the other
+  side. Of the two issues once open against this clause, **#1094 (index unchecked) is
+  CLOSED** (2026-07-27, PR #1102 — see the §9 bullet) and **#1095 (a result-index
+  occurrence miscounted as a charge in a method signature) is OPEN**. Note neither
+  showed up as an engine divergence — both engines were equally wrong — so
+  `diff_compiler_engines` could not see this class, and cannot see the half that
+  remains.
+- **Erasure / backend agreement** → §8: any divergence in result (not just
+  acceptance) between evaluators traceable to effects violates the single-meaning law.
+- **`main` policy** → §7: a *language-internal* upper-bound gate on `main` would be a
+  spec deviation in the *opposite* direction — `main` is the grant root; bounding is
+  the host's job, not the type system's.
+
+---

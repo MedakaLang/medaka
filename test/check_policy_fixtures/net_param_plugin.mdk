@@ -1,7 +1,7 @@
 -- WS-1b param-level check-policy fixture.
--- `transform` returns a CLOSURE that calls a <Net Prefix> extern with a STRING
--- LITERAL; the α (known-prefix) abstract analysis fills the extern's <Net _>
--- hole with the literal:
+-- `transform` returns a CLOSURE that calls a <Net Prefix> extern whose Net
+-- authority is bound to its `url` argument, passing a STRING LITERAL; the α
+-- (known-prefix) abstract analysis resolves that argument:
 --   α("idp.example.com/api") = Known "idp.example.com/api"
 -- so transform's inferred row carries <Net "idp.example.com/api"> (on the
 -- returned arrow).  Returning a closure (rather than calling netGet directly)
@@ -13,6 +13,6 @@
 -- bare `--allow Net` (⊤) must admit.
 effect Net Prefix
 
-extern netGet : String -> <FFI, Net _> String
+extern netGet : (url : String) -> <FFI, Net url> String
 
 transform req = (u => netGet "idp.example.com/api")

@@ -3,7 +3,7 @@
 -- fires exactly once (`[box]` then `[cup]`), and the two occurrences of each reuse
 -- their own per-instance CAF, on all three engines.
 interface HasUnit a where
-  theUnit : a
+  theUnit : <Stdout> a
 
 data Box = Box String
 data Cup = Cup String

@@ -1,2 +1,2 @@
 f : Wrap <Stdout> -> Int
-main : Unit
+main : <IO> Unit

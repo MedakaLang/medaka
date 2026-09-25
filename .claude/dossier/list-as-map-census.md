@@ -5,6 +5,14 @@ detector). Fixes nothing — this is an inventory, not a patch. Every table belo
 mechanically derived; regenerate with the commands in "Regeneration" and diff against
 this file rather than hand-editing a row.
 
+The tables preserve the historical #2733 measurements, not current source counts
+or line numbers. The effects foundation retired the standalone-scheme side table:
+its old rows below are explicitly marked retired so the original totals remain
+interpretable. Its replacement is the lexical `EnvBinding` field `ebStandalone`, with
+`lookupStandaloneVar` and `lookupImportedStandalone` reading the same environment
+entry; it is no longer a run-wide association-list scan. Re-run the regeneration
+commands against the revision being measured before using any count for planning.
+
 Scope: `compiler/**/*.mdk`, excluding `*_test.mdk`, comment lines excluded via
 `grep -v '^\S*:\s*--'`.
 
@@ -34,7 +42,7 @@ semantics with no first/last-wins hazard, unlike the `typecheck.mdk`-internal
 | Collection | Record | Call sites (lookupAssoc/lookupTab/contains) | Suggested container |
 |---|---|---|---|
 | `dataParamKindsRef` | PerRun | 8 (lookupTab) | `OrdMap` (String-keyed via `TabKey`) |
-| `shadowStandaloneSchemesRef` | PerRun | 9 (lookupAssoc) + 1 field decl | `OrdMap` |
+| retired standalone-scheme side table | PerRun | 9 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `definerShadowNamesRef` | PerRun | 8 (contains) + 1 field decl | `HashSet` |
 | `definerShadowSigsRef` | PerRun | 4 (lookupAssoc) + 1 field decl | `OrdMap` |
 | `aliasTableRef` | PerRun | 5 (lookupTab) + 1 field decl | `OrdMap` |
@@ -376,7 +384,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:10999 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:11079 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:11259 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:11615 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:11615 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:11956 | lookupAssoc | `perRun.value.currentImportOriginsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:11958 | lookupAssoc | `perRun.value.currentImportDefinersRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:12075 | lookupAssoc | `perRun.value.funConstraintDeclaredRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
@@ -389,15 +397,15 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:14799 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:14811 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:15007 | lookupAssoc | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/types/typecheck.mdk:15451 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:15566 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:15667 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:15693 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:15705 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:15723 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:15762 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15451 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15566 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15667 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15693 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15705 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15723 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:15762 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:16264 | lookupAssoc | `perRun.value.definerShadowSigsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
-| compiler/types/typecheck.mdk:16416 | lookupAssoc | `perRun.value.shadowStandaloneSchemesRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
+| compiler/types/typecheck.mdk:16416 | lookupAssoc | retired standalone-scheme side table | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:16426 | lookupAssoc | `perRun.value.definerShadowSigsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:16846 | lookupAssoc | `perRun.value.definerShadowSigsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
 | compiler/types/typecheck.mdk:16852 | lookupAssoc | `perRun.value.definerShadowSigsRef.value` | graph | Ref accumulator | n/a | run-wide accumulator |
@@ -575,7 +583,7 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/types/typecheck.mdk:9333 | Ref (List | `dataParamPolarityRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9334 | Ref (List | `dataParamRowAtomsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9335 | Ref (List | `aliasTableRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
-| compiler/types/typecheck.mdk:9336 | Ref (List | `shadowStandaloneSchemesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
+| compiler/types/typecheck.mdk:9336 | Ref (List | retired standalone-scheme side table | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9340 | Ref (List | `definerShadowNamesRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9341 | Ref (List | `definerShadowSigsRef` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |
 | compiler/types/typecheck.mdk:9348 | Ref (List | `poisonedVars` | graph | Ref accumulator (record field) | n/a | run-wide accumulator field |

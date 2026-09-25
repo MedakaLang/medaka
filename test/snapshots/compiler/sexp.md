@@ -1,5 +1,5 @@
 # META
-source_lines=364
+source_lines=377
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -7,6 +7,8 @@ stages=DESUGAR,MARK
 -- the AST/parser; new variants get a matching clause here.
 
 import frontend.ast.{
+  EffAtomTy(..),
+  EffParamTy(..),
   DeriveRef(..),
   deriveRefName,
   Lit(..),
@@ -98,6 +100,8 @@ tySexp (TyRow labels tail _) =
   node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
+tySexp (TyNamed n t) = node "TyNamed" [escStr n, tySexp t]
+tySexp (TyQual t n) = node "TyQual" [tySexp t, escStr n]
 
 constraintSexp : Constraint -> String
 constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
@@ -116,11 +120,20 @@ optStrSexp : Option String -> String
 optStrSexp (Some s) = node "Some" [escStr s]
 optStrSexp None = "None"
 
--- a row atom: a bare label, or `(atom Net "pat")` when parameterized.
-effAtomSexp : (String, Option String) -> String
-effAtomSexp (l, None) = escStr l
-effAtomSexp (l, Some "_") = node "hole" [escStr l]  -- v2 Stage 2b inferred hole
-effAtomSexp (l, Some s) = node "atom" [escStr l, escStr s]
+-- a row atom: a bare label, or `(atom Net <param>)` when parameterized.  The
+-- declaration identity is not rendered, like every other origin carrier.
+effAtomSexp : EffAtomTy -> String
+effAtomSexp a = match a.eatParam
+  EPTop => escStr a.eatLabel
+  p => node "atom" [escStr a.eatLabel, effParamSexp p]
+
+effParamSexp : EffParamTy -> String
+effParamSexp EPTop = "None"
+effParamSexp (EPLit s) = escStr s
+effParamSexp (EPName n) = node "name" [escStr n]
+effParamSexp (EPSet xs) = node "set" (map escStr xs)
+effParamSexp (EPProduct axes) =
+  node "product" (map (ax => node (fst ax) [effParamSexp (snd ax)]) axes)
 
 guardSexp : Guard -> String
 guardSexp (GBool e) = node "GBool" [exprSexp e]
@@ -264,7 +277,7 @@ declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, 
     slist (map (d => escStr (deriveRefName d)) ds),
   ]
 declSexp (DUse pub path _) = node "DUse" [boolStr pub, usePathSexp path]
-declSexp (DEffect pub n dom) =
+declSexp (DEffect pub n dom _) =
   node "DEffect" [boolStr pub, escStr n, optStrSexp dom]
 declSexp (DProp pub name params body) = node "DProp" [
   boolStr pub,
@@ -367,7 +380,7 @@ deferNodeName : Bool -> String
 deferNodeName True = "EDefer"
 deferNodeName False = "EDo"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false))))
 (DTypeSig true "boolStr" (TyFun (TyCon "Bool") (TyCon "String")))
 (DFunDef false "boolStr" ((PCon "True")) (ELit (LString "true")))
@@ -408,6 +421,8 @@ deferNodeName False = "EDo"
 (DFunDef false "tySexp" ((PCon "TyEffect" (PVar "labels") (PVar "tail") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyEffect"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
+(DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
+(DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EListLit (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EVar "n")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
 (DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "args")))))
 (DTypeSig true "tailSexp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -417,10 +432,14 @@ deferNodeName False = "EDo"
 (DTypeSig false "optStrSexp" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "optStrSexp" ((PCon "Some" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "Some"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "optStrSexp" ((PCon "None")) (ELit (LString "None")))
-(DTypeSig false "effAtomSexp" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "effAtomSexp" ((PTuple (PVar "l") (PCon "None"))) (EApp (EVar "escStr") (EVar "l")))
-(DFunDef false "effAtomSexp" ((PTuple (PVar "l") (PCon "Some" (PLit (LString "_"))))) (EApp (EApp (EVar "node") (ELit (LString "hole"))) (EListLit (EApp (EVar "escStr") (EVar "l")))))
-(DFunDef false "effAtomSexp" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EApp (EApp (EVar "node") (ELit (LString "atom"))) (EListLit (EApp (EVar "escStr") (EVar "l")) (EApp (EVar "escStr") (EVar "s")))))
+(DTypeSig false "effAtomSexp" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
+(DFunDef false "effAtomSexp" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPTop") () (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel"))) (arm (PVar "p") () (EApp (EApp (EVar "node") (ELit (LString "atom"))) (EListLit (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel")) (EApp (EVar "effParamSexp") (EVar "p")))))))
+(DTypeSig false "effParamSexp" (TyFun (TyCon "EffParamTy") (TyCon "String")))
+(DFunDef false "effParamSexp" ((PCon "EPTop")) (ELit (LString "None")))
+(DFunDef false "effParamSexp" ((PCon "EPLit" (PVar "s"))) (EApp (EVar "escStr") (EVar "s")))
+(DFunDef false "effParamSexp" ((PCon "EPName" (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "name"))) (EListLit (EApp (EVar "escStr") (EVar "n")))))
+(DFunDef false "effParamSexp" ((PCon "EPSet" (PVar "xs"))) (EApp (EApp (EVar "node") (ELit (LString "set"))) (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "xs"))))
+(DFunDef false "effParamSexp" ((PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "node") (ELit (LString "product"))) (EApp (EApp (EVar "map") (ELam ((PVar "ax")) (EApp (EApp (EVar "node") (EApp (EVar "fst") (EVar "ax"))) (EListLit (EApp (EVar "effParamSexp") (EApp (EVar "snd") (EVar "ax"))))))) (EVar "axes"))))
 (DTypeSig false "guardSexp" (TyFun (TyCon "Guard") (TyCon "String")))
 (DFunDef false "guardSexp" ((PCon "GBool" (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "GBool"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")))))
 (DFunDef false "guardSexp" ((PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "GBind"))) (EListLit (EApp (EVar "patSexp") (EVar "p")) (EApp (EVar "exprSexp") (EVar "e")))))
@@ -508,7 +527,7 @@ deferNodeName False = "EDo"
 (DFunDef false "declSexp" ((PCon "DFunDef" (PVar "p") (PVar "n") (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "DFunDef"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
 (DFunDef false "declSexp" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataDerives" (PVar "ds"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DData"))) (EListLit (EApp (EVar "visSexp") (EVar "vis")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "ps"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "variantSexp")) (EVar "vs"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EVar "escStr") (EApp (EVar "deriveRefName") (EVar "d"))))) (EVar "ds"))))))
 (DFunDef false "declSexp" ((PCon "DUse" (PVar "pub") (PVar "path") PWild)) (EApp (EApp (EVar "node") (ELit (LString "DUse"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "usePathSexp") (EVar "path")))))
-(DFunDef false "declSexp" ((PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom"))) (EApp (EApp (EVar "node") (ELit (LString "DEffect"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "optStrSexp") (EVar "dom")))))
+(DFunDef false "declSexp" ((PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") PWild)) (EApp (EApp (EVar "node") (ELit (LString "DEffect"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "optStrSexp") (EVar "dom")))))
 (DFunDef false "declSexp" ((PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "DProp"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "propParamSexp")) (EVar "params"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DFunDef false "declSexp" ((PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "DTest"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "exprSexp") (EVar "body")))))
 (DFunDef false "declSexp" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PVar "p")) (rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "t"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DTypeAlias"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "ps"))) (EApp (EVar "tySexp") (EVar "t")))))
@@ -547,7 +566,7 @@ deferNodeName False = "EDo"
 (DFunDef false "deferNodeName" ((PCon "True")) (ELit (LString "EDefer")))
 (DFunDef false "deferNodeName" ((PCon "False")) (ELit (LString "EDo")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false))))
 (DTypeSig true "boolStr" (TyFun (TyCon "Bool") (TyCon "String")))
 (DFunDef false "boolStr" ((PCon "True")) (ELit (LString "true")))
@@ -588,6 +607,8 @@ deferNodeName False = "EDo"
 (DFunDef false "tySexp" ((PCon "TyEffect" (PVar "labels") (PVar "tail") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyEffect"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
+(DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
+(DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EListLit (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EVar "n")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
 (DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "args")))))
 (DTypeSig true "tailSexp" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -597,10 +618,14 @@ deferNodeName False = "EDo"
 (DTypeSig false "optStrSexp" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "optStrSexp" ((PCon "Some" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "Some"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "optStrSexp" ((PCon "None")) (ELit (LString "None")))
-(DTypeSig false "effAtomSexp" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "effAtomSexp" ((PTuple (PVar "l") (PCon "None"))) (EApp (EVar "escStr") (EVar "l")))
-(DFunDef false "effAtomSexp" ((PTuple (PVar "l") (PCon "Some" (PLit (LString "_"))))) (EApp (EApp (EVar "node") (ELit (LString "hole"))) (EListLit (EApp (EVar "escStr") (EVar "l")))))
-(DFunDef false "effAtomSexp" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EApp (EApp (EVar "node") (ELit (LString "atom"))) (EListLit (EApp (EVar "escStr") (EVar "l")) (EApp (EVar "escStr") (EVar "s")))))
+(DTypeSig false "effAtomSexp" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
+(DFunDef false "effAtomSexp" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPTop") () (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel"))) (arm (PVar "p") () (EApp (EApp (EVar "node") (ELit (LString "atom"))) (EListLit (EApp (EVar "escStr") (EFieldAccess (EVar "a") "eatLabel")) (EApp (EVar "effParamSexp") (EVar "p")))))))
+(DTypeSig false "effParamSexp" (TyFun (TyCon "EffParamTy") (TyCon "String")))
+(DFunDef false "effParamSexp" ((PCon "EPTop")) (ELit (LString "None")))
+(DFunDef false "effParamSexp" ((PCon "EPLit" (PVar "s"))) (EApp (EVar "escStr") (EVar "s")))
+(DFunDef false "effParamSexp" ((PCon "EPName" (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "name"))) (EListLit (EApp (EVar "escStr") (EVar "n")))))
+(DFunDef false "effParamSexp" ((PCon "EPSet" (PVar "xs"))) (EApp (EApp (EVar "node") (ELit (LString "set"))) (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "xs"))))
+(DFunDef false "effParamSexp" ((PCon "EPProduct" (PVar "axes"))) (EApp (EApp (EVar "node") (ELit (LString "product"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ax")) (EApp (EApp (EVar "node") (EApp (EVar "fst") (EVar "ax"))) (EListLit (EApp (EVar "effParamSexp") (EApp (EVar "snd") (EVar "ax"))))))) (EVar "axes"))))
 (DTypeSig false "guardSexp" (TyFun (TyCon "Guard") (TyCon "String")))
 (DFunDef false "guardSexp" ((PCon "GBool" (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "GBool"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")))))
 (DFunDef false "guardSexp" ((PCon "GBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "node") (ELit (LString "GBind"))) (EListLit (EApp (EVar "patSexp") (EVar "p")) (EApp (EVar "exprSexp") (EVar "e")))))
@@ -688,7 +713,7 @@ deferNodeName False = "EDo"
 (DFunDef false "declSexp" ((PCon "DFunDef" (PVar "p") (PVar "n") (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "DFunDef"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
 (DFunDef false "declSexp" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataDerives" (PVar "ds"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DData"))) (EListLit (EApp (EVar "visSexp") (EVar "vis")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "ps"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "variantSexp")) (EVar "vs"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EVar "escStr") (EApp (EVar "deriveRefName") (EVar "d"))))) (EVar "ds"))))))
 (DFunDef false "declSexp" ((PCon "DUse" (PVar "pub") (PVar "path") PWild)) (EApp (EApp (EVar "node") (ELit (LString "DUse"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "usePathSexp") (EVar "path")))))
-(DFunDef false "declSexp" ((PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom"))) (EApp (EApp (EVar "node") (ELit (LString "DEffect"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "optStrSexp") (EVar "dom")))))
+(DFunDef false "declSexp" ((PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") PWild)) (EApp (EApp (EVar "node") (ELit (LString "DEffect"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "optStrSexp") (EVar "dom")))))
 (DFunDef false "declSexp" ((PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "DProp"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "propParamSexp")) (EVar "params"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DFunDef false "declSexp" ((PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "DTest"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "exprSexp") (EVar "body")))))
 (DFunDef false "declSexp" ((PRec "DTypeAlias" ((rf "tyAliasPub" (PVar "p")) (rf "tyAliasName" (PVar "n")) (rf "tyAliasParams" (PVar "ps")) (rf "tyAliasRhs" (PVar "t"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DTypeAlias"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "ps"))) (EApp (EVar "tySexp") (EVar "t")))))

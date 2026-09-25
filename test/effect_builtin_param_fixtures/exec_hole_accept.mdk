@@ -1,8 +1,8 @@
--- WS-3b EXEC hole-fill on the REAL stdlib builtin `runCommand` (no local
+-- EXEC named-argument accept on the REAL stdlib builtin `runCommand` (no local
 -- extern redeclaration, no per-program `effect Exec Prefix` decl — Exec is
--- pre-registered as a Prefix domain in seedEffectDomains and stdlib/runtime.mdk's
--- `runCommand` now carries the universal inferred-hole marker `_`).  The
--- call-site α recovers the literal argv0 "/usr/bin/ls" and fills the Prefix
+-- pre-registered as a Prefix domain in seedEffectDomains).  `runCommand :
+-- (program : String) -> … <Exec program> …` binds its Exec authority to argv0;
+-- the literal "/usr/bin/ls" is that argument, so the body performs the Prefix
 -- pattern <Exec "/usr/bin/ls">.  Declared bound <Exec "/usr/bin/*"> ADMITS
 -- "/usr/bin/ls" ⇒ ACCEPT.
 runLs : Unit -> <Exec "/usr/bin/*"> Result String (Int, String, String)

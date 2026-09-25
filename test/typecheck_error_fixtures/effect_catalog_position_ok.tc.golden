@@ -1,0 +1,4 @@
+main : <IO> Unit
+readFile : String -> <FileRead> Result String String
+rename : (from : String) -> (to : String) -> <FileWrite (from | to)> Result String Unit
+writeFile : (target : String) -> String -> <FileWrite target> Result String Unit

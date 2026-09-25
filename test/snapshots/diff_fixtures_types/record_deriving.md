@@ -16,4 +16,4 @@ main =
   println (compare p4 p3)
   println (debug p1)
 # TYPES_USER
-main : Unit
+main : <IO> Unit

@@ -29,7 +29,7 @@ data Q a b = MkQ a b
 
 interface Sz a where
   size : a -> Int
-  banner : a
+  banner : <IO> a
 
 impl Sz (Q A_B C) where
   size _ = 1
@@ -44,7 +44,7 @@ impl Sz (Q A B_C) where
     MkQ MkA MkB_C
 
 main =
-  let p : Q A_B C = banner
-  let q : Q A B_C = banner
-  let p2 : Q A_B C = banner
+  let p = banner : Q A_B C
+  let q = banner : Q A B_C
+  let p2 = banner : Q A_B C
   println "\{size p}|\{size q}|\{size p2}"

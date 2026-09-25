@@ -19,4 +19,4 @@ main =
 # TYPES_USER
 catName : Cat -> String
 boxName : Box -> Int
-main : Unit
+main : <IO> Unit

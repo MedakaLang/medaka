@@ -26,7 +26,7 @@ medakaBin = getEnvOr "MEDAKA" "\{getEnvOr "MEDAKA_ROOT" "."}/medaka"
 
 -- Reads the subject first so a missing fixture fails as a missing fixture,
 -- not as a confusing `medaka check` error about a path that is not there.
-checkPasses : <Exec "_", IO> Expectation
+checkPasses : <Exec, IO> Expectation
 checkPasses =
   let subject =
     getEnvOr

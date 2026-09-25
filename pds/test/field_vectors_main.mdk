@@ -176,14 +176,14 @@ processAll counts totals stride path (l :: rest) lineNo rowNo =
     let () = processLine counts totals path lineNo l
     processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
 
-runFile : Array Int -> Array Int -> Int -> String -> <IO, FileRead "_"> Unit
+runFile : Array Int -> Array Int -> Int -> String -> <IO, FileRead> Unit
 runFile counts totals stride path = match readLines path
   Err e =>
     let () = println "FAIL\tcannot read \{path}: \{e}"
     bump totals 1
   Ok ls => processAll counts totals stride path ls 1 0
 
-runAll : Array Int -> Array Int -> Int -> List String -> <IO, FileRead "_"> Unit
+runAll : Array Int -> Array Int -> Int -> List String -> <IO, FileRead> Unit
 runAll counts totals stride [] = ()
 runAll counts totals stride (f :: rest) =
   let () = runFile counts totals stride f
@@ -209,7 +209,7 @@ parseArgs ("--stride" :: nStr :: rest) = match toInt nStr
   None => panic "field_vectors: --stride needs an integer argument"
 parseArgs files = (1, files)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main =
   let (stride, files) = parseArgs (args ())
   if files == [] then

@@ -134,9 +134,10 @@ Follow that; this file does not duplicate it.
 
 - Pure functions: no effect annotation (`extern foo : a -> b`).
 - Effectful operations carry an effect on the **return type**, read
-  automatically by the effect checker — e.g. `<Stdout>`, `<Stdin>`,
-  `<FileRead "_">`, `<Net "_">`, or the coarser `<IO>` alias. See existing
-  entries in `runtime.mdk` for examples of each. Mutation (e.g. `setRef`) is
+  automatically by the effect checker — e.g. `<Stdout>`, `<Stdin>`, a label
+  whose parameter the argument determines (`(path : String) -> <FileRead path>
+  …`), a bare label for any authority (`<Net>`), or the coarser `<IO>` alias.
+  See existing entries in `runtime.mdk` for examples of each. Mutation (e.g. `setRef`) is
   **untracked** — it carries no effect label at all, since 2026-07-14 (the
   old internal-label class, which included `<Mut>` and `<Panic>`, was removed
   outright; see `runtime.mdk:215` and `docs/stdlib/STDLIB.md` §"Design

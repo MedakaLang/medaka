@@ -122,10 +122,7 @@ parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
     len <- contentLengthOf rest
     Ok (status, contentTypeOf rest, len)
 
-recvAtLeast : Connection ->
-  Array Int ->
-  Int ->
-  <Net "_"> Result String (Array Int)
+recvAtLeast : Connection -> Array Int -> Int -> <Net> Result String (Array Int)
 recvAtLeast conn buf need =
   if arrayLength buf >= need then
     Ok buf
@@ -145,7 +142,7 @@ recvAtLeast conn buf need =
    connection that has one. -}
 readTypedResponse : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, String, Array Int, Array Int)
+  <Net> Result String (Int, String, Array Int, Array Int)
 readTypedResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
@@ -173,7 +170,7 @@ readTypedResponse conn pending = match findHeaderEnd pending 0
    response headers no other reader keeps. -}
 readHeaderResponse : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, String, Array Int, Array Int)
+  <Net> Result String (Int, String, Array Int, Array Int)
 readHeaderResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
@@ -199,17 +196,17 @@ readHeaderResponse conn pending = match findHeaderEnd pending 0
 -- | The same read for the cases that do not care what media type came back.
 readResponse : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, Array Int, Array Int)
+  <Net> Result String (Int, Array Int, Array Int)
 readResponse conn pending =
   map
     ((status, _, body, rest) => (status, body, rest))
     (readTypedResponse conn pending)
 
-mustConnect : Int -> <Net "_"> Connection
+mustConnect : Int -> <Net> Connection
 mustConnect port =
   resultOrPanic "serve_client: connect failed" (connect "127.0.0.1" port)
 
-mustSend : Connection -> Array Int -> <Net "_"> Unit
+mustSend : Connection -> Array Int -> <Net> Unit
 mustSend conn bytes = match sendAll conn bytes
   Ok () => ()
   Err message => panic "serve_client: send failed: \{message}"
@@ -504,7 +501,7 @@ ignoreResult : Result String a -> Unit
 ignoreResult (Ok _) = ()
 ignoreResult (Err _) = ()
 
-runQuery : Int -> String -> <IO, Net "_"> Unit
+runQuery : Int -> String -> <IO, Net> Unit
 runQuery port did =
   let conn = mustConnect port
   let () = mustSend conn (getRequest atprotoDidPath)
@@ -525,7 +522,7 @@ runQuery port did =
 -- | `GET /xrpc/_health` with no `Authorization` header: 200, and a
 -- `"version"` field carrying `pdsd`'s own version-string shape
 -- (`pds/serve.mdk`'s `versionString`).
-runHealth : Int -> <IO, Net "_"> Unit
+runHealth : Int -> <IO, Net> Unit
 runHealth port =
   let conn = mustConnect port
   let () = mustSend conn (getRequest healthPath)
@@ -538,7 +535,7 @@ runHealth port =
     Err _ => ()
   ignoreResult (close conn)
 
-runPipeline : Int -> <IO, Net "_"> Unit
+runPipeline : Int -> <IO, Net> Unit
 runPipeline port =
   let conn = mustConnect port
   let both = appendBytes (getRequest atprotoDidPath) (getRequest atprotoDidPath)
@@ -557,7 +554,7 @@ runPipeline port =
             "statuses \{intToString s1}, \{intToString s2}"
   ignoreResult (close conn)
 
-runKeepalive : Int -> <IO, Net "_"> Unit
+runKeepalive : Int -> <IO, Net> Unit
 runKeepalive port =
   let conn = mustConnect port
   let () = mustSend conn (getRequest atprotoDidPath)
@@ -582,7 +579,7 @@ runChunked : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runChunked port token did collection rkey text =
   let conn = mustConnect port
   let () =
@@ -627,7 +624,7 @@ corsVerdict label want got headerText =
 -- Graded on the allow-origin header as well as the status: this answer comes
 -- from `lib.server_core`'s `handleBytes` Err arm, which never reaches `handle`
 -- and so is not one of the exits that gets the header for free.
-runMalformed : Int -> <IO, Net "_"> Unit
+runMalformed : Int -> <IO, Net> Unit
 runMalformed port =
   let conn = mustConnect port
   let () = mustSend conn (toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n")
@@ -641,7 +638,7 @@ runMalformed port =
 overcapFillerBytes : Int
 overcapFillerBytes = 6400000
 
-runOvercap : Int -> <IO, Net "_"> Unit
+runOvercap : Int -> <IO, Net> Unit
 runOvercap port =
   let conn = mustConnect port
   let filler = arrayMakeWith overcapFillerBytes (_ => 65)
@@ -678,7 +675,7 @@ runOvercap port =
 idleWaitCeiling : Duration
 idleWaitCeiling = seconds 40
 
-runIdle : Int -> <IO, Net "_", Clock> Unit
+runIdle : Int -> <IO, Net, Clock> Unit
 runIdle port =
   let conn = mustConnect port
   let _ = setTimeout conn idleWaitCeiling
@@ -699,7 +696,7 @@ runIdle port =
   ignoreResult (close conn)
 
 -- | Drive one route on a connection of its own and require `want`.
-checkRoute : String -> Int -> Int -> Array Int -> <IO, Net "_"> Unit
+checkRoute : String -> Int -> Int -> Array Int -> <IO, Net> Unit
 checkRoute label port want request =
   let conn = mustConnect port
   let () = mustSend conn request
@@ -726,7 +723,7 @@ runEndpoints : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runEndpoints port token did handle collection rkey =
   let scratch = "\{rkey}scratch"
   let () =
@@ -808,7 +805,7 @@ runDeepRecord : Int ->
   String ->
   String ->
   Int ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runDeepRecord port token did collection rkey depth =
   let () =
     checkRoute
@@ -826,7 +823,7 @@ runDeepRecord port token did collection rkey depth =
     (getRequest
       "\{xrpcPath "com.atproto.repo.listRecords"}?repo=\{did}&collection=\{collection}")
 
-runResume : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runResume : Int -> String -> String -> String -> String -> <IO, Net> Unit
 runResume port did collection rkey text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getRecordPath did collection rkey))
@@ -849,7 +846,7 @@ runResume port did collection rkey text =
    composition seam, and the body must carry atproto's `AuthenticationRequired`
    error code rather than whatever the handler would have said. This is the
    running-server half of `pds/test/auth_seam_test.mdk`'s in-process cells. -}
-runUnauthorized : Int -> String -> String -> String -> <IO, Net "_"> Unit
+runUnauthorized : Int -> String -> String -> String -> <IO, Net> Unit
 runUnauthorized port did collection rkey =
   let conn = mustConnect port
   let () =
@@ -883,7 +880,7 @@ runUnauthorized port did collection rkey =
    verify its signature and nothing else — no session would be open for it, so
    the seam would refuse it — and the login path is what the gate is here to
    prove. -}
-runLogin : Int -> String -> String -> <IO, Net "_"> Unit
+runLogin : Int -> String -> String -> <IO, Net> Unit
 runLogin port identifier password =
   let conn = mustConnect port
   let () =
@@ -901,7 +898,7 @@ runLogin port identifier password =
   ignoreResult (close conn)
 
 -- | A login that must be REFUSED, and with atproto's own code for it.
-runLoginRefused : Int -> String -> String -> <IO, Net "_"> Unit
+runLoginRefused : Int -> String -> String -> <IO, Net> Unit
 runLoginRefused port identifier password =
   let conn = mustConnect port
   let () =
@@ -926,7 +923,7 @@ runLoginRefused port identifier password =
 {- | Rotates the presented refresh token and prints the pair that replaced it.
    `refreshSession` is a `RefreshRoute`, so the REFRESH token is what its
    `Authorization` header carries — an access token there is refused. -}
-runRefresh : Int -> String -> <IO, Net "_"> Unit
+runRefresh : Int -> String -> <IO, Net> Unit
 runRefresh port refreshToken =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
@@ -944,7 +941,7 @@ runRefresh port refreshToken =
    window of that rotation, and prints the pair it is answered with. The
    replay must be answered 200 with a pair of its own: its access token is
    neither empty nor `previousAccess`, the one the first rotation issued. -}
-runRefreshGraceReplay : Int -> String -> String -> <IO, Net "_"> Unit
+runRefreshGraceReplay : Int -> String -> String -> <IO, Net> Unit
 runRefreshGraceReplay port refreshToken previousAccess =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
@@ -964,7 +961,7 @@ runRefreshGraceReplay port refreshToken previousAccess =
   ignoreResult (close conn)
 
 -- | Closes the session the presented refresh token belongs to.
-runLogout : Int -> String -> <IO, Net "_"> Unit
+runLogout : Int -> String -> <IO, Net> Unit
 runLogout port refreshToken =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken deleteSessionPath)
@@ -972,7 +969,7 @@ runLogout port refreshToken =
   ignoreResult (close conn)
 
 -- | `getSession` reports the account the presented ACCESS token belongs to.
-runGetSession : Int -> String -> String -> <IO, Net "_"> Unit
+runGetSession : Int -> String -> String -> <IO, Net> Unit
 runGetSession port token did =
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token getSessionPath)
@@ -1021,7 +1018,7 @@ wrongNamespacePreferencesJson =
 
 -- | `app.bsky.actor.putPreferences` with the one shared fixture item,
 -- required to answer `want`.
-runPutPreferences : Int -> String -> Int -> <IO, Net "_"> Unit
+runPutPreferences : Int -> String -> Int -> <IO, Net> Unit
 runPutPreferences port token want =
   let conn = mustConnect port
   let () =
@@ -1033,7 +1030,7 @@ runPutPreferences port token want =
 -- | The same call, graded on the allow-origin header instead of the body —
 -- used for the persist-failure 500 path, the other response
 -- `lib.server_core`'s `handle` never sees.
-runPutPreferencesCors : Int -> String -> Int -> <IO, Net "_"> Unit
+runPutPreferencesCors : Int -> String -> Int -> <IO, Net> Unit
 runPutPreferencesCors port token want =
   let conn = mustConnect port
   let () =
@@ -1048,7 +1045,7 @@ runPutPreferencesCors port token want =
 {- | A `putPreferences` body this server must refuse 400: either an item with
    no `$type` at all, or one whose `$type` names a namespace other than
    `app.bsky`. -}
-runPutPreferencesInvalid : Int -> String -> String -> <IO, Net "_"> Unit
+runPutPreferencesInvalid : Int -> String -> String -> <IO, Net> Unit
 runPutPreferencesInvalid port token kind =
   let body =
     if kind == "missing-type" then
@@ -1063,7 +1060,7 @@ runPutPreferencesInvalid port token kind =
 -- | `app.bsky.actor.getPreferences`, required to answer with exactly the
 -- fixture item `runPutPreferences` last wrote — or, on a fresh account that
 -- never called `putPreferences`, an empty list.
-runGetPreferences : Int -> String -> Bool -> <IO, Net "_"> Unit
+runGetPreferences : Int -> String -> Bool -> <IO, Net> Unit
 runGetPreferences port token expectFixture =
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token getPreferencesPath)
@@ -1093,7 +1090,7 @@ runWriteStatus : Int ->
   String ->
   String ->
   Int ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runWriteStatus port token did collection rkey want =
   let conn = mustConnect port
   let () =
@@ -1122,7 +1119,7 @@ runWriteStatus port token did collection rkey want =
 floodStep : Connection ->
   Array Int ->
   Array Int ->
-  <Net "_"> (Int, String, Array Int, Array Int)
+  <Net> (Int, String, Array Int, Array Int)
 floodStep conn pending requestBytes =
   let () = mustSend conn requestBytes
   match readHeaderResponse conn pending
@@ -1136,7 +1133,7 @@ floodStep conn pending requestBytes =
 floodLoop : Connection ->
   Int ->
   (Int -> Array Int) ->
-  <Net "_"> (Int, String, Array Int)
+  <Net> (Int, String, Array Int)
 floodLoop conn count buildRequest = floodLoopGo conn count buildRequest 1 [||]
 
 floodLoopGo : Connection ->
@@ -1144,7 +1141,7 @@ floodLoopGo : Connection ->
   (Int -> Array Int) ->
   Int ->
   Array Int ->
-  <Net "_"> (Int, String, Array Int)
+  <Net> (Int, String, Array Int)
 floodLoopGo conn count buildRequest i pending =
   let (status, headerText, body, rest) = floodStep conn pending (buildRequest i)
   if i >= count then
@@ -1155,14 +1152,14 @@ floodLoopGo conn count buildRequest i pending =
 -- | The connections-class case needs a NEW connection each time — that class
 -- is charged once per connection, on its first request, never on a reused
 -- one — so it cannot share `floodLoop`'s single-connection shape.
-floodConnections : Int -> String -> Int -> <Net "_"> (Int, String, Array Int)
+floodConnections : Int -> String -> Int -> <Net> (Int, String, Array Int)
 floodConnections port xff count = floodConnectionsGo port xff count 1
 
 floodConnectionsGo : Int ->
   String ->
   Int ->
   Int ->
-  <Net "_"> (Int, String, Array Int)
+  <Net> (Int, String, Array Int)
 floodConnectionsGo port xff count i =
   let conn = mustConnect port
   let (status, headerText, body, _) =
@@ -1200,12 +1197,12 @@ reportRateLimit label want status headerText body =
   else
     report label True ""
 
-runRateLimitConn : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitConn : Int -> String -> Int -> Int -> <IO, Net> Unit
 runRateLimitConn port xff count want =
   let (status, headerText, body) = floodConnections port xff count
   reportRateLimit "RLCONN" want status headerText body
 
-runRateLimitReq : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitReq : Int -> String -> Int -> Int -> <IO, Net> Unit
 runRateLimitReq port xff count want =
   let conn = mustConnect port
   let (status, headerText, body) =
@@ -1217,7 +1214,7 @@ runRateLimitReq port xff count want =
 -- is a whole-repository CAR, bounded by `maxCarBytes` and not by any count of
 -- requests. Driven over ONE connection so the flood observes that ceiling
 -- rather than the far lower per-connection one.
-runRateLimitRepo : Int -> String -> Int -> Int -> String -> <IO, Net "_"> Unit
+runRateLimitRepo : Int -> String -> Int -> Int -> String -> <IO, Net> Unit
 runRateLimitRepo port xff count want did =
   let conn = mustConnect port
   let (status, headerText, body) =
@@ -1238,14 +1235,10 @@ malformedRequest "framed" =
 malformedRequest "unframed" = toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n"
 malformedRequest shape = panic "serve_client: unknown malformed shape \{shape}"
 
-floodMalformed : Int -> String -> Int -> <Net "_"> (Int, String, Array Int)
+floodMalformed : Int -> String -> Int -> <Net> (Int, String, Array Int)
 floodMalformed port shape count = floodMalformedGo port shape count 1
 
-floodMalformedGo : Int ->
-  String ->
-  Int ->
-  Int ->
-  <Net "_"> (Int, String, Array Int)
+floodMalformedGo : Int -> String -> Int -> Int -> <Net> (Int, String, Array Int)
 floodMalformedGo port shape count i =
   let conn = mustConnect port
   let (status, headerText, body, _) =
@@ -1256,7 +1249,7 @@ floodMalformedGo port shape count i =
   else
     floodMalformedGo port shape count (i + 1)
 
-runRateLimitMalformed : Int -> String -> Int -> Int -> <IO, Net "_"> Unit
+runRateLimitMalformed : Int -> String -> Int -> Int -> <IO, Net> Unit
 runRateLimitMalformed port shape count want =
   let (status, headerText, body) = floodMalformed port shape count
   reportRateLimit "RLMALFORMED" want status headerText body
@@ -1273,7 +1266,7 @@ runRateLimitWrite : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runRateLimitWrite port xff count want token did collection rkeyPrefix =
   let conn = mustConnect port
   let (status, headerText, body) = floodLoop conn count (i =>
@@ -1295,7 +1288,7 @@ runRateLimitSession : Int ->
   Int ->
   String ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runRateLimitSession port xff count want identifier password =
   let conn = mustConnect port
   let (status, headerText, body) = floodLoop conn count (_ =>
@@ -1323,10 +1316,10 @@ unterminatedHeaders =
    A send may legitimately fail: past either accept-time ceiling the server
    closes the connection without reading it, which is the behavior under
    test, not an error in the driver. -}
-holdUnframed : Int -> Int -> <Net "_"> List Connection
+holdUnframed : Int -> Int -> <Net> List Connection
 holdUnframed port count = holdUnframedGo port count []
 
-holdUnframedGo : Int -> Int -> List Connection -> <Net "_"> List Connection
+holdUnframedGo : Int -> Int -> List Connection -> <Net> List Connection
 holdUnframedGo port count held =
   if count <= 0 then
     held
@@ -1335,7 +1328,7 @@ holdUnframedGo port count held =
     let _ = sendAll conn unterminatedHeaders
     holdUnframedGo port (count - 1) (conn :: held)
 
-closeAll : List Connection -> <Net "_"> Unit
+closeAll : List Connection -> <Net> Unit
 closeAll [] = ()
 closeAll (conn :: rest) =
   let () = ignoreResult (close conn)
@@ -1355,7 +1348,7 @@ probeInterval = millis 250
    connection closed at accept without a response, or the read timing out —
    because this case grades on being ANSWERED, and those are the same
    non-answer to the caller. -}
-probeOnce : Int -> <Net "_"> Option Int
+probeOnce : Int -> <Net> Option Int
 probeOnce port = match connect "127.0.0.1" port
   Err _ => None
   Ok conn =>
@@ -1369,7 +1362,7 @@ probeOnce port = match connect "127.0.0.1" port
 
 -- | Probe until one attempt is answered or `budgetSeconds` have passed since
 -- `t0`, reporting the status and how long it took.
-probeWithin : Int -> Float -> Int -> <Net "_", Clock> Option (Int, Float)
+probeWithin : Int -> Float -> Int -> <Net, Clock> Option (Int, Float)
 probeWithin port t0 budgetSeconds = match probeOnce port
   Some status => Some (status, elapsedSince t0)
   None =>
@@ -1390,7 +1383,7 @@ probeWithin port t0 budgetSeconds = match probeOnce port
    allowed. The budget the gate passes is what discriminates — it sits above
    the header budget and well below the read and request budgets a
    never-terminated header used to be granted. -}
-runUnframedFlood : Int -> Int -> Int -> <IO, Net "_", Clock> Unit
+runUnframedFlood : Int -> Int -> Int -> <IO, Net, Clock> Unit
 runUnframedFlood port sockets budgetSeconds =
   let held = holdUnframed port sockets
   let t0 = monotonic ()
@@ -1426,10 +1419,10 @@ declaredBodyNeverSent =
   toUtf8
     "POST \{createSessionPath} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: 1048576\r\n\r\n"
 
-holdBodyStall : Int -> Int -> <Net "_"> List Connection
+holdBodyStall : Int -> Int -> <Net> List Connection
 holdBodyStall port count = holdBodyStallGo port count []
 
-holdBodyStallGo : Int -> Int -> List Connection -> <Net "_"> List Connection
+holdBodyStallGo : Int -> Int -> List Connection -> <Net> List Connection
 holdBodyStallGo port count held =
   if count <= 0 then
     held
@@ -1454,7 +1447,7 @@ holdBodyStallGo port count held =
    progress budget and well below the `requestTimeout` a declared-but-unsent
    body would otherwise be granted, so a server that bounds the body phase
    only by the whole request's budget cannot pass it. -}
-runBodyStallFlood : Int -> Int -> Int -> <IO, Net "_", Clock> Unit
+runBodyStallFlood : Int -> Int -> Int -> <IO, Net, Clock> Unit
 runBodyStallFlood port sockets budgetSeconds =
   let held = holdBodyStall port sockets
   let t0 = monotonic ()
@@ -1536,7 +1529,7 @@ runProxyWrite : Int ->
   Int ->
   String ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runProxyWrite port token service path body want marker field =
   let conn = mustConnect port
   let () = mustSend conn (proxyWriteRequest token service path body)
@@ -1578,7 +1571,7 @@ runProxyRead : Int ->
   String ->
   Int ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runProxyRead port token service path want marker =
   let conn = mustConnect port
   let () = mustSend conn (proxyRequest "" token service path)
@@ -1615,7 +1608,7 @@ openProxyCalls : Int ->
   String ->
   Int ->
   List Connection ->
-  <Net "_"> List Connection
+  <Net> List Connection
 openProxyCalls port token service path remaining acc =
   if remaining <= 0 then
     acc
@@ -1624,7 +1617,7 @@ openProxyCalls port token service path remaining acc =
     let () = mustSend conn (proxyRequest "" token service path)
     openProxyCalls port token service path (remaining - 1) (conn :: acc)
 
-closeProxyCalls : List Connection -> <Net "_"> Unit
+closeProxyCalls : List Connection -> <Net> Unit
 closeProxyCalls [] = ()
 closeProxyCalls (conn :: rest) =
   let () = ignoreResult (close conn)
@@ -1658,7 +1651,7 @@ countFanout : Int ->
   Int ->
   Int ->
   Int ->
-  <Net "_"> (Int, Int, Int, Int)
+  <Net> (Int, Int, Int, Int)
 countFanout _ [] served refused unexpected odd =
   (served, refused, unexpected, odd)
 countFanout upstream (conn :: rest) served refused unexpected odd =
@@ -1691,7 +1684,7 @@ runProxyFanout : Int ->
   Int ->
   Int ->
   Int ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runProxyFanout port token service path count upstream wantServed =
   let conns = openProxyCalls port token service path count []
   let (served, refused, unexpected, odd) = countFanout upstream conns 0 0 0 0
@@ -1715,7 +1708,7 @@ timedProxyRead : Int ->
   String ->
   String ->
   String ->
-  <Net "_", Clock> (Int, String, Float)
+  <Net, Clock> (Int, String, Float)
 timedProxyRead port token service path =
   let conn = mustConnect port
   let () = mustSend conn (proxyRequest "" token service path)
@@ -1735,7 +1728,7 @@ probeRefusals : Int ->
   Int ->
   Bool ->
   String ->
-  <Net "_", Clock> (Bool, String)
+  <Net, Clock> (Bool, String)
 probeRefusals port token service path remaining maxMs ok detail =
   if remaining <= 0 then
     (ok, detail)
@@ -1771,7 +1764,7 @@ runProxyOverload : Int ->
   Int ->
   Int ->
   Int ->
-  <IO, Net "_", Clock> Unit
+  <IO, Net, Clock> Unit
 runProxyOverload port token service path held probes maxMs =
   let conns = openProxyCalls port token service path held []
   let () = sleep overloadSettle
@@ -1786,12 +1779,7 @@ runProxyOverload port token service path held probes maxMs =
 -- | The same proxied read, graded on the allow-origin header instead of the
 -- body — the one response `lib.server_core`'s `handle` never sees, so it is
 -- the exit that most needs its own check that the header still reaches it.
-runProxyReadCors : Int ->
-  String ->
-  String ->
-  String ->
-  Int ->
-  <IO, Net "_"> Unit
+runProxyReadCors : Int -> String -> String -> String -> Int -> <IO, Net> Unit
 runProxyReadCors port token service path want =
   let conn = mustConnect port
   let () = mustSend conn (proxyRequest "" token service path)
@@ -1869,7 +1857,7 @@ missingField headerText (field :: rest) =
    preflight before `upgradeDecision`/`proxyDecisionFor`/
    `serviceAuthDecisionFor`, and an in-process cell calling `handleBytes`
    directly sits below all three and cannot see that ordering at all. -}
-runPreflight : Int -> String -> String -> Int -> String -> <IO, Net "_"> Unit
+runPreflight : Int -> String -> String -> Int -> String -> <IO, Net> Unit
 runPreflight port path named want wantAllowed =
   let allowed = wantedAllowHeaders wantAllowed
   let conn = mustConnect port
@@ -1913,7 +1901,7 @@ runPreflight port path named want wantAllowed =
    refusal), and a shared label would make a failure name the wrong case. An
    empty `token` sends no `Authorization` header, which is what a refusal case
    needs. -}
-runCorsGet : String -> Int -> String -> String -> Int -> <IO, Net "_"> Unit
+runCorsGet : String -> Int -> String -> String -> Int -> <IO, Net> Unit
 runCorsGet label port token path want =
   let conn = mustConnect port
   let () = mustSend conn (getRequestWith token path)
@@ -1937,7 +1925,7 @@ runCorsGet label port token path want =
    SERVER's stderr for that exact text: a credential that reached a log is a
    credential that leaked, and only the party that received it can say what text
    to look for. -}
-runServiceAuth : Int -> String -> String -> String -> Int -> <IO, Net "_"> Unit
+runServiceAuth : Int -> String -> String -> String -> Int -> <IO, Net> Unit
 runServiceAuth port token audience nsid stubPort =
   let path =
     xrpcPath "com.atproto.server.getServiceAuth?aud=\{audience}&lxm=\{nsid}"
@@ -1986,7 +1974,7 @@ runProxyFlood : Int ->
   String ->
   Int ->
   Int ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runProxyFlood port xff token service path count want =
   let conn = mustConnect port
   let (status, headerText, body) =
@@ -2010,7 +1998,7 @@ perIdentityDerivationCeiling : Int
 perIdentityDerivationCeiling = 2
 
 -- | One login request sent on a fresh connection, not yet answered.
-sendLogin : Int -> String -> String -> <Net "_"> Connection
+sendLogin : Int -> String -> String -> <Net> Connection
 sendLogin port identifier password =
   let conn = mustConnect port
   let () =
@@ -2022,7 +2010,7 @@ sendLogin port identifier password =
 -- | `sendLogin`, carrying a forwarded-for identity instead of a bearer
 -- token — lets two logins be attributed to two different callers behind a
 -- trusted proxy (`kdf-flood-xff`).
-sendLoginXff : Int -> String -> String -> String -> <Net "_"> Connection
+sendLoginXff : Int -> String -> String -> String -> <Net> Connection
 sendLoginXff port xff identifier password =
   let conn = mustConnect port
   let () =
@@ -2041,11 +2029,7 @@ statusOnly (Err _) = 0
 
 -- | A `getRecord` for `rkey`, sent now: its status and how many seconds it
 -- took to be answered.
-timedGetRecord : Int ->
-  String ->
-  String ->
-  String ->
-  <Net "_", Clock> (Int, Float)
+timedGetRecord : Int -> String -> String -> String -> <Net, Clock> (Int, Float)
 timedGetRecord port did collection rkey =
   let conn = mustConnect port
   let t0 = monotonic ()
@@ -2069,7 +2053,7 @@ runKdfYield : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_", Clock> Unit
+  <IO, Net, Clock> Unit
 runKdfYield port identifier password did collection rkey =
   let t0 = monotonic ()
   let login = sendLogin port identifier password
@@ -2092,7 +2076,7 @@ runKdfYield port identifier password did collection rkey =
    Whichever verdict lands first re-derives the credential at today's count;
    the other was computed against the record that replaced, so it is refused
    rather than applied. Exactly one of the two is let in. -}
-runLoginRace : Int -> String -> String -> <IO, Net "_"> Unit
+runLoginRace : Int -> String -> String -> <IO, Net> Unit
 runLoginRace port identifier password =
   let first = sendLogin port identifier password
   let second = sendLogin port identifier password
@@ -2132,7 +2116,7 @@ runKdfFlood : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_", Clock> Unit
+  <IO, Net, Clock> Unit
 runKdfFlood port identifier password count did collection rkey =
   let t0 = monotonic ()
   let logins = map (_ => sendLogin port identifier password) [1..=count]
@@ -2167,7 +2151,7 @@ runKdfFloodOwnerLockout : Int ->
   Int ->
   String ->
   String ->
-  <IO, Net "_", Clock> Unit
+  <IO, Net, Clock> Unit
 runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff ownerPassword =
   let logins =
     map
@@ -2192,7 +2176,7 @@ usage : String
 usage =
   "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
-main : <IO, Env, Net "_", Clock> Unit
+main : <IO, Env, Net, Clock> Unit
 main = match args ()
   ["query", port, did] => runQuery (mustPort port) did
   ["health", port] => runHealth (mustPort port)
@@ -2381,7 +2365,7 @@ runCredentialAt count password =
    The gate captures that CID and asks for it back after a restart, so an
    upload whose bytes never reached the disk is caught by the READ, not by
    anything this case asserts on its own. -}
-runUploadBlob : Int -> String -> String -> String -> <IO, Net "_"> Unit
+runUploadBlob : Int -> String -> String -> String -> <IO, Net> Unit
 runUploadBlob port token mimeType text =
   let conn = mustConnect port
   let () =
@@ -2404,7 +2388,7 @@ runUploadBlob port token mimeType text =
    server's export byte-matches" means. Printing a digest rather than the CAR
    keeps the comparison a string comparison, exactly as
    `pds/test/store_persistence_main.mdk`'s `summary` does for the same bytes. -}
-runRepoDigest : Int -> String -> <IO, Net "_"> Unit
+runRepoDigest : Int -> String -> <IO, Net> Unit
 runRepoDigest port did =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getRepoPath did))
@@ -2442,7 +2426,7 @@ slowUploadGap = seconds 3
    is computed here, from the bytes this client meant to send, so a body the
    server truncated at one of the gaps cannot pass by answering 200 to a
    shorter blob. -}
-runSlowUpload : Int -> String -> String -> <IO, Net "_", Clock> Unit
+runSlowUpload : Int -> String -> String -> <IO, Net, Clock> Unit
 runSlowUpload port token mimeType =
   let body = arrayMakeWith slowUploadBytes (i => 65 + i % 26)
   let wanted = cidToString (cidForRaw body)
@@ -2471,7 +2455,7 @@ runSlowUpload port token mimeType =
 
 -- | Sends `body` from `offset` onward in `piece`-byte pieces, pausing
 -- `slowUploadGap` before every piece after the first.
-sendInPieces : Connection -> Array Int -> Int -> Int -> <Net "_", Clock> Unit
+sendInPieces : Connection -> Array Int -> Int -> Int -> <Net, Clock> Unit
 sendInPieces conn body offset piece =
   if offset >= arrayLength body then
     ()
@@ -2498,7 +2482,7 @@ blobRefCidText body = match parse (fromUtf8 body)
 {- | Fetch one blob back and grade all three things a restart can lose: the
    status, the DECLARED media type (which content addressing does not carry,
    so only the sidecar on disk can have preserved it), and the bytes. -}
-runGetBlob : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runGetBlob : Int -> String -> String -> String -> String -> <IO, Net> Unit
 runGetBlob port did cid mimeType text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getBlobPath did cid))
@@ -2518,7 +2502,7 @@ runGetBlob port did cid mimeType text =
    whatever the blob's declared MIME type. Response headers are always
    lowercase (`serializeResponse`'s doing), so a plain substring check is
    exact. -}
-runGetBlobNotLive : Int -> String -> String -> <IO, Net "_"> Unit
+runGetBlobNotLive : Int -> String -> String -> <IO, Net> Unit
 runGetBlobNotLive port did cid =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getBlobPath did cid))
@@ -2539,7 +2523,7 @@ runGetBlobNotLive port did cid =
 
    The refusal is graded by its error NAME and not by its status alone: every
    other refusal this route can produce carries the same 400. -}
-runGetBlobMissing : Int -> String -> String -> <IO, Net "_"> Unit
+runGetBlobMissing : Int -> String -> String -> <IO, Net> Unit
 runGetBlobMissing port did cid =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getBlobPath did cid))
@@ -2563,7 +2547,7 @@ runGetBlobMissing port did cid =
 
    The two `sync.getBlocks` cases need a CID the block store really holds,
    and this is the only one a client can learn without decoding a CAR. -}
-latestCommitCid : Int -> String -> <IO, Net "_"> String
+latestCommitCid : Int -> String -> <IO, Net> String
 latestCommitCid port did =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (getLatestCommitPath did))
@@ -2588,12 +2572,7 @@ latestCommitCid port did =
    The header is graded too, in the opposite direction from `getBlocks`: this
    CAR must NAME a root, so its first 18 bytes must not be the rootless
    header. -}
-runSyncGetRecord : Int ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <IO, Net "_"> Unit
+runSyncGetRecord : Int -> String -> String -> String -> String -> <IO, Net> Unit
 runSyncGetRecord port did collection rkey text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (syncGetRecordPath did collection rkey))
@@ -2622,7 +2601,7 @@ runSyncGetRecordAbsent : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_"> Unit
+  <IO, Net> Unit
 runSyncGetRecordAbsent port did collection rkey text =
   let conn = mustConnect port
   let () = mustSend conn (getRequest (syncGetRecordPath did collection rkey))
@@ -2647,7 +2626,7 @@ runSyncGetRecordAbsent port did collection rkey text =
    for did arrive), and the record's text is ABSENT. The last one is the
    claim that the route answers exactly what was asked for: the commit block
    alone, not the repository it heads. -}
-runSyncGetBlocks : Int -> String -> String -> <IO, Net "_"> Unit
+runSyncGetBlocks : Int -> String -> String -> <IO, Net> Unit
 runSyncGetBlocks port did text =
   let cid = latestCommitCid port did
   let conn = mustConnect port
@@ -2674,11 +2653,7 @@ runSyncGetBlocks port did text =
    leave a caller believing the second had arrived. The two absent CIDs the
    gate passes are real blob CIDs: a blob is content-addressed but is not a
    block of the signed graph, so the store genuinely does not hold them. -}
-runSyncGetBlocksMissing : Int ->
-  String ->
-  String ->
-  String ->
-  <IO, Net "_"> Unit
+runSyncGetBlocksMissing : Int -> String -> String -> String -> <IO, Net> Unit
 runSyncGetBlocksMissing port did firstMissing secondMissing =
   let cid = latestCommitCid port did
   let conn = mustConnect port

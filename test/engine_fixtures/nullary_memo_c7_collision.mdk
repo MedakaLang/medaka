@@ -10,7 +10,7 @@
 data MyPair a b = MyPair a b
 
 interface Foo a where
-  theVal : a
+  theVal : <Stdout> a
 
 impl Foo (MyPair Int Bool) where
   theVal =

@@ -140,7 +140,7 @@ runSubscription : String ->
   String ->
   Option Int ->
   Array Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 runSubscription dir budget conn accept cursor pending = defer
   opened <- A.sendAllWithin budget conn (handshakeResponseBytes accept)
   match opened
@@ -159,7 +159,7 @@ openStream : String ->
   Connection ->
   Option Int ->
   Array Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 openStream dir budget conn cursor pending = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -185,7 +185,7 @@ gradeCursor : String ->
   Option Int ->
   Array Int ->
   Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 gradeCursor dir budget conn None pending newest =
   tailFrom dir budget conn newest noReassembly pending
 gradeCursor dir budget conn (Some wanted) pending newest =
@@ -215,7 +215,7 @@ refuseFuture : Duration ->
   Connection ->
   Int ->
   Int ->
-  Async <Clock, Net "_" | e> (Result String Unit)
+  Async <Clock, Net | e> (Result String Unit)
 refuseFuture budget conn wanted newest =
   let framed =
     syncErrorFrame
@@ -231,7 +231,7 @@ announceOutdated : String ->
   Int ->
   Array Int ->
   List EventLogEntry ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 announceOutdated dir budget conn wanted pending replay =
   let framed =
     syncInfoFrame
@@ -251,7 +251,7 @@ replayThenTail : String ->
   Int ->
   Array Int ->
   List EventLogEntry ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 replayThenTail dir budget conn wanted pending replay = defer
   delivered <- sendEntries budget conn wanted replay
   match delivered
@@ -270,7 +270,7 @@ sendEntries : Duration ->
   Connection ->
   Int ->
   List EventLogEntry ->
-  Async <Clock, Net "_" | e> (Result String Int)
+  Async <Clock, Net | e> (Result String Int)
 sendEntries _ _ delivered [] = deferPure (Ok delivered)
 sendEntries budget conn delivered (entry :: rest) =
   match Hex.decode entry.frameHex
@@ -289,14 +289,14 @@ sendEntries budget conn delivered (entry :: rest) =
 sendPayload : Duration ->
   Connection ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String Unit)
+  Async <Clock, Net | e> (Result String Unit)
 sendPayload budget conn payload =
   A.sendAllWithin budget conn (encodeServerFrame (Frame True Binary payload))
 
 sendPayloadThenClose : Duration ->
   Connection ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String Unit)
+  Async <Clock, Net | e> (Result String Unit)
 sendPayloadThenClose budget conn payload = defer
   sent <- sendPayload budget conn payload
   match sent
@@ -306,7 +306,7 @@ sendPayloadThenClose budget conn payload = defer
 sendClose : Duration ->
   Connection ->
   Int ->
-  Async <Clock, Net "_" | e> (Result String Unit)
+  Async <Clock, Net | e> (Result String Unit)
 sendClose budget conn code = defer
   _ <- A.sendAllWithin budget conn (encodeServerFrame (closeFrame code ""))
   deferPure (Ok ())
@@ -324,7 +324,7 @@ tailFrom : String ->
   Int ->
   Reassembly ->
   Array Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 tailFrom dir budget conn lastSeq pending buffered = defer
   stopping <- liftIO (u => pdsSignalRequested ())
   if stopping then
@@ -338,7 +338,7 @@ tailStep : String ->
   Int ->
   Reassembly ->
   Array Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 tailStep dir budget conn lastSeq pending buffered =
   let step = clientStep pending buffered
   match step
@@ -372,7 +372,7 @@ pollLog : String ->
   Int ->
   Reassembly ->
   Array Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 pollLog dir budget conn lastSeq pending buffered = defer
   last <- liftIO (u => eventLogLast dir)
   match last
@@ -389,7 +389,7 @@ deliverNew : String ->
   Int ->
   Reassembly ->
   Array Int ->
-  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+  Async <Clock, FileRead, Net | e> (Result String Unit)
 deliverNew dir budget conn lastSeq pending buffered = defer
   fresh <- liftIO (u => eventLogRead dir lastSeq)
   match fresh

@@ -39,7 +39,12 @@ DIST="$ROOT/playground/dist"
 # measurement predates — pushing the real total to 6,558,645 bytes (CI run
 # 33572397373). Same ~16% headroom re-applied over the new total, not a
 # one-off bump to clear a red: 6,558,645 * 1.16 ≈ 7,608,000, rounded down.
-SITE_BYTES_CEIL=7600000
+# RETUNED again (PR #3393, effects rearchitecture merged with N1): the compiler
+# grew by the named-authority front end and solver, and the /stdlib reference
+# gained the u8/u16/u32 pages, pushing the real total to 7,631,285 bytes (CI run
+# 36154492441). Same ~16% headroom over the new total: 7,631,285 * 1.16 ≈
+# 8,852,000, rounded down.
+SITE_BYTES_CEIL=8850000
 
 NODE=node
 major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)

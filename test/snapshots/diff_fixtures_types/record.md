@@ -18,4 +18,4 @@ main =
 # TYPES_USER
 distSq : Point -> Int
 moveRight : Point -> Point
-main : Unit
+main : <IO> Unit

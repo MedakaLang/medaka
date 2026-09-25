@@ -1,0 +1,26 @@
+-- A constrained receiver selects the method despite the local standalone.
+-- Its function-valued initializer prints once; calling the local Bool binding
+-- must neither force that method nor acquire its effect.
+interface Sizeable a where
+  size : <IO> (a -> Bool)
+
+data Box = Box Bool
+
+impl Sizeable Box where
+  size =
+    let _ = println "METHOD FORCED"
+    x => match x
+      Box b => b
+
+size : Bool -> Bool
+size _ = False
+
+use : Sizeable a => a -> <IO> Bool
+use x = size x
+
+local : Bool -> <> Bool
+local x = size x
+
+main =
+  let chosen = use (Box True)
+  println (chosen, local True)

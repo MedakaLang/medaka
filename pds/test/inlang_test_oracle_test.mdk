@@ -300,7 +300,7 @@ libModuleStem name = stripSuffix ".mdk" name
 
 -- Runs one `pds/lib/` or `pds/shell/` module and returns its
 -- executed-assertion count, or an error naming the file and what went wrong.
-runLibSuite : String -> String -> <Exec "_", IO> Result String Int
+runLibSuite : String -> String -> <Exec, IO> Result String Int
 runLibSuite dir name =
   match testAssertionCount (underRoot "pds/\{dir}/\{name}.mdk") []
     Err e => Err "pds/\{dir}/\{name}.mdk: \{e}"
@@ -318,7 +318,7 @@ libKeyOf dir name = "\{dir}/\{name}"
 
 -- Every `pds/lib/`/`pds/shell/` module run exactly once, shared by every
 -- assertion below — memoized the same way `results` is.
-libResults : <Exec "_", IO> List (String, (Int, Result String Int))
+libResults : <Exec, IO> List (String, (Int, Result String Int))
 libResults =
   map
     ((dir, name, floor) => (libKeyOf dir name, (floor, runLibSuite dir name)))
@@ -326,7 +326,7 @@ libResults =
 
 -- Grades one `pds/lib/`/`pds/shell/` module's floor, same shape as
 -- `floorExpectation`.
-libFloorExpectation : String -> String -> <Exec "_", IO> Expectation
+libFloorExpectation : String -> String -> <Exec, IO> Expectation
 libFloorExpectation dir name = match lookup (libKeyOf dir name) libResults
   None => Fail "pds/\{dir}/\{name}.mdk has no `libResults` entry" "" ""
   Some (floor, Err e) =>
@@ -367,7 +367,7 @@ test "pds/lib/scalar.mdk executed >= 4 assertions" =
 test "pds/shell/blobfile.mdk executed >= 1 assertions" =
   libFloorExpectation "shell" "blobfile"
 
-libUnrosteredLibFiles : <FileRead "_", IO> Result String (List String)
+libUnrosteredLibFiles : <FileRead, IO> Result String (List String)
 libUnrosteredLibFiles = match listDir (underRoot "pds/lib")
   Err e => Err "could not list pds/lib: \{e}"
   Ok names => Ok (unrosteredUnits libModuleStem libKnownNames names)
@@ -382,7 +382,7 @@ test "every pds/lib/*.mdk module has a `libSuites` or `libExempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-libUnrosteredShellFiles : <FileRead "_", IO> Result String (List String)
+libUnrosteredShellFiles : <FileRead, IO> Result String (List String)
 libUnrosteredShellFiles = match listDir (underRoot "pds/shell")
   Err e => Err "could not list pds/shell: \{e}"
   Ok names => Ok (unrosteredUnits libModuleStem libKnownNames names)
@@ -397,7 +397,7 @@ test "every pds/shell/*.mdk module has a `libSuites` or `libExempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-libPhantomExemptions : <FileRead "_", IO> Result String (List String)
+libPhantomExemptions : <FileRead, IO> Result String (List String)
 libPhantomExemptions = match listDir (underRoot "pds/lib")
   Err e => Err "could not list pds/lib: \{e}"
   Ok libNames => match listDir (underRoot "pds/shell")
@@ -421,7 +421,7 @@ test "every `libExempt` row names a module that exists" =
    The engine is named because the two arms fail differently: a capability
    refusal from the eval arm and a genuine assertion failure both surface as
    a nonzero exit, and only the label says which arm was asked. -}
-runSuite : String -> Engine -> <Exec "_", IO> Result String Int
+runSuite : String -> Engine -> <Exec, IO> Result String Int
 runSuite name engine =
   let path = underRoot "pds/test/\{name}.mdk"
   match testAssertionCount path (engineArgs engine)
@@ -434,7 +434,7 @@ runSuite name engine =
 
    An excluded suite is absent from this list entirely rather than present
    with a stand-in count, so it cannot be summed into `totalRan`. -}
-results : <Exec "_", IO> List (String, (Int, Result String Int))
+results : <Exec, IO> List (String, (Int, Result String Int))
 results =
   somes
     (map
@@ -447,7 +447,7 @@ results =
    on a miss; a run that failed outright reports the spawn's own text
    instead, so a broken assertion inside a suite is never mistaken for a
    count that merely fell short. -}
-floorExpectation : String -> <Exec "_", IO> Expectation
+floorExpectation : String -> <Exec, IO> Expectation
 floorExpectation name = match lookup name excluded
   Some reason => Pass "ledgered exclusion" "skipped: \{reason}"
   None => match lookup name results
@@ -556,7 +556,7 @@ ranCountOf : (String, (Int, Result String Int)) -> Int
 ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
-totalRan : <Exec "_", IO> Int
+totalRan : <Exec, IO> Int
 totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
 
 test "pds in-language suite ran at least one assertion" =
@@ -572,7 +572,7 @@ test "pds in-language suite ran at least one assertion" =
 -- The retired `unit_suite.sh` skipped an excluded suite before touching its
 -- running total, and this keeps that: an exclusion may lower what the gate
 -- proves, but it may never raise what the gate claims.
-spawnedCount : <Exec "_", IO> Int
+spawnedCount : <Exec, IO> Int
 spawnedCount = length results
 
 expectedSpawnCount : Int
@@ -597,7 +597,7 @@ test "an `excluded` suite is neither spawned nor counted" =
    PASS. Every `_test.mdk` file under `pds/test/` must therefore be
    accounted for: a row in `suites` above, or a reasoned row in `exempt`. -}
 
-unrosteredFiles : <FileRead "_", IO> Result String (List String)
+unrosteredFiles : <FileRead, IO> Result String (List String)
 unrosteredFiles =
   unrosteredTestFiles (underRoot "pds/test") (rosterNames ++ exemptNames)
 
@@ -611,7 +611,7 @@ test "every pds/test/*_test.mdk file has a `suites` or `exempt` row" =
         "no unrostered files"
         "\{debug extras}"
 
-phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions : <FileRead, IO> Result String (List String)
 phantomExemptions = missingTestFiles (underRoot "pds/test") exemptNames
 
 test "every `exempt` row names a file that exists" = match phantomExemptions

@@ -168,17 +168,17 @@ awaitAny waits = Await waits (u => Done ())
 
    Polls the descriptor, so `<Net>` joins `e`. -}
 export
-waitRead : Int -> Wait <Net "_" | e>
+waitRead : Int -> Wait <Net | e>
 waitRead fd = WaitRead fd systemPoller
 
 {- | A wait for `fd` to become writable, as a wait for `awaitAny`.
 
    Polls the descriptor, so `<Net>` joins `e`. -}
 export
-waitWrite : Int -> Wait <Net "_" | e>
+waitWrite : Int -> Wait <Net | e>
 waitWrite fd = WaitWrite fd systemPoller
 
-systemPoller : Poller <Net "_" | e>
+systemPoller : Poller <Net | e>
 systemPoller = Poller (fds interests timeout => ioPoll fds interests timeout)
 
 {- | A wait for `flag` to be set, as a wait for `awaitAny`.

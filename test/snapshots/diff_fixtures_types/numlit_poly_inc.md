@@ -15,4 +15,4 @@ main =
   println (inc 5)
 # TYPES_USER
 inc : Num a => a -> a
-main : Unit
+main : <IO> Unit

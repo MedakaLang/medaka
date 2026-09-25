@@ -1,2 +1,2 @@
-main : Unit
+main : <IO> Unit
 r : List (List Int)

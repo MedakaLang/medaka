@@ -85,7 +85,7 @@ gradeCorpus : String ->
 gradeCorpus label validate validPath invalidPath =
   gradeCorpusChecked label validate validPath invalidPath None
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [aturiValid, aturiInvalid, atidentifierValid, atidentifierInvalid, didValid, didInvalid, handleValid, handleInvalid, nsidValid, nsidInvalid, recordkeyValid, recordkeyInvalid, tidValid, tidInvalid] =>
     let results = [

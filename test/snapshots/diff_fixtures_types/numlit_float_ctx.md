@@ -9,4 +9,4 @@ main : <IO> Unit
 main = println x
 # TYPES_USER
 x : Float
-main : Unit
+main : <IO> Unit

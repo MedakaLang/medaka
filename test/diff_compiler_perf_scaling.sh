@@ -2162,7 +2162,6 @@ TIME_STAGES="parse desugar resolve mark typecheck elaborate dce mangle fmt lint 
 # (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_TIME="
 manydefs:lint
-modules:typecheck
 nestedparens:parse
 nestedparens:fmt
 nestedparens:lint
@@ -3147,9 +3146,17 @@ clause_of() {
 # was "a property of this box ... while CI passes on the same commit", and told you to
 # re-run or re-enqueue. CI does NOT pass on it: the merge queue reads r2 = 2.77 and 3.21,
 # the same band this box reads, and bounced PR #2245 three times and PR #2260 once. That
-# row is now LEDGERED (KNOWN_SLOW_TIME, "modules:typecheck") against a measured band, so
+# row was LEDGERED (KNOWN_SLOW_TIME, "modules:typecheck") against a measured band, so
 # it no longer reds in-band and no longer hides worsening either. The fix is still
 # #1879's, not yours.
+#   modules:typecheck (TIME) — PROMOTED OUT 2026-09-25 (PR #3393): the ledger's own
+#     under-2.00 branch fired on CI (r2=1.97 at N=100->200->400, run 36121365015)
+#     after the named-authority typechecker landed. The row is deleted; the stage is
+#     graded like any other (threshold 3.0 per doubling; a quiet box reads 2.5-2.8).
+#     The DETERMINISTIC arm of record for #1879 is unchanged:
+#     test/diff_compiler_stage_ir_scaling.sh's `modules:typecheck` KNOWN_SLOW row.
+#     If this TIME arm flaps above 3.0 on a loud box, re-ledger it with a ceiling
+#     rather than reading it as a regression of that fix.
 _cc_t="$(clause_of threshold 3.0)"; _cc_c="$(clause_of climbing)"
 case "$_cc_t" in
   *'r2 > 3.0x'*) ;;

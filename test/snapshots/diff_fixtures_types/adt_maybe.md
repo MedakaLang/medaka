@@ -20,4 +20,4 @@ main =
 # TYPES_USER
 safeDiv : Int -> Int -> Option Int
 showResult : Display a => Option a -> String
-main : Unit
+main : <IO> Unit

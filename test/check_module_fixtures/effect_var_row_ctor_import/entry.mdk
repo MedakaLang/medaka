@@ -7,5 +7,8 @@ import asyncmod.{Async(..)}
 export interface Runner s where
   runr : s -> Async e a -> <e> a
 
-runIt : Runner s => s -> Async b c -> c
+-- `runIt` runs the argument's row, so its own arrow declares that row: a
+-- declared row variable is the caller's choice and the body cannot narrow it
+-- to `<>`, which is what an unannotated result would claim.
+runIt : Runner s => s -> Async b c -> <b> c
 runIt s a = runr s a

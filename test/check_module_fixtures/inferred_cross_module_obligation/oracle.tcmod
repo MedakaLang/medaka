@@ -1,2 +1,2 @@
 g : Display a => a -> String
-main : Unit
+main : <IO> Unit

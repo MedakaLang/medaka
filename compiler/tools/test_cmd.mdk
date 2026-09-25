@@ -1415,7 +1415,7 @@ gatedReportTests : String ->
   List Decl ->
   List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> Bool
+  <IO | e> Bool
 gatedReportTests target corpus env tests =
   match uncapableExterns corpus env tests
     [] => reportTests target env tests
@@ -1444,7 +1444,7 @@ joinCommas (n :: rest) = "`\{n}`, " ++ joinCommas rest
 reportTests : String ->
   List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> Bool
+  <IO | e> Bool
 reportTests target env tests =
   let _ = putStrLn ("running tests in " ++ target)
   let (passed, failed, errors) = runTestLoop target env tests 0 0 0
@@ -1500,7 +1500,7 @@ runTestLoop : String ->
   Int ->
   Int ->
   Int ->
-  <IO> (Int, Int, Int)
+  <IO | e> (Int, Int, Int)
 runTestLoop _ _ [] passed failed errors = (passed, failed, errors)
 runTestLoop target env ((name, line, body) :: rest) passed failed errors =
   let _ = printTestRunning target line name
@@ -1886,7 +1886,7 @@ gatedTestsCollect : String ->
   List Decl ->
   List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> List (String, Int, ExResult)
+  <e> List (String, Int, ExResult)
 gatedTestsCollect target corpus env tests =
   match uncapableExterns corpus env tests
     [] => runTestsCollect env tests
@@ -1899,7 +1899,7 @@ snd3 (_, b, _) = b
 
 runTestsCollect : List (String, Value e) ->
   List (String, Int, Expr) ->
-  <IO> List (String, Int, ExResult)
+  <e> List (String, Int, ExResult)
 runTestsCollect _ [] = []
 runTestsCollect env ((name, line, body) :: rest) =
   (name, line, runOneTest env body) :: runTestsCollect env rest

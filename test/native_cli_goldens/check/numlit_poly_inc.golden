@@ -1,2 +1,2 @@
 inc : Num a => a -> a
-main : Unit
+main : <IO> Unit

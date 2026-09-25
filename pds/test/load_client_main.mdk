@@ -263,10 +263,7 @@ parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
     len <- contentLengthOf rest
     Ok (status, len)
 
-recvAtLeast : Connection ->
-  Array Int ->
-  Int ->
-  <Net "_"> Result String (Array Int)
+recvAtLeast : Connection -> Array Int -> Int -> <Net> Result String (Array Int)
 recvAtLeast conn buf need =
   if arrayLength buf >= need then
     Ok buf
@@ -286,7 +283,7 @@ recvAtLeast conn buf need =
    keep-alive stream. -}
 readOneResponse : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, Array Int, Array Int)
+  <Net> Result String (Int, Array Int, Array Int)
 readOneResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
@@ -311,7 +308,7 @@ readOneResponse conn pending = match findHeaderEnd pending 0
 requestCeiling : Duration
 requestCeiling = seconds 30
 
-mustConnect : Int -> <Net "_"> Connection
+mustConnect : Int -> <Net> Connection
 mustConnect port = match connect "127.0.0.1" port
   Ok conn =>
     let _ = setTimeout conn requestCeiling
@@ -332,7 +329,7 @@ microsSince start = floatToInt (elapsedSince start * 1000000.0)
 timedRequest : Connection ->
   Array Int ->
   Array Int ->
-  <Clock, Net "_"> Result String (Int, Array Int, Int)
+  <Clock, Net> Result String (Int, Array Int, Int)
 timedRequest conn pending request =
   let t0 = monotonic ()
   match sendAll conn request
@@ -388,7 +385,7 @@ recordWriteBody did collection rkey =
 responseRoundTrip : Connection ->
   Array Int ->
   Array Int ->
-  <Net "_"> Result String (Int, Array Int, Array Int)
+  <Net> Result String (Int, Array Int, Array Int)
 responseRoundTrip conn pending request = match sendAll conn request
   Err message => Err message
   Ok () => readOneResponse conn pending
@@ -406,7 +403,7 @@ writeLoop : Connection ->
   Int ->
   Int ->
   Int ->
-  <Clock, IO, Net "_"> (Array Int, Int, Int, Int, Int, Int)
+  <Clock, IO, Net> (Array Int, Int, Int, Int, Int, Int)
 writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
   if elapsedSince t0 >= budget then
     (pending, requests, writes, non200, errors, i)
@@ -446,7 +443,7 @@ runWrite : Int ->
   Int ->
   String ->
   String ->
-  <Clock, Env, IO, Net "_", FileRead "_"> Unit
+  <Clock, Env, IO, Net, FileRead> Unit
 runWrite port collection clientId durationMs did passwordPath =
   let password = match readFile passwordPath
     Err message =>
@@ -554,7 +551,7 @@ loadLoop : Connection ->
   Int ->
   Int ->
   Int ->
-  <Clock, Net "_"> (Int, Int, Int)
+  <Clock, Net> (Int, Int, Int)
 loadLoop conn pending plan clientId t0 budget i non200 errors =
   if elapsedSince t0 >= budget then
     (i, non200, errors)
@@ -574,7 +571,7 @@ loadLoop conn pending plan clientId t0 budget i non200 errors =
           (if status == 200 then non200 else non200 + 1)
           errors
 
-runLoad : Int -> Plan -> Int -> Int -> <Clock, IO, Net "_"> Unit
+runLoad : Int -> Plan -> Int -> Int -> <Clock, IO, Net> Unit
 runLoad port plan clientId durationMs =
   let conn = mustConnect port
   let t0 = monotonic ()
@@ -601,7 +598,7 @@ sampleOne : Connection ->
   Plan ->
   Int ->
   List Sample ->
-  <Clock, Net "_"> (Array Int, List Sample)
+  <Clock, Net> (Array Int, List Sample)
 sampleOne conn pending target plan i acc =
   let (route, request) = planRequest plan samplerClientId i
   let result = timedRequest conn pending request
@@ -625,7 +622,7 @@ sampleTick : Connection ->
   Plan ->
   Int ->
   List Sample ->
-  <Clock, IO, Net "_"> (Array Int, Array Int, List Sample)
+  <Clock, IO, Net> (Array Int, Array Int, List Sample)
 sampleTick loaded control loadedPending controlPending plan i acc =
   if isEven i then
     let () = eprintln "tick i=\{intToString i} first=loaded"
@@ -657,7 +654,7 @@ sampleLoop : Connection ->
   Int ->
   Int ->
   List Sample ->
-  <Clock, IO, Net "_"> List Sample
+  <Clock, IO, Net> List Sample
 sampleLoop loaded control loadedPending controlPending plan i remaining intervalMs acc =
   if remaining < 1 then
     acc
@@ -676,7 +673,7 @@ sampleLoop loaded control loadedPending controlPending plan i remaining interval
       intervalMs
       afterBoth
 
-runSample : Int -> Int -> Plan -> Int -> Int -> <Clock, IO, Net "_"> Unit
+runSample : Int -> Int -> Plan -> Int -> Int -> <Clock, IO, Net> Unit
 runSample port controlPort plan requests intervalMs =
   let loaded = mustConnect port
   let control =
@@ -707,7 +704,7 @@ usage : String
 usage =
   "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile>"
 
-main : <Clock, Env, IO, Net "_", FileRead "_"> Unit
+main : <Clock, Env, IO, Net, FileRead> Unit
 main = match args ()
   ["load", port, scenario, collection, recordCount, blobCount, clientId, durationMs] =>
     runLoad

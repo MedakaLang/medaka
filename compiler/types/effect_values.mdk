@@ -1,0 +1,250 @@
+-- Produced values join at positive positions. This is neither type equality
+-- nor a permission to widen an existing invariant container. Callers supply
+-- inference services and declaration-derived variance; rows are only collected.
+import types.repr.{Mono(..), Tyvar(..), normalize}
+import types.effect_rows.{EffRow}
+import types.effect_domain.{Param}
+import types.effect_authority.{Authority, authDomainTop}
+import support.util.{minI, anyList}
+
+public export data ValueJoinOps c = ValueJoinOps {
+  vjoEqual : c -> Mono -> Mono -> Unit,
+  vjoCovariants : Mono -> List Bool,
+  vjoFreshType : Unit -> Mono,
+  vjoFreshRow : Unit -> EffRow,
+  vjoCollectRows : List EffRow -> EffRow,
+  -- A positive qualified slot receives an allowance bounded below by every
+  -- alternative's authority, the authority peer of a row allowance.
+  vjoFreshAuth : Param -> Authority,
+  vjoCollectAuth : List Authority -> Authority,
+}
+
+export
+joinProduced : ValueJoinOps c -> List (c, Mono) -> Option Mono
+joinProduced _ [] = None
+joinProduced _ [(_, value)] = Some value
+joinProduced ops values = Some (joinNonempty ops values)
+
+-- A binding envelope must visit even a single producer: its collector allocates
+-- owned summaries at positive arrows instead of aliasing the producer's rows.
+export
+joinProducedEnvelope : ValueJoinOps c -> List (c, Mono) -> Option Mono
+joinProducedEnvelope _ [] = None
+joinProducedEnvelope ops values = Some (joinNonempty ops values)
+
+-- Shape an unknown alternative without copying the witness's closed rows.
+-- Otherwise `if flag then callback else pureFn` would first make callback pure.
+shapeUnknown : ValueJoinOps c -> Mono -> (c, Mono) -> (c, Mono)
+shapeUnknown ops witness (context, value) =
+  let _ = match normalize value
+    TVar cell => match cell.value
+      Unbound id _ =>
+        if occursIn id witness then
+          ()  -- matchingValues reports the occurs equation once, then omits it.
+        else
+          ops.vjoEqual context value (freshShape ops witness)
+      Link _ => ()
+    _ => ()
+  (context, normalize value)
+
+freshShape : ValueJoinOps c -> Mono -> Mono
+freshShape ops (TFun _ _ _) =
+  TFun (ops.vjoFreshType ()) (ops.vjoFreshRow ()) (ops.vjoFreshType ())
+freshShape ops (TApp head _) =
+  TApp (freshApplicationHead ops head) (ops.vjoFreshType ())
+freshShape ops (TEff _) = TEff (ops.vjoFreshRow ())
+freshShape ops (TQual inner q) =
+  TQual (freshShape ops inner) (ops.vjoFreshAuth (authDomainTop q))
+freshShape _ t = t
+
+freshApplicationHead : ValueJoinOps c -> Mono -> Mono
+freshApplicationHead ops head = match normalize head
+  TApp prefix _ => TApp (freshApplicationHead ops prefix) (ops.vjoFreshType ())
+  _ => ops.vjoFreshType ()
+
+-- Shaping must not hide an infinite-type equation from ordinary unification.
+-- In particular x joined with Box x must report an occurs-check failure.
+occursIn : Int -> Mono -> Bool
+occursIn id value = match normalize value
+  TVar cell => match cell.value
+    Unbound other _ => id == other
+    Link _ => False
+  TFun domain _ result => occursIn id domain || occursIn id result
+  TApp head argument => occursIn id head || occursIn id argument
+  TQual inner _ => occursIn id inner
+  _ => False
+
+concreteWitness : List (c, Mono) -> Option Mono
+concreteWitness [] = None
+concreteWitness ((_, t) :: rest) = match normalize t
+  TVar _ => concreteWitness rest
+  value => Some value
+
+sameShape : Mono -> Mono -> Bool
+sameShape (TFun _ _ _) (TFun _ _ _) = True
+sameShape (TApp _ _) (TApp _ _) = True
+sameShape (TQual _ _) (TQual _ _) = True
+sameShape _ _ = False
+
+-- An incompatible alternative is diagnosed through ordinary equality, then
+-- omitted from recovery. No user type mismatch reaches a projection panic.
+matchingValues : ValueJoinOps c -> Mono -> List (c, Mono) -> List (c, Mono)
+matchingValues _ _ [] = []
+matchingValues ops witness ((value@(context, t)) :: rest) =
+  if sameShape witness t then
+    value :: matchingValues ops witness rest
+  else
+    let _ = ops.vjoEqual context witness t
+    matchingValues ops witness rest
+
+joinNonempty : ValueJoinOps c -> List (c, Mono) -> Mono
+joinNonempty ops values = match concreteWitness values
+  None => equalValues ops values
+  Some witness => match witness
+    TFun _ _ _ =>
+      let alternatives =
+        matchingValues ops witness (map (shapeUnknown ops witness) values)
+      let domain = equalValues ops (map arrowDomain alternatives)
+      let rows = map arrowRow alternatives
+      let result = joinNonempty ops (map arrowResult alternatives)
+      TFun domain (ops.vjoCollectRows rows) result
+    TApp _ _ =>
+      let alternatives =
+        matchingValues ops witness (map (shapeUnknown ops witness) values)
+      joinApplications ops alternatives
+    -- Qualified alternatives join their value types and take one allowance
+    -- above every authority.  A plain alternative beside them is a value the
+    -- domain cannot bound, so the join forgets the qualifier: only the
+    -- expression-directed abstraction can recover more, and it does.
+    TQual _ _ =>
+      let shaped = map (shapeUnknown ops witness) values
+      if anyList (v => not (isQualified (snd v))) shaped then
+        joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
+      else
+        let inner =
+          joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
+        TQual inner (ops.vjoCollectAuth (map (v => qualAuth (snd v)) shaped))
+    _ =>
+      -- Concrete heads and effect indices have no covariant join rule.
+      equalValues ops values
+
+equalValues : ValueJoinOps c -> List (c, Mono) -> Mono
+equalValues _ [] = panic "empty produced-value equality"
+equalValues ops ((_, first) :: rest) =
+  let _ = equalRest ops first rest
+  first
+
+equalRest : ValueJoinOps c -> Mono -> List (c, Mono) -> Unit
+equalRest _ _ [] = ()
+equalRest ops first ((context, value) :: rest) =
+  let _ = ops.vjoEqual context first value
+  equalRest ops first rest
+
+arrowDomain : (c, Mono) -> (c, Mono)
+arrowDomain (context, TFun domain _ _) = (context, domain)
+arrowDomain _ = panic "non-arrow produced-value projection"
+
+arrowRow : (c, Mono) -> EffRow
+arrowRow (_, TFun _ row _) = row
+arrowRow _ = panic "non-arrow produced-value projection"
+
+arrowResult : (c, Mono) -> (c, Mono)
+arrowResult (context, TFun _ _ result) = (context, result)
+arrowResult _ = panic "non-arrow produced-value projection"
+
+-- Flatten the common application suffix once. A higher-kinded unknown prefix
+-- may unify with a partially applied constructor; its arguments are not lost.
+joinApplications : ValueJoinOps c -> List (c, Mono) -> Mono
+joinApplications ops values =
+  let arity = commonArity values
+  let spines = map (applicationSpine arity) values
+  let head =
+    equalValues ops (map (entry => (fst entry, fst (snd entry))) spines)
+  let args = map (entry => (fst entry, snd (snd entry))) spines
+  joinArguments ops head (ops.vjoCovariants head) args
+
+applicationDepth : Mono -> Int
+applicationDepth value = match normalize value
+  TApp head _ => 1 + applicationDepth head
+  _ => 0
+
+commonArity : List (c, Mono) -> Int
+commonArity [] = 0
+commonArity [(_, value)] = applicationDepth value
+commonArity ((_, value) :: rest) =
+  minI (applicationDepth value) (commonArity rest)
+
+applicationSpine : Int -> (c, Mono) -> (c, (Mono, List Mono))
+applicationSpine arity (context, value) =
+  (context, peelApplication arity value [])
+
+peelApplication : Int -> Mono -> List Mono -> (Mono, List Mono)
+peelApplication arity value args =
+  if arity == 0 then
+    (value, args)
+  else match normalize value
+    TApp head argument => peelApplication (arity - 1) head (argument :: args)
+    _ => panic "produced-value application spine changed arity"
+
+joinArguments : ValueJoinOps c ->
+  Mono ->
+  List Bool ->
+  List (c, List Mono) ->
+  Mono
+joinArguments ops head modes (rows@((_, _ :: _) :: _)) =
+  let values = map argumentFirst rows
+  let argument = match modes
+    True :: _ => joinNonempty ops values
+    _ => equalValues ops values
+  let restModes = match modes
+    _ :: rest => rest
+    [] => []
+  joinArguments ops (TApp head argument) restModes (map argumentRest rows)
+joinArguments _ head _ _ = head
+
+argumentFirst : (c, List Mono) -> (c, Mono)
+argumentFirst (context, first :: _) = (context, first)
+argumentFirst _ = panic "empty produced-value argument column"
+
+argumentRest : (c, List Mono) -> (c, List Mono)
+argumentRest (context, _ :: rest) = (context, rest)
+argumentRest _ = panic "empty produced-value argument column"
+
+-- Every callable reachable through positive projections exposes its domain to
+-- callers. Invariant/unknown constructor slots are not projected through.
+export
+producedInputTypes : (Mono -> List Bool) -> Mono -> List Mono
+producedInputTypes variance value = inputTypesGo variance value []
+
+inputTypesGo : (Mono -> List Bool) -> Mono -> List Mono -> List Mono
+inputTypesGo variance value acc = match normalize value
+  TFun domain _ result => inputTypesGo variance result (domain :: acc)
+  TApp _ _ =>
+    let (head, arguments) = peelApplication (applicationDepth value) value []
+    inputArguments variance (variance head) arguments acc
+  _ => acc
+
+inputArguments : (Mono -> List Bool) ->
+  List Bool ->
+  List Mono ->
+  List Mono ->
+  List Mono
+inputArguments variance (mode :: modes) (argument :: arguments) acc =
+  let next = if mode then inputTypesGo variance argument acc else acc
+  inputArguments variance modes arguments next
+inputArguments _ _ _ acc = acc
+
+isQualified : Mono -> Bool
+isQualified value = match normalize value
+  TQual _ _ => True
+  _ => False
+
+qualInner : Mono -> Mono
+qualInner value = match normalize value
+  TQual inner _ => inner
+  other => other
+
+qualAuth : Mono -> Authority
+qualAuth value = match normalize value
+  TQual _ q => q
+  _ => panic "qualified-value join projected a plain alternative"

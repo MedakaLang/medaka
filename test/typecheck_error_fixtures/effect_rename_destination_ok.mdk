@@ -1,0 +1,11 @@
+-- The honest control for effect_rename_destination_launder: both paths lie
+-- within the bound, directly and through a partial application.
+mv : Unit -> <FileWrite "tmp/*"> Result String Unit
+mv _ = rename "tmp/a" "tmp/b"
+
+partial : Unit -> <FileWrite "tmp/*"> Result String Unit
+partial _ =
+  let from = rename "tmp/a"
+  from "tmp/b"
+
+main = println 1

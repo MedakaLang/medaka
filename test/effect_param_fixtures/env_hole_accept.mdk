@@ -1,11 +1,11 @@
--- WS-3b ENV hole-fill ⊆ ACCEPT.  `getEnv : String -> <Env _> …` carries the
--- universal inferred-hole `_`; the call-site α recovers the literal first arg
--- "HOME" and the DOMAIN-DIRECTED fill builds the singleton authority set
--- <Env {"HOME"}> (Set domain, not a Prefix pattern).  Declared bound is the
+-- ENV named-argument ⊆ ACCEPT.  `getEnv : (name : String) -> <Env name> …`
+-- binds its Env authority to its argument; at the call site that argument is
+-- the literal "HOME", so the DOMAIN-DIRECTED atom is the singleton authority
+-- set <Env {"HOME"}> (Set domain, not a Prefix pattern).  Declared bound is the
 -- SUPERSET {"HOME","PATH"} ⇒ {"HOME"} ⊆ {"HOME","PATH"} ⇒ ACCEPT.
-effect Env Set
+-- Env is the builtin Set-domain label; a local declaration would be another label
 
-extern getEnv : String -> <Env _> Option String
+extern getEnv : (name : String) -> <Env name> Option String
 
 readHome : Unit -> <Env {"HOME", "PATH"}, FFI> Option String
 readHome _ = getEnv "HOME"

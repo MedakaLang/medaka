@@ -1,0 +1,10 @@
+-- The public method does not export the same-named private standalone.
+-- Value-position lookup is deliberate: direct calls prefer the live method
+-- even if an incorrect export descriptor leaks the private binding.
+import provider.{Labelled, label}
+
+applyBool : (Bool -> String) -> String
+applyBool f = f True
+
+main : <Stdout> Unit
+main = putStrLn (applyBool label)

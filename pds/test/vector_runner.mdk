@@ -168,7 +168,7 @@ spawn : Int ->
   List String ->
   String ->
   List String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec> Result String (Int, String, String)
 spawn secs envs cmd args = boundedVerbSeconds secs "env" (envs ++ (cmd :: args))
 
 {- | The environment every `medaka` spawn carries.
@@ -187,7 +187,7 @@ medakaEnv = [
 -- Whether `name` resolves to something runnable. A missing command makes
 -- `env` exit 127 without running anything, which is the one code that
 -- distinguishes "absent" from "ran and disagreed".
-commandPresent : String -> <Exec "_"> Bool
+commandPresent : String -> <Exec> Bool
 commandPresent name = match spawn 60 [] name ["--version"]
   Err _ => False
   Ok (code, _, _) => code /= 127
@@ -356,7 +356,7 @@ runArm : Row ->
   String ->
   List String ->
   Arm ->
-  <Exec "_", FileRead "_", IO> ArmResult
+  <Exec, FileRead, IO> ArmResult
 runArm r corpusPaths scratch extraNeeds a =
   let label = "\{r.gate} \{engineLabel a.engine}"
   let driver = "\{medakaRoot}/\{r.driver}"
@@ -380,7 +380,7 @@ armStdout : Row ->
   String ->
   List String ->
   String ->
-  <Exec "_", IO> (String, List String)
+  <Exec, IO> (String, List String)
 armStdout r a label driver corpusPaths scratch = match a.engine
   EvalEngine => evalStdout a label driver corpusPaths
   NativeEngine => nativeStdout r a label driver corpusPaths scratch
@@ -390,7 +390,7 @@ evalStdout : Arm ->
   String ->
   String ->
   List String ->
-  <Exec "_", IO> (String, List String)
+  <Exec, IO> (String, List String)
 evalStdout a label driver corpusPaths =
   let args = ["run", driver] ++ a.driverArgs ++ corpusPaths
   spawnFindings label "medaka run" (spawn runSeconds medakaEnv medakaBin args)
@@ -401,7 +401,7 @@ nativeStdout : Row ->
   String ->
   List String ->
   String ->
-  <Exec "_", IO> (String, List String)
+  <Exec, IO> (String, List String)
 nativeStdout r a label driver corpusPaths scratch =
   let bin = "\{scratch}/\{stem r.driver}"
   let build =
@@ -420,7 +420,7 @@ wasmStdout : Row ->
   String ->
   List String ->
   String ->
-  <Exec "_", IO> (String, List String)
+  <Exec, IO> (String, List String)
 wasmStdout r a label driver corpusPaths scratch =
   let wasm = "\{scratch}/\{stem r.driver}.wasm"
   let envs = medakaEnv ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter}"]
@@ -464,7 +464,7 @@ spaceStr = " "
    The three prerequisites are the ones the retired script checked, in the
    same order. `MEDAKA_REQUIRE_WASM=1` turns every absence into a finding,
    which is how CI states that a host it controls must have them. -}
-wasmUnavailable : <Exec "_", FileRead "_", IO> Option String
+wasmUnavailable : <Exec, FileRead, IO> Option String
 wasmUnavailable =
   if not (fileExists wasmEmitter) then
     Some "the Wasm emitter \{wasmEmitter} is not built"
@@ -479,7 +479,7 @@ armResults : Row ->
   List String ->
   String ->
   List String ->
-  <Exec "_", FileRead "_", IO> List ArmResult
+  <Exec, FileRead, IO> List ArmResult
 armResults r corpusPaths scratch extraNeeds =
   map (oneArm r corpusPaths scratch extraNeeds) r.arms
 
@@ -488,7 +488,7 @@ oneArm : Row ->
   String ->
   List String ->
   Arm ->
-  <Exec "_", FileRead "_", IO> ArmResult
+  <Exec, FileRead, IO> ArmResult
 oneArm r corpusPaths scratch extraNeeds a =
   let label = "\{r.gate} \{engineLabel a.engine}"
   match a.engine
@@ -525,9 +525,7 @@ differsFrom first a =
 
 -- # The corpus
 
-corpusPathsOf : String ->
-  Corpus ->
-  <Exec "_", FileRead "_"> Result String (List String)
+corpusPathsOf : String -> Corpus -> <Exec, FileRead> Result String (List String)
 corpusPathsOf root (Ledgered consumer) = filesForConsumer root consumer
 corpusPathsOf root (Explicit rels) = validatePaths root rels
 
@@ -547,12 +545,10 @@ boundFinding (Exactly n) got =
 
 -- # The source-shape precondition
 
-sourceShapeFindings : String ->
-  List (String, String) ->
-  <FileRead "_"> List String
+sourceShapeFindings : String -> List (String, String) -> <FileRead> List String
 sourceShapeFindings root shapes = somes (map (sourceShapeFinding root) shapes)
 
-sourceShapeFinding : String -> (String, String) -> <FileRead "_"> Option String
+sourceShapeFinding : String -> (String, String) -> <FileRead> Option String
 sourceShapeFinding root (rel, shape) = match readFile "\{root}/\{rel}"
   Err e => Some "\{rel}: could not be read to check its accepted shape: \{e}"
   Ok src =>
@@ -573,7 +569,7 @@ sourceShapeFinding root (rel, shape) = match readFile "\{root}/\{rel}"
 oracleNeeds : Row ->
   String ->
   List String ->
-  <Exec "_", FileWrite "_", IO> (List String, List String)
+  <Exec, FileWrite, IO> (List String, List String)
 oracleNeeds r scratch corpusPaths = match r.oracle
   None => ([], [])
   Some o => runOracle r o scratch corpusPaths
@@ -582,7 +578,7 @@ runOracle : Row ->
   Oracle ->
   String ->
   List String ->
-  <Exec "_", FileWrite "_", IO> (List String, List String)
+  <Exec, FileWrite, IO> (List String, List String)
 runOracle r o scratch corpusPaths =
   let label = "\{r.gate} (oracle)"
   let path = "\{scratch}/oracle_source"
@@ -610,7 +606,7 @@ runOracle r o scratch corpusPaths =
    The whole list, never the first: a red run should name every engine that
    disagreed at once, which is what a single runner buys over one script per
    engine pair. -}
-gradeRow : Row -> <Exec "_", FileRead "_", FileWrite "_", IO> List String
+gradeRow : Row -> <Exec, FileRead, FileWrite, IO> List String
 gradeRow r =
   let shapeFindings = sourceShapeFindings medakaRoot r.sourceShapes
   match shapeFindings
@@ -621,9 +617,7 @@ gradeRow r =
         Some m => ["\{r.gate}: \{m}"]
         None => runRow r (map (p => "\{medakaRoot}/\{p}") rels)
 
-runRow : Row ->
-  List String ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> List String
+runRow : Row -> List String -> <Exec, FileRead, FileWrite, IO> List String
 runRow r corpusPaths = match scratchDir
   Err e => ["\{r.gate}: could not make a scratch directory: \{e}"]
   Ok scratch => match oracleNeeds r scratch corpusPaths
@@ -641,7 +635,7 @@ armFindings (a :: rest) = a.findings ++ armFindings rest
 -- The scratch directory is the caller's to remove (`scratchDir`'s own
 -- contract). The spawn is wildcard-bound because a cleanup asserts nothing:
 -- a failure to reap is not a finding about the gate's subject.
-reap : String -> List String -> <Exec "_"> List String
+reap : String -> List String -> <Exec> List String
 reap scratch findings =
   let _ = spawn 60 [] "rm" ["-rf", scratch]
   findings
@@ -653,7 +647,7 @@ reap scratch findings =
    every later one unanswerable — so reporting them as one failure with a
    full finding list says more than a column of identically-caused reds. -}
 export
-expectRow : Row -> <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+expectRow : Row -> <Exec, FileRead, FileWrite, IO> Expectation
 expectRow r = match gradeRow r
   [] => pass
   fs =>

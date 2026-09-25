@@ -32,7 +32,7 @@ Instances: `Eq`, `Debug`
 ### `stat`
 
 ```
-stat : String -> <FileRead _> Result String FileStat
+stat : (path : String) -> <FileRead path> Result String FileStat
 stat p
 ```
 
@@ -42,7 +42,7 @@ be examined, for instance because it does not exist.
 ### `isDir`
 
 ```
-isDir : String -> <FileRead _> Result String Bool
+isDir : (path : String) -> <FileRead path> Result String Bool
 isDir p
 ```
 
@@ -51,7 +51,7 @@ Whether a path exists and is a directory.
 ### `isFile`
 
 ```
-isFile : String -> <FileRead _> Result String Bool
+isFile : (path : String) -> <FileRead path> Result String Bool
 isFile p
 ```
 
@@ -60,7 +60,7 @@ Whether a path exists and is a regular file.
 ### `fileSize`
 
 ```
-fileSize : String -> <FileRead _> Result String Int
+fileSize : (path : String) -> <FileRead path> Result String Int
 fileSize p
 ```
 
@@ -71,7 +71,7 @@ The size of a file in bytes.
 ### `copyFile`
 
 ```
-copyFile : String -> String -> <FileRead _, FileWrite _> Result String Unit
+copyFile : (src : String) -> (dst : String) -> <FileRead src, FileWrite dst> Result String Unit
 copyFile src dst
 ```
 
@@ -82,7 +82,7 @@ A read failure is reported before anything is written.
 ### `replaceDurably`
 
 ```
-replaceDurably : String -> String -> String -> <FileWrite _> Result String Unit
+replaceDurably : String -> String -> String -> <FileWrite> Result String Unit
 replaceDurably staged target content
 ```
 
@@ -110,7 +110,7 @@ Err "No such file or directory"
 ### `mkdirAll`
 
 ```
-mkdirAll : String -> <FileWrite _> Result String Unit
+mkdirAll : String -> <FileWrite> Result String Unit
 mkdirAll path
 ```
 
@@ -121,7 +121,7 @@ A directory that already exists is not an error.
 ### `mkdirAllDurably`
 
 ```
-mkdirAllDurably : String -> <FileRead _, FileWrite _> Result String Unit
+mkdirAllDurably : String -> <FileRead, FileWrite> Result String Unit
 mkdirAllDurably path
 ```
 
@@ -148,7 +148,7 @@ Err "Not a directory"
 ### `walkDir`
 
 ```
-walkDir : String -> <FileRead _> Result String (List String)
+walkDir : String -> <FileRead> Result String (List String)
 walkDir root
 ```
 
@@ -161,7 +161,7 @@ directory that cannot be read or entry that cannot be examined.
 ### `fixtureFiles`
 
 ```
-fixtureFiles : String -> <FileRead _> Result String (List String)
+fixtureFiles : String -> <FileRead> Result String (List String)
 fixtureFiles root
 ```
 
@@ -183,7 +183,7 @@ Ok True
 ### `fixtureDirs`
 
 ```
-fixtureDirs : String -> <FileRead _> Result String (List String)
+fixtureDirs : String -> <FileRead> Result String (List String)
 fixtureDirs root
 ```
 

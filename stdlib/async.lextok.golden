@@ -732,7 +732,6 @@ ARROW
 UPPER "Wait"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -753,7 +752,6 @@ ARROW
 UPPER "Wait"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT
@@ -770,7 +768,6 @@ COLON
 UPPER "Poller"
 LT
 UPPER "Net"
-STRING "_"
 PIPE
 IDENT "e"
 GT

@@ -51,7 +51,7 @@ Which direction of a connection `shutdown` closes.
 ### `resolve`
 
 ```
-resolve : String -> <Net _> Result String (List String)
+resolve : (host : String) -> <Net host> Result String (List String)
 resolve host
 ```
 
@@ -62,7 +62,7 @@ The numeric addresses a host name resolves to.
 ### `connect`
 
 ```
-connect : String -> Int -> <Net _> Result String Connection
+connect : (host : String) -> Int -> <Net host> Result String Connection
 connect host port
 ```
 
@@ -76,7 +76,7 @@ closes the connection for you.
 ### `listen`
 
 ```
-listen : String -> Int -> <Net _> Result String Listener
+listen : (addr : String) -> Int -> <Net addr> Result String Listener
 listen addr port
 ```
 
@@ -87,7 +87,7 @@ Port `0` lets the system pick a free port; `listenPort` reports which.
 ### `listenPort`
 
 ```
-listenPort : Listener -> <Net _> Result String Int
+listenPort : Listener -> <Net> Result String Int
 ```
 
 The port a listener is bound to.
@@ -95,7 +95,7 @@ The port a listener is bound to.
 ### `accept`
 
 ```
-accept : Listener -> <Net _> Result String Connection
+accept : Listener -> <Net> Result String Connection
 ```
 
 Waits for the next connection to a listener.
@@ -105,7 +105,7 @@ Waits for the next connection to a listener.
 ### `send`
 
 ```
-send : Connection -> Array Int -> <Net _> Result String Int
+send : Connection -> Array Int -> <Net> Result String Int
 send _ bs
 ```
 
@@ -117,7 +117,7 @@ which may be fewer than given.
 ### `recv`
 
 ```
-recv : Connection -> Int -> <Net _> Result String (Array Int)
+recv : Connection -> Int -> <Net> Result String (Array Int)
 recv _ n
 ```
 
@@ -129,7 +129,7 @@ form that reads to the end.
 ### `sendAll`
 
 ```
-sendAll : Connection -> Array Int -> <Net _> Result String Unit
+sendAll : Connection -> Array Int -> <Net> Result String Unit
 sendAll _ bs
 ```
 
@@ -141,7 +141,7 @@ treated as a stalled connection.
 ### `recvAll`
 
 ```
-recvAll : Connection -> <Net _> Result String (Array Int)
+recvAll : Connection -> <Net> Result String (Array Int)
 recvAll conn
 ```
 
@@ -155,7 +155,7 @@ discarded.
 ### `sendString`
 
 ```
-sendString : Connection -> String -> <Net _> Result String Unit
+sendString : Connection -> String -> <Net> Result String Unit
 sendString conn s
 ```
 
@@ -164,7 +164,7 @@ Sends a string as UTF-8, every byte of it.
 ### `recvString`
 
 ```
-recvString : Connection -> <Net _> Result String String
+recvString : Connection -> <Net> Result String String
 recvString conn
 ```
 
@@ -177,7 +177,7 @@ or a bounded amount with `recv`.
 ### `sendLine`
 
 ```
-sendLine : Connection -> String -> <Net _> Result String Unit
+sendLine : Connection -> String -> <Net> Result String Unit
 sendLine conn s
 ```
 
@@ -186,7 +186,7 @@ Sends a string as UTF-8 followed by a newline.
 ### `recvLine`
 
 ```
-recvLine : Connection -> <Net _> Result String (Option String)
+recvLine : Connection -> <Net> Result String (Option String)
 recvLine conn
 ```
 
@@ -201,7 +201,7 @@ so it suits small line-based messages, not bulk transfer.
 ### `shutdown`
 
 ```
-shutdown : Connection -> Shutdown -> <Net _> Result String Unit
+shutdown : Connection -> Shutdown -> <Net> Result String Unit
 shutdown _ how
 ```
 
@@ -210,7 +210,7 @@ Shuts down one or both directions of a connection without closing it.
 ### `close`
 
 ```
-close : Connection -> <Net _> Result String Unit
+close : Connection -> <Net> Result String Unit
 ```
 
 Closes a connection.
@@ -220,7 +220,7 @@ Closing twice is not an error. `withConnection` closes for you.
 ### `closeListener`
 
 ```
-closeListener : Listener -> <Net _> Result String Unit
+closeListener : Listener -> <Net> Result String Unit
 ```
 
 Closes a listener.
@@ -228,7 +228,7 @@ Closes a listener.
 ### `setTimeout`
 
 ```
-setTimeout : Connection -> Duration -> <Net _> Result String Unit
+setTimeout : Connection -> Duration -> <Net> Result String Unit
 setTimeout _ d
 ```
 
@@ -240,7 +240,7 @@ so a stalled peer cannot block forever.
 ### `withConnection`
 
 ```
-withConnection : String -> Int -> (Connection -> <Net _> Result String a) -> <Net _> Result String a
+withConnection : String -> Int -> (Connection -> <Net> Result String a) -> <Net> Result String a
 withConnection host port body
 ```
 
@@ -255,7 +255,7 @@ fails, in which case `body` does not run.
 ### `withListener`
 
 ```
-withListener : String -> Int -> (Listener -> <Net _> Result String a) -> <Net _> Result String a
+withListener : String -> Int -> (Listener -> <Net> Result String a) -> <Net> Result String a
 withListener addr port body
 ```
 
@@ -267,7 +267,7 @@ The result is `body`'s result, or the error when listening fails.
 ### `serveLoop`
 
 ```
-serveLoop : Listener -> (Connection -> <Net _> Result String Unit) -> <Net _> Result String Unit
+serveLoop : Listener -> (Connection -> <Net> Result String Unit) -> <Net> Result String Unit
 serveLoop lis handle
 ```
 

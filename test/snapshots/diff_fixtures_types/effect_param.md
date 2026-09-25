@@ -59,9 +59,9 @@ liftIO2 act = Suspend (u => Done (act u))
 # TYPES_USER
 netGet : String -> <FFI, Net "a.com/foo"> String
 fetch : String -> <FFI, Net "a.com/foo"> String
-runAsync : Async a b -> b
-liftIO : (Unit -> a) -> Async b a
+runAsync : Async a b -> <a> b
+liftIO : (Unit -> <a> b) -> Async a b
 yld : Async a Unit
 seqIO : Async a b -> (b -> Async a c) -> Async a c
-main : Unit
-liftIO2 : (Unit -> <IO> a) -> Async <IO | b> a
+main : <IO> Unit
+liftIO2 : (Unit -> <IO | a> b) -> Async <IO | a> b

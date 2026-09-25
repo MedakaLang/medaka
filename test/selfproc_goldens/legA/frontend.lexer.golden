@@ -70,8 +70,6 @@ frameHasLive : List BracketFrame -> Bool
 handleNewline : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 hasTripleInterpMark : String -> Bool
 identEnd : Array Char -> Int -> Int -> Int
-identRunStart : Array Char -> Int -> Int
-identStartLower : Array Char -> Int -> Bool
 identToken : Array Char -> Int -> Int -> Token
 indentOf : String -> Int
 indentOfGo : Array Char -> Int -> Int -> Int

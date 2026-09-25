@@ -97,7 +97,7 @@ findHeaderEnd buf i =
    this stops at the terminator and hands the remainder back. -}
 readHead : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, String, Array Int)
+  <Net> Result String (Int, String, Array Int)
 readHead conn pending = match findHeaderEnd pending 0
   Some headerEnd =>
     let headerText = fromUtf8 (sliceClamped 0 headerEnd pending)
@@ -149,13 +149,13 @@ contentLengthRe = mustCompile "(?i)^content-length:(.*)$"
 readRefusalBody : Connection ->
   String ->
   Array Int ->
-  <Net "_"> Result String String
+  <Net> Result String String
 readRefusalBody conn headerText pending =
   match toInt (headerValueOf contentLengthRe (lines headerText))
     None => Err "serve_subscribe: refusal carried no content-length"
     Some want => readBodyBytes conn want pending
 
-readBodyBytes : Connection -> Int -> Array Int -> <Net "_"> Result String String
+readBodyBytes : Connection -> Int -> Array Int -> <Net> Result String String
 readBodyBytes conn want have =
   if arrayLength have >= want then
     Ok (fromUtf8 (sliceClamped 0 want have))
@@ -173,7 +173,7 @@ readBodyBytes conn want have =
    with the wrong `Sec-WebSocket-Accept` has not completed RFC 6455's
    handshake, and a client that skipped the check would call that a
    subscription. -}
-mustUpgrade : Connection -> String -> <IO, Net "_"> Array Int
+mustUpgrade : Connection -> String -> <IO, Net> Array Int
 mustUpgrade conn cursor =
   let () = mustSend conn (handshakeRequest cursor)
   match readHead conn [||]
@@ -201,7 +201,7 @@ mustUpgrade conn cursor =
    the stream ending. -}
 readFrame : Connection ->
   Array Int ->
-  <Net "_"> Result String (Option (Frame, Array Int))
+  <Net> Result String (Option (Frame, Array Int))
 readFrame conn buffered = match decodeFrame FromServer maxFrameBytes buffered 0
   Decoded frame consumed =>
     Ok (Some (frame, sliceClamped consumed (arrayLength buffered) buffered))
@@ -229,7 +229,7 @@ maxFrameBytes = 16777216
    `Err` is a transport failure; `Ok None` is the stream ending. -}
 nextEvent : Connection ->
   Array Int ->
-  <Net "_"> Result String (Option (Array Int, Array Int))
+  <Net> Result String (Option (Array Int, Array Int))
 nextEvent conn buffered = match readFrame conn buffered
   Err message => Err message
   Ok None => Ok None
@@ -297,11 +297,11 @@ report label ok detail =
     let () = println "\{label}: FAIL \{detail}"
     exit 1
 
-mustConnect : Int -> <Net "_"> Connection
+mustConnect : Int -> <Net> Connection
 mustConnect port =
   resultOrPanic "serve_subscribe: connect failed" (connect "127.0.0.1" port)
 
-mustSend : Connection -> Array Int -> <Net "_"> Unit
+mustSend : Connection -> Array Int -> <Net> Unit
 mustSend conn bytes = match sendAll conn bytes
   Ok () => ()
   Err message => panic "serve_subscribe: send failed: \{message}"
@@ -313,7 +313,7 @@ ignoreResult (Err _) = ()
 -- | Say goodbye the way RFC 6455 §5.5.1 says a client does, then drop the
 -- socket. The server's own close frame is not waited for: every case has
 -- already read what it came for.
-sayGoodbye : Connection -> <Net "_"> Unit
+sayGoodbye : Connection -> <Net> Unit
 sayGoodbye conn =
   ignoreResult (sendAll conn (encodeClientFrame maskKey (closeFrame 1000 "")))
 
@@ -328,7 +328,7 @@ readBudget = seconds 20
 silenceBudget : Duration
 silenceBudget = seconds 3
 
-armRead : Connection -> Duration -> <Net "_"> Unit
+armRead : Connection -> Duration -> <Net> Unit
 armRead conn budget = ignoreResult (setTimeout conn budget)
 
 -- # Writing, so a subscriber has something to receive
@@ -337,7 +337,7 @@ armRead conn budget = ignoreResult (setTimeout conn budget)
 -- produces the `#commit` event every live case waits for. It is spelled out
 -- here rather than shelled out to the other driver because the write has to
 -- happen WHILE a subscription this process holds is open.
-writeRecord : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+writeRecord : Int -> String -> String -> String -> String -> <IO, Net> Unit
 writeRecord port token did collection rkey =
   let bodyJson =
     "{\"repo\":\"\{did}\",\"collection\":\"\{collection}\",\"rkey\":\"\{rkey}\",\"record\":{\"$type\":\"\{collection}\",\"text\":\"subscribe gate \{rkey}\",\"createdAt\":\"2026-01-01T00:00:00Z\"}}"
@@ -369,12 +369,7 @@ writeRecord port token did collection rkey =
    stopped tailing would pass a one-event case, and the sequence numbers being
    consecutive is what shows the second was delivered as a new event rather
    than as a replay of the first. -}
-runLive : Int ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <IO, Net "_", Clock> Unit
+runLive : Int -> String -> String -> String -> String -> <IO, Net, Clock> Unit
 runLive port token did collection rkeyPrefix =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -391,7 +386,7 @@ runLive port token did collection rkeyPrefix =
   let () = sayGoodbye conn
   ignoreResult (close conn)
 
-twoCommits : Connection -> Array Int -> <Net "_"> Result String (Int, Int)
+twoCommits : Connection -> Array Int -> <Net> Result String (Int, Int)
 twoCommits conn buffered = match commitSeq conn buffered
   Err message => Err message
   Ok (first, rest) => map ((second, _) => (first, second)) (commitSeq conn rest)
@@ -399,7 +394,7 @@ twoCommits conn buffered = match commitSeq conn buffered
 -- | The sequence number of the next `#commit` event, refusing any other kind:
 -- an `#info` or an error frame where a commit is expected is a different
 -- stream from the one the case is grading.
-commitSeq : Connection -> Array Int -> <Net "_"> Result String (Int, Array Int)
+commitSeq : Connection -> Array Int -> <Net> Result String (Int, Array Int)
 commitSeq conn buffered = match nextEvent conn buffered
   Err message => Err message
   Ok None => Err "serve_subscribe: stream ended before the next #commit"
@@ -428,7 +423,7 @@ commitSeq conn buffered = match nextEvent conn buffered
    The silence afterwards is what makes "exactly four" mean atomicity rather
    than arithmetic: nothing else has reached the log, and nothing could have,
    because these are staged before the listener binds. -}
-runGenesis : Int -> <IO, Net "_"> Unit
+runGenesis : Int -> <IO, Net> Unit
 runGenesis port =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -459,7 +454,7 @@ readEvents : Connection ->
   Array Int ->
   Int ->
   List (DagCbor, DagCbor) ->
-  <Net "_"> Result String (List (DagCbor, DagCbor), Array Int)
+  <Net> Result String (List (DagCbor, DagCbor), Array Int)
 readEvents conn buffered remaining acc =
   if remaining == 0 then
     Ok (reverse acc, buffered)
@@ -588,7 +583,7 @@ linkField value name = match mapField value name
 {- | A cursor naming an event this server has never emitted is REFUSED, and
    refused with atproto's own name for it rather than by silence or by a
    replay of something else. -}
-runFutureCursor : Int -> String -> <IO, Net "_"> Unit
+runFutureCursor : Int -> String -> <IO, Net> Unit
 runFutureCursor port cursor =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -615,7 +610,7 @@ runFutureCursor port cursor =
    but that they are told apart: a client whose own arithmetic went below zero
    and a client that sent something that is not a number at all have different
    bugs, and one message for both would name neither. -}
-runRefusedCursor : Int -> String -> String -> <IO, Net "_"> Unit
+runRefusedCursor : Int -> String -> String -> <IO, Net> Unit
 runRefusedCursor port cursor expected =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -639,7 +634,7 @@ runRefusedCursor port cursor expected =
    Both halves are graded: an `#info` followed by silence would be a stream
    that announced a gap and then delivered nothing, which is a worse answer
    than the one this replaces. -}
-runOutdatedCursor : Int -> String -> <IO, Net "_"> Unit
+runOutdatedCursor : Int -> String -> <IO, Net> Unit
 runOutdatedCursor port cursor =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -679,7 +674,7 @@ runExactCursor : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_", Clock> Unit
+  <IO, Net, Clock> Unit
 runExactCursor port cursor token did collection rkey =
   let conn = mustConnect port
   let () = armRead conn silenceBudget
@@ -717,7 +712,7 @@ boolToString False = "no"
    crossed it would pass the first half on its own. The held connections are
    released only when this process exits, so the refusal and the ordinary
    request both happen while every slot is genuinely occupied. -}
-runCeiling : Int -> Int -> String -> <IO, Net "_", Clock> Unit
+runCeiling : Int -> Int -> String -> <IO, Net, Clock> Unit
 runCeiling port ceiling did =
   let held = holdSubscriptions port ceiling []
   let refusal = attemptOverCeiling port
@@ -731,10 +726,7 @@ runCeiling port ceiling did =
       "\{intToString ceiling} subscriptions held; attempt \{intToString (ceiling + 1)} answered \{intToString refusal} with no upgrade (wanted 503); describeRepo answered \{intToString answered} in \{floatToString elapsed}s (wanted 200)"
   closeAll held
 
-holdSubscriptions : Int ->
-  Int ->
-  List Connection ->
-  <IO, Net "_"> List Connection
+holdSubscriptions : Int -> Int -> List Connection -> <IO, Net> List Connection
 holdSubscriptions port remaining held =
   if remaining <= 0 then
     held
@@ -749,7 +741,7 @@ holdSubscriptions port remaining held =
    A 101 is reported as itself rather than as a failure here so the report
    line can say what actually happened: "the upgrade completed" is the finding
    this case exists to catch, and it must not read as a transport error. -}
-attemptOverCeiling : Int -> <IO, Net "_"> Int
+attemptOverCeiling : Int -> <IO, Net> Int
 attemptOverCeiling port =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -760,7 +752,7 @@ attemptOverCeiling port =
   let () = ignoreResult (close conn)
   status
 
-describeRepoStatus : Int -> String -> <IO, Net "_"> Int
+describeRepoStatus : Int -> String -> <IO, Net> Int
 describeRepoStatus port did =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -775,7 +767,7 @@ describeRepoStatus port did =
   let () = ignoreResult (close conn)
   status
 
-closeAll : List Connection -> <Net "_"> Unit
+closeAll : List Connection -> <Net> Unit
 closeAll [] = ()
 closeAll (conn :: rest) =
   let () = ignoreResult (close conn)
@@ -796,7 +788,7 @@ runHold : Int ->
   String ->
   String ->
   String ->
-  <IO, Net "_", Clock> Unit
+  <IO, Net, Clock> Unit
 runHold port hold token did collection rkey =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -818,10 +810,10 @@ runHold port hold token did collection rkey =
 -- # Frame-level cases: RFC 6455 §5.4 fragmentation and §5.5.1 close
 
 -- | One client frame on the wire, masked the way §5.1 requires of a client.
-sendFrame : Connection -> Frame -> <Net "_"> Unit
+sendFrame : Connection -> Frame -> <Net> Unit
 sendFrame conn frame = mustSend conn (encodeClientFrame maskKey frame)
 
-sendFrames : Connection -> List Frame -> <Net "_"> Unit
+sendFrames : Connection -> List Frame -> <Net> Unit
 sendFrames _ [] = ()
 sendFrames conn (frame :: rest) =
   let () = sendFrame conn frame
@@ -834,9 +826,7 @@ sendFrames conn (frame :: rest) =
    and `Some 0` is a Close frame carrying no status code at all. Both are
    distinct answers from any code, and a case that folded them into one would
    accept a server that said nothing where a code was owed. -}
-serverCloseCode : Connection ->
-  Array Int ->
-  <Net "_"> Result String (Option Int)
+serverCloseCode : Connection -> Array Int -> <Net> Result String (Option Int)
 serverCloseCode conn buffered = match readFrame conn buffered
   Err message => Err message
   Ok None => Ok None
@@ -858,7 +848,7 @@ isCode (Some got) wanted = got == wanted
 {- | Send `frames` on a fresh subscription and grade the status code the
    server closes with. Every case below is that shape: the frames are the
    whole input and a close code is the whole answer. -}
-runClosingCase : Int -> String -> Int -> List Frame -> <IO, Net "_"> Unit
+runClosingCase : Int -> String -> Int -> List Frame -> <IO, Net> Unit
 runClosingCase port label wanted frames =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -880,7 +870,7 @@ runClosingCase port label wanted frames =
    is ignored by design — a subscriber has nothing this server's lexicon can
    read — so the only thing observable about the message having been handled
    correctly is that the connection is neither closed nor wedged behind it. -}
-runFragment : Int -> <IO, Net "_"> Unit
+runFragment : Int -> <IO, Net> Unit
 runFragment port =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -901,7 +891,7 @@ runFragment port =
   let () = sayGoodbye conn
   ignoreResult (close conn)
 
-nextPong : Connection -> Array Int -> <Net "_"> Result String (Option String)
+nextPong : Connection -> Array Int -> <Net> Result String (Option String)
 nextPong conn buffered = match readFrame conn buffered
   Err message => Err message
   Ok None => Ok None
@@ -963,7 +953,7 @@ soakLoop : Connection ->
   Float ->
   Int ->
   Int ->
-  <Clock, IO, Net "_"> Result String (Int, Int)
+  <Clock, IO, Net> Result String (Int, Int)
 soakLoop conn buffered t0 budget events commits =
   if elapsedSince t0 >= budget then
     Ok (events, commits)
@@ -989,7 +979,7 @@ soakLoop conn buffered t0 budget events commits =
         else
           soakLoop conn rest t0 budget (events + 1) commits
 
-runSoak : Int -> Int -> <IO, Net "_", Clock> Unit
+runSoak : Int -> Int -> <IO, Net, Clock> Unit
 runSoak port durationMs =
   let conn = mustConnect port
   let () = armRead conn readBudget
@@ -1016,7 +1006,7 @@ usage : String
 usage =
   "usage: serve_subscribe <genesis|live|soak|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
-main : <IO, Env, Net "_", Clock> Unit
+main : <IO, Env, Net, Clock> Unit
 main = match args ()
   ["genesis", port] => runGenesis (mustPort port)
   ["soak", port, durationMs] => runSoak (mustPort port) (mustCount durationMs)

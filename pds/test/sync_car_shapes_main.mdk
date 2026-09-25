@@ -495,7 +495,7 @@ namedBlockBytes wanted [] =
 namedBlockBytes wanted ((cid, bytes) :: rest) =
   if cidToString cid == wanted then bytes else namedBlockBytes wanted rest
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "sync_car_shapes: cannot read corpus: \{message}"

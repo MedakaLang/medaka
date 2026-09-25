@@ -1,0 +1,206 @@
+-- Concrete authority domains: the lattice each effect label's parameter is
+-- drawn from. Domain operations do not depend on inference state, syntax, or
+-- dictionary selection; atoms and rows are built over them in `effect_rows`.
+
+import support.util.{
+  listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList
+}
+
+public export data Param =
+  | PUnit
+  | PPrefix (Option String)
+  | PSet (Option (List String))
+  | PProduct (List (String, Param))
+
+-- Canonical form of a parameter. The empty prefix denotes the Prefix domain's
+-- top: `""` is a prefix of every path, so its join with any prefix is top and
+-- top must cover it. One representation keeps join, coverage, rendering and a
+-- solver's covered-atom skip in agreement; a producer that abstracts a value
+-- to `""` builds the top parameter through this function.
+export
+canonParam : Param -> Param
+canonParam (PPrefix (Some s)) =
+  if s == "" then PPrefix None else PPrefix (Some s)
+canonParam p = p
+
+export
+subTopOf : Param -> Param
+subTopOf (PPrefix _) = PPrefix None
+subTopOf (PSet _) = PSet None
+subTopOf (PProduct _) = PProduct []
+subTopOf _ = PUnit
+
+export
+lookupAxis : String -> List (String, Param) -> Option Param
+lookupAxis _ [] = None
+lookupAxis name ((k, v) :: rest) =
+  if name == k then Some v else lookupAxis name rest
+
+export
+djoin : Param -> Param -> Param
+djoin p1 p2 = djoinN (canonParam p1) (canonParam p2)
+
+-- The Prefix join is the longest common prefix of the two concrete parts,
+-- spelled as a written pattern: a common prefix that is not one of the
+-- operands verbatim takes an explicit trailing wildcard, so the joined
+-- pattern is exactly what a signature may write (`"a.com/*" ⊔ "a.com.evil/*"`
+-- is `"a.com*"`, never the bare `"a.com"` a signature rejects). An empty
+-- common prefix is top.
+export
+djoinN : Param -> Param -> Param
+djoinN PUnit PUnit = PUnit
+djoinN (PPrefix None) _ = PPrefix None
+djoinN _ (PPrefix None) = PPrefix None
+djoinN (PPrefix (Some a)) (PPrefix (Some b)) =
+  if a == b then
+    PPrefix (Some a)
+  else
+    let ca = prefixConcrete a
+    let cb = prefixConcrete b
+    let k = commonPrefixLen ca cb 0
+    if k == 0 then PPrefix None else PPrefix (Some (stringSlice 0 k ca ++ "*"))
+djoinN (PSet None) _ = PSet None
+djoinN _ (PSet None) = PSet None
+djoinN (PSet (Some a)) (PSet (Some b)) =
+  let u = sortUniqS (a ++ b)
+  if listLen u > setCardCap then PSet None else PSet (Some u)
+djoinN (PProduct ax) (PProduct bx) =
+  productNorm (map (joinAxis ax bx) (axisUnion ax bx))
+djoinN p _ = p
+
+export
+joinAxis : List (String, Param) ->
+  List (String, Param) ->
+  String ->
+  (String, Param)
+joinAxis ax bx name = match (lookupAxis name ax, lookupAxis name bx)
+  (Some pa, Some pb) => (name, djoinN pa pb)
+  (Some pa, None) => (name, djoinN pa (subTopOf pa))
+  (None, Some pb) => (name, djoinN (subTopOf pb) pb)
+  (None, None) => (name, PUnit)
+
+export
+axisUnion : List (String, Param) -> List (String, Param) -> List String
+axisUnion ax bx = sortUniqS (map fst ax ++ map fst bx)
+
+export
+productNorm : List (String, Param) -> Param
+productNorm axes =
+  PProduct (sortAxes (filterList (p => not (isSubTop (snd p))) axes))
+
+export
+isSubTop : Param -> Bool
+isSubTop (PPrefix None) = True
+isSubTop (PSet None) = True
+isSubTop (PProduct []) = True
+isSubTop PUnit = True
+isSubTop _ = False
+
+export
+sortAxes : List (String, Param) -> List (String, Param)
+sortAxes [] = []
+sortAxes (x :: xs) = insertAxis x (sortAxes xs)
+
+export
+insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
+insertAxis x [] = [x]
+insertAxis x (y :: ys) = match stringCompare (fst x) (fst y)
+  Gt => y :: insertAxis x ys
+  _ => x :: y :: ys
+
+export
+setCardCap : Int
+setCardCap = 16
+
+export
+commonPrefixLen : String -> String -> Int -> Int
+commonPrefixLen a b i =
+  if i >= stringLength a || i >= stringLength b then
+    i
+  else if stringSlice i (i + 1) a == stringSlice i (i + 1) b then
+    commonPrefixLen a b (i + 1)
+  else
+    i
+
+export
+drender : Param -> String
+drender p = drenderN (canonParam p)
+
+export
+drenderN : Param -> String
+drenderN PUnit = ""
+drenderN (PPrefix None) = ""
+drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
+drenderN (PSet None) = ""
+drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
+drenderN (PProduct []) = ""
+drenderN (PProduct ax) = " " ++ renderProductLit ax
+
+export
+quoteStr : String -> String
+quoteStr s = "\"" ++ s ++ "\""
+
+export
+renderProductLit : List (String, Param) -> String
+renderProductLit ax = joinWith " " (map renderAxis ax)
+
+export
+renderAxis : (String, Param) -> String
+renderAxis (name, p) = "\{name}=\{renderAxisVal p}"
+
+export
+renderAxisVal : Param -> String
+renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
+renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
+renderAxisVal _ = ""
+
+export
+prefixConcrete : String -> String
+prefixConcrete s =
+  let n = stringLength s
+  if n > 0 && stringSlice (n - 1) n s == "*" then stringSlice 0 (n - 1) s else s
+
+export
+dsub : Param -> Param -> Bool
+dsub p1 p2 = dsubN (canonParam p1) (canonParam p2)
+
+export
+dsubN : Param -> Param -> Bool
+dsubN PUnit PUnit = True
+dsubN _ (PPrefix None) = True
+dsubN (PPrefix (Some a)) (PPrefix (Some b)) =
+  if isPrefixPattern b then
+    startsWith (prefixConcrete b) (prefixConcrete a)
+  else
+    a == b
+dsubN (PPrefix None) (PPrefix (Some _)) = False
+dsubN _ (PSet None) = True
+dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b
+dsubN (PSet None) (PSet (Some _)) = False
+dsubN _ (PProduct []) = True
+dsubN (PProduct ax) (PProduct bx) = allList (axisSub ax) bx
+dsubN _ _ = False
+
+-- A pattern ends in `*` and admits every element it is a prefix of; any
+-- other element is exact and admits only itself: `"/etc/host"` does not
+-- admit `/etc/hostname`.
+export
+isPrefixPattern : String -> Bool
+isPrefixPattern s =
+  let n = stringLength s
+  n > 0 && stringSlice (n - 1) n s == "*"
+
+export
+axisSub : List (String, Param) -> (String, Param) -> Bool
+axisSub ax (name, bp) = dsubN (lookupAxisOrTop name ax bp) bp
+
+export
+lookupAxisOrTop : String -> List (String, Param) -> Param -> Param
+lookupAxisOrTop name ax bp = match lookupAxis name ax
+  Some v => v
+  None => subTopOf bp
+
+export
+subsetStr : List String -> List String -> Bool
+subsetStr [] _ = True
+subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False

@@ -1,0 +1,81 @@
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
+import types.effect_domain.{Param(..), djoin, drender, dsub}
+import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
+
+test "prefix coverage is directed and respects the host boundary" = expectAll [
+  expectTrue
+    (dsub
+      (PPrefix (Some "good.example/api/"))
+      (PPrefix (Some "good.example/*"))),
+  expectFalse
+    (dsub
+      (PPrefix (Some "good.example.evil/api/"))
+      (PPrefix (Some "good.example/*"))),
+  expectFalse (dsub (PPrefix None) (PPrefix (Some "good.example/*"))),
+]
+
+test "the empty prefix is the domain top under join, coverage and rendering" = expectAll
+  [
+    expectTrue (dsub (PPrefix None) (PPrefix (Some ""))),
+    expectTrue (dsub (PPrefix (Some "")) (PPrefix None)),
+    expectEqual
+      (drender (PPrefix None))
+      (drender (djoin (PPrefix (Some "")) (PPrefix (Some "")))),
+    expectEqual (drender (PPrefix None)) (drender (PPrefix (Some ""))),
+    expectEqual
+      "FileWrite"
+      (renderAtoms
+        (atomsUnion
+          [atomBuiltin "FileWrite" (PPrefix (Some ""))]
+          [atomBuiltin "FileWrite" (PPrefix (Some "/a"))])),
+  ]
+
+test "set coverage includes every possible authority" =
+  let joined = djoin (PSet (Some ["HOME"])) (PSet (Some ["PATH"]))
+  expectAll [
+    expectEqual " {\"HOME\", \"PATH\"}" (drender joined),
+    expectTrue (dsub (PSet (Some ["HOME"])) joined),
+    expectFalse (dsub joined (PSet (Some ["HOME"]))),
+  ]
+
+test "a missing product axis is unconstrained rather than empty" =
+  let host = PPrefix (Some "good.example/*")
+  let readOnly = PProduct [("Host", host), ("Method", PSet (Some ["GET"]))]
+  let anyMethod = PProduct [("Host", host)]
+  expectAll [
+    expectTrue (dsub readOnly anyMethod),
+    expectFalse (dsub anyMethod readOnly),
+    expectEqual (drender anyMethod) (drender (djoin readOnly anyMethod)),
+  ]
+
+test "a row retains a same-label authority which exceeds its bound" =
+  let actual = [atomBuiltin "FileWrite" (PPrefix (Some "/etc/passwd"))]
+  let bound = [atomBuiltin "FileWrite" (PPrefix (Some "tmp/*"))]
+  expectEqual "FileWrite \"/etc/passwd\"" (renderAtoms (atomsDiff actual bound))
+
+test "combining different capabilities never discards either label" =
+  expectEqual
+    "Clock, Env {\"HOME\"}"
+    (renderAtoms
+      (atomsUnion
+        [atomBuiltin "Env" (PSet (Some ["HOME"]))]
+        [atomBuiltin "Clock" PUnit]))
+
+test "larger rows use the canonical label index without changing order" =
+  let all =
+    atomsUnion
+      [atomBuiltin "F" PUnit, atomBuiltin "D" PUnit, atomBuiltin "B" PUnit]
+      [atomBuiltin "E" PUnit, atomBuiltin "C" PUnit, atomBuiltin "A" PUnit]
+  let remaining =
+    atomsDiff
+      [
+        atomBuiltin "F" PUnit,
+        atomBuiltin "D" PUnit,
+        atomBuiltin "B" PUnit,
+        atomBuiltin "A" PUnit,
+      ]
+      [atomBuiltin "D" PUnit, atomBuiltin "A" PUnit, atomBuiltin "C" PUnit]
+  expectAll [
+    expectEqual "A, B, C, D, E, F" (renderAtoms all),
+    expectEqual "B, F" (renderAtoms remaining),
+  ]

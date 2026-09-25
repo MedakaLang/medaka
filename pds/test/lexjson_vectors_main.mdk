@@ -115,7 +115,7 @@ runMalformed =
   ]
   sum checks
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "lexjson_vectors: cannot read corpus: \{message}"

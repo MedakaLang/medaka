@@ -2109,32 +2109,32 @@ fromInt : Int -> a
 rem : a -> a -> a
 minBound : a
 maxBound : a
-map : (a -> b) -> c a -> c b
+map : (a -> <b> c) -> d a -> <b> d c
 pure : a -> b a
 ap : a (b -> c) -> a b -> a c
-andThen : a b -> (b -> a c) -> a c
-deferMap : (a -> b) -> c d a -> c d b
+andThen : a b -> (b -> <c> a d) -> <c> a d
+deferMap : (a -> <b> c) -> d b a -> d b c
 deferPure : a -> b c a
 deferAp : a b (c -> d) -> a b c -> a b d
-deferThen : a b c -> (c -> a b d) -> a b d
+deferThen : a b c -> (c -> <b> a b d) -> a b d
 noMatch : a b
 orElse : a b -> a b -> a b
-bimap : (a -> b) -> (c -> d) -> e a c -> e b d
-mapFirst : (a -> b) -> c a d -> c b d
-mapSecond : (a -> b) -> c d a -> c d b
-fold : (a -> b -> a) -> a -> c b -> a
-foldRight : (a -> b -> b) -> b -> c a -> b
-foldMap : (a -> b) -> c a -> b
+bimap : (a -> <b> c) -> (d -> <b> e) -> f a d -> <b> f c e
+mapFirst : (a -> <b> c) -> d a e -> <b> d c e
+mapSecond : (a -> <b> c) -> d e a -> <b> d e c
+fold : (a -> b -> <c> a) -> a -> d b -> <c> a
+foldRight : (a -> b -> <c> b) -> b -> d a -> <c> b
+foldMap : (a -> <b> c) -> d a -> <b> c
 toList : a b -> List b
 isEmpty : a b -> Bool
 length : a b -> Int
-filterMap : (a -> Option b) -> c a -> c b
-filter : (a -> Bool) -> b a -> b a
+filterMap : (a -> <b> Option c) -> d a -> <b> d c
+filter : (a -> <b> Bool) -> c a -> <b> c a
 fromEntries : List a -> b
 index : a -> b -> c
 setIndex : a -> b -> c -> a
 slice : a -> Int -> Int -> a
-traverse : (a -> b c) -> d a -> b (d c)
+traverse : (a -> <b> c d) -> e a -> <b> c (e d)
 sequence : a (b c) -> b (a c)
 arbitrary : Unit -> <Rand> a
 shrink : a -> List a
@@ -2168,26 +2168,26 @@ isOdd : Int -> Bool
 mapConst : Mappable b => a -> b c -> b a
 map2 : Applicative d => (a -> b -> c) -> d a -> d b -> d c
 map3 : Applicative e => (a -> b -> c -> d) -> e a -> e b -> e c -> e d
-flatMap : Thenable b => (a -> b c) -> b a -> b c
+flatMap : Thenable c => (a -> <b> c d) -> c a -> <b> c d
 identity : a -> a
 flat : Thenable a => a (a b) -> a b
 when : Thenable a => Bool -> a Unit -> a Unit
 unless : Thenable a => Bool -> a Unit -> a Unit
-deferFlatMap : DeferredThenable b => (a -> b c d) -> b c a -> b c d
+deferFlatMap : DeferredThenable c => (a -> <b> c b d) -> c b a -> c b d
 deferWhen : DeferredApplicative a => Bool -> a b Unit -> a b Unit
 deferUnless : DeferredApplicative a => Bool -> a b Unit -> a b Unit
-foldThen : Thenable c => (a -> b -> c a) -> a -> List b -> c a
+foldThen : Thenable d => (a -> b -> <c> d a) -> a -> List b -> <c> d a
 repeatThen : Thenable a => Int -> a b -> a (List b)
-filterThen : Thenable b => (a -> b Bool) -> List a -> b (List a)
-forEach : Thenable b => (a -> b Unit) -> List a -> b Unit
+filterThen : Thenable c => (a -> <b> c Bool) -> List a -> <b> c (List a)
+forEach : Thenable c => (a -> <b> c Unit) -> List a -> <b> c Unit
 runEach : Thenable a => List (a b) -> a Unit
 guard : Alternative a => Bool -> a Unit
 indexGo : List a -> Int -> Int -> a
 sliceListGo : List a -> Int -> Int -> Int -> List a
-any : Foldable b => (a -> Bool) -> b a -> Bool
-all : Foldable b => (a -> Bool) -> b a -> Bool
-find : Foldable b => (a -> Bool) -> b a -> Option a
-count : Foldable b => (a -> Bool) -> b a -> Int
+any : Foldable c => (a -> <b> Bool) -> c a -> <b> Bool
+all : Foldable c => (a -> <b> Bool) -> c a -> <b> Bool
+find : Foldable c => (a -> <b> Bool) -> c a -> <b> Option a
+count : Foldable c => (a -> <b> Bool) -> c a -> <b> Int
 sum : (Foldable a, Num b) => a b -> b
 product : (Foldable a, Num b) => a b -> b
 elem : (Eq a, Foldable b) => a -> b a -> Bool
@@ -2201,26 +2201,26 @@ isSome : Option a -> Bool
 isNone : Option a -> Bool
 optionOr : a -> Option a -> a
 optionOrPanic : String -> Option a -> a
-option : a -> (b -> a) -> Option b -> a
+option : a -> (b -> <c> a) -> Option b -> <c> a
 toResult : a -> Option b -> Result a b
 fromResult : Result a b -> Option b
 isOk : Result a b -> Bool
 isErr : Result a b -> Bool
 resultOr : a -> Result b a -> a
 resultOrPanic : Display a => String -> Result a b -> b
-result : (a -> b) -> (c -> b) -> Result a c -> b
+result : (a -> <b> c) -> (d -> <b> c) -> Result a d -> <b> c
 mapErr : (a -> b) -> Result a c -> Result b c
 fst : (a, b) -> a
 snd : (a, b) -> b
 const : a -> b -> a
-flip : (a -> b -> c) -> b -> a -> c
-on : (a -> a -> b) -> (c -> a) -> c -> c -> b
-curry : ((a, b) -> c) -> a -> b -> c
-uncurry : (a -> b -> c) -> (a, b) -> c
+flip : (a -> b -> <c> d) -> b -> a -> <c> d
+on : (a -> a -> <b> c) -> (d -> a) -> d -> d -> <b> c
+curry : ((a, b) -> <c> d) -> a -> b -> <c> d
+uncurry : (a -> b -> <c> d) -> (a, b) -> <c> d
 discard : Mappable a => a b -> a Unit
-compose : (a -> b) -> (c -> a) -> c -> b
-pipe : (a -> b) -> (b -> c) -> a -> c
-apply : (a -> b) -> a -> b
+compose : (a -> <b> c) -> (d -> <b> a) -> d -> <b> c
+pipe : (a -> <b> c) -> (c -> <b> d) -> a -> <b> d
+apply : (a -> <b> c) -> a -> <b> c
 arbitraryString : Unit -> <Rand> String
 arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
 drawN : Arbitrary a => Int -> <Rand> List a

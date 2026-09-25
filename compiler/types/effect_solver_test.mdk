@@ -1,0 +1,667 @@
+-- Unit contracts for the binding-summary solver. These exercises the solver
+-- directly so a cyclic force equation cannot be hidden by typechecker routing.
+
+import test.{expectAll, expectEqual, expectGreaterThan, expectLessThan}
+import map as M
+import map.{Map(..)}
+import support.opcount.{opSnap, setOpCounting}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  Atom, atomBuiltin, atomsDiff, renderAtoms, EffRow(..), Effvar(..), effvarId,
+  rowFlat
+}
+import types.effect_solver.{
+  SummaryFailure(..),
+  SummarySolver,
+  closeSummaryScope,
+  newSolver,
+  newSummary,
+  openSummaryScope,
+  recordBodyLower,
+  recordRelation,
+  registerExistential,
+  registerValueAllowance,
+}
+
+auditAtom : Atom
+auditAtom = atomBuiltin "Audit" PUnit
+
+pureRow : EffRow
+pureRow = EffRow [] None
+
+auditRow : EffRow
+auditRow = EffRow [auditAtom] None
+
+openTail : Int -> EffRow
+openTail id = EffRow [] (Some (Ref (EUnbound id 1)))
+
+withAudit : EffRow -> EffRow
+withAudit (EffRow _ tail) = EffRow [auditAtom] tail
+
+tailCell : EffRow -> Ref Effvar
+tailCell (EffRow _ (Some cell)) = cell
+tailCell _ = panic "test fixture requires a row tail"
+
+tailIds : EffRow -> List Int
+tailIds row = map effvarId (snd (rowFlat row))
+
+rowLabels : EffRow -> String
+rowLabels row = renderAtoms (fst (rowFlat row))
+
+capabilityEscape : Bool -> List Atom -> List Atom -> List Atom
+capabilityEscape _ lower upper = atomsDiff lower upper
+
+joinId : Ref Int
+joinId = Ref 900000
+
+makeJoin : List (Ref Effvar) -> Ref Effvar
+makeJoin cells =
+  let id = joinId.value
+  joinId := id + 1
+  Ref (EJoin id 1 cells)
+
+makeResidual : Int -> Ref Effvar
+makeResidual level =
+  let id = joinId.value
+  joinId := id + 1
+  Ref (EUnbound id level)
+
+finish : SummarySolver c -> Map Int Unit -> List (SummaryFailure c)
+finish solver protected =
+  closeSummaryScope
+    solver
+    protected
+    Tip
+    Tip
+    Tip
+    capabilityEscape
+    makeJoin
+    makeResidual
+
+finishRetained : SummarySolver c -> List EffRow -> List (SummaryFailure c)
+finishRetained solver rows =
+  let retained =
+    fold
+      (roots row => fold (acc id => M.set id () acc) roots (tailIds row))
+      Tip
+      rows
+  closeSummaryScope
+    solver
+    Tip
+    Tip
+    retained
+    Tip
+    capabilityEscape
+    makeJoin
+    makeResidual
+
+finishBorrowed : SummarySolver c -> List EffRow -> List (SummaryFailure c)
+finishBorrowed solver rows =
+  let cells =
+    fold
+      (acc row => M.set (effvarId (tailCell row)) (tailCell row) acc)
+      Tip
+      rows
+  let retained = M.mapWithKey (_ _ => ()) cells
+  closeSummaryScope
+    solver
+    Tip
+    Tip
+    retained
+    cells
+    capabilityEscape
+    makeJoin
+    makeResidual
+
+test "a retained positive allowance takes its least pure solution" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let choice = openTail 11
+  let _ = registerValueAllowance solver (tailCell choice)
+  let _ = recordRelation solver False "pure" pureRow choice
+  let failures = finishRetained solver [choice]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual [] (tailIds choice),
+    expectEqual "" (rowLabels choice),
+  ]
+
+test "an allowance shared with a borrowed input remains symbolic" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let choice = openTail 11
+  let input = openTail 12
+  let _ = registerValueAllowance solver (tailCell choice)
+  let _ = recordRelation solver False "forward" choice input
+  let _ = recordRelation solver False "backward" input choice
+  let failures = finishBorrowed solver [input]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual [12] (tailIds choice),
+    expectEqual [12] (tailIds input),
+  ]
+
+test "an outward pure allowance retains ownership without a pending relation" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let _ = openSummaryScope solver 20 2
+  let choice = openTail 21
+  let _ = registerValueAllowance solver (tailCell choice)
+  let _ = recordRelation solver False "pure" pureRow choice
+  let inner = finishRetained solver [choice]
+  let before = tailIds choice
+  let outer = finishRetained solver [choice]
+  expectAll [
+    expectEqual 0 (length inner),
+    expectEqual [21] before,
+    expectEqual 0 (length outer),
+    expectEqual [] (tailIds choice),
+  ]
+
+test "outward allowances transfer the connected bound component before solving" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let _ = openSummaryScope solver 20 2
+  let outward = openTail 21
+  let local = EffRow [] (Some (Ref (EUnbound 22 2)))
+  let _ = registerValueAllowance solver (tailCell outward)
+  let _ = registerValueAllowance solver (tailCell local)
+  let _ = recordRelation solver False "connection" outward local
+  let _ = recordRelation solver False "local-bound" auditRow local
+  let inner = finishRetained solver [outward, local]
+  let before = tailIds local
+  let _ = recordRelation solver False "outer-bound" auditRow outward
+  let outer = finishRetained solver [outward, local]
+  expectAll [
+    expectEqual 0 (length inner),
+    expectEqual [22] before,
+    expectEqual 0 (length outer),
+    expectEqual "Audit" (rowLabels outward),
+    expectEqual "Audit" (rowLabels local),
+    expectEqual [] (tailIds outward),
+    expectEqual [] (tailIds local),
+  ]
+
+test "an inner scope transfers a relation over an outer allowance to its owner" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let choice = openTail 11
+  let _ = registerValueAllowance solver (tailCell choice)
+  let _ = recordRelation solver False "value" pureRow choice
+  let _ = openSummaryScope solver 20 2
+  let _ = recordRelation solver False "closed-slot" choice pureRow
+  let inner = finish solver Tip
+  let before = tailIds choice
+  let outer = finish solver Tip
+  expectAll [
+    expectEqual 0 (length inner),
+    expectEqual [11] before,
+    expectEqual 0 (length outer),
+    expectEqual "" (rowLabels choice),
+    expectEqual [] (tailIds choice),
+  ]
+
+test "an inner scope transfers a relation over an outer signature root to its owner" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let root = openTail 11
+  let protected = M.set 11 () Tip
+  let _ = openSummaryScope solver 20 2
+  let _ = recordRelation solver False "closed-slot" root pureRow
+  let inner = finish solver protected
+  let outer = finish solver protected
+  expectAll [
+    expectEqual 0 (length inner),
+    expectEqual ["closed-slot"] (failureContexts outer),
+    expectEqual [11] (tailIds root),
+  ]
+
+test "a recursive result summary does not default a retained input" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 40 1
+  let summary = newSummary solver 41
+  let input = openTail 42
+  let _ = registerExistential solver (tailCell input)
+  let _ = recordBodyLower solver summary input
+  let _ = recordRelation solver False "recursive-assumption" summary input
+  let failures = finishBorrowed solver [input]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual [42] (tailIds input),
+    expectEqual [42] (tailIds summary),
+  ]
+
+test "borrowed inclusion retains residual freedom beyond its concrete lower bound" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10000 1
+  let summary = newSummary solver 10001
+  let input = openTail 10002
+  let _ = recordBodyLower solver summary (withAudit input)
+  let _ = recordRelation solver False "recursive-allowance" summary input
+  let failures = finishBorrowed solver [input]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels input),
+    expectEqual 1 (length (tailIds input)),
+    expectEqual (tailIds input) (tailIds summary),
+  ]
+
+test "exact effect indices do not gain borrowed residual freedom" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 11000 1
+  let input = openTail 11001
+  let _ = recordRelation solver True "exact-index" auditRow input
+  let failures = finishBorrowed solver [input]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels input),
+    expectEqual [] (tailIds input),
+  ]
+
+test "borrowed residuals propagate through a chain before validation" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 12000 1
+  let first = openTail 12001
+  let second = openTail 12002
+  let _ = recordRelation solver False "lower" auditRow first
+  let _ = recordRelation solver False "forward" first second
+  let failures = finishBorrowed solver [first, second]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels second),
+    expectEqual 1 (length (tailIds first)),
+    expectEqual 2 (length (tailIds second)),
+  ]
+
+test "an owned result cycle bottoms when no published input supplies its row" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 44 1
+  let summary = newSummary solver 45
+  let recursive = openTail 46
+  let _ = registerExistential solver (tailCell recursive)
+  let _ = recordBodyLower solver summary recursive
+  let _ = recordRelation solver False "recursive-assumption" summary recursive
+  let failures = finishRetained solver [summary]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual [] (tailIds recursive),
+    expectEqual [] (tailIds summary),
+    expectEqual "" (rowLabels summary),
+  ]
+
+test "retained inference rows solve accumulated lower bounds" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 50 1
+  let result = openTail 51
+  let _ = recordRelation solver False "returned-index" auditRow result
+  let failures = finishRetained solver [result]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels result),
+    expectEqual [] (tailIds result),
+  ]
+
+test "a pure lower bound does not default a retained row" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 60 1
+  let result = openTail 61
+  let _ = recordRelation solver False "pure-lower" pureRow result
+  let failures = finishRetained solver [result]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual [61] (tailIds result),
+  ]
+
+test "a zero-information retained cycle remains polymorphic" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 70 1
+  let first = openTail 71
+  let second = openTail 72
+  let _ = recordRelation solver False "forward" first second
+  let _ = recordRelation solver False "backward" second first
+  let failures = finishRetained solver [first, second]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual 1 (length (tailIds first)),
+    expectEqual (tailIds first) (tailIds second),
+  ]
+
+test "a retained member prevents an instantiated three-cycle from defaulting" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 80 1
+  let first = openTail 81
+  let second = openTail 82
+  let third = openTail 83
+  let _ = registerExistential solver (tailCell first)
+  let _ = recordRelation solver False "first" first second
+  let _ = recordRelation solver False "second" second third
+  let _ = recordRelation solver False "third" third first
+  let failures = finishRetained solver [third]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual [83] (tailIds first),
+    expectEqual [83] (tailIds second),
+    expectEqual [83] (tailIds third),
+  ]
+
+test "a labelled inclusion cycle is not an equality class" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 90 1
+  let first = openTail 91
+  let second = openTail 92
+  let _ = recordRelation solver False "filtered" first (withAudit second)
+  let _ = recordRelation solver False "reverse" second first
+  let _ = recordRelation solver False "concrete" auditRow first
+  let failures = finishRetained solver [first, second]
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels first),
+    expectEqual "" (rowLabels second),
+    expectEqual [] (tailIds first),
+    expectEqual [] (tailIds second),
+  ]
+
+failureContexts : List (SummaryFailure String) -> List String
+failureContexts fs = map (f => f.esfContext) fs
+
+test "a direct filtered cycle assigns its residual tail the pure least solution" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 100 1
+  let summary = newSummary solver 101
+  let residual = openTail 1001
+  let _ = recordBodyLower solver summary (withAudit residual)
+  let _ = recordRelation solver False "direct" summary (withAudit residual)
+  let failures = finish solver Tip
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels summary),
+    expectEqual [] (tailIds summary),
+    expectEqual "" (rowLabels residual),
+    expectEqual [] (tailIds residual),
+  ]
+
+test "a mutual filtered cycle preserves the summary lower bound without widening its residual" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 200 1
+  let left = newSummary solver 201
+  let right = newSummary solver 202
+  let residual = openTail 2001
+  let _ = recordBodyLower solver left (withAudit right)
+  let _ =
+    recordBodyLower
+      solver
+      right
+      (EffRow [] (Some (makeJoin [tailCell left, tailCell residual])))
+  let _ = recordRelation solver False "mutual" left (withAudit residual)
+  let failures = finish solver Tip
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels left),
+    expectEqual "Audit" (rowLabels right),
+    expectEqual "" (rowLabels residual),
+    expectEqual [] (tailIds residual),
+  ]
+
+test "an unprotected lower-only leaf remains external instead of being closed by occurrence" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 250 1
+  let summary = newSummary solver 251
+  let callback = openTail 2501
+  let _ = recordBodyLower solver summary (withAudit callback)
+  let failures = finish solver Tip
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels summary),
+    expectEqual [2501] (tailIds summary),
+    expectEqual [2501] (tailIds callback),
+  ]
+
+test "an ambiguous multi-tail upper bound leaves both alternatives untouched" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 275 1
+  let summary = newSummary solver 276
+  let first = openTail 2751
+  let second = openTail 2752
+  let upper =
+    EffRow [auditAtom] (Some (makeJoin [tailCell first, tailCell second]))
+  let _ = recordBodyLower solver summary auditRow
+  let _ = recordRelation solver False "ambiguous-upper" summary upper
+  let failures = finish solver Tip
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels summary),
+    expectEqual [] (tailIds summary),
+    expectEqual [2751] (tailIds first),
+    expectEqual [2752] (tailIds second),
+  ]
+
+test "protected callback rows remain distinct external payload" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 300 1
+  let summary = newSummary solver 301
+  let callback = openTail 3001
+  let unrelated = openTail 3002
+  let protected =
+    M.set
+      (effvarId (tailCell callback))
+      ()
+      (M.set (effvarId (tailCell unrelated)) () Tip)
+  let _ = recordBodyLower solver summary (withAudit callback)
+  let failures = finish solver protected
+  expectAll [
+    expectEqual 0 (length failures),
+    expectEqual "Audit" (rowLabels summary),
+    expectEqual [3001] (tailIds summary),
+    expectEqual [3001] (tailIds callback),
+    expectEqual [3002] (tailIds unrelated),
+  ]
+
+test "a concrete Audit lower bound fails a pure relation" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 350 1
+  let _ = recordRelation solver False "pure-bound" auditRow pureRow
+  let failures = finish solver Tip
+  expectAll [
+    expectEqual ["pure-bound"] (failureContexts failures),
+    expectEqual "Audit" (rowLabels (headFailureLower failures)),
+    expectEqual "" (rowLabels (headFailureUpper failures)),
+  ]
+
+test "a solved summary cannot satisfy a pure contract" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 375 1
+  let summary = newSummary solver 376
+  let _ = recordBodyLower solver summary auditRow
+  let _ = recordRelation solver False "outer-unresolved" summary pureRow
+  let failures = finish solver Tip
+  expectEqual ["outer-unresolved"] (failureContexts failures)
+
+headFailureLower : List (SummaryFailure c) -> EffRow
+headFailureLower (f :: _) = f.esfLower
+headFailureLower [] = panic "expected a solver failure"
+
+headFailureUpper : List (SummaryFailure c) -> EffRow
+headFailureUpper (f :: _) = f.esfUpper
+headFailureUpper [] = panic "expected a solver failure"
+
+test "an inner scope defers an outer summary relation to its owner" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 400 1
+  let outer = newSummary solver 401
+  let _ = openSummaryScope solver 500 2
+  let _ = recordRelation solver False "from-inner" outer pureRow
+  let beforeInnerClose = tailIds outer
+  let innerFailures = finish solver Tip
+  let _ = recordBodyLower solver outer auditRow
+  let outerFailures = finish solver Tip
+  expectAll [
+    expectEqual [401] beforeInnerClose,
+    expectEqual 0 (length innerFailures),
+    expectEqual ["from-inner"] (failureContexts outerFailures),
+  ]
+
+test "an inner protected callback remains external after its relation transfers outward" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 450 1
+  let outer = newSummary solver 451
+  let _ = openSummaryScope solver 500 2
+  let callback = openTail 5001
+  let innerProtected = M.set (effvarId (tailCell callback)) () Tip
+  let _ =
+    recordRelation solver False "inner-callback" outer (withAudit callback)
+  let innerFailures = finish solver innerProtected
+  let _ = recordBodyLower solver outer auditRow
+  let outerFailures = finish solver Tip
+  expectAll [
+    expectEqual 0 (length innerFailures),
+    expectEqual 0 (length outerFailures),
+    expectEqual "Audit" (rowLabels outer),
+    expectEqual [5001] (tailIds callback),
+  ]
+
+makeSummaries : SummarySolver c -> Int -> Int -> List EffRow
+makeSummaries solver count id =
+  if count <= 0 then
+    []
+  else
+    newSummary solver id :: makeSummaries solver (count - 1) (id + 1)
+
+test "transferred constraints retain flexible endpoints at the parent level" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 600 1
+  let outer = newSummary solver 601
+  let _ = openSummaryScope solver 700 2
+  let cell = Ref (EUnbound 701 2)
+  let local = EffRow [] (Some cell)
+  let protected = M.set 701 () Tip
+  let _ = recordRelation solver False "retained" local outer
+  let innerFailures = finish solver protected
+  let level = match !cell
+    EUnbound _ n => n
+    _ => -1
+  let _ = recordBodyLower solver outer auditRow
+  let outerFailures = finish solver Tip
+  expectAll [
+    expectEqual 0 (length innerFailures),
+    expectEqual 1 level,
+    expectEqual [701] (tailIds local),
+    expectEqual ["retained"] (failureContexts outerFailures),
+  ]
+
+linkChain : SummarySolver c -> EffRow -> List EffRow -> Unit
+linkChain _ _ [] = ()
+linkChain solver previous (next :: rest) =
+  let _ = recordBodyLower solver next previous
+  linkChain solver next rest
+
+seedChain : SummarySolver c -> List EffRow -> Unit
+seedChain _ [] = ()
+seedChain solver (first :: rest) =
+  let _ = recordBodyLower solver first auditRow
+  linkChain solver first rest
+
+measureChain : Int -> Int -> Int -> (List (SummaryFailure Unit), Int)
+measureChain count owner firstId =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver owner 1
+  let rows = makeSummaries solver count firstId
+  let _ = seedChain solver rows
+  let _ = setOpCounting True
+  let before = opSnap ()
+  let failures = finish solver Tip
+  let operations = opSnap () - before
+  let _ = setOpCounting False
+  (failures, operations)
+
+measureDiamond : Int -> Int -> Int -> (List (SummaryFailure Unit), Int)
+measureDiamond count owner firstId =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver owner 1
+  let source = newSummary solver firstId
+  let branches = makeSummaries solver count (firstId + 1)
+  let sink = newSummary solver (firstId + count + 1)
+  let _ = recordBodyLower solver source auditRow
+  let _ = linkChain solver source branches
+  let _ =
+    recordBodyLower
+      solver
+      sink
+      (EffRow [] (Some (makeJoin (map tailCell branches))))
+  let _ = setOpCounting True
+  let before = opSnap ()
+  let failures = finish solver Tip
+  let operations = opSnap () - before
+  let _ = setOpCounting False
+  (failures, operations)
+
+test "summary chain and diamond traversals grow linearly in row operations" =
+  let (smallChainFailures, smallChain) = measureChain 8 600 601
+  let (largeChainFailures, largeChain) = measureChain 32 700 701
+  let (smallDiamondFailures, smallDiamond) = measureDiamond 8 800 801
+  let (largeDiamondFailures, largeDiamond) = measureDiamond 32 900 901
+  expectAll [
+    expectEqual 0 (length smallChainFailures),
+    expectEqual 0 (length largeChainFailures),
+    expectEqual 0 (length smallDiamondFailures),
+    expectEqual 0 (length largeDiamondFailures),
+    expectGreaterThan 0 smallChain,
+    expectGreaterThan 0 smallDiamond,
+    expectLessThan (smallChain * 8 + 200) largeChain,
+    expectLessThan (smallDiamond * 8 + 200) largeDiamond,
+  ]
+
+seedExternalLeaves : SummarySolver c -> List EffRow -> Int -> Unit
+seedExternalLeaves _ [] _ = ()
+seedExternalLeaves solver (summary :: rest) leafId =
+  let _ = recordBodyLower solver summary (openTail leafId)
+  seedExternalLeaves solver rest (leafId + 1)
+
+measureFanIn : Int ->
+  Int ->
+  Int ->
+  <IO> (List (SummaryFailure Unit), Int, Int, Float)
+measureFanIn count owner firstId =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver owner 1
+  let inputs = makeSummaries solver count firstId
+  let collector = newSummary solver (firstId + count)
+  let sink = newSummary solver (firstId + count + 1)
+  let _ = seedExternalLeaves solver inputs (firstId + count + 2)
+  let _ =
+    recordBodyLower
+      solver
+      collector
+      (EffRow [] (Some (makeJoin (map tailCell inputs))))
+  let _ = recordBodyLower solver sink collector
+  let _ = setOpCounting True
+  let operationsBefore = opSnap ()
+  let allocationBefore = allocBytes ()
+  let failures = finish solver Tip
+  let allocation = allocBytes () - allocationBefore
+  let operations = opSnap () - operationsBefore
+  let _ = setOpCounting False
+  (failures, length (tailIds sink), operations, allocation)
+
+-- The operation counter observes `rowFlat` visits, not balanced-map work:
+-- `Map.foldlWithKey`, `Map.set`, `Map.has` and `Map.size` do not call `opBump`.
+-- The operation assertion below therefore pins the visible graph traversal but
+-- cannot detect a propagation loop that repeatedly scans an accumulated leaf map.
+-- Allocation is the fail-capable metric for that mutation: rebuilding a persistent
+-- map from all k accumulated leaves after each of N arrivals allocates quadratically,
+-- while delta propagation grows at most N log N. The additive allowance absorbs the
+-- fixed cost of opening and closing a tiny solver scope, not an N-squared scan.
+test "external fan-in reaches its sink without whole-map rescanning" =
+  let (smallFailures, smallLeaves, smallOps, smallAlloc) =
+    measureFanIn 16 1000 1001
+  let (largeFailures, largeLeaves, largeOps, largeAlloc) =
+    measureFanIn 64 2000 2001
+  expectAll [
+    expectEqual 0 (length smallFailures),
+    expectEqual 0 (length largeFailures),
+    expectEqual 16 smallLeaves,
+    expectEqual 64 largeLeaves,
+    expectGreaterThan 0 smallOps,
+    expectGreaterThan 0.0 smallAlloc,
+    expectLessThan (smallOps * 8 + 500) largeOps,
+    expectLessThan (smallAlloc * 10.0 + 65536.0) largeAlloc,
+  ]

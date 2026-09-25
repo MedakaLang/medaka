@@ -1,0 +1,13 @@
+-- A written Prefix element without a trailing `*` is exact: it admits only
+-- itself, so a bound of "/etc/host" does not admit "/etc/hostname" while
+-- "/etc/host*" does.
+exact : Unit -> <FileRead "/etc/host"> Result String String
+exact _ = readFile "/etc/hostname"
+
+pattern : Unit -> <FileRead "/etc/host*"> Result String String
+pattern _ = readFile "/etc/hostname"
+
+same : Unit -> <FileRead "/etc/host"> Result String String
+same _ = readFile "/etc/host"
+
+main = println 1

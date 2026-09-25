@@ -1,7 +1,7 @@
 -- #2163 CATALOG-ROW rule, the REJECT half of the pair whose ACCEPT half is
 -- ffi_cross_builtin_name_accept.mdk.  The two differ in ONE thing: whether the
 -- redeclared catalog row still COVERS the catalog's own row.  There `getEnv` is
--- redeclared with the catalog's own `<Env "_">` and must accept; here it is
+-- redeclared with the catalog's own `<Env>` and must accept; here it is
 -- redeclared with `<>`, dropping `Env` outright.
 --
 -- A catalog name is lowered as the REAL builtin whatever the local signature says

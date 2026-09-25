@@ -15,4 +15,4 @@ main =
   println (total [1, 2])
 # TYPES_USER
 total : (Foldable a, Num b) => a b -> b
-main : Unit
+main : <IO> Unit

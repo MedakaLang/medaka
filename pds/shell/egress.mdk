@@ -269,11 +269,11 @@ decodeUpstream buffer = match parseResponse buffer
    call with nothing more read. Whether a total is affordable is not this
    module's question: it depends on what every other call in the process
    holds, which only the caller can see. -}
-collectUpstream : Wait <Clock, Net "_" | e> ->
-  (Int -> Async <Clock, Net "_" | e> Bool) ->
+collectUpstream : Wait <Clock, Net | e> ->
+  (Int -> Async <Clock, Net | e> Bool) ->
   Connection ->
   Vector Int ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 collectUpstream deadline mayHold conn acc = defer
   late <- expired deadline
   if late then
@@ -282,12 +282,12 @@ collectUpstream deadline mayHold conn acc = defer
     received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
     collectStep deadline mayHold conn acc received
 
-collectStep : Wait <Clock, Net "_" | e> ->
-  (Int -> Async <Clock, Net "_" | e> Bool) ->
+collectStep : Wait <Clock, Net | e> ->
+  (Int -> Async <Clock, Net | e> Bool) ->
   Connection ->
   Vector Int ->
   Result String (Array Int) ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 collectStep _ _ _ _ (Err message) =
   deferPure (Err "egress: upstream read failed: \{message}")
 collectStep deadline mayHold conn acc (Ok bytes) =
@@ -301,12 +301,12 @@ collectStep deadline mayHold conn acc (Ok bytes) =
     else
       keepChunk deadline mayHold conn acc bytes
 
-keepChunk : Wait <Clock, Net "_" | e> ->
-  (Int -> Async <Clock, Net "_" | e> Bool) ->
+keepChunk : Wait <Clock, Net | e> ->
+  (Int -> Async <Clock, Net | e> Bool) ->
   Connection ->
   Vector Int ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 keepChunk deadline mayHold conn acc bytes =
   let () = V.pushArray bytes acc
   let (backing, collected) = V.rawParts acc
@@ -318,10 +318,10 @@ keepChunk deadline mayHold conn acc bytes =
     Some _ => deferPure (decodeUpstream (V.toArray acc))
     None => collectUpstream deadline mayHold conn acc
 
-exchange : (Int -> Async <Clock, Net "_" | e> Bool) ->
+exchange : (Int -> Async <Clock, Net | e> Bool) ->
   Connection ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 exchange mayHold conn bytes = defer
   deadline <- deadlineAfter upstreamCallTimeout
   sent <- A.sendAllWithin upstreamWriteTimeout conn bytes
@@ -333,10 +333,10 @@ exchange mayHold conn bytes = defer
 -- The connection is closed on every path out, success and failure alike, which
 -- is why the exchange's outcome is held and returned after the close rather
 -- than returned from inside it.
-opened : (Int -> Async <Clock, Net "_" | e> Bool) ->
+opened : (Int -> Async <Clock, Net | e> Bool) ->
   Connection ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 opened mayHold conn bytes = defer
   outcome <- exchange mayHold conn bytes
   _ <- A.close conn
@@ -361,7 +361,7 @@ export
 egressConnect : String ->
   Int ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 egressConnect host port bytes =
   egressConnectHolding host port (_ => deferPure True) bytes
 
@@ -369,9 +369,9 @@ egressConnect host port bytes =
 -- (`collectUpstream`).
 egressConnectHolding : String ->
   Int ->
-  (Int -> Async <Clock, Net "_" | e> Bool) ->
+  (Int -> Async <Clock, Net | e> Bool) ->
   Array Int ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 egressConnectHolding host port mayHold bytes = defer
   connected <- A.connectWithin upstreamConnectTimeout host port
   match connected
@@ -409,9 +409,9 @@ egressConnectHolding host port mayHold bytes = defer
    which of the rest happened is this server's business and not the client's. -}
 export
 egressCall : Egress ->
-  (Int -> Async <Clock, Net "_" | e> Bool) ->
+  (Int -> Async <Clock, Net | e> Bool) ->
   ProxyAdmission ->
-  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+  Async <Clock, Net | e> (Result String UpstreamAnswer)
 egressCall egress mayHold admission =
   match appviewRouteFor (egressAppviews egress) admission.audience
     None =>

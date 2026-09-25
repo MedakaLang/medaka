@@ -83,12 +83,12 @@ data Src = Src { rel : String, name : String, text : String }
    `fixtureFiles` carries the anti-vacuity floor: a directory that reads
    cleanly but holds no files is an `Err`, so a scan of nothing cannot
    report a clean boundary. -}
-loadSrcs : String -> String -> <FileRead "_"> Result String (List Src)
+loadSrcs : String -> String -> <FileRead> Result String (List Src)
 loadSrcs root sub = match fixtureFiles "\{root}/\{sub}"
   Err e => Err "could not walk \{root}/\{sub}: \{e}"
   Ok paths => readSrcs root (filter (endsWith ".mdk") paths)
 
-readSrcs : String -> List String -> <FileRead "_"> Result String (List Src)
+readSrcs : String -> List String -> <FileRead> Result String (List Src)
 readSrcs _ [] = Ok []
 readSrcs root (p :: rest) = match readFile p
   Err e => Err "could not read \{p}: \{e}"
@@ -313,13 +313,13 @@ dedupe (x :: rest) = x :: dedupe (filter (/= x) rest)
 root : <IO> String
 root = medakaRoot
 
-production : <FileRead "_", IO> Result String (List Src)
+production : <FileRead, IO> Result String (List Src)
 production = loadSrcs root "pds/lib"
 
-drivers : <FileRead "_", IO> Result String (List Src)
+drivers : <FileRead, IO> Result String (List Src)
 drivers = loadSrcs root "pds/test"
 
-hooks : <FileRead "_", IO> Result String (List (String, String))
+hooks : <FileRead, IO> Result String (List (String, String))
 hooks = map (flatMap hooksOf) production
 
 allEdges : List Src -> Result String (List (String, String, String))
@@ -328,19 +328,19 @@ allEdges (src :: rest) = match edgesOf src
   Err e => Err e
   Ok edges => map (edges ++ _) (allEdges rest)
 
-productionEdges : <FileRead "_", IO> Result String (List (String, String, String))
+productionEdges : <FileRead, IO> Result String (List (String, String, String))
 productionEdges = match production
   Err e => Err e
   Ok srcs => allEdges srcs
 
-driverEdges : <FileRead "_", IO> Result String (List (String, String, String))
+driverEdges : <FileRead, IO> Result String (List (String, String, String))
 driverEdges = match drivers
   Err e => Err e
   Ok srcs => allEdges srcs
 
 -- | The violations a source set's edges commit against the real hook set.
 breachesOf : Result String (List (String, String, String)) ->
-  <FileRead "_", IO> Result String (List String)
+  <FileRead, IO> Result String (List String)
 breachesOf (Err e) = Err e
 breachesOf (Ok edges) = map (h => breaches h edges) hooks
 
@@ -361,7 +361,7 @@ test "the deployment scan found at least one pds/lib production module" =
 test "the deployment scan found at least one exported test-only API" =
   expectAtLeast "exported test-only APIs" 1 (map length hooks)
 
-driverReach : <FileRead "_", IO> Result String (List String)
+driverReach : <FileRead, IO> Result String (List String)
 driverReach = match driverEdges
   Err e => Err e
   Ok edges => map (h => reaches h edges) hooks
@@ -416,7 +416,7 @@ signRel : String
 signRel = "pds/lib/sign.mdk"
 
 -- | The production source set with `extra` prepended to `pds/lib/sign.mdk`.
-withPrepended : String -> <FileRead "_", IO> Result String (List Src)
+withPrepended : String -> <FileRead, IO> Result String (List Src)
 withPrepended extra = map (map (prependTo extra)) production
 
 prependTo : String -> Src -> Src
@@ -426,7 +426,7 @@ prependTo extra src =
   else
     src
 
-mutantBreaches : String -> <FileRead "_", IO> Result String (List String)
+mutantBreaches : String -> <FileRead, IO> Result String (List String)
 mutantBreaches extra = match withPrepended extra
   Err e => Err e
   Ok srcs => breachesOf (allEdges srcs)
@@ -518,12 +518,12 @@ test "mutation control: the real pds/lib/sign.mdk holds no injected import" =
 
    `expectSpawnFails` is the whole grader: exit code and diagnostic
    together, which is the assertion this half wants. -}
-expectCellRejected : String -> String -> <Exec "_", IO> Expectation
+expectCellRejected : String -> String -> <Exec, IO> Expectation
 expectCellRejected rel needle =
   expectSpawnFails medakaBin ["check", underRoot rel] needle
 
 -- | Passes when `medaka check <rel>` exits 0.
-expectCellChecks : String -> <Exec "_", IO> Expectation
+expectCellChecks : String -> <Exec, IO> Expectation
 expectCellChecks rel = expectSpawnOk medakaBin ["check", underRoot rel]
 
 {- | Passes when `medaka check <rel>` fails and BOTH `first` and `second`
@@ -532,10 +532,7 @@ expectCellChecks rel = expectSpawnOk medakaBin ["check", underRoot rel]
    `expectSpawnFails` takes one needle, and the abstract-export diagnostic
    below has to be pinned on two independent phrases, so this is its
    two-needle peer rather than a second way of doing the same thing. -}
-expectCellRejectedBoth : String ->
-  String ->
-  String ->
-  <Exec "_", IO> Expectation
+expectCellRejectedBoth : String -> String -> String -> <Exec, IO> Expectation
 expectCellRejectedBoth rel first second =
   let want =
     "nonzero exit, output containing \{debug first} and \{debug second}"
@@ -682,7 +679,7 @@ bodyScan (line :: rest) inside =
 isTopLevelLine : String -> Bool
 isTopLevelLine line = line /= "" && not (startsWith " " line)
 
-ownBodyLines : <FileRead "_", IO> Result String (List String)
+ownBodyLines : <FileRead, IO> Result String (List String)
 ownBodyLines =
   map
     (text => testBodyLines (lines text))

@@ -17,4 +17,4 @@ main =
 # TYPES_USER
 swap : (a, b) -> (b, a)
 addPair : Num a => (a, a) -> a
-main : Unit
+main : <IO> Unit

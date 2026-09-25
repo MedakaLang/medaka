@@ -1,0 +1,144 @@
+import test.{expectAll, expectEqual, expectTrue}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{
+  Atom(..), atomBuiltin, renderAtoms, EffRow(..), Effvar(..), dedupCells,
+  effrowLabels, rowFlat, joinRows, effvarId, effrowNorm, isJoinCell, linkRow
+}
+import support.util.{listLen}
+import support.opcount.{setOpCounting, opSnap}
+
+deepDiamond : Int -> Ref Effvar -> Ref Effvar
+deepDiamond 0 leaf = leaf
+deepDiamond depth leaf =
+  let below = deepDiamond (depth - 1) leaf
+  Ref (EJoin (1000 + depth) 0 [below, below])
+
+test "sequencing joins independent rows without solving either input" =
+  let left = Ref (EUnbound 1 0)
+  let right = Ref (EUnbound 2 0)
+  let makeJoin = cells => Ref (EJoin 3 0 cells)
+  let joined =
+    joinRows makeJoin (EffRow [] (Some left)) (EffRow [] (Some right))
+  let ids =
+    map
+      (cell => match !cell
+        EUnbound id _ => id
+        _ => 0)
+      (snd (rowFlat joined))
+  linkRow left (EffRow [atomBuiltin "Stdout" PUnit] None)
+  linkRow right (EffRow [atomBuiltin "Clock" PUnit] None)
+  expectAll [
+    expectEqual [1, 2] ids,
+    expectEqual [1, 2] (map effvarId [left, right]),
+    expectEqual "Clock, Stdout" (renderAtoms (effrowLabels joined)),
+    expectEqual "Stdout" (renderAtoms (effrowLabels (EffRow [] (Some left)))),
+    expectEqual "Clock" (renderAtoms (effrowLabels (EffRow [] (Some right)))),
+  ]
+
+test "repeated normalization of a join preserves linked atoms" =
+  let a = Ref (EUnbound 1 0)
+  let b = Ref (EUnbound 2 0)
+  let joined = EffRow [] (Some (Ref (EJoin 3 0 [a, b])))
+  linkRow a (EffRow [atomBuiltin "Stdout" PUnit] None)
+  let first = renderAtoms (effrowLabels joined)
+  let second = renderAtoms (effrowLabels joined)
+  linkRow b (EffRow [atomBuiltin "Clock" PUnit] None)
+  expectAll [
+    expectEqual "Stdout" first,
+    expectEqual "Stdout" second,
+    expectEqual "Clock, Stdout" (renderAtoms (effrowLabels joined)),
+    expectEqual 0 (listLen (snd (rowFlat joined))),
+  ]
+
+test "a shared join member contributes its effects exactly once" =
+  let a = Ref (EUnbound 1 0)
+  let joined = EffRow [] (Some (Ref (EJoin 2 0 [a, a])))
+  let members = listLen (snd (rowFlat joined))
+  linkRow a (EffRow [atomBuiltin "Env" (PSet (Some ["HOME"]))] None)
+  expectAll [
+    expectEqual 1 members,
+    expectEqual "Env {\"HOME\"}" (renderAtoms (effrowLabels joined)),
+  ]
+
+test "a deep shared join diamond is flattened once per live cell" =
+  let leaf = Ref (EUnbound 1 0)
+  let joined = EffRow [] (Some (deepDiamond 22 leaf))
+  linkRow leaf (EffRow [atomBuiltin "Clock" PUnit] None)
+  expectAll [
+    expectEqual "Clock" (renderAtoms (effrowLabels joined)),
+    expectEqual 0 (listLen (snd (rowFlat joined))),
+  ]
+
+test "linked cells retain distinct identities and deduplicate shared references" =
+  let left = Ref (ELink 1 (EffRow [atomBuiltin "Clock" PUnit] None))
+  let right = Ref (ELink 2 (EffRow [atomBuiltin "Stdout" PUnit] None))
+  expectEqual 2 (listLen (dedupCells [left, right, left]))
+
+linkChain : Int -> Ref Effvar -> Ref Effvar
+linkChain 0 leaf = leaf
+linkChain depth leaf =
+  Ref (ELink (1000 + depth) (EffRow [] (Some (linkChain (depth - 1) leaf))))
+
+test "flattening compresses link chains and retains their labels" =
+  let leaf = Ref (EUnbound 17 0)
+  let below = Ref (ELink 18 (EffRow [atomBuiltin "Clock" PUnit] (Some leaf)))
+  let root = linkChain 512 below
+  let row = EffRow [atomBuiltin "Stdout" PUnit] (Some root)
+  let first = renderAtoms (fst (rowFlat row))
+  let target = match !root
+    ELink _ (EffRow _ (Some tail)) => effvarId tail
+    _ => 0
+  linkRow leaf (EffRow [atomBuiltin "Audit" PUnit] None)
+  expectAll [
+    expectEqual "Clock, Stdout" first,
+    expectEqual 18 target,
+    expectEqual "Audit, Clock, Stdout" (renderAtoms (fst (rowFlat row))),
+  ]
+
+labelChain : Int -> Ref Effvar -> Ref Effvar
+labelChain 0 leaf = leaf
+labelChain depth leaf =
+  Ref
+    (ELink
+      (1000 + depth)
+      (EffRow
+        [atomBuiltin ("E" ++ intToString depth) PUnit]
+        (Some (labelChain (depth - 1) leaf))))
+
+test "label-bearing chains normalize once without copying every suffix" =
+  let leaf = Ref (EUnbound 1 0)
+  let root = labelChain 256 leaf
+  let labels = effrowLabels (EffRow [] (Some root))
+  let rootLabelCount = match !root
+    ELink _ (EffRow chunk _) => listLen chunk
+    _ => 0
+  expectAll [expectEqual 256 (listLen labels), expectEqual 1 rootLabelCount]
+
+test "a linked join remains recognizable to the row solver" =
+  let a = Ref (EUnbound 1 0)
+  let b = Ref (EUnbound 2 0)
+  let join = Ref (EJoin 3 0 [a, b])
+  let root = Ref (ELink 4 (EffRow [] (Some join)))
+  let recognized = match effrowNorm (EffRow [] (Some root))
+    EffRow _ (Some cell) => isJoinCell cell
+    _ => False
+  expectTrue recognized
+
+repeatCell : Int -> Ref Effvar -> List (Ref Effvar)
+repeatCell 0 _ = []
+repeatCell n cell = cell :: repeatCell (n - 1) cell
+
+test "a shared labelled suffix costs nodes plus edges, not their product" =
+  let leaf = Ref (EUnbound 1 0)
+  let shared = labelChain 32 leaf
+  let root = EffRow [] (Some (Ref (EJoin 2 0 (repeatCell 32 shared))))
+  let _ = setOpCounting True
+  let before = opSnap ()
+  let (labels, tails) = rowFlat root
+  let visits = opSnap () - before
+  let _ = setOpCounting False
+  expectAll [
+    expectEqual 32 (listLen labels),
+    expectEqual [1] (map effvarId tails),
+    expectTrue (visits < 128),
+  ]

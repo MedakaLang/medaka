@@ -15,4 +15,4 @@ main =
   println (countdown 0)
 # TYPES_USER
 countdown : Int -> Int
-main : Unit
+main : <IO> Unit

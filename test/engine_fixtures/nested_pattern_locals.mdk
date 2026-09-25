@@ -1,0 +1,29 @@
+-- Pattern binders inside constructor operands still belong to the enclosing
+-- function. A lifted closure must declare them before emitting its body.
+data Box = Box { payload : Int }
+
+main =
+  let sources = Some 7
+  let tuple =
+    binding => (
+      0,
+      match sources
+        Some source => source
+        None => binding,
+    )
+  let array =
+    binding => [|
+      match sources
+        Some source => source
+        None => binding,
+    |]
+  let record =
+    binding => Box {
+      payload = match sources
+        Some source => source
+        None => binding,
+    }
+  let (_, t) = tuple 1
+  let a = arrayGetUnsafe 0 (array 1)
+  let r = record 1
+  (t, a, r.payload)

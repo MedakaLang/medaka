@@ -9,4 +9,4 @@ main : <IO> Unit
 main = println (g 2.0)
 # TYPES_USER
 g : Float -> Float
-main : Unit
+main : <IO> Unit

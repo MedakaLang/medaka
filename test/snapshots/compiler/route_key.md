@@ -1,5 +1,5 @@
 # META
-source_lines=558
+source_lines=565
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -47,6 +47,11 @@ import frontend.ast.{
   Ty(..),
   Constraint(..),
   TyConOrigin(..),
+  EffAtomTy(..),
+  EffParamTy(..),
+  effAtomSurface,
+  effAtomBare,
+  effAtomWith,
   Route,
   EvId(..),
   EvVal(..),
@@ -344,6 +349,10 @@ rkTy (TyEffect effs tail t) = "<\{rkRowBody effs tail}> \{rkTy t}"
 -- A bare row atom (#997) wraps no type, so there is nothing to fall back to.
 rkTy (TyRow effs tail _) = "<\{rkRowBody effs tail}>"
 rkTy (TyConstrained cs t) = "\{rkConstraints cs} => \{rkTy t}"
+-- A binder's name is lexical to its signature and is not part of the word;
+-- the qualifier IS (it changes what the argument means), so it is kept.
+rkTy (TyNamed _ t) = rkTy t
+rkTy (TyQual t n) = "\{rkTyAtom t} @\{n}"
 
 -- argument of `->`: wrap `TyFun` (prec ≥ 1) but not `TyApp` (prec < 2).
 rkTyFunArg : Ty -> String
@@ -357,7 +366,7 @@ rkTyAtom (TyApp a b) = "(" ++ rkTy (TyApp a b) ++ ")"
 rkTyAtom t = rkTy t
 
 -- shared `<…>` row-body renderer for the `TyEffect`/`TyRow` arms above.
-rkRowBody : List (String, Option String) -> List String -> String
+rkRowBody : List EffAtomTy -> List String -> String
 rkRowBody effs [] = joinWith ", " (map rkEffAtom effs)
 rkRowBody [] tails = joinWith " | " tails
 rkRowBody effs tails =
@@ -391,10 +400,8 @@ rkRowBody effs tails =
 -- The finding is REPORTED at the declaration's first line, which is a
 -- decl-level anchor and NOT the line the directive is matched against; putting
 -- the directive where the diagnostic points is the natural move and it fails.
-rkEffAtom : (String, Option String) -> String
-rkEffAtom (l, None) = l
--- lint-disable-next-line rule-duplicate-body
-rkEffAtom (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
+rkEffAtom : EffAtomTy -> String
+rkEffAtom a = effAtomSurface escStr a
 
 -- single constraint: no outer parens; multiple: parenthesised.
 rkConstraints : List Constraint -> String
@@ -532,23 +539,23 @@ rkTyList =
 -- The three arms where this printer is the COMPLETE one and `eval`'s
 -- `ppTyAtomK` is not (see the header). These assertions are the record of what
 -- a later bite's caller collapse would change on the eval side.
--- > rkTy (TyEffect [("Stdout", None)] [] rkTyInt)
+-- > rkTy (TyEffect [effAtomBare "Stdout"] [] rkTyInt)
 -- "<Stdout> Int"
--- > rkTy (TyRow [("Stdout", None)] [] None)
+-- > rkTy (TyRow [effAtomBare "Stdout"] [] None)
 -- "<Stdout>"
--- > rkTy (TyRow [("Stdout", None), ("Rand", None)] [] None)
+-- > rkTy (TyRow [effAtomBare "Stdout", effAtomBare "Rand"] [] None)
 -- "<Stdout, Rand>"
 -- > rkTy (TyRow [] ["e"] None)
 -- "<e>"
--- > rkTy (TyRow [("Stdout", None)] ["e"] None)
+-- > rkTy (TyRow [effAtomBare "Stdout"] ["e"] None)
 -- "<Stdout | e>"
 
 -- A domain parameter is kept, so two rows differing only by domain do not
 -- collide onto one word.
--- > rkTy (TyRow [("Net", Some "a/*")] [] None) == rkTy (TyRow [("Net", Some "b/*")] [] None)
+-- > rkTy (TyRow [effAtomWith "Net" (EPLit "a/*")] [] None) == rkTy (TyRow [effAtomWith "Net" (EPLit "b/*")] [] None)
 -- False
--- > rkTy (TyRow [("Net", Some "_")] [] None)
--- "<Net _>"
+-- > rkTy (TyRow [effAtomWith "Net" (EPName "host")] [] None)
+-- "<Net host>"
 
 -- A constraint prefix: bare for one, parenthesised for two.
 -- > rkTy (TyConstrained [constraintUnresolved "Eq" [TyVar "a"]] (TyVar "a"))
@@ -558,10 +565,10 @@ rkTyList =
 
 -- Two impls differing ONLY in an effect row get distinct words here — the
 -- property eval's printer does not have today.
--- > implRouteKeyWord OriginUnresolved "A" [TyEffect [("Stdout", None)] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [("Rand", None)] [] rkTyInt] None
+-- > implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Stdout"] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Rand"] [] rkTyInt] None
 -- False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "ifaceIdentity" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "ifaceIdentity" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))))))
 (DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
@@ -605,6 +612,8 @@ rkTyList =
 (DFunDef false "rkTy" ((PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "rkRowBody") (EVar "effs")) (EVar "tail")))) (ELit (LString "> "))) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "t")))) (ELit (LString ""))))
 (DFunDef false "rkTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "rkRowBody") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "rkTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "t")))) (ELit (LString ""))))
+(DFunDef false "rkTy" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "rkTy") (EVar "t")))
+(DFunDef false "rkTy" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkTyAtom") (EVar "t")))) (ELit (LString " @"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
 (DTypeSig false "rkTyFunArg" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTyFunArg" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "rkTyFunArg" ((PVar "t")) (EApp (EVar "rkTy") (EVar "t")))
@@ -612,13 +621,12 @@ rkTyList =
 (DFunDef false "rkTyAtom" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "rkTyAtom" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "rkTyAtom" ((PVar "t")) (EApp (EVar "rkTy") (EVar "t")))
-(DTypeSig false "rkRowBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DTypeSig false "rkRowBody" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "rkRowBody" ((PVar "effs") (PList)) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "rkEffAtom")) (EVar "effs"))))
 (DFunDef false "rkRowBody" ((PList) (PVar "tails")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))
 (DFunDef false "rkRowBody" ((PVar "effs") (PVar "tails")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "rkEffAtom")) (EVar "effs"))))) (ELit (LString " | "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ""))))
-(DTypeSig false "rkEffAtom" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "rkEffAtom" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
-(DFunDef false "rkEffAtom" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
+(DTypeSig false "rkEffAtom" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
+(DFunDef false "rkEffAtom" ((PVar "a")) (EApp (EApp (EVar "effAtomSurface") (EVar "escStr")) (EVar "a")))
 (DTypeSig false "rkConstraints" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "String")))
 (DFunDef false "rkConstraints" ((PList (PVar "c"))) (EApp (EVar "rkConstraint") (EVar "c")))
 (DFunDef false "rkConstraints" ((PVar "cs")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "rkConstraint")) (EVar "cs")))) (ELit (LString ")"))))
@@ -634,7 +642,7 @@ rkTyList =
 (DTypeSig false "rkTyList" (TyCon "Ty"))
 (DFunDef false "rkTyList" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "List"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "ifaceIdentity" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "ifaceIdentity" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))))))
 (DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
@@ -678,6 +686,8 @@ rkTyList =
 (DFunDef false "rkTy" ((PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "rkRowBody") (EVar "effs")) (EVar "tail")))) (ELit (LString "> "))) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "t")))) (ELit (LString ""))))
 (DFunDef false "rkTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "rkRowBody") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "rkTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "t")))) (ELit (LString ""))))
+(DFunDef false "rkTy" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "rkTy") (EVar "t")))
+(DFunDef false "rkTy" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkTyAtom") (EVar "t")))) (ELit (LString " @"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
 (DTypeSig false "rkTyFunArg" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTyFunArg" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "rkTyFunArg" ((PVar "t")) (EApp (EVar "rkTy") (EVar "t")))
@@ -685,13 +695,12 @@ rkTyList =
 (DFunDef false "rkTyAtom" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "rkTyAtom" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "rkTy") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "rkTyAtom" ((PVar "t")) (EApp (EVar "rkTy") (EVar "t")))
-(DTypeSig false "rkRowBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DTypeSig false "rkRowBody" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "rkRowBody" ((PVar "effs") (PList)) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "rkEffAtom")) (EVar "effs"))))
 (DFunDef false "rkRowBody" ((PList) (PVar "tails")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))
 (DFunDef false "rkRowBody" ((PVar "effs") (PVar "tails")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "rkEffAtom")) (EVar "effs"))))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails")))) (ELit (LString ""))))
-(DTypeSig false "rkEffAtom" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "rkEffAtom" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
-(DFunDef false "rkEffAtom" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
+(DTypeSig false "rkEffAtom" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
+(DFunDef false "rkEffAtom" ((PVar "a")) (EApp (EApp (EVar "effAtomSurface") (EVar "escStr")) (EVar "a")))
 (DTypeSig false "rkConstraints" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "String")))
 (DFunDef false "rkConstraints" ((PList (PVar "c"))) (EApp (EVar "rkConstraint") (EVar "c")))
 (DFunDef false "rkConstraints" ((PVar "cs")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "rkConstraint")) (EVar "cs")))) (ELit (LString ")"))))

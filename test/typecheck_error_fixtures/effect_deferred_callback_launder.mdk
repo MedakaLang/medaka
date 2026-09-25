@@ -1,0 +1,16 @@
+-- #825 (S0): an impl applying its `<e>`-callback INSIDE a returned thunk whose
+-- declared row is pure. The caller's `<Stdout>` callback would then run from a
+-- thunk typed `Unit -> Unit`, while the outer arrow charges `<e>` at build time
+-- where nothing runs. Rejected by T-EFFECT-LAUNDER at the impl: the returned
+-- arrow's declared `<>` cannot hold the caller-chosen `<e>`. The honest eager
+-- shape is effect_deferred_callback_eager_ok.mdk.
+interface Act a where
+  act : a -> (Unit -> <e> Unit) -> <e> (Unit -> Unit)
+
+data Dog = Dog
+
+impl Act Dog where
+  act d k = (u => k ())
+
+mkPure : Unit -> <Stdout> (Unit -> Unit)
+mkPure v = act Dog (u2 => putStr "LAUNDERED ")

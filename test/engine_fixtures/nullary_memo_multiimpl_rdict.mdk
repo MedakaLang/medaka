@@ -11,7 +11,7 @@
 -- Also the criterion-1 control: the Box and Cup tags memoise INDEPENDENTLY (each fires
 -- its own effect exactly once — NOT one shared cell returning Box's value for Cup).
 interface HasUnit a where
-  theUnit : a
+  theUnit : <Stdout> a
 
 data Box = Box String
 data Cup = Cup String
@@ -32,7 +32,7 @@ unBox (Box s) = s
 unCup : Cup -> String
 unCup (Cup s) = s
 
-useTwice : HasUnit a => (a -> String) -> String
+useTwice : HasUnit a => (a -> String) -> <Stdout> String
 useTwice un = un theUnit ++ un theUnit
 
 main = putStrLn (useTwice unBox ++ useTwice unCup)

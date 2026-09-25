@@ -1,5 +1,5 @@
 # META
-source_lines=172
+source_lines=174
 stages=DESUGAR,MARK
 # SOURCE
 {- | Output to standard error, debug printing, and helpers for files and
@@ -109,7 +109,9 @@ isPrivateMode mode = bitAnd mode 63 == 0
    The contents never exist at a wider mode: an existing file at a wider one
    is narrowed before they are written. Use it for a secret. -}
 export
-writeFilePrivate : String -> String -> <FileWrite "_"> Result String Unit
+writeFilePrivate : (path : String) ->
+  String ->
+  <FileWrite path> Result String Unit
 writeFilePrivate path content = writeFileMode path ownerOnlyMode content
 
 -- # Commands
@@ -124,9 +126,9 @@ writeFilePrivate path content = writeFileMode path ownerOnlyMode content
    > runCommandOk "true" []
    Ok ("", "") -}
 export
-runCommandOk : String ->
+runCommandOk : (cmd : String) ->
   List String ->
-  <Exec "_"> Result String (String, String)
+  <Exec cmd> Result String (String, String)
 runCommandOk cmd args = match runCommand cmd args
   Err e => Err "\{cmd}: \{e}"
   Ok (0, out, err) => Ok (out, err)
@@ -160,9 +162,9 @@ runCommandOk cmd args = match runCommand cmd args
    > runVerb "sh" ["-c", "printf err >&2; exit 3"]
    Ok (3, "", "err") -}
 export
-runVerb : String ->
+runVerb : (cmd : String) ->
   List String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec cmd> Result String (Int, String, String)
 runVerb cmd args = match runCommand cmd args
   Err e => Err "\{cmd}: \{e}"
   Ok (code, out, err) => Ok (code, out, err)
@@ -191,11 +193,11 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "ownerOnlyMode" () (ELit (LInt 384)))
 (DTypeSig true "isPrivateMode" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isPrivateMode" ((PVar "mode")) (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EVar "mode")) (ELit (LInt 63))) (ELit (LInt 0))))
-(DTypeSig true "writeFilePrivate" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "writeFilePrivate" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "writeFilePrivate" ((PVar "path") (PVar "content")) (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "ownerOnlyMode")) (EVar "content")))
-(DTypeSig true "runCommandOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
+(DTypeSig true "runCommandOk" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "cmd"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "runCommandOk" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "out") (EVar "err")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString ""))))))))
-(DTypeSig true "runVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
+(DTypeSig true "runVerb" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "cmd"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "runVerb" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "code") (EVar "out") (EVar "err"))))))
 (DTypeSig true "getEnvOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
@@ -216,11 +218,11 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "ownerOnlyMode" () (ELit (LInt 384)))
 (DTypeSig true "isPrivateMode" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isPrivateMode" ((PVar "mode")) (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EVar "mode")) (ELit (LInt 63))) (ELit (LInt 0))))
-(DTypeSig true "writeFilePrivate" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "writeFilePrivate" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "writeFilePrivate" ((PVar "path") (PVar "content")) (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "ownerOnlyMode")) (EVar "content")))
-(DTypeSig true "runCommandOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
+(DTypeSig true "runCommandOk" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "cmd"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "runCommandOk" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "out") (EVar "err")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString ""))))))))
-(DTypeSig true "runVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
+(DTypeSig true "runVerb" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "cmd"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "runVerb" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "code") (EVar "out") (EVar "err"))))))
 (DTypeSig true "getEnvOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))

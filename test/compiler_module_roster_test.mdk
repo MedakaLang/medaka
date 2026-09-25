@@ -39,7 +39,7 @@ import test_process.{testAssertionCount, underRoot}
    least the committed floor. A raw spawn/run error is reported by name
    rather than folded into a generic failure, so a broken module and a
    count that merely fell short read differently. -}
-floorExpectation : String -> Int -> <Exec "_", IO> Expectation
+floorExpectation : String -> Int -> <Exec, IO> Expectation
 floorExpectation path floor = match testAssertionCount (underRoot path) []
   Err e => Fail e "\{intToString floor} assertions" "spawn/run error"
   Ok ran =>

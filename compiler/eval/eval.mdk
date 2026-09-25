@@ -648,6 +648,8 @@ countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
 countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
+countTyvars (TyNamed _ t) = countTyvars t
+countTyvars (TyQual t _) = countTyvars t
 
 sumInts : List Int -> Int
 sumInts [] = 0
@@ -734,6 +736,7 @@ headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
+headTycon (TyQual t _) = headTycon t
 headTycon (TyTuple ts) = Some (tupleHeadTag (listLen ts))
 headTycon (TyFun _ _) = Some funHeadTag
 headTycon _ = None
@@ -745,6 +748,7 @@ dispatchPositionsOf mty params = filterMentions 0 (argsOfTy mty) params
 argsOfTy : Ty -> List Ty
 argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
+argsOfTy (TyFun (TyNamed _ a) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
 argsOfTy _ = []
 
@@ -762,6 +766,8 @@ tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
+tyMentions (TyNamed _ t) params = tyMentions t params
+tyMentions (TyQual t _) params = tyMentions t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name — the same relationship `TyVar`
 -- above already tracks for an ordinary type parameter used unwrapped.
@@ -4725,7 +4731,7 @@ evalModulesOutput preludeDecls modules =
 -- that is a property of the buffered-stdout design, tracked separately as
 -- "`run` drops stdout on panic", and streaming stderr is a step toward, not away
 -- from, fixing it.
-pReadFile : Value e -> <FileRead "_" | e> Value e
+pReadFile : Value e -> <FileRead | e> Value e
 pReadFile (VString path) = match readFile path
   Ok s => VCon "Ok" [VString s]
   Err m => VCon "Err" [VString m]
@@ -4828,29 +4834,29 @@ pEPutStrLn (VString s) =
 pEPutStrLn _ = panic "ePutStrLn: not a String"
 
 -- ── File ──────────────────────────────────────────────────────────────────
-pReadFileBytes : Value e -> <FileRead "_" | e> Value e
+pReadFileBytes : Value e -> <FileRead | e> Value e
 pReadFileBytes (VString path) =
   resultToValue (mapResultOk vIntArray (readFileBytes path))
 pReadFileBytes _ = panic "readFileBytes: not a String"
 
-pFileExists : Value e -> <FileRead "_" | e> Value e
+pFileExists : Value e -> <FileRead | e> Value e
 pFileExists (VString path) = VBool (fileExists path)
 pFileExists _ = panic "fileExists: not a String"
 
-pFileMode : Value e -> <FileRead "_" | e> Value e
+pFileMode : Value e -> <FileRead | e> Value e
 pFileMode (VString path) = resultToValue (mapResultOk VInt (fileMode path))
 pFileMode _ = panic "fileMode: not a String"
 
-pCanonicalizePath : Value e -> <FileRead "_" | e> Value e
+pCanonicalizePath : Value e -> <FileRead | e> Value e
 pCanonicalizePath (VString path) = VString (canonicalizePath path)
 pCanonicalizePath _ = panic "canonicalizePath: not a String"
 
-pListDir : Value e -> <FileRead "_" | e> Value e
+pListDir : Value e -> <FileRead | e> Value e
 pListDir (VString path) = resultToValue (mapResultOk vStringList (listDir path))
 pListDir _ = panic "listDir: not a String"
 
 -- statFile : String -> Result String (Int, Bool, Bool, Float)  (size, isDir, isFile, mtime)
-pStatFile : Value e -> <FileRead "_" | e> Value e
+pStatFile : Value e -> <FileRead | e> Value e
 pStatFile (VString path) = resultToValue (mapResultOk statTuple (statFile path))
 pStatFile _ = panic "statFile: not a String"
 
@@ -4858,41 +4864,41 @@ statTuple : (Int, Bool, Bool, Float) -> Value e
 statTuple (sz, isDir, isFile, mtime) =
   VTuple [VInt sz, VBool isDir, VBool isFile, VFloat mtime]
 
-pWriteFile : Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFile : Value e -> Value e -> <FileWrite | e> Value e
 pWriteFile (VString path) (VString s) = unitResultToValue (writeFile path s)
 pWriteFile _ _ = panic "writeFile: expected String String"
 
-pWriteFileBytes : Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFileBytes : Value e -> Value e -> <FileWrite | e> Value e
 pWriteFileBytes (VString path) bs =
   unitResultToValue (writeFileBytes path (unIntArray bs))
 pWriteFileBytes _ _ = panic "writeFileBytes: expected String (Array Int)"
 
-pWriteFileMode : Value e -> Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFileMode : Value e -> Value e -> Value e -> <FileWrite | e> Value e
 pWriteFileMode (VString path) (VInt mode) (VString s) =
   unitResultToValue (writeFileMode path mode s)
 pWriteFileMode _ _ _ = panic "writeFileMode: expected String Int String"
 
-pAppendFile : Value e -> Value e -> <FileWrite "_" | e> Value e
+pAppendFile : Value e -> Value e -> <FileWrite | e> Value e
 pAppendFile (VString path) (VString s) = unitResultToValue (appendFile path s)
 pAppendFile _ _ = panic "appendFile: expected String String"
 
-pMakeDir : Value e -> <FileWrite "_" | e> Value e
+pMakeDir : Value e -> <FileWrite | e> Value e
 pMakeDir (VString path) = unitResultToValue (makeDir path)
 pMakeDir _ = panic "makeDir: not a String"
 
-pRemoveFile : Value e -> <FileWrite "_" | e> Value e
+pRemoveFile : Value e -> <FileWrite | e> Value e
 pRemoveFile (VString path) = unitResultToValue (removeFile path)
 pRemoveFile _ = panic "removeFile: not a String"
 
-pRemoveDir : Value e -> <FileWrite "_" | e> Value e
+pRemoveDir : Value e -> <FileWrite | e> Value e
 pRemoveDir (VString path) = unitResultToValue (removeDir path)
 pRemoveDir _ = panic "removeDir: not a String"
 
-pRename : Value e -> Value e -> <FileWrite "_" | e> Value e
+pRename : Value e -> Value e -> <FileWrite | e> Value e
 pRename (VString old) (VString new) = unitResultToValue (rename old new)
 pRename _ _ = panic "rename: expected String String"
 
-pFsync : Value e -> <FileWrite "_" | e> Value e
+pFsync : Value e -> <FileWrite | e> Value e
 pFsync (VString path) = unitResultToValue (fsync path)
 pFsync _ = panic "fsync: expected String"
 
@@ -4910,7 +4916,7 @@ progArgsRef = Ref []
 pArgs : Value e -> <Env | e> Value e
 pArgs _ = vStringList !progArgsRef
 
-pGetEnv : Value e -> <Env "_" | e> Value e
+pGetEnv : Value e -> <Env | e> Value e
 pGetEnv (VString name) = vOptionString (getEnv name)
 pGetEnv _ = panic "getEnv: not a String"
 
@@ -4948,7 +4954,7 @@ pOsEntropyBytes (VInt n) = vIntArray (osEntropyBytes n)
 pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
 
 export
-ioExternBindings : Unit -> List (String, Value e)
+ioExternBindings : Unit -> List (String, Value <IO>)
 ioExternBindings _ = [
   -- Clock / GC / stderr — these OVERRIDE the frozen constants in externBindings
   ("wallTimeSec", prim1M pWallTimeSecIO),
@@ -5002,7 +5008,7 @@ ioExternBindings _ = [
 -- long-lived test process and falsely report SUCCESS — THE hazard), and every
 -- file / env / stdin / net extern (no sandbox / capability flag in test/repl).
 export
-testCapableExterns : Unit -> List (String, Value e)
+testCapableExterns : Unit -> List (String, Value <IO>)
 testCapableExterns _ = [
   ("wallTimeSec", prim1M pWallTimeSecIO),
   ("monotonicSec", prim1M pMonotonicSecIO),

@@ -6,7 +6,7 @@
 -- a foreign-call contract.  `Option String` is non-crossable; this must still
 -- ACCEPT.  Its counterpart ffi_cross_ref_reject.mdk proves the exemption is
 -- keyed on the NAME and does not disable the guard wholesale.
-extern getEnv : String -> <Env "_"> Option String
+extern getEnv : String -> <Env> Option String
 
 main : <IO> Unit
 main = println "ffi cross builtin name accept"

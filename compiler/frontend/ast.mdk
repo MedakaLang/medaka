@@ -6,6 +6,8 @@
 -- Coverage grows with the parser.  This is the core node set; more expr,
 -- pat, ty, and decl variants are added per slice.
 
+import string.{join}
+
 public export data Lit =
   | LInt Int
   | LFloat Float
@@ -690,8 +692,17 @@ public export data Ty =
   | TyApp Ty Ty
   | TyFun Ty Ty
   | TyTuple (List Ty)
-  | TyEffect (List (String, Option String)) (List String) Ty
+  | TyEffect (List EffAtomTy) (List String) Ty
   | TyConstrained (List Constraint) Ty
+  -- An arrow-domain binder `(path : String)`: names the argument so an effect
+  -- atom `<FileRead path>` or a qualifier `@path` further right can refer to
+  -- its authority.  Only ever the domain of a `TyFun`; the parser rejects it
+  -- elsewhere.  Carries no identity: the name is lexical to its signature.
+  | TyNamed String Ty
+  -- An explicit authority qualifier `String @p`: the value's domain-directed
+  -- abstraction is bounded by the authority `p` names.  `p` must be bound by a
+  -- `TyNamed` to its left (or a data parameter); resolve checks that.
+  | TyQual Ty String
   -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
   -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
   -- always WRAPS an inner type (`<Stdout> Unit` meaning "Unit, performing
@@ -700,7 +711,89 @@ public export data Ty =
   -- to be Unit", so a real constructor is required rather than a filler Ty
   -- (a filler is print-ambiguous with a genuine wrapped type of the same
   -- shape, e.g. `Foo (<Stdout> Unit)` where `Unit` is a real payload type).
-  | TyRow (List (String, Option String)) (List String) (Option Loc)
+  | TyRow (List EffAtomTy) (List String) (Option Loc)
+
+-- One written effect atom: a label, the identity of the `effect` declaration
+-- it names (acquired by resolve, `OriginBuiltin` for the language's own
+-- labels, `OriginUnresolved` until then), and its parameter.  Two modules'
+-- same-spelled labels are two atoms; the spelling is never the key.  The field
+-- prefix `eat` is the program-global-field-namespace discipline `TyCon`'s
+-- comment explains.
+public export data EffAtomTy = EffAtomTy {
+  eatLabel : String,
+  eatOrigin : TyConOrigin,
+  eatParam : EffParamTy,
+}
+
+-- The written parameter of an effect atom.  A bare label is the domain's top;
+-- a literal is a Prefix pattern (or an FFI library name); a name refers to an
+-- authority binder in scope (`(path : String) -> <FileRead path> …`); a set
+-- and a product are the Set and Product domain literals.  There is no hole
+-- form: the quoted underscore is a parse error naming these forms.
+public export data EffParamTy =
+  | EPTop
+  | EPLit String
+  | EPName String
+  | EPSet (List String)
+  | EPProduct (List (String, EffParamTy))
+
+export
+effAtomBare : String -> EffAtomTy
+effAtomBare l =
+  EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = EPTop }
+
+-- The names a pattern binds, in source order.
+export
+patBoundNames : Pat -> List String
+patBoundNames (PVar x _) = [x]
+patBoundNames (PCon _ args) = flatMap patBoundNames args
+patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
+patBoundNames (PTuple ps) = flatMap patBoundNames ps
+patBoundNames (PList ps) = flatMap patBoundNames ps
+patBoundNames (PAs x _ p) = x :: patBoundNames p
+patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
+patBoundNames _ = []
+
+recPatFieldNames : RecPatField -> List String
+recPatFieldNames (RecPatField label _ None) = [label]
+recPatFieldNames (RecPatField _ _ (Some p)) = patBoundNames p
+
+-- An effect declaration as the parser produces it: the resolver stamps its
+-- declaring origin, so before resolve it carries none.
+export
+effectDeclUnstamped : Bool -> String -> Option String -> Decl
+effectDeclUnstamped pub name dom = DEffect pub name dom OriginUnresolved
+
+export
+effAtomWith : String -> EffParamTy -> EffAtomTy
+effAtomWith l p =
+  EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = p }
+
+-- The written spelling of an atom, given the string-literal escaper the caller
+-- prints with.  One renderer, so the formatter, the doc generator, the route
+-- key and the diagnostics all spell a parameter the way the parser reads it.
+export
+effAtomSurface : (String -> String) -> EffAtomTy -> String
+effAtomSurface esc a = a.eatLabel ++ effParamSurface esc a.eatParam
+
+-- The parameter's spelling with its leading space; `""` for a bare label.
+export
+effParamSurface : (String -> String) -> EffParamTy -> String
+effParamSurface _ EPTop = ""
+effParamSurface esc (EPLit s) = " " ++ esc s
+effParamSurface _ (EPName n) = " " ++ n
+effParamSurface esc (EPSet xs) = " " ++ effSetSurface esc xs
+effParamSurface esc (EPProduct axes) =
+  " " ++ join " " (map (a => "\{fst a}=\{effAxisSurface esc (snd a)}") axes)
+
+effAxisSurface : (String -> String) -> EffParamTy -> String
+effAxisSurface esc (EPLit s) = esc s
+effAxisSurface esc (EPSet xs) = effSetSurface esc xs
+effAxisSurface _ (EPName n) = n
+effAxisSurface _ _ = ""
+
+effSetSurface : (String -> String) -> List String -> String
+effSetSurface esc xs = "{" ++ join ", " (map esc xs) ++ "}"
 
 -- Build a `TyCon` whose module identity has NOT been acquired yet (#1110).
 -- This is the ONE producer of `OriginUnresolved`, and every construction site
@@ -851,6 +944,8 @@ firstTyLoc (TyApp f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyFun f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyTuple ts) = firstTyLocList ts
 firstTyLoc (TyEffect _ _ t) = firstTyLoc t
+firstTyLoc (TyNamed _ t) = firstTyLoc t
+firstTyLoc (TyQual t _) = firstTyLoc t
 firstTyLoc (TyConstrained _ t) = firstTyLoc t
 firstTyLoc (TyRow _ _ l) = l
 
@@ -1478,9 +1573,11 @@ public export data Decl =
     dataOrigin : TyConOrigin,
   }
   | DUse Bool UsePath Loc
-  -- pub? name domain?  `effect Foo` (atomic host capability),
-  -- `effect Net Prefix` (domain-carrying).  v2 Stage 2a: domain = Some "Prefix" or None.
-  | DEffect Bool String (Option String)
+  -- pub? name domain? origin.  `effect Foo` (atomic host capability),
+  -- `effect Net Prefix` (domain-carrying).  The origin is the declaration's
+  -- own identity, stamped by resolve exactly like `dataOrigin`; an occurrence
+  -- of the label carries the same identity on its `EffAtomTy`.
+  | DEffect Bool String (Option String) TyConOrigin
   | DProp Bool String (List PropParam) Expr
   | DTest Bool String Expr
   | DInterface {
@@ -1714,6 +1811,12 @@ mapTyKids f (TyEffect es tail t) =
 -- like `TyCon`/`TyVar` above.  `mapTyFull`'s outer `f ty1` call still
 -- visits the node itself.
 mapTyKids _ (TyRow es tail l) = (TyRow es tail l, False)
+mapTyKids f (TyNamed n t) =
+  let (t2, c) = mapTyFull f t
+  (TyNamed n t2, c)
+mapTyKids f (TyQual t n) =
+  let (t2, c) = mapTyFull f t
+  (TyQual t2 n, c)
 mapTyKids f (TyConstrained cs t) =
   let (cs2, cc) = mapConstraintsB f cs
   let (t2, ct) = mapTyFull f t
@@ -1762,7 +1865,7 @@ mapTyInDecl f (d@(DData { dataCtors })) =
   let (vs2, c) = mapVariantsB f dataCtors
   (DData { d | dataCtors = vs2 }, c)
 mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
-mapTyInDecl _ (DEffect pub n dom) = (DEffect pub n dom, False)
+mapTyInDecl _ (DEffect pub n dom o) = (DEffect pub n dom o, False)
 mapTyInDecl f (DProp pub n params body) =
   let (params2, c1) = mapPropParamsB f params
   let (body2, c2) = mapTyInExpr f body

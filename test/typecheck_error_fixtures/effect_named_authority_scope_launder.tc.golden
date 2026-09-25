@@ -1,0 +1,6 @@
+TYPE ERROR: Binding 'armRebind' reaches "/etc/hostname" where only p is admitted: p is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare
+TYPE ERROR: Binding 'letRebind' reaches the whole domain where only p is admitted: p is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare
+TYPE ERROR: Effectful value used where <FileRead "config/*"> is allowed, but it performs <FileRead "/etc/hostname">
+TYPE ERROR: Effectful value used where <FileRead "config/*"> is allowed, but it performs <FileRead>
+TYPE ERROR: Effectful value used where <FileRead "config/*"> is allowed, but it performs <FileRead>
+TYPE ERROR: Function 'localFn' declared with <FileRead "config/*"> but also performs <FileRead>

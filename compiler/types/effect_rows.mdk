@@ -1,0 +1,428 @@
+-- Effect atoms and rows. An atom is a resolved label refined by an authority
+-- term; a row is a finite label map plus an optional tail. Two atoms on one
+-- label are never two members: they collapse to one by the authority join.
+-- A row's tail is a DAG of cells; a join retains every member's atoms, since
+-- compressing it to only its unbound leaves would erase effects.
+
+import support.util.{reverseL, joinWith}
+import support.opcount.{opBump}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+import types.effect_domain.{Param}
+import types.effect_authority.{
+  Authority(..), Authvar, authJoin, authSub, authConst, renderAuthority,
+  renderAuthorityWith
+}
+import frontend.ast.{TyConOrigin(..)}
+import map.{Map(..), has, set}
+
+-- A label is its spelling together with the identity of the declaration it
+-- names: `OriginBuiltin` for the language's own labels, the declaring module
+-- for a user `effect`, unresolved in a flat program. The key an atom map uses
+-- is the identity, so two modules' same-spelled labels are two atoms.
+public export data EffLabel = EffLabel String TyConOrigin
+
+public export data Atom = Atom EffLabel Authority
+
+export
+effLabelName : EffLabel -> String
+effLabelName (EffLabel n _) = n
+
+export
+effLabelOrigin : EffLabel -> TyConOrigin
+effLabelOrigin (EffLabel _ o) = o
+
+export
+labelKey : EffLabel -> String
+labelKey (EffLabel n o) = match o
+  OriginModule m => "\{m}::\{n}"
+  _ => n
+
+export
+builtinLabel : String -> EffLabel
+builtinLabel n = EffLabel n OriginBuiltin
+
+export
+atomLabel : Atom -> String
+atomLabel (Atom l _) = effLabelName l
+
+export
+atomLabelOf : Atom -> EffLabel
+atomLabelOf (Atom l _) = l
+
+export
+atomKey : Atom -> String
+atomKey (Atom l _) = labelKey l
+
+export
+atomAuth : Atom -> Authority
+atomAuth (Atom _ a) = a
+
+-- The concrete parameter an atom carries, when nothing symbolic is left in it.
+export
+atomConst : Atom -> Option Param
+atomConst (Atom _ a) = authConst a
+
+export
+atomBuiltin : String -> Param -> Atom
+atomBuiltin n p = Atom (builtinLabel n) (AConst p)
+
+export
+atomWith : EffLabel -> Param -> Atom
+atomWith l p = Atom l (AConst p)
+
+-- Rendering order is by spelling first, then by identity, so a row prints the
+-- way it always has and only a genuine same-spelling collision orders by module.
+sortKey : Atom -> String
+sortKey a = "\{atomLabel a} \{atomKey a}"
+
+export
+renderAtom : Atom -> String
+renderAtom a = atomLabel a ++ renderAuthority (atomAuth a)
+
+export
+renderAtomWith : (Ref Authvar -> String) -> Atom -> String
+renderAtomWith name a = atomLabel a ++ renderAuthorityWith name (atomAuth a)
+
+export
+renderAtoms : List Atom -> String
+renderAtoms atoms = joinWith ", " (map renderAtom (atomsNorm atoms))
+
+export
+renderAtomsWith : (Ref Authvar -> String) -> List Atom -> String
+renderAtomsWith name atoms =
+  joinWith ", " (map (renderAtomWith name) (atomsNorm atoms))
+
+export
+atomInsert : Atom -> List Atom -> List Atom
+atomInsert x [] = [x]
+atomInsert x (y :: ys) = match stringCompare (sortKey x) (sortKey y)
+  Lt => x :: y :: ys
+  Eq => Atom (atomLabelOf y) (authJoin (atomAuth x) (atomAuth y)) :: ys
+  Gt => y :: atomInsert x ys
+
+export
+atomsNorm : List Atom -> List Atom
+atomsNorm [] = []
+atomsNorm [x] = [x]
+atomsNorm [x, y] = atomInsert y [x]
+atomsNorm [x, y, z] = atomInsert z (atomInsert y [x])
+atomsNorm xs = atomsFromIndex (atomIndex xs omEmpty)
+
+-- Rows normally contain one or two labels, where a tree would be needless
+-- allocation. Once a row grows past that fixed small case, index by the sort
+-- key. The map's in-order keys also retain the canonical rendering order.
+-- `authJoin x old` deliberately matches atomInsert: a later occurrence is
+-- joined into the earlier one in the same direction.
+atomIndex : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndex [] m = m
+atomIndex (x :: xs) m =
+  let k = sortKey x
+  let next = match omLookup k m
+    None => x
+    Some old => Atom (atomLabelOf old) (authJoin (atomAuth x) (atomAuth old))
+  atomIndex xs (omInsert k next m)
+
+atomIndexFirst : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndexFirst [] m = m
+atomIndexFirst (x :: xs) m = match omLookup (sortKey x) m
+  None => atomIndexFirst xs (omInsert (sortKey x) x m)
+  Some _ => atomIndexFirst xs m
+
+atomsFromIndex : OrdMap Atom -> List Atom
+atomsFromIndex m = atomsFromKeys (omKeys m) m
+
+atomsFromKeys : List String -> OrdMap Atom -> List Atom
+atomsFromKeys [] _ = []
+atomsFromKeys (k :: ks) m = match omLookup k m
+  Some atom => atom :: atomsFromKeys ks m
+  None => atomsFromKeys ks m
+
+export
+atomsUnion : List Atom -> List Atom -> List Atom
+atomsUnion a b = atomsNorm (a ++ b)
+
+-- The atoms of [xs] not proven covered by [ys]: a label absent from [ys], or
+-- present with an authority that does not provably cover. A symbolic pair
+-- that cannot be decided yet stays in the difference; the caller decides
+-- whether that is an escape or a pending obligation.
+export
+atomsDiff : List Atom -> List Atom -> List Atom
+atomsDiff [] _ = []
+atomsDiff xs [] = xs
+atomsDiff [x] ys = atomsDiffOne x ys
+atomsDiff [x, y] ys = atomsDiffOne x ys ++ atomsDiffOne y ys
+atomsDiff xs [y] = atomsDiffOneAgainst xs y
+atomsDiff xs ys = reverseL (atomsDiffIndexed xs (atomIndexFirst ys omEmpty) [])
+
+atomsDiffOne : Atom -> List Atom -> List Atom
+atomsDiffOne x ys = match findAtom (atomKey x) ys
+  None => [x]
+  Some y => if authSub (atomAuth x) (atomAuth y) then [] else [x]
+
+atomsDiffOneAgainst : List Atom -> Atom -> List Atom
+atomsDiffOneAgainst xs y = reverseL (atomsDiffOneAgainstGo xs y [])
+
+atomsDiffOneAgainstGo : List Atom -> Atom -> List Atom -> List Atom
+atomsDiffOneAgainstGo [] _ acc = acc
+atomsDiffOneAgainstGo (x :: xs) y acc =
+  if atomKey x == atomKey y && authSub (atomAuth x) (atomAuth y) then
+    atomsDiffOneAgainstGo xs y acc
+  else
+    atomsDiffOneAgainstGo xs y (x :: acc)
+
+atomsDiffIndexed : List Atom -> OrdMap Atom -> List Atom -> List Atom
+atomsDiffIndexed [] _ acc = acc
+atomsDiffIndexed (x :: xs) index acc = match omLookup (sortKey x) index
+  Some y =>
+    if authSub (atomAuth x) (atomAuth y) then
+      atomsDiffIndexed xs index acc
+    else
+      atomsDiffIndexed xs index (x :: acc)
+  None => atomsDiffIndexed xs index (x :: acc)
+
+-- The atom whose label has identity key [k], by first occurrence.
+export
+findAtom : String -> List Atom -> Option Atom
+findAtom _ [] = None
+findAtom k (y :: ys) = if k == atomKey y then Some y else findAtom k ys
+
+-- ── rows ──────────────────────────────────────────────────────────────────
+
+public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
+
+public export data Effvar =
+  | EUnbound Int Int
+  | ELink Int EffRow
+  | EJoin Int Int (List (Ref Effvar))
+  | ESummary Int Int Int
+
+export
+effrowNorm : EffRow -> EffRow
+effrowNorm (row@(EffRow _ None)) = row
+effrowNorm (row@(EffRow _ (Some cell))) = match !cell
+  EUnbound _ _ => row
+  ESummary _ _ _ => row
+  _ =>
+    let (labels, members) = rowFlat row
+    match members
+      [] => EffRow labels None
+      [member] => EffRow labels (Some member)
+      _ => EffRow labels (Some (rowRepresentative cell))
+
+-- After flattening leaves more than one tail, the tail-chain representative
+-- must be a join. Returning an ELink here would hide that fact from solvers.
+rowRepresentative : Ref Effvar -> Ref Effvar
+rowRepresentative cell = match !cell
+  ELink _ (EffRow _ (Some next)) => rowRepresentative next
+  _ => cell
+
+-- Compress link chains without expanding joins. Expanding a shared join here
+-- would start a fresh visited set for each incoming link and defeat DAG sharing.
+-- Only empty-prefix links can share a normalized suffix without copying its
+-- atoms. Stop before a labelled node to retain its shared identity. Materializing every suffix of a
+-- distinct-label chain would allocate quadratically. rowFlat joins them once.
+compressLink : Ref Effvar -> EffRow -> EffRow
+compressLink cell (row@(EffRow [] (Some next))) = match !next
+  ELink _ (nextRow@(EffRow [] _)) =>
+    let target = compressLink next nextRow
+    linkRow cell target
+    target
+  _ => row
+compressLink _ row = row
+
+export
+effrowLabels : EffRow -> List Atom
+effrowLabels r = match effrowNorm r
+  EffRow labels _ => labels
+
+-- Sequencing is a join, never an equation between the performed computations.
+-- The allocator supplies a request-owned join identity; input cells are read
+-- but not linked, closed or narrowed by effect accumulation.
+export
+joinRows : (List (Ref Effvar) -> Ref Effvar) -> EffRow -> EffRow -> EffRow
+joinRows _ (EffRow [] None) right = right
+joinRows _ left (EffRow [] None) = left
+joinRows makeJoin left right = collectRows makeJoin [left, right]
+
+-- Captures prepend performed rows in constant time and finalize once. Flatten
+-- the whole collection with one visited set, including shared row DAGs.
+export
+collectRows : (List (Ref Effvar) -> Ref Effvar) -> List EffRow -> EffRow
+collectRows makeJoin rows =
+  let (atoms, cells) = rowFlatGo rows (Seen Tip Tip) [] []
+  match cells
+    [] => EffRow atoms None
+    [cell] => EffRow atoms (Some cell)
+    cells => EffRow atoms (Some (makeJoin cells))
+
+export
+effvarId : Ref Effvar -> Int
+effvarId cell = match !cell
+  EUnbound id _ => id
+  ELink id _ => id
+  EJoin id _ _ => id
+  ESummary id _ _ => id
+
+-- Identity belongs to the cell, not its current contents. Links retain it so
+-- a shared labelled suffix is visited once even after inference solves it.
+export
+linkRow : Ref Effvar -> EffRow -> Unit
+linkRow cell row = match !cell
+  ESummary _ _ _ => panic "effect summary mutated by ordinary row unification"
+  _ => cell := ELink (effvarId cell) row
+
+export
+solveSummaryCell : Int -> Ref Effvar -> EffRow -> Unit
+solveSummaryCell owner cell row = match !cell
+  ESummary id _ actualOwner if owner == actualOwner => cell := ELink id row
+  _ => panic "effect summary solved outside its owning scope"
+
+export
+rowHasSummary : EffRow -> Bool
+rowHasSummary row = hasSummaryRows [row] Tip
+
+hasSummaryRows : List EffRow -> Map Int Unit -> Bool
+hasSummaryRows [] _ = False
+hasSummaryRows ((EffRow _ None) :: rest) seen = hasSummaryRows rest seen
+hasSummaryRows ((EffRow _ (Some cell)) :: rest) seen = match !cell
+  ESummary _ _ _ => True
+  EUnbound _ _ => hasSummaryRows rest seen
+  ELink id row =>
+    if has id seen then
+      hasSummaryRows rest seen
+    else
+      hasSummaryRows (row :: rest) (set id () seen)
+  EJoin id _ members =>
+    if has id seen then
+      hasSummaryRows rest seen
+    else
+      hasSummaryRows (pushMembers members rest) (set id () seen)
+
+export
+isJoinCell : Ref Effvar -> Bool
+isJoinCell cell = match !cell
+  EJoin _ _ _ => True
+  _ => False
+
+export
+rowFlat : EffRow -> (List Atom, List (Ref Effvar))
+rowFlat row = rowFlatGo [row] (Seen Tip Tip) [] []
+
+export
+rowFlatMembers : List Atom ->
+  List (Ref Effvar) ->
+  (List Atom, List (Ref Effvar))
+rowFlatMembers labels members =
+  rowFlatGo (EffRow labels None :: pushMembers members []) (Seen Tip Tip) [] []
+
+-- A row tail is a DAG: joins deliberately share member cells.  Traversing a
+-- shared join once per incoming edge is exponential for a diamond-shaped row.
+-- IDs are allocated from one request-owned supply and survive solving/linking.
+-- Sharing applies to label-bearing links as well as joins: visiting a common
+-- N-label suffix for each of M incoming edges would otherwise cost O(M*N).
+data Seen = Seen (Map Int Unit) (Map Int Unit)
+
+seenUnbound : Int -> Seen -> Bool
+seenUnbound id (Seen unbounds _) = has id unbounds
+
+seenJoin : Int -> Seen -> Bool
+seenJoin id (Seen _ joins) = has id joins
+
+markUnbound : Int -> Seen -> Seen
+markUnbound id (Seen unbounds joins) = Seen (set id () unbounds) joins
+
+markJoin : Int -> Seen -> Seen
+markJoin id (Seen unbounds joins) = Seen unbounds (set id () joins)
+
+-- `pending` is a stack.  Reverse first so a join's members still visit left to
+-- right, which retains the old first-occurrence order for its live tail cells.
+pushMembers : List (Ref Effvar) -> List EffRow -> List EffRow
+pushMembers members pending = pushMembersRev (reverseL members) pending
+
+pushMembersRev : List (Ref Effvar) -> List EffRow -> List EffRow
+pushMembersRev [] pending = pending
+pushMembersRev (member :: members) pending =
+  pushMembersRev members (EffRow [] (Some member) :: pending)
+
+addLabels : List Atom -> List (List Atom) -> List (List Atom)
+addLabels [] chunks = chunks
+addLabels labels chunks = labels :: chunks
+
+-- The chunks are accumulated in reverse visitation order.  Prepending each
+-- original chunk restores exact left-to-right atom input without any repeated
+-- list append; atomsUnion normalises just once at the end.
+flattenChunks : List (List Atom) -> List Atom -> List Atom
+flattenChunks [] acc = acc
+flattenChunks (chunk :: chunks) acc =
+  flattenChunks chunks (prependChunk chunk acc)
+
+prependChunk : List Atom -> List Atom -> List Atom
+prependChunk chunk acc = prependChunkRev (reverseL chunk) acc
+
+prependChunkRev : List Atom -> List Atom -> List Atom
+prependChunkRev [] acc = acc
+prependChunkRev (atom :: atoms) acc = prependChunkRev atoms (atom :: acc)
+
+rowFlatGo : List EffRow ->
+  Seen ->
+  List (List Atom) ->
+  List (Ref Effvar) ->
+  (List Atom, List (Ref Effvar))
+rowFlatGo [] _ chunks cells = (finishChunks chunks, reverseL cells)
+rowFlatGo ((EffRow labels tail) :: pending) seen chunks cells =
+  let _ = opBump ()
+  let chunks2 = addLabels labels chunks
+  match tail
+    None => rowFlatGo pending seen chunks2 cells
+    Some cell => match !cell
+      EUnbound id _ =>
+        if seenUnbound id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo pending (markUnbound id seen) chunks2 (cell :: cells)
+      ESummary id _ _ =>
+        if seenUnbound id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo pending (markUnbound id seen) chunks2 (cell :: cells)
+      ELink id row =>
+        if seenJoin id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo
+            (compressLink cell row :: pending)
+            (markJoin id seen)
+            chunks2
+            cells
+      EJoin id _ members =>
+        if seenJoin id seen then
+          rowFlatGo pending seen chunks2 cells
+        else
+          rowFlatGo
+            (pushMembers members pending)
+            (markJoin id seen)
+            chunks2
+            cells
+
+finishChunks : List (List Atom) -> List Atom
+finishChunks [] = []
+finishChunks [labels] = labels
+finishChunks chunks = atomsUnion [] (flattenChunks chunks [])
+
+export
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+dedupCells cells = reverseL (dedupCellsGo cells Tip [])
+
+-- `rowFlat` returns unbound cells, but this public helper is also used while
+-- constructing joins. Keep the first cell for each stable identity.
+dedupCellsGo : List (Ref Effvar) ->
+  Map Int Unit ->
+  List (Ref Effvar) ->
+  List (Ref Effvar)
+dedupCellsGo [] _ acc = acc
+dedupCellsGo (cell :: cells) seen acc =
+  let id = effvarId cell
+  if has id seen then
+    dedupCellsGo cells seen acc
+  else
+    dedupCellsGo cells (set id () seen) (cell :: acc)

@@ -479,7 +479,7 @@ symbolPartsOfDecl d range childLocs = match innerDecl d
   DUse _ _ _ => None
   DProp _ name _ _ => Some (name, 12, False, [])
   DTest _ name _ => Some (name, 12, False, [])
-  DEffect _ name _ => Some (name, 24, False, [])
+  DEffect _ name _ _ => Some (name, 24, False, [])
   DAttrib _ _ => None  -- unreachable post innerDecl
 -- Variable
 -- Function
@@ -597,7 +597,7 @@ declOwnNameMatches d name = match innerDecl d
   DUse _ _ _ => False
   DProp _ n _ _ => n == name
   DTest _ n _ => n == name
-  DEffect _ n _ => n == name
+  DEffect _ n _ _ => n == name
   DAttrib _ _ => False
 
 -- `d`'s CHILD names, in the SAME order `declPosChildLocs`/`symbolPartsOfDecl`
@@ -714,11 +714,6 @@ docSchemes runtimeSrc coreSrc src =
         ("__user__", userDecls)
       Some (ownSchemes ++ preludeSchemes)
 
--- core.mdk always parses; unwrap its parseResult (defensive None → []).
-unwrapDecls : Result ParseError (List Decl) -> List Decl
-unwrapDecls (Ok ds) = ds
-unwrapDecls (Err _) = []
-
 -- Lookup a name's Scheme in the env (mirror repl.mdk lookupScheme / OCaml
 -- List.assoc_opt).
 lookupSchemeL : String -> List (String, Scheme) -> Option Scheme
@@ -752,9 +747,7 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (
       None => JNull
       Some env => match hoverSchemeAt name src line col env
         None => JNull
-        Some (sch, isLocal) =>
-          let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
-          jHover name (stringConcat [pfx, ppHoverScheme isLocal name sch])
+        Some (sch, isLocal) => jHover name (ppHoverScheme isLocal name sch)
   _ => JNull
 
 -- Stateless type-at-point for the `medaka mcp` `medaka_type_at` tool (#251) — and
@@ -793,12 +786,11 @@ typeAtPoint runtimeSrc coreSrc filePath src line col =
       let docs = docsPut uri src emptyDocs
       match hoverEnvFor runtimeSrc coreSrc uri src docs
         None => None
-        Some env => match hoverSchemeAt name src line col env
-          None => None
-          Some (sch, isLocal) =>
-            let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
-            Some
-              (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
+        Some env =>
+          map
+            ((sch, isLocal) =>
+              stringConcat [name, " : ", ppHoverScheme isLocal name sch])
+            (hoverSchemeAt name src line col env)
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (loads the import graph; the
@@ -978,47 +970,6 @@ latestLocal (Some (pl, pc, ps)) ((bl, bc, bs) :: rest)
 ppHoverScheme : Bool -> String -> Scheme -> String
 ppHoverScheme isLocal n s =
   if isLocal then ppSchemeNamed n s else ppSchemeNamedFull n s
-
--- The leading effect annotation of NAME's top-level signature, rendered as a
--- `<IO> ` prefix (trailing space), or "" if none.  `from_ast_type` drops a
--- leading `TyEffect` when building the Mono (both compilers do — it's a latent
--- computation effect, not part of the value's type), so `main : <IO> Unit`
--- otherwise renders as bare `Unit`.  Recover it from the written sig for display.
-sigLeadingEff : String -> List Decl -> String
-sigLeadingEff _ [] = ""
-sigLeadingEff name (d :: ds) = match sigLeadingEffOne name d
-  Some pfx => pfx
-  None => sigLeadingEff name ds
-
-sigLeadingEffOne : String -> Decl -> Option String
-sigLeadingEffOne name (DAttrib _ d) = sigLeadingEffOne name d
-sigLeadingEffOne name (DTypeSig _ n ty)
-  | n == name = leadingEffOf ty
-  | otherwise = None
-sigLeadingEffOne _ _ = None
-
-leadingEffOf : Ty -> Option String
-leadingEffOf (TyEffect labels tail _) =
-  Some (stringConcat [renderEffRow labels tail, " "])
-leadingEffOf _ = None
-
--- Render a written effect row to surface syntax: `<IO>`, `<IO, State>`,
--- `<IO | e>`, `<e>`, `<IO | e | e2>` (mirrors parser.mdk effectBody:
--- comma-separated labels, then zero or more `| tail` vars).
-renderEffRow : List (String, Option String) -> List String -> String
-renderEffRow labels tails =
-  let lbls = joinWith ", " (map renderEffAtom labels)
-  let body = match tails
-    [] => lbls
-    _ =>
-      let tls = joinWith " | " tails
-      if lbls == "" then tls else stringConcat [lbls, " | ", tls]
-  stringConcat ["<", body, ">"]
-
-renderEffAtom : (String, Option String) -> String
-renderEffAtom (nm, None) = nm
-renderEffAtom (nm, Some "_") = stringConcat [nm, " _"]
-renderEffAtom (nm, Some p) = stringConcat [nm, " \"", p, "\""]
 
 -- Build the Hover { contents: MarkupContent{ kind:"markdown", value } } object.
 jHover : String -> String -> Json

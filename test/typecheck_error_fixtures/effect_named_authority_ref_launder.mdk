@@ -1,0 +1,11 @@
+-- A mutable cell is invariant in its authority.  A cell created from the
+-- named argument holds `String @p`, so writing an unrelated literal into it
+-- is charged against `p` and must reject: otherwise a later read would
+-- reach the literal under the argument's authority.
+bad : (p : String) -> <FileRead p> Result String String
+bad p =
+  let r = Ref p
+  let _ = r := "/etc/shadow"
+  readFile !r
+
+main = println 1

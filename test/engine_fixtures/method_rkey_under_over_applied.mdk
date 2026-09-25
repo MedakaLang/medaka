@@ -1,0 +1,46 @@
+-- A statically routed (RKey) method call that does not supply exactly the
+-- method's value arity.  The WasmGC backend used to emit a direct
+-- `call $mdk_impl_<tag>_<m>` with whatever operands the site had, so the module
+-- failed validation (too few operands for an under-applied site, a surplus for an
+-- over-applied one).  Expected values, worked by hand:
+--   nested [[1, 2], [3]]    = [[2, 3], [4]]         -> 5 + 4             = 9
+--   map (twice 2) [P 1, P 3] = [P 4, P 12]          -> 4 + 12            = 16
+--   get (Box inc) 41        = inc 41                                     = 42
+data Box a = Box a
+
+data P = P Int
+
+interface Get f where
+  get : f a -> a
+
+impl Get Box where
+  get (Box x) = x
+
+interface Scale a where
+  scale : Int -> a -> a
+  twice : Int -> a -> a
+  twice k x = scale k (scale k x)
+
+impl Scale P where
+  scale k (P x) = P (k * x)
+
+unP : P -> Int
+unP (P x) = x
+
+inc : Int -> Int
+inc x = x + 1
+
+-- under-applied concrete impl: the inner `map inc` supplies 1 of 2 args
+nested : List (List Int) -> List (List Int)
+nested xs = map (map inc) xs
+
+-- under-applied inherited default: `twice 2` supplies 1 of 2 args
+twiceAll : List P -> List P
+twiceAll ps = map (twice 2) ps
+
+main : <IO> Unit
+main =
+  println (sum (map sum (nested [[1, 2], [3]])))
+  println (sum (map unP (twiceAll [P 1, P 3])))
+  -- over-applied: `get` has value arity 1 and its result is applied to 41
+  println (get (Box inc) 41)

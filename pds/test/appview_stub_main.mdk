@@ -209,7 +209,7 @@ unreadableBytes status = answerBytes status "<unreadable>" "<unreadable>"
 
 -- ── modes ───────────────────────────────────────────────────────────────────
 
-logLine : String -> String -> <FileWrite "_"> Unit
+logLine : String -> String -> <FileWrite> Unit
 logLine path line = match appendFile path "\{line}\n"
   Ok () => ()
   Err message => panic "appview_stub: could not log: \{message}"
@@ -223,7 +223,7 @@ logLine path line = match appendFile path "\{line}\n"
    forwarded call can carry a body and a driver that stopped at the header
    terminator would answer before the body it is supposed to observe had
    arrived. -}
-recvRequest : Connection -> Array Int -> <Net "_"> Result String Request
+recvRequest : Connection -> Array Int -> <Net> Result String Request
 recvRequest conn buffer = match fromArray buffer
   -- `recv` hands back an `Array Int`; the framer reads a packed `Bytes`, and
   -- `fromArray` is the only door between them.
@@ -257,7 +257,7 @@ observedCall request =
 -- it — WITHOUT sending them. Split from `answerCall` so `batch` can hold a
 -- read call unanswered, which is the only way a mode can make the PDS keep
 -- more than one of them outstanding.
-answerFor : String -> Int -> Connection -> <FileWrite "_", Net "_"> Array Int
+answerFor : String -> Int -> Connection -> <FileWrite, Net> Array Int
 answerFor path status conn = match recvRequest conn [||]
   Err message =>
     let () = logLine path "unreadable \{message}"
@@ -279,16 +279,13 @@ answerFor path status conn = match recvRequest conn [||]
             "call aud=\{aud} lxm=\{lxm} iss=\{stringClaim "iss" claims} jti=\{stringClaim "jti" claims} iat=\{intClaim "iat" claims} target=\{requestTarget request} \{observedCall request}"
         answerBytes status aud lxm
 
-answerCall : String ->
-  Int ->
-  Connection ->
-  <FileWrite "_", Net "_"> Result String Unit
+answerCall : String -> Int -> Connection -> <FileWrite, Net> Result String Unit
 answerCall path status conn = sendAll conn (answerFor path status conn)
 
 -- Reads the call to its end and answers nothing, holding the connection until
 -- the PDS's own outbound budget gives up on it. `serveLoop` then closes it and
 -- accepts the next one, so a stalled upstream can be asked twice.
-stallCall : Connection -> <Net "_"> Result String Unit
+stallCall : Connection -> <Net> Result String Unit
 stallCall conn = match recvAll conn
   Err _ => Ok ()
   Ok _ => Ok ()
@@ -303,10 +300,7 @@ stallCall conn = match recvAll conn
    peer closes rather than for a fixed span keeps this mode free of a clock
    and leaves the timing entirely to the PDS: how long it takes to answer is
    the measurement. -}
-lingerCall : String ->
-  Int ->
-  Connection ->
-  <FileWrite "_", Net "_"> Result String Unit
+lingerCall : String -> Int -> Connection -> <FileWrite, Net> Result String Unit
 lingerCall path status conn =
   let answered = answerCall path status conn
   match recvAll conn
@@ -316,7 +310,7 @@ lingerCall path status conn =
 -- Announces the bound port and hands it back, so a mode that needs the port
 -- itself does not ask for it a second time and risk naming a different one in
 -- its own output than the gate read from this line.
-ready : Listener -> <IO, Net "_"> Int
+ready : Listener -> <IO, Net> Int
 ready lis = match listenPort lis
   Err message => panic "appview_stub: listener port unavailable: \{message}"
   Ok port =>
@@ -351,7 +345,7 @@ backlogDialAttempts = 512
    queue stays full only while those requests keep retransmitting, and closing
    them would let the next dial through — including the PDS's, which is the
    dial the case needs to hang. -}
-dialCompletes : Int -> <Net "_"> Bool
+dialCompletes : Int -> <Net> Bool
 dialCompletes port = match netConnectStart "127.0.0.1" port
   Err message => panic "appview_stub: deaf dial failed: \{message}"
   Ok fd => match ioPoll [|fd|] [|2|] dialProbeMs
@@ -367,7 +361,7 @@ dialCompletes port = match netConnectStart "127.0.0.1" port
    for THIS line before pointing a PDS at the port: a dial made while the queue
    still had room would complete, and the case would grade a connect that never
    hung. -}
-fillBacklog : Int -> Int -> <IO, Net "_"> Unit
+fillBacklog : Int -> Int -> <IO, Net> Unit
 fillBacklog port attempts =
   if attempts <= 0 then
     panic "appview_stub: the accept queue never filled"
@@ -385,7 +379,7 @@ idleForever u =
   let () = sleepMs 60000
   idleForever ()
 
-deaf : Int -> <Clock, IO, Net "_"> Unit
+deaf : Int -> <Clock, IO, Net> Unit
 deaf port = match listen "127.0.0.1" port
   Err message => panic "appview_stub: listen failed: \{message}"
   Ok lis =>
@@ -394,12 +388,12 @@ deaf port = match listen "127.0.0.1" port
     idleForever ()
 
 {- | `stdlib/net`'s own `serveLoop` cannot carry this: its handler row is closed
-   at `<Net "_">`, and logging the claims a call arrived with is a file write.
+   at `<Net>`, and logging the claims a call arrived with is a file write.
    One connection at a time, closed on every path, which is all a sequential
    gate asks for. -}
 acceptLoop : Listener ->
-  (Connection -> <FileWrite "_", Net "_"> Result String Unit) ->
-  <FileWrite "_", Net "_"> Unit
+  (Connection -> <FileWrite, Net> Result String Unit) ->
+  <FileWrite, Net> Unit
 acceptLoop lis handle = match accept lis
   Err message => panic "appview_stub: accept failed: \{message}"
   Ok conn =>
@@ -407,9 +401,7 @@ acceptLoop lis handle = match accept lis
     let _ = close conn
     acceptLoop lis handle
 
-serveWith : Int ->
-  (Listener -> <FileWrite "_", Net "_"> Unit) ->
-  <IO, Net "_"> Unit
+serveWith : Int -> (Listener -> <FileWrite, Net> Unit) -> <IO, Net> Unit
 serveWith port run = match listen "127.0.0.1" port
   Err message => panic "appview_stub: listen failed: \{message}"
   Ok lis =>
@@ -417,8 +409,8 @@ serveWith port run = match listen "127.0.0.1" port
     run lis
 
 serve : Int ->
-  (Connection -> <FileWrite "_", Net "_"> Result String Unit) ->
-  <IO, Net "_"> Unit
+  (Connection -> <FileWrite, Net> Result String Unit) ->
+  <IO, Net> Unit
 serve port handle = serveWith port (lis => acceptLoop lis handle)
 
 {- | Accepts `count` calls and answers NONE of them until all `count` have
@@ -437,7 +429,7 @@ serve port handle = serveWith port (lis => acceptLoop lis handle)
    of `count`, because the ones behind a ceiling are made only as the ones in
    front of them finish: a second batch would be waiting for callers who are
    waiting for it. -}
-batchAnswer : String -> Int -> Int -> Listener -> <FileWrite "_", Net "_"> Unit
+batchAnswer : String -> Int -> Int -> Listener -> <FileWrite, Net> Unit
 batchAnswer path status count lis =
   let () = flushHeld (holdCalls path status lis count [])
   acceptLoop lis (answerCall path status)
@@ -447,7 +439,7 @@ holdCalls : String ->
   Listener ->
   Int ->
   List (Connection, Array Int) ->
-  <FileWrite "_", Net "_"> List (Connection, Array Int)
+  <FileWrite, Net> List (Connection, Array Int)
 holdCalls path status lis remaining held =
   if remaining <= 0 then
     held
@@ -464,7 +456,7 @@ holdCalls path status lis remaining held =
 -- The order the held calls are answered in is not the order they arrived in,
 -- and nothing depends on it: the log is already written in arrival order by
 -- `answerFor`, and each answer goes back on the connection that asked for it.
-flushHeld : List (Connection, Array Int) -> <Net "_"> Unit
+flushHeld : List (Connection, Array Int) -> <Net> Unit
 flushHeld [] = ()
 flushHeld ((conn, bytes) :: rest) =
   let _ = sendAll conn bytes
@@ -500,7 +492,7 @@ bulkTickMs = 500
 
 -- Errors are ignored: a call the PDS has already abandoned is closed on its
 -- side, and what the case asserts is what the PDS answered its own client.
-sendRange : Array Int -> Int -> Int -> Connection -> <Net "_"> Unit
+sendRange : Array Int -> Int -> Int -> Connection -> <Net> Unit
 sendRange bytes lo hi conn =
   if lo >= hi then
     ()
@@ -508,14 +500,14 @@ sendRange bytes lo hi conn =
     let _ = sendAll conn (sliceClamped lo hi bytes)
     ()
 
-sendPrefixes : Array Int -> Int -> List Connection -> <Clock, Net "_"> Unit
+sendPrefixes : Array Int -> Int -> List Connection -> <Clock, Net> Unit
 sendPrefixes _ _ [] = ()
 sendPrefixes bytes prefix (conn :: rest) =
   let () = sendRange bytes 0 prefix conn
   let () = sleepMs bulkPrefixGapMs
   sendPrefixes bytes prefix rest
 
-sendEach : Array Int -> Int -> Int -> List Connection -> <Net "_"> Unit
+sendEach : Array Int -> Int -> Int -> List Connection -> <Net> Unit
 sendEach _ _ _ [] = ()
 sendEach bytes lo hi (conn :: rest) =
   let () = sendRange bytes lo hi conn
@@ -523,7 +515,7 @@ sendEach bytes lo hi (conn :: rest) =
 
 -- One byte to every held call per tick, from `at` until `until`, and returns
 -- where it stopped.
-trickle : Array Int -> Int -> Int -> List Connection -> <Clock, Net "_"> Int
+trickle : Array Int -> Int -> Int -> List Connection -> <Clock, Net> Int
 trickle bytes at until conns =
   if at >= until then
     at
@@ -532,7 +524,7 @@ trickle bytes at until conns =
     let () = sendEach bytes at (at + 1) conns
     trickle bytes (at + 1) until conns
 
-finishAll : Array Int -> Int -> List Connection -> <Net "_"> Unit
+finishAll : Array Int -> Int -> List Connection -> <Net> Unit
 finishAll _ _ [] = ()
 finishAll bytes from (conn :: rest) =
   let () = sendRange bytes from (arrayLength bytes) conn
@@ -558,7 +550,7 @@ bulkAnswer : String ->
   Int ->
   Int ->
   Listener ->
-  <Clock, FileWrite "_", Net "_"> Unit
+  <Clock, FileWrite, Net> Unit
 bulkAnswer path status count size prefix holdMs lis =
   let held = holdCalls path status lis count []
   let conns = reverse (map (pair => let (conn, _) = pair in conn) held)
@@ -576,7 +568,7 @@ bulkCall : String ->
   Int ->
   Int ->
   Connection ->
-  <FileWrite "_", Net "_"> Result String Unit
+  <FileWrite, Net> Result String Unit
 bulkCall path status size conn =
   let _ = answerFor path status conn
   sendAll conn (bulkBytes status size)
@@ -595,7 +587,7 @@ usage : String
 usage =
   "usage: appview_stub_main <answer PORT LOGFILE STATUS|batch PORT LOGFILE STATUS COUNT|bulk PORT LOGFILE STATUS COUNT SIZE PREFIX HOLDMS|linger PORT LOGFILE STATUS|stall PORT|deaf PORT>"
 
-main : <Clock, IO, Env, Net "_"> Unit
+main : <Clock, IO, Env, Net> Unit
 main = match args ()
   ["answer", port, path, status] =>
     serve (mustPort port) (answerCall path (mustStatus status))

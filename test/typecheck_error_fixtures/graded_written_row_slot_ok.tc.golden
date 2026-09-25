@@ -1,1 +1,1 @@
-gandThen : a <Stdout | b> c -> (c -> <Stdout> a <Stdout | b> d) -> a <Stdout | b> d
+gandThen : a <Stdout | b> c -> (c -> <Stdout | b> a <Stdout | b> d) -> a <Stdout | b> d

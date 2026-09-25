@@ -1,0 +1,8 @@
+export interface Labelled a where
+  label : a -> String
+
+export impl Labelled Bool where
+  label _ = "method"
+
+label : a -> String
+label _ = "private"

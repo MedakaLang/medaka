@@ -6,4 +6,4 @@ main = do
   let x = 1
   println x
 # TYPES_USER
-main : Unit
+main : <IO> Unit

@@ -276,7 +276,7 @@ exemptNames = map fst exempt
    silently runs its eval arm alone, and the file still exits 0 reporting
    every floor met. Exhaustive arms make the same mistake a missing-arm
    compile error instead. -}
-runModule : String -> Engine -> <Exec "_", IO> Result String Int
+runModule : String -> Engine -> <Exec, IO> Result String Int
 runModule name EvalAndNative = runBothEngines (underRoot "stdlib/\{name}.mdk")
 runModule name Eval = runOneSpawn name Eval
 runModule name NativeCapability = runOneSpawn name NativeCapability
@@ -287,7 +287,7 @@ runModule name NativeSpeed = runOneSpawn name NativeSpeed
    The engine is named in the error because the arms fail differently: a
    capability refusal from the eval arm and a genuine assertion failure both
    surface as a nonzero exit, and only the label says which arm was asked. -}
-runOneSpawn : String -> Engine -> <Exec "_", IO> Result String Int
+runOneSpawn : String -> Engine -> <Exec, IO> Result String Int
 runOneSpawn name engine =
   let path = underRoot "stdlib/\{name}.mdk"
   match testAssertionCount path (engineArgs engine)
@@ -310,7 +310,7 @@ runOneSpawn name engine =
    which one, since the two fail for unrelated reasons (the interpreter
    over an unbound extern, the native backend over a doctest that does not
    typecheck). -}
-runBothEngines : String -> <Exec "_", IO> Result String Int
+runBothEngines : String -> <Exec, IO> Result String Int
 runBothEngines path = match testAssertionCount path []
   Err e => Err "\{path} (eval arm of \{engineLabel EvalAndNative}): \{e}"
   Ok evalRan => match testAssertionCount path ["--native"]
@@ -325,7 +325,7 @@ runBothEngines path = match testAssertionCount path []
 {- | Every rostered module run exactly once, shared by every assertion below
    — top-level nullary bindings are memoized, so a spawn placed here and
    read from two `test` decls executes once, not twice. -}
-results : <Exec "_", IO> List (String, (Int, Result String Int))
+results : <Exec, IO> List (String, (Int, Result String Int))
 results =
   map ((name, (floor, engine)) => (name, (floor, runModule name engine))) suites
 
@@ -333,7 +333,7 @@ results =
    numbers on a miss; a run that failed outright reports the spawn's own
    text instead, so a broken assertion inside a module is never mistaken for
    a count that merely fell short. -}
-floorExpectation : String -> <Exec "_", IO> Expectation
+floorExpectation : String -> <Exec, IO> Expectation
 floorExpectation name = match lookup name results
   None => Fail "stdlib/\{name}.mdk has no `results` entry" "" ""
   Some (floor, Err e) =>
@@ -428,14 +428,14 @@ test "stdlib/vector.mdk executed >= 32 assertions" = floorExpectation "vector"
 
 -- # The zero-assertion pins
 
-zeroResults : <Exec "_", IO> List (String, Result String Int)
+zeroResults : <Exec, IO> List (String, Result String Int)
 zeroResults =
   map ((name, engine) => (name, runModule name engine)) zeroAssertionModules
 
 {- | Grades one exempt-because-empty module: its count must be exactly 0,
    never merely at least 0. A module that has grown an assertion fails here
    with the count to commit as its new floor. -}
-zeroExpectation : String -> <Exec "_", IO> Expectation
+zeroExpectation : String -> <Exec, IO> Expectation
 zeroExpectation name = match lookup name zeroResults
   None => Fail "stdlib/\{name}.mdk has no `zeroResults` entry" "" ""
   Some (Err e) => Fail e "0 assertions" "spawn/run error"
@@ -461,7 +461,7 @@ ranCountOf : (String, (Int, Result String Int)) -> Int
 ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
-totalRan : <Exec "_", IO> Int
+totalRan : <Exec, IO> Int
 totalRan = sum (map ranCountOf results)
 
 test "stdlib in-language suite ran at least one assertion" =
@@ -500,17 +500,17 @@ moduleStem name = stripSuffix ".mdk" name
 
 -- Every `stdlib/` entry, with a subdirectory replaced by its own entries
 -- spelled `dir/name`, so `crypto/hmac.mdk` names the unit `crypto/hmac`.
-stdlibEntries : <FileRead "_", IO> Result String (List String)
+stdlibEntries : <FileRead, IO> Result String (List String)
 stdlibEntries = match listDir (underRoot "stdlib")
   Err e => Err "could not list stdlib: \{e}"
   Ok names => Ok (flatMap subdirEntriesOrSelf names)
 
-subdirEntriesOrSelf : String -> <FileRead "_", IO> List String
+subdirEntriesOrSelf : String -> <FileRead, IO> List String
 subdirEntriesOrSelf name = match listDir (underRoot "stdlib/\{name}")
   Ok inner => map (n => "\{name}/\{n}") inner
   Err _ => [name]
 
-unrosteredModules : <FileRead "_", IO> Result String (List String)
+unrosteredModules : <FileRead, IO> Result String (List String)
 unrosteredModules =
   map (unrosteredUnits moduleStem (rosterNames ++ exemptNames)) stdlibEntries
 
@@ -524,7 +524,7 @@ test "every stdlib/*.mdk module has a `suites` or `exempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions : <FileRead, IO> Result String (List String)
 phantomExemptions = map (missingUnits moduleStem exemptNames) stdlibEntries
 
 test "every `exempt` row names a module that exists" = match phantomExemptions

@@ -1,6 +1,0 @@
--- #3383: rename's hole is filled from argument 1 only, so the destination
--- /etc/passwd is never charged against mv's <FileWrite "tmp/*"> bound.
-mv : Unit -> <FileWrite "tmp/*"> Result String Unit
-mv _ = rename "tmp/a" "/etc/passwd"
-
-main = println 1

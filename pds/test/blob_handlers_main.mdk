@@ -291,9 +291,9 @@ runRead (Err message) = panic "blob_handlers: cannot read corpus: \{message}"
 runRead (Ok raw) =
   runRows (map (line => split "\t" line) (filter meaningful raw))
 
-runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain : List String -> <IO, Env, FileRead> Unit
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain _ = panic "usage: blob_handlers_main <ledger-owned-blob-corpus>"
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = runMain (args ())

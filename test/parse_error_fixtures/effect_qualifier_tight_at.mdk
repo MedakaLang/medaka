@@ -1,0 +1,6 @@
+-- A qualifier is written with a space before the `@`; the adjacent form is
+-- refused with the spelling it should have had.
+idp : (p : String) -> <FileRead p> String@p
+idp p = p
+
+main = println 1

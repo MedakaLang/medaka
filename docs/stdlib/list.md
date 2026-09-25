@@ -26,7 +26,7 @@ resolve when the module is imported qualified.
 ### `filter`
 
 ```
-filter : (a -> Bool) -> b a -> b a
+filter : (a -> <b> Bool) -> c a -> <b> c a
 ```
 
 Re-exported from the prelude so that `list.filter` and `list.filterMap`
@@ -35,7 +35,7 @@ resolve when the module is imported qualified.
 ### `filterMap`
 
 ```
-filterMap : (a -> Option b) -> c a -> c b
+filterMap : (a -> <b> Option c) -> d a -> <b> d c
 ```
 
 Re-exported from the prelude so that `list.filter` and `list.filterMap`

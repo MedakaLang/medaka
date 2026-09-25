@@ -1,0 +1,11 @@
+apply : (a -> <b> c) -> a -> <b> c
+cfg : Unit -> <FileRead "config/*"> Result String String
+cfgAlias : Unit -> <FileRead "config/*"> Result String String
+cfgApply : Unit -> <FileRead "config/*"> Result String String
+cfgSub : Unit -> <FileRead "config/*"> Result String String
+main : <IO> Unit
+readIt : (path : String) -> <FileRead path> Result String String
+readSub : (path : String) -> <FileRead path> Result String String
+rf : (path : String) -> <FileRead path> Result String String
+viaApply : (path : String) -> <FileRead path> Result String String
+viaLet : (path : String) -> <FileRead path> Result String String

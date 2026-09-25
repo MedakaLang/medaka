@@ -2,10 +2,10 @@ alsoLoud : Box <Stdout> Unit
 firstOf : Pair a b -> a
 idString : String -> String
 loud : Box <Stdout> Unit
-mkBox : (Unit -> a) -> Box b a
+mkBox : (Unit -> <a> b) -> Box a b
 pureBox : Unit -> Box <> Unit
 relay : Box a b -> Box a b
 shout : Unit -> <Stdout> Unit
 swap : a b c -> a c b
-unbox : Box a b -> b
+unbox : Box a b -> <a> b
 widen : Box <Stdout | a> Unit -> Box <Stdout | a> Unit

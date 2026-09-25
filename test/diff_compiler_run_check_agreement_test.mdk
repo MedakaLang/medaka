@@ -122,7 +122,7 @@ structuralRow base note = Row {
   note = note,
 }
 
-gradeOne : String -> String -> <Exec "_", FileRead "_", IO> Row
+gradeOne : String -> String -> <Exec, FileRead, IO> Row
 gradeOne scratch path =
   let base = stem path
   let sibling = "\{corpus}/\{base}"
@@ -168,7 +168,7 @@ summarizeAgreement what graded failures =
   fail
     "\{intToString (length failures)} of \{intToString graded} fixtures \{what}:\n\{unlines failures}"
 
-sweep : List String -> <Exec "_", FileRead "_", IO> Expectation
+sweep : List String -> <Exec, FileRead, IO> Expectation
 sweep entries =
   sweepUnits
     entries
@@ -181,7 +181,7 @@ sweep entries =
    nothing is an `Err` rather than a green run over zero rows; it walks
    recursively, and `lib/` holds imported modules rather than entry points,
    so only the root's own files are fixtures. -}
-mdkFixtures : <FileRead "_", IO> Result String (List String)
+mdkFixtures : <FileRead, IO> Result String (List String)
 mdkFixtures = match fixtureFiles corpus
   Err e => Err e
   Ok paths =>
@@ -189,7 +189,7 @@ mdkFixtures = match fixtureFiles corpus
       [] => Err "no top-level .mdk fixtures"
       fixtures => Ok fixtures
 
-pinnedVerdict : String -> <FileRead "_", IO> Option String
+pinnedVerdict : String -> <FileRead, IO> Option String
 pinnedVerdict path = match readFile "\{corpus}/\{stem path}.expected"
   Err _ => Some "  \{stem path}: no .expected file pinning ACCEPT or REJECT"
   Ok raw =>
@@ -301,7 +301,7 @@ runtimeRefusals = [
 -- Why one verb's handling of a compile-time row is wrong, or `None`.
 verbRefusalFailure : List String ->
   (String, List String) ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 verbRefusalFailure needles (verb, args) = match boundedVerb medakaBin args
   Err e => Some "\{verb}: could not spawn: \{e}"
   Ok (code, out, err) =>
@@ -315,7 +315,7 @@ verbRefusalFailure needles (verb, args) = match boundedVerb medakaBin args
 
 compileRefusalFailure : String ->
   (String, List String) ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 compileRefusalFailure scratch (name, needles) =
   let entry = "\{refusalCorpus}/\{name}.mdk"
   let verbs = [
@@ -340,8 +340,8 @@ test "every fixed-width refusal fixture has a row, and every row a fixture" =
    `test_process.scratchDir` is a top-level nullary, evaluated once per
    process, and every sweep removes it when it finishes, so each sweep after
    the module's first would be handed a path that no longer exists. -}
-afterRemadeScratch : (Unit -> <Exec "_", FileRead "_", IO> Expectation) ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+afterRemadeScratch : (Unit -> <Exec, FileRead, IO> Expectation) ->
+  <Exec, FileRead, FileWrite, IO> Expectation
 afterRemadeScratch sweep = match scratchDir
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match mkdirAll dir

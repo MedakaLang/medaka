@@ -146,7 +146,7 @@ admitted bytes = match checkBlobBytes (arrayLength bytes)
 -- created barriered into `blobs/`, and `blobs/` itself created first and
 -- barriered into the data directory when it is missing. See the header's
 -- "Directory barriers".
-ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureShard : String -> Cid -> <FileRead, FileWrite> Result String Unit
 ensureShard dir cid = mkdirAllDurably (blobShardDir dir cid)
 
 -- Not `fs.replaceDurably`: the sidecar and the bytes file share ONE shard
@@ -159,7 +159,7 @@ writeOne : String ->
   Cid ->
   String ->
   Array Int ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 writeOne dir cid mimeType bytes = do
   () <- admitted bytes
   () <- ensureShard dir cid
@@ -177,12 +177,12 @@ writeOne dir cid mimeType bytes = do
 -- created barriered into `blobs/`, and `blobs/` itself created first and
 -- barriered into the data directory when it is missing: each dentry is
 -- barriered into its own parent.
-ensureStaging : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureStaging : String -> <FileRead, FileWrite> Result String Unit
 ensureStaging dir = mkdirAllDurably "\{blobDir dir}/\{stagingName}"
 
 writeRows : String ->
   List (Cid, String, Array Int) ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 writeRows _ [] = Ok ()
 writeRows dir ((cid, mimeType, bytes) :: rest) =
   match writeOne dir cid mimeType bytes
@@ -196,7 +196,7 @@ writeRows dir ((cid, mimeType, bytes) :: rest) =
 export
 blobFileWrite : String ->
   List (Cid, String, Array Int) ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 blobFileWrite dir rows = do
   () <- ensureStaging dir
   writeRows dir rows
@@ -220,7 +220,7 @@ sidecarOk path leaf = match stripSuffix mimeSuffix leaf
 readLeaves : String ->
   List String ->
   List (Cid, String, Array Int) ->
-  <FileRead "_"> Result String (List (Cid, String, Array Int))
+  <FileRead> Result String (List (Cid, String, Array Int))
 readLeaves _ [] acc = Ok acc
 readLeaves shardPath (leaf :: rest) acc =
   let path = "\{shardPath}/\{leaf}"
@@ -241,7 +241,7 @@ readLeaves shardPath (leaf :: rest) acc =
 readShards : String ->
   List String ->
   List (Cid, String, Array Int) ->
-  <FileRead "_"> Result String (List (Cid, String, Array Int))
+  <FileRead> Result String (List (Cid, String, Array Int))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
   let path = "\{blobDir dir}/\{shard}"
@@ -270,7 +270,7 @@ readShards dir (shard :: rest) acc =
    there. -}
 export
 blobFileRead : String ->
-  <FileRead "_"> Result String (List (Cid, String, Array Int))
+  <FileRead> Result String (List (Cid, String, Array Int))
 blobFileRead dir =
   if not (fileExists (blobDir dir)) then
     Ok []
@@ -306,7 +306,7 @@ countLeaves all (leaf :: rest) =
   else
     countLeaves all rest
 
-countShards : String -> List String -> <FileRead "_"> Result String Int
+countShards : String -> List String -> <FileRead> Result String Int
 countShards _ [] = Ok 0
 countShards dir (shard :: rest) =
   let path = "\{blobDir dir}/\{shard}"
@@ -329,7 +329,7 @@ countShards dir (shard :: rest) =
 -- skipped rather than passed to `removeFile`, which fails on a directory.
 removeStagingResidue : String ->
   List String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 removeStagingResidue _ [] = Ok ()
 removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
   Ok True => removeStagingResidue dir rest
@@ -350,8 +350,7 @@ removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
    than a promotion this process has in flight. A data directory that has
    never staged a blob reads as nothing to sweep, not as a failure. -}
 export
-blobFileSweepStaging : String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+blobFileSweepStaging : String -> <FileRead, FileWrite> Result String Unit
 blobFileSweepStaging dir =
   let staging = "\{blobDir dir}/\{stagingName}"
   if not (fileExists staging) then
@@ -377,7 +376,7 @@ blobFileSweepStaging dir =
    it serves any and this count is a stats line on an interval — the refusal
    has already happened somewhere a caller acts on. -}
 export
-blobFileCount : String -> <FileRead "_"> Result String Int
+blobFileCount : String -> <FileRead> Result String Int
 blobFileCount dir =
   if not (fileExists (blobDir dir)) then
     Ok 0

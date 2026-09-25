@@ -284,10 +284,10 @@ test "a sweep is due on every interval-th entry and on no other" = expectEach [
 {- | One scratch directory for the whole file, made once — a top-level nullary
    binding is memoized, so every case below names a subdirectory of the same
    `mktemp -d` rather than spawning its own. -}
-scratch : <Exec "_", IO> String
+scratch : <Exec, IO> String
 scratch = resultOrPanic "event_log_test: mktemp -d failed" scratchDir
 
-caseDir : String -> <Exec "_", FileRead "_", FileWrite "_", IO> String
+caseDir : String -> <Exec, FileRead, FileWrite, IO> String
 caseDir name =
   let path = "\{scratch}/\{name}"
   match mkdirAll path
@@ -295,10 +295,7 @@ caseDir name =
     Ok () => path
 
 -- An append as the server performs one: assign off disk, stage, promote.
-appendAt : String ->
-  Int ->
-  String ->
-  <FileRead "_", FileWrite "_"> Result String Int
+appendAt : String -> Int -> String -> <FileRead, FileWrite> Result String Int
 appendAt dir timeSeconds anchor = do
   seq <- eventLogNextSequence dir
   let entry = EventLogEntry {
@@ -311,10 +308,7 @@ appendAt dir timeSeconds anchor = do
   () <- eventLogPromote dir eventLogRetentionSeconds timeSeconds
   Ok seq
 
-appendMany : String ->
-  Int ->
-  Int ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+appendMany : String -> Int -> Int -> <FileRead, FileWrite> Result String Unit
 appendMany dir 0 _ = Ok ()
 appendMany dir remaining timeSeconds =
   match appendAt dir timeSeconds "bafyrei\{intToString remaining}"
@@ -325,7 +319,7 @@ mustSeqs : Result String (List EventLogEntry) -> List Int
 mustSeqs (Ok entries) = seqsOf entries
 mustSeqs (Err message) = panic "event_log_test: log unreadable: \{message}"
 
-sequencedDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+sequencedDir : <Exec, FileRead, FileWrite, IO> String
 sequencedDir =
   let dir = caseDir "sequenced"
   match appendMany dir 3 1700000000
@@ -351,7 +345,7 @@ test "the last-entry pointer names the sequence number it promoted" =
 -- cannot pass over a sequence production never performs.
 recoverAgainst : String ->
   Option String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
+  <FileRead, FileWrite> Result String Unit
 recoverAgainst dir head = do
   plan <- eventLogPlanRecovery dir head
   eventLogApplyRecovery dir plan eventLogRetentionSeconds 1700000000
@@ -361,7 +355,7 @@ recoverAgainst dir head = do
 stagedIn : String ->
   Option String ->
   String ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> String
+  <Exec, FileRead, FileWrite, IO> String
 stagedIn name anchor frameHex =
   let dir = caseDir name
   let entry = EventLogEntry {
@@ -557,7 +551,7 @@ test "promoting the same entry twice leaves one entry, not two" =
 
 -- # Truncation
 
-expiringDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+expiringDir : <Exec, FileRead, FileWrite, IO> String
 expiringDir =
   let dir = caseDir "expiring"
   match appendAt dir 1000 "bafyreiold1"
@@ -583,7 +577,7 @@ test "a sweep removes exactly the entries the window no longer admits" =
 
 -- # An append does not rewrite the log
 
-bulkDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+bulkDir : <Exec, FileRead, FileWrite, IO> String
 bulkDir =
   let dir = caseDir "bulk"
   match appendMany dir 40 1700000000
@@ -711,7 +705,7 @@ opShape (DcMap fields) = match (lookup "action" fields, lookup "path" fields)
   _ => None
 opShape _ = None
 
-endToEndDir : <Exec "_", FileRead "_", FileWrite "_", IO> String
+endToEndDir : <Exec, FileRead, FileWrite, IO> String
 endToEndDir =
   let dir = caseDir "end-to-end"
   let entry = EventLogEntry {

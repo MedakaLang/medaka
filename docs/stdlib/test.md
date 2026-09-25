@@ -615,7 +615,7 @@ Returns `True` when every test passes.
 ### `expectGolden`
 
 ```
-expectGolden : String -> String -> <FileRead _> Expectation
+expectGolden : (path : String) -> String -> <FileRead path> Expectation
 expectGolden path actual
 ```
 

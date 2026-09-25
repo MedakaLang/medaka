@@ -20,7 +20,7 @@ purePoly x = x
 # TYPES
 emit : Int -> <IO> Unit
 gen : a -> <IO, Rand> a
-pureVal : Int
+pureVal : <IO> Int
 higher : (a -> <IO> b) -> a -> <IO> b
 runTwice : (Unit -> <IO> a) -> <IO> Unit
 mixed : Int -> Int -> <Rand> Bool

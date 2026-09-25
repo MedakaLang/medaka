@@ -37,7 +37,7 @@ data Stanza = Stanza { kind : String, fields : List (String, String) }
 export
 filesForConsumer : String ->
   String ->
-  <FileRead "_", Exec "_"> Result String (List String)
+  <FileRead, Exec> Result String (List String)
 filesForConsumer root consumer = match loadStanzas root
   Err e => Err e
   Ok stanzas =>
@@ -56,7 +56,7 @@ filesForConsumer root consumer = match loadStanzas root
 export
 validatePaths : String ->
   List String ->
-  <FileRead "_", Exec "_"> Result String (List String)
+  <FileRead, Exec> Result String (List String)
 validatePaths root paths = match loadStanzas root
   Err e => Err e
   Ok stanzas => validateEach root stanzas paths
@@ -64,7 +64,7 @@ validatePaths root paths = match loadStanzas root
 validateEach : String ->
   List Stanza ->
   List String ->
-  <FileRead "_", Exec "_"> Result String (List String)
+  <FileRead, Exec> Result String (List String)
 validateEach _ _ [] = Ok []
 validateEach root stanzas (p :: rest) = match findStanzaForFile p stanzas
   None => Err "vector_ledger: no [vector] stanza names file \"\{p}\""
@@ -80,7 +80,7 @@ findStanzaForFile path (s :: rest) =
   else
     findStanzaForFile path rest
 
-loadStanzas : String -> <FileRead "_"> Result String (List Stanza)
+loadStanzas : String -> <FileRead> Result String (List Stanza)
 loadStanzas root =
   let ledgerPath = "\{root}/pds/test/VECTOR-PROVENANCE.txt"
   match readFile ledgerPath
@@ -158,13 +158,13 @@ isVectorForConsumer consumer stanza =
 
 collectRows : String ->
   List Stanza ->
-  <FileRead "_", Exec "_"> Result String (List String)
+  <FileRead, Exec> Result String (List String)
 collectRows _ [] = Ok []
 collectRows root (s :: rest) = match validateRow root s
   Err e => Err e
   Ok file => map (file :: _) (collectRows root rest)
 
-validateRow : String -> Stanza -> <FileRead "_", Exec "_"> Result String String
+validateRow : String -> Stanza -> <FileRead, Exec> Result String String
 validateRow root stanza = match fieldValue "file" stanza
   None => Err "vector_ledger: [vector] stanza missing required key \"file\""
   Some file => match fieldValue "local-sha256" stanza
@@ -199,7 +199,7 @@ isHexChar c = isDigit c || c >= 'a' && c <= 'f'
 
 -- ── sha256, spawned — never stdlib/crypto/sha256.mdk (see module header) ───────
 
-sha256OfFile : String -> <Exec "_"> Result String String
+sha256OfFile : String -> <Exec> Result String String
 sha256OfFile path = match runCommandOk "sha256sum" [path]
   Ok (out, _) => firstWord path out
   Err e1 => match runCommandOk "shasum" ["-a", "256", path]

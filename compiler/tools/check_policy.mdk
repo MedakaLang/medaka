@@ -1,3 +1,15 @@
+import types.effect_domain.{canonParam, drender, Param(..)}
+import types.effect_authority.{Authority(..), authSub}
+import types.effect_rows.{
+  atomLabel,
+  atomAuth,
+  atomConst,
+  atomsUnion,
+  renderAtom,
+  Atom(..),
+  effrowLabels,
+  EffRow(..),
+}
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
 --
@@ -48,21 +60,12 @@ import tools.check.{checkHasErrors}
 import types.repr.{
   Scheme(..),
   Mono(..),
-  EffRow(..),
-  Atom(..),
-  Param(..),
   normalize,
   tupleSpine,
-  effrowLabels,
-  atomLabel,
-  atomParam,
-  normHole,
-  drender,
 }
 import types.typecheck.{
   checkOneSchemeFull,
   checkModulesEntryFullSplitK,
-  dsub,
   decodeProductParam,
   decodeSetParam,
   TcDiag,
@@ -287,56 +290,26 @@ monoEffects : Mono -> List Atom
 monoEffects m = match normalize m
   TFun _ row result =>
     let atoms = effrowLabels row
-    sortUniqAtoms (atoms ++ monoEffects result)
+    atomsUnion atoms (monoEffects result)
   -- Fork C (Stage 1 preservation): a tuple TYPE is now a `__tupleN__`-headed
   -- `TApp` spine rather than an atomic `Mono.TTuple`, which the catch-all arm
   -- `_ => []` answers with no element effects; reproduce
   -- that exactly here instead of letting the generic `TApp` arm recurse in.
   TApp a b => match tupleSpine (TApp a b)
     Some _ => []
-    None => sortUniqAtoms (monoEffects a ++ monoEffects b)
+    None => atomsUnion (monoEffects a) (monoEffects b)
   _ => []
 
+export
 schemeEffects : Scheme -> List Atom
-schemeEffects (Forall _ _ mono) = monoEffects mono
-
--- Sort atoms by label and drop label-duplicates (first atom of a label wins;
--- in practice a row carries one atom per label after normalization).
-sortUniqAtoms : List Atom -> List Atom
-sortUniqAtoms atoms = dedupAtoms (sortAtoms atoms)
-
-sortAtoms : List Atom -> List Atom
-sortAtoms [] = []
-sortAtoms (x :: xs) = insertAtom x (sortAtoms xs)
-
-insertAtom : Atom -> List Atom -> List Atom
-insertAtom x [] = [x]
-insertAtom x (y :: ys) =
-  if stringLeq (atomLabel x) (atomLabel y) then
-    x :: y :: ys
-  else
-    y :: insertAtom x ys
-
-stringLeq : String -> String -> Bool
-stringLeq a b = match stringCompare a b
-  Gt => False
-  _ => True
-
-dedupAtoms : List Atom -> List Atom
-dedupAtoms [] = []
-dedupAtoms [x] = [x]
-dedupAtoms (x :: y :: rest) =
-  if atomLabel x == atomLabel y then
-    dedupAtoms (x :: rest)
-  else
-    x :: dedupAtoms (y :: rest)
+schemeEffects (Forall _ _ _ force mono) =
+  atomsUnion (effrowLabels force) (monoEffects mono)
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
 -- identical to WS-1a for ⊤ params (drender ⊤ = "").
 atomLabels : List Atom -> List String
-atomLabels [] = []
-atomLabels (a :: rest) = atomLabel a ++ drender (atomParam a) :: atomLabels rest
+atomLabels atoms = map renderAtom atoms
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
 fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
@@ -413,12 +386,13 @@ filterForbidden (a :: rest) policy =
   else
     atomLabel a :: filterForbidden rest policy
 
--- Permitted iff the label is in the policy AND the inferred param is ⊑ the
--- policy param.
+-- Permitted iff the label is in the policy AND the inferred authority is
+-- provably within the policy's: an authority still symbolic at the manifest
+-- boundary is not proven and is not permitted.
 atomPermitted : Atom -> List (String, Param) -> Bool
 atomPermitted a policy = match lookupParam (atomLabel a) policy
   None => False
-  Some pp => dsub (atomParam a) pp
+  Some pp => authSub (atomAuth a) (AConst pp)
 
 -- ── 7. accept: run the plugin on a sample request with stub capabilities ─────
 -- Synthetic stub funDefs that shadow the user-declared platform externs.  Parsed
@@ -585,7 +559,7 @@ listIsEmpty _ = False
 --   PUnit / PPrefix None → key = true  (bare ⊤ grant — host decides scope)
 --
 -- Output order: labels sorted ascending (stable/gateable).
--- Labels already arrive sorted from monoEffects/sortUniqAtoms.
+-- Labels already arrive sorted from the canonical atom join.
 --
 -- WS-1c (deferred): Wasm custom section — would embed M(module) into the
 -- compiled .wasm binary as a custom section.  Touches wasm_emit.mdk; left
@@ -595,14 +569,18 @@ listIsEmpty _ = False
 -- Render one atom as a TOML key-value line.
 -- PPrefix (Some s) → 'Label = "s"'
 -- PUnit / PPrefix None → 'Label = true'
+-- An authority left symbolic at the host boundary is reported conservatively
+-- as the bare grant (`Label = true`), never omitted.
 atomToToml : Atom -> String
 atomToToml a =
   let label = atomLabel a
-  match normHole (atomParam a)
-    PPrefix (Some s) => "\{label} = \"\{s}\""
-    PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
-    PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
-    _ => label ++ " = true"
+  match atomConst a
+    Some p => match canonParam p
+      PPrefix (Some s) => "\{label} = \"\{s}\""
+      PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
+      PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
+      _ => label ++ " = true"
+    None => label ++ " = true"
 
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
 -- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
@@ -711,10 +689,10 @@ manifestToAllowStr atoms =
 atomToAllowTok : Atom -> String
 atomToAllowTok a =
   let label = atomLabel a
-  match atomParam a
-    PPrefix (Some s) => "\{label}=\{s}"
-    PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
-    PProduct ax => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
+  match atomConst a
+    Some (PPrefix (Some s)) => "\{label}=\{s}"
+    Some (PSet (Some xs)) => "\{label}={\{joinWith "," xs}}"
+    Some (PProduct ax) => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
     _ => label
 
 -- WS-4: render product axes as a policy `--allow` rhs `Host="…";Method={…}` —

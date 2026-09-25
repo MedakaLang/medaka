@@ -14,7 +14,7 @@ library module (`string.toUpper` over `stringToUpper`, `io.readLines`
 over `readFile`); use this page when no library module covers what you
 need.
 
-An effect on a return type (`<Stdout>`, `<FileRead "_">`, `<Net "_">`,
+An effect on a return type (`<Stdout>`, `<FileRead>`, `<Net>`,
 `<IO>`) names what the primitive touches. A primitive with no effect is
 pure. Mutation of a `Ref` or an array carries no effect.
 
@@ -111,7 +111,7 @@ with `r := v`.
 ### `readFile`
 
 ```
-readFile : String -> <FileRead _> Result String String
+readFile : (path : String) -> <FileRead path> Result String String
 ```
 
 The contents of a file as a string, or `Err` with the host's message.
@@ -119,7 +119,7 @@ The contents of a file as a string, or `Err` with the host's message.
 ### `readFileBytes`
 
 ```
-readFileBytes : String -> <FileRead _> Result String (Array Int)
+readFileBytes : (path : String) -> <FileRead path> Result String (Array Int)
 ```
 
 The contents of a file as bytes, `0` to `255` each, or `Err` with the
@@ -128,7 +128,7 @@ host's message.
 ### `writeFile`
 
 ```
-writeFile : String -> String -> <FileWrite _> Result String Unit
+writeFile : (path : String) -> String -> <FileWrite path> Result String Unit
 ```
 
 Writes a string to a file, replacing any existing contents.
@@ -136,7 +136,7 @@ Writes a string to a file, replacing any existing contents.
 ### `writeFileBytes`
 
 ```
-writeFileBytes : String -> Array Int -> <FileWrite _> Result String Unit
+writeFileBytes : (path : String) -> Array Int -> <FileWrite path> Result String Unit
 ```
 
 Writes bytes, `0` to `255` each, to a file, replacing any existing
@@ -145,7 +145,7 @@ contents.
 ### `writeFileMode`
 
 ```
-writeFileMode : String -> Int -> String -> <FileWrite _> Result String Unit
+writeFileMode : (path : String) -> Int -> String -> <FileWrite path> Result String Unit
 ```
 
 Writes a string to a file, replacing any existing contents, and leaves
@@ -159,7 +159,7 @@ pre-existing file's own mode can widen the result.
 ### `appendFile`
 
 ```
-appendFile : String -> String -> <FileWrite _> Result String Unit
+appendFile : (path : String) -> String -> <FileWrite path> Result String Unit
 ```
 
 Appends a string to a file, creating it when it does not exist.
@@ -167,7 +167,7 @@ Appends a string to a file, creating it when it does not exist.
 ### `fileExists`
 
 ```
-fileExists : String -> <FileRead _> Bool
+fileExists : (path : String) -> <FileRead path> Bool
 ```
 
 Whether a path exists.
@@ -175,7 +175,7 @@ Whether a path exists.
 ### `fileMode`
 
 ```
-fileMode : String -> <FileRead _> Result String Int
+fileMode : (path : String) -> <FileRead path> Result String Int
 ```
 
 A path's permission bits, `0` to `4095` (`384` is `rw-------`), or
@@ -184,7 +184,7 @@ A path's permission bits, `0` to `4095` (`384` is `rw-------`), or
 ### `canonicalizePath`
 
 ```
-canonicalizePath : String -> <FileRead _> String
+canonicalizePath : (path : String) -> <FileRead path> String
 ```
 
 The absolute path with `.`, `..`, and symbolic links resolved. The
@@ -193,7 +193,7 @@ input, unchanged, when it cannot be resolved.
 ### `listDir`
 
 ```
-listDir : String -> <FileRead _> Result String (List String)
+listDir : (path : String) -> <FileRead path> Result String (List String)
 ```
 
 The names of the entries in a directory.
@@ -201,7 +201,7 @@ The names of the entries in a directory.
 ### `makeDir`
 
 ```
-makeDir : String -> <FileWrite _> Result String Unit
+makeDir : (path : String) -> <FileWrite path> Result String Unit
 ```
 
 Creates a directory.
@@ -209,7 +209,7 @@ Creates a directory.
 ### `removeFile`
 
 ```
-removeFile : String -> <FileWrite _> Result String Unit
+removeFile : (path : String) -> <FileWrite path> Result String Unit
 ```
 
 Deletes a file.
@@ -217,7 +217,7 @@ Deletes a file.
 ### `rename`
 
 ```
-rename : String -> String -> <FileWrite _> Result String Unit
+rename : (src : String) -> (dst : String) -> <FileWrite src, FileWrite dst> Result String Unit
 ```
 
 Moves or renames a path.
@@ -225,7 +225,7 @@ Moves or renames a path.
 ### `fsync`
 
 ```
-fsync : String -> <FileWrite _> Result String Unit
+fsync : (path : String) -> <FileWrite path> Result String Unit
 ```
 
 Flushes a path's contents to durable storage. Works on a regular file or
@@ -235,7 +235,7 @@ directory, not of either file.
 ### `removeDir`
 
 ```
-removeDir : String -> <FileWrite _> Result String Unit
+removeDir : (path : String) -> <FileWrite path> Result String Unit
 ```
 
 Removes an empty directory.
@@ -243,7 +243,7 @@ Removes an empty directory.
 ### `statFile`
 
 ```
-statFile : String -> <FileRead _> Result String (Int, Bool, Bool, Float)
+statFile : (path : String) -> <FileRead path> Result String (Int, Bool, Bool, Float)
 ```
 
 A path's size in bytes, whether it is a directory, whether it is a
@@ -263,7 +263,7 @@ The command-line arguments after the program name.
 ### `getEnv`
 
 ```
-getEnv : String -> <Env _> Option String
+getEnv : (name : String) -> <Env name> Option String
 ```
 
 The value of an environment variable, or `None` when it is unset.
@@ -279,7 +279,7 @@ The absolute path of the running executable.
 ### `runCommand`
 
 ```
-runCommand : String -> List String -> <Exec _> Result String (Int, String, String)
+runCommand : (program : String) -> List String -> <Exec program> Result String (Int, String, String)
 ```
 
 Runs a program with arguments and waits for it. `Ok` carries the exit
@@ -308,7 +308,7 @@ Aborts the program with a message. Panics cannot be caught.
 ### `netResolve`
 
 ```
-netResolve : String -> <Net _> Result String (List String)
+netResolve : (host : String) -> <Net host> Result String (List String)
 ```
 
 The numeric addresses a host name resolves to.
@@ -316,7 +316,7 @@ The numeric addresses a host name resolves to.
 ### `netTcpConnect`
 
 ```
-netTcpConnect : String -> Int -> <Net _> Result String Int
+netTcpConnect : (host : String) -> Int -> <Net host> Result String Int
 ```
 
 Opens a TCP connection to a host and port. The result is the
@@ -325,7 +325,7 @@ connection's descriptor.
 ### `netTcpListen`
 
 ```
-netTcpListen : String -> Int -> <Net _> Result String Int
+netTcpListen : (host : String) -> Int -> <Net host> Result String Int
 ```
 
 Starts listening for TCP connections on an address and port. Port `0`
@@ -334,7 +334,7 @@ picks a free port. The result is the listener's descriptor.
 ### `netListenPort`
 
 ```
-netListenPort : Int -> <Net _> Result String Int
+netListenPort : Int -> <Net> Result String Int
 ```
 
 The port a listener is bound to. Use it after listening on port `0`.
@@ -342,7 +342,7 @@ The port a listener is bound to. Use it after listening on port `0`.
 ### `netTcpAccept`
 
 ```
-netTcpAccept : Int -> <Net _> Result String Int
+netTcpAccept : Int -> <Net> Result String Int
 ```
 
 Waits for the next connection on a listener. The result is the
@@ -351,7 +351,7 @@ connection's descriptor.
 ### `netSend`
 
 ```
-netSend : Int -> Array Int -> <Net _> Result String Int
+netSend : Int -> Array Int -> <Net> Result String Int
 ```
 
 Sends bytes on a connection. The result is the number of bytes
@@ -360,7 +360,7 @@ written, which may be fewer than given.
 ### `netSendFrom`
 
 ```
-netSendFrom : Int -> Array Int -> Int -> <Net _> Result String Int
+netSendFrom : Int -> Array Int -> Int -> <Net> Result String Int
 ```
 
 Sends bytes starting at the given offset into the array. The result is the number
@@ -370,7 +370,7 @@ call so a loop can retain one array while advancing through it.
 ### `netRecv`
 
 ```
-netRecv : Int -> Int -> <Net _> Result String (Array Int)
+netRecv : Int -> Int -> <Net> Result String (Array Int)
 ```
 
 Receives up to the given number of bytes from a connection. An empty array means the
@@ -379,7 +379,7 @@ other side has closed.
 ### `netShutdown`
 
 ```
-netShutdown : Int -> Int -> <Net _> Result String Unit
+netShutdown : Int -> Int -> <Net> Result String Unit
 ```
 
 Shuts down one or both directions of a connection: `0` for reading,
@@ -388,7 +388,7 @@ Shuts down one or both directions of a connection: `0` for reading,
 ### `netClose`
 
 ```
-netClose : Int -> <Net _> Result String Unit
+netClose : Int -> <Net> Result String Unit
 ```
 
 Closes a descriptor.
@@ -396,7 +396,7 @@ Closes a descriptor.
 ### `netSetTimeout`
 
 ```
-netSetTimeout : Int -> Int -> <Net _> Result String Unit
+netSetTimeout : Int -> Int -> <Net> Result String Unit
 ```
 
 Sets a connection's send and receive timeout in milliseconds. `0`
@@ -405,7 +405,7 @@ means no timeout.
 ### `pdsSignalStart`
 
 ```
-pdsSignalStart : Unit -> <Net _> Result String Int
+pdsSignalStart : Unit -> <Net> Result String Int
 ```
 
 Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
@@ -415,7 +415,7 @@ the operating system's default signal behavior. Call once after bind.
 ### `pdsSignalRequested`
 
 ```
-pdsSignalRequested : Unit -> <Net _> Bool
+pdsSignalRequested : Unit -> <Net> Bool
 ```
 
 Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
@@ -424,7 +424,7 @@ the descriptor remains readable. Only call from ordinary task context.
 ### `ioPoll`
 
 ```
-ioPoll : Array Int -> Array Int -> Int -> <Net _> Result String (Array Int)
+ioPoll : Array Int -> Array Int -> Int -> <Net> Result String (Array Int)
 ```
 
 Waits until any of the descriptors is ready, or the timeout in
@@ -435,7 +435,7 @@ both bits on an error or hangup so a retry surfaces the error.
 ### `netSetNonblock`
 
 ```
-netSetNonblock : Int -> Bool -> <Net _> Result String Unit
+netSetNonblock : Int -> Bool -> <Net> Result String Unit
 ```
 
 Switches a socket's non-blocking mode on or off.
@@ -443,7 +443,7 @@ Switches a socket's non-blocking mode on or off.
 ### `netTryAccept`
 
 ```
-netTryAccept : Int -> <Net _> Result String (Option Int)
+netTryAccept : Int -> <Net> Result String (Option Int)
 ```
 
 `netTcpAccept` that returns `None` instead of blocking.
@@ -451,7 +451,7 @@ netTryAccept : Int -> <Net _> Result String (Option Int)
 ### `netConnectStart`
 
 ```
-netConnectStart : String -> Int -> <Net _> Result String Int
+netConnectStart : (host : String) -> Int -> <Net host> Result String Int
 ```
 
 `netTcpConnect` that returns as soon as the handshake is under way. The
@@ -462,7 +462,7 @@ resolution still blocks.
 ### `netConnectCheck`
 
 ```
-netConnectCheck : Int -> <Net _> Result String (Option Unit)
+netConnectCheck : Int -> <Net> Result String (Option Unit)
 ```
 
 Whether a descriptor from `netConnectStart` has finished its handshake.
@@ -473,7 +473,7 @@ and leaves the descriptor for the caller to close.
 ### `netTryRecv`
 
 ```
-netTryRecv : Int -> Int -> <Net _> Result String (Option (Array Int))
+netTryRecv : Int -> Int -> <Net> Result String (Option (Array Int))
 ```
 
 `netRecv` that returns `None` instead of blocking. `Some []` is end of
@@ -482,7 +482,7 @@ stream.
 ### `netTryRecvBytes`
 
 ```
-netTryRecvBytes : Int -> Int -> <Net _> Result String (Option ByteBlock)
+netTryRecvBytes : Int -> Int -> <Net> Result String (Option ByteBlock)
 ```
 
 `netTryRecv` delivering the chunk as a packed block, one byte per byte
@@ -493,7 +493,7 @@ with no other reference to it.
 ### `netTrySend`
 
 ```
-netTrySend : Int -> Array Int -> <Net _> Result String (Option Int)
+netTrySend : Int -> Array Int -> <Net> Result String (Option Int)
 ```
 
 `netSend` that returns `None` instead of blocking. `Some n` is the count
@@ -502,7 +502,7 @@ written, which may be short.
 ### `netTrySendFrom`
 
 ```
-netTrySendFrom : Int -> Array Int -> Int -> <Net _> Result String (Option Int)
+netTrySendFrom : Int -> Array Int -> Int -> <Net> Result String (Option Int)
 ```
 
 `netTrySend` starting at the given offset into the array, sending at most 64 KiB

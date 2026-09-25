@@ -131,7 +131,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -169,7 +168,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -216,7 +214,7 @@ IDENT "scratchDir"
 COLON
 LT
 UPPER "Exec"
-STRING "_"
+STRING "mktemp*"
 GT
 UPPER "Result"
 UPPER "String"
@@ -275,14 +273,18 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnOk"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
+IDENT "cmd"
 GT
 UPPER "Expectation"
 NEWLINE
@@ -378,18 +380,26 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnFails"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
+IDENT "cmd"
 GT
 UPPER "Expectation"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "expectSpawnFails"
 IDENT "cmd"
@@ -516,7 +526,11 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnFailsAll"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 INDENT
 UPPER "List"
@@ -528,7 +542,7 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
+IDENT "cmd"
 GT
 UPPER "Expectation"
 NEWLINE
@@ -674,18 +688,26 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnOkLine"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
+IDENT "cmd"
 GT
 UPPER "Expectation"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "expectSpawnOkLine"
 IDENT "cmd"
@@ -917,7 +939,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
-STRING "_"
 COMMA
 UPPER "IO"
 GT
@@ -1205,7 +1226,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1259,7 +1279,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"

@@ -235,7 +235,7 @@ runHostile (Fixture _ roots blocks expected) =
       (carDecode (framed ++ mismatchSection)),
   ]
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = match args ()
   [corpusPath] => match readLines corpusPath
     Err message => panic "car_vectors: cannot read corpus: \{message}"

@@ -10,4 +10,4 @@ main = println y
 # TYPES_USER
 x : Int
 y : Int
-main : Unit
+main : <IO> Unit

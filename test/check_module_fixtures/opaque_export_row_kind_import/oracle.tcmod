@@ -1,4 +1,4 @@
-speak : a -> Asy b c -> c
-wrote : Asy <Stdout> Int
+runIt : Speak a => a -> Asy b c -> <b> c
 seeded : Asy <Stdout> Int
-runIt : Speak a => a -> Asy <> b -> b
+speak : a -> Asy b c -> <b> c
+wrote : Asy <Stdout> Int

@@ -47,14 +47,14 @@ tooLargeFixture = "\{corpus}/too_large.mdk"
 -- print a right-looking answer over a compiler that no longer matches disk.
 strictSpawn : Int ->
   List String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 strictSpawn secs args =
   boundedVerbSeconds secs "env" (["MEDAKA_STRICT=1", medakaBin] ++ args)
 
 -- Removes a scratch directory a build wrote into. The exit code is read and
 -- discarded on purpose — cleanup failing is never the reason a check reports
 -- red.
-cleanup : String -> <Exec "_", IO> Unit
+cleanup : String -> <Exec, IO> Unit
 cleanup scratch = match boundedVerb "rm" ["-rf", scratch]
   Ok (code, _, _) =>
     let _ = code == 0
@@ -102,7 +102,7 @@ test "os_entropy: positive fixture — `medaka run` is well-shaped and independe
 
 -- The rejection `medaka run` owes for a fixture whose `osEntropyBytes` call
 -- is out of contract: nonzero exit with `wantSubstring` on stderr.
-runRejected : String -> String -> <Exec "_", IO> Expectation
+runRejected : String -> String -> <Exec, IO> Expectation
 runRejected fixture wantSubstring = match strictSpawn 30 ["run", fixture]
   Err e => fail "medaka run: \{e}"
   Ok (code, ro, re) =>
@@ -128,7 +128,7 @@ test "os_entropy: too-large length is rejected by `medaka run`" =
 builtOnce : String ->
   String ->
   String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 builtOnce scratch name fixture =
   let binPath = "\{scratch}/\{name}"
   match strictSpawn 60 ["build", fixture, "-o", binPath]
@@ -143,7 +143,7 @@ builtOnce scratch name fixture =
 
 -- `fixture`, built once into `scratch` under `name` and executed TWICE:
 -- both runs must be well-shaped and must differ from each other.
-buildIndependence : String -> String -> String -> <Exec "_", IO> Expectation
+buildIndependence : String -> String -> String -> <Exec, IO> Expectation
 buildIndependence scratch name fixture = match builtOnce scratch name fixture
   Err e => fail e
   Ok a => match boundedVerb "\{scratch}/\{name}" []
@@ -156,7 +156,7 @@ buildRejected : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Expectation
+  <Exec, IO> Expectation
 buildRejected scratch name fixture wantSubstring =
   match builtOnce scratch name fixture
     Err e => fail e

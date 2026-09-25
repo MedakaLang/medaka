@@ -1,4 +1,4 @@
 get : String -> <FFI, KV> String
 handler : String -> <FFI, KV, Log> String
 kvGet : String -> <FFI, KV> String
-main : Unit
+main : <IO> Unit

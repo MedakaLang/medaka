@@ -106,7 +106,7 @@ True
 ### `writeFilePrivate`
 
 ```
-writeFilePrivate : String -> String -> <FileWrite _> Result String Unit
+writeFilePrivate : (path : String) -> String -> <FileWrite path> Result String Unit
 writeFilePrivate path content
 ```
 
@@ -121,7 +121,7 @@ is narrowed before they are written. Use it for a secret.
 ### `runCommandOk`
 
 ```
-runCommandOk : String -> List String -> <Exec _> Result String (String, String)
+runCommandOk : (cmd : String) -> List String -> <Exec cmd> Result String (String, String)
 runCommandOk cmd args
 ```
 
@@ -140,7 +140,7 @@ Ok ("", "")
 ### `runVerb`
 
 ```
-runVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+runVerb : (cmd : String) -> List String -> <Exec cmd> Result String (Int, String, String)
 runVerb cmd args
 ```
 

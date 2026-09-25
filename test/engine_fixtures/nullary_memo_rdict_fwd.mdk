@@ -6,7 +6,7 @@
 -- side effect (`[eval] [eval] XX`).  With the sole-impl static hoist all three
 -- engines force it once: `[eval] XX`.  A run /= build S1 — the engines gate is the pin.
 interface HasUnit a where
-  theUnit : a
+  theUnit : <Stdout> a
 
 data Box = Box String
 
@@ -18,7 +18,7 @@ impl HasUnit Box where
 unBox : Box -> String
 unBox (Box s) = s
 
-useTwice : HasUnit a => (a -> String) -> String
+useTwice : HasUnit a => (a -> String) -> <Stdout> String
 useTwice un =
   let a = un theUnit
   let b = un theUnit

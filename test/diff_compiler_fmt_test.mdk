@@ -220,7 +220,7 @@ withEnv : String ->
   String ->
   String ->
   List String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec> Result String (Int, String, String)
 withEnv name value cmd args =
   boundedVerb "env" (["\{name}=\{value}", cmd] ++ args)
 
@@ -268,7 +268,7 @@ effectTypesSuperset : String ->
   String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Option String
+  <Exec, FileRead, IO> Option String
 effectTypesSuperset snapshotRel host rt core fix =
   let snap = underRoot snapshotRel
   match readFile snap
@@ -297,7 +297,7 @@ draftSemanticFixturesDir = "test/draft_semantic_fixtures"
 {- | The one `main_*.mdk` entry directly under `dir`, or an error naming how
    many were found — the fixture is malformed unless there is exactly
    one. -}
-draftSemanticEntry : String -> <FileRead "_"> Result String String
+draftSemanticEntry : String -> <FileRead> Result String String
 draftSemanticEntry dir = match fixtureFiles dir
   Err e => Err "\{dir}: \{e}"
   Ok paths =>
@@ -323,7 +323,7 @@ draftSemanticAssert : String ->
   String ->
   String ->
   String ->
-  <Exec "_", IO> Result String String
+  <Exec, IO> Result String String
 draftSemanticAssert label mutation wantReceipt wantDiffCount bin rt core entry =
   let spawn =
     if mutation == "" then
@@ -358,7 +358,7 @@ methodIfaceReceipt =
    controls that prove the golden's comparator can actually observe a
    copied-field mismatch rather than only ever printing MATCH. -}
 draftSemanticFixtureFailure : String ->
-  <Exec "_", FileRead "_", IO> Option String
+  <Exec, FileRead, IO> Option String
 draftSemanticFixtureFailure dir = match draftSemanticEntry dir
   Err e => Some e
   Ok entry =>
@@ -385,7 +385,7 @@ draftSemanticChecks : String ->
   String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Option String
+  <Exec, FileRead, IO> Option String
 draftSemanticChecks name bin rt core entry dir baseline =
   let malformed =
     draftSemanticAssert
@@ -439,7 +439,7 @@ draftSemanticIsolation : String ->
   String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Option String
+  <Exec, FileRead, IO> Option String
 draftSemanticIsolation name bin rt core entry dir baseline =
   match withEnv "MEDAKA_DRAFT_MUTATION" "same-process" bin [rt, core, entry]
     Err e => Some "\{name}: P -> P+U -> P control could not spawn: \{e}"
@@ -478,7 +478,7 @@ referencesFixtures = [
 {- | Everything wrong with one `references_fixtures/<name>/` project: a
    `refindex_main --dump` over its `main.mdk`, path-normalized the same way
    the retired script's `sed` was, diffed against `expected.golden`. -}
-referencesFixtureFailure : String -> <Exec "_", FileRead "_", IO> Option String
+referencesFixtureFailure : String -> <Exec, FileRead, IO> Option String
 referencesFixtureFailure name =
   let dir = underRoot "test/references_fixtures/\{name}"
   let bin = underRoot "test/bin/refindex_main"
@@ -507,7 +507,7 @@ effectParamSnapshot = "test/snapshots/diff_fixtures_types/effect_param.md"
 {- | Stage-2a's parameterized effect surface (`effect Net Prefix`,
    `<Net "a.com/foo">`) accepted by the native CLI, inferred correctly, and
    agreeing with the committed `# TYPES_USER` snapshot. -}
-effectParamFailures : <Exec "_", FileRead "_", IO> List String
+effectParamFailures : <Exec, FileRead, IO> List String
 effectParamFailures =
   let fix = underRoot effectParamFixture
   let native = underRoot "medaka"
@@ -551,7 +551,7 @@ effectHoleSnapshot = "test/snapshots/diff_fixtures_types/effect_param_hole.md"
 effectHoleWs2Src : String
 effectHoleWs2Src = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net _> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch _ =",
   "  let dest = \"a.com/foo\"",
   "  netGet dest",
@@ -562,7 +562,7 @@ effectHoleWs2Src = unlines [
 effectHoleRejectSiblingSrc : String
 effectHoleRejectSiblingSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net _> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
   "fetch _ = netGet \"a.com.evil.com/x\"",
   "main : <IO> Unit",
@@ -572,7 +572,7 @@ effectHoleRejectSiblingSrc = unlines [
 effectHoleRejectComputedSrc : String
 effectHoleRejectComputedSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net _> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch : String -> <FFI, Net \"a.com/*\"> String",
   "fetch url = netGet url",
   "main : <IO> Unit",
@@ -582,7 +582,7 @@ effectHoleRejectComputedSrc = unlines [
 effectHoleRejectOuterComputedSrc : String
 effectHoleRejectOuterComputedSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net _> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch : String -> <FFI, Net \"a.com/*\"> String",
   "fetch url =",
   "  let dest = url",
@@ -600,18 +600,18 @@ effectHoleRejectOuterComputedSrc = unlines [
 withScratchFile : String ->
   String ->
   String ->
-  (String -> <Exec "_", FileRead "_", IO> Option String) ->
-  <Exec "_", FileWrite "_", IO> Option String
+  (String -> <Exec, FileRead, IO> Option String) ->
+  <Exec, FileWrite, IO> Option String
 withScratchFile scratch name src use =
   let f = "\{scratch}/\{name}.mdk"
   match writeFile f src
     Err e => Some "\{name}: could not write \{f}: \{e}"
     Ok () => use f
 
-{- | Stage-2b's inferred-hole surface (`<Net _>`), the α-derived wildcard
+{- | Stage-2b's inferred-hole surface (`<Net>`), the α-derived wildcard
    admission, and the delimiter-aware rejections the WS-2 scope-seeding
    soundness rule depends on (#440-adjacent, WS-2). -}
-effectHoleFailures : <Exec "_", FileWrite "_", FileRead "_", IO> List String
+effectHoleFailures : <Exec, FileWrite, FileRead, IO> List String
 effectHoleFailures =
   let fix = underRoot effectHoleFixture
   let native = underRoot "medaka"
@@ -628,12 +628,12 @@ effectHoleFailures =
           let acceptFail =
             if hasParseErr natText then
               Some
-                "native-cli/check emitted an error accepting the <Net _> hole fixture"
+                "native-cli/check emitted an error accepting the named-extern fixture"
             else
               None
           let inferFail =
             if containsAll natText [
-              "netGet : String -> <FFI, Net> String",
+              "netGet : (url : String) -> <FFI, Net url> String",
               "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
             ] then
               None
@@ -680,14 +680,14 @@ effectHoleFailures =
             ++ synthFails
 
 {- | WS-2 scope-seeding (E3 precision): an OUTER-BODY `let` literal reaches
-   an inner `<Net _>` call site, so the recovered row must carry the
+   an inner `<Net>` call site, so the recovered row must carry the
    literal's prefix rather than staying the bare `<Net>` an empty `lets`
    scope would infer. -}
 effectHoleWs2Check : String ->
   String ->
   String ->
   String ->
-  <Exec "_", FileRead "_", IO> Option String
+  <Exec, FileRead, IO> Option String
 effectHoleWs2Check host rt core f = match boundedVerb host [rt, core, f]
   Err e => Some "WS-2 outer-let: could not spawn check_main: \{e}"
   Ok (code, out, err) =>
@@ -706,7 +706,7 @@ effectHoleWs2Check host rt core f = match boundedVerb host [rt, core, f]
 effectHoleRejectCheck : String ->
   String ->
   String ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 effectHoleRejectCheck native name f = match boundedVerb native ["check", f]
   Err e => Some "\{name}: could not spawn native check: \{e}"
   Ok (code, out, err) =>
@@ -726,7 +726,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 105
+typecheckErrorFixtureCount = 123
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -734,6 +734,24 @@ typecheckErrorFixtureCount = 105
    the prelude-aware driver; every other fixture runs through both. -}
 typecheckPreludeDep : List String
 typecheckPreludeDep = [
+  "effect_named_authority_scope_launder.mdk",
+  "effect_named_authority_scope_ok.mdk",
+  "effect_named_authority_method_launder.mdk",
+  "effect_named_authority_method_ok.mdk",
+  "effect_catalog_position_launder.mdk",
+  "effect_catalog_position_ok.mdk",
+  "effect_prefix_exact.mdk",
+  "effect_named_authority_launder.mdk",
+  "effect_named_authority_ok.mdk",
+  "effect_named_authority_dynamic_launder.mdk",
+  "effect_named_authority_binder_errors.mdk",
+  "effect_named_authority_ref_launder.mdk",
+  "effect_named_authority_ref_ok.mdk",
+  "effect_rename_destination_launder.mdk",
+  "effect_rename_destination_ok.mdk",
+  "effect_prefix_join_render.mdk",
+  "effect_deferred_callback_launder.mdk",
+  "effect_deferred_callback_eager_ok.mdk",
   "int_vs_string.mdk",
   "value_restriction.mdk",
   "value_restriction_scc.mdk",
@@ -799,7 +817,7 @@ typecheckDriverFailure : String ->
   String ->
   List String ->
   String ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 typecheckDriverFailure driver bin args want = match boundedVerb bin args
   Err e => Some "\{driver}: could not spawn: \{e}"
   Ok (code, out, err) => match processFailure (basename bin) driver code err
@@ -812,7 +830,7 @@ typecheckDriverFailure driver bin args want = match boundedVerb bin args
    `typecheckPreludeDep`: prelude-dependent fixtures run ONLY `check_main`;
    every other fixture runs `typecheck_main` and `check_main` both. -}
 typecheckErrorFixtureFailures : String ->
-  <Exec "_", FileRead "_", IO> List String
+  <Exec, FileRead, IO> List String
 typecheckErrorFixtureFailures path =
   let name = basename path
   let golden = "\{dirname path}/\{stem path}.tc.golden"
@@ -840,7 +858,7 @@ typecheckErrorFixtureFailures path =
 
 -- | Every `.mdk` fixture directly under `typecheckErrorFixturesDir`,
 -- against its two (or one) drivers.
-typecheckErrorFailures : <Exec "_", FileRead "_", IO> List String
+typecheckErrorFailures : <Exec, FileRead, IO> List String
 typecheckErrorFailures =
   match fixtureFiles (underRoot typecheckErrorFixturesDir)
     Err e => ["\{typecheckErrorFixturesDir}: \{e}"]
@@ -868,7 +886,7 @@ replGolden = "test/repl_fixtures/session.golden"
    exit code at all) rather than requiring 0 — an escape outside {0, 1}
    (a crash, not a scripted repl error) is still graded a finding, with
    `err` folded into its message. Stdout is graded against the golden. -}
-replFailures : <Exec "_", FileRead "_", IO> List String
+replFailures : <Exec, FileRead, IO> List String
 replFailures =
   let bin = underRoot "test/bin/repl_main"
   let rt = underRoot "stdlib/runtime.mdk"
@@ -922,7 +940,7 @@ projectDiagStart line col = "\{intToString line}:\{intToString col}"
 {- | The one `root_*.mdk` or `main_*.mdk` entry directly under `dir`, or an
    error naming how many were found — the fixture is malformed unless there
    is exactly one, and the probe takes a single entry. -}
-analyzeProjectEntry : String -> <FileRead "_"> Result String String
+analyzeProjectEntry : String -> <FileRead> Result String String
 analyzeProjectEntry dir = match fixtureFiles dir
   Err e => Err "\{basename dir}: \{e}"
   Ok paths => match sort (filter (projectEntryFile dir) paths)
@@ -1094,7 +1112,7 @@ startFailure name f want d = match d.start
    corpus, and one is re-derived by hand from `./medaka check --json` and
    reviewed before being committed. -}
 analyzeProjectFixtureFailures : String ->
-  <Exec "_", FileRead "_", IO> List String
+  <Exec, FileRead, IO> List String
 analyzeProjectFixtureFailures dir =
   let name = basename dir
   match analyzeProjectEntry dir
@@ -1111,7 +1129,7 @@ analyzeProjectSpawn : String ->
   String ->
   String ->
   List (String, List ProjectDiag) ->
-  <Exec "_", IO> List String
+  <Exec, IO> List String
 analyzeProjectSpawn name dir entry want =
   let bin = underRoot "test/bin/diagnostics_project_main"
   let rt = underRoot "stdlib/runtime.mdk"
@@ -1187,7 +1205,7 @@ testRelative text = chompNewlines (replaceAll "\{medakaRoot}/" "" text)
    exit code, and stdout and stderr each path-normalized. -}
 testSpawn : String ->
   List String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 testSpawn rel roots =
   let bin = underRoot "test/bin/test_main"
   let rt = underRoot "stdlib/runtime.mdk"
@@ -1203,7 +1221,7 @@ testSpawn rel roots =
    FAILING doctest or prop and exit 1 by construction, so the golden is the
    whole claim. Stderr still is — no corpus member writes an `E-PANIC`
    today, and the retired script's `2>/dev/null` could not have said so. -}
-testGoldenFailure : String -> <Exec "_", FileRead "_", IO> Option String
+testGoldenFailure : String -> <Exec, FileRead, IO> Option String
 testGoldenFailure rel =
   let name = basename rel
   match testSpawn rel [dirname rel]
@@ -1217,7 +1235,7 @@ testGoldenFailure rel =
 testGoldenCompare : String ->
   String ->
   String ->
-  <FileRead "_", IO> Option String
+  <FileRead, IO> Option String
 testGoldenCompare name rel got =
   let golden = underRoot "\{dirname rel}/\{stem rel}.test.golden"
   match readFile golden
@@ -1233,7 +1251,7 @@ testExitFailure : String ->
   String ->
   List String ->
   Bool ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 testExitFailure label rel roots wantZero = match testSpawn rel roots
   Err e => Some "\{label}: \{e}"
   Ok (code, _, _) =>
@@ -1261,7 +1279,7 @@ testContentFailure : String ->
   Bool ->
   List String ->
   List String ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 testContentFailure label rel roots wantZero wanted unwanted =
   match testSpawn rel roots
     Err e => Some "\{label}: \{e}"
@@ -1287,7 +1305,7 @@ testReportFailure : String ->
   String ->
   List String ->
   String ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 testReportFailure label rel roots want = match testSpawn rel roots
   Err e => Some "\{label}: \{e}"
   Ok (_, out, _) =>
@@ -1385,7 +1403,7 @@ twoModuleCollisionEntries = [
   ("main_b2", "b's own Arbitrary instance is what b's Color draws from"),
 ]
 
-twoModuleCollisionFailure : (String, String) -> <Exec "_", IO> Option String
+twoModuleCollisionFailure : (String, String) -> <Exec, IO> Option String
 twoModuleCollisionFailure (entry, want) =
   let dir = "\{testFixturesDir}/arbitrary_two_module_collision"
   testContentFailure
@@ -1400,7 +1418,7 @@ twoModuleCollisionFailure (entry, want) =
    corpus loop: fixtures whose claim is an exit code, a whole hand-derived
    report, or the presence and ABSENCE of a specific message, none of which a
    per-fixture golden diff can carry. -}
-testBatteryFailures : <Exec "_", IO> List String
+testBatteryFailures : <Exec, IO> List String
 testBatteryFailures =
   let fix = testFixturesDir
   let stdlib = "stdlib"

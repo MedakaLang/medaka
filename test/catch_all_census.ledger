@@ -1,12 +1,13 @@
 aliasDictNamesOfDecl	Decl	2/14
 aliasMethodRenamesOf	Decl	2/14
 allEVars	Expr	37/41
-alpha	Expr	12/41
+appArgExpr	Expr	2/41
 appArgLoc	Expr	2/41
 appNodeArg	Expr	2/41
 appSpineArgCount	Expr	4/41
 appSpineExpr	Expr	2/41
 appSpineHead	Expr	2/41
+appSpineHeadLoc	Expr	2/41
 appSpineName	Expr	9/41
 appSpineNodes	Expr	2/41
 argDispatchOfDecl	Decl	2/14
@@ -30,6 +31,7 @@ declRefNames	Decl	7/14
 definerShadowArgHead	Expr	2/41
 definerShadowVarHead	Expr	3/41
 dictPassDecl	Decl	3/14
+directIfaceSchemeRows	Decl	1/14
 doChainIsDeferred	Expr	3/41
 eagerRefs	Expr	36/41
 exprLoc	Expr	2/41
@@ -45,10 +47,11 @@ implTysIfMatch	Decl	1/14
 importOverlayDecls	Decl	2/14
 importShadowsOfDecl	Decl	2/14
 infer	Expr	29/41
-inferExpected	Expr	1/41
+inferExpected	Expr	2/41
 inferOneIfaceDefaults	Decl	2/14
 inferOneImpl	Decl	2/14
 isCtorAppSpine	Expr	5/41
+isDirectInterfaceDecl	Decl	1/14
 isDoLoweredAndThenCallee	Expr	1/41
 isDoLoweredAndThenCalleeExpr	Expr	2/41
 isNonexpansive	Expr	14/41
@@ -73,8 +76,7 @@ rewriteArgScoped	Expr	33/41
 rewriteBinopExpr	Expr	3/41
 rewriteRPDict	Expr	1/41
 shadowStandaloneHead	Expr	4/41
-spineFirstArg	Expr	3/41
-spineHeadIsApp	Expr	3/41
+sourceBindingArity	Expr	6/41
 stampTailDecl	Decl	1/14
 stmtCalleeName	Expr	10/41
 superImplMsgsOf	Decl	1/14

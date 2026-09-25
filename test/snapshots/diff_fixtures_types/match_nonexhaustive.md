@@ -13,5 +13,5 @@ colorName c = match c
 main = println (colorName Red)
 # TYPES_USER
 colorName : Color -> String
-main : Unit
+main : <IO> Unit
 Warning: non-exhaustive match of 'Color'. Missing case: 'Blue'; add a 'Blue => …' arm, or a '_' wildcard arm to catch the rest.

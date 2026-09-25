@@ -2,7 +2,7 @@
 -- must-fail pin drained (test/must_fail_fixtures/
 -- 2163-catalog-extern-redecl-launders-effect/main.mdk).
 --
--- `writeFile` is stdlib/runtime.mdk's own row (`String -> String -> <FileWrite "_">
+-- `writeFile` is stdlib/runtime.mdk's own row (`String -> String -> <FileWrite>
 -- Result String Unit`); redeclared here as `<>` it used to be exempt from every FFI
 -- declaration rule (`ffiIsBuiltinExternName`) and lowered as the builtin regardless,
 -- so `innocent` typechecked as `String -> Unit` AND WROTE TO THE FILESYSTEM.

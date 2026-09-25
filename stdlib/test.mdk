@@ -610,7 +610,7 @@ runTests tests = goTests tests 0 0
    > expectGolden "stdlib/no-such-golden-doctest-fixture.golden" "hello"
    Fail "expected golden stdlib/no-such-golden-doctest-fixture.golden: No such file or directory" "" "hello" -}
 export
-expectGolden : String -> String -> <FileRead "_"> Expectation
+expectGolden : (path : String) -> String -> <FileRead path> Expectation
 expectGolden path actual = match readFile path
   Err e => Fail "expected golden \{path}: \{e}" "" actual
   Ok golden => expectEqualText golden actual

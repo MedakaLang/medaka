@@ -1,2 +1,2 @@
 g : Float -> Float
-main : Unit
+main : <IO> Unit

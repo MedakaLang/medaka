@@ -1,0 +1,1136 @@
+-- Binding-owned effect equations. Operational lower bounds and compatibility
+-- constraints are separate inputs: checking a type never adds a body effect.
+-- The worklist solves summaries and their local existential dependencies before
+-- any cells are linked, including filtered cycles through higher-order calls.
+import map as M
+import map.{Map(..)}
+import types.effect_authority.{
+  Authority(..), Authvar(..), authvarId, authNorm, authSub, authVars,
+  authJoinAll, linkAuthvar
+}
+import types.effect_rows.{
+  Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
+  Effvar(..), effvarId, rowFlat, rowFlatMembers, rowHasSummary, linkRow,
+  solveSummaryCell
+}
+import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList}
+import support.scc.{tarjanSCCs}
+
+export data SummarySolver c = SummarySolver {
+  essStack : Ref (List (SummaryScope c)),
+  -- obligations over a variable no binding owns: a value binding kept
+  -- monomorphic by the value restriction has its authority determined by
+  -- every use in the module, so these are solved once the module is inferred
+  essRoot : Ref (List (AuthWanted c)),
+}
+
+data SummaryScope c = SummaryScope {
+  essOwner : Int,
+  essEffvarFloor : Int,
+  essLevel : Int,
+  essNodes : Ref (Map Int SummaryNode),
+  essExistentials : Ref (Map Int (Ref Effvar)),
+  essAllowances : Ref (Map Int (Ref Effvar)),
+  essRelations : Ref (List (RowRelation c)),
+  essAuthorities : Ref (List (AuthWanted c)),
+}
+
+-- A directed authority obligation `awLower ⊑ awUpper`, recorded where a value
+-- flows into a qualified slot or where a row check meets a symbolic pair.
+public export data AuthWanted c = AuthWanted {
+  awLower : Authority,
+  awUpper : Authority,
+  awContext : c,
+}
+
+data SummaryNode = SummaryNode {
+  esnCell : Ref Effvar,
+  esnLowers : Ref (List EffRow),
+}
+
+data RowRelation c = RowRelation {
+  esrLower : EffRow,
+  esrUpper : EffRow,
+  esrExact : Bool,
+  esrContext : c,
+  esrProtected : Map Int Unit,
+}
+
+public export data SummaryFailure c = SummaryFailure {
+  esfLower : EffRow,
+  esfUpper : EffRow,
+  esfExact : Bool,
+  esfContext : c,
+  -- an authority obligation `lower ⊑ upper` this scope could neither prove
+  -- nor hand outward; the rows are then empty
+  esfAuthority : Option (Authority, Authority),
+}
+
+export
+newSolver : Unit -> SummarySolver c
+newSolver _ = SummarySolver { essStack = Ref [], essRoot = Ref [] }
+
+export
+hasSummaryScope : SummarySolver c -> Bool
+hasSummaryScope solver = isNonEmptyL solver.essStack.value
+
+export
+openSummaryScope : SummarySolver c -> Int -> Int -> Unit
+openSummaryScope solver owner level =
+  solver.essStack :=
+    SummaryScope {
+        essOwner = owner,
+        essEffvarFloor = owner,
+        essLevel = level,
+        essNodes = Ref Tip,
+        essExistentials = Ref Tip,
+        essAllowances = Ref Tip,
+        essRelations = Ref [],
+        essAuthorities = Ref [],
+      }
+      :: solver.essStack.value
+
+currentScope : SummarySolver c -> SummaryScope c
+currentScope solver = match solver.essStack.value
+  scope :: _ => scope
+  [] => panic "effect summary outside an inference scope"
+
+export
+newSummary : SummarySolver c -> Int -> EffRow
+newSummary solver id =
+  let scope = currentScope solver
+  let cell = Ref (ESummary id scope.essLevel scope.essOwner)
+  scope.essNodes :=
+    M.set
+      id
+      SummaryNode {
+        esnCell = cell,
+        esnLowers = Ref [],
+      }
+      scope.essNodes.value
+  EffRow [] (Some cell)
+
+export
+isOwnedSummary : SummarySolver c -> EffRow -> Bool
+isOwnedSummary solver (EffRow [] (Some cell)) =
+  M.has (effvarId cell) (currentScope solver).essNodes.value
+isOwnedSummary _ _ = False
+
+-- Instantiating a quantified scheme or inferring an unknown callable introduces
+-- existential choices owned by this scope. This differs from observing a row
+-- while capturing effects: an environment/callback tail is not ours to close.
+export
+registerExistential : SummarySolver c -> Ref Effvar -> Unit
+registerExistential solver cell = match solver.essStack.value
+  scope :: _ =>
+    scope.essExistentials :=
+      M.set (effvarId cell) cell scope.essExistentials.value
+  [] => ()
+
+-- A positive value envelope is an inference choice whose least solution is
+-- observable even inside an invariant result. It is not a body summary and
+-- does not confer permission to widen an already-typed value.
+export
+registerValueAllowance : SummarySolver c -> Ref Effvar -> Unit
+registerValueAllowance solver cell = match solver.essStack.value
+  scope :: _ =>
+    let _ = registerExistential solver cell
+    scope.essAllowances := M.set (effvarId cell) cell scope.essAllowances.value
+  [] => ()
+
+export
+recordBodyLower : SummarySolver c -> EffRow -> EffRow -> Unit
+recordBodyLower solver (EffRow [] (Some cell)) lower =
+  let scope = currentScope solver
+  match M.get (effvarId cell) scope.essNodes.value
+    Some node => node.esnLowers := lower :: node.esnLowers.value
+    None => panic "body lower bound assigned outside its summary owner"
+recordBodyLower _ _ _ = panic "body lower bound requires a summary slot"
+
+-- Exact compares Effect-kind indices; the checker supplies the two concrete
+-- orders (ordinary capability inclusion and invariant index inclusion).
+export
+recordRelation : SummarySolver c -> Bool -> c -> EffRow -> EffRow -> Unit
+recordRelation solver exact context lower upper =
+  let scope = currentScope solver
+  scope.essRelations :=
+    RowRelation {
+        esrLower = lower,
+        esrUpper = upper,
+        esrExact = exact,
+        esrContext = context,
+        esrProtected = Tip,
+      }
+      :: scope.essRelations.value
+
+export
+recordAuthority : SummarySolver c -> c -> Authority -> Authority -> Unit
+recordAuthority solver context lower upper =
+  let scope = currentScope solver
+  scope.essAuthorities :=
+    AuthWanted { awLower = lower, awUpper = upper, awContext = context }
+      :: scope.essAuthorities.value
+
+data SolveEdge = SolveEdge {
+  eseTarget : Int,
+  eseCoverAtoms : List Atom,
+  eseCoverLeaves : Map Int Unit,
+  eseExact : Bool,
+}
+
+data WorkNode = WorkNode {
+  ewnCell : Ref Effvar,
+  ewnAtoms : Ref (List Atom),
+  ewnLeaves : Ref (Map Int (Ref Effvar)),
+  ewnPendingAtoms : Ref (List Atom),
+  ewnPendingLeaves : Ref (Map Int (Ref Effvar)),
+  ewnEdges : Ref (List SolveEdge),
+}
+
+data SolveWork = SolveWork {
+  eswNodes : Map Int WorkNode,
+  eswQueue : Ref (List Int),
+  eswQueued : Ref (Map Int Unit),
+  eswOrdinaryTargets : Ref (Map Int Unit),
+  eswExactTargets : Ref (Map Int Unit),
+  eswEscape : Bool -> List Atom -> List Atom -> List Atom,
+}
+
+newWorkNode : Ref Effvar -> WorkNode
+newWorkNode cell = WorkNode {
+  ewnCell = cell,
+  ewnAtoms = Ref [],
+  ewnLeaves = Ref Tip,
+  ewnPendingAtoms = Ref [],
+  ewnPendingLeaves = Ref Tip,
+  ewnEdges = Ref [],
+}
+
+-- Only same-owner inference existentials are candidates. Parameter, signature,
+-- environment and rigid roots are supplied explicitly by the checker.
+eligibleUpper : SummaryScope c -> Map Int Unit -> Ref Effvar -> Bool
+eligibleUpper scope protected cell = match !cell
+  EUnbound id level =>
+    level >= scope.essLevel
+      && id > scope.essEffvarFloor
+      && not (M.has id protected)
+  -- Owned summaries are solved from explicit body lower bounds. They are not
+  -- compatibility absorbers: counting one as an upper candidate would make
+  -- `{summary, caller-tail}` ambiguous and leave the real inferred tail open.
+  ESummary _ _ _ => False
+  _ => False
+
+relationNodes : SummaryScope c ->
+  Map Int Unit ->
+  List (RowRelation c) ->
+  Map Int WorkNode ->
+  Map Int WorkNode
+relationNodes _ _ [] nodes = nodes
+relationNodes scope protected (rel :: rest) nodes =
+  let candidates =
+    filter (eligibleUpper scope protected) (snd (rowFlat rel.esrUpper))
+  let nodes2 = match candidates
+    [cell] => match !cell
+      EUnbound id _ =>
+        if M.has id nodes then nodes else M.set id (newWorkNode cell) nodes
+      _ => nodes
+    _ => nodes
+  relationNodes scope protected rest nodes2
+
+enqueue : SolveWork -> Int -> Unit
+enqueue work id =
+  if not (M.has id work.eswQueued.value) then
+    work.eswQueued := M.set id () work.eswQueued.value
+    work.eswQueue := id :: work.eswQueue.value
+
+grow : SolveWork -> Int -> List Atom -> Map Int (Ref Effvar) -> Unit
+grow work id atoms leaves = match M.get id work.eswNodes
+  None => panic "missing effect equation vertex"
+  Some node =>
+    let newAtoms = atomsDiff atoms node.ewnAtoms.value
+    let newLeaves =
+      M.foldlWithKey
+        (acc key cell =>
+          if M.has key node.ewnLeaves.value then acc else M.set key cell acc)
+        Tip
+        leaves
+    let _ =
+      if isNonEmptyL newAtoms then
+        node.ewnAtoms := atomsUnion node.ewnAtoms.value newAtoms
+        node.ewnPendingAtoms := atomsUnion node.ewnPendingAtoms.value newAtoms
+    let changedLeaves = match newLeaves
+      Tip => False
+      _ =>
+        node.ewnLeaves :=
+          M.foldlWithKey
+            (acc key cell => M.set key cell acc)
+            node.ewnLeaves.value
+            newLeaves
+        node.ewnPendingLeaves :=
+          M.foldlWithKey
+            (acc key cell => M.set key cell acc)
+            node.ewnPendingLeaves.value
+            newLeaves
+        True
+    if isNonEmptyL newAtoms || changedLeaves then enqueue work id
+
+-- RHS leaves become either graph edges or external symbolic payload. No cell is
+-- mutated here, so cycles are finite equations rather than cyclic ELink chains.
+addEquation : SolveWork ->
+  Int ->
+  EffRow ->
+  List Atom ->
+  Map Int Unit ->
+  Bool ->
+  Unit
+addEquation work target rhs coverAtoms coverLeaves exact =
+  let (atoms, cells) = rowFlat rhs
+  let leaves = addEdges work target cells coverAtoms coverLeaves exact Tip
+  grow work target (work.eswEscape exact atoms coverAtoms) leaves
+
+addEdges : SolveWork ->
+  Int ->
+  List (Ref Effvar) ->
+  List Atom ->
+  Map Int Unit ->
+  Bool ->
+  Map Int (Ref Effvar) ->
+  Map Int (Ref Effvar)
+addEdges _ _ [] _ _ _ leaves = leaves
+addEdges work target (cell :: rest) coverAtoms coverLeaves exact leaves =
+  let id = effvarId cell
+  let leaves2 =
+    if M.has id coverLeaves then
+      leaves
+    else match M.get id work.eswNodes
+      Some node =>
+        node.ewnEdges :=
+          SolveEdge {
+              eseTarget = target,
+              eseCoverAtoms = coverAtoms,
+              eseCoverLeaves = coverLeaves,
+              eseExact = exact,
+            }
+            :: node.ewnEdges.value
+        leaves
+      None => M.set id cell leaves
+  addEdges work target rest coverAtoms coverLeaves exact leaves2
+
+addBodyEquations : SolveWork -> List SummaryNode -> Unit
+addBodyEquations _ [] = ()
+addBodyEquations work (node :: rest) =
+  let _ = addLowers work (effvarId node.esnCell) node.esnLowers.value
+  addBodyEquations work rest
+
+addLowers : SolveWork -> Int -> List EffRow -> Unit
+addLowers _ _ [] = ()
+addLowers work id (row :: rest) =
+  let _ = addEquation work id row [] Tip False
+  addLowers work id rest
+
+leafSet : List (Ref Effvar) -> Map Int Unit
+leafSet cells = leafSetGo cells Tip
+
+leafSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
+leafSetGo [] acc = acc
+leafSetGo (cell :: rest) acc = leafSetGo rest (M.set (effvarId cell) () acc)
+
+addRelationEquations : SolveWork -> List (RowRelation c) -> Unit
+addRelationEquations _ [] = ()
+addRelationEquations work (rel :: rest) =
+  let (upperAtoms, upperCells) = rowFlat rel.esrUpper
+  let vertices = filter (cell => M.has (effvarId cell) work.eswNodes) upperCells
+  let _ = match vertices
+    [cell] => match !cell
+      EUnbound id _ =>
+        let fixed = filter (c => effvarId c /= id) upperCells
+        let _ =
+          addEquation
+            work
+            id
+            rel.esrLower
+            upperAtoms
+            (leafSet fixed)
+            rel.esrExact
+        if rel.esrExact then
+          work.eswExactTargets := M.set id () work.eswExactTargets.value
+        else
+          work.eswOrdinaryTargets := M.set id () work.eswOrdinaryTargets.value
+      _ => ()
+    -- No arbitrary decomposition of a join between two unknown tails. Such a
+    -- constraint remains a check after the body equations have been solved.
+    _ => ()
+  addRelationEquations work rest
+
+drainWork : SolveWork -> Unit
+drainWork work = match work.eswQueue.value
+  [] => ()
+  id :: rest =>
+    work.eswQueue := rest
+    work.eswQueued := M.delete id work.eswQueued.value
+    let _ = match M.get id work.eswNodes
+      Some node =>
+        let atoms = node.ewnPendingAtoms.value
+        let leaves = node.ewnPendingLeaves.value
+        node.ewnPendingAtoms := []
+        node.ewnPendingLeaves := Tip
+        propagate work atoms leaves node.ewnEdges.value
+      None => panic "missing queued effect equation"
+    drainWork work
+
+-- Every newly discovered atom/leaf crosses each outgoing edge once. Snapshot
+-- and clear the delta before propagation so a cycle can enqueue new work.
+propagate : SolveWork ->
+  List Atom ->
+  Map Int (Ref Effvar) ->
+  List SolveEdge ->
+  Unit
+propagate _ _ _ [] = ()
+propagate work atoms delta (edge :: rest) =
+  let leaves =
+    M.foldlWithKey
+      (acc id cell =>
+        if M.has id edge.eseCoverLeaves then acc else M.set id cell acc)
+      Tip
+      delta
+  let _ =
+    grow
+      work
+      edge.eseTarget
+      (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
+      leaves
+  propagate work atoms delta rest
+
+linkSolutions : Int ->
+  (List (Ref Effvar) -> Ref Effvar) ->
+  List WorkNode ->
+  Unit
+linkSolutions _ _ [] = ()
+linkSolutions owner makeJoin (node :: rest) =
+  let row = match M.values node.ewnLeaves.value
+    [] => EffRow node.ewnAtoms.value None
+    [cell] => EffRow node.ewnAtoms.value (Some cell)
+    cells => EffRow node.ewnAtoms.value (Some (makeJoin cells))
+  let _ = match !node.ewnCell
+    ESummary _ _ _ => solveSummaryCell owner node.ewnCell row
+    _ => linkRow node.ewnCell row
+  linkSolutions owner makeJoin rest
+
+missingLeaves : List (Ref Effvar) -> Map Int Unit -> Bool
+missingLeaves [] _ = False
+missingLeaves (cell :: rest) upper =
+  not (M.has (effvarId cell) upper) || missingLeaves rest upper
+
+validateRelations : SummarySolver c ->
+  Map Int Unit ->
+  (Bool -> List Atom -> List Atom -> List Atom) ->
+  List (RowRelation c) ->
+  List (SummaryFailure c)
+validateRelations _ _ _ [] = []
+validateRelations solver protected escape (rel :: rest) =
+  if rowHasSummary rel.esrLower
+    || rowHasSummary rel.esrUpper then match solver.essStack.value
+    _ :: parent :: _ =>
+      let _ = retainRowAt parent.essLevel rel.esrLower
+      let _ = retainRowAt parent.essLevel rel.esrUpper
+      parent.essRelations :=
+        RowRelation {
+            esrLower = rel.esrLower,
+            esrUpper = rel.esrUpper,
+            esrExact = rel.esrExact,
+            esrContext = rel.esrContext,
+            esrProtected = protected,
+          }
+          :: parent.essRelations.value
+      validateRelations solver protected escape rest
+    -- An unresolved summary relation at the outermost boundary is a real
+    -- unsatisfied effect obligation, not a reason to reach for a nonexistent
+    -- parent scope. Keep it observable as a normal failure so laundering
+    -- cannot turn into a stack panic or an implicit acceptance.
+    _ =>
+      SummaryFailure {
+          esfLower = rel.esrLower,
+          esfUpper = rel.esrUpper,
+          esfExact = rel.esrExact,
+          esfContext = rel.esrContext,
+          esfAuthority = None,
+        }
+        :: validateRelations solver protected escape rest
+  else
+    let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
+    let (upperAtoms, upperCells) = rowFlat rel.esrUpper
+    let failures = validateRelations solver protected escape rest
+    let escaping =
+      authorityEscapes
+        (currentScope solver)
+        rel.esrContext
+        upperAtoms
+        (escape rel.esrExact lowerAtoms upperAtoms)
+    if isNonEmptyL escaping
+      || missingLeaves lowerCells (leafSet upperCells) then
+      SummaryFailure {
+          esfLower = rel.esrLower,
+          esfUpper = rel.esrUpper,
+          esfExact = rel.esrExact,
+          esfContext = rel.esrContext,
+          esfAuthority = None,
+        }
+        :: failures
+    else
+      failures
+
+-- An escaping atom whose label the upper row carries with a symbolic
+-- authority is an authority obligation, not a missing label: record
+-- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
+authorityEscapes : SummaryScope c -> c -> List Atom -> List Atom -> List Atom
+authorityEscapes _ _ _ [] = []
+authorityEscapes scope context upper (x :: rest) =
+  let others = authorityEscapes scope context upper rest
+  match findAtom (atomKey x) upper
+    Some y =>
+      if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
+        scope.essAuthorities :=
+          AuthWanted {
+              awLower = atomAuth x,
+              awUpper = atomAuth y,
+              awContext = context,
+            }
+            :: scope.essAuthorities.value
+        others
+      else
+        x :: others
+    None => x :: others
+
+isSymbolic : Authority -> Bool
+isSymbolic q = match authVars q
+  [] => False
+  _ => True
+
+-- A residual proof may move outward, but a local scheme cannot freshen its
+-- flexible endpoints away from that proof. Keep exactly those leaves at the
+-- parent's level; protected leaves retain their identities and protection.
+retainRowAt : Int -> EffRow -> Unit
+retainRowAt level row = retainLeavesAt level (snd (rowFlat row))
+
+retainLeavesAt : Int -> List (Ref Effvar) -> Unit
+retainLeavesAt _ [] = ()
+retainLeavesAt level (cell :: rest) =
+  let _ = match !cell
+    EUnbound id old => if old > level then cell := EUnbound id level
+    _ => ()
+  retainLeavesAt level rest
+
+export
+closeSummaryScope : SummarySolver c ->
+  Map Int Unit ->
+  Map Int Unit ->
+  Map Int Unit ->
+  Map Int (Ref Effvar) ->
+  (Bool -> List Atom -> List Atom -> List Atom) ->
+  (List (Ref Effvar) -> Ref Effvar) ->
+  (Int -> Ref Effvar) ->
+  List (SummaryFailure c)
+closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual =
+  let scope = currentScope solver
+  -- Authorities first: an argument's lower bounds decide a callee's flexible
+  -- authority before any row is compared, so a row check sees concrete atoms
+  -- wherever the body determined them.
+  let _ = solveOwnedAuthorities scope rigidAuths
+  let summaries = M.values scope.essNodes.value
+  let untransferred =
+    filter
+      (rel => not (relationProven escape rel))
+      (reverseL scope.essRelations.value)
+  let relationRoots =
+    fold
+      (acc rel =>
+        M.foldlWithKey (roots id _ => M.set id () roots) acc rel.esrProtected)
+      protected
+      untransferred
+  let frozen = relationRoots
+  let initialAllowances =
+    snd (rowFlatMembers [] (M.values scope.essAllowances.value))
+  let outward = outerRelationLeaves scope untransferred
+  let pending = transferAllowanceRelations solver frozen outward untransferred
+  let _ = transferAllowances solver initialAllowances
+  let retained2 = collapseInclusionCycles scope frozen retained pending
+  let allowanceCells =
+    snd (rowFlatMembers [] (M.values scope.essAllowances.value))
+  let allowanceRoots = leafSet allowanceCells
+  let inputRoots = leafSet (snd (rowFlatMembers [] (M.values borrowed)))
+  let relations = filter (rel => not (relationProven escape rel)) pending
+  let summaryNodes = map (node => newWorkNode node.esnCell) scope.essNodes.value
+  let choices = snd (rowFlatMembers [] (M.values scope.essExistentials.value))
+  let initial =
+    fold
+      (nodes cell =>
+        if eligibleUpper scope frozen cell
+          && (not (M.has (effvarId cell) retained2)
+            || M.has (effvarId cell) allowanceRoots
+              && not (M.has (effvarId cell) inputRoots)) then
+          M.set (effvarId cell) (newWorkNode cell) nodes
+        else
+          nodes)
+      summaryNodes
+      choices
+  -- Published flexible leaves are symbolic inputs to the least equations, not
+  -- zero-information vertices. Otherwise S = input, S <= input would erase
+  -- the input by solving both vertices from bottom.
+  let leastFrozen =
+    M.foldlWithKey (acc id _ => M.set id () acc) frozen retained2
+  let nodes = relationNodes scope leastFrozen relations initial
+  let _ =
+    solveEquations
+      scope.essOwner
+      nodes
+      summaries
+      relations
+      Tip
+      escape
+      makeJoin
+      makeResidual
+  -- Only after summaries have solutions can their evidence constrain a
+  -- retained upper row. Normalize/drop reflexive obligations first; fresh bare
+  -- inclusion cycles exposed by summary substitution again mean equality.
+  let residual0 = filter (rel => not (relationProven escape rel)) relations
+  let local = filter summaryFreeRelation residual0
+  let _ = collapseInclusionCycles scope frozen retained2 local
+  let residual = filter (rel => not (relationProven escape rel)) local
+  let retainedNodes = relationNodes scope frozen residual Tip
+  let borrowedRoots = leafSet (snd (rowFlatMembers [] (M.values borrowed)))
+  let _ =
+    solveEquations
+      scope.essOwner
+      retainedNodes
+      []
+      residual
+      borrowedRoots
+      escape
+      makeJoin
+      makeResidual
+  let unproven = filter (rel => not (relationProven escape rel)) residual0
+  let failures = validateRelations solver frozen escape unproven
+  -- Row validation may have derived new authority obligations; solve the
+  -- variables they bound, then decide every obligation this scope owns.
+  let _ = solveOwnedAuthorities scope rigidAuths
+  let authFailures = checkAuthorities solver scope rigidAuths
+  solver.essStack := match solver.essStack.value
+    _ :: rest => rest
+    [] => panic "effect scope stack underflow"
+  failures ++ authFailures
+
+-- ── authorities ────────────────────────────────────────────────────────────
+
+-- A flexible authority this scope may solve: allocated at or below this
+-- scope's level and after its floor, and not a declaration universal.
+ownedFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+ownedFlexibleAuth scope rigid cell = match !cell
+  AUnbound id level _ _ =>
+    level >= scope.essLevel && id > scope.essEffvarFloor && not (M.has id rigid)
+  ALink _ _ => False
+
+outerFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+outerFlexibleAuth scope rigid cell = match !cell
+  AUnbound id level _ _ =>
+    (level < scope.essLevel || id <= scope.essEffvarFloor)
+      && not (M.has id rigid)
+  ALink _ _ => False
+
+-- A declaration universal is rigid wherever it was minted: a contract's
+-- variables are allocated before the body's scope opens, and an obligation
+-- over one is decided by the scope that saw it, never handed outward.
+localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+localRigidAuth _ rigid cell = match !cell
+  AUnbound id _ _ _ => M.has id rigid
+  ALink _ _ => False
+
+-- Every owned flexible variable takes the join of its lower bounds, its
+-- least solution.  Variables bounded by each other collapse to one
+-- representative first, so no solution can refer back to itself.
+solveOwnedAuthorities : SummaryScope c -> Map Int Unit -> Unit
+solveOwnedAuthorities scope rigid =
+  solveAuthorities
+    (ownedFlexibleAuth scope rigid)
+    (reverseL scope.essAuthorities.value)
+
+solveAuthorities : (Ref Authvar -> Bool) -> List (AuthWanted c) -> Unit
+solveAuthorities owned wanteds =
+  let lowers =
+    fold
+      (acc w => match authNorm w.awUpper
+        AVar cell =>
+          if owned cell then
+            M.set
+              (authvarId cell)
+              (cell, w.awLower :: lowersOf (authvarId cell) acc)
+              acc
+          else
+            acc
+        _ => acc)
+      Tip
+      wanteds
+  match M.keys lowers
+    [] => ()
+    ids =>
+      let names = map intToString ids
+      let idOfName = fold (acc id => M.set (intToString id) id acc) Tip ids
+      let edges =
+        fold
+          (acc id =>
+            M.set
+              (intToString id)
+              (map
+                intToString
+                (dependencies owned lowers (snd (nodeOf id lowers))))
+              acc)
+          Tip
+          ids
+      fold
+        (_ members => solveClass lowers idOfName members)
+        ()
+        (tarjanSCCs names edges)
+
+lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
+lowersOf id m = match M.get id m
+  Some (_, ls) => ls
+  None => []
+
+nodeOf : Int ->
+  Map Int (Ref Authvar, List Authority) ->
+  (Ref Authvar, List Authority)
+nodeOf id m = match M.get id m
+  Some node => node
+  None => panic "missing authority equation vertex"
+
+dependencies : (Ref Authvar -> Bool) ->
+  Map Int (Ref Authvar, List Authority) ->
+  List Authority ->
+  List Int
+dependencies owned nodes ls =
+  flatMap
+    (q =>
+      flatMap
+        (cell =>
+          if M.has (authvarId cell) nodes && owned cell then
+            [authvarId cell]
+          else
+            [])
+        (authVars q))
+    ls
+
+solveClass : Map Int (Ref Authvar, List Authority) ->
+  Map String Int ->
+  List String ->
+  Unit
+solveClass _ _ [] = ()
+solveClass nodes idOfName (first :: rest) =
+  let repId = idOfVertex idOfName first
+  let (rep, _) = nodeOf repId nodes
+  let members = map (idOfVertex idOfName) rest
+  let _ =
+    fold
+      (_ id =>
+        let (cell, _) = nodeOf id nodes
+        linkAuthvar cell (AVar rep))
+      ()
+      members
+  let all = flatMap (id => snd (nodeOf id nodes)) (repId :: members)
+  let kept = filter (q => not (isVar repId q)) (joinMembers (authJoinAll all))
+  match kept
+    [] => ()
+    _ => linkAuthvar rep (authJoinAll kept)
+
+idOfVertex : Map String Int -> String -> Int
+idOfVertex idOfName name = match M.get name idOfName
+  Some id => id
+  None => panic "missing authority vertex name"
+
+joinMembers : Authority -> List Authority
+joinMembers q = match authNorm q
+  AJoin ms => ms
+  other => [other]
+
+isVar : Int -> Authority -> Bool
+isVar id (AVar cell) = authvarId cell == id
+isVar _ _ = False
+
+-- Decide each obligation: proved; owed to an enclosing scope, when it
+-- mentions a variable that scope owns and none this scope declared rigid;
+-- else a failure of this scope.
+checkAuthorities : SummarySolver c ->
+  SummaryScope c ->
+  Map Int Unit ->
+  List (SummaryFailure c)
+checkAuthorities solver scope rigid =
+  flatMap
+    (w =>
+      let lo = authNorm w.awLower
+      let hi = authNorm w.awUpper
+      if authSub lo hi then
+        []
+      else
+        let cells = authVars lo ++ authVars hi
+        let transferable =
+          anyList (outerFlexibleAuth scope rigid) cells
+            && not (anyList (localRigidAuth scope rigid) cells)
+        match solver.essStack.value
+          _ :: parent :: _ =>
+            if transferable then
+              parent.essAuthorities :=
+                AuthWanted {
+                    awLower = lo,
+                    awUpper = hi,
+                    awContext = w.awContext,
+                  }
+                  :: parent.essAuthorities.value
+              []
+            else
+              [authorityFailure w.awContext lo hi]
+          _ =>
+            if transferable then
+              solver.essRoot :=
+                AuthWanted {
+                    awLower = lo,
+                    awUpper = hi,
+                    awContext = w.awContext,
+                  }
+                  :: solver.essRoot.value
+              []
+            else
+              [authorityFailure w.awContext lo hi])
+    (reverseL scope.essAuthorities.value)
+
+-- Once every binding of the module is inferred, the variables no binding
+-- owned take their least solution over every use, and each obligation over
+-- them is decided.
+export
+closeRootAuthorities : SummarySolver c ->
+  Map Int Unit ->
+  List (SummaryFailure c)
+closeRootAuthorities solver rigid =
+  let wanteds = reverseL solver.essRoot.value
+  let _ = solveAuthorities (cell => not (M.has (authvarId cell) rigid)) wanteds
+  solver.essRoot := []
+  flatMap
+    (w =>
+      let lo = authNorm w.awLower
+      let hi = authNorm w.awUpper
+      if authSub lo hi then [] else [authorityFailure w.awContext lo hi])
+    wanteds
+
+authorityFailure : c -> Authority -> Authority -> SummaryFailure c
+authorityFailure context lo hi = SummaryFailure {
+  esfLower = EffRow [] None,
+  esfUpper = EffRow [] None,
+  esfExact = False,
+  esfContext = context,
+  esfAuthority = Some (lo, hi),
+}
+
+-- A flexible leaf created before this scope opened, or at an enclosing level,
+-- belongs to an enclosing scope: an outer allowance, an outer instantiation
+-- choice or a signature root. This scope can neither solve it nor diagnose a
+-- relation over it.
+outerLeaf : SummaryScope c -> Ref Effvar -> Bool
+outerLeaf scope cell = match !cell
+  EUnbound id level => level < scope.essLevel || id <= scope.essEffvarFloor
+  _ => False
+
+-- Every outer flexible leaf reachable from a pending relation. A relation over
+-- such a leaf is the owner's to prove: it moves outward with its connected
+-- component before anything here is solved, whether the leaf is one of this
+-- scope's own escaped allowances or a variable the enclosing scope handed in.
+-- Validating it here would report an unprovable relation that the owner can
+-- still solve (an outer allowance bounded above by a closed slot takes that
+-- slot as its least solution), or default a choice that is not ours.
+outerRelationLeaves : SummaryScope c -> List (RowRelation c) -> Map Int Unit
+outerRelationLeaves scope relations =
+  fold
+    (acc rel =>
+      outerLeavesInto
+        scope
+        (snd (rowFlat rel.esrUpper))
+        (outerLeavesInto scope (snd (rowFlat rel.esrLower)) acc))
+    Tip
+    relations
+
+outerLeavesInto : SummaryScope c ->
+  List (Ref Effvar) ->
+  Map Int Unit ->
+  Map Int Unit
+outerLeavesInto _ [] acc = acc
+outerLeavesInto scope (cell :: rest) acc = outerLeavesInto
+  scope
+  rest
+  (if outerLeaf scope cell then M.set (effvarId cell) () acc else acc)
+
+-- Moving one obligation also moves its flexible endpoints. Follow the connected
+-- constraint component before solving anything locally, so a sibling bound on
+-- a newly-outward endpoint cannot be diagnosed or defaulted in the child.
+data TransferWork = TransferWork {
+  etwRows : Map Int (Map Int Unit),
+  etwUsers : Map Int (List Int),
+  etwSelected : Ref (Map Int Unit),
+  etwSeen : Ref (Map Int Unit),
+}
+
+relationRoots : RowRelation c -> Map Int Unit
+relationRoots rel =
+  leafSetGo (snd (rowFlat rel.esrUpper)) (leafSet (snd (rowFlat rel.esrLower)))
+
+indexTransferRelations : List (RowRelation c) ->
+  Int ->
+  Map Int (Map Int Unit) ->
+  Map Int (List Int) ->
+  TransferWork
+indexTransferRelations [] _ rows users = TransferWork {
+  etwRows = rows,
+  etwUsers = users,
+  etwSelected = Ref Tip,
+  etwSeen = Ref Tip,
+}
+indexTransferRelations (rel :: rest) id rows users =
+  let roots = relationRoots rel
+  let users2 =
+    M.foldlWithKey
+      (acc root _ => M.set root (id :: optionOr [] (M.get root acc)) acc)
+      users
+      roots
+  indexTransferRelations rest (id + 1) (M.set id roots rows) users2
+
+selectTransferRows : TransferWork -> List Int -> Unit
+selectTransferRows _ [] = ()
+selectTransferRows work (root :: rest) =
+  if M.has root work.etwSeen.value then
+    selectTransferRows work rest
+  else
+    work.etwSeen := M.set root () work.etwSeen.value
+    let next =
+      fold
+        (pending id =>
+          if M.has id work.etwSelected.value then
+            pending
+          else
+            work.etwSelected := M.set id () work.etwSelected.value
+            M.foldlWithKey
+              (acc key _ => key :: acc)
+              pending
+              (optionOr Tip (M.get id work.etwRows)))
+        rest
+        (optionOr [] (M.get root work.etwUsers))
+    selectTransferRows work next
+
+transferAllowanceRelations : SummarySolver c ->
+  Map Int Unit ->
+  Map Int Unit ->
+  List (RowRelation c) ->
+  List (RowRelation c)
+transferAllowanceRelations solver protected outward relations =
+  match solver.essStack.value
+    _ :: parent :: _ => match outward
+      Tip => relations
+      _ =>
+        let work = indexTransferRelations relations 0 Tip Tip
+        let _ = selectTransferRows work (M.keys outward)
+        partitionTransferred parent protected work.etwSelected.value 0 relations
+    _ => relations
+
+partitionTransferred : SummaryScope c ->
+  Map Int Unit ->
+  Map Int Unit ->
+  Int ->
+  List (RowRelation c) ->
+  List (RowRelation c)
+partitionTransferred _ _ _ _ [] = []
+partitionTransferred parent protected selected id (rel :: rest) =
+  if M.has id selected then
+    let _ = retainRowAt parent.essLevel rel.esrLower
+    let _ = retainRowAt parent.essLevel rel.esrUpper
+    parent.essRelations :=
+      RowRelation {
+          esrLower = rel.esrLower,
+          esrUpper = rel.esrUpper,
+          esrExact = rel.esrExact,
+          esrContext = rel.esrContext,
+          esrProtected = protected,
+        }
+        :: parent.essRelations.value
+    partitionTransferred parent protected selected (id + 1) rest
+  else
+    rel :: partitionTransferred parent protected selected (id + 1) rest
+
+-- Transfer before solving: only original inference choices carry this role,
+-- never external leaves introduced by a solution's borrowed residual.
+transferAllowances : SummarySolver c -> List (Ref Effvar) -> Unit
+transferAllowances solver cells = match solver.essStack.value
+  _ :: parent :: _ =>
+    fold
+      (_ cell => match !cell
+        EUnbound id level =>
+          if level <= parent.essLevel then
+            parent.essExistentials := M.set id cell parent.essExistentials.value
+            parent.essAllowances := M.set id cell parent.essAllowances.value
+        _ => ())
+      ()
+      cells
+  _ => ()
+
+summaryFreeRelation : RowRelation c -> Bool
+summaryFreeRelation rel =
+  not (rowHasSummary rel.esrLower || rowHasSummary rel.esrUpper)
+
+solveEquations : Int ->
+  Map Int WorkNode ->
+  List SummaryNode ->
+  List (RowRelation c) ->
+  Map Int Unit ->
+  (Bool -> List Atom -> List Atom -> List Atom) ->
+  (List (Ref Effvar) -> Ref Effvar) ->
+  (Int -> Ref Effvar) ->
+  Unit
+solveEquations owner nodes summaries relations borrowed escape makeJoin makeResidual =
+  let work = SolveWork {
+    eswNodes = nodes,
+    eswQueue = Ref [],
+    eswQueued = Ref Tip,
+    eswOrdinaryTargets = Ref Tip,
+    eswExactTargets = Ref Tip,
+    eswEscape = escape,
+  }
+  let _ = addBodyEquations work summaries
+  let _ = addRelationEquations work relations
+  let _ =
+    M.foldlWithKey
+      (_ id node => seedBorrowedResidual work borrowed makeResidual id node)
+      ()
+      nodes
+  let _ = drainWork work
+  linkSolutions owner makeJoin (M.values nodes)
+
+-- An input allowance may include more than its demonstrated lower bound.
+-- Seed one external residual before propagation, so cyclic/sibling constraints
+-- see the same slack. Exact index equations do not admit that extra freedom.
+seedBorrowedResidual : SolveWork ->
+  Map Int Unit ->
+  (Int -> Ref Effvar) ->
+  Int ->
+  WorkNode ->
+  Unit
+seedBorrowedResidual work borrowed makeResidual id node =
+  if M.has id borrowed
+    && M.has id work.eswOrdinaryTargets.value
+    && not (M.has id work.eswExactTargets.value) then
+    let residual = makeResidual (inclusionLevel node.ewnCell)
+    grow work id [] (M.set (effvarId residual) residual Tip)
+
+-- Mutual reachability of unfiltered singleton inclusions proves equality.
+-- Collapse precisely those classes before least solving; an unconstrained
+-- retained class must remain a polymorphic variable, not be defaulted to pure.
+-- Filtered joins and body summaries are equations, not equality-class edges.
+collapseInclusionCycles : SummaryScope c ->
+  Map Int Unit ->
+  Map Int Unit ->
+  List (RowRelation c) ->
+  Map Int Unit
+collapseInclusionCycles scope rigid retained relations =
+  let pairs = flatMap (singletonInclusion scope rigid) relations
+  match pairs
+    [] => retained
+    _ =>
+      let cells =
+        fold
+          (acc (a, b) => M.set (effvarId a) a (M.set (effvarId b) b acc))
+          Tip
+          pairs
+      -- Allocate each string key once for the existing SCC service. Edges
+      -- reuse those keys; the hot row/worklist maps remain integer-keyed.
+      let names = M.mapWithKey (id _ => intToString id) cells
+      let byName =
+        M.foldlWithKey
+          (acc id cell => M.set (inclusionName names id) cell acc)
+          Tip
+          cells
+      let edges =
+        fold
+          (acc (a, b) =>
+            let from = inclusionName names (effvarId a)
+            let to = inclusionName names (effvarId b)
+            M.set from (to :: optionOr [] (M.get from acc)) acc)
+          Tip
+          pairs
+      fold
+        (collapseInclusionClass byName)
+        retained
+        (tarjanSCCs (M.values names) edges)
+
+singletonInclusion : SummaryScope c ->
+  Map Int Unit ->
+  RowRelation c ->
+  List (Ref Effvar, Ref Effvar)
+singletonInclusion scope rigid rel = match (
+  rowFlat rel.esrLower,
+  rowFlat rel.esrUpper,
+)
+  (([], [a]), ([], [b])) =>
+    if eligibleUpper scope rigid a && eligibleUpper scope rigid b then
+      [(a, b)]
+    else
+      []
+  _ => []
+
+inclusionName : Map Int String -> Int -> String
+inclusionName names id = match M.get id names
+  Some name => name
+  None => panic "missing inclusion graph name"
+
+inclusionCell : Map String (Ref Effvar) -> String -> Ref Effvar
+inclusionCell cells name = match M.get name cells
+  Some cell => cell
+  None => panic "missing inclusion graph cell"
+
+inclusionLevel : Ref Effvar -> Int
+inclusionLevel cell = match !cell
+  EUnbound _ level => level
+  _ => panic "non-flexible inclusion graph vertex"
+
+collapseInclusionClass : Map String (Ref Effvar) ->
+  Map Int Unit ->
+  List String ->
+  Map Int Unit
+collapseInclusionClass _ retained [] = retained
+collapseInclusionClass _ retained [_] = retained
+collapseInclusionClass cells retained (first :: rest) =
+  let members = map (inclusionCell cells) (first :: rest)
+  let initial = inclusionCell cells first
+  let (representative, level, keep) =
+    fold
+      ((best, level, keep) cell =>
+        let retainedCell = M.has (effvarId cell) retained
+        (
+          if retainedCell && not keep then cell else best,
+          min level (inclusionLevel cell),
+          keep || retainedCell,
+        ))
+      (initial, inclusionLevel initial, M.has (effvarId initial) retained)
+      members
+  let id = effvarId representative
+  representative := EUnbound id level
+  let _ =
+    fold
+      (_ cell =>
+        if effvarId cell /= id then
+          linkRow cell (EffRow [] (Some representative)))
+      ()
+      members
+  if keep then M.set id () retained else retained
+
+-- Reflexivity and known widening impose no lower bound on an unknown tail.
+-- In particular, pure <= e must not turn an observable e into a pure row.
+relationProven : (Bool -> List Atom -> List Atom -> List Atom) ->
+  RowRelation c ->
+  Bool
+relationProven escape rel =
+  let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
+  let (upperAtoms, upperCells) = rowFlat rel.esrUpper
+  isEmptyL (escape rel.esrExact lowerAtoms upperAtoms)
+    && not (missingLeaves lowerCells (leafSet upperCells))

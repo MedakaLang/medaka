@@ -37,7 +37,7 @@ fixtureIn : String -> String -> <IO> String
 fixtureIn corpus name = "\{root}/\{corpus}/\{name}"
 
 export
-runMedaka : List String -> <Exec "_", IO> Result String (Int, String)
+runMedaka : List String -> <Exec, IO> Result String (Int, String)
 runMedaka args =
   map ((code, out, err) => (code, out ++ err)) (runVerb medakaBin args)
 
@@ -66,7 +66,7 @@ export
 boundedInTree : Int ->
   String ->
   List String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 boundedInTree secs cmd args =
   boundedVerbSeconds
     secs
@@ -99,7 +99,7 @@ firstErrorLine out = match filter (contains "error" << toLower) (lines out)
   [] => "(no line mentioning an error)"
 
 export
-expectCheckAccept : String -> <Exec "_", IO> Expectation
+expectCheckAccept : String -> <Exec, IO> Expectation
 expectCheckAccept path = match runMedaka ["check", path]
   Err e => fail "\{path}: could not run `medaka check`: \{e}"
   Ok (code, out) =>
@@ -111,7 +111,7 @@ expectCheckAccept path = match runMedaka ["check", path]
       pass
 
 export
-expectCheckReject : String -> List String -> <Exec "_", IO> Expectation
+expectCheckReject : String -> List String -> <Exec, IO> Expectation
 expectCheckReject path needles = match runMedaka ["check", path]
   Err e => fail "\{path}: could not run `medaka check`: \{e}"
   Ok (code, out) =>
@@ -121,7 +121,7 @@ expectCheckReject path needles = match runMedaka ["check", path]
       expectTextContainsAll needles out
 
 export
-expectCheckRejectLine : String -> List String -> <Exec "_", IO> Expectation
+expectCheckRejectLine : String -> List String -> <Exec, IO> Expectation
 expectCheckRejectLine path needles = match runMedaka ["check", path]
   Err e => fail "\{path}: could not run `medaka check`: \{e}"
   Ok (code, out) =>
@@ -135,7 +135,7 @@ expectVerbExitStartsWith : String ->
   List String ->
   Int ->
   String ->
-  <Exec "_", IO> Expectation
+  <Exec, IO> Expectation
 expectVerbExitStartsWith verb args expectedCode prefix =
   expectVerbExitStartsWithAndContains verb args expectedCode prefix []
 
@@ -145,7 +145,7 @@ expectVerbExitStartsWithAndContains : String ->
   Int ->
   String ->
   List String ->
-  <Exec "_", IO> Expectation
+  <Exec, IO> Expectation
 expectVerbExitStartsWithAndContains verb args expectedCode prefix needles =
   match runMedaka (verb :: args)
     Err e => fail "medaka \{verb}: could not run: \{e}"
@@ -197,7 +197,7 @@ verdictOf _ = "REJECT"
    binary to run, and the three `bin` fields report an empty zero-exit run
    that every caller reads only after checking `buildCode`. -}
 export
-checkRunBuild : String -> String -> <Exec "_", IO> Result String Agreement
+checkRunBuild : String -> String -> <Exec, IO> Result String Agreement
 checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
   Err e => Err "\{entry}: could not run `medaka check`: \{e}"
   Ok (checkCode, _, checkErr) => match boundedVerb medakaBin ["run", entry]
@@ -244,10 +244,10 @@ binaryRanClean a = a.binCode == 0 && not (contains "E-PANIC" a.binErr)
    unified here. -}
 export
 sweepUnits : List unit ->
-  (String -> unit -> <Exec "_", FileRead "_", IO> row) ->
+  (String -> unit -> <Exec, FileRead, IO> row) ->
   (row -> Option String) ->
   (Int -> List String -> Expectation) ->
-  <Exec "_", FileRead "_", IO> Expectation
+  <Exec, FileRead, IO> Expectation
 sweepUnits units gradeOne rowFailure summarize = match scratchDir
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
@@ -488,7 +488,7 @@ runtimeOutcomeFailure want a =
 -- subdirectory holds modules the fixtures import, which are not entry points
 -- and pin no outcome of their own.
 export
-fixtureStems : String -> <FileRead "_", IO> Result String (List String)
+fixtureStems : String -> <FileRead, IO> Result String (List String)
 fixtureStems corpus = match fixtureFiles corpus
   Err e => Err e
   Ok paths =>
@@ -514,7 +514,7 @@ export
 rosterAgreement : String ->
   Int ->
   List (String, RuntimeOutcome) ->
-  <FileRead "_", IO> Expectation
+  <FileRead, IO> Expectation
 rosterAgreement corpus want rows = match fixtureStems corpus
   Err e => fail "\{corpus}: \{e}"
   Ok found => match expectUnitCount want rows
@@ -534,7 +534,7 @@ rosterAgreement corpus want rows = match fixtureStems corpus
 gradeOutcome : String ->
   String ->
   (String, RuntimeOutcome) ->
-  <Exec "_", FileRead "_", IO> Option String
+  <Exec, FileRead, IO> Option String
 gradeOutcome corpus scratch (name, want) =
   match checkRunBuild "\{corpus}/\{name}.mdk" "\{scratch}/\{name}.bin"
     Err e => Some "  \{padRight 30 ' ' name} \{e}"
@@ -564,6 +564,6 @@ export
 fatalOutcomeSweep : String ->
   Int ->
   List (String, RuntimeOutcome) ->
-  <Exec "_", FileRead "_", IO> Expectation
+  <Exec, FileRead, IO> Expectation
 fatalOutcomeSweep corpus want rows =
   sweepUnits rows (gradeOutcome corpus) (r => r) (summarizeOutcomes corpus want)

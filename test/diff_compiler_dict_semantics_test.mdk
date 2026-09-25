@@ -2371,13 +2371,13 @@ codeProblem json (Absent c) =
    stricter than the identical row that does not. -}
 codeFailures : List CodeAssert ->
   String ->
-  <Exec "_", IO> Result String (List String)
+  <Exec, IO> Result String (List String)
 codeFailures [] _ = Ok []
 codeFailures cs entrypath = match runMedaka ["check", "--json", entrypath]
   Err e => Err "could not run `medaka check --json`: \{e}"
   Ok (_, json) => Ok (somes (map (codeProblem json) cs))
 
-gradeOne : String -> Row -> <Exec "_", FileRead "_", IO> Graded
+gradeOne : String -> Row -> <Exec, FileRead, IO> Graded
 gradeOne scratch r =
   let entrypath = "\{corpus}/\{r.entry}"
   let binPath = "\{scratch}/\{binName r.entry}.bin"
@@ -2436,7 +2436,7 @@ summarize graded failures =
   else
     summarizeSweep graded failures
 
-sweep : <Exec "_", FileRead "_", IO> Expectation
+sweep : <Exec, FileRead, IO> Expectation
 sweep = sweepUnits table gradeOne rowFailure summarize
 
 -- A row may name a secondary entry point inside a fixture directory
@@ -2457,7 +2457,7 @@ roster = map unitOf (map rowEntry table)
    or a whole directory. `fixtureDirs` carries the anti-vacuity floor, so a
    corpus that reads cleanly but holds nothing is an `Err` rather than a
    green run over zero units. -}
-corpusUnits : <FileRead "_", IO> Result String (List String)
+corpusUnits : <FileRead, IO> Result String (List String)
 corpusUnits = match fixtureDirs corpus
   Err e => Err e
   Ok dirs =>
@@ -2960,7 +2960,7 @@ simpleFailure g =
 
 -- # Section 2 grading
 
-gradeScheme : String -> SchemeRow -> <Exec "_", FileRead "_", IO> SimpleGraded
+gradeScheme : String -> SchemeRow -> <Exec, FileRead, IO> SimpleGraded
 gradeScheme _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
   Err e => SimpleGraded {
     sentry = r.entry,
@@ -2994,7 +2994,7 @@ summarizeSchemes graded failures =
   else
     summarizeSweep graded failures
 
-schemeSweep : <Exec "_", FileRead "_", IO> Expectation
+schemeSweep : <Exec, FileRead, IO> Expectation
 schemeSweep = sweepUnits schemeTable gradeScheme simpleFailure summarizeSchemes
 
 -- # Section 5 grading
@@ -3002,7 +3002,7 @@ schemeSweep = sweepUnits schemeTable gradeScheme simpleFailure summarizeSchemes
 spawnVerb : String ->
   String ->
   String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 spawnVerb _ "check" entrypath = boundedVerb medakaBin ["check", entrypath]
 spawnVerb _ "run" entrypath = boundedVerb medakaBin ["run", entrypath]
 spawnVerb _ "run-json" entrypath =
@@ -3031,7 +3031,7 @@ spawnVerb _ v _ = Err "unknown verb \{v}"
 -- needs a FRESH directory per call, so it goes around that binding through a
 -- 1-argument twin instead (the argument only defeats the no-argument
 -- memoization rule; the value itself is unused).
-freshScratchDir : String -> <Exec "_"> Result String String
+freshScratchDir : String -> <Exec> Result String String
 freshScratchDir _ = match runVerb "mktemp" ["-d"]
   Err e => Err e
   Ok (0, out, _) => Ok (trim out)
@@ -3097,7 +3097,7 @@ diagCode d = match get "code" d
   Some (JString c) => Some c
   _ => None
 
-gradeVerbRow : String -> VerbRow -> <Exec "_", IO> SimpleGraded
+gradeVerbRow : String -> VerbRow -> <Exec, IO> SimpleGraded
 gradeVerbRow scratch r =
   let entrypath = "\{corpus}/\{r.ventry}"
   match spawnVerb scratch r.verb entrypath
@@ -3124,7 +3124,7 @@ summarizeVerbs graded failures =
   else
     summarizeSweep graded failures
 
-verbSweep : <Exec "_", FileRead "_", IO> Expectation
+verbSweep : <Exec, FileRead, IO> Expectation
 verbSweep = sweepUnits verbTable gradeVerbRow simpleFailure summarizeVerbs
 
 -- # Section 6 grading
@@ -3139,7 +3139,7 @@ firstSpan out = match find spanRe out
     _ => "(no located diagnostic)"
   None => "(no located diagnostic)"
 
-gradeSpan : String -> SpanRow -> <Exec "_", IO> SimpleGraded
+gradeSpan : String -> SpanRow -> <Exec, IO> SimpleGraded
 gradeSpan _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
   Err e => SimpleGraded {
     sentry = r.entry,
@@ -3175,7 +3175,7 @@ summarizeSpans graded failures =
   else
     summarizeSweep graded failures
 
-spanSweep : <Exec "_", FileRead "_", IO> Expectation
+spanSweep : <Exec, FileRead, IO> Expectation
 spanSweep = sweepUnits spanTable gradeSpan simpleFailure summarizeSpans
 
 test "medaka check prints every pinned scheme line verbatim" = schemeSweep

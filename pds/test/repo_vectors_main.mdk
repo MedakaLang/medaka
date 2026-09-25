@@ -451,10 +451,10 @@ runHostile did secret repo path presentRecord =
 meaningful : String -> Bool
 meaningful line = line /= "" && not (startsWith "#" line)
 
-main : <IO, Env, FileRead "_"> Unit
+main : <IO, Env, FileRead> Unit
 main = runMain (args ())
 
-runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain : List String -> <IO, Env, FileRead> Unit
 runMain ["--final-review"] = runFinalReview
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain [corpusPath, "--representative"] =
@@ -462,7 +462,7 @@ runMain [corpusPath, "--representative"] =
 runMain _ =
   panic "usage: repo_vectors_main <ledger-owned-corpus> [--representative]"
 
-runRead : Result String (List String) -> <IO, Env, FileRead "_"> Unit
+runRead : Result String (List String) -> <IO, Env, FileRead> Unit
 runRead (Err message) = panic "repo_vectors: cannot read corpus: \{message}"
 runRead (Ok raw) = runRows (filter meaningful raw)
 
@@ -779,7 +779,7 @@ firstTidRow : List String -> String
 firstTidRow (row :: _) = row
 firstTidRow [] = panic "repo_vectors: missing TID rows"
 
-runRows : List String -> <IO, Env, FileRead "_"> Unit
+runRows : List String -> <IO, Env, FileRead> Unit
 runRows [meta, t0, t1, t2, t3, t4, initLine, op1, c1, _, _, op2, c2, op3, c3, op4, c4, orderLine, carLine, "END"] =
   runTranscript
     (split "\t" meta)
@@ -810,7 +810,7 @@ runTranscript : List String ->
   String ->
   String ->
   String ->
-  <IO, Env, FileRead "_"> Unit
+  <IO, Env, FileRead> Unit
 runTranscript ["META", did, secretHex] tidsRows initLine op1 c1 op2 c2 op3 c3 op4 c4 orderLine carLine =
   let tids = sum (map gradeTid tidsRows)
   let secret = mustSecret secretHex

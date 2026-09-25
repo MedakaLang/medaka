@@ -1,0 +1,1 @@
+TYPE ERROR: Binding 'act' runs the effect row <a>, which its caller chooses (an argument's or a callback's row), but only <> is allowed there: a caller may instantiate <a> to an effectful row and would then run it from a position typed <>. Declare that row at the arrow that runs it (write `-> <a> …`), or defer the value instead of running it.

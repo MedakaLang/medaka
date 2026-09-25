@@ -1,0 +1,9 @@
+-- A runtime-chosen path abstracts to the domain's top, which no narrow
+-- bound admits.  This is the no-exfiltration guarantee: a value the program
+-- computes can name any file.
+fromEnv : Unit -> <Env, FileRead "config/*"> Result String String
+fromEnv _ = match getEnv "CFG"
+  Some p => readFile p
+  None => Err "unset"
+
+main = println 1

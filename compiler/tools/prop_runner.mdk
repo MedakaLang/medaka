@@ -558,6 +558,8 @@ tyReaches tydefs seen (TyFun a b) target =
   tyReaches tydefs seen a target || tyReaches tydefs seen b target
 tyReaches tydefs seen (TyTuple ts) target = anyTyReaches tydefs seen ts target
 tyReaches tydefs seen (TyEffect _ _ t) target = tyReaches tydefs seen t target
+tyReaches tydefs seen (TyNamed _ t) target = tyReaches tydefs seen t target
+tyReaches tydefs seen (TyQual t _) target = tyReaches tydefs seen t target
 tyReaches tydefs seen (TyConstrained _ t) target =
   tyReaches tydefs seen t target
 tyReaches _ _ _ _ = False
@@ -595,6 +597,8 @@ tyCanDiverge tydefs (TyApp a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyFun a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyTuple ts) = anyTyCanDiverge tydefs ts
 tyCanDiverge tydefs (TyEffect _ _ t) = tyCanDiverge tydefs t
+tyCanDiverge tydefs (TyNamed _ t) = tyCanDiverge tydefs t
+tyCanDiverge tydefs (TyQual t _) = tyCanDiverge tydefs t
 tyCanDiverge tydefs (TyConstrained _ t) = tyCanDiverge tydefs t
 tyCanDiverge _ _ = False
 
@@ -779,7 +783,7 @@ runProp : GenEnv ->
   Int ->
   String ->
   List (String, Int) ->
-  <IO> Bool
+  <IO | e> Bool
 runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   let line = lineOfPropName name propLines
   let _ = putStr "\{propLocPrefix target line}Testing \{escStrLocal name} ... "
@@ -1104,7 +1108,7 @@ runAllProps : Int ->
   List (String, Value e) ->
   List Decl ->
   List Decl ->
-  <IO> Bool
+  <IO | e> Bool
 runAllProps cases filterOpt target propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then
@@ -1124,7 +1128,7 @@ runEach : Int ->
   GenEnv ->
   List (String, Value e) ->
   List Decl ->
-  <IO> List Bool
+  <IO | e> List Bool
 runEach _ _ _ _ _ [] = []
 runEach cases target propLines genEnv evalEnv (p :: rest) =
   runProp genEnv evalEnv p cases target propLines
@@ -1174,7 +1178,7 @@ runAllPropsResults : Int ->
   List (String, Value e) ->
   List Decl ->
   List Decl ->
-  <IO> List PropResult
+  <e> List PropResult
 runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then
@@ -1187,7 +1191,7 @@ runEachResult : Int ->
   GenEnv ->
   List (String, Value e) ->
   List Decl ->
-  <IO> List PropResult
+  <e> List PropResult
 runEachResult _ _ _ _ [] = []
 runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest) =
   propResultOf

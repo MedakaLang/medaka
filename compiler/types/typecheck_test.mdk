@@ -916,7 +916,7 @@ test "arithmetic keeps missing Num and explicit result mismatches loud" = expect
       ["T-MISSING-CONSTRAINT"]
       (arithmeticErrorCodes "bad : a -> a -> a\nbad x y = x + y\n"),
     expectEqual
-      ["T-NO-IMPL"]
+      ["T-TYPE-TOO-GENERAL", "T-NO-IMPL"]
       (arithmeticErrorCodes
         "bad : Num a => a -> a -> (a, Bool)\nbad x y = (x + y, x)\n"),
   ]
@@ -925,7 +925,7 @@ declaredNumHelperSource : String
 declaredNumHelperSource = "value : Num a => Int -> a\nvalue n = fromInt n\n"
 
 schemeVariableCount : Scheme -> Int
-schemeVariableCount (Forall variables _ _) = listLen variables
+schemeVariableCount (Forall variables _ _ _ _) = listLen variables
 
 declaredNumSchemeObserved : Option (Int, Int) ->
   String ->
@@ -1033,7 +1033,7 @@ test "an unsigned recursive sibling cannot default a declared numeric root" =
       (fst (declaredNumMemberSchemeObserved None "relay" source)),
   ]
 
-test "unsupported recursive evidence keeps erased and expansive siblings rejected" =
+test "an erased sibling defaults its own contract copy; an expansive sibling fixes the universal" =
   let floatInstance =
     joinNl [
         "impl Num Float where",
@@ -1071,8 +1071,8 @@ test "unsupported recursive evidence keeps erased and expansive siblings rejecte
             "floating : Float",
             "floating = signed 2",
           ])),
-    expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes erased),
-    expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes expansive),
+    expectEqual [] (declaredNumErrorCodes erased),
+    expectEqual ["T-TYPE-TOO-GENERAL"] (declaredNumErrorCodes expansive),
   ]
 
 test "declared result protection preserves missing-context and value-restriction errors" = expectAll

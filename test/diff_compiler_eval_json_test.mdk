@@ -50,7 +50,7 @@ declaredFixtureCount = 12
    file, only changes what a stale-binary failure message says. `""` when
    that source no longer has this shape, in which case `staleNote` appends
    nothing (never a guess either way). -}
-staleMarker : <FileRead "_", IO> String
+staleMarker : <FileRead, IO> String
 staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
   Err _ => ""
   Ok src => markerBefore "" (lines src)
@@ -85,7 +85,7 @@ staleNote marker text =
 -- included, since `W-MAIN-SHAPE` means the run never happened), so a clean
 -- exit here is itself a sign the diagnostic path silently stopped firing —
 -- the process boundary the byte comparison alone never inspects.
-gradeOne : String -> String -> <Exec "_", FileRead "_", IO> Option String
+gradeOne : String -> String -> <Exec, FileRead, IO> Option String
 gradeOne marker name =
   let entry = "\{corpus}/\{name}.mdk"
   let golden = "\{corpus}/\{name}.json.out"

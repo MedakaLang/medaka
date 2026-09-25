@@ -18,6 +18,8 @@ import frontend.ast.{
   Lit(..),
   Ty(..),
   TyConOrigin(..),
+  EffAtomTy(..),
+  EffParamTy(..),
   mapTyInDecl,
   firstTyLoc,
   firstTyLocList,
@@ -225,6 +227,20 @@ public export data ResError =
   -- ambiguity sets are computed from disjoint export lists and must never be keyed
   -- together.
   | AmbiguousInterface String (List String) (Option Loc)
+  -- EFFECT LABEL written in a row that ≥2 non-`core` imports bring into scope
+  -- from DIFFERENT declaring modules.  A label is identified by its declaring
+  -- module, so two same-spelled declarations are two effects and a row cannot
+  -- name either by spelling alone.  A diamond (one declaration re-exported
+  -- along two paths) is one provenance and is not ambiguous; the module's own
+  -- declaration settles the name.
+  | AmbiguousEffect String (List String) (Option Loc)
+  -- an authority name written in a row (`<FileRead p>`) or a qualifier
+  -- (`String @p`) with no `(p : T)` binder to its left in the same signature.
+  -- Authority names are lexically bound, never implicitly quantified: a typo
+  -- would otherwise silently become "any authority".
+  | UnboundAuthority String (Option Loc)
+  -- a `(name : T)` binder somewhere other than an arrow's domain.
+  | MisplacedAuthorityBinder String (Option Loc)
   -- an internal-only array-kernel extern (arrayGetUnsafe, …) referenced from a
   -- module that is neither in the standard library nor compiled with
   -- `--allow-internal` (see internalExterns / Env.internalGuard)
@@ -288,6 +304,9 @@ resErrorLoc (AmbiguousConstructor _ _ l) = l
 resErrorLoc (AmbiguousAliasCtor _ _ l) = l
 resErrorLoc (AmbiguousType _ _ l) = l
 resErrorLoc (AmbiguousInterface _ _ l) = l
+resErrorLoc (AmbiguousEffect _ _ l) = l
+resErrorLoc (UnboundAuthority _ l) = l
+resErrorLoc (MisplacedAuthorityBinder _ l) = l
 resErrorLoc (InternalExternAccess _ l) = l
 resErrorLoc (ReassignImmutable _ l) = l
 resErrorLoc (DuplicateInterfaceMethod _ _ _ l) = l
@@ -318,6 +337,7 @@ public export data Env = Env {
   aliasAbstractCtor : List (String, String),
   typeAmbiguous : List (String, List String),
   ifaceAmbiguous : List (String, List String),
+  effectAmbiguous : List (String, List String),  -- label -> its ≥2 DECLARING modules in scope
   internalGuard : OrdMap Unit,
   sugValuesMemo : Ref (Option (List SugCand)),  -- the did-you-mean candidate POOLS, built at most
   sugTypesMemo : Ref (Option (List SugCand)),  -- ONCE per `Env` — see `sugValuePool` (#1016, #2800).
@@ -435,7 +455,13 @@ patGroupDupErrors loc kind ps =
 -- `cur` (Stage B) is the enclosing `ELoc` span threaded from the expr walk (or
 -- `None` at decl level).
 checkType : Option Loc -> Env -> Ty -> List ResError
-checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
+checkType cur env t = checkTypeIn [] cur env t
+
+-- [bound] is the authority binders in scope: every `(p : T)` arrow domain to
+-- the left in this signature.  A row atom's named parameter and a `@p`
+-- qualifier must name one of them.
+checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
+checkTypeIn _ cur env (TyCon { tyConName = n, tyConLoc = loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
     -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
     -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
@@ -444,7 +470,7 @@ checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
     ambiguousTypeErrors env n (orElseLoc loc cur)
   else
     [UnknownType n (orElseLoc loc cur) (suggestType env n)]
-checkType _ _ (TyVar _) = []
+checkTypeIn _ _ _ (TyVar _) = []
 -- (helper below `checkType`) — accept the bare tuple type constructors
 -- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
 -- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
@@ -452,11 +478,18 @@ checkType _ _ (TyVar _) = []
 -- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
 -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
 -- typecheck's `tupleHeadTagTc`.
-checkType cur env (TyApp a b) = checkType cur env a ++ checkType cur env b
-checkType cur env (TyFun a b) = checkType cur env a ++ checkType cur env b
-checkType cur env (TyTuple ts) = flatMap (checkType cur env) ts
-checkType cur env (TyEffect labels _ t) =
-  flatMap (checkEffect cur env) (map fst labels) ++ checkType cur env t
+checkTypeIn bound cur env (TyApp a b) =
+  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
+checkTypeIn bound cur env (TyFun (TyNamed n a) b) =
+  checkTypeIn bound cur env a ++ checkTypeIn (n :: bound) cur env b
+checkTypeIn bound cur env (TyFun a b) =
+  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
+checkTypeIn bound cur env (TyTuple ts) = flatMap (checkTypeIn bound cur env) ts
+checkTypeIn bound cur env (TyEffect labels _ t) =
+  checkEffAtoms bound cur env labels ++ checkTypeIn bound cur env t
+checkTypeIn _ cur _ (TyNamed n _) = [MisplacedAuthorityBinder n cur]
+checkTypeIn bound cur env (TyQual t n) =
+  checkTypeIn bound cur env t ++ checkAuthorityName bound cur n
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -465,13 +498,31 @@ checkType cur env (TyEffect labels _ t) =
 -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
 -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
 -- location>` to the signature it was written in.
-checkType cur env (TyConstrained cs t) =
+checkTypeIn bound cur env (TyConstrained cs t) =
   flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-    ++ checkType cur env t
+    ++ checkTypeIn bound cur env t
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
-checkType cur env (TyRow labels _ _) =
-  flatMap (checkEffect cur env) (map fst labels)
+checkTypeIn bound cur env (TyRow labels _ _) =
+  checkEffAtoms bound cur env labels
+
+checkEffAtoms : List String ->
+  Option Loc ->
+  Env ->
+  List EffAtomTy ->
+  List ResError
+checkEffAtoms bound cur env atoms =
+  flatMap
+    (a =>
+      checkEffect cur env a.eatLabel
+        ++ (match a.eatParam
+          EPName n => checkAuthorityName bound cur n
+          _ => []))
+    atoms
+
+checkAuthorityName : List String -> Option Loc -> String -> List ResError
+checkAuthorityName bound cur n =
+  if contains n bound then [] else [UnboundAuthority n cur]
 
 builtInEffects : List String
 builtInEffects = [
@@ -490,11 +541,13 @@ builtInEffects = [
 ]
 
 checkEffect : Option Loc -> Env -> String -> List ResError
-checkEffect cur env e =
-  if contains e builtInEffects || contains e env.effects then
-    []
-  else
-    [UnknownEffect e cur]
+checkEffect cur env e = match lookupAssoc e env.effectAmbiguous
+  Some mods => [AmbiguousEffect e mods cur]
+  None =>
+    if contains e builtInEffects || contains e env.effects then
+      []
+    else
+      [UnknownEffect e cur]
 
 -- The three type-occurrence sites (`checkType`'s `TyCon` arm, `recPatHead`,
 -- `recCreateHead`) share this so the ambiguity verdict cannot differ between a type
@@ -1769,7 +1822,7 @@ dataRecordNames (_ :: rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _) :: rest) = n :: effectNames rest
+effectNames ((DEffect _ n _ _) :: rest) = n :: effectNames rest
 effectNames ((DAttrib _ d) :: rest) = effectNames (d :: rest)
 effectNames (_ :: rest) = effectNames rest
 
@@ -1972,6 +2025,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     aliasAbstractCtor = [],
     typeAmbiguous = [],
     ifaceAmbiguous = [],
+    effectAmbiguous = [],
     internalGuard = omFromNames internalGuard omEmpty,
     sugValuesMemo = Ref None,
     sugTypesMemo = Ref None,
@@ -2484,6 +2538,11 @@ resErrorSexp (AmbiguousType n mods _) =
   "(AmbiguousType " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousInterface n mods _) =
   "(AmbiguousInterface " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousEffect n mods _) =
+  "(AmbiguousEffect " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (UnboundAuthority n _) = "(UnboundAuthority " ++ escStr n ++ ")"
+resErrorSexp (MisplacedAuthorityBinder n _) =
+  "(MisplacedAuthorityBinder " ++ escStr n ++ ")"
 resErrorSexp (ReassignImmutable n _) = "(ReassignImmutable " ++ escStr n ++ ")"
 resErrorSexp (DuplicateInterfaceMethod m a b _) =
   "(DuplicateInterfaceMethod \{escStr m} \{escStr a} \{escStr b})"
@@ -2638,6 +2697,12 @@ ppResError (AmbiguousType n mods _) =
 -- alias is still impossible — only a value member may be renamed, so
 -- `import m.{Foo as Bar}` is rejected — so the message offers the two fixes that
 -- exist and not that one.
+ppResError (UnboundAuthority n _) =
+  "Unknown authority '\{n}': an authority name refers to an argument named to its left in the same signature. Bind it by naming the argument, `(\{n} : String) -> <FileRead \{n}> …`, or write the label bare for any authority"
+ppResError (MisplacedAuthorityBinder n _) =
+  "A named argument `(\{n} : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"
+ppResError (AmbiguousEffect n mods _) =
+  "Ambiguous effect label: '\{n}' is declared by \{ambigModPhrase mods}, and both declarations are in scope. A label is identified by the module that declares it, so these are two different effects and a row cannot tell them apart by spelling. Import only one of those modules here, or rename one of the declarations"
 ppResError (AmbiguousInterface n mods _) =
   "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>.\{n}` — or drop '\{n}' from the other's import list"
 ppResError (InternalExternAccess n _) =
@@ -2693,6 +2758,9 @@ resErrorCode (AmbiguousConstructor _ _ _) = "R-AMBIGUOUS-CTOR"
 resErrorCode (AmbiguousAliasCtor _ _ _) = "R-AMBIGUOUS-CTOR"
 resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
 resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
+resErrorCode (AmbiguousEffect _ _ _) = "R-AMBIGUOUS-EFFECT"
+resErrorCode (UnboundAuthority _ _) = "R-UNBOUND-AUTHORITY"
+resErrorCode (MisplacedAuthorityBinder _ _) = "R-MISPLACED-AUTHORITY-BINDER"
 resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
 resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
 resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"
@@ -2755,6 +2823,10 @@ public export data ModuleExports = ModuleExports {
   expInterfaces : List String,
   expIfaceMethods : List (String, List String),
   expEffects : List String,  -- exported effect labels (Phase 146)
+  -- (label, DECLARING module) for every exported label, the identity an
+  -- importer's rows are stamped with and the provenance its ambiguity check
+  -- keys on.  Carried whole across a wildcard re-export, as `expEffects` is.
+  expEffectOrigins : List (String, String),
   -- (ctorName, typeName) pairs for `export newtype` decls (#1311) — a
   -- newtype's ctor is unconditionally module-private (typecheck's
   -- `publicDataDecls` never publishes it), so unlike `expCtors`/
@@ -3434,6 +3506,35 @@ ifaceAmbiguousSet known prog =
       (usePathsOf prog)
   keepAmbiguous (interfaceNamesOf prog) (provToPairs prov)
 
+-- The effect peer.  Every import of a module installs all of that module's
+-- labels (`importedEffects`), so provenance is keyed by the DECLARING module
+-- each label carries (`expEffectOrigins`), not by the importing path: a label
+-- reached twice through re-exports of one declaration is one provenance.
+effectAmbiguousSet : OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
+effectAmbiguousSet known prog =
+  let prov = foldEffectProvenance known omEmpty (usePathsOf prog)
+  keepAmbiguous (effectNames prog) (provToPairs prov)
+
+foldEffectProvenance : OrdMap ModuleExports ->
+  OrdMap (List String) ->
+  List UsePath ->
+  OrdMap (List String)
+foldEffectProvenance _ prov [] = prov
+foldEffectProvenance known prov (p :: rest) =
+  let prov2 = match findExports (useModId p) known
+    Some exp => addEffectProvenance prov exp.expEffectOrigins
+    None => prov
+  foldEffectProvenance known prov2 rest
+
+addEffectProvenance : OrdMap (List String) ->
+  List (String, String) ->
+  OrdMap (List String)
+addEffectProvenance prov [] = prov
+addEffectProvenance prov ((label, definer) :: rest) =
+  addEffectProvenance (addProvenance prov label definer) rest
+
 foldImports : OrdMap ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldImports _ [] = emptyAdds
 foldImports known ((p, loc) :: rest) =
@@ -3787,6 +3888,7 @@ buildEnvMM ps known prog internalGuard =
     aliasAbstractCtor = aliasAbstractCtors known prog,
     typeAmbiguous = typeAmbiguousSet known prog,
     ifaceAmbiguous = ifaceAmbiguousSet known prog,
+    effectAmbiguous = effectAmbiguousSet known prog,
     internalGuard = omFromNames internalGuard omEmpty,
     sugValuesMemo = Ref None,
     sugTypesMemo = Ref None,
@@ -3843,6 +3945,7 @@ coreExports preludeDecls = ModuleExports {
   expInterfaces = map fst (interfaceList preludeDecls),
   expIfaceMethods = interfaceList preludeDecls,
   expEffects = effectNames preludeDecls,
+  expEffectOrigins = map (n => (n, "core")) (effectNames preludeDecls),
   expNewtypeCtors = [],  -- the prelude declares no `newtype` today; nothing to refuse
 }
 
@@ -4018,11 +4121,24 @@ nsEffects = ExpNs {
   nsGet = exp => exp.expEffects,
   nsDirectOf =
     d => match d
-      DEffect True n _ => [n]
+      DEffect True n _ _ => [n]
       _ => [],
   nsCarry =
     path src => match path
       UseWild _ => src.expEffects
+      _ => [],
+}
+
+-- The identity-carrying twin of `nsEffects`: no direct rule (the declaring
+-- module is supplied by `buildExports`, which has the id), and the same
+-- wildcard-only carriage.
+nsEffectOrigins : ExpNs (String, String)
+nsEffectOrigins = ExpNs {
+  nsGet = exp => exp.expEffectOrigins,
+  nsDirectOf = _ => [],
+  nsCarry =
+    path src => match path
+      UseWild _ => src.expEffectOrigins
       _ => [],
 }
 
@@ -4101,6 +4217,9 @@ buildExports coreExp known modId prog env = ModuleExports {
     directIn nsIfaceMethods prog ++ carriedIn nsIfaceMethods coreExp known prog,
   expEffects =
     directIn nsEffects prog ++ carriedIn nsEffects coreExp known prog,
+  expEffectOrigins =
+    map (n => (n, modId)) (directIn nsEffects prog)
+      ++ carriedIn nsEffectOrigins coreExp known prog,
   expNewtypeCtors = directIn nsNewtypeCtors prog,
 }
 
@@ -4857,14 +4976,53 @@ tyOriginScope coreTypes known mid prog =
   -- folded once, last-wins.  Naming the layers is not decoration: it is what keeps
   -- the order readable after `fmt`, which reflows a bare five-way `++` chain onto
   -- a single line and hides the very thing this function's comment argues about.
-  let builtinLayer = builtinTyOrigins
+  let builtinLayer = builtinTyOrigins ++ builtinEffOrigins
   let preludeLayer = map importedTyOrigin coreTypes
   let importLayer =
     map importedTyOrigin (flatMap (importedTypeOrigins known) (usePathsOf prog))
+      ++ map
+        importedTyOrigin
+        (flatMap (importedEffectOrigins known) (usePathsOf prog))
   let ownLayer =
     map (ownTyOrigin mid) (dataRecordNames prog)
       ++ map (ownIfaceOrigin mid) (interfaceNamesOf prog)
+      ++ map (ownEffOrigin mid) (effectNames prog)
   omFromPairs (builtinLayer ++ preludeLayer ++ importLayer ++ ownLayer) omEmpty
+
+-- The language's own labels have one program-global identity, like its
+-- builtin type heads.
+builtinEffOrigins : List (String, TyConOrigin)
+builtinEffOrigins = map (n => (effectKey n, OriginBuiltin)) builtInEffects
+
+ownEffOrigin : String -> String -> (String, TyConOrigin)
+ownEffOrigin mid n = (effectKey n, OriginModule mid)
+
+-- Every `effect:` row a use path's module exports, whatever the path's form:
+-- any import of `m` installs all of `m`'s labels (`importedEffects`), so the
+-- identities arrive the same way.
+importedEffectOrigins : OrdMap (List (String, String)) ->
+  UsePath ->
+  List (String, String)
+importedEffectOrigins known path =
+  if useModId path == "core" then
+    []
+  else match omLookup (useModId path) known
+    None => []
+    Some src => filterList (r => isEffectKey (fst r)) src
+
+-- The FOURTH namespace on the origin map: an effect label under `effect:<Name>`.
+effectKey : String -> String
+effectKey n = "effect:\{n}"
+
+isEffectKey : String -> Bool
+isEffectKey k = startsWith "effect:" k
+
+isWildPath : UsePath -> Bool
+isWildPath (UseWild _) = True
+isWildPath _ = False
+
+effectDeclaredIn : String -> String -> (String, String)
+effectDeclaredIn mid n = (effectKey n, mid)
 
 -- `dataRecordNames` is the ALL-declarations extractor (`nsTypes`' direct rule is
 -- the public subset) — a module's own private type is in its own scope.
@@ -4940,6 +5098,10 @@ typeOriginExports : OrdMap (List (String, String)) ->
 -- DEFINING module can answer it.
 typeOriginExports known mid prog =
   flatMap (importedTypeOrigins known) (pubUsePaths prog)
+    ++ flatMap
+      (importedEffectOrigins known)
+      (filterList isWildPath (pubUsePaths prog))
+    ++ map (effectDeclaredIn mid) (directIn nsEffects prog)
     ++ map (typeDeclaredIn mid) (directIn nsTypes prog)
     ++ map (ifaceDeclaredIn mid) (directIn nsInterfaces prog)
     ++ map (ctorDeclaredIn mid) (directIn nsCtors prog)
@@ -5164,10 +5326,28 @@ stampTyHead aliases scope (t@(TyCon { tyConName = n, tyConOrigin = o })) =
 -- The flag reads "may have been rewritten": every consumer OR-folds it, for which
 -- over-reporting is safe and under-reporting is not.  An alias-free module takes
 -- the arm above it and rebuilds nothing.
+-- Effect atoms acquire the declaration identity of their label, once, under
+-- the same first-write immunity as a type head.
+stampTyHead _ scope (TyEffect atoms tail t) =
+  let (atoms2, changed) = stampEffAtoms scope atoms
+  (TyEffect atoms2 tail t, changed)
+stampTyHead _ scope (TyRow atoms tail l) =
+  let (atoms2, changed) = stampEffAtoms scope atoms
+  (TyRow atoms2 tail l, changed)
 stampTyHead [] _ (t@(TyConstrained _ _)) = (t, False)
 stampTyHead aliases scope (TyConstrained cs t) =
   (TyConstrained (map (unqualConstraint (aliasCtx aliases scope)) cs) t, True)
 stampTyHead _ _ t = (t, False)
+
+stampEffAtoms : OrdMap TyConOrigin -> List EffAtomTy -> (List EffAtomTy, Bool)
+stampEffAtoms _ [] = ([], False)
+stampEffAtoms scope (a :: rest) =
+  let (rest2, c) = stampEffAtoms scope rest
+  match a.eatOrigin
+    OriginUnresolved => match omLookup (effectKey a.eatLabel) scope
+      Some o => (EffAtomTy { a | eatOrigin = o } :: rest2, True)
+      None => (a :: rest2, c)
+    _ => (a :: rest2, c)
 
 -- `M.Map` → `Map` (#2412).  The name and the identity move together, or neither
 -- moves.  Together, because typecheck reads a type's identity straight off the
@@ -5513,6 +5693,8 @@ stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
   DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
 stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
   DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (DEffect pub n dom o) =
+  DEffect pub n dom (fillDeclOrigin mid o)
 stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
 stampDeclOrigin _ d = d
 
@@ -5847,6 +6029,7 @@ stampGraphTyOrigins coreDecls modules =
   let coreTypes =
     map (typeDeclaredIn "core") (dataRecordNames coreDecls)
       ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)
+      ++ map (effectDeclaredIn "core") (effectNames coreDecls)
   let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
   (coreS, stampModulesGo coreTypes omEmpty modules)
 

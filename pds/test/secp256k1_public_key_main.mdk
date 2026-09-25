@@ -110,7 +110,7 @@ roundTrip bytes = match publicKeyFromCompressed bytes
 fields : String -> List String
 fields line = filter (/= "") (split " " (trim line))
 
-corpusRows : String -> <FileRead "_"> List (List String)
+corpusRows : String -> <FileRead> List (List String)
 corpusRows path = match readFile path
   Err message =>
     panic "public-key driver: unreadable corpus \{path}: \{message}"
@@ -190,7 +190,7 @@ groupOrderHex rows =
     [order] => order
     _ => panic "public-key driver: the point corpus names no single INF row"
 
-main : <IO, Env, FileRead "_", Rand> Unit
+main : <IO, Env, FileRead, Rand> Unit
 main =
   let oddGenerator = arrayCopy generatorCompressed
   let () = A.setInPlace 0 3 oddGenerator

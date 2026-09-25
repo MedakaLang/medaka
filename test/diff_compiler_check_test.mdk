@@ -334,7 +334,7 @@ rows = [
 -- | The ENTRY MODULE of each of a leg's fixtures, sorted, as absolute paths:
 -- the fixture's own file for a file-shaped corpus, the module its `entry`
 -- file names for a directory-shaped one.
-entriesOf : Leg -> <FileRead "_", IO> Result String (List String)
+entriesOf : Leg -> <FileRead, IO> Result String (List String)
 entriesOf leg =
   let dir = "\{medakaRoot}/\{leg.corpus}"
   match leg.shape
@@ -347,7 +347,7 @@ entriesOf leg =
    `fixtureFiles` walks recursively and carries the anti-vacuity floor, so a
    corpus that reads cleanly but holds nothing is an `Err` rather than a
    green run over zero fixtures. Only the corpus root holds fixtures. -}
-fileEntries : Leg -> String -> <FileRead "_"> Result String (List String)
+fileEntries : Leg -> String -> <FileRead> Result String (List String)
 fileEntries leg dir = match fixtureFiles dir
   Err e => Err e
   Ok paths =>
@@ -368,14 +368,14 @@ isGraded leg paths p = match leg.pairedWith
    skip: the retired script counted such a directory as a failure precisely
    so a fixture whose entry was renamed away could not stop being graded in
    silence. -}
-dirEntries : String -> <FileRead "_"> Result String (List String)
+dirEntries : String -> <FileRead> Result String (List String)
 dirEntries dir = match fixtureDirs dir
   Err e => Err e
   Ok dirs => entriesIn (sort dirs) []
 
 entriesIn : List String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 entriesIn [] acc = Ok (reverse acc)
 entriesIn (d :: rest) acc = match readFile "\{d}/entry"
   Err e => Err "\{basename d}: no readable entry file: \{e}"
@@ -390,21 +390,21 @@ entriesIn (d :: rest) acc = match readFile "\{d}/entry"
 
    A directory whose `order` file cannot be read is an `Err` naming it, not a
    skip — the same reasoning as `entriesIn`'s `entry` file. -}
-orderedEntries : String -> <FileRead "_"> Result String (List String)
+orderedEntries : String -> <FileRead> Result String (List String)
 orderedEntries dir = match fixtureDirs dir
   Err e => Err e
   Ok dirs => orderedIn (sort dirs) []
 
 orderedIn : List String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 orderedIn [] acc = Ok (reverse acc)
 orderedIn (d :: rest) acc = match readFile "\{d}/order"
   Err e => Err "\{basename d}: no readable order file: \{e}"
   Ok _ => orderedIn rest ("\{d}/order" :: acc)
 
 -- | The expected output for one fixture, read from its committed golden.
-goldenOf : Leg -> String -> <FileRead "_", IO> Result String String
+goldenOf : Leg -> String -> <FileRead, IO> Result String String
 goldenOf leg path = match leg.golden
   SiblingExpected =>
     map chompNewlines (readFile "\{dirname path}/\{stem path}.expected")
@@ -464,7 +464,7 @@ labelOf leg path = match leg.shape
   OrderedModules => "\{basename leg.corpus}/\{basename (dirname path)}"
   FileFixture => "\{basename leg.corpus}/\{stem path}"
 
-valueFailure : Leg -> String -> String -> <FileRead "_", IO> Option String
+valueFailure : Leg -> String -> String -> <FileRead, IO> Option String
 valueFailure leg path actual =
   let label = labelOf leg path
   match goldenOf leg path
@@ -484,7 +484,7 @@ data Outcome = Outcome { label : String, graded : Int, failures : List String }
 
 unitsOf : List Leg ->
   List LegFixtures ->
-  <FileRead "_", IO> Result String (List LegFixtures)
+  <FileRead, IO> Result String (List LegFixtures)
 unitsOf [] acc = Ok (reverse acc)
 unitsOf (leg :: rest) acc = match entriesOf leg
   Err e => Err "\{leg.corpus}: \{e}"
@@ -509,7 +509,7 @@ countFailure u =
    sitting beside it. An `OrderedModules` leg instead expands to every module
    the `order` file names, in that order, with no trailing directory — the
    driver takes the files directly and never consults the loader. -}
-argsFor : Row -> Leg -> String -> <FileRead "_", IO> List String
+argsFor : Row -> Leg -> String -> <FileRead, IO> List String
 argsFor r leg path =
   let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
   match leg.shape
@@ -520,7 +520,7 @@ argsFor r leg path =
 -- | The modules named by the `order` file at `orderPath` (itself
 -- `"\{fixtureDir}/order"`, per `orderedEntries`), as absolute-relative paths
 -- inside that same directory, in the file's own order.
-orderedModuleFiles : String -> <FileRead "_"> List String
+orderedModuleFiles : String -> <FileRead> List String
 orderedModuleFiles orderPath = match readFile orderPath
   Err _ => []
   Ok content =>
@@ -529,13 +529,13 @@ orderedModuleFiles orderPath = match readFile orderPath
 -- | A row that spawns its driver once per fixture: the shape three of the
 -- four retired scripts had, and the reference the batched row is compared
 -- against.
-perFixture : Row -> List LegFixtures -> <Exec "_", FileRead "_", IO> List String
+perFixture : Row -> List LegFixtures -> <Exec, FileRead, IO> List String
 perFixture r units = flatMap (sweepLeg r) units
 
-sweepLeg : Row -> LegFixtures -> <Exec "_", FileRead "_", IO> List String
+sweepLeg : Row -> LegFixtures -> <Exec, FileRead, IO> List String
 sweepLeg r u = somes (map (oneFixture r u.leg) u.entries)
 
-oneFixture : Row -> Leg -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture : Row -> Leg -> String -> <Exec, FileRead, IO> Option String
 oneFixture r leg path =
   match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r leg path)
     Err e => Some "\{labelOf leg path}: could not spawn \{r.oracle}: \{e}"
@@ -547,7 +547,7 @@ oneFixture r leg path =
 {- | A row that spawns its driver ONCE over every leg's fixtures and cuts its
    delimited stdout back apart — the property no per-fixture row can state,
    since a leak between two fixtures needs both of them in one heap. -}
-batchedRow : Row -> List LegFixtures -> <Exec "_", FileRead "_", IO> List String
+batchedRow : Row -> List LegFixtures -> <Exec, FileRead, IO> List String
 batchedRow r units =
   let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
   match (boundedVerb
@@ -564,12 +564,12 @@ batchedRow r units =
 unitEntries : LegFixtures -> List String
 unitEntries u = u.entries
 
-legSections : String -> LegFixtures -> <FileRead "_", IO> List String
+legSections : String -> LegFixtures -> <FileRead, IO> List String
 legSections all u =
   let cut = p => chompNewlines (batchSection "===SELFHOST-FIX=== " p all)
   somes (map (p => valueFailure u.leg p (cut p)) u.entries)
 
-gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow : String -> Row -> <Exec, FileRead, IO> Outcome
 gradeRow _ r = match unitsOf r.legs []
   Err e => Outcome { label = r.label, graded = 0, failures = [e] }
   Ok units =>
@@ -611,7 +611,7 @@ cycleModules = [
 cycleChain : String
 cycleChain = "cyclic dependency: a → b → a"
 
-writeAll : String -> List (String, String) -> <FileWrite "_"> Result String Unit
+writeAll : String -> List (String, String) -> <FileWrite> Result String Unit
 writeAll _ [] = Ok ()
 writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
   Err e => Err "\{dir}/\{name}: \{e}"
@@ -625,14 +625,14 @@ writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
    does when it finishes. A second test in one module therefore has to make
    its directory rather than assume one; `mkdirAll` remakes the root on the
    way and is not an error when it is still there. -}
-cycleScratch : <Exec "_", FileWrite "_"> Result String String
+cycleScratch : <Exec, FileWrite> Result String String
 cycleScratch = match scratchDir
   Err e => Err e
   Ok root =>
     let dir = "\{root}/cycle"
     map (() => dir) (mkdirAll dir)
 
-cycleVerdict : String -> <Exec "_", IO> Option String
+cycleVerdict : String -> <Exec, IO> Option String
 cycleVerdict dir =
   let oracle = "\{medakaRoot}/test/bin/check_modules_main"
   let args = [
@@ -651,7 +651,7 @@ cycleVerdict dir =
         Some
           "expected exit 0 reporting \{debug cycleChain}, got exit \{intToString code} reporting \{debug said}"
 
-cycleChainReported : <Exec "_", FileWrite "_", IO> Expectation
+cycleChainReported : <Exec, FileWrite, IO> Expectation
 cycleChainReported = match cycleScratch
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir cycleModules
@@ -711,14 +711,14 @@ validModules = [
   ),
 ]
 
-validModulesScratch : <Exec "_", FileWrite "_"> Result String String
+validModulesScratch : <Exec, FileWrite> Result String String
 validModulesScratch = match scratchDir
   Err e => Err e
   Ok root =>
     let dir = "\{root}/resolve_modules_valid"
     map (() => dir) (mkdirAll dir)
 
-validModulesVerdict : String -> <Exec "_", IO> Option String
+validModulesVerdict : String -> <Exec, IO> Option String
 validModulesVerdict dir =
   let oracle = "\{medakaRoot}/test/bin/resolve_modules_main"
   let args = [
@@ -738,7 +738,7 @@ validModulesVerdict dir =
             Some
               "compiler reports errors on a valid program: \{debug (joinLines got)}"
 
-validModulesRun : <Exec "_", FileWrite "_", IO> Expectation
+validModulesRun : <Exec, FileWrite, IO> Expectation
 validModulesRun = match validModulesScratch
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir validModules
@@ -770,14 +770,14 @@ selfNamedModules = [
   ("use_nt.mdk", "import nt.{NT}\n\nbuild : Int -> NT\nbuild x = NT x\n"),
 ]
 
-selfNamedScratch : <Exec "_", FileWrite "_"> Result String String
+selfNamedScratch : <Exec, FileWrite> Result String String
 selfNamedScratch = match scratchDir
   Err e => Err e
   Ok root =>
     let dir = "\{root}/newtype_self_named_ctor"
     map (() => dir) (mkdirAll dir)
 
-selfNamedRun : <Exec "_", FileWrite "_", IO> Expectation
+selfNamedRun : <Exec, FileWrite, IO> Expectation
 selfNamedRun = match selfNamedScratch
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir selfNamedModules
@@ -804,7 +804,7 @@ test "a self-named newtype imports as a type and its ctor spelling stays unbound
    table (see the module header): `parse_main`'s pass condition is a NON-zero
    exit, the reverse of every `Row`'s `processFailure`, and its graded value
    is normalized STDERR rather than stdout. -}
-parseErrorFixtures : <FileRead "_", IO> Result String (List String)
+parseErrorFixtures : <FileRead, IO> Result String (List String)
 parseErrorFixtures =
   let dir = "\{medakaRoot}/test/parse_error_fixtures"
   match fixtureFiles dir
@@ -845,7 +845,7 @@ firstNonBlank [] = None
 firstNonBlank ("" :: rest) = firstNonBlank rest
 firstNonBlank (l :: _) = Some l
 
-parseErrorVerdict : String -> <Exec "_", FileRead "_", IO> Option String
+parseErrorVerdict : String -> <Exec, FileRead, IO> Option String
 parseErrorVerdict path =
   let name = stem path
   match goldenOf resolveLeg path
@@ -867,11 +867,11 @@ parseErrorVerdict path =
             else
               Some "\{name}: expected \{debug golden}, got \{debug got}"
 
-parseErrorsRun : <Exec "_", FileRead "_", IO> Expectation
+parseErrorsRun : <Exec, FileRead, IO> Expectation
 parseErrorsRun = match parseErrorFixtures
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths =>
-    let expected = 39
+    let expected = 40
     if length paths /= expected then
       fail
         "test/parse_error_fixtures: expected \{intToString expected} fixtures, found \{intToString (length paths)}"
@@ -891,14 +891,14 @@ test "parse_main rejects every malformed fixture with the expected message" =
    lexer) rejection and can therefore round-trip through `parseResult`.
    Derived, not hand-listed (#595: a hand-maintained list silently drifted).
    An empty result is an `Err`, never a silent pass over nothing. -}
-parseResultFixtures : <FileRead "_", IO> Result String (List String)
+parseResultFixtures : <FileRead, IO> Result String (List String)
 parseResultFixtures = match parseErrorFixtures
   Err e => Err e
   Ok paths => derivedParseResultFixtures paths []
 
 derivedParseResultFixtures : List String ->
   List String ->
-  <FileRead "_"> Result String (List String)
+  <FileRead> Result String (List String)
 derivedParseResultFixtures [] acc = match reverse acc
   [] =>
     Err
@@ -926,7 +926,7 @@ firstSrcLine (l :: rest) n =
   else
     Some n
 
-firstSrcLineOf : String -> <FileRead "_"> Option Int
+firstSrcLineOf : String -> <FileRead> Option Int
 firstSrcLineOf path = match readFile path
   Err _ => None
   Ok src => firstSrcLine (lines src) 1
@@ -952,7 +952,7 @@ parseLocation said = match stripPrefix "parse error " said
    structurally different (Menhir's post-lookahead position vs. the
    recursive-descent combinator's give-up token; see the retired script's own
    header), so requiring byte-exact parity would be pinning a coincidence. -}
-oracleLocatedOrAbsent : String -> <FileRead "_"> Option String
+oracleLocatedOrAbsent : String -> <FileRead> Option String
 oracleLocatedOrAbsent path =
   let oracleFile = "\{dirname path}/\{stem path}.parse_result_oracle"
   if fileExists oracleFile then match readFile oracleFile
@@ -966,7 +966,7 @@ oracleLocatedOrAbsent path =
   else
     None
 
-parseResultVerdict : String -> <Exec "_", FileRead "_", IO> Option String
+parseResultVerdict : String -> <Exec, FileRead, IO> Option String
 parseResultVerdict path = match oracleLocatedOrAbsent path
   Some m => Some m
   None =>
@@ -997,7 +997,7 @@ parseResultVerdict path = match oracleLocatedOrAbsent path
                 else
                   None
 
-parseResultRun : <Exec "_", FileRead "_", IO> Expectation
+parseResultRun : <Exec, FileRead, IO> Expectation
 parseResultRun = match parseResultFixtures
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths => match somes (map parseResultVerdict paths)
@@ -1014,7 +1014,7 @@ test "parseResult reports a located parse error within the source, never a panic
 validParseResultSrc : String
 validParseResultSrc = "f = 1\ng x = x + 1\n"
 
-parseResultValidProgramVerdict : String -> <Exec "_", IO> Option String
+parseResultValidProgramVerdict : String -> <Exec, IO> Option String
 parseResultValidProgramVerdict path =
   let oracle = "\{medakaRoot}/test/bin/parse_result_main"
   match boundedVerb oracle [path]
@@ -1027,14 +1027,14 @@ parseResultValidProgramVerdict path =
         Some
           "expected exit 0 reporting \"ok\", got exit \{intToString code} reporting \{debug got}"
 
-parseResultValidProgramScratch : <Exec "_", FileWrite "_"> Result String String
+parseResultValidProgramScratch : <Exec, FileWrite> Result String String
 parseResultValidProgramScratch = match scratchDir
   Err e => Err e
   Ok root =>
     let dir = "\{root}/parse_result_valid"
     map (() => dir) (mkdirAll dir)
 
-parseResultValidProgramRun : <Exec "_", FileWrite "_", IO> Expectation
+parseResultValidProgramRun : <Exec, FileWrite, IO> Expectation
 parseResultValidProgramRun = match parseResultValidProgramScratch
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir =>

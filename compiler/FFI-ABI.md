@@ -74,7 +74,7 @@ untouched.
 🚨 **A catalog redeclaration may not NARROW the catalog's effect row**
 (`T-FFI-CATALOG-NARROW`, #2163, the `ffi-boundary-honesty` sprint). The
 shape rule above walks *through* effect rows on purpose, so `<>` and
-`<FileWrite "_">` are one shape to it — which left epic #2070's own R2 escape
+`<FileWrite path>` are one shape to it — which left epic #2070's own R2 escape
 hatch open for all 138 catalog names. `extern writeFile : String -> String -> <>
 Result Unit String` matched the catalog's heads, passed every rule above, typed
 its caller as `String -> Unit`, and the emitter (name-keyed, and never reached by

@@ -1,0 +1,9 @@
+-- The honest control for effect_named_authority_ref_launder: a cell created
+-- from the named argument and read back still carries that argument's
+-- authority, so the read is within the declared row.
+ok : (p : String) -> <FileRead p> Result String String
+ok p =
+  let r = Ref p
+  readFile !r
+
+main = println 1

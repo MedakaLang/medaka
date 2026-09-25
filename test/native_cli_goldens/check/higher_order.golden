@@ -1,4 +1,4 @@
 double : Num a => a -> a
 isEven : (Eq a, Num a) => a -> Bool
-main : Unit
+main : <IO> Unit
 sumList : (Foldable a, Num b) => a b -> b

@@ -31,9 +31,10 @@ seeded = seeded
 -- The same bug's FOURTH face, NOT a control — do not delete this as redundant.
 -- A bare tyvar in the row slot propagates cross-module for a `public export` type
 -- (that is `effect_var_row_ctor_import`'s ground), but for an OPAQUE one it did not:
--- on a pre-fix binary this inferred `Speak a => a -> Asy b c -> c`, the row slot read
--- as an ordinary type parameter — the LAUNDERING answer, and silent. Post-fix it is
--- `Asy <> b -> b`, with the slot recognised as a row. So this line is a fourth
--- discriminator on the same root cause, and the golden below records the difference.
-runIt : Speak s => s -> Asy b c -> c
+-- on a pre-fix binary the row slot read as an ordinary type parameter — the
+-- LAUNDERING answer, and silent. With the slot recognised as a row, `b` is a row
+-- variable the caller chooses, `speak s a` runs it, and the arrow must declare it:
+-- the golden below records `Asy b c -> <b> c`, and an unannotated result would be
+-- rejected rather than silently narrowed to `<>`.
+runIt : Speak s => s -> Asy b c -> <b> c
 runIt s a = speak s a

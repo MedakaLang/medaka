@@ -1,0 +1,37 @@
+import test.{expectAll, expectEqual}
+import tools.check_policy.{schemeEffects}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{EffRow(..), atomBuiltin, renderAtoms}
+import types.repr.{Scheme(..), Mono(..)}
+
+net : String -> EffRow
+net path = EffRow [atomBuiltin "Net" (PPrefix (Some path))] None
+
+summary : EffRow -> EffRow -> EffRow -> String
+summary force first second =
+  renderAtoms
+    (schemeEffects
+      (Forall
+        []
+        []
+        []
+        force
+        (TFun
+          (TRigid "Unit")
+          first
+          (TFun (TRigid "Unit") second (TRigid "Unit")))))
+
+test "capability summaries join authorities across different arrows" = expectAll
+  [
+    expectEqual
+      "Net \"host/*\""
+      (summary (EffRow [] None) (net "host/a/") (net "host/b/")),
+    expectEqual
+      "Net \"host/*\""
+      (summary (EffRow [] None) (net "host/b/") (net "host/a/")),
+  ]
+
+test "forcing authority participates in the same domain join" =
+  expectEqual
+    "Net"
+    (summary (net "other/path/") (net "host/a/") (net "host/b/"))

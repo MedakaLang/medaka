@@ -1,0 +1,1 @@
+TYPE ERROR: Binding 'bad' reaches "/etc/shadow" where only p is admitted: p is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare

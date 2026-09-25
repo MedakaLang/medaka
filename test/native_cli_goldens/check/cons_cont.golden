@@ -1,2 +1,2 @@
-main : Unit
+main : <IO> Unit
 wrap : a -> List a -> List a

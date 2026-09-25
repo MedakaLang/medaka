@@ -1,5 +1,5 @@
 # META
-source_lines=806
+source_lines=808
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -10,7 +10,7 @@ stages=DESUGAR,MARK
    over `readFile`); use this page when no library module covers what you
    need.
 
-   An effect on a return type (`<Stdout>`, `<FileRead "_">`, `<Net "_">`,
+   An effect on a return type (`<Stdout>`, `<FileRead>`, `<Net>`,
    `<IO>`) names what the primitive touches. A primitive with no effect is
    pure. Mutation of a `Ref` or an array carries no effect. -}
 
@@ -74,20 +74,23 @@ extern setRef : Ref a -> a -> Unit
 -- # Files
 
 -- | The contents of a file as a string, or `Err` with the host's message.
-extern readFile : String -> <FileRead "_"> Result String String
+extern readFile : (path : String) -> <FileRead path> Result String String
 
 -- | The contents of a file as bytes, `0` to `255` each, or `Err` with the
 -- host's message.
-extern readFileBytes : String -> <FileRead "_"> Result String (Array Int)
+extern readFileBytes : (path : String) ->
+  <FileRead path> Result String (Array Int)
 
 -- | Writes a string to a file, replacing any existing contents.
-extern writeFile : String -> String -> <FileWrite "_"> Result String Unit
+extern writeFile : (path : String) ->
+  String ->
+  <FileWrite path> Result String Unit
 
 -- | Writes bytes, `0` to `255` each, to a file, replacing any existing
 -- contents.
-extern writeFileBytes : String ->
+extern writeFileBytes : (path : String) ->
   Array Int ->
-  <FileWrite "_"> Result String Unit
+  <FileWrite path> Result String Unit
 
 -- | Writes a string to a file, replacing any existing contents, and leaves
 -- the file at exactly the permission bits the given mode names (`384` is
@@ -96,50 +99,54 @@ extern writeFileBytes : String ->
 -- The contents never exist at a wider mode: the mode is set on the open
 -- file before the first byte is written, so neither the process umask nor a
 -- pre-existing file's own mode can widen the result.
-extern writeFileMode : String ->
+extern writeFileMode : (path : String) ->
   Int ->
   String ->
-  <FileWrite "_"> Result String Unit
+  <FileWrite path> Result String Unit
 
 -- | Appends a string to a file, creating it when it does not exist.
-extern appendFile : String -> String -> <FileWrite "_"> Result String Unit
+extern appendFile : (path : String) ->
+  String ->
+  <FileWrite path> Result String Unit
 
 -- | Whether a path exists.
-extern fileExists : String -> <FileRead "_"> Bool
+extern fileExists : (path : String) -> <FileRead path> Bool
 
 -- | A path's permission bits, `0` to `4095` (`384` is `rw-------`), or
 -- `Err` with the host's message. Symbolic links are followed.
-extern fileMode : String -> <FileRead "_"> Result String Int
+extern fileMode : (path : String) -> <FileRead path> Result String Int
 
 -- | The absolute path with `.`, `..`, and symbolic links resolved. The
 -- input, unchanged, when it cannot be resolved.
-extern canonicalizePath : String -> <FileRead "_"> String
+extern canonicalizePath : (path : String) -> <FileRead path> String
 
 -- | The names of the entries in a directory.
-extern listDir : String -> <FileRead "_"> Result String (List String)
+extern listDir : (path : String) -> <FileRead path> Result String (List String)
 
 -- | Creates a directory.
-extern makeDir : String -> <FileWrite "_"> Result String Unit
+extern makeDir : (path : String) -> <FileWrite path> Result String Unit
 
 -- | Deletes a file.
-extern removeFile : String -> <FileWrite "_"> Result String Unit
+extern removeFile : (path : String) -> <FileWrite path> Result String Unit
 
 -- | Moves or renames a path.
-extern rename : String -> String -> <FileWrite "_"> Result String Unit
+extern rename : (src : String) ->
+  (dst : String) ->
+  <FileWrite src, FileWrite dst> Result String Unit
 
 -- | Flushes a path's contents to durable storage. Works on a regular file or
 -- a directory; the durability of a `rename` is a property of the containing
 -- directory, not of either file.
-extern fsync : String -> <FileWrite "_"> Result String Unit
+extern fsync : (path : String) -> <FileWrite path> Result String Unit
 
 -- | Removes an empty directory.
-extern removeDir : String -> <FileWrite "_"> Result String Unit
+extern removeDir : (path : String) -> <FileWrite path> Result String Unit
 
 -- | A path's size in bytes, whether it is a directory, whether it is a
 -- regular file, and its modification time in seconds. `fs.stat` returns the
 -- same as a record.
-extern statFile : String ->
-  <FileRead "_"> Result String (Int, Bool, Bool, Float)
+extern statFile : (path : String) ->
+  <FileRead path> Result String (Int, Bool, Bool, Float)
 
 -- # Processes and environment
 
@@ -147,7 +154,7 @@ extern statFile : String ->
 extern args : Unit -> <Env> List String
 
 -- | The value of an environment variable, or `None` when it is unset.
-extern getEnv : String -> <Env "_"> Option String
+extern getEnv : (name : String) -> <Env name> Option String
 
 -- | The absolute path of the running executable.
 extern executablePath : Unit -> <Env> String
@@ -173,9 +180,9 @@ extern buildDate : Unit -> <Env> String
 -- code, the captured standard output, and the captured standard error; a
 -- non-zero exit code is still `Ok`. `Err` carries the host's message when
 -- the program could not be started.
-extern runCommand : String ->
+extern runCommand : (program : String) ->
   List String ->
-  <Exec "_"> Result String (Int, String, String)
+  <Exec program> Result String (Int, String, String)
 
 -- | Ends the program with an exit code.
 extern exit : Int -> Unit
@@ -245,46 +252,46 @@ extern assertSnapshot : String -> String -> <IO> Unit
 -- newtypes are a stdlib concern (stdlib/net.mdk).  See NET-DESIGN.md.
 
 -- | The numeric addresses a host name resolves to.
-extern netResolve : String -> <Net "_"> Result String (List String)
+extern netResolve : (host : String) -> <Net host> Result String (List String)
 
 -- | Opens a TCP connection to a host and port. The result is the
 -- connection's descriptor.
-extern netTcpConnect : String -> Int -> <Net "_"> Result String Int
+extern netTcpConnect : (host : String) -> Int -> <Net host> Result String Int
 
 -- | Starts listening for TCP connections on an address and port. Port `0`
 -- picks a free port. The result is the listener's descriptor.
-extern netTcpListen : String -> Int -> <Net "_"> Result String Int
+extern netTcpListen : (host : String) -> Int -> <Net host> Result String Int
 
 -- | The port a listener is bound to. Use it after listening on port `0`.
-extern netListenPort : Int -> <Net "_"> Result String Int
+extern netListenPort : Int -> <Net> Result String Int
 
 -- | Waits for the next connection on a listener. The result is the
 -- connection's descriptor.
-extern netTcpAccept : Int -> <Net "_"> Result String Int
+extern netTcpAccept : Int -> <Net> Result String Int
 
 -- | Sends bytes on a connection. The result is the number of bytes
 -- written, which may be fewer than given.
-extern netSend : Int -> Array Int -> <Net "_"> Result String Int
+extern netSend : Int -> Array Int -> <Net> Result String Int
 
 -- | Sends bytes starting at the given offset into the array. The result is the number
 -- of bytes written, which may be fewer than given and is limited to 64 KiB per
 -- call so a loop can retain one array while advancing through it.
-extern netSendFrom : Int -> Array Int -> Int -> <Net "_"> Result String Int
+extern netSendFrom : Int -> Array Int -> Int -> <Net> Result String Int
 
 -- | Receives up to the given number of bytes from a connection. An empty array means the
 -- other side has closed.
-extern netRecv : Int -> Int -> <Net "_"> Result String (Array Int)
+extern netRecv : Int -> Int -> <Net> Result String (Array Int)
 
 -- | Shuts down one or both directions of a connection: `0` for reading,
 -- `1` for writing, `2` for both.
-extern netShutdown : Int -> Int -> <Net "_"> Result String Unit
+extern netShutdown : Int -> Int -> <Net> Result String Unit
 
 -- | Closes a descriptor.
-extern netClose : Int -> <Net "_"> Result String Unit
+extern netClose : Int -> <Net> Result String Unit
 
 -- | Sets a connection's send and receive timeout in milliseconds. `0`
 -- means no timeout.
-extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
+extern netSetTimeout : Int -> Int -> <Net> Result String Unit
 
 -- ## Readiness
 --
@@ -295,61 +302,56 @@ extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
 -- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 -- descriptor readable on shutdown. A binary that never calls this retains
 -- the operating system's default signal behavior. Call once after bind.
-extern pdsSignalStart : Unit -> <Net "_"> Result String Int
+extern pdsSignalStart : Unit -> <Net> Result String Int
 
 -- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
 -- the descriptor remains readable. Only call from ordinary task context.
-extern pdsSignalRequested : Unit -> <Net "_"> Bool
+extern pdsSignalRequested : Unit -> <Net> Bool
 
 -- | Waits until any of the descriptors is ready, or the timeout in
 -- milliseconds passes (`-1` waits forever). The interests are parallel to the
 -- descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,
 -- both bits on an error or hangup so a retry surfaces the error.
-extern ioPoll : Array Int ->
-  Array Int ->
-  Int ->
-  <Net "_"> Result String (Array Int)
+extern ioPoll : Array Int -> Array Int -> Int -> <Net> Result String (Array Int)
 
 -- | Switches a socket's non-blocking mode on or off.
-extern netSetNonblock : Int -> Bool -> <Net "_"> Result String Unit
+extern netSetNonblock : Int -> Bool -> <Net> Result String Unit
 
 -- | `netTcpAccept` that returns `None` instead of blocking.
-extern netTryAccept : Int -> <Net "_"> Result String (Option Int)
+extern netTryAccept : Int -> <Net> Result String (Option Int)
 
 {- | `netTcpConnect` that returns as soon as the handshake is under way. The
    result is a non-blocking descriptor that is not connected yet: wait for it
    to become writable, then ask `netConnectCheck` whether it arrived. Name
    resolution still blocks. -}
-extern netConnectStart : String -> Int -> <Net "_"> Result String Int
+extern netConnectStart : (host : String) -> Int -> <Net host> Result String Int
 
 {- | Whether a descriptor from `netConnectStart` has finished its handshake.
    `None` means not yet, so a woken task asks again rather than trusting the
    wake. `Err` is the handshake's own failure (a refused or unreachable peer)
    and leaves the descriptor for the caller to close. -}
-extern netConnectCheck : Int -> <Net "_"> Result String (Option Unit)
+extern netConnectCheck : Int -> <Net> Result String (Option Unit)
 
 -- | `netRecv` that returns `None` instead of blocking. `Some []` is end of
 -- stream.
-extern netTryRecv : Int -> Int -> <Net "_"> Result String (Option (Array Int))
+extern netTryRecv : Int -> Int -> <Net> Result String (Option (Array Int))
 
 -- | `netTryRecv` delivering the chunk as a packed block, one byte per byte
 -- rather than one boxed word per byte. `Some` an empty block is end of
 -- stream. The block is allocated for this call alone and reaches the caller
 -- with no other reference to it.
-extern netTryRecvBytes : Int ->
-  Int ->
-  <Net "_"> Result String (Option ByteBlock)
+extern netTryRecvBytes : Int -> Int -> <Net> Result String (Option ByteBlock)
 
 -- | `netSend` that returns `None` instead of blocking. `Some n` is the count
 -- written, which may be short.
-extern netTrySend : Int -> Array Int -> <Net "_"> Result String (Option Int)
+extern netTrySend : Int -> Array Int -> <Net> Result String (Option Int)
 
 -- | `netTrySend` starting at the given offset into the array, sending at most 64 KiB
 -- per call, so a loop over a large payload pays only for the bytes it sends.
 extern netTrySendFrom : Int ->
   Array Int ->
   Int ->
-  <Net "_"> Result String (Option Int)
+  <Net> Result String (Option Int)
 
 -- # Time
 
@@ -820,29 +822,29 @@ extern stringToLower : String -> String
 (DExtern false "readExactly" (TyFun (TyCon "Int") (TyEffect ("Stdin") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "Ref" (TyFun (TyVar "a") (TyApp (TyCon "Ref") (TyVar "a"))))
 (DExtern false "setRef" (TyFun (TyApp (TyCon "Ref") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Unit"))))
-(DExtern false "readFile" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DExtern false "readFileBytes" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
-(DExtern false "writeFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "writeFileBytes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "writeFileMode" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DExtern false "appendFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "fileExists" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "Bool"))))
-(DExtern false "fileMode" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "canonicalizePath" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "String"))))
-(DExtern false "listDir" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DExtern false "makeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "removeFile" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "rename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "fsync" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "removeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "statFile" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
+(DExtern false "readFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DExtern false "readFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
+(DExtern false "writeFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "writeFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "writeFileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DExtern false "appendFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "fileExists" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "Bool"))))
+(DExtern false "fileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "canonicalizePath" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "String"))))
+(DExtern false "listDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DExtern false "makeDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "removeFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "rename" (TyFun (TyNamed "src" (TyCon "String")) (TyFun (TyNamed "dst" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "src")) (atom "FileWrite" (name "dst"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "fsync" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "removeDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "statFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
 (DExtern false "args" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyApp (TyCon "List") (TyCon "String")))))
-(DExtern false "getEnv" (TyFun (TyCon "String") (TyEffect ((hole "Env")) None (TyApp (TyCon "Option") (TyCon "String")))))
+(DExtern false "getEnv" (TyFun (TyNamed "name" (TyCon "String")) (TyEffect ((atom "Env" (name "name"))) None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildDate" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "runCommand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
+(DExtern false "runCommand" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
@@ -852,28 +854,28 @@ extern stringToLower : String -> String
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DExtern false "__fallthrough__" (TyFun (TyCon "Unit") (TyVar "a")))
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DExtern false "netResolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DExtern false "netTcpConnect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netTcpListen" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
-(DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
-(DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyCon "Bool"))))
-(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DExtern false "netConnectStart" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
-(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netTryRecvBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
-(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "netResolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DExtern false "netTcpConnect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netTcpListen" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyCon "Bool"))))
+(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DExtern false "netConnectStart" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
+(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netTryRecvBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
+(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
@@ -999,29 +1001,29 @@ extern stringToLower : String -> String
 (DExtern false "readExactly" (TyFun (TyCon "Int") (TyEffect ("Stdin") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "Ref" (TyFun (TyVar "a") (TyApp (TyCon "Ref") (TyVar "a"))))
 (DExtern false "setRef" (TyFun (TyApp (TyCon "Ref") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Unit"))))
-(DExtern false "readFile" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DExtern false "readFileBytes" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
-(DExtern false "writeFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "writeFileBytes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "writeFileMode" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DExtern false "appendFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "fileExists" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "Bool"))))
-(DExtern false "fileMode" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "canonicalizePath" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyCon "String"))))
-(DExtern false "listDir" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DExtern false "makeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "removeFile" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "rename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "fsync" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "removeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "statFile" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
+(DExtern false "readFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DExtern false "readFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
+(DExtern false "writeFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "writeFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "writeFileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DExtern false "appendFile" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "fileExists" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "Bool"))))
+(DExtern false "fileMode" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "canonicalizePath" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "String"))))
+(DExtern false "listDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DExtern false "makeDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "removeFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "rename" (TyFun (TyNamed "src" (TyCon "String")) (TyFun (TyNamed "dst" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "src")) (atom "FileWrite" (name "dst"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "fsync" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "removeDir" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileWrite" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "statFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
 (DExtern false "args" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyApp (TyCon "List") (TyCon "String")))))
-(DExtern false "getEnv" (TyFun (TyCon "String") (TyEffect ((hole "Env")) None (TyApp (TyCon "Option") (TyCon "String")))))
+(DExtern false "getEnv" (TyFun (TyNamed "name" (TyCon "String")) (TyEffect ((atom "Env" (name "name"))) None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildDate" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
-(DExtern false "runCommand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
+(DExtern false "runCommand" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
@@ -1031,28 +1033,28 @@ extern stringToLower : String -> String
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DExtern false "__fallthrough__" (TyFun (TyCon "Unit") (TyVar "a")))
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DExtern false "netResolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DExtern false "netTcpConnect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netTcpListen" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
-(DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
-(DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyCon "Bool"))))
-(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DExtern false "netConnectStart" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
-(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netTryRecvBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
-(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "netResolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DExtern false "netTcpConnect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netTcpListen" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyCon "Bool"))))
+(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DExtern false "netConnectStart" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
+(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netTryRecvBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
+(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))

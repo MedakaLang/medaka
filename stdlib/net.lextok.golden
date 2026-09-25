@@ -74,11 +74,15 @@ EXPORT
 NEWLINE
 IDENT "resolve"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "Net"
-STRING "_"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -97,13 +101,17 @@ EXPORT
 NEWLINE
 IDENT "connect"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -125,13 +133,17 @@ EXPORT
 NEWLINE
 IDENT "listen"
 COLON
+LPAREN
+IDENT "addr"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
+IDENT "addr"
 GT
 UPPER "Result"
 UPPER "String"
@@ -157,7 +169,6 @@ UPPER "Listener"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -180,7 +191,6 @@ UPPER "Listener"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -210,7 +220,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -237,7 +246,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -268,7 +276,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1026,7 +1033,6 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1109,7 +1115,6 @@ UPPER "Connection"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1139,7 +1144,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1164,7 +1168,6 @@ UPPER "Connection"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1190,7 +1193,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1212,13 +1214,11 @@ IDENT "recvLineLoop"
 COLON
 UPPER "Connection"
 ARROW
-INDENT
 UPPER "Vector"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1226,8 +1226,6 @@ LPAREN
 UPPER "Option"
 UPPER "String"
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "recvLineLoop"
 IDENT "conn"
@@ -1332,7 +1330,6 @@ UPPER "Connection"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1362,7 +1359,6 @@ UPPER "Shutdown"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1411,7 +1407,6 @@ UPPER "Connection"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1434,7 +1429,6 @@ UPPER "Listener"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1459,7 +1453,6 @@ UPPER "Duration"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1494,7 +1487,6 @@ UPPER "Connection"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1503,7 +1495,6 @@ RPAREN
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1564,7 +1555,6 @@ UPPER "Listener"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1573,7 +1563,6 @@ RPAREN
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1631,7 +1620,6 @@ UPPER "Connection"
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1640,7 +1628,6 @@ RPAREN
 ARROW
 LT
 UPPER "Net"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"

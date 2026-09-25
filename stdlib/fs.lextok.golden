@@ -66,11 +66,15 @@ EXPORT
 NEWLINE
 IDENT "stat"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -122,11 +126,15 @@ EXPORT
 NEWLINE
 IDENT "isDir"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -152,11 +160,15 @@ EXPORT
 NEWLINE
 IDENT "isFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -182,11 +194,15 @@ EXPORT
 NEWLINE
 IDENT "fileSize"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -212,20 +228,31 @@ EXPORT
 NEWLINE
 IDENT "copyFile"
 COLON
+LPAREN
+IDENT "src"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
+LPAREN
+IDENT "dst"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
+IDENT "src"
 COMMA
 UPPER "FileWrite"
-STRING "_"
+IDENT "dst"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "copyFile"
 IDENT "src"
@@ -256,21 +283,16 @@ IDENT "replaceDurably"
 COLON
 UPPER "String"
 ARROW
-INDENT
 UPPER "String"
 ARROW
-NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "replaceDurably"
 IDENT "staged"
@@ -316,7 +338,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -402,10 +423,8 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 COMMA
 UPPER "FileWrite"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -473,7 +492,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -520,7 +538,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -631,7 +648,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -695,7 +711,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -756,7 +771,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"
@@ -820,7 +834,6 @@ UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
-STRING "_"
 GT
 UPPER "Result"
 UPPER "String"

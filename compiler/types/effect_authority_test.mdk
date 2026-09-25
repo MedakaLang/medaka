@@ -1,0 +1,250 @@
+-- The anti-laundering matrix for named authorities: every negative beside its
+-- honest control, observed through production inference on tiny programs.
+-- The rows come from docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md.
+import test.{expectAll, expectEqual, expectTrue, expectFalse}
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import types.typecheck.{checkOneDiags, checkOneSchemeFullK, tcCode}
+import types.repr.{Scheme(..), ppScheme}
+import types.effect_authority.{
+  Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority
+}
+import types.effect_domain.{Param(..)}
+import support.util.{contains, lookupAssoc}
+
+-- A prefix-domain label with a named-authority extern and a set-domain
+-- label beside it, so the two domains can be crossed.
+prelude : String
+prelude =
+  "effect Store Prefix\n"
+    ++ "effect Var Set\n"
+    ++ "extern load : (path : String) -> <Store path> Int\n"
+    ++ "extern move : (src : String) -> (dst : String) -> <Store src, Store dst> Unit\n"
+    ++ "extern lookup : (name : String) -> <Var name> Int\n"
+    ++ "extern anyStore : Unit -> <Store> Int\n"
+
+codes : String -> List String
+codes source =
+  let (errors, _) = checkOneDiags [] [] (
+    "authority",
+    desugar (parseLocated (prelude ++ source)),
+  )
+  map tcCode errors
+
+schemeOf : String -> String -> String
+schemeOf source name =
+  let (_, schemes) = checkOneSchemeFullK None [] [] (
+    "authority",
+    desugar (parseLocated (prelude ++ source)),
+  )
+  match lookupAssoc name schemes
+    Some s => ppScheme s
+    None => "<missing>"
+
+rejects : String -> Bool
+rejects source = contains "T-AUTHORITY" (codes source)
+
+accepts : String -> Bool
+accepts source = match codes source
+  [] => True
+  _ => False
+
+test "a literal must lie within the bound; raw dynamic input is top" = expectAll
+  [
+    expectTrue
+      (accepts "ok : Unit -> <Store \"cfg/*\"> Int\nok _ = load \"cfg/app\"\n"),
+    expectFalse
+      (accepts
+        "bad : Unit -> <Store \"cfg/*\"> Int\nbad _ = load \"/etc/x\"\n"),
+    expectFalse
+      (accepts "dyn : String -> <Store \"cfg/*\"> Int\ndyn p = load p\n"),
+  ]
+
+test "a named wrapper is checked against its own argument" = expectAll [
+  expectTrue
+    (accepts "honest : (p : String) -> <Store p> Int\nhonest p = load p\n"),
+  expectTrue
+    (accepts
+      "narrow : (p : String) -> <Store p> Int\nnarrow p = load (p ++ \"/x\")\n"),
+  expectTrue
+    (rejects
+      "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n"),
+  expectTrue
+    (rejects
+      "rooted : (p : String) -> <Store p> Int\nrooted p = load (\"/\" ++ p)\n"),
+  expectTrue
+    (rejects "wide : (p : String) -> <Store p> Int\nwide p = anyStore ()\n"),
+]
+
+test "the implementation binder's spelling does not matter" = expectAll [
+  expectTrue
+    (accepts "honest : (p : String) -> <Store p> Int\nhonest q = load q\n"),
+  expectTrue
+    (rejects
+      "sneaky : (p : String) -> <Store p> Int\nsneaky q = load \"/etc/x\"\n"),
+]
+
+test "both determining positions of a two-path extern are charged" = expectAll [
+  expectTrue
+    (accepts
+      "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"tmp/a\" \"tmp/b\"\n"),
+  expectFalse
+    (accepts
+      "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"tmp/a\" \"/etc/x\"\n"),
+  expectFalse
+    (accepts
+      "mv : Unit -> <Store \"tmp/*\"> Unit\nmv _ = move \"/etc/x\" \"tmp/a\"\n"),
+]
+
+test "aliases, partial applications and higher-order application keep the relation" = expectAll
+  [
+    expectTrue
+      (accepts
+        "ld = load\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = ld \"cfg/app\"\n"),
+    expectFalse
+      (accepts
+        "ld = load\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = ld \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "part : Unit -> <Store \"tmp/*\"> Unit\npart _ =\n  let from = move \"tmp/a\"\n  from \"tmp/b\"\n"),
+    expectFalse
+      (accepts
+        "part : Unit -> <Store \"tmp/*\"> Unit\npart _ =\n  let from = move \"tmp/a\"\n  from \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = apply load \"cfg/app\"\n"),
+    expectFalse
+      (accepts
+        "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = apply load \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "comp = load >> (n => n + 1)\nok : Unit -> <Store \"cfg/*\"> Int\nok _ = comp \"cfg/app\"\n"),
+    expectFalse
+      (accepts
+        "comp = load >> (n => n + 1)\nbad : Unit -> <Store \"cfg/*\"> Int\nbad _ = comp \"/etc/x\"\n"),
+  ]
+
+test "a wrapper publishes its argument's authority, not a fresh universal" = expectAll
+  [
+    expectEqual
+      "(p : String) -> <Store p> Int"
+      (schemeOf
+        "honest : (p : String) -> <Store p> Int\nhonest p = load p\n"
+        "honest"),
+    expectEqual
+      "(path : String) -> <Store path> Int"
+      (schemeOf "ld = load\n" "ld"),
+    -- an unsigned wrapper of an unqualified argument reads any path
+    expectEqual "String -> <Store> Int" (schemeOf "w p = load p\n" "w"),
+  ]
+
+test "branches join and a let-bound literal is seen through" = expectAll [
+  expectTrue
+    (accepts
+      "ok : Bool -> <Store \"cfg/*\"> Int\nok b = load (if b then \"cfg/a\" else \"cfg/b\")\n"),
+  expectFalse
+    (accepts
+      "bad : Bool -> <Store \"cfg/*\"> Int\nbad b = load (if b then \"cfg/a\" else \"/etc/x\")\n"),
+  expectTrue
+    (accepts
+      "ok : Unit -> <Store \"cfg/*\"> Int\nok _ =\n  let dest = \"cfg/app\"\n  load dest\n"),
+]
+
+test "the set domain does not preserve concatenation" = expectAll [
+  expectTrue
+    (accepts "ok : Unit -> <Var {\"HOME\"}> Int\nok _ = lookup \"HOME\"\n"),
+  expectFalse
+    (accepts
+      "bad : (n : String) -> <Var n> Int\nbad n = lookup (n ++ \"_X\")\n"),
+  expectTrue (accepts "ok : (n : String) -> <Var n> Int\nok n = lookup n\n"),
+]
+
+test "a binder has one domain and a String type" = expectAll [
+  expectTrue
+    (contains
+      "T-AUTHORITY-DOMAIN"
+      (codes "two : (p : String) -> <Store p, Var p> Int\ntwo p = load p\n")),
+  expectTrue
+    (contains
+      "T-AUTHORITY-BINDER"
+      (codes "n : (k : Int) -> <Store k> Int\nn k = anyStore ()\n")),
+]
+
+test "a name is read by its binding: rebinding shadows the outer authority" = expectAll
+  [
+    expectTrue
+      (rejects
+        "arm : (p : String) -> <Store p> Int\narm p = load (match \"/etc/x\"\n  p => p)\n"),
+    expectTrue
+      (rejects
+        "pat : (p : String) -> <Store p> Int\npat p = load (let (p, _) = (\"/etc/x\", 1) in p)\n"),
+    expectFalse
+      (accepts
+        "outer : String -> <Store \"cfg/*\"> Int\nouter input =\n  let q = \"cfg/app\"\n  match Some input\n    Some q => load q\n    None => 0\n"),
+    expectFalse
+      (accepts
+        "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"/etc/x\"\n  let q = x\n  let x = \"cfg/app\"\n  load q\n"),
+    expectTrue
+      (accepts
+        "rename : (p : String) -> <Store p> Int\nrename p = load (match p\n  q => q)\n"),
+    expectTrue
+      (accepts
+        "chain : Unit -> <Store \"cfg/*\"> Int\nchain _ =\n  let x = \"cfg/app\"\n  let q = x\n  let x = \"/etc/x\"\n  load q\n"),
+  ]
+
+test "a method contract's binder is rigid in every body that implements it" = expectAll
+  [
+    expectTrue
+      (rejects
+        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\ncomp = (f => f) load\nimpl Loader X where\n  get _ p = comp \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\ndata X = X\nimpl Loader X where\n  get _ p = load p\n"),
+    expectTrue
+      (accepts
+        "interface Loader a where\n  get : a -> (p : String) -> <Store p> Int\n  get _ p = load (p ++ \"/x\")\ndata X = X\nimpl Loader X where\n"),
+  ]
+
+test "a lambda-form definition and a qualified result follow the signature" = expectAll
+  [
+    expectTrue
+      (accepts "lam : (p : String) -> <Store p> Int\nlam = p => load p\n"),
+    expectTrue
+      (rejects
+        "lam : (p : String) -> <Store p> Int\nlam = p => load \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "idp : (p : String) -> <Store p> String @p\nidp p = p\nvia : (p : String) -> <Store p> Int\nvia p = load (idp p)\n"),
+  ]
+
+test "a written prefix element without a star is exact" = expectAll [
+  expectFalse
+    (accepts
+      "exact : Unit -> <Store \"/etc/host\"> Int\nexact _ = load \"/etc/hostname\"\n"),
+  expectTrue
+    (accepts
+      "pat : Unit -> <Store \"/etc/host*\"> Int\npat _ = load \"/etc/hostname\"\n"),
+  expectTrue
+    (accepts
+      "same : Unit -> <Store \"/etc/host\"> Int\nsame _ = load \"/etc/host\"\n"),
+]
+
+test "the authority algebra" =
+  let top = AConst (PPrefix None)
+  let a = AConst (PPrefix (Some "a/*"))
+  let ab = AConst (PPrefix (Some "a/b/*"))
+  let k = AVar (Ref (AUnbound 1 0 (PPrefix None) (Some "k")))
+  let j = AVar (Ref (AUnbound 2 0 (PPrefix None) None))
+  expectAll [
+    expectTrue (authSub ab a),
+    expectFalse (authSub a ab),
+    expectTrue (authSub k top),
+    expectFalse (authSub top k),
+    expectTrue (authSub k k),
+    expectFalse (authSub k j),
+    expectTrue (authSub a (authJoin k a)),
+    expectTrue (authSub (authJoin ab k) (authJoin a k)),
+    expectFalse (authSub (authJoin a k) (authJoin ab k)),
+    expectEqual " (\"a/*\" | k)" (renderAuthority (authJoin k a)),
+    expectEqual "" (renderAuthority (authJoin top k)),
+  ]

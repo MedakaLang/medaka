@@ -1,1 +1,1 @@
-gm : a -> (Unit -> Unit) -> Box b Unit -> Box b Unit
+gm : a -> (Unit -> <b> Unit) -> Box b Unit -> Box b Unit

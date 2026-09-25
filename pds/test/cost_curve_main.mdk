@@ -72,7 +72,7 @@ corpusSecret =
 
 -- ── loading the corpus exactly as `pds/serve.mdk` does ──────────────────────
 
-loadRepo : String -> <FileRead "_"> Repo
+loadRepo : String -> <FileRead> Repo
 loadRepo dir =
   let (head, blocks) = match persistLoad dir
     Ok value => value
@@ -88,7 +88,7 @@ admitBlobs ((cid, mimeType, bytes) :: rest) store =
     Ok next => admitBlobs rest next
     Err message => panic "cost_curve: corpus blob rejected: \{message}"
 
-loadStore : String -> <FileRead "_"> Store
+loadStore : String -> <FileRead> Store
 loadStore dir =
   let base = storeFromRepo (loadRepo dir)
   let withBlobs = match blobFileRead dir
@@ -199,7 +199,7 @@ measure label server store request reps =
   println
     "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{statusLine first}"
 
-run : String -> String -> Int -> <IO, Clock, FileRead "_"> Unit
+run : String -> String -> Int -> <IO, Clock, FileRead> Unit
 run dir collection reps =
   let store = loadStore dir
   let server = match pdsServer (mustAccount ()) serverLinksEmpty "cost-curve"
@@ -243,7 +243,7 @@ mustInt text =
 {- | `persistTransition` called `reps` times with the same store on both
    sides, so every half compares equal and nothing reaches disk — the loop
    times the decision alone, `blobsMoved` included. -}
-repeatPersist : String -> Store -> Int -> <FileRead "_", FileWrite "_"> Unit
+repeatPersist : String -> Store -> Int -> <FileRead, FileWrite> Unit
 repeatPersist dir store n =
   if n <= 0 then
     ()
@@ -251,10 +251,7 @@ repeatPersist dir store n =
     Ok () => repeatPersist dir store (n - 1)
     Err message => panic "cost_curve: persistTransition failed: \{message}"
 
-measurePersist : String ->
-  Store ->
-  Int ->
-  <IO, Clock, FileRead "_", FileWrite "_"> Unit
+measurePersist : String -> Store -> Int -> <IO, Clock, FileRead, FileWrite> Unit
 measurePersist dir store reps =
   let start = monotonicSec ()
   let () = repeatPersist dir store reps
@@ -262,10 +259,10 @@ measurePersist dir store reps =
   println
     "persistTransition us=\{intToString (micros elapsed reps)} reps=\{intToString reps}"
 
-runPersist : String -> Int -> <IO, Clock, FileRead "_", FileWrite "_"> Unit
+runPersist : String -> Int -> <IO, Clock, FileRead, FileWrite> Unit
 runPersist dir reps = measurePersist dir (loadStore dir) reps
 
-main : <IO, Env, Clock, FileRead "_", FileWrite "_"> Unit
+main : <IO, Env, Clock, FileRead, FileWrite> Unit
 main = match args ()
   ["persist", dir, repsText] => runPersist dir (mustInt repsText)
   [dir, collection, repsText] => run dir collection (mustInt repsText)

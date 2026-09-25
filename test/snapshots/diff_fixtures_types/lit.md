@@ -11,4 +11,4 @@ main =
   println True
   println False
 # TYPES_USER
-main : Unit
+main : <IO> Unit

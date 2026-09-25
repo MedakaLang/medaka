@@ -8,6 +8,6 @@ cons : Int -> List Int -> List Int
 divmod : Int -> Int -> Int
 listcat : List Int -> List Int -> List Int
 logic : Bool -> Bool -> Bool
-main : Unit
+main : <IO> Unit
 pipeline : Int -> Int
 sub : Int -> Int -> Int

@@ -213,7 +213,7 @@ blocksOf : Repo -> List (Cid, Array Int)
 blocksOf repo =
   resultOrPanic "store_persistence: block export failed" (repoExportBlocks repo)
 
-runSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSave : String -> <IO, FileRead, FileWrite> Unit
 runSave dir =
   let repo = fixtureRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
@@ -225,7 +225,7 @@ runSave dir =
 {- | Persist the EARLIER generation, so a later `save` into the same directory
    leaves both generations' blocks on disk and only the head distinguishes
    them. The summary is the one a rewound head must reproduce exactly. -}
-runCrashSaveOld : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runCrashSaveOld : String -> <IO, FileRead, FileWrite> Unit
 runCrashSaveOld dir =
   let repo = olderRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
@@ -235,12 +235,12 @@ runCrashSaveOld dir =
       let () = summary "OLD" repo
       println "CRASH-SAVE-OLD: PASS"
 
-reload : String -> <FileRead "_"> Result String Repo
+reload : String -> <FileRead> Result String Repo
 reload dir = do
   (head, blocks) <- persistLoad dir
   repoFromBlocks accountDid mustSecret head blocks
 
-runLoad : String -> <IO, FileRead "_"> Unit
+runLoad : String -> <IO, FileRead> Unit
 runLoad dir = match reload dir
   Err message => panic "store_persistence: load failed: \{message}"
   Ok repo =>
@@ -248,7 +248,7 @@ runLoad dir = match reload dir
     println "LOAD: PASS"
 
 -- | A tampered block file must be rejected, never served.
-runReject : String -> <IO, FileRead "_"> Unit
+runReject : String -> <IO, FileRead> Unit
 runReject dir = match reload dir
   Ok _ =>
     let () = println "REJECT: FAIL tampered store reloaded"
@@ -295,7 +295,7 @@ printBlobs label (row :: rest) =
   let () = blobSummary label row
   printBlobs label rest
 
-runBlobSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobSave : String -> <IO, FileRead, FileWrite> Unit
 runBlobSave dir = match blobFileWrite dir blobFixtures
   Err message => panic "store_persistence: blob save failed: \{message}"
   Ok () =>
@@ -306,7 +306,7 @@ runBlobSave dir = match blobFileWrite dir blobFixtures
 -- The rows are unverified disk bytes until this runs, exactly as the
 -- repository's are until `repoFromBlocks` runs.
 verifiedBlobs : String ->
-  <FileRead "_"> Result String (List (Cid, String, Array Int))
+  <FileRead> Result String (List (Cid, String, Array Int))
 verifiedBlobs dir = do
   rows <- blobFileRead dir
   _ <- blockStoreFromBlocks (map ((cid, _, bytes) => (cid, bytes)) rows)
@@ -326,7 +326,7 @@ reportBlobs loaded ((cid, _, _) :: rest) = match findBlob cid loaded
     let () = blobSummary "BLOBLOAD" row
     reportBlobs loaded rest
 
-runBlobLoad : String -> <IO, FileRead "_"> Unit
+runBlobLoad : String -> <IO, FileRead> Unit
 runBlobLoad dir = match verifiedBlobs dir
   Err message => panic "store_persistence: blob load failed: \{message}"
   Ok loaded =>
@@ -342,14 +342,14 @@ runBlobLoad dir = match verifiedBlobs dir
    its bytes still missing, or bytes promoted with the sidecar still missing.
    What the reader does with each is the measurement, so the route records it
    rather than demanding it. -}
-runBlobSurvey : String -> <IO, FileRead "_"> Unit
+runBlobSurvey : String -> <IO, FileRead> Unit
 runBlobSurvey dir = match verifiedBlobs dir
   Err message => println "BLOB-SURVEY: ERR \{message}"
   Ok rows =>
     let () = printBlobs "BLOBSURVEY" rows
     println "BLOB-SURVEY: OK \{intToString (length rows)}"
 
-runBlobReject : String -> <IO, FileRead "_"> Unit
+runBlobReject : String -> <IO, FileRead> Unit
 runBlobReject dir = match verifiedBlobs dir
   Ok _ =>
     let () = println "BLOB-REJECT: FAIL tampered blob loaded"
@@ -362,7 +362,7 @@ runBlobReject dir = match verifiedBlobs dir
    `admitBlob` — the ONE admission point — and therefore never reaches
    `blobFileWrite` at all. The directory is read back afterwards to show that
    nothing was written, which is the claim: refused BEFORE any bytes land. -}
-runBlobOversize : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobOversize : String -> <IO, FileRead, FileWrite> Unit
 runBlobOversize dir =
   let oversize = arrayMakeWith (maxBlobBytes + 1) (_ => 65)
   match admitBlob 0 "application/octet-stream" oversize
@@ -399,7 +399,7 @@ fixturePrefs = [
   ],
 ]
 
-runPrefsSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runPrefsSave : String -> <IO, FileRead, FileWrite> Unit
 runPrefsSave dir = match persistPreferences dir fixturePrefs
   Err message => panic "store_persistence: preferences save failed: \{message}"
   Ok () => println "PREFS SAVE: PASS"
@@ -421,12 +421,12 @@ fixtureCredential =
       panic "store_persistence: malformed credential fixture: \{message}"
     Ok record => record
 
-runCredentialSave : String -> <IO, FileWrite "_"> Unit
+runCredentialSave : String -> <IO, FileWrite> Unit
 runCredentialSave dir = match persistCredential dir fixtureCredential
   Err message => panic "store_persistence: credential save failed: \{message}"
   Ok () => println "CREDENTIAL SAVE: PASS"
 
-runPrefsLoad : String -> <IO, FileRead "_"> Unit
+runPrefsLoad : String -> <IO, FileRead> Unit
 runPrefsLoad dir = match persistLoadPreferences dir
   Err message => panic "store_persistence: preferences load failed: \{message}"
   Ok prefs =>
@@ -487,7 +487,7 @@ legacyExpires = 2000000000
    the rows, prune against the starting instant. The row must come back as a
    one-session family named by its own refresh fingerprint and ending at its
    own expiry, and its access token must still verify after the admission. -}
-runSessionsLegacy : String -> <IO, FileRead "_"> Unit
+runSessionsLegacy : String -> <IO, FileRead> Unit
 runSessionsLegacy dir = match persistLoadSessions dir
   Err message =>
     let () = println "SESSIONS LEGACY: FAIL startup refused: \{message}"
@@ -514,12 +514,12 @@ runSessionsLegacy dir = match persistLoadSessions dir
       let () = println "SESSIONS LEGACY: FAIL mismatch"
       exit 1
 
-runSessionsSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSessionsSave : String -> <IO, FileRead, FileWrite> Unit
 runSessionsSave dir = match persistSessions dir fixtureSessions
   Err message => panic "store_persistence: sessions save failed: \{message}"
   Ok () => println "SESSIONS SAVE: PASS"
 
-runSessionsLoad : String -> <IO, FileRead "_"> Unit
+runSessionsLoad : String -> <IO, FileRead> Unit
 runSessionsLoad dir = match persistLoadSessions dir
   Err message => panic "store_persistence: sessions load failed: \{message}"
   Ok rows =>
@@ -554,7 +554,7 @@ anchorLabel (Some cid) = cid
 
 -- What the log holds right now: the pending entry, if any, and how many
 -- entries have been promoted.
-eventSurvey : String -> String -> <IO, FileRead "_"> Unit
+eventSurvey : String -> String -> <IO, FileRead> Unit
 eventSurvey label dir =
   let staged = match eventLogStaged dir
     Err message => "staged-unreadable(\{message})"
@@ -583,7 +583,7 @@ eventSurvey label dir =
      one. -}
 runEventRecover : String ->
   (Repo -> String -> Option String) ->
-  <IO, FileRead "_", FileWrite "_"> Unit
+  <IO, FileRead, FileWrite> Unit
 runEventRecover dir anchorFor =
   let repo = fixtureRepo
   let () =
@@ -648,7 +648,7 @@ putBlobs ((cid, mimeType, bytes) :: rest) store =
 
    The gate persists the earlier generation through `crash-save-old` BEFORE it
    starts tracing, so what the trace holds is this transition alone. -}
-runTransition : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runTransition : String -> <IO, FileRead, FileWrite> Unit
 runTransition dir =
   let before = storeFromRepo olderRepo
   let after = putBlobs blobFixtures (storeWithRepo fixtureRepo before)
@@ -686,7 +686,7 @@ churnSeed : String ->
   Int ->
   Int ->
   Store ->
-  <FileRead "_", FileWrite "_"> Result String Store
+  <FileRead, FileWrite> Result String Store
 churnSeed dir index limit store =
   if index > limit then
     Ok store
@@ -696,7 +696,7 @@ churnSeed dir index limit store =
       Err message => Err message
       Ok () => churnSeed dir (index + 1) limit next
 
-runBlobChurnSeed : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobChurnSeed : String -> <IO, FileRead, FileWrite> Unit
 runBlobChurnSeed dir =
   match churnSeed dir 1 (churnCount - 1) (storeFromRepo olderRepo)
     Err message => panic "store_persistence: churn seed failed: \{message}"
@@ -718,7 +718,7 @@ reportChurnAdd (cid, mimeType, bytes) =
    published — a store rebuilt by reading the blob area would hold the same
    blobs, but reading it would also be the whole-account walk this route is
    here to show is gone. -}
-runBlobChurnAdd : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobChurnAdd : String -> <IO, FileRead, FileWrite> Unit
 runBlobChurnAdd dir =
   let before = putBlobs (churnRows 1 (churnCount - 1)) (storeFromRepo olderRepo)
   let row = churnRow churnCount
@@ -744,7 +744,7 @@ retypeSecondType = "application/json"
 retypeRow : String -> (Cid, String, Array Int)
 retypeRow mimeType = (blobCid retypeBytes, mimeType, retypeBytes)
 
-runBlobRetypeSeed : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobRetypeSeed : String -> <IO, FileRead, FileWrite> Unit
 runBlobRetypeSeed dir =
   let before = storeFromRepo olderRepo
   let after = putBlobs [retypeRow retypeFirstType] before
@@ -762,7 +762,7 @@ runBlobRetypeSeed dir =
    The seed's upload is replayed into memory rather than read back, for
    `blob-churn-add`'s reason — a `before` rebuilt by reading the blob area
    would be the whole-account walk these routes exist to show is gone. -}
-runBlobRetypeAdd : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobRetypeAdd : String -> <IO, FileRead, FileWrite> Unit
 runBlobRetypeAdd dir =
   let before = putBlobs [retypeRow retypeFirstType] (storeFromRepo olderRepo)
   let after = putBlobs [retypeRow retypeSecondType] before
@@ -793,7 +793,7 @@ reportSweep : String ->
   String ->
   String ->
   String ->
-  <IO, FileRead "_"> Unit
+  <IO, FileRead> Unit
 reportSweep dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
   let () =
     println "SWEEP residue-block \{presentLabel (fileExists blockResidue)}"
@@ -833,7 +833,7 @@ sweepAndReport : String ->
   String ->
   String ->
   String ->
-  <IO, FileRead "_", FileWrite "_"> Unit
+  <IO, FileRead, FileWrite> Unit
 sweepAndReport dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
   match persistSweepStagedBlocks dir
     Err message =>
@@ -860,7 +860,7 @@ sweepAndReport dir blockResidue blobResidue eventResidue strayBlockFile strayBlo
 -- Also plant a stray SUBDIRECTORY (with a file of its own inside) under each
 -- `.staging` — residue this process did not write, which the sweep must
 -- skip rather than fail on or recurse into (F5, #3053).
-plantAndSweep : String -> <IO, FileRead "_", FileWrite "_"> Unit
+plantAndSweep : String -> <IO, FileRead, FileWrite> Unit
 plantAndSweep dir =
   let blockResidue = "\{dir}/blocks/.staging/crash-residue"
   let blobResidue = "\{dir}/blobs/.staging/crash-residue"
@@ -920,7 +920,7 @@ plantAndSweep dir =
    Shared by every route that plants something beside legitimate content, so
    that "the readers still answer with everything real" is a claim about all
    three halves and not a vacuous one over an empty directory. -}
-persistFixtureTree : String -> <FileRead "_", FileWrite "_"> Result String Unit
+persistFixtureTree : String -> <FileRead, FileWrite> Result String Unit
 persistFixtureTree dir =
   let repo = fixtureRepo
   do
@@ -940,7 +940,7 @@ persistFixtureTree dir =
    must be gone afterward; the legitimate content it sat beside must not be,
    since a sweep that cannot tell staged residue from a directory it should
    never touch is not the sweep #2572 part 2 asked for. -}
-runSweepStaging : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSweepStaging : String -> <IO, FileRead, FileWrite> Unit
 runSweepStaging dir = match persistFixtureTree dir
   Err message =>
     panic "store_persistence: sweep-staging setup failed: \{message}"
@@ -955,10 +955,10 @@ strayText = "planted by the gate; no store in this tree wrote it"
 -- refusal to NAME it. A planted directory gets a file of its own inside, so
 -- that "skipped" means the whole subtree was passed over rather than that an
 -- empty directory happened to contribute nothing.
-plantFile : String -> <FileWrite "_"> Result String String
+plantFile : String -> <FileWrite> Result String String
 plantFile path = map (_ => path) (writeFile path strayText)
 
-plantDir : String -> <FileWrite "_"> Result String String
+plantDir : String -> <FileWrite> Result String String
 plantDir path = do
   () <- mkdirAll path
   _ <- plantFile "\{path}/inner"
@@ -983,7 +983,7 @@ firstBlobCid = match blobFixtures
 -- shard. Derived rather than written down: which shards this fixture occupies
 -- is a function of its bytes, and a hand-picked name would go stale the first
 -- time a fixture record changes.
-freeShardFrom : String -> Int -> <FileRead "_"> String
+freeShardFrom : String -> Int -> <FileRead> String
 freeShardFrom parent n =
   if n >= 256 then
     panic "store_persistence: \{parent} occupies every shard name"
@@ -994,7 +994,7 @@ freeShardFrom parent n =
     else
       name
 
-plantShard : String -> <FileRead "_", FileWrite "_"> Result String String
+plantShard : String -> <FileRead, FileWrite> Result String String
 plantShard parent = plantDir "\{parent}/\{freeShardFrom parent 0}"
 
 -- A reader's answer in one word: how many rows it returned, or that it
@@ -1017,7 +1017,7 @@ strayMessage label reader (Err message) =
    `blobs`, which is `blobFileRead` — the two answer the same question by
    different means and a case where they disagree is a count of blobs the
    server cannot serve. -}
-straySurvey : String -> String -> <IO, FileRead "_"> Unit
+straySurvey : String -> String -> <IO, FileRead> Unit
 straySurvey label dir =
   let blocks = map length (blockFileRead "\{dir}/blocks")
   let blobs = map length (blobFileRead dir)
@@ -1035,8 +1035,8 @@ straySurvey label dir =
 -- survey of what every reader then answers.
 strayCase : String ->
   String ->
-  (String -> <FileRead "_", FileWrite "_"> Result String String) ->
-  <IO, FileRead "_", FileWrite "_"> Unit
+  (String -> <FileRead, FileWrite> Result String String) ->
+  <IO, FileRead, FileWrite> Unit
 strayCase root label plant =
   let dir = "\{root}/\{label}"
   match persistFixtureTree dir
@@ -1058,7 +1058,7 @@ blobShardPath dir = "\{blobDir dir}/\{shardOf firstBlobCid}"
 -- A bytes-file name spelling a valid CID, beside a sidecar of its own, but
 -- carried by a DIRECTORY. Name arithmetic alone reads it as a blob, which is
 -- why `blobFileCount` used to report one the reader skips.
-plantBlobLeafCid : String -> <FileRead "_", FileWrite "_"> Result String String
+plantBlobLeafCid : String -> <FileRead, FileWrite> Result String String
 plantBlobLeafCid dir =
   let name = cidName (repoRootCid fixtureRepo)
   do
@@ -1083,7 +1083,7 @@ mimeSuffixText = ".mime"
    and, for a refusal, the message; `store_persistence.sh` decides which of
    those is correct, so that the expected disposition lives beside the prose
    that states the rule rather than inside the driver. -}
-runStrayEntries : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runStrayEntries : String -> <IO, FileRead, FileWrite> Unit
 runStrayEntries root =
   let () = strayCase root "none" (_ => Ok "nothing")
   let () = strayCase root "blocks-top-file" (dir =>
@@ -1134,7 +1134,7 @@ printGenesis (entry :: rest) =
       "GENESIS \{intToString entry.seq} \{anchorLabel entry.anchorCommitCid} \{entry.frameHex}"
   printGenesis rest
 
-genesisSurvey : String -> <IO, FileRead "_"> Unit
+genesisSurvey : String -> <IO, FileRead> Unit
 genesisSurvey dir = match eventLogRead dir 0
   Err message => panic "store_persistence: genesis log unreadable: \{message}"
   Ok entries =>
@@ -1147,7 +1147,7 @@ genesisSurvey dir = match eventLogRead dir 0
 
    Pointed at a log the gate truncated this is the resumption; pointed at a
    finished one it must add nothing, which is the same route run twice. -}
-runGenesisResume : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisResume : String -> <IO, FileRead, FileWrite> Unit
 runGenesisResume dir = match reload dir
   Err message => panic "store_persistence: genesis reload failed: \{message}"
   Ok repo =>
@@ -1171,7 +1171,7 @@ genesisSecondStartTime = eventFixtureTime + 3600
    panicking on it: a log whose last-promoted pointer is gone while its
    entries remain must be refused, and a route that dies on `Err` cannot tell
    a refusal apart from a crash. -}
-runGenesisGuard : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisGuard : String -> <IO, FileRead, FileWrite> Unit
 runGenesisGuard dir = match reload dir
   Err message => panic "store_persistence: genesis reload failed: \{message}"
   Ok repo =>
@@ -1194,14 +1194,14 @@ runGenesisGuard dir = match reload dir
    the same bytes whenever the log is. What the gate compares is a log nothing
    interrupted against one it truncated and let this finish, and the
    comparison would otherwise be grading the reload as well. -}
-runGenesisInit : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisInit : String -> <IO, FileRead, FileWrite> Unit
 runGenesisInit dir =
   let repo = fixtureRepo
   match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
     Err message => panic "store_persistence: genesis save failed: \{message}"
     Ok () => runGenesisResume dir
 
-main : <IO, Env, FileRead "_", FileWrite "_"> Unit
+main : <IO, Env, FileRead, FileWrite> Unit
 main = match args ()
   ["save", dir] => runSave dir
   ["crash-save-old", dir] => runCrashSaveOld dir

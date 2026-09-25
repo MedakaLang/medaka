@@ -8,4 +8,4 @@ r = identity
 main = println r
 # TYPES_USER
 r : Int
-main : Unit
+main : <IO> Unit

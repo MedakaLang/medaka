@@ -166,7 +166,7 @@ export
 spawnRaw : Int ->
   String ->
   List String ->
-  <Exec "_", IO> Result String (Int, String, String)
+  <Exec, IO> Result String (Int, String, String)
 spawnRaw secs cmd args =
   match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
     Err e =>
@@ -180,7 +180,7 @@ spawnRaw secs cmd args =
    through: a row where the tool itself failed is not the same condition as
    a row whose SQL was refused. -}
 export
-spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+spawnOut : Int -> String -> List String -> <Exec, IO> Result String String
 spawnOut secs cmd args = match spawnRaw secs cmd args
   Err e => Err e
   Ok (0, out, _) => Ok out
@@ -196,7 +196,7 @@ seedTimeoutSeconds = 120
 {- | One `Seed`'s SQL text: itself, or read from the checked-in fixture it
    names. -}
 export
-seedSql : Seed -> <FileRead "_", IO> Result String String
+seedSql : Seed -> <FileRead, IO> Result String String
 seedSql (SeedSql sql) = Ok sql
 seedSql (SeedFile rel) = match readFile (underRoot rel)
   Err e => Err "could not read \{rel}: \{e}"
@@ -205,7 +205,7 @@ seedSql (SeedFile rel) = match readFile (underRoot rel)
 {- | `db` seeded through the real `sqlite3` CLI, one `Seed` statement at a
    time, in order. -}
 export
-seedDb : String -> List Seed -> <Exec "_", FileRead "_", IO> Result String Unit
+seedDb : String -> List Seed -> <Exec, FileRead, IO> Result String Unit
 seedDb _ [] = Ok ()
 seedDb db (s :: rest) = match seedSql s
   Err e => Err e

@@ -1,6 +1,6 @@
-gmap : (a -> b) -> c d a -> c d b
-runBox : Box a b -> b
-loud : Int -> <Stdout> Int
 built : Box <Stdout> Int
+gmap : (a -> <b> c) -> d b a -> d b c
+loud : Int -> <Stdout> Int
+main : <IO> Unit
 pureInt : Int
-main : Unit
+runBox : Box a b -> <a> b

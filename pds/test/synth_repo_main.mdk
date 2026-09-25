@@ -207,7 +207,7 @@ runBuild : String ->
   Int ->
   Int ->
   Int ->
-  <IO, FileRead "_", FileWrite "_"> Unit
+  <IO, FileRead, FileWrite> Unit
 runBuild shape dir count blobCount seed =
   let rows = buildRows shape seed count
   let tree = mustTree (entriesOf rows)
@@ -243,7 +243,7 @@ mustInt : String -> Int
 mustInt text =
   optionOrPanic "synth_repo: malformed integer: \{text}" (toInt text)
 
-main : <IO, Env, FileRead "_", FileWrite "_"> Unit
+main : <IO, Env, FileRead, FileWrite> Unit
 main = match args ()
   ["build", shape, dir] =>
     runBuild shape dir defaultRecordCount defaultBlobCount defaultSeed

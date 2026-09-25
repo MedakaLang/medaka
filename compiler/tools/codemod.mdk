@@ -35,7 +35,9 @@
 -- mutable-cell approach would leak a host capability into the transform's
 -- otherwise-pure type).
 
-import frontend.ast.{Ty(..), Loc, Decl(..), mapTyInDecl}
+import frontend.ast.{
+  Ty(..), Loc, Decl(..), mapTyInDecl, EffAtomTy(..), effAtomSurface
+}
 import frontend.parser.{
   parseResult,
   ParseError,
@@ -48,6 +50,7 @@ import frontend.parser.{
 import frontend.lexer.{collectComments}
 import tools.fmt.{formatProgram}
 import support.util.{
+  escStr,
   reverseL,
   listLen,
   lookupAssoc,
@@ -227,7 +230,7 @@ effTyNode acts (TyRow es tail l) = rewriteBareRow acts es tail l
 effTyNode _ ty = (ty, False)
 
 rewriteRow : List (String, EffAction) ->
-  List (String, Option String) ->
+  List EffAtomTy ->
   List String ->
   Ty ->
   (Ty, Bool)
@@ -246,7 +249,7 @@ rewriteRow acts es tail t =
 -- (unlike `rewriteRow`'s `None` case above) an empty closed bare row stays a
 -- `TyRow [] []` rather than being dropped — there is no other Ty to become.
 rewriteBareRow : List (String, EffAction) ->
-  List (String, Option String) ->
+  List EffAtomTy ->
   List String ->
   Option Loc ->
   (Ty, Bool)
@@ -255,8 +258,8 @@ rewriteBareRow acts es tail l =
   (TyRow deduped tail l, changed)
 
 rewriteAtoms : List (String, EffAction) ->
-  List (String, Option String) ->
-  (List (String, Option String), Bool)
+  List EffAtomTy ->
+  (List EffAtomTy, Bool)
 rewriteAtoms acts es =
   let stepped = map (applyAtom acts) es
   let anyChanged = anyList sndB stepped
@@ -265,19 +268,16 @@ rewriteAtoms acts es =
   let dedupChanged = listLen deduped /= listLen kept
   (deduped, anyChanged || dedupChanged)
 
-applyAtom : List (String, EffAction) ->
-  (String, Option String) ->
-  (Option (String, Option String), Bool)
-applyAtom acts (label, dom) = match lookupAssoc label acts
-  None => (Some (label, dom), False)
+applyAtom : List (String, EffAction) -> EffAtomTy -> (Option EffAtomTy, Bool)
+applyAtom acts a = match lookupAssoc a.eatLabel acts
+  None => (Some a, False)
   Some ADrop => (None, True)
-  Some (ARename nw) => (Some (nw, dom), True)
+  Some (ARename nw) => (Some EffAtomTy { a | eatLabel = nw }, True)
 
 sndB : (a, Bool) -> Bool
 sndB (_, b) = b
 
-collectKept : List (Option (String, Option String), Bool) ->
-  List (String, Option String)
+collectKept : List (Option EffAtomTy, Bool) -> List EffAtomTy
 collectKept [] = []
 collectKept ((None, _) :: rest) = collectKept rest
 collectKept ((Some a, _) :: rest) = a :: collectKept rest
@@ -287,15 +287,12 @@ collectKept ((Some a, _) :: rest) = a :: collectKept rest
 -- private O(n²) `List`-as-a-set scan).  Both the label and the payload are
 -- unconstrained Strings, so the label is length-prefixed and the `Option` is
 -- tagged — the encoding is injective, matching the old `atomEq` exactly.
-dedupeAtoms : List (String, Option String) -> List (String, Option String)
+dedupeAtoms : List EffAtomTy -> List EffAtomTy
 dedupeAtoms xs = dedupBy atomKey xs
 
-atomKey : (String, Option String) -> String
-atomKey (label, dom) = lenKey label ++ domKey dom
-
-domKey : Option String -> String
-domKey None = "N"
-domKey (Some x) = "S\{x}"
+-- The written spelling is injective over (label, parameter), so it is the key.
+atomKey : EffAtomTy -> String
+atomKey a = effAtomSurface escStr a
 
 -- Advisory warnings: a `DEffect` that DECLARES a targeted label is left
 -- untouched (the codemod only rewrites row USES), so flag it for the operator.
@@ -310,7 +307,7 @@ declEffectWarns acts (d :: ds) =
   declEffectWarn acts d ++ declEffectWarns acts ds
 
 declEffectWarn : List (String, EffAction) -> Decl -> List String
-declEffectWarn acts (DEffect _ name _) = match lookupAssoc name acts
+declEffectWarn acts (DEffect _ name _ _) = match lookupAssoc name acts
   None => []
   Some _ => [
     "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched",

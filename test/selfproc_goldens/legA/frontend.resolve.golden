@@ -1,4 +1,5 @@
 abstractlyExportedTypes : ModuleExports -> List String
+addEffectProvenance : Map String (List String) -> List (String, String) -> Map String (List String)
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
@@ -38,6 +39,7 @@ buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
+builtinEffOrigins : List (String, TyConOrigin)
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigins : List (String, TyConOrigin)
 carriedCtorOwners : List (String, String) -> List UseMember -> List (String, String)
@@ -49,8 +51,10 @@ charMask : Int -> String -> Int
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
 checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
+checkAuthorityName : List String -> Option Loc -> String -> List ResError
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
 checkDecl : Env -> Decl -> List ResError
+checkEffAtoms : List String -> Option Loc -> Env -> List EffAtomTy -> List ResError
 checkEffect : Option Loc -> Env -> String -> List ResError
 checkExpr : Option Loc -> Env -> Scope -> Expr -> List ResError
 checkFieldAssign : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
@@ -81,6 +85,7 @@ checkStmt : Option Loc -> Env -> Scope -> DoStmt -> (List ResError, Scope)
 checkStmts : Option Loc -> Env -> Scope -> List DoStmt -> List ResError
 checkSuper : Env -> Super -> List ResError
 checkType : Option Loc -> Env -> Ty -> List ResError
+checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
 checkVar : Option Loc -> Env -> Scope -> String -> List ResError
 checkVariant : Env -> Variant -> List ResError
 closeMissing : List String -> List String -> Map String Unit -> Map String Unit
@@ -126,6 +131,9 @@ dupValGo : Option String -> Bool -> List Decl -> List ResError
 dupValueBindingErrors : List Decl -> List ResError
 duplicateErrors : List Decl -> List Decl -> List ResError
 dvbName : ResError -> String
+effectAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
+effectDeclaredIn : String -> String -> (String, String)
+effectKey : String -> String
 effectNames : List Decl -> List String
 emptyAdds : ImportAdds
 emptyScope : Scope
@@ -160,6 +168,7 @@ firstOr : String -> List String -> String
 firstStmtLoc : List DoStmt -> Option Loc
 flatTyOriginScope : List Decl -> Map String TyConOrigin
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
+foldEffectProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldNamespaceProvenance : (Map String ModuleExports -> UsePath -> List String) -> Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
@@ -184,6 +193,7 @@ ifaceValsOf : ModuleExports -> String -> List String
 implMethodNm : ImplMethod -> String
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
 importValueNames : Map String ModuleExports -> UsePath -> List String
+importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedEffects : Map String ModuleExports -> List Decl -> List String
 importedIfaceMethods : Map String ModuleExports -> List Decl -> List (String, List String)
 importedModuleValueSets : Map String ModuleExports -> List Decl -> List (String, List String)
@@ -202,6 +212,7 @@ internalGuardFor : Bool -> List String
 isAmbiguous : Env -> String -> Bool
 isCtorAmbiguous : Env -> String -> Bool
 isCtorOwnerKey : String -> Bool
+isEffectKey : String -> Bool
 isEmptyL : List a -> Bool
 isHaskellAliasPair : String -> String -> Bool
 isHint : String -> Bool
@@ -214,6 +225,7 @@ isTaggedOriginKey : String -> Bool
 isTransparentDecl : Decl -> Bool
 isTupleCtorTyName : String -> Bool
 isTypeAmbiguous : Env -> String -> Bool
+isWildPath : UsePath -> Bool
 keepAmbiguous : List String -> List (String, List String) -> List (String, List String)
 keepBetter : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBoundMethods : Env -> List String -> List String
@@ -244,6 +256,7 @@ noCarry : UsePath -> ModuleExports -> List a
 noteOriginTrace : String -> List Decl -> Unit
 nsAbstractData : ExpNs String
 nsCtors : ExpNs String
+nsEffectOrigins : ExpNs (String, String)
 nsEffects : ExpNs String
 nsFieldOwners : ExpNs (String, String)
 nsIfaceMethods : ExpNs (String, List String)
@@ -262,6 +275,7 @@ originOfTyName : Map String TyConOrigin -> String -> TyConOrigin
 originTraceEnabled : Ref Bool
 originTraceLog : Ref (List (String, List Decl))
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
+ownEffOrigin : String -> String -> (String, TyConOrigin)
 ownIfaceOrigin : String -> String -> (String, TyConOrigin)
 ownInterfaceMethods : List Decl -> List (String, List String)
 ownTyOrigin : String -> String -> (String, TyConOrigin)
@@ -336,6 +350,7 @@ stampDeclOrigin : String -> Decl -> Decl
 stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclTyOrigins : List String -> Map String TyConOrigin -> Decl -> Decl
 stampDeclWith : Map String Int -> Decl -> Decl
+stampEffAtoms : Map String TyConOrigin -> List EffAtomTy -> (List EffAtomTy, Bool)
 stampExpr : Map String Int -> Expr -> Expr
 stampFieldAssign : Map String Int -> FieldAssign -> FieldAssign
 stampFlatTyOrigins : List Decl -> List Decl -> List Decl
