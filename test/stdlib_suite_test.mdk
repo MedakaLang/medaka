@@ -201,6 +201,7 @@ suites = [
   -- engine lowers on its own.
   ("u16", (35, EvalAndNative)),
   ("u32", (36, EvalAndNative)),
+  ("u64", (33, EvalAndNative)),
   ("u8", (29, EvalAndNative)),
   ("validation", (20, EvalAndNative)),
   ("vector", (32, EvalAndNative)),
@@ -415,6 +416,8 @@ test "stdlib/toml.mdk executed >= 56 assertions" = floorExpectation "toml"
 test "stdlib/u16.mdk executed >= 35 assertions" = floorExpectation "u16"
 
 test "stdlib/u32.mdk executed >= 36 assertions" = floorExpectation "u32"
+
+test "stdlib/u64.mdk executed >= 33 assertions" = floorExpectation "u64"
 
 test "stdlib/u8.mdk executed >= 29 assertions" = floorExpectation "u8"
 

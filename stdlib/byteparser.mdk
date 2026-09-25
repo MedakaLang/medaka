@@ -15,9 +15,9 @@
    readers name their byte order and width, as in `beUint 4` for a four-byte
    big-endian unsigned integer and `leSint 2` for a two-byte little-endian
    signed one. An `Int` reader fails rather than wrap when the value does not
-   fit `Int`, which only an eight-byte value can do. `beU16`, `beU32` and
-   `beU64`, and their `le` forms, read a fixed-width unsigned value as its
-   own type, `U64` included. `bytebuilder`'s emit functions write the same
+   fit `Int`, which only an eight-byte value can do. `beU16`, `beU32`,
+   `beU64`, `leU16`, `leU32` and `leU64` read a fixed-width unsigned value as
+   its own type, `U64` included. `bytebuilder`'s emit functions write the same
    encodings. -}
 
 import array.{reverse as arrayReverse}
@@ -367,29 +367,35 @@ intRangeMessage = "integer does not fit Int (read a U64 with beU64 or leU64)"
    > runByteParser (beSint 2) (arrayFromList [255, 255])
    Ok -1
    > runByteParser (beSint 2) (arrayFromList [0, 1])
-   Ok 1 -}
+   Ok 1
+   > runByteParser (beSint 9) (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255, 254])
+   Ok -2 -}
 export
 beSint : Int -> ByteParser Int
 beSint n
-  | n >= 8 = signedFrom64 n beU64
+  | n >= 8 = defer
+    fill <- takeBytes (n - 8)
+    x <- beU64
+    signedFrom64 fill x
   | otherwise = defer
     u <- beUint n
     let threshold = pow2 (8 * n - 1)
     deferPure (if u >= threshold then u - threshold * 2 else u)
 
--- An eight-byte two's-complement value read as its `U64` pattern: it fits `Int`
--- when bits 63 and 62 agree, and is then exactly the low 63 bits.  Wider than
--- eight bytes is refused, since no such value is an `Int` without a range check
--- over the extra bytes.
-signedFrom64 : Int -> ByteParser U64 -> ByteParser Int
-signedFrom64 n reader
-  | n > 8 = failWith "a signed integer of \{n} bytes does not fit Int"
-  | otherwise = defer
-    x <- reader
-    if x < 0x4000000000000000 || x >= 0xC000000000000000 then
-      deferPure (U64.truncateToInt x)
-    else
-      failWith intRangeMessage
+-- A two's-complement value of eight bytes or more, as its low eight bytes read
+-- as a `U64` and the bytes above them. It fits `Int` when bits 63 and 62 agree
+-- and every byte above repeats the sign, and is then exactly the low 63 bits.
+signedFrom64 : Bytes -> U64 -> ByteParser Int
+signedFrom64 fill x =
+  let signByte = if x >= 0x8000000000000000 then 255 else 0
+  if (x < 0x4000000000000000 || x >= 0xC000000000000000)
+    && allEqual signByte (toArray fill) 0 then
+    deferPure (U64.truncateToInt x)
+  else
+    failWith intRangeMessage
+
+allEqual : Int -> Array Int -> Int -> Bool
+allEqual b arr i = i >= arrayLength arr || arr[i] == b && allEqual b arr (i + 1)
 
 -- 2^n by left shift; valid for n in 0..62 on a 63-bit Int.
 pow2 : Int -> Int
@@ -451,7 +457,10 @@ leUintGo n shift acc input pos
 export
 leSint : Int -> ByteParser Int
 leSint n
-  | n >= 8 = signedFrom64 n leU64
+  | n >= 8 = defer
+    x <- leU64
+    fill <- takeBytes (n - 8)
+    signedFrom64 fill x
   | otherwise = defer
     u <- leUint n
     let threshold = pow2 (8 * n - 1)
@@ -472,7 +481,7 @@ leFloat64 = defer
 -- # Fixed-width unsigned readers
 
 {- | A `U16` from two bytes, most significant byte first. The inverse of
-   `bytebuilder`'s `emitU16BE`.
+   `bytebuilder.emitU16BE`.
 
    > runByteParser beU16 (arrayFromList [1, 2])
    Ok 258 -}
@@ -483,7 +492,7 @@ beU16 = defer
   deferPure (U16.truncate n)
 
 {- | A `U32` from four bytes, most significant byte first. The inverse of
-   `bytebuilder`'s `emitU32BE`.
+   `bytebuilder.emitU32BE`.
 
    > runByteParser beU32 (arrayFromList [255, 255, 255, 255])
    Ok 4294967295 -}
@@ -494,7 +503,7 @@ beU32 = defer
   deferPure (U32.truncate n)
 
 {- | A `U64` from eight bytes, most significant byte first. The inverse of
-   `bytebuilder`'s `emitU64BE`. Every eight-byte value fits, so this never
+   `bytebuilder.emitU64BE`. Every eight-byte value fits, so this never
    fails for want of range.
 
    > runByteParser beU64 (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255])
@@ -515,7 +524,7 @@ beU64Go n acc input pos
       (pos + 1)
 
 {- | A `U16` from two bytes, least significant byte first. The inverse of
-   `bytebuilder`'s `emitU16LE`.
+   `bytebuilder.emitU16LE`.
 
    > runByteParser leU16 (arrayFromList [2, 1])
    Ok 258 -}
@@ -526,7 +535,7 @@ leU16 = defer
   deferPure (U16.truncate n)
 
 {- | A `U32` from four bytes, least significant byte first. The inverse of
-   `bytebuilder`'s `emitU32LE`.
+   `bytebuilder.emitU32LE`.
 
    > runByteParser leU32 (arrayFromList [4, 3, 2, 1])
    Ok 16909060 -}
@@ -537,7 +546,7 @@ leU32 = defer
   deferPure (U32.truncate n)
 
 {- | A `U64` from eight bytes, least significant byte first. The inverse of
-   `bytebuilder`'s `emitU64LE`.
+   `bytebuilder.emitU64LE`.
 
    > runByteParser leU64 (arrayFromList [21, 124, 74, 127, 185, 121, 55, 158])
    Ok 11400714819323198485 -}

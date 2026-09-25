@@ -12,10 +12,12 @@ public export data Lit =
   | LInt Int
   | LFloat Float
   -- A `U64` constant, as its high and low 32-bit halves (each `0 .. 2^32 - 1`):
-  -- the compiler's own `Int` is 63-bit, so it cannot hold the value itself.  Never
-  -- parsed: the typechecker mints it for an integer literal whose type grounded to
-  -- `U64` (`rewriteBinopExpr`), so it reaches only the interpreters and the
-  -- emitters, never a pattern.
+  -- the compiler's own `Int` is 63-bit, so it cannot hold the value itself.  The
+  -- typechecker mints it for an integer literal whose type grounded to `U64`
+  -- (`rewriteBinopExpr`), so in an expression it reaches only the interpreters
+  -- and the emitters.  As a pattern it exists only when a wide literal is
+  -- written in a binding (`exprToPat`), and the typechecker refuses it there
+  -- (`inferU64LitPat`), so no engine ever matches against one.
   | LU64 Int Int
   | LString String
   | LChar String

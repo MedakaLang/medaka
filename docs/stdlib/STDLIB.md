@@ -1249,7 +1249,7 @@ It sits with `Result`/`isOk`/`isErr`/`resultOr`/`mapErr` (`resultOr` was
 
 ## Module 24 — `bits64` — retired (2026-09-25, N3 of epic #3417)
 
-`stdlib/bits64.mdk` emulated a 64-bit unsigned word as four 16-bit limbs over
+The `bits64` module emulated a 64-bit unsigned word as four 16-bit limbs over
 the 63-bit `Int` (issue #223). The builtin `U64` and the `u64` module
 (`docs/design/INTEGER-TYPES-DESIGN.md` §5, §6.2) replace it, and the module is
 deleted; its type's generic tuple `Ord` (#2311) and its missing operations

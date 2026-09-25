@@ -715,8 +715,9 @@ intLitTooBigMsg = "integer literal too large for Int (max 4611686018427387903)"
 -- (INTEGER-TYPES-DESIGN §3.2 item 5; `U64` patterns are not built).  Both
 -- messages keep the "integer literal too large" prefix `parseErrCode` keys
 -- `L-INT-OVERFLOW` on.
-wideNegMsg : String
-wideNegMsg = "integer literal too large for Int (max magnitude 2^62)"
+wideNegMsg : String -> String
+wideNegMsg lx =
+  "integer literal too large for Int (-\{lx} is below Int's minimum, -4611686018427387904, and a U64 is never negative)"
 
 widePatMsg : String -> String
 widePatMsg lx =
@@ -760,7 +761,7 @@ negUnaryFor (TInt n lx)
     advance
     advance
     deferPure (ENumLit n (Ref None) (Ref RNone) ("-" ++ lx)))
-negUnaryFor (TWideInt _ _ _) = fatalP wideNegMsg
+negUnaryFor (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
 negUnaryFor _ = defer
   advance
   e <- parseUnary
@@ -825,7 +826,7 @@ negLitArgFor TMinusTight (TInt n lx) = defer
   advance
   advance
   deferPure (ENumLit (negate n) (Ref None) (Ref RNone) ("-" ++ lx))
-negLitArgFor TMinusTight (TWideInt _ _ _) = fatalP wideNegMsg
+negLitArgFor TMinusTight (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
 negLitArgFor TMinusTight (TFloat f) = defer
   advance
   advance

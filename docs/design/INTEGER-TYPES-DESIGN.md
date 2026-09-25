@@ -24,8 +24,8 @@ hit that wall in the same month:
   byte is a `U8` (#3415), a member of a fixed-width family this document
   defines.
 - **Crypto.** `stdlib/crypto/sha256.mdk` simulates 32-bit words with a mask
-  after every operation; `stdlib/bits64.mdk` simulates a 64-bit word with
-  four 16-bit limbs in a heap cell; `pds/lib/scalar.mdk` multiplies 16
+  after every operation; the `bits64` stdlib module (retired in N3)
+  simulated a 64-bit word with four 16-bit limbs in a heap cell; `pds/lib/scalar.mdk` multiplies 16
   limbs of 16 bits because a 63-bit `Int` has no widening multiply. The
   KDF work (#3373) measured what real 32-bit lowering buys: about 1.3× on
   the SHA-256 round, with larger wins expected from 64-bit limbs.
@@ -369,7 +369,7 @@ stays accurate. A "wraps" report is not an S0 bug; it points at #3377.
 |---|---|
 | **N1 (the tagged tier)** | `U8`/`U16`/`U32` exist on all three engines; the literal range check, builtin operators, pattern literals and the three modules ship; the W-QUIETER probe (`emitU8 300`, `setInPlace 0 256`, computed `fromInt 300`) is a gated test |
 | **N2 (the first consumers)** | `U8` is the element type of `Bytes`/`MutBytes`/`bytebuilder`/`byteparser` (#3415); `U32` carries sha256/hmac/pbkdf2/crc32 and the property-runner RNG; the round is re-measured against the figures on #3377 |
-| **N3 (U64)** | boxed `U64`, wide literals, `mulWide`/`addCarry`/`subBorrow`, the multi-byte codecs typed, `stdlib/bits64.mdk` deleted with #2311 and #432 closed, SplitMix/FNV moved, the seed re-minted twice |
+| **N3 (U64)** | boxed `U64`, wide literals, `mulWide`/`addCarry`/`subBorrow`, the multi-byte codecs typed, the `bits64` module deleted with #2311 and #432 closed, SplitMix/FNV moved, the seed re-minted twice |
 | **N4 (Int traps)** | every wrap dependent moved (the `Hashable` folds, field/scalar), the census repeated over the emitter child and `pdsd`, the cost measured, `Int` overflow panics on all three engines, `checkedAdd` family shipped, spec updated |
 | **N5 (unboxed and lowered)** | #353, `i32` lowering, #2360, field/scalar on 64-bit limbs |
 | **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opens when a customer is named |

@@ -60,7 +60,7 @@ write_source_manifest() {
 # Re-blessed for N3 (#3424, #3425): stdlib/u32.mdk gained truncateU64 and
 # mulWide, neither of which the signing closure calls (SHA-256 uses only the
 # N2 word operations), and pds/lib/field.mdk's one change is a comment that
-# stopped naming the retired stdlib/bits64.mdk path. Neither moves emitted
+# stopped citing the retired bits64 module by path. Neither moves emitted
 # code; every closure and branch check below passes unchanged.
 expected_internal_source_manifest() {
   cat <<'EOF'

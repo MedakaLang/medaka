@@ -23877,9 +23877,10 @@ binopPrimitiveHead h = contains h ["Int", "Float", "String", "Bool", "Char"]
 -- themselves unboundedly.  Every OTHER head still routes, which is precisely what
 -- makes a user `impl Semigroup MyRope` reachable from `a ++ b`.
 --
--- The fixed-width heads (`U8`/`U16`/`U32`) are builtin for the COMPARISON methods
--- only: their values share `Int`'s tagged word and are held in `0 .. 2^n - 1`, so
--- the signed word compare is the unsigned compare.  They are deliberately NOT in
+-- The unsigned heads (`U8`/`U16`/`U32`/`U64`) are builtin for the COMPARISON
+-- methods only.  The tagged ones share `Int`'s word and are held in
+-- `0 .. 2^n - 1`, so the signed word compare is the unsigned compare; a `U64`
+-- compares its boxed payloads unsigned (`stampOpRouteVal`).  They are deliberately NOT in
 -- `binopPrimitiveHead`, which the unary-minus path also reads: a builtin `-x` on a
 -- `U8` would be `Int` negation and leave a negative word, so `negate` routes to
 -- the type's own `Num` impl instead.
@@ -23895,13 +23896,13 @@ binopBuiltinHead method tag =
 -- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
 -- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
--- channel stamps Float and the fixed-width heads with their own tag (Int is the
+-- channel stamps Float and the unsigned heads with their own tag (Int is the
 -- arithmetic primitive default already; leaving Int operands RNone avoids
 -- perturbing every integer binop's emitted IR) — `RScalar "Int"` is
 -- stampOpRouteVal's, on comparison sites.  Never overwrites a route another pass
 -- already set (a comparison op has a different node/ref; an arithmetic route
 -- starts RNone) — the guard is: stamp only if the site is still RNone AND grounds
--- to Float or a fixed-width head.
+-- to Float or an unsigned head.
 resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveArithSites [] = ()
 resolveArithSites ((dref, m) :: rest) =
@@ -24156,7 +24157,7 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
--- Int/Float and fixed-width U8/U16/U32 heads bypass method dispatch; a user Num
+-- Int/Float and unsigned U8/U16/U32/U64 heads bypass method dispatch; a user Num
 -- impl for any other head, including String/Bool/Char, is selected through the
 -- exact interface identity.
 stampPredicateOpRouteVal : String ->

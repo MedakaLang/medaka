@@ -954,6 +954,11 @@ valueEq (VU64 ah al) (VU64 bh bl) = ah == bh && al == bl
 valueEq (VCon n1 a1) (VCon n2 a2) = n1 == n2 && valueListEq a1 a2
 valueEq (VRecord n1 f1) (VRecord n2 f2) = n1 == n2 && fieldListEq f1 f2
 valueEq (VRef a) (VRef b) = valueEq !a !b
+-- A `U64` meets only a `U64` in a typechecked program; anywhere else the
+-- program was run without its types (an untyped eval path), and ordering the
+-- two by `valueTag` would be a silent wrong answer, so it is refused.
+valueEq (VU64 _ _) _ = u64ShapeMismatch ()
+valueEq _ (VU64 _ _) = u64ShapeMismatch ()
 valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
@@ -1012,7 +1017,14 @@ valueCompare (VU64 ah al) (VU64 bh bl) = H.compareU64 (ah, al) (bh, bl)
 valueCompare (VCon n1 a1) (VCon n2 a2) = match compare n1 n2
   Eq => compareValueLists a1 a2
   o => o
+valueCompare (VU64 _ _) _ = u64ShapeMismatch ()
+valueCompare _ (VU64 _ _) = u64ShapeMismatch ()
 valueCompare a b = compare (valueTag a) (valueTag b)
+
+u64ShapeMismatch : Unit -> a
+u64ShapeMismatch _ =
+  panic
+    "a U64 compared with a value of another type: the program was not typechecked"
 
 compareValueLists : List (Value e) -> List (Value e) -> Ordering
 compareValueLists [] [] = Eq
@@ -2445,6 +2457,8 @@ evalArith "*" (VFloat a) (VFloat b) = VFloat (a * b)
 evalArith "/" (VFloat a) (VFloat b) = VFloat (a / b)
 evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
 evalArith op (VU64 ah al) (VU64 bh bl) = evalArithU64 op (ah, al) (bh, bl)
+evalArith _ (VU64 _ _) _ = u64ShapeMismatch ()
+evalArith _ _ (VU64 _ _) = u64ShapeMismatch ()
 evalArith "==" a b = VBool (valueEq a b)
 evalArith "/=" a b = VBool (not (valueEq a b))
 -- Float comparisons use IEEE ordered semantics directly (these compile to native

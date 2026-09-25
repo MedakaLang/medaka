@@ -140,7 +140,7 @@ builderParts : Builder -> (Bytes, Int)
 builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
 
 -- | Appends a `U16` as two bytes, most significant byte first. The inverse
--- of `beU16`.
+-- of `byteparser.beU16`.
 export
 emitU16BE : U16 -> Builder -> Unit
 emitU16BE v buf =
@@ -158,7 +158,7 @@ emitU24BE v buf =
   emitLowByte v buf
 
 -- | Appends a `U32` as four bytes, most significant byte first. The inverse
--- of `beU32`.
+-- of `byteparser.beU32`.
 export
 emitU32BE : U32 -> Builder -> Unit
 emitU32BE v buf =
@@ -169,7 +169,7 @@ emitU32BE v buf =
   emitLowByte n buf
 
 -- | Appends a `U64` as eight bytes, most significant byte first. The inverse
--- of `beU64`.
+-- of `byteparser.beU64`.
 export
 emitU64BE : U64 -> Builder -> Unit
 emitU64BE v buf =
@@ -177,7 +177,7 @@ emitU64BE v buf =
   emitU32BE (U32.truncateU64 v) buf
 
 -- | Appends a `U16` as two bytes, least significant byte first. The inverse
--- of `leU16`.
+-- of `byteparser.leU16`.
 export
 emitU16LE : U16 -> Builder -> Unit
 emitU16LE v buf =
@@ -195,7 +195,7 @@ emitU24LE v buf =
   emitLowByte (shiftRight v 16) buf
 
 -- | Appends a `U32` as four bytes, least significant byte first. The inverse
--- of `leU32`.
+-- of `byteparser.leU32`.
 export
 emitU32LE : U32 -> Builder -> Unit
 emitU32LE v buf =
@@ -206,7 +206,7 @@ emitU32LE v buf =
   emitLowByte (shiftRight n 24) buf
 
 -- | Appends a `U64` as eight bytes, least significant byte first. The inverse
--- of `leU64`.
+-- of `byteparser.leU64`.
 export
 emitU64LE : U64 -> Builder -> Unit
 emitU64LE v buf =
@@ -222,9 +222,24 @@ emitU64LE v buf =
 -- significant byte first. The inverse of `beSint nbytes`.
 export
 emitBeSint : Int -> Int -> Builder -> Unit
-emitBeSint nbytes v buf =
-  let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
-  emitBeUint nbytes unsigned buf
+emitBeSint nbytes v buf
+  | nbytes >= 8 =
+    emitSignFill (nbytes - 8) v buf
+    emitU64BE (U64.truncate v) buf
+  | otherwise =
+    let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
+    emitBeUint nbytes unsigned buf
+
+-- At eight bytes or more, 2^(8n) no longer fits `Int`: the low eight bytes are
+-- the value's 64-bit two's-complement pattern (`U64.truncate`), and every byte
+-- above them repeats the sign.
+emitSignFill : Int -> Int -> Builder -> Unit
+emitSignFill n v buf =
+  if n <= 0 then
+    ()
+  else
+    emitLowByte (if v < 0 then 255 else 0) buf
+    emitSignFill (n - 1) v buf
 
 -- | Appends a non-negative integer as `nbytes` bytes, most significant
 -- byte first. The inverse of `beUint nbytes`.
@@ -239,9 +254,13 @@ emitBeUint n v buf =
 -- significant byte first. The inverse of `leSint nbytes`.
 export
 emitLeSint : Int -> Int -> Builder -> Unit
-emitLeSint nbytes v buf =
-  let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
-  emitLeUint nbytes unsigned buf
+emitLeSint nbytes v buf
+  | nbytes >= 8 =
+    emitU64LE (U64.truncate v) buf
+    emitSignFill (nbytes - 8) v buf
+  | otherwise =
+    let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
+    emitLeUint nbytes unsigned buf
 
 -- | Appends a non-negative integer as `nbytes` bytes, least significant
 -- byte first. The inverse of `leUint nbytes`.
@@ -376,6 +395,16 @@ build1 f =
 -- Ok -32768
 -- > runByteParser (beSint 2) (build1 (emitBeSint 2 (-1)))
 -- Ok -1
+
+-- emitBeSint ↔ beSint  (8-byte, the Int bounds) and emitLeSint ↔ leSint (9-byte)
+-- > runByteParser (beSint 8) (build1 (emitBeSint 8 (-4611686018427387904)))
+-- Ok -4611686018427387904
+-- > runByteParser (beSint 8) (build1 (emitBeSint 8 (-1)))
+-- Ok -1
+-- > runByteParser (beSint 8) (build1 (emitBeSint 8 4611686018427387903))
+-- Ok 4611686018427387903
+-- > runByteParser (leSint 9) (build1 (emitLeSint 9 (-2)))
+-- Ok -2
 
 -- emitBeSint ↔ beSint  (4-byte)
 -- > runByteParser (beSint 4) (build1 (emitBeSint 4 2147483647))

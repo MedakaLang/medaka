@@ -10301,9 +10301,10 @@ loadCaptures e env (c :: rest) i =
 -- matching emitLit's boxed-float convention, so arith (the Win-12 one-float-operand
 -- path), print, and list ops all unbox it correctly.  A captured U64 cell keeps
 -- LTU64 for the same reason.  Every OTHER capture stays LTInt (the uniform-i64
--- default), so non-float captures are unaffected → zero regression surface.  Fixes the closure-float-capture arith soundness bug
--- (`map (x => x * scale)` with a captured float `scale`, `(z => z + k)` etc., which
--- previously did INTEGER arith on boxed-float pointers → garbage).
+-- default), so non-float captures are unaffected → zero regression surface.
+-- Fixes the closure-float-capture arith soundness bug (`map (x => x * scale)`
+-- with a captured float `scale`, `(z => z + k)` etc., which previously did
+-- INTEGER arith on boxed-float pointers → garbage).
 capTypeOf : OrdMap (String, LTy) -> String -> LTy
 capTypeOf env c = match omLookup c env
   Some (_, LTFloat) => LTFloat
