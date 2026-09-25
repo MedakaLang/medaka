@@ -742,6 +742,12 @@ effAtomBare : String -> EffAtomTy
 effAtomBare l =
   EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = EPTop }
 
+-- An effect declaration as the parser produces it: the resolver stamps its
+-- declaring origin, so before resolve it carries none.
+export
+effectDeclUnstamped : Bool -> String -> Option String -> Decl
+effectDeclUnstamped pub name dom = DEffect pub name dom OriginUnresolved
+
 export
 effAtomWith : String -> EffParamTy -> EffAtomTy
 effAtomWith l p =

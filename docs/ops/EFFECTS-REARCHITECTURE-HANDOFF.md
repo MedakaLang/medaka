@@ -244,6 +244,19 @@ is owed, not the design.
   `sh test/bootstrap_from_seed.sh`, before pushing a syntax change the stdlib
   uses; AGENTS.md's `[T-EMITTER-BENCH]` says so for codegen changes and it
   holds for the parser too.
+- The `compiler-soundness` job's must-fail step runs BEFORE the whole-source
+  typecheck and the fixpoint, so a drained pin skips both in CI; they were run
+  locally instead (`test/typecheck_compiler_source.sh`,
+  `test/selfcompile_fixpoint.sh`, C3a and C3b yes). That source typecheck also
+  carries the `OriginUnresolved` producer ratchet: the parser may not name the
+  sentinel, so `effectDeclUnstamped` (`frontend/ast.mdk`) is the helper the
+  effect declaration goes through.
+- The catch-all census ledger is re-derived when a projection over `Expr`
+  gains or loses a catch-all clause (`appArgExpr` gained one; `alpha`,
+  `spineFirstArg` and `spineHeadIsApp` retired); the perf gate needs the
+  `profile_main`/`profile_modules_main` oracles, which the effects oracle set
+  does not build; a SYNTAX.md example must be in the formatter's canonical
+  wrapping and an extern in it must name `FFI`.
 - The `must_fail` gate's drain instruction is `git rm -r` of the pin directory;
   this session's tool policy refused that deletion ("security test removal"),
   so the three drained pins are still in the tree and the `soundness` job's
@@ -282,7 +295,7 @@ is owed, not the design.
 - `docs-links`, `agent-doc-symbols` (one ledger row for the archived census's
   retired `Known`), comment-register census, shout-diff and the registry
   keying ratchet: green.
-- The CI run on the pushed head is recorded in the PR.
+- The first run on `21efe1579` failed at the cold bootstrap (seed, above); the run on `65912b644` is recorded in the PR.
 
 **Owed after this session:**
 

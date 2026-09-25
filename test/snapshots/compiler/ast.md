@@ -1,5 +1,5 @@
 # META
-source_lines=2182
+source_lines=2188
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -745,6 +745,12 @@ export
 effAtomBare : String -> EffAtomTy
 effAtomBare l =
   EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = EPTop }
+
+-- An effect declaration as the parser produces it: the resolver stamps its
+-- declaring origin, so before resolve it carries none.
+export
+effectDeclUnstamped : Bool -> String -> Option String -> Decl
+effectDeclUnstamped pub name dom = DEffect pub name dom OriginUnresolved
 
 export
 effAtomWith : String -> EffParamTy -> EffAtomTy
@@ -2247,6 +2253,8 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
 (DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")))))
+(DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Decl")))))
+(DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom")) (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "OriginUnresolved")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
 (DFunDef false "effAtomWith" ((PVar "l") (PVar "p")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")))))
 (DTypeSig true "effAtomSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffAtomTy") (TyCon "String"))))
@@ -2563,6 +2571,8 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "EffParamTy" () ((variant "EPTop" (ConPos)) (variant "EPLit" (ConPos (TyCon "String"))) (variant "EPName" (ConPos (TyCon "String"))) (variant "EPSet" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "EPProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))) ())
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
 (DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")))))
+(DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Decl")))))
+(DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom")) (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "OriginUnresolved")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
 (DFunDef false "effAtomWith" ((PVar "l") (PVar "p")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "p")))))
 (DTypeSig true "effAtomSurface" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "EffAtomTy") (TyCon "String"))))

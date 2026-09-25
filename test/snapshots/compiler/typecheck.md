@@ -1,5 +1,5 @@
 # META
-source_lines=47849
+source_lines=47853
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -19171,6 +19171,10 @@ envVarType : TcEnv -> String -> Option Mono
 envVarType env x =
   map (b => schemeBodyOf b.ebValue.vsScheme) (lookupBinding env x)
 
+-- The argument node of an application, when the callee's syntax is an
+-- application at all; every other node is not one and has no argument to
+-- abstract (the catch-all is the projection's negative answer, not an
+-- unhandled constructor).
 appArgExpr : Expr -> Option Expr
 appArgExpr (ELoc _ e) = appArgExpr e
 appArgExpr (EApp _ x) = Some x

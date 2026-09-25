@@ -1,7 +1,7 @@
 aliasDictNamesOfDecl	Decl	2/14
 aliasMethodRenamesOf	Decl	2/14
 allEVars	Expr	37/41
-alpha	Expr	12/41
+appArgExpr	Expr	2/41
 appArgLoc	Expr	2/41
 appNodeArg	Expr	2/41
 appSpineArgCount	Expr	4/41
@@ -76,8 +76,6 @@ rewriteBinopExpr	Expr	3/41
 rewriteRPDict	Expr	1/41
 shadowStandaloneHead	Expr	4/41
 sourceBindingArity	Expr	6/41
-spineFirstArg	Expr	3/41
-spineHeadIsApp	Expr	3/41
 stampTailDecl	Decl	1/14
 stmtCalleeName	Expr	10/41
 superImplMsgsOf	Decl	1/14

@@ -170,10 +170,12 @@ arrow; an atom that names it charges the effect on whatever that argument is:
 
 ```medaka
 effect Store Prefix
-extern load : (path : String) -> <Store path> Int
-extern move : (src : String) -> (dst : String) -> <Store src, Store dst> Unit
-sub : (path : String) -> <Store path> Int  -- may read path or narrow it, nothing else
-sub path = load (path ++ "/x")
+extern load : (path : String) -> <FFI, Store path> Int
+extern move : (src : String) ->
+  (dst : String) ->
+  <FFI, Store src, Store dst> Unit
+under : (path : String) -> <FFI, Store path> Int  -- may read path or narrow it, nothing else
+under path = load (path ++ "/x")
 ```
 
 A qualified value type is written with a spaced `@`: `String @path` names the

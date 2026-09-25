@@ -24,7 +24,7 @@ import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
   effAtomWith,
-  TyConOrigin(..),
+  effectDeclUnstamped,
   KindAnn(..),
   Constraint(..),
   Pat(..),
@@ -2990,7 +2990,7 @@ parseEffect pub = defer
   name <- upperNameP
   dom <- effDomainP
   skipNewlines
-  deferPure (DEffect pub name dom OriginUnresolved)
+  deferPure (effectDeclUnstamped pub name dom)
 
 effDomainP : Parser (Option String)
 effDomainP = defer

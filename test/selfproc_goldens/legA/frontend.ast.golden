@@ -11,6 +11,7 @@ effAtomWith : String -> EffParamTy -> EffAtomTy
 effAxisSurface : (String -> String) -> EffParamTy -> String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
+effectDeclUnstamped : Bool -> String -> Option String -> Decl
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 identOriginBuiltin : IdentOrigin
