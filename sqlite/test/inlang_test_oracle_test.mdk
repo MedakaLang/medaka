@@ -139,12 +139,13 @@ libExemptNames = map fst libExempt
 libModuleStem : String -> Option String
 libModuleStem name = stripSuffix ".mdk" name
 
--- Runs one `sqlite/lib/` module and returns its executed-assertion count,
--- or an error naming the file and what went wrong.
+-- Runs one `sqlite/lib/` module under the eval engine and returns its
+-- executed-assertion count, or an error naming the file and what went wrong.
 runLibSuite : String -> <Exec, IO> Result String Int
 runLibSuite name =
-  match testAssertionCount (underRoot "sqlite/lib/\{name}.mdk") []
-    Err e => Err "sqlite/lib/\{name}.mdk: \{e}"
+  let path = "sqlite/lib/\{name}.mdk"
+  match testAssertionCount (underRoot path) ["--engines", "eval"]
+    Err e => Err "\{path}: \{e}"
     Ok n => Ok n
 
 -- Every `sqlite/lib/` module run exactly once, shared by every assertion
@@ -240,12 +241,13 @@ test "every `libExempt` row names a module that exists" =
         "no phantom exemptions"
         "\{debug extras}"
 
--- Runs one suite under the default (eval) engine and returns its
+-- Runs one suite under the eval engine and returns its
 -- executed-assertion count, or an error naming the file and what went wrong.
 runSuite : String -> <Exec, IO> Result String Int
 runSuite name =
-  match testAssertionCount (underRoot "sqlite/test/\{name}.mdk") []
-    Err e => Err "sqlite/test/\{name}.mdk: \{e}"
+  let path = "sqlite/test/\{name}.mdk"
+  match testAssertionCount (underRoot path) ["--engines", "eval"]
+    Err e => Err "\{path}: \{e}"
     Ok n => Ok n
 
 -- Every suite run exactly once, shared by every assertion below —

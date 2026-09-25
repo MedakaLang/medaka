@@ -1,6 +1,6 @@
 -- #2588: a `test "…"` decl that needs a capability `medaka test`'s interpreter
 -- policy does not grant.  Under `--native` it compiles to a real binary and
--- passes; under the default (eval) engine the capability gate refuses the file
+-- passes; under `--engines eval` the capability gate refuses the file
 -- by naming `runCommand`, instead of dying mid-run on eval's own `unbound
 -- identifier`.
 --

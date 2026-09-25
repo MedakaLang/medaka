@@ -76,6 +76,7 @@ import tools.probe_transcript.{
   lookupChunk,
   mintNonce,
   noncedPrefix,
+  renameUserMain,
   sentinelLine,
   tagsInOrder,
   valuePrintExpr,
@@ -131,7 +132,7 @@ forgedTranscript =
   "native doctest runner: the probe printed a sentinel line this engine did not write, so the transcript no longer says which example each value belongs to. No example was judged from it."
 
 -- ── skips that must be LOUD ─────────────────────────────────────────────────
--- Two shapes cannot run natively.  Both return a whole-file error, so every
+-- The prelude cannot run natively.  It is a whole-file error, so every
 -- example is reported `Errored` with the reason and the file's summary line
 -- reads `0/N passed (0 failed, N errors)`.  A silent skip would read exactly
 -- like a pass, which is the one outcome this engine may never produce.
@@ -142,9 +143,6 @@ nativeSkipReason target userDecls
   | dtProgramIsCore userDecls =
     Some
       "native doctest runner: SKIPPED \{target} — it is the prelude itself, and `medaka build` cannot build stdlib/core.mdk as a program (issue #1334). No example was executed natively."
-  | definesMain userDecls =
-    Some
-      "native doctest runner: SKIPPED \{target} — it already defines a top-level `main`, which the synthesized doctest entry point would collide with. No example was executed natively."
   | otherwise = None
 
 -- The prelude is the unique program declaring BOTH the `Ordering` data type and
@@ -162,11 +160,6 @@ dtHasFoldable : List Decl -> Bool
 dtHasFoldable [] = False
 dtHasFoldable ((DInterface { name = "Foldable", ... }) :: _) = True
 dtHasFoldable (_ :: rest) = dtHasFoldable rest
-
-definesMain : List Decl -> Bool
-definesMain [] = False
-definesMain ((DFunDef _ "main" _ _) :: _) = True
-definesMain (_ :: rest) = definesMain rest
 
 -- ── entry point ─────────────────────────────────────────────────────────────
 -- `target`/`tsrc` are the module under test and its verbatim source;
@@ -322,7 +315,8 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
           Err forgedTranscript
 
 -- ── the probe program ───────────────────────────────────────────────────────
--- target source (verbatim) ++ the `__dt_i__` bindings ++ a synthesized `main`.
+-- target source (verbatim, its own `main` renamed by `renameUserMain`) ++ the
+-- `__dt_i__` bindings ++ a synthesized `main`.
 --
 -- ⚠️ `main` MUST be a zero-arg VALUE.  `medaka run`/the runtime evaluate
 -- top-level bindings and never APPLY `main`, so `main () = …` is a silent no-op
@@ -338,7 +332,7 @@ probeSource : String ->
   String
 probeSource nonce tsrc examples synthResults =
   joinNl
-    ([tsrc, ""]
+    ([renameUserMain tsrc, ""]
       ++ synthLines 0 examples synthResults
       ++ ["", "main ="]
       ++ mainLines nonce 0 examples synthResults

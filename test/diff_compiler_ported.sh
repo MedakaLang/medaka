@@ -14,6 +14,12 @@
 # own pass/fail report IS the check), so this only needs the native ./medaka,
 # not a test/bin/* oracle.
 #
+# The runs pass `--engines eval`: this is the interpreter's regression corpus.
+# Two of its files carry constructs `medaka check` rejects (#807, #1461), which
+# only the interpreter arm's type-check exemption can run, and a native build of
+# `test_eval_ported.mdk` fails whole-file on a recursive `where`-bound lambda
+# that `medaka run` evaluates correctly.
+#
 # Usage:  sh test/diff_compiler_ported.sh
 # Exit:   0 if every file's every assertion passes; nonzero otherwise.
 set -u
@@ -66,7 +72,7 @@ for f in $files; do
   # to the exit-code check below but it garbles text-matching on a combined
   # capture, so classify PANIC from stderr alone.
   errfile="$(mktemp)"
-  out="$("$NATIVE" test "$path" 2>"$errfile")"
+  out="$("$NATIVE" test --engines eval "$path" 2>"$errfile")"
   code=$?
   err="$(cat "$errfile")"; rm -f "$errfile"
   summary="$(printf '%s\n' "$out" | grep -E ': [0-9]+/[0-9]+ passed' | tail -1)"

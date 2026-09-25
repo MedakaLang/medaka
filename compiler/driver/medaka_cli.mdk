@@ -3109,13 +3109,10 @@ runProgramOutput preludeDecls modules =
 -- `.mdk` file is tested in turn, aggregating: exit nonzero iff ANY file's
 -- tests failed OR couldn't be read (this is also what makes the #212 exit-0
 -- bug go away for the directory/project route, not just the single-file one).
--- `--native` (#81 Stage 3) SWAPS the engine to native-only — sugar for
--- `--engines native`, NOT an addition to the interpreter (a flag named
--- "native" that silently also ran eval would mislead the exact stranger the
--- 0.1.0 bar is written for). `--engines eval,native` is the explicit
--- multi-engine form Stage 4's CI gate will use. Bare `medaka test <file>`
--- (neither flag) is unchanged: interpreter-only, byte-identical to
--- pre-#81-Stage-3 output. An unknown `--engines` name is a hard diagnostic
+-- Bare `medaka test <file>` runs the native engine alone; `--native` is
+-- sugar for that same `--engines native`, never an addition to the
+-- interpreter. `--engines eval` selects the interpreter and `--engines
+-- eval,native` runs both. An unknown `--engines` name is a hard diagnostic
 -- naming the valid set — never a silent drop, which would let a typo run
 -- nothing and still exit 0 (the exact "didn't run looks like passed" failure
 -- this whole arc exists to close).

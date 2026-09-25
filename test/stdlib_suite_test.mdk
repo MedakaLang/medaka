@@ -89,7 +89,7 @@ data Engine = Eval | NativeCapability | NativeSpeed | EvalAndNative
 -- `runModule` matches it before it can reach here, and the arm below
 -- exists only because this function must be total.
 engineArgs : Engine -> List String
-engineArgs Eval = []
+engineArgs Eval = ["--engines", "eval"]
 engineArgs NativeCapability = ["--native"]
 engineArgs NativeSpeed = ["--native"]
 engineArgs EvalAndNative = []
@@ -311,7 +311,7 @@ runOneSpawn name engine =
    over an unbound extern, the native backend over a doctest that does not
    typecheck). -}
 runBothEngines : String -> <Exec, IO> Result String Int
-runBothEngines path = match testAssertionCount path []
+runBothEngines path = match testAssertionCount path ["--engines", "eval"]
   Err e => Err "\{path} (eval arm of \{engineLabel EvalAndNative}): \{e}"
   Ok evalRan => match testAssertionCount path ["--native"]
     Err e => Err "\{path} (native arm of \{engineLabel EvalAndNative}): \{e}"

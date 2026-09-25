@@ -321,7 +321,7 @@ anything.
 
 **The engine is a wave-3 precondition, not a detail.** A stage called as a library runs
 under whichever engine `medaka test` was given, and the two engines answer differently.
-Under the interpreter — `medaka test`'s default — two independent walls stop a
+Under the interpreter (`medaka test --engines eval`) two independent walls stop a
 corpus-driven stage call. The capability policy binds no filesystem extern, so a `test`
 body that reads a fixture is refused before it runs, with the remedy named in the
 diagnostic. And the tree-walking evaluator has no tail-call optimisation, so a stage call
@@ -330,13 +330,11 @@ over a real-sized corpus dies at `E-STACK-OVERFLOW … evaluator call depth exce
 `compiler/frontend/lexer.mdk:375:26`). Under `--native` both walls are absent: `tokenize`
 over `compiler/frontend/lexer.mdk` (2,775 lines) and `parser.mdk` (5,664 lines) pass, and
 `runCheck` seeded with the real `stdlib/runtime.mdk` + `stdlib/core.mdk` prelude passes —
-the shape the inventory recorded as unable to run under eval at all. `kind = "native"` rows
-are safe by construction: `gateInvocation` (`compiler/tools/gate_cmd.mdk`) spawns
-`medaka test --native --json`, so the interpreter arm is unreachable from the registry. The
-exposure is every other call site — a wave-3 `*_test.mdk` also named in the Makefile's
-`test:` target, or run by hand, takes the interpreter default. Each such call site states
-`--native`, as `stdlib/fs.mdk`, `stdlib/test_process.mdk` and `compiler/tools/lint_test.mdk`
-already do.
+the shape the inventory recorded as unable to run under eval at all. Native is
+`medaka test`'s default engine, so a wave-3 `*_test.mdk` gets it whether it is reached
+through a `kind = "native"` row (`gateInvocation`, `compiler/tools/gate_cmd.mdk`, spawns
+`medaka test --native --json`), the Makefile's `test:` target, or a run by hand. Only a
+call site that passes `--engines eval` reaches the interpreter arm.
 
 **Wave 3 moves when the closure build is paid, not how much.** `medaka test --native`
 compiles the test module's whole import closure on every invocation, with no build cache.

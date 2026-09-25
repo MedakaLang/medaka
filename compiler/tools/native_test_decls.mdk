@@ -52,7 +52,7 @@ import driver.build_cmd.{
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
-import support.util.{joinNl, splitNl, anyList}
+import support.util.{joinNl, splitNl}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
@@ -63,6 +63,7 @@ import tools.probe_transcript.{
   lookupChunk,
   mintNonce,
   noncedPrefix,
+  renameUserMain,
   sentinelLine,
   tagsInOrder,
   valuePrintExpr,
@@ -111,62 +112,37 @@ expectedTags i (_ :: rest) =
     ]
     ++ expectedTags (i + 1) rest
 
--- ── skips that must be LOUD ─────────────────────────────────────────────────
--- A target that already defines `main` cannot host the synthesized entry point.
--- Every other shape that cannot build reports the BUILD's own error, which is
--- loud by construction.  A silent skip would read exactly like a pass, which is
--- the one outcome this engine may never produce.
-nativeTestSkipReason : String -> List Decl -> Option String
-nativeTestSkipReason target userDecls
-  | definesMain userDecls =
-    Some
-      "native test runner: SKIPPED \{target} — it already defines a top-level `main`, which the synthesized test entry point would collide with. No test was executed natively."
-  | otherwise = None
-
-definesMain : List Decl -> Bool
-definesMain decls = anyList isMainDef decls
-
-isMainDef : Decl -> Bool
-isMainDef (DFunDef _ "main" _ _) = True
-isMainDef _ = False
-
 -- ── entry point ─────────────────────────────────────────────────────────────
 -- `tests` is `(name, line, RAW body)` in the same order and after the same
 -- `--filter` the interpreter arm applies, so index `i` here is the same test
 -- the driver names at index `i`.  The result is one `ExResult` per test,
--- positionally aligned.
+-- positionally aligned.  A target that cannot build reports the BUILD's own
+-- error on every test, which is loud by construction.
 export
 runNativeTests : String ->
   String ->
-  List Decl ->
   List (String, Int, Expr) ->
   <IO> List ExResult
-runNativeTests target tsrc userDecls tests =
-  match nativeRendered target tsrc userDecls tests
-    Err reason => map (_ => Errored reason) tests
-    Ok results => results
+runNativeTests target tsrc tests = match nativeRendered target tsrc tests
+  Err reason => map (_ => Errored reason) tests
+  Ok results => results
 
 nativeRendered : String ->
   String ->
-  List Decl ->
   List (String, Int, Expr) ->
   <IO> Result String (List ExResult)
-nativeRendered target tsrc userDecls tests =
-  match nativeTestSkipReason target userDecls
-    Some reason => Err reason
-    None => match makeTempDir ()
-      Err e =>
-        Err "native test runner: could not create a scratch directory: \{e}"
-      Ok tmpDir =>
-        -- The nonce is drawn HERE, before the probe source is written, so it
-        -- reaches `runInTmp` in time to land in the generated code the target's
-        -- own (already-fixed) source cannot see or influence.
-        let nonce = mintNonce ()
-        -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
-        -- teardown, so the probe binary still exists while it runs.
-        let results = runInTmp target tsrc tests tmpDir nonce
-        let _ = cleanupTempDir tmpDir
-        results
+nativeRendered target tsrc tests = match makeTempDir ()
+  Err e => Err "native test runner: could not create a scratch directory: \{e}"
+  Ok tmpDir =>
+    -- The nonce is drawn HERE, before the probe source is written, so it
+    -- reaches `runInTmp` in time to land in the generated code the target's
+    -- own (already-fixed) source cannot see or influence.
+    let nonce = mintNonce ()
+    -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
+    -- teardown, so the probe binary still exists while it runs.
+    let results = runInTmp target tsrc tests tmpDir nonce
+    let _ = cleanupTempDir tmpDir
+    results
 
 -- ── the scratch project ─────────────────────────────────────────────────────
 -- The manifest is what carries trusted-root status to the copy, so a module
@@ -266,7 +242,7 @@ expectationAlias = "MdkProbeTest__"
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
   joinNl
-    (["import test as \{expectationAlias}", "", tsrc, ""]
+    (["import test as \{expectationAlias}", "", renameUserMain tsrc, ""]
       ++ testBindings nonce 0 tests
       ++ ["main ="]
       ++ mainLines nonce 0 tests

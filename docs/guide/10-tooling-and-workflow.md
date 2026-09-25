@@ -118,22 +118,16 @@ Both doctests matched, the property held for its 100 generated pairs, and the na
 test passed. The `main` at the bottom is there only so the file also runs with
 `medaka run`.
 
-By default `test` runs everything through the interpreter. `--native` compiles the
-file and runs the doctests through the compiled binary instead, which is slower but
-catches a difference between the two engines. It has one precondition: the native
-runner generates its own `main`, so it refuses a file that already defines one. On
-the file above, `medaka test --native total.mdk` reports every doctest as an error:
+`test` compiles the file with the native backend, the same one `medaka build`
+uses, and runs the doctests and named tests through that binary. Properties
+always run in the interpreter. `--engines eval` runs the doctests and named tests
+in the interpreter instead, and `--engines eval,native` runs them under both and
+fails if either engine fails. The interpreter starts faster, but it does not bind
+file, environment or process primitives and has no tail-call elimination, so a
+test that passes natively can fail there.
 
-```
-  ERROR total.mdk:5: total [1, 2, 3]
-        native doctest runner: SKIPPED total.mdk — it already defines a top-level `main`,
-        which the synthesized doctest entry point would collide with. No example was
-        executed natively.
-```
-
-Properties and named tests are unaffected and still run. Keep doctested functions
-in modules without a `main` if you want to run them natively. `--filter <substring>` narrows a run to the tests whose name, or for a
-doctest whose expression, contains the substring.
+`--filter <substring>` narrows a run to the tests whose name, or for a doctest
+whose expression, contains the substring.
 
 ## `repl`
 

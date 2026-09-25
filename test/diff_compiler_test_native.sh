@@ -62,13 +62,6 @@
 #        require the SAME named skip + issue number to still appear, with a non-zero
 #        exit. If #1334 is fixed and stdlib/core.mdk builds/runs natively, this
 #        assertion breaks and the gate names the row to delete.
-#      OWNS-MAIN <structural>          — re-scan every `.mdk` under stdlib/ and
-#        compiler/ for a top-level `main` binding, and assert NONE of them also
-#        carries a doctest (`-- > ` line) — the exact invariant the row's own note
-#        claims ("no module in stdlib/ or compiler/ defines main except the entry
-#        points, which carry no doctests"). A module that violates this is where the
-#        native engine's synthesized-`main` collision would actually bite, so this
-#        check is the thing that would have caught the row going stale.
 #
 # ── COST CONTROL ─────────────────────────────────────────────────────────────────
 #
@@ -242,25 +235,8 @@ for tag in $tags; do
       fi
       note "ok   ledger row PRELUDE-TARGET $scope $issue still reproduces"
       ;;
-    OWNS-MAIN)
-      # Structural row, no fixed scope path — re-derive the SET of `.mdk` files
-      # defining a top-level `main` and assert NONE also carries a doctest
-      # (`-- > ` line), which is exactly the invariant the row's own note claims.
-      offenders=""
-      for f in $(grep -rlE '^main[ =(]' "$ROOT/stdlib" "$ROOT/compiler" --include='*.mdk' 2>/dev/null); do
-        if grep -q '^-- > ' "$f"; then
-          rel="${f#"$ROOT"/}"
-          offenders="$offenders $rel"
-        fi
-      done
-      if [ -n "$offenders" ]; then
-        bad "ledger row OWNS-MAIN's invariant no longer holds: the following module(s) define a top-level 'main' AND carry doctests, so the native engine's synthesized-main collision is now a live bug, not a documented design limit:$offenders. File/verify an issue and update the OWNS-MAIN row in $LEDGER to point at it."
-      else
-        note "ok   ledger row OWNS-MAIN: no module defines main and carries doctests (invariant holds)"
-      fi
-      ;;
     *)
-      bad "unrecognized ledger tag '$tag' in $LEDGER — this gate's self-drain logic only knows PRELUDE-TARGET and OWNS-MAIN. Add a case for '$tag' to test/diff_compiler_test_native.sh before this can pass (a tag this gate doesn't understand is a row it cannot verify, i.e. exactly the silent rot the ledger is supposed to prevent)."
+      bad "unrecognized ledger tag '$tag' in $LEDGER — this gate's self-drain logic only knows PRELUDE-TARGET. Add a case for '$tag' to test/diff_compiler_test_native.sh before this can pass (a tag this gate doesn't understand is a row it cannot verify, i.e. exactly the silent rot the ledger is supposed to prevent)."
       ;;
   esac
 done
@@ -313,13 +289,13 @@ else
   note "ok   exempt_illtyped.mdk: the native probe build is strict — emitter-recorded type errors fail the run and are named"
 fi
 # The same file under the EVAL engine keeps the exemption: no probe is built, so
-# nothing here narrows what `medaka test` (no --native) accepts.
+# nothing here narrows what `medaka test --engines eval` accepts.
 st_ev_out="$WORK/strict_probe_eval.out"
-bound "$MEDAKA" test "$st/exempt_illtyped.mdk" >"$st_ev_out" 2>&1
+bound "$MEDAKA" test --engines eval "$st/exempt_illtyped.mdk" >"$st_ev_out" 2>&1
 st_ev_rc=$?
 checked=$((checked + 1))
 if [ "$st_ev_rc" -ne 0 ]; then
-  bad "exempt_illtyped.mdk: 'medaka test' (eval engine) exited $st_ev_rc — the #2679 fix must be scoped to the native probe build and must not narrow the eval-engine exemption. See $st_ev_out"
+  bad "exempt_illtyped.mdk: 'medaka test --engines eval' exited $st_ev_rc — the #2679 fix must be scoped to the native probe build and must not narrow the eval-engine exemption. See $st_ev_out"
 else
   note "ok   exempt_illtyped.mdk: the eval engine still exempts it (the fix is scoped to the probe build)"
 fi
@@ -366,8 +342,9 @@ fi
 
 # ── capability-gated exec rule (#2657/#2588: native_test_exec.mdk) ───────────
 # Under --native, with MEDAKA resolved via the environment (never PATH), the
-# `runCommand`/`readFile`/`getEnv` trio compiles to a real binary and passes.
-# Under the default (eval) engine, `medaka test`'s capability policy must
+# `runCommand`/`readFile`/`getEnv` trio compiles to a real binary and passes,
+# and so does bare `medaka test`, whose default engine is native.
+# Under `--engines eval`, `medaka test`'s capability policy must
 # refuse the file BY NAME, naming `runCommand`, instead of dying mid-run on
 # eval's own "unbound identifier".
 ex="$ROOT/test/compiler_test_fixtures/native_test_exec.mdk"
@@ -387,16 +364,50 @@ else
   note "ok   native_test_exec.mdk: passes under --native with MEDAKA resolved via env, not PATH"
 fi
 
+ex_default_out="$WORK/exec_default.out"
+(
+  MEDAKA_TEST_SUBJECT="$subj"
+  export MEDAKA MEDAKA_TEST_SUBJECT
+  bound "$MEDAKA" test "$ex"
+) >"$ex_default_out" 2>&1
+ex_default_rc=$?
+checked=$((checked + 1))
+if [ "$ex_default_rc" -ne 0 ]; then
+  bad "native_test_exec.mdk: bare 'medaka test' exited $ex_default_rc (expected 0) — the default engine must be native, which binds runCommand. See $ex_default_out"
+elif ! grep -qF "$ex: 1/1 passed" "$ex_default_out"; then
+  bad "native_test_exec.mdk: bare 'medaka test' did not report '1/1 passed' — see $ex_default_out"
+else
+  note "ok   native_test_exec.mdk: bare 'medaka test' runs it under the native default"
+fi
+
 ex_eval_out="$WORK/exec_eval.out"
-bound "$MEDAKA" test "$ex" >"$ex_eval_out" 2>&1
+bound "$MEDAKA" test --engines eval "$ex" >"$ex_eval_out" 2>&1
 ex_eval_rc=$?
 checked=$((checked + 1))
 if [ "$ex_eval_rc" -eq 0 ]; then
-  bad "native_test_exec.mdk: 'medaka test' (eval) exited 0 — the capability gate must refuse this file, not run it. See $ex_eval_out"
+  bad "native_test_exec.mdk: 'medaka test --engines eval' exited 0 — the capability gate must refuse this file, not run it. See $ex_eval_out"
 elif ! grep -q "runCommand" "$ex_eval_out"; then
-  bad "native_test_exec.mdk: 'medaka test' (eval) refusal did not name runCommand — see $ex_eval_out"
+  bad "native_test_exec.mdk: 'medaka test --engines eval' refusal did not name runCommand — see $ex_eval_out"
 else
   note "ok   native_test_exec.mdk: eval engine refuses by naming runCommand, never a bare 'unbound identifier' crash"
+fi
+
+# ── a target that defines its own `main` (native_owns_main.mdk) ──────────────
+# Both native probes append a synthesized `main`, so the target's own is renamed
+# in the probe source. Every doctest and test must run and pass under the default
+# engine, and the `main`s the rename must leave alone (a comment, a string, a
+# local binding) are what the fixture's tests observe.
+om="$ROOT/test/compiler_test_fixtures/native_owns_main.mdk"
+om_out="$WORK/owns_main.out"
+bound "$MEDAKA" test "$om" >"$om_out" 2>&1
+om_rc=$?
+checked=$((checked + 1))
+if [ "$om_rc" -ne 0 ]; then
+  bad "native_owns_main.mdk: bare 'medaka test' exited $om_rc (expected 0) — a target's own 'main' must not stop the native runners. See $om_out"
+elif [ "$(grep -cF "$om: 2/2 passed" "$om_out")" -ne 1 ] || [ "$(grep -cF "$om: 3/3 passed" "$om_out")" -ne 1 ]; then
+  bad "native_owns_main.mdk: expected '2/2 passed' (doctests) and '3/3 passed' (tests) — see $om_out"
+else
+  note "ok   native_owns_main.mdk: a target defining 'main' runs its doctests and tests natively"
 fi
 
 # ── forged sentinel lines in an operand (#2657/#2634: native_test_forged_sentinel.mdk) ──
