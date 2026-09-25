@@ -180,6 +180,7 @@ import frontend.ast.{
   ifaceIdMatches,
   isFixedWidthHead,
   fixedWidthMask,
+  isU64Head,
 }
 import ir.core_ir.{
   CExpr(..),
@@ -221,6 +222,7 @@ import support.util.{
   dedupBy,
   lenKey,
   isNonEmptyL,
+  u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
 import support.ordmap.{
@@ -659,6 +661,7 @@ fieldNameToLTy "Bool" = Some LTBool
 fieldNameToLTy "Int" = Some LTInt
 fieldNameToLTy "Char" = Some LTChar
 fieldNameToLTy "String" = Some LTStr
+fieldNameToLTy "U64" = Some LTU64
 fieldNameToLTy n = if isFixedWidthHead n then Some LTInt else None
 
 -- ── function → DECLARED param/return type-head names (native backend, Gap E1) ─
@@ -796,6 +799,11 @@ data LTy =
   -- the pure `lookupVar`/capWords path).  Every read through `lookupVarG` boxes it
   -- back to an i64 word (escape coercion); only `emitFloatLeaf` consumes it raw.
   | LTFloatU
+  -- LTU64: a boxed `U64` cell word (`boxU64`).  Its own constructor rather than
+  -- `LTCon` or `LTInt`, so a path keyed on the operand type (the unstamped
+  -- arithmetic and comparison fallbacks, unary minus, the auto-print) can take the
+  -- unsigned payload instead of an Int untag or a Float unbox.
+  | LTU64
 
 -- emitter state: the per-scope fresh-name counters, the output lines (accumulated in REVERSE
 -- — prepend is O(1); reverseL'd once at the end restores program order), the
@@ -2187,6 +2195,37 @@ boxFloat e d =
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
   w
 
+-- The header of a boxed `U64` cell, `{ i64 header, i64 payload }` in Float's cell
+-- shape: reserved type-id 5 (`reservedTypeBase` below), which no constructor tag
+-- reaches.  runtime/medaka_rt.c spells the same word as MDK_U64_TAG and pins it to
+-- `MDK_TAG(5, 0)` with a _Static_assert.
+u64CellTag : Int
+u64CellTag = (reservedTypeBase + 5) * ctorTagShift
+
+-- box a raw 64-bit payload -> a U64 cell word.  Pointer-free, as boxFloat's is.
+boxU64 : Emit -> String -> String
+boxU64 e x =
+  let p = freshReg e
+  let _ = emit e "  \{p} = call ptr @mdk_alloc_atomic(i64 16)"
+  let _ = emit e "  store i64 \{intToString u64CellTag}, ptr \{p}"
+  let xp = freshReg e
+  let _ = emit e "  \{xp} = getelementptr i8, ptr \{p}, i64 8"
+  let _ = emit e "  store i64 \{x}, ptr \{xp}"
+  let w = freshReg e
+  let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  w
+
+-- unbox a U64 cell word -> its raw 64-bit payload.
+unboxU64 : Emit -> String -> String
+unboxU64 e v =
+  let p = freshReg e
+  let _ = emit e "  \{p} = inttoptr i64 \{v} to ptr"
+  let xp = freshReg e
+  let _ = emit e "  \{xp} = getelementptr i8, ptr \{p}, i64 8"
+  let x = freshReg e
+  let _ = emit e "  \{x} = load i64, ptr \{xp}"
+  x
+
 -- unbox a float word -> the stored double.
 unboxFloat : Emit -> String -> String
 unboxFloat e v =
@@ -2374,6 +2413,18 @@ emitLit e (LInt n) =
   else
     (tagInt e (intToString n), LTInt)
 emitLit _ (LBool b) = (if b then "3" else "1", LTBool)
+-- a `U64` literal: its whole cell as a private module-scope constant, as a String
+-- literal's is, so evaluating it allocates nothing.  A U64 cell is never written
+-- after it is built, so one shared constant is sound, and Boehm ignores a pointer
+-- outside its heap.  `u0x` is LLVM's unsigned hex integer syntax, which carries
+-- the value above 2^63 that the emitter's own 63-bit `Int` cannot.
+emitLit e (LU64 hi lo) =
+  let gid = ".u64c" ++ mangleScoped e
+  let _ =
+    emitGlobal
+      e
+      "@\{gid} = private unnamed_addr constant { i64, i64 } { i64 \{intToString u64CellTag}, i64 u0x\{u64HalvesHex hi lo} }"
+  ("ptrtoint (ptr @" ++ gid ++ " to i64)", LTU64)
 emitLit e (LFloat f) =
   let w = boxFloat e (ensureFloatDot (floatToString f))
   (w, LTFloat)
@@ -3750,6 +3801,89 @@ emitFixedWidthToInt e env args = match emitArgs e env args
   [a] => (a, LTInt)
   _ => panic "llvm: a fixed-width widening takes one argument"
 
+-- The `U64` kernels (PURE), all inline IR on the unboxed payload.  They are the
+-- only doors between a U64 cell and an Int word: `u64Truncate` sign-extends the
+-- 63-bit Int to 64 bits (the `ashr` untag is exactly that), and
+-- `u64TruncateToInt` retags the low 63 bits (`shl` drops bit 63).  The shifts take
+-- an Int amount and give 0 for any amount outside `0 .. 63`, by a select rather
+-- than a branch; the amount is masked first, so the `shl`/`lshr` itself never sees
+-- an out-of-range count.
+isU64Extern : String -> Bool
+isU64Extern name = contains name [
+  "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr", "u64BitXor",
+  "u64ShiftLeft", "u64ShiftRight", "u64MulHigh"
+]
+
+emitU64Extern : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitU64Extern e env "u64Truncate" args = match emitArgs e env args
+  [a] => (boxU64 e (untagInt e a), LTU64)
+  _ => panic "llvm: u64Truncate takes one argument"
+emitU64Extern e env "u64TruncateToInt" args = match emitArgs e env args
+  [a] => (tagInt e (unboxU64 e a), LTInt)
+  _ => panic "llvm: u64TruncateToInt takes one argument"
+emitU64Extern e env "u64BitAnd" args = emitU64Bin e env "and" args
+emitU64Extern e env "u64BitOr" args = emitU64Bin e env "or" args
+emitU64Extern e env "u64BitXor" args = emitU64Bin e env "xor" args
+emitU64Extern e env "u64ShiftLeft" args = emitU64Shift e env "shl" args
+emitU64Extern e env "u64ShiftRight" args = emitU64Shift e env "lshr" args
+emitU64Extern e env "u64MulHigh" args = match emitArgs e env args
+  [a, b] =>
+    let x = unboxU64 e a
+    let y = unboxU64 e b
+    let wa = freshReg e
+    let _ = emit e "  \{wa} = zext i64 \{x} to i128"
+    let wb = freshReg e
+    let _ = emit e "  \{wb} = zext i64 \{y} to i128"
+    let p = freshReg e
+    let _ = emit e "  \{p} = mul i128 \{wa}, \{wb}"
+    let h = freshReg e
+    let _ = emit e "  \{h} = lshr i128 \{p}, 64"
+    let r = freshReg e
+    let _ = emit e "  \{r} = trunc i128 \{h} to i64"
+    (boxU64 e r, LTU64)
+  _ => panic "llvm: u64MulHigh takes two arguments"
+emitU64Extern e _ name _ = gapE e ("unsupported U64 extern " ++ name)
+
+-- a bitwise U64 kernel: one instruction on the two payloads.
+emitU64Bin : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitU64Bin e env instr args = match emitArgs e env args
+  [a, b] =>
+    let x = unboxU64 e a
+    let y = unboxU64 e b
+    let r = freshReg e
+    let _ = emit e "  \{r} = \{instr} i64 \{x}, \{y}"
+    (boxU64 e r, LTU64)
+  _ => panic "llvm: a U64 bitwise kernel takes two arguments"
+
+-- a logical U64 shift by a tagged Int amount; 0 outside `0 .. 63`.
+emitU64Shift : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitU64Shift e env instr args = match emitArgs e env args
+  [a, k] =>
+    let x = unboxU64 e a
+    let n = untagInt e k
+    let inRange = freshReg e
+    let _ = emit e "  \{inRange} = icmp ult i64 \{n}, 64"
+    let masked = freshReg e
+    let _ = emit e "  \{masked} = and i64 \{n}, 63"
+    let shifted = freshReg e
+    let _ = emit e "  \{shifted} = \{instr} i64 \{x}, \{masked}"
+    let r = freshReg e
+    let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
+    (boxU64 e r, LTU64)
+  _ => panic "llvm: a U64 shift takes two arguments"
+
 isHashExtern : String -> Bool
 isHashExtern name =
   contains name ["hashInt", "hashChar", "hashBool", "hashFloat", "hashString"]
@@ -3853,6 +3987,7 @@ externCatalog = [
   (isHashExtern, emitHashExtern),
   (isBitExtern, emitBitExtern),
   (isFixedWidthExtern, emitFixedWidthExtern),
+  (isU64Extern, emitU64Extern),
   (isDebugLitExtern, emitDebugLitExtern),
   (isPerfExtern, emitPerfExtern),
 ]
@@ -4659,9 +4794,45 @@ emitArith : Emit ->
   CExpr ->
   String ->
   (String, LTy)
-emitArith e env op l r tag = match fixedWidthMask tag
-  Some mask => emitFixedWidthArith e env op l r mask
-  None => emitArithUnsized e env op l r tag
+emitArith e env op l r tag =
+  if isU64Head tag then
+    emitU64Arith e env op l r
+  else match fixedWidthMask tag
+    Some mask => emitFixedWidthArith e env op l r mask
+    None => emitArithUnsized e env op l r tag
+
+-- An arithmetic node typecheck stamped `U64`: both operands are boxed U64 cells,
+-- so the stamp is tested before every Float or Int route (a `U64` payload read as
+-- a double or untagged as an Int is silently wrong).  `+`, `-` and `*` are the
+-- 64-bit instructions, which wrap modulo 2^64; `/` and `%` are `udiv`/`urem`
+-- behind Int's zero-divisor abort.
+emitU64Arith : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  (String, LTy)
+emitU64Arith e env op l r =
+  let (lv, _) = emitExpr e env l
+  let (rv, _) = emitExpr e env r
+  emitU64ArithW e op lv rv
+
+-- the U64 operator on two already-emitted cell words.
+emitU64ArithW : Emit -> String -> String -> String -> (String, LTy)
+emitU64ArithW e op lv rv =
+  let a = unboxU64 e lv
+  let b = unboxU64 e rv
+  let _ = if op == "/" || op == "%" then emitDivZeroGuard e op b
+  let res = freshReg e
+  let _ = emit e "  \{res} = \{u64Op op} i64 \{a}, \{b}"
+  (boxU64 e res, LTU64)
+
+-- the LLVM instruction for a U64 arithmetic operator: Int's for the ring
+-- operations, the unsigned forms for division and remainder.
+u64Op : String -> String
+u64Op "/" = "udiv"
+u64Op "%" = "urem"
+u64Op op = intOp op
 
 -- An arithmetic node typecheck stamped with a fixed-width head: both operands are
 -- tagged Int words, so the operand LTys (which may read `LTNum` for a param of a
@@ -4777,6 +4948,9 @@ emitArithW e env op l r =
   let (lv, lty) = emitExpr e env l
   let (rv, rty) = emitExpr e env r
   match lty
+    -- An operand the emitter knows is a U64 cell, on a node that reached here
+    -- without the `U64` stamp: its payload, never an Int untag.
+    LTU64 => emitU64ArithW e op lv rv
     LTFloat =>
       let ld = unboxFloat e lv
       let rd = unboxFloat e rv
@@ -4789,6 +4963,7 @@ emitArithW e env op l r =
       let _ = emit e "  \{res} = call i64 @\{numOp op}(i64 \{lv}, i64 \{rv})"
       (res, LTNum)
     _ => match rty
+      LTU64 => emitU64ArithW e op lv rv
       LTFloat =>
         let ld = unboxFloat e lv
         let rd = unboxFloat e rv
@@ -4821,6 +4996,15 @@ emitArithW e env op l r =
 -- unchanged, so valid-division output is byte-identical.
 emitIntDivZeroChecked : Emit -> String -> String -> String -> (String, LTy)
 emitIntDivZeroChecked e op li ri =
+  let _ = emitDivZeroGuard e op ri
+  let res = freshReg e
+  let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
+  (tagInt e res, LTInt)
+-- The zero-divisor branch of `/` or `%` on the raw divisor `ri`: the abort block,
+-- then the ok label the caller's instruction is emitted under.  Shared by Int's
+-- `sdiv`/`srem` and U64's `udiv`/`urem`, so both abort with the same message.
+emitDivZeroGuard : Emit -> String -> String -> Unit
+emitDivZeroGuard e op ri =
   let z = freshReg e
   let _ = emit e "  \{z} = icmp eq i64 \{ri}, 0"
   let n = intToString (freshLocal e)
@@ -4831,10 +5015,8 @@ emitIntDivZeroChecked e op li ri =
   let abortFn = if op == "%" then "mdk_mod_zero" else "mdk_div_zero"
   let _ = emit e "  call void @\{abortFn}()"
   let _ = emit e "  unreachable"
-  let _ = emit e (okL ++ ":")
-  let res = freshReg e
-  let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
-  (tagInt e res, LTInt)
+  emit e (okL ++ ":")
+
 -- G3: a POLYMORPHIC Num operand (declared type-var param) — could be Int OR
 -- Float at runtime.  Route through the runtime tag-dispatched @mdk_num_* helper
 -- (low-bit discriminator), keeping the result LTNum so a chained `Num` op and
@@ -4850,7 +5032,9 @@ emitCmp : Emit ->
   String ->
   (String, LTy)
 emitCmp e env op l r tag =
-  if scalarTagIsInt tag then
+  if isU64Head tag then
+    emitU64Cmp e env op l r
+  else if scalarTagIsInt tag then
     emitIntCmp e env op l r
   else if staticIsFloat env l then
     emitFloatCmp e env op l r
@@ -4875,6 +5059,39 @@ emitIntCmp e env op l r =
   let c = freshReg e
   let _ = emit e "  \{c} = icmp \{intPred op} i64 \{lv}, \{rv}"
   boolFromI1 e c
+
+-- A comparison typecheck stamped `U64`: the unsigned predicate on the two
+-- payloads, so a value at or above 2^63 orders above every smaller one.  Tested
+-- before the Float and type-lost routes, as the arithmetic stamp is.
+emitU64Cmp : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  (String, LTy)
+emitU64Cmp e env op l r =
+  let (lv, _) = emitExpr e env l
+  let (rv, _) = emitExpr e env r
+  emitU64CmpW e op lv rv
+
+-- the U64 comparison on two already-emitted cell words.
+emitU64CmpW : Emit -> String -> String -> String -> (String, LTy)
+emitU64CmpW e op lv rv =
+  let a = unboxU64 e lv
+  let b = unboxU64 e rv
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp \{u64Pred op} i64 \{a}, \{b}"
+  boolFromI1 e c
+
+-- the unsigned `icmp` predicate for a comparison operator.
+u64Pred : String -> String
+u64Pred "==" = "eq"
+u64Pred "/=" = "ne"
+u64Pred "<" = "ult"
+u64Pred "<=" = "ule"
+u64Pred ">" = "ugt"
+u64Pred ">=" = "uge"
+u64Pred op = panic ("llvm: unsupported U64 comparison " ++ op)
 
 -- fused statically-Float comparison: operands as unboxed doubles, fcmp, NO box.
 emitFloatCmp : Emit ->
@@ -4903,6 +5120,8 @@ emitCmpW e env op l r =
     emitValueEq e op lv rv
   else if isStrLTy lty || isStrLTy rty then
     emitStrCmp e op lv rv
+  else if isU64LTy lty || isU64LTy rty then
+    emitU64CmpW e op lv rv
   else match lty
     LTFloat =>
       let ld = unboxFloat e lv
@@ -5001,6 +5220,10 @@ isStrLTy LTStr = True
 isStrLTy LTUnknown = True
 isStrLTy _ = False
 
+isU64LTy : LTy -> Bool
+isU64LTy LTU64 = True
+isU64LTy _ = False
+
 isLTUnknown : LTy -> Bool
 isLTUnknown LTUnknown = True
 isLTUnknown _ = False
@@ -5050,6 +5273,13 @@ emitUn e env "-" x =
       let r = freshReg e
       let _ = emit e "  \{r} = fneg double \{d}"
       (boxFloat e r, LTFloat)
+    -- Typecheck routes a U64 `-x` through `negate`, so a U64 operand arrives here
+    -- only on a path that lost that routing; two's complement, never an untag.
+    LTU64 =>
+      let x = unboxU64 e v
+      let r = freshReg e
+      let _ = emit e "  \{r} = sub i64 0, \{x}"
+      (boxU64 e r, LTU64)
     _ =>
       let i = untagInt e v
       let r = freshReg e
@@ -9072,7 +9302,8 @@ implParamEnv n i
       (implParamEnv n (i + 1))
 
 -- map an impl head tag name to its static LTy for use in param typing.
--- Known primitives → their type (a fixed-width `U8`/`U16`/`U32` is an Int word);
+-- Known primitives → their type (a fixed-width `U8`/`U16`/`U32` is an Int word, a
+-- `U64` its boxed cell);
 -- everything else (ADT, List, Array, tuples, …) → LTCon.
 tagToLTy : String -> LTy
 tagToLTy "String" = LTStr
@@ -9080,6 +9311,7 @@ tagToLTy "Int" = LTInt
 tagToLTy "Float" = LTFloat
 tagToLTy "Bool" = LTBool
 tagToLTy "Char" = LTChar
+tagToLTy "U64" = LTU64
 tagToLTy t = if isFixedWidthHead t then LTInt else LTCon
 
 -- like implParamEnv, but types param `i` as `tagToLTy tag` when `i ∈ positions`
@@ -10063,15 +10295,16 @@ loadCaptures e env (c :: rest) i =
 -- a captured FLOAT is stored BOXED in the closure cell (capWords/lookupVarG boxes
 -- an unboxed LTFloatU on escape), so bind it LTFloat inside the lifted body —
 -- matching emitLit's boxed-float convention, so arith (the Win-12 one-float-operand
--- path), print, and list ops all unbox it correctly.  Every OTHER capture stays
--- LTInt (the uniform-i64 default), so non-float captures are unaffected → zero
--- regression surface.  Fixes the closure-float-capture arith soundness bug
+-- path), print, and list ops all unbox it correctly.  A captured U64 cell keeps
+-- LTU64 for the same reason.  Every OTHER capture stays LTInt (the uniform-i64
+-- default), so non-float captures are unaffected → zero regression surface.  Fixes the closure-float-capture arith soundness bug
 -- (`map (x => x * scale)` with a captured float `scale`, `(z => z + k)` etc., which
 -- previously did INTEGER arith on boxed-float pointers → garbage).
 capTypeOf : OrdMap (String, LTy) -> String -> LTy
 capTypeOf env c = match omLookup c env
   Some (_, LTFloat) => LTFloat
   Some (_, LTFloatU) => LTFloat
+  Some (_, LTU64) => LTU64
   _ => LTInt
 
 -- the live operand words for a captured-name list (looked up in the emit env).
@@ -13218,6 +13451,7 @@ typeOf _ _ (CLit (LFloat _)) = LTFloat
 typeOf _ _ (CLit (LBool _)) = LTBool
 typeOf _ _ (CLit (LString _)) = LTStr
 typeOf _ _ (CLit (LChar _)) = LTChar
+typeOf _ _ (CLit (LU64 _ _)) = LTU64
 -- A list literal / range-list is a chain of Cons/Nil cells — a constructor
 -- value (LTCon), NOT an Int.  Without this, the empty-list base clause of a
 -- list-returning multi-clause fn (e.g. `externNames [] = []`) typed as LTInt, so
@@ -13231,9 +13465,10 @@ typeOf _ env (CVar x _) = match lookupAssoc x env
   Some LTFloatU => LTFloat
   Some t => t
   None => LTInt
-typeOf sigs env (CBinPrim op l r _)
+typeOf sigs env (CBinPrim op l r tag)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
+  | isU64Head tag = LTU64
   | otherwise = typeOf sigs env l
 typeOf sigs env (CUnOp "-" x) = typeOf sigs env x
 typeOf sigs env (CIf _ t _) = typeOf sigs env t
@@ -13349,13 +13584,16 @@ binOperandTy sigs env op other =
 concreteNumTy : OrdMap FnSig -> List (String, LTy) -> CExpr -> Option LTy
 concreteNumTy _ _ (CLit (LInt _)) = Some LTInt
 concreteNumTy _ _ (CLit (LFloat _)) = Some LTFloat
+concreteNumTy _ _ (CLit (LU64 _ _)) = Some LTU64
 concreteNumTy sigs env (CUnOp "-" x) = concreteNumTy sigs env x
 concreteNumTy _ env (CVar x _) = match lookupAssoc x env
   Some LTFloatU => Some LTFloat
   Some t => Some t
   None => None
-concreteNumTy sigs env (CBinPrim op l r _) =
-  if isArithOp op then
+concreteNumTy sigs env (CBinPrim op l r tag) =
+  if isArithOp op && isU64Head tag then
+    Some LTU64
+  else if isArithOp op then
     firstSome (concreteNumTy sigs env l) (concreteNumTy sigs env r)
   else
     None
@@ -13583,6 +13821,7 @@ litTy (LFloat _) = LTFloat
 litTy (LBool _) = LTBool
 litTy (LString _) = LTStr
 litTy (LChar _) = LTChar
+litTy (LU64 _ _) = LTU64
 litTy LUnit = LTInt
 
 nthPat : List Pat -> Int -> Option Pat
@@ -15203,6 +15442,7 @@ emitPrint e v LTChar = emit e ("  call void @mdk_print_char(i64 " ++ v ++ ")")
 -- G3: a polymorphic Num result (LTNum) is an Int OR boxed-Float word; dispatch
 -- the print on its runtime tag via @mdk_print_num (mirrors the @mdk_num_* arith).
 emitPrint e v LTNum = emit e ("  call void @mdk_print_num(i64 " ++ v ++ ")")
+emitPrint e v LTU64 = emit e ("  call void @mdk_print_u64(i64 " ++ v ++ ")")
 emitPrint _ _ LTCon =
   panic
     "llvm: cannot print an ADT value (`main` must reduce to a scalar Int/Bool/Float)"
