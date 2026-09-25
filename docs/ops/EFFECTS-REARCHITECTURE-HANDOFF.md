@@ -1,18 +1,19 @@
 # Effects rearchitecture session handoff
 
-**Status:** INCOMPLETE — draft PR. The named-authority work (#3385's arrow
-half, #3382, #3383, #3391) landed in the session of 2026-09-24/25 (see
-"Named-authority session"); the data half of #3385 and the final CI run on
-that head are still owed. CI was last green on head `fbe6d455b` (run
-36064803849, every job). Handoff first recorded 2026-09-24.
+**Status:** MERGED. [PR #3393](https://github.com/MedakaLang/medaka/pull/3393)
+landed on `main` as `f81ff1d9d` on 2026-09-25 through the merge queue (run
+36163162966, every job green); #3382, #3383, #3391 and #825 closed with it. The
+named-authority work (#3385's arrow half) is on `main`; the data half of #3385
+and the review leftovers listed under "Owed after this session" are the open
+work. Handoff first recorded 2026-09-24.
 
 ## Resume here
 
-Continue [PR #3393](https://github.com/MedakaLang/medaka/pull/3393), branch
-`effects-architecture-one-shot`. The source checkpoint is the branch head; the
-named-authority session below is its last commits. `main` is merged in as of
-`9d7fd98ac`. Do not enqueue the PR until a fresh CI run on the head is read to
-terminal; Val decides the merge.
+The effects rearchitecture is on `main`. Start the next piece of work from
+`main` on a topic branch; there is no effects branch to continue. Read, in
+order, the same documents as before: this handoff (the named-authority session
+and its "Owed after this session"), the architecture, the semantics, the
+typechecker contracts. The reading order below still applies.
 
 Read, in order:
 
@@ -431,22 +432,21 @@ grade, conceptually `forall e. a -> f e a`; it does **not** coerce an existing
 `f <> a` into `f e a`. `deferWhen`/`deferUnless` preserve the grade instead of
 claiming purity. Keep inference, signatures, docs and snapshots consistent.
 
-## Remaining merge blockers
+## What remains after the merge
 
-These are tracked by the draft PR and its architecture delivery checklist; this
-list is not a claim that an independent full-head review found nothing else.
+The adversarial review and the CI run on the final head are done (see the
+named-authority session). What the architecture's delivery checklist still
+lists as open:
 
-1. An exact-head, whole-diff adversarial review, and the CI run on the final
-   head read to terminal (CI was last green on `fbe6d455b`, run 36064803849).
-2. Qualified data fields, constructor proof sources and existentials (#3385's
+1. Qualified data fields, constructor proof sources and existentials (#3385's
    data half). Named authorities on arrows, the underscore's retirement, label
    identity and the prefix-join canonical form are delivered.
-3. General qualified directed residual constraints in schemes, plus fully
+2. General qualified directed residual constraints in schemes, plus fully
    delayed unknown-shape produced-value joins.
-4. Shared invocation-protocol summaries for policy/manifest consumers rather
+3. Shared invocation-protocol summaries for policy/manifest consumers rather
    than re-deriving semantics by structural traversal.
-5. Final performance, cross-engine, self-hosting and CI verification after all
-   semantic changes. Earlier successful subsets do not discharge this.
+4. The review's S2/S3 leftovers and the manifest's bare-name label keys, listed
+   under "Owed after this session".
 
 The branch also changed `819-impl-head-tyvar-pinned`; recheck its current contract.
 The #825 drain above is new evidence. #830/#2111 remain relevant semantic history.

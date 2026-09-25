@@ -4,10 +4,11 @@
 destination from code that has actually migrated. This is one implementation
 effort, not a sprint contract. Base: `c8d1ffe38`.
 
-For continuation of draft PR #3393, read the
+PR #3393 merged on 2026-09-25 (`f81ff1d9d`). For what it delivered and what
+remains, read the
 [session handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) first. It records
-the exact source checkpoint, newly completed red CI, verification limits and
-the next authority implementation steps. This document describes the intended
+the decisions, the verification receipts, the adversarial review's findings and
+the open work. This document describes the intended
 architecture; neither it nor the earlier passing subsets imply merge readiness.
 
 The effects subsystem owns effect rows and authority constraints. It participates
