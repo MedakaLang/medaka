@@ -1,0 +1,94 @@
+-- U32 (#3418, epic #3417) at the magnitudes where a 31-bit or a signed representation
+-- would go wrong: values at and above 2^30 (past the wasm i31 range) and 2^31 (the sign
+-- bit of an i32), sums and products overflowing 2^32, and a product overflowing 2^63
+-- (4294967295 * 4294967295, whose low 32 bits are 1).  Division and remainder are
+-- unsigned, comparison above 2^31 is unsigned, and a literal pattern arm can name
+-- 4294967295 (#3421).
+--
+-- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): the same magnitudes as
+-- plain `Int` must keep `Int` semantics (no 32-bit wrap), and `Int` still wraps at 63
+-- bits.
+--
+-- Expected values were computed independently of every engine (Python, `% 2**32`); the
+-- pin is test/engine_value_pins/engine/fixed_width_u32.pin.
+
+import u32 as U32
+
+double : Num a => a -> a
+double x = x + x
+
+kind : U32 -> String
+kind w = match w
+  0 => "zero"
+  2147483648 => "2^31"
+  4294967295 => "max"
+  _ => "other"
+
+ws : List U32
+ws = [0, 1073741824, 2147483647, 2147483648, 3000000000, 4294967295]
+
+main =
+  println "u32 +"
+  println [
+    (4294967295 : U32) + 1,
+    (2147483648 : U32) + 2147483648,
+    (1073741824 : U32) + 1073741824,
+    (3000000000 : U32) + 3000000000,
+  ]
+  println "u32 -"
+  println [
+    (0 : U32) - 1,
+    (1 : U32) - 2147483649,
+    (3000000000 : U32) - 1000000000,
+  ]
+  println "u32 *"
+  println [
+    (1073741824 : U32) * 4,
+    (65536 : U32) * 65536,
+    (100000 : U32) * 100000,
+    (3000000000 : U32) * 3,
+  ]
+  println ((4294967295 : U32) * 4294967295)
+  println ((2147483649 : U32) * 2147483649)
+  println "u32 / %"
+  println [
+    (4294967295 : U32) / 2,
+    (4294967295 : U32) % 10,
+    (3000000000 : U32) / 7,
+    (3000000000 : U32) % 7,
+  ]
+  println "u32 negate"
+  println [
+    negate (1 : U32),
+    negate (0 : U32),
+    negate (2147483648 : U32),
+    negate (4294967295 : U32),
+  ]
+  println "u32 compare"
+  println [
+    (3000000000 : U32) > 1,
+    (2147483648 : U32) > 2147483647,
+    (4294967295 : U32) < 1073741824,
+    (4294967295 : U32) == U32.truncate (-1),
+  ]
+  println (compare (4294967295 : U32) 0, compare (2147483648 : U32) 2147483648)
+  println (maxBound : U32)
+  println "u32 generic"
+  println (sum ws)
+  println (sum [4294967295 : U32, 2])
+  println (double (3000000000 : U32))
+  println "u32 display debug"
+  println ws
+  println (debug ws)
+  println "u32 patterns"
+  println (map kind ws)
+  println (kind (U32.truncate 4294967296))
+  println "int bystander"
+  println (4294967295 + 1)
+  println (0 - 1)
+  println (65536 * 65536)
+  println (3000000000 * 3)
+  println (2147483648 > 2147483647)
+  println (4294967295 / 2)
+  println (4611686018427387903 * 2)
+  println (double 3000000000)

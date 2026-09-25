@@ -98,6 +98,8 @@ hashFloat	PENDING	#476 hashing NaN and -0.0 (must agree with +0.0) is an edge (c
 # Bit shifts: shift amount >= 63/64 or negative is C-level UB (all three engines agree today, unpinned).
 shiftLeft	PENDING	#476 shift amount >= 64 or negative is the edge (UB in C; verify+pin before it drifts)
 shiftRight	PENDING	#476 shift amount >= 64 or negative is the edge (UB in C; verify+pin before it drifts)
+intShiftLeft	PENDING	#476 shiftLeft under another name: shift amount >= 64 or negative is the edge
+intShiftRight	PENDING	#476 shiftRight under another name: shift amount >= 64 or negative is the edge
 # Array / string / bytes with out-of-range or invalid-input domains.
 arrayGetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
 arraySetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
@@ -137,6 +139,18 @@ bitAnd	TOTAL	total bitwise op
 bitOr	TOTAL	total bitwise op
 bitXor	TOTAL	total bitwise op
 bitNot	TOTAL	total bitwise op
+intBitAnd	TOTAL	total bitwise op (bitAnd under another name)
+intBitOr	TOTAL	total bitwise op (bitOr under another name)
+intBitXor	TOTAL	total bitwise op (bitXor under another name)
+intBitNot	TOTAL	total bitwise op (bitNot under another name)
+# Fixed-width integers: truncation keeps the low n bits of any Int, and the
+# widening is the identity on a value already in 0 .. 2^n - 1.
+u8Truncate	TOTAL	total: the low eight bits of any Int
+u8ToInt	TOTAL	total: identity on the word
+u16Truncate	TOTAL	total: the low sixteen bits of any Int
+u16ToInt	TOTAL	total: identity on the word
+u32Truncate	TOTAL	total: the low thirty-two bits of any Int
+u32ToInt	TOTAL	total: identity on the word
 intToString	TOTAL	total: decimal render of any Int (incl. intMinBound)
 # Hashes (except hashFloat): total over their domains.
 hashBool	TOTAL	total over Bool

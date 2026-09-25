@@ -72,6 +72,21 @@ RNG) depends on this; to detect it, bounds-check the operands against
 `intMaxBound`/`intMinBound` yourself. (There is no `minInt`/`maxInt` — use
 `intMinBound`/`intMaxBound`, or
 the polymorphic `minBound`/`maxBound : Bounded a => a` with a type annotation.)
+`Int` is neither `I64` nor `U64`.
+
+**Fixed-width unsigned integers.** `U8`, `U16` and `U32` are builtin types
+holding `0 .. 2^n - 1`; their operations and instances live in the stdlib
+modules `u8`, `u16` and `u32` (`import u32 as U32`). Their `+`, `-` and `*`
+**wrap** modulo 2^n; `/` and `%` are unsigned, and a zero divisor panics as for
+`Int`. An integer literal takes the type its context gives it, so `7` in `U8`
+position needs no suffix, and a literal whose type grounds to one of these must fit it:
+`(300 : U8)` and `(-2 : U8)` are `L-INT-OVERFLOW` compile errors (`integer
+literal 300 does not fit U8 (0..255)`). A computed value never narrows silently:
+`fromInt` panics out of range, `tryFromInt` answers `None`, and `truncate` is
+the only masking conversion. A literal **pattern** is typed by its scrutinee
+when that is `U8`/`U16`/`U32` (`classify : U8 -> String; classify 10 = …`) and
+is range-checked the same way; otherwise it is an `Int`. Design:
+`docs/design/INTEGER-TYPES-DESIGN.md`.
 
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take
 `\'`). `\{` is **not** a literal-brace escape — it is the interpolation opener (see

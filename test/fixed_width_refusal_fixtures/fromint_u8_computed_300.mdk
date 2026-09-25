@@ -1,0 +1,9 @@
+-- #3420: `fromInt` on a value only known at runtime is a checked narrowing.
+-- 300 is refused by a panic naming the value and the type, and nothing is
+-- printed: the program must never reach `println` with a stored 44.
+import u8
+
+widen : Int -> U8
+widen n = fromInt n
+
+main = println (widen (length [1..=300]))

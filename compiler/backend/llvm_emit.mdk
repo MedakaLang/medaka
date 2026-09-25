@@ -178,6 +178,8 @@ import frontend.ast.{
   Route(..),
   Loc(..),
   ifaceIdMatches,
+  isFixedWidthHead,
+  fixedWidthMask,
 }
 import ir.core_ir.{
   CExpr(..),
@@ -657,7 +659,7 @@ fieldNameToLTy "Bool" = Some LTBool
 fieldNameToLTy "Int" = Some LTInt
 fieldNameToLTy "Char" = Some LTChar
 fieldNameToLTy "String" = Some LTStr
-fieldNameToLTy _ = None
+fieldNameToLTy n = if isFixedWidthHead n then Some LTInt else None
 
 -- ── function → DECLARED param/return type-head names (native backend, Gap E1) ─
 -- The fn → (declared-param-type-head-names, declared-return-type-head-name) table
@@ -3652,10 +3654,13 @@ emitPerfExtern e _ name _ = gapE e ("unsupported perf extern " ++ name)
 -- call the C helper on the raw values, retag the result.  shiftRight is LOGICAL
 -- (C >> on the untagged non-negative value == OCaml lsr for non-negative);
 -- bitNot's retag (shl/or) drops the top bit so it matches OCaml lnot on the
--- 63-bit rep.  See runtime/medaka_rt.c mdk_bit_*/mdk_shift_*.
+-- 63-bit rep.  See runtime/medaka_rt.c mdk_bit_*/mdk_shift_*.  The `int`-prefixed
+-- names (`intBitAnd`, …) are the same primitives under names a module defining its
+-- own `bitAnd` can still reach; they emit exactly what the bare name does.
 isBitExtern : String -> Bool
 isBitExtern name = contains name [
-  "bitAnd", "bitOr", "bitXor", "shiftLeft", "shiftRight", "bitNot"
+  "bitAnd", "bitOr", "bitXor", "shiftLeft", "shiftRight", "bitNot", "intBitAnd",
+  "intBitOr", "intBitXor", "intShiftLeft", "intShiftRight", "intBitNot"
 ]
 
 emitBitBin : Emit ->
@@ -3682,6 +3687,12 @@ emitBitExtern e env "bitOr" args = emitBitBin e env "mdk_bit_or" args
 emitBitExtern e env "bitXor" args = emitBitBin e env "mdk_bit_xor" args
 emitBitExtern e env "shiftLeft" args = emitBitBin e env "mdk_shift_left" args
 emitBitExtern e env "shiftRight" args = emitBitBin e env "mdk_shift_right" args
+emitBitExtern e env "intBitAnd" args = emitBitExtern e env "bitAnd" args
+emitBitExtern e env "intBitOr" args = emitBitExtern e env "bitOr" args
+emitBitExtern e env "intBitXor" args = emitBitExtern e env "bitXor" args
+emitBitExtern e env "intShiftLeft" args = emitBitExtern e env "shiftLeft" args
+emitBitExtern e env "intShiftRight" args = emitBitExtern e env "shiftRight" args
+emitBitExtern e env "intBitNot" args = emitBitExtern e env "bitNot" args
 emitBitExtern e env "bitNot" args = match emitArgs e env args
   [a] =>
     let x = untagInt e a
@@ -3690,6 +3701,54 @@ emitBitExtern e env "bitNot" args = match emitArgs e env args
     (tagInt e r, LTInt)
   _ => panic "llvm: bitNot takes one argument"
 emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
+
+-- Fixed-width integer conversions (PURE).  A `U8`/`U16`/`U32` is Int's tagged
+-- word, so `uNToInt` is the identity on it, and `uNTruncate` keeps the low `n`
+-- bits of the payload with one `and` on the TAGGED word: the mask shifted over
+-- the tag bit, tag bit kept (`(2^n - 1) << 1 | 1`), which is exact for a
+-- negative payload too.
+isFixedWidthExtern : String -> Bool
+isFixedWidthExtern name = contains name [
+  "u8Truncate", "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt"
+]
+
+emitFixedWidthTruncate : Emit ->
+  OrdMap (String, LTy) ->
+  Int ->
+  List CExpr ->
+  (String, LTy)
+emitFixedWidthTruncate e env mask args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    let taggedMask = intToString (mask * 2 + 1)
+    let _ = emit e "  \{r} = and i64 \{a}, \{taggedMask}"
+    (r, LTInt)
+  _ => panic "llvm: a fixed-width truncation takes one argument"
+
+emitFixedWidthExtern : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitFixedWidthExtern e env "u8Truncate" args =
+  emitFixedWidthTruncate e env 255 args
+emitFixedWidthExtern e env "u16Truncate" args =
+  emitFixedWidthTruncate e env 65535 args
+emitFixedWidthExtern e env "u32Truncate" args =
+  emitFixedWidthTruncate e env 4294967295 args
+emitFixedWidthExtern e env "u8ToInt" args = emitFixedWidthToInt e env args
+emitFixedWidthExtern e env "u16ToInt" args = emitFixedWidthToInt e env args
+emitFixedWidthExtern e env "u32ToInt" args = emitFixedWidthToInt e env args
+emitFixedWidthExtern e _ name _ =
+  gapE e ("unsupported fixed-width extern " ++ name)
+
+emitFixedWidthToInt : Emit ->
+  OrdMap (String, LTy) ->
+  List CExpr ->
+  (String, LTy)
+emitFixedWidthToInt e env args = match emitArgs e env args
+  [a] => (a, LTInt)
+  _ => panic "llvm: a fixed-width widening takes one argument"
 
 isHashExtern : String -> Bool
 isHashExtern name =
@@ -3793,6 +3852,7 @@ externCatalog = [
   (isRngExtern, emitRngExtern),
   (isHashExtern, emitHashExtern),
   (isBitExtern, emitBitExtern),
+  (isFixedWidthExtern, emitFixedWidthExtern),
   (isDebugLitExtern, emitDebugLitExtern),
   (isPerfExtern, emitPerfExtern),
 ]
@@ -4586,8 +4646,11 @@ scalarTagIsFloat tag = match fieldNameToLTy tag
 -- emitter's default for an operand whose type it could not recover, so keying an
 -- inline `icmp` on LTy would order boxed String/Float heap addresses.  An empty or
 -- any other tag leaves the comparison on the runtime-discriminated path.
+-- A fixed-width head (`U8`/`U16`/`U32`) is a witness too: its value is a tagged
+-- Int word held in `0 .. 2^n - 1`, never negative, so the signed word compare
+-- orders it exactly as `Int` does.
 scalarTagIsInt : String -> Bool
-scalarTagIsInt tag = tag == "Int"
+scalarTagIsInt tag = tag == "Int" || isFixedWidthHead tag
 
 emitArith : Emit ->
   OrdMap (String, LTy) ->
@@ -4596,7 +4659,46 @@ emitArith : Emit ->
   CExpr ->
   String ->
   (String, LTy)
-emitArith e env op l r tag =
+emitArith e env op l r tag = match fixedWidthMask tag
+  Some mask => emitFixedWidthArith e env op l r mask
+  None => emitArithUnsized e env op l r tag
+
+-- An arithmetic node typecheck stamped with a fixed-width head: both operands are
+-- tagged Int words, so the operand LTys (which may read `LTNum` for a param of a
+-- polymorphic-looking body) are not consulted.  `+`, `-` and `*` run the Int
+-- instruction and keep the low `n` bits (`and` with `2^n - 1`) before retagging;
+-- the 64-bit `mul` wraps modulo 2^64, whose low 32 bits are the true product's.
+-- `/` and `%` of two non-negative in-range values are already in range, so they
+-- keep Int's lowering, zero-divisor abort included.
+emitFixedWidthArith : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  Int ->
+  (String, LTy)
+emitFixedWidthArith e env op l r mask =
+  let (lv, _) = emitExpr e env l
+  let (rv, _) = emitExpr e env r
+  let li = untagInt e lv
+  let ri = untagInt e rv
+  if op == "/" || op == "%" then
+    emitIntDivZeroChecked e op li ri
+  else
+    let res = freshReg e
+    let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
+    let masked = freshReg e
+    let _ = emit e "  \{masked} = and i64 \{res}, \{intToString mask}"
+    (tagInt e masked, LTInt)
+
+emitArithUnsized : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  String ->
+  (String, LTy)
+emitArithUnsized e env op l r tag =
   if scalarTagIsFloat tag
     || staticIsFloat env l
     || isFloatFieldAccess e l
@@ -8970,14 +9072,15 @@ implParamEnv n i
       (implParamEnv n (i + 1))
 
 -- map an impl head tag name to its static LTy for use in param typing.
--- Known primitives → their type; everything else (ADT, List, Array, tuples, …) → LTCon.
+-- Known primitives → their type (a fixed-width `U8`/`U16`/`U32` is an Int word);
+-- everything else (ADT, List, Array, tuples, …) → LTCon.
 tagToLTy : String -> LTy
 tagToLTy "String" = LTStr
 tagToLTy "Int" = LTInt
 tagToLTy "Float" = LTFloat
 tagToLTy "Bool" = LTBool
 tagToLTy "Char" = LTChar
-tagToLTy _ = LTCon
+tagToLTy t = if isFixedWidthHead t then LTInt else LTCon
 
 -- like implParamEnv, but types param `i` as `tagToLTy tag` when `i ∈ positions`
 -- (the receiver-type positions from CImplTagged), otherwise LTInt.

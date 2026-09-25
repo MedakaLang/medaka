@@ -55,7 +55,7 @@ import eval.eval.{
   matchPat,
   force,
   startsWithAt,
-  evalArith,
+  evalArithAt,
   evalUnop,
   consVal,
   appendVal,
@@ -117,7 +117,8 @@ ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
 ceval env (CDecision scrut arms tree) =
   cevalDecision env (ceval env scrut) arms tree
 ceval env (CIf c t e) = cevalIf env (ceval env c) t e
-ceval env (CBinPrim op l r _) = cevalBinPrim op (ceval env l) (ceval env r)
+ceval env (CBinPrim op l r tag) =
+  cevalBinPrim op tag (ceval env l) (ceval env r)
 ceval env (CUnOp op e) = evalUnop op (ceval env e)
 ceval env (CTuple es) = VTuple (map (ceval env) es)
 ceval env (CList es) = VList (map (ceval env) es)
@@ -171,10 +172,10 @@ litValue (LChar c) = VChar c
 litValue (LBool b) = VBool b
 litValue LUnit = VUnit
 
-cevalBinPrim : String -> Value e -> Value e -> Value e
-cevalBinPrim "::" l r = consVal l r
-cevalBinPrim "++" l r = appendVal l r
-cevalBinPrim op l r = evalArith op l r
+cevalBinPrim : String -> String -> Value e -> Value e -> Value e
+cevalBinPrim "::" _ l r = consVal l r
+cevalBinPrim "++" _ l r = appendVal l r
+cevalBinPrim op tag l r = evalArithAt tag op l r
 
 cevalIf : EvalEnv (Value e) -> Value e -> CExpr -> CExpr -> <e> Value e
 cevalIf env (VBool True) t _ = ceval env t

@@ -1,0 +1,6 @@
+-- #3420: `-2` parses as `negate 2`, and the typechecker checks a negated literal
+-- as the negative value it spells, so -2 in U8 position meets the same range
+-- check rather than becoming `negate 2` = 254.
+import u8
+
+main = println (-2 : U8)

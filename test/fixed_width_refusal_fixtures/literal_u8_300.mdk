@@ -1,0 +1,8 @@
+-- #3420: a ground literal in U8 position that does not fit is refused at
+-- compile time, on every verb.  300 must never be stored as 44.
+import u8
+
+x : U8
+x = 300
+
+main = println x

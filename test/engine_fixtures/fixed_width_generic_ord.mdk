@@ -1,0 +1,20 @@
+-- U8/U32 reached through an `Ord a =>` dictionary rather than at their ground
+-- type: `maximum`/`minimum`, `sort`, and a user function comparing with `>`.
+-- The u8/u32 `Ord` impls define every method, so no generic caller reaches an
+-- interface default (the defaults are what trap on wasm, #1020).  Values
+-- straddle 2^31 so a signed comparison would pick the wrong answer.
+import u8
+import u32
+import list.{sort}
+
+bigger : Ord a => a -> a -> a
+bigger a b = if a > b then a else b
+
+ws : List U32
+ws = [3000000000, 0, 4294967295, 2147483648, 1]
+
+main =
+  println (maximum ws, minimum ws)
+  println (sort ws)
+  println (bigger (3000000000 : U32) 2147483647)
+  println (bigger (200 : U8) 100)

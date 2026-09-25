@@ -111,7 +111,8 @@ arms are path globs, so a sibling derives its SUBJECT's gate set. Run one with
 
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
-`vector` (growable array), `json`, `crypto/` (`crypto.sha256`, `crypto.hmac` — the one nested
+`vector` (growable array), `u8`/`u16`/`u32` (the fixed-width unsigned types' operations; the
+types themselves are builtin — `docs/design/INTEGER-TYPES-DESIGN.md`), `json`, `crypto/` (`crypto.sha256`, `crypto.hmac` — the one nested
 namespace; a stdlib subdirectory's modules import dotted), `byteparser`/`bytebuilder` (parser-combinator libraries
 for hand-rolled binary/text parsing and building — `parsec` is a separate, more general
 parser-combinator project under its own manifest, not part of `stdlib/`), `io.mdk` (ergonomic

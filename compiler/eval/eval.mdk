@@ -42,6 +42,8 @@ import frontend.ast.{
   DataVis(..),
   TyConOrigin,
   ifaceIdentity,
+  isFixedWidthHead,
+  fixedWidthMask,
   ifaceIdMatches,
 }
 -- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
@@ -1790,6 +1792,10 @@ eval env (EVariantUpdate con base fields) =
   evalVariantUpdate con (eval env base) (map (evalFieldAssign env) fields)
 eval env (EFieldAccess e "value" _) = evalValueField (eval env e)
 eval env (EFieldAccess e field _) = evalField (eval env e) field
+-- a fixed-width arithmetic operator: typecheck stamped the operand's head, and
+-- the `Int` result is reduced modulo 2^n (see `evalArithAt`).
+eval env (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag }))
+  | isFixedWidthHead tag = evalArithAt tag op (eval env l) (eval env r)
 eval env (EAnnot e _) = eval env e
 eval env (EHeadAnnot e _) = eval env e
 eval env (EBlock stmts) = evalBlock env stmts
@@ -2458,6 +2464,16 @@ evalArith ">" a b = VBool (ordGt (valueCompare a b))
 evalArith "<=" a b = VBool (not (ordGt (valueCompare a b)))
 evalArith ">=" a b = VBool (not (ordLt (valueCompare a b)))
 evalArith op _ _ = panic ("unknown op '" ++ op ++ "'")
+
+-- An arithmetic operator whose operands typecheck grounded to the scalar head
+-- [tag].  At a fixed-width head (`U8`/`U16`/`U32`) the `Int` result is reduced
+-- modulo 2^n: `+`, `-` and `*` wrap, and `/`/`%` of two in-range values are
+-- already in range.  Every other tag is plain `evalArith`.
+export
+evalArithAt : String -> String -> Value e -> Value e -> Value e
+evalArithAt tag op l r = match (fixedWidthMask tag, evalArith op l r)
+  (Some mask, VInt n) => VInt (bitAnd n mask)
+  (_, v) => v
 
 -- ── program driver ────────────────────────────────────────────────────────
 export
@@ -3342,6 +3358,18 @@ externBindings _ = [
   ("shiftLeft", prim2 pShiftLeft),
   ("shiftRight", prim2 pShiftRight),
   ("bitNot", prim1 pBitNot),
+  ("u8Truncate", prim1 (pTruncateBits 255)),
+  ("u8ToInt", prim1 pFixedToInt),
+  ("u16Truncate", prim1 (pTruncateBits 65535)),
+  ("u16ToInt", prim1 pFixedToInt),
+  ("u32Truncate", prim1 (pTruncateBits 4294967295)),
+  ("u32ToInt", prim1 pFixedToInt),
+  ("intBitAnd", prim2 pBitAnd),
+  ("intBitOr", prim2 pBitOr),
+  ("intBitXor", prim2 pBitXor),
+  ("intBitNot", prim1 pBitNot),
+  ("intShiftLeft", prim2 pShiftLeft),
+  ("intShiftRight", prim2 pShiftRight),
   ("intToFloat", prim1 pIntToFloat),
   ("floatToInt", prim1 pFloatToInt),
   ("floatToString", prim1 pFloatToString),
@@ -3484,6 +3512,16 @@ pShiftRight _ _ = panic "shiftRight: not Ints"
 pBitNot : Value e -> <e> Value e
 pBitNot (VInt a) = VInt (bitNot a)
 pBitNot _ = panic "bitNot: not an Int"
+
+-- A fixed-width integer shares `Int`'s `VInt`: truncation masks to the
+-- width, and widening back to `Int` is the identity.
+pTruncateBits : Int -> Value e -> <e> Value e
+pTruncateBits mask (VInt a) = VInt (bitAnd a mask)
+pTruncateBits _ _ = panic "truncate: not an Int"
+
+pFixedToInt : Value e -> <e> Value e
+pFixedToInt (VInt a) = VInt a
+pFixedToInt _ = panic "toInt: not a fixed-width integer"
 
 pIntToFloat : Value e -> <e> Value e
 pIntToFloat (VInt n) = VFloat (intToFloat n)

@@ -1,0 +1,9 @@
+-- #3421: the same range check on a `match` arm: 256 cannot be a U8.
+import u8
+
+kind : U8 -> String
+kind w = match w
+  256 => "big"
+  _ => "other"
+
+main = println (kind 0)

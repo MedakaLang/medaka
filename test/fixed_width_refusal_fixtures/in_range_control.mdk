@@ -1,0 +1,27 @@
+-- CONTROL, load-bearing: every value here sits exactly on a boundary the
+-- checks must NOT refuse — the largest and smallest literal of each type, a
+-- literal pattern at the maximum, a computed `fromInt` at the maximum, and a
+-- generic literal that fits.  Without it, a range check "fixed" into refusing
+-- everything would read as green.  The last two lines are plain Int, which
+-- no U-type check may touch: 300 and -2 are ordinary Int literals.
+import u8
+import u16
+import u32
+
+top : U8 -> String
+top 255 = "top"
+top _ = "other"
+
+bump : Num a => a -> a
+bump x = x + 200
+
+main =
+  println [255 : U8, 0]
+  println [65535 : U16, 0]
+  println [4294967295 : U32, 0]
+  println (top 255)
+  println (fromInt (length [1..=255]) : U8)
+  println (fromInt (65536 * 65536 - 1) : U32)
+  println (bump (55 : U8))
+  println 300
+  println (-2)

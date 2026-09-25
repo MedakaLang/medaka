@@ -1,0 +1,8 @@
+-- A local helper is not dict-abstracted, so its arithmetic and literals are
+-- grounded by its uses rather than generalized over `Num`.  Used at U8, the 300
+-- here is a U8 literal and is refused at compile time, not stored as 301.
+import u8
+
+main =
+  let g = x => x + 300
+  println (g (1 : U8))
