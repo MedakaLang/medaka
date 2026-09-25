@@ -352,7 +352,7 @@ position without evidence (every attempt was caught at a later application).
 - `docs-links`, `agent-doc-symbols` (one ledger row for the archived census's
   retired `Known`), comment-register census, shout-diff and the registry
   keying ratchet: green.
-- CI on `bbb98f13c` (run 36090508390) was green except the must-fail step's drained pins; with the pins removed, the full dispatched run on `35654f79f` (run 36105896609, `workflow_dispatch`, unnarrowed) is green on every job, `compiler-soundness` included (must-fail 25 reproduce, whole-source typecheck and fixpoint both ran in CI).
+- CI on `bbb98f13c` (run 36090508390) was green except the must-fail step's drained pins; with the pins removed, the full dispatched run on `35654f79f` (run 36105896609, `workflow_dispatch`, unnarrowed) was green on every job, `compiler-soundness` included. The review fixes landed as `d5bcbca70`; its dispatched run is recorded in the PR body (GitHub stopped creating `pull_request` runs for this branch's pushes after 353b4e21a, so the branch's runs are dispatched by hand). Locally on `d5bcbca70`: strict closure clean, whole-source typecheck PASS, C3a/C3b yes, matrix 14/14, every sibling and domain suite green, `named_authority` on all three engines, perf 0 regressed, 29 gates green plus the census after its re-derivation.
 
 **Owed after this session:**
 
@@ -364,7 +364,10 @@ position without evidence (every attempt was caught at a later application).
 4. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
    lambda parameter without a directed flow lose the qualifier: conservative,
    documented in the architecture, not a launder.
-5. The whole-diff adversarial review.
+5. The review's S2/S3 leftovers listed above: error locations, the
+   solved-bound wording, the symbolic-join render, one defect reporting
+   twice, the manifest's bare-name keys (a format decision for Val), the
+   hard-coded Product `Host` axis.
 
 ## Delivered code and invariants to preserve
 
