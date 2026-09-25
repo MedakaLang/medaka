@@ -1,5 +1,5 @@
 # META
-source_lines=2561
+source_lines=2563
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -2124,6 +2124,7 @@ tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
 tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentionsParams (TyAuth _ _) _ = False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 tyMentionsParams (TyNamed _ t) params = tyMentionsParams t params
 tyMentionsParams (TyQual t _) params = tyMentionsParams t params
@@ -2297,6 +2298,7 @@ tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
 -- Mirror of the `tyMentionsParams` arm above.
 tyMentionsNonParam (TyRow _ tail _) params =
   anyList (v => not (contains v params)) tail
+tyMentionsNonParam (TyAuth _ _) _ = False
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyNamed _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyQual t _) params = tyMentionsNonParam t params
@@ -3147,6 +3149,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsParams" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentionsParams" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
@@ -3200,6 +3203,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))))) (EVar "tail")))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
@@ -3882,6 +3886,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsParams" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentionsParams" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
@@ -3935,6 +3940,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))))) (EVar "tail")))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))

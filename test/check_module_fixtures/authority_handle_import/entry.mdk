@@ -1,0 +1,24 @@
+import handle.{Raw, Named(..), open, descriptor, readNamed}
+
+-- The importer's side of an abstract authority-indexed handle: the declared
+-- kind reaches it (`Raw path` elaborates at `Authority FileRead`), the named
+-- arrow `open` is its only constructor, and a public carrying constructor may
+-- be applied here because applying it proves the field.  The gate diffs the
+-- inferred schemes below against oracle.tcmod: an index erased to a type
+-- variable, or a qualifier dropped from `Named`'s field, would show there.
+cfgRaw : Unit -> Raw "config/*"
+cfgRaw _ = open "config/app.toml"
+
+fd : Raw p -> Int
+fd r = descriptor r
+
+cfgNamed : Unit -> Named "config/*"
+cfgNamed _ = Named "config/app.toml"
+
+readCfg : Unit -> <FileRead "config/*"> Result String String
+readCfg _ = readNamed (cfgNamed ())
+
+readAt : (path : String) -> <FileRead path> Result String String
+readAt path = readNamed (Named path)
+
+main = println (fd (open "config/x"))

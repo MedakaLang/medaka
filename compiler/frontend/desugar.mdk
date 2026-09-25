@@ -9,6 +9,7 @@
 -- post-order (children first, then the node).
 
 import frontend.ast.{
+  KindAnn(..),
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -407,12 +408,12 @@ anyRefutable (p :: ps) = isRefutable p || anyRefutable ps
 -- below now reports those sites instead of dropping them silently — #421.)
 expandDecl : Decl -> List Decl
 -- #1110: record UPDATE — `deriving` is consumed here, identity must survive it.
-expandDecl (d@(DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives })) =
+expandDecl (d@(DData { dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives })) =
   DData { d | dataDerives = [] }
-    :: deriveImpls (deriveForData name params variants) derives
-expandDecl (d@(DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives })) =
+    :: deriveImpls (deriveForData name params kinds variants) derives
+expandDecl (d@(DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives })) =
   DNewtype { d | newtypeDerives = [] }
-    :: deriveImpls (deriveForNewtype name params con fty) derives
+    :: deriveImpls (deriveForNewtype name params kinds con fty) derives
 expandDecl (DAttrib attrs d) = attribHead attrs (expandDecl d)
 expandDecl d = [d]
 
@@ -439,17 +440,22 @@ deriveImpls f (d :: ds) = match f (deriveRefName d)
 export
 dataDerivers : String ->
   List String ->
+  List (Option KindAnn) ->
   List Variant ->
   List (String, Unit -> Decl)
-dataDerivers name params variants = [
-  ("Eq", _ => applyDeriveParams name params (deriveEqData name variants)),
-  ("Ord", _ => applyDeriveParams name params (deriveOrdData name variants)),
+dataDerivers name params kinds variants = [
+  ("Eq", _ => applyDeriveParams name params kinds (deriveEqData name variants)),
+  (
+    "Ord",
+    _ => applyDeriveParams name params kinds (deriveOrdData name variants),
+  ),
   (
     "Debug",
     _ =>
       applyDeriveParams
         name
         params
+        kinds
         (deriveShowData "Debug" "debug" name variants),
   ),
   (
@@ -458,15 +464,16 @@ dataDerivers name params variants = [
       applyDeriveParams
         name
         params
+        kinds
         (deriveShowData "Display" "display" name variants),
   ),
   (
     "Generic",
-    _ => applyDeriveParams name params (deriveGenericData name variants),
+    _ => applyDeriveParams name params kinds (deriveGenericData name variants),
   ),
   (
     "Hashable",
-    _ => applyDeriveParams name params (deriveHashData name variants),
+    _ => applyDeriveParams name params kinds (deriveHashData name variants),
   ),
 ]
 
@@ -477,9 +484,14 @@ lookupDeriver n ((k, f) :: rest)
   | n == k = Some (f ())
   | otherwise = lookupDeriver n rest
 
-deriveForData : String -> List String -> List Variant -> String -> Option Decl
-deriveForData name params variants iface =
-  lookupDeriver iface (dataDerivers name params variants)
+deriveForData : String ->
+  List String ->
+  List (Option KindAnn) ->
+  List Variant ->
+  String ->
+  Option Decl
+deriveForData name params kinds variants iface =
+  lookupDeriver iface (dataDerivers name params kinds variants)
 
 -- A newtype is structurally a single-constructor, single-field data type, so the
 -- data derivers produce the right tagged rendering via a synthetic variant.
@@ -493,20 +505,28 @@ deriveForData name params variants iface =
 export
 newtypeDerivers : String ->
   List String ->
+  List (Option KindAnn) ->
   String ->
   Ty ->
   List (String, Unit -> Decl)
-newtypeDerivers name params con fty =
+newtypeDerivers name params kinds con fty =
   let synthetic = [Variant con (ConPos [fty])]
   [
-    ("Eq", _ => applyDeriveParams name params (deriveEqData name synthetic)),
-    ("Ord", _ => applyDeriveParams name params (deriveOrdData name synthetic)),
+    (
+      "Eq",
+      _ => applyDeriveParams name params kinds (deriveEqData name synthetic),
+    ),
+    (
+      "Ord",
+      _ => applyDeriveParams name params kinds (deriveOrdData name synthetic),
+    ),
     (
       "Debug",
       _ =>
         applyDeriveParams
           name
           params
+          kinds
           (deriveShowData "Debug" "debug" name synthetic),
     ),
     (
@@ -515,6 +535,7 @@ newtypeDerivers name params con fty =
         applyDeriveParams
           name
           params
+          kinds
           (deriveShowData "Display" "display" name synthetic),
     ),
     -- Hashable needs no specialized newtype deriver: the synthetic variant is
@@ -522,18 +543,19 @@ newtypeDerivers name params con fty =
     -- exactly "hash the wrapped value", which is what a newtype key should do.
     (
       "Hashable",
-      _ => applyDeriveParams name params (deriveHashData name synthetic),
+      _ => applyDeriveParams name params kinds (deriveHashData name synthetic),
     ),
   ]
 
 deriveForNewtype : String ->
   List String ->
+  List (Option KindAnn) ->
   String ->
   Ty ->
   String ->
   Option Decl
-deriveForNewtype name params con fty iface =
-  lookupDeriver iface (newtypeDerivers name params con fty)
+deriveForNewtype name params kinds con fty iface =
+  lookupDeriver iface (newtypeDerivers name params kinds con fty)
 
 -- ── Pass: unknown `deriving (…)` names (standalone, pre-desugar) ─────────────
 -- `expandDecl` DROPS any derive name it has no deriver for, so `deriving (Banana)`
@@ -553,19 +575,21 @@ checkDerives decls = flatMap declDeriveErrors decls
 -- passing `map fst (dataDerivers …)` to a decl with NO derives would still build
 -- the deriver table for every `data` in the program.
 declDeriveErrors : Decl -> List (String, Option Loc)
-declDeriveErrors (DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives }) =
+declDeriveErrors (DData { dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) =
   match derives
     [] => []
     _ =>
       flatMap
-        (unknownDerive name (map fst (dataDerivers name params variants)))
+        (unknownDerive name (map fst (dataDerivers name params kinds variants)))
         derives
-declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) =
+declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) =
   match derives
     [] => []
     _ =>
       flatMap
-        (unknownDerive name (map fst (newtypeDerivers name params con fty)))
+        (unknownDerive
+          name
+          (map fst (newtypeDerivers name params kinds con fty)))
         derives
 declDeriveErrors (DAttrib _ d) = declDeriveErrors d
 declDeriveErrors _ = []
@@ -583,12 +607,29 @@ cannotDeriveMsg tyName supported n =
 
 -- rewrite a generated impl's head/constraints for the type's params:
 -- `data Box a deriving Eq` → `impl Eq (Box a) requires Eq a`
-applyDeriveParams : String -> List String -> Decl -> Decl
-applyDeriveParams name params (d@(DImpl { iface, ... })) = DImpl { d |
+-- The head applies EVERY parameter (a row or authority parameter is a slot of
+-- the type); a `requires` is owed only by the `Type`-kinded ones — an
+-- effect row or an authority has no `Eq`.
+applyDeriveParams : String ->
+  List String ->
+  List (Option KindAnn) ->
+  Decl ->
+  Decl
+applyDeriveParams name params kinds (d@(DImpl { iface, ... })) = DImpl { d |
   tys = [appliedHead name params],
-  reqs = paramRequires iface params,
+  reqs = paramRequires iface (typeKindedParams params kinds),
 }
-applyDeriveParams _ _ d = d
+applyDeriveParams _ _ _ d = d
+
+-- positional with the kinds; an unannotated parameter is `Type` (§6.3).
+export
+typeKindedParams : List String -> List (Option KindAnn) -> List String
+typeKindedParams (_ :: ps) ((Some KindEffect) :: ks) = typeKindedParams ps ks
+typeKindedParams (_ :: ps) ((Some (KindAuthority _ _)) :: ks) =
+  typeKindedParams ps ks
+typeKindedParams (p :: ps) (_ :: ks) = p :: typeKindedParams ps ks
+typeKindedParams ps [] = ps
+typeKindedParams [] _ = []
 
 appliedHead : String -> List String -> Ty
 appliedHead name params = appliedHeadGo (tyConUnresolved name None) params

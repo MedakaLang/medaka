@@ -14,7 +14,7 @@
 -- directly from effect_domain/effect_rows rather than through this module.
 
 import types.effect_authority.{
-  Authority(..), Authvar(..), authvarId, authvarName, authNorm,
+  Authority(..), Authvar(..), authvarId, authvarName, authNorm, authIsTop,
   renderAuthorityWith
 }
 import types.effect_rows.{
@@ -30,7 +30,8 @@ import types.effect_rows.{
   Effvar(..),
 }
 import frontend.ast.{
-  Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface
+  Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface,
+  authTermSurface
 }
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
@@ -177,6 +178,11 @@ public export data Mono =
   -- `@p`; forgotten safely toward the plain type, never invented from one.
   -- Erases before any runtime layout.
   | TQual Mono Authority
+  -- An authority occupying an `Authority`-kinded type-CONSTRUCTOR ARGUMENT
+  -- slot (`Handle κ`, `Handle "config/*"`): the twin of `TEff` for the third
+  -- variable sort.  Produced only by kind-directed elaboration at such a
+  -- slot; invariant under unification (§6.4); erases before runtime layout.
+  | TAuth Authority
 
 -- An effect row occupying a type-CONSTRUCTOR ARGUMENT slot, for a data type
 -- with an effect-row parameter (`data Async e a = … <e> …`).  Produced ONLY
@@ -446,6 +452,14 @@ ppGo ctx cnt prec t = match normalize t
   TFun a eff b => ppFun ctx cnt prec a eff b
   TEff r => ppEffArg ctx cnt r
   TQual inner q => ppQual ctx cnt prec inner q
+  TAuth q => ppAuthArg ctx cnt q
+
+-- An index argument: the top is `*`, the spelling a signature writes; any
+-- other term renders as it does after `@`.
+export
+ppAuthArg : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+ppAuthArg ctx cnt q =
+  if authIsTop (authNorm q) then "*" else ppAuthority ctx cnt q
 
 -- `T @p` outside an arrow domain (an arrow domain renders as the named
 -- argument `(p : T)` in `ppFun`, the form a signature writes).
@@ -567,7 +581,10 @@ ppFun ctx cnt prec a eff b =
 ppDomain : Ref (List (Int, String)) -> Ref Int -> Mono -> String
 ppDomain ctx cnt a = match normalize a
   TQual inner (AVar cell) =>
-    "(\{ppAuthvarName ctx cnt cell} : \{ppGo ctx cnt 0 inner})"
+    if isSome (lookupAssocI (authvarId cell + 2000000) !ctx) then
+      ppGo ctx cnt 2 a
+    else
+      "(\{ppAuthvarName ctx cnt cell} : \{ppGo ctx cnt 0 inner})"
   _ => ppGo ctx cnt 2 a
 
 export
@@ -696,6 +713,7 @@ ppTy (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
+ppTy (TyAuth p _) = authTermSurface escStr p
 ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 ppTy (TyNamed n t) = "(\{n} : \{ppTy t})"
 ppTy (TyQual t n) = "\{ppTyAtom t} @\{n}"

@@ -1,0 +1,14 @@
+-- A constructor of a `public export data` with an `Authority` parameter that
+-- no field of it carries would let every importer invent an authority nothing
+-- proves (EFFECTS-SEMANTICS §4.1: an unrestricted constructor cannot invent
+-- κ).  The honest twins are in effect_data_field_ok: the same shape exported
+-- abstractly (`export data Raw`, constructed only at home) and a public type
+-- whose constructor carries the parameter (`Named`).
+public export data Leak (p : Authority FileRead) = Leak Int
+
+-- one carrying constructor does not excuse a phantom sibling
+public export data Mixed (p : Authority FileRead) =
+  | Carried (String @p)
+  | Bare Int
+
+main = println 1

@@ -248,3 +248,201 @@ test "the authority algebra" =
     expectEqual " (\"a/*\" | k)" (renderAuthority (authJoin k a)),
     expectEqual "" (renderAuthority (authJoin top k)),
   ]
+
+-- ── The data half (EFFECTS-SEMANTICS §4.1): fields, constructors, patterns ──
+
+-- A handle whose one field is qualified by the head's authority parameter.
+handle : String
+handle = "data H (p : Authority Store) = H (String @p)\n"
+
+test "a qualified field is a proof source: construction checks the stored value" = expectAll
+  [
+    expectTrue
+      (accepts (handle ++ "mk : Unit -> H \"cfg/*\"\nmk _ = H \"cfg/app\"\n")),
+    expectTrue
+      (rejects (handle ++ "mk : Unit -> H \"cfg/*\"\nmk _ = H \"/etc/x\"\n")),
+    expectTrue (rejects (handle ++ "mk : String -> H \"cfg/*\"\nmk s = H s\n")),
+    expectTrue
+      (accepts
+        (handle ++ "open : (path : String) -> H path\nopen path = H path\n")),
+    expectTrue
+      (accepts
+        (handle
+          ++ "open : (path : String) -> H path\nopen path = H (path ++ \"/x\")\n")),
+    expectTrue
+      (rejects
+        (handle
+          ++ "open : (path : String) -> H path\nopen path = H \"/etc/x\"\n")),
+    expectEqual
+      "(path : String) -> H path"
+      (schemeOf
+        (handle ++ "open : (path : String) -> H path\nopen path = H path\n")
+        "open"),
+    expectEqual "String -> H *" (schemeOf (handle ++ "anyH s = H s\n") "anyH"),
+  ]
+
+test "matching recovers the declared qualifier and nothing more" = expectAll [
+  expectTrue
+    (accepts (handle ++ "read : H p -> <Store p> Int\nread (H s) = load s\n")),
+  expectTrue
+    (rejects
+      (handle
+        ++ "read : H p -> <Store p> Int\nread (H s) = load \"/etc/x\"\n")),
+  expectFalse
+    (accepts
+      ("data U = U String\n"
+        ++ "readU : U -> <Store \"cfg/*\"> Int\nreadU (U s) = load s\n")),
+  expectTrue
+    (accepts
+      ("data U = U String\n"
+        ++ "readU : U -> <Store> Int\nreadU (U s) = load s\n")),
+  expectTrue
+    (accepts
+      ("data H2 (p : Authority Store) = A (String @p) | B Int\n"
+        ++ "f : H2 p -> <Store p> Int\nf (A s) = load s\nf (B n) = n\n")),
+  expectTrue
+    (rejects
+      ("data H2 (p : Authority Store) = A (String @p) | B Int\n"
+        ++ "f : H2 p -> <Store p> Int\nf (A s) = load s\nf (B n) = load \"cfg/x\"\n")),
+]
+
+test "an index in a signature quantifies like a type variable" = expectAll [
+  expectTrue
+    (accepts
+      (handle
+        ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+        ++ "via : H p -> <Store p> Int\nvia h = read h\n")),
+  expectTrue
+    (accepts
+      (handle
+        ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+        ++ "viaTop : H p -> <Store> Int\nviaTop h = read h\n")),
+  expectTrue
+    (rejects
+      (handle
+        ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+        ++ "viaBad : H p -> <Store \"cfg/*\"> Int\nviaBad h = read h\n")),
+  expectTrue
+    (contains
+      "T-AUTHORITY-KIND"
+      (codes (handle ++ "bad : List p -> <Store p> Int\nbad _ = 1\n"))),
+  expectTrue
+    (contains
+      "T-AUTHORITY-KIND"
+      (codes (handle ++ "bad : H p -> List p -> Int\nbad _ _ = 1\n"))),
+]
+
+-- (the `Ref` cell rows live in effect_data_field_{ok,launder}: `:=` needs the
+-- prelude this matrix runs without)
+test "an index is invariant; `*` is the top" = expectAll [
+  expectTrue
+    (accepts (handle ++ "same : H \"cfg/*\" -> H \"cfg/*\"\nsame h = h\n")),
+  expectTrue
+    (rejects (handle ++ "widen : H \"cfg/app\" -> H \"cfg/*\"\nwiden h = h\n")),
+  expectTrue (accepts (handle ++ "anyH : String -> H *\nanyH s = H s\n")),
+  expectTrue
+    (accepts
+      (handle ++ "fromAny : H * -> <Store> Int\nfromAny (H s) = load s\n")),
+  expectFalse
+    (accepts
+      (handle
+        ++ "fromAny : H * -> <Store \"cfg/*\"> Int\nfromAny (H s) = load s\n")),
+]
+
+test "a phantom authority index is trusted only at home" = expectAll [
+  expectTrue
+    (contains
+      "T-AUTHORITY-PHANTOM-EXPORT"
+      (codes "public export data P (p : Authority Store) = P Int\n")),
+  expectTrue (accepts "export data P (p : Authority Store) = P Int\n"),
+  expectTrue
+    (accepts "public export data Q (p : Authority Store) = Q (String @p)\n"),
+  expectTrue
+    (accepts
+      ("data P (p : Authority Store) = P Int\n"
+        ++ "mk : (path : String) -> P path\nmk _ = P 1\n")),
+]
+
+record : String
+record = "data R (p : Authority Store) = R { path : String @p, n : Int }\n"
+
+test "record fields: create, read, pattern and update follow the qualifier" = expectAll
+  [
+    expectTrue
+      (accepts
+        (record
+          ++ "mk : Unit -> R \"cfg/*\"\nmk _ = R { path = \"cfg/a\", n = 1 }\n")),
+    expectTrue
+      (rejects
+        (record
+          ++ "mk : Unit -> R \"cfg/*\"\nmk _ = R { path = \"/etc/x\", n = 1 }\n")),
+    expectTrue
+      (accepts (record ++ "rd : R p -> <Store p> Int\nrd r = load r.path\n")),
+    expectTrue
+      (accepts
+        (record
+          ++ "rd : R p -> <Store p> Int\nrd (R { path = s }) = load s\n")),
+    expectTrue
+      (accepts
+        (record ++ "rd : R p -> <Store p> Int\nrd (R { path }) = load path\n")),
+    expectTrue
+      (rejects
+        (record
+          ++ "rd : R p -> <Store p> Int\nrd (R { path }) = load \"/etc/x\"\n")),
+    expectTrue
+      (accepts (record ++ "upd : R p -> R p\nupd r = { r | n = 2 }\n")),
+    expectTrue
+      (rejects
+        (record ++ "upd : R p -> R p\nupd r = { r | path = \"/etc/x\" }\n")),
+  ]
+
+existential : String
+existential =
+  handle
+    ++ "data Any = Any (p : Authority Store) (H p)\n"
+    ++ "read : H p -> <Store p> Int\nread (H s) = load s\n"
+    ++ "write : H p -> String @p -> Unit\nwrite _ _ = ()\n"
+
+test "an existential opens a rigid authority scoped to the arm" = expectAll [
+  expectTrue
+    (accepts
+      (existential
+        ++ "pack : (path : String) -> Any\npack path = Any (H path)\n")),
+  expectTrue
+    (accepts
+      (existential
+        ++ "use : Any -> <Store> Int\nuse a = match a\n  Any h => read h\n")),
+  expectTrue
+    (rejects
+      (existential
+        ++ "use : Any -> <Store \"cfg/*\"> Int\nuse a = match a\n  Any h => read h\n")),
+  expectTrue
+    (accepts
+      (existential
+        ++ "wr : Any -> Unit\nwr a = match a\n  Any h => match h\n    H s => write h s\n")),
+  expectTrue
+    (rejects
+      (existential
+        ++ "wr : Any -> Unit\nwr a = match a\n  Any h => write h \"/etc/x\"\n")),
+  expectTrue
+    (contains
+      "T-AUTHORITY-ESCAPE"
+      (codes
+        (existential ++ "esc : Any -> H *\nesc a = match a\n  Any h => h\n"))),
+  expectTrue
+    (accepts
+      (existential ++ "useC : Any -> <Store> Int\nuseC (Any h) = read h\n")),
+  expectTrue
+    (contains
+      "T-AUTHORITY-ESCAPE"
+      (codes (existential ++ "escC : Any -> H *\nescC (Any h) = h\n"))),
+  expectTrue
+    (contains
+      "T-AUTHORITY-EXISTENTIAL-SCOPE"
+      (codes
+        (existential
+          ++ "bad : Any -> <Store> Int\nbad a =\n  let Any h = a\n  read h\n"))),
+  expectEqual
+    "Any -> <Store> Int"
+    (schemeOf (existential ++ "use a = match a\n  Any h => read h\n") "use"),
+]

@@ -1,0 +1,6 @@
+cfgNamed : Unit -> Named "config/*"
+cfgRaw : Unit -> Raw "config/*"
+fd : Raw p -> Int
+main : <IO> Unit
+readAt : (path : String) -> <FileRead path> Result String String
+readCfg : Unit -> <FileRead "config/*"> Result String String

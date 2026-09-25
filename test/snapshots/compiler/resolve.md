@@ -1,5 +1,5 @@
 # META
-source_lines=6269
+source_lines=6397
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -24,6 +24,7 @@ import frontend.ast.{
   TyConOrigin(..),
   EffAtomTy(..),
   EffParamTy(..),
+  KindAnn(..),
   mapTyInDecl,
   firstTyLoc,
   firstTyLocList,
@@ -461,9 +462,13 @@ patGroupDupErrors loc kind ps =
 checkType : Option Loc -> Env -> Ty -> List ResError
 checkType cur env t = checkTypeIn [] cur env t
 
--- [bound] is the authority binders in scope: every `(p : T)` arrow domain to
--- the left in this signature.  A row atom's named parameter and a `@p`
--- qualifier must name one of them.
+-- [bound] is the authority binders in scope: every `(p : T)` arrow domain and
+-- every bare name (`Handle p`) written to the LEFT in this signature, plus the
+-- enclosing declaration's `Authority`-kinded parameters and a constructor's
+-- existential binders.  A row atom's named parameter and a `@p` qualifier
+-- must name one of them.  Whether a bare name to the left is an authority or
+-- a type variable is the elaborator's question (`Handle`'s declared kind);
+-- this pass only knows what was written where.
 checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
 checkTypeIn _ cur env (TyCon { tyConName = n, tyConLoc = loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
@@ -483,12 +488,17 @@ checkTypeIn _ _ _ (TyVar _) = []
 -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
 -- typecheck's `tupleHeadTagTc`.
 checkTypeIn bound cur env (TyApp a b) =
-  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
+  checkTypeIn bound cur env a
+    ++ checkTypeIn (tyVarsWritten a ++ bound) cur env b
 checkTypeIn bound cur env (TyFun (TyNamed n a) b) =
-  checkTypeIn bound cur env a ++ checkTypeIn (n :: bound) cur env b
+  checkTypeIn bound cur env a
+    ++ checkTypeIn (n :: tyVarsWritten a ++ bound) cur env b
 checkTypeIn bound cur env (TyFun a b) =
-  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
-checkTypeIn bound cur env (TyTuple ts) = flatMap (checkTypeIn bound cur env) ts
+  checkTypeIn bound cur env a
+    ++ checkTypeIn (tyVarsWritten a ++ bound) cur env b
+checkTypeIn bound cur env (TyTuple ts) = checkTypesLeftToRight bound cur env ts
+-- A written authority term names nothing.
+checkTypeIn _ _ _ (TyAuth _ _) = []
 checkTypeIn bound cur env (TyEffect labels _ t) =
   checkEffAtoms bound cur env labels ++ checkTypeIn bound cur env t
 checkTypeIn _ cur _ (TyNamed n _) = [MisplacedAuthorityBinder n cur]
@@ -509,6 +519,51 @@ checkTypeIn bound cur env (TyConstrained cs t) =
 -- written effect labels a `TyEffect` carries — validate them the same way.
 checkTypeIn bound cur env (TyRow labels _ _) =
   checkEffAtoms bound cur env labels
+
+-- Tuple components bind left to right, as arrow domains do.
+checkTypesLeftToRight : List String ->
+  Option Loc ->
+  Env ->
+  List Ty ->
+  List ResError
+checkTypesLeftToRight _ _ _ [] = []
+checkTypesLeftToRight bound cur env (t :: ts) =
+  checkTypeIn bound cur env t
+    ++ checkTypesLeftToRight (tyVarsWritten t ++ bound) cur env ts
+
+-- The bare names a type writes, in source order — the candidates a name to
+-- the right may refer to as an authority.
+tyVarsWritten : Ty -> List String
+tyVarsWritten (TyVar n) = [n]
+tyVarsWritten (TyApp a b) = tyVarsWritten a ++ tyVarsWritten b
+tyVarsWritten (TyFun a b) = tyVarsWritten a ++ tyVarsWritten b
+tyVarsWritten (TyTuple ts) = flatMap tyVarsWritten ts
+tyVarsWritten (TyEffect _ _ t) = tyVarsWritten t
+tyVarsWritten (TyConstrained _ t) = tyVarsWritten t
+tyVarsWritten (TyNamed _ t) = tyVarsWritten t
+tyVarsWritten (TyQual t _) = tyVarsWritten t
+tyVarsWritten _ = []
+
+-- The names a declaration head binds as authorities: its `Authority`-kinded
+-- parameters (positional with the name list, as the kinds are stored).
+authorityParams : List String -> List (Option KindAnn) -> List String
+authorityParams (p :: ps) ((Some (KindAuthority _ _)) :: ks) =
+  p :: authorityParams ps ks
+authorityParams (_ :: ps) (_ :: ks) = authorityParams ps ks
+authorityParams _ _ = []
+
+-- The effect labels a head's kinds and a constructor's binders name, each
+-- checked like a label written in a row: unknown or ambiguous is an error.
+checkKindLabels : Env -> List (Option KindAnn) -> List ResError
+checkKindLabels env kinds = flatMap (checkKindLabel env) kinds
+
+checkKindLabel : Env -> Option KindAnn -> List ResError
+checkKindLabel env (Some (KindAuthority l _)) = checkEffect None env l
+checkKindLabel _ _ = []
+
+checkBinderLabels : Env -> List (String, KindAnn) -> List ResError
+checkBinderLabels env binders =
+  flatMap (b => checkKindLabel env (Some (snd b))) binders
 
 checkEffAtoms : List String ->
   Option Loc ->
@@ -1677,24 +1732,52 @@ checkDecl env (DLetGroup _ binds) =
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
-checkDecl env (DData { dataCtors = vs }) = flatMap (checkVariant env) vs
+checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
+  checkKindLabels env ks
+    ++ checkVariants env (authorityParams ps ks) vs (padBinders vs bs)
 checkDecl env (DProp _ _ params body) = checkProp env params body
 checkDecl env (DTest _ _ body) = checkExpr None env emptyScope body
 checkDecl env (DInterface { supers, methods, ... }) =
   checkInterfaceDecl env supers methods
 checkDecl env (DImpl { iface, tys, reqs, methods, ... }) =
   checkImplDecl env iface tys reqs methods
-checkDecl env (DTypeAlias { tyAliasRhs = rhs }) = checkType None env rhs
-checkDecl env (DNewtype { newtypeFieldTy = fty }) = checkType None env fty
+checkDecl env (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
+  checkKindLabels env ks ++ checkTypeIn (authorityParams ps ks) None env rhs
+checkDecl env (DNewtype { newtypeParams = ps, newtypeParamKinds = ks, newtypeCtorBinders = bs, newtypeFieldTy = fty }) =
+  checkKindLabels env ks
+    ++ checkBinderLabels env bs
+    ++ checkTypeIn (map fst bs ++ authorityParams ps ks) None env fty
 checkDecl env (DAttrib _ inner) = checkDecl env inner
 checkDecl _ _ = []
 
-checkVariant : Env -> Variant -> List ResError
-checkVariant env (Variant _ (ConPos tys)) = flatMap (checkType None env) tys
-checkVariant env (Variant _ (ConNamed fs _)) = flatMap (checkFieldType env) fs
+-- The binder list is positional with the variants; a short list (a decl
+-- synthesised without one) reads as "no binders" rather than truncating.
+padBinders : List Variant ->
+  List (List (String, KindAnn)) ->
+  List (List (String, KindAnn))
+padBinders [] _ = []
+padBinders (_ :: vs) (b :: bs) = b :: padBinders vs bs
+padBinders (_ :: vs) [] = [] :: padBinders vs []
 
-checkFieldType : Env -> Field -> List ResError
-checkFieldType env (Field _ t) = checkType None env t
+checkVariants : Env ->
+  List String ->
+  List Variant ->
+  List (List (String, KindAnn)) ->
+  List ResError
+checkVariants env bound (v :: vs) (bs :: rest) =
+  checkBinderLabels env bs
+    ++ checkVariant env (map fst bs ++ bound) v
+    ++ checkVariants env bound vs rest
+checkVariants _ _ _ _ = []
+
+checkVariant : Env -> List String -> Variant -> List ResError
+checkVariant env bound (Variant _ (ConPos tys)) =
+  flatMap (checkTypeIn bound None env) tys
+checkVariant env bound (Variant _ (ConNamed fs _)) =
+  flatMap (checkFieldType env bound) fs
+
+checkFieldType : Env -> List String -> Field -> List ResError
+checkFieldType env bound (Field _ t) = checkTypeIn bound None env t
 
 checkProp : Env -> List PropParam -> Expr -> List ResError
 checkProp env params body =
@@ -2702,7 +2785,7 @@ ppResError (AmbiguousType n mods _) =
 -- `import m.{Foo as Bar}` is rejected — so the message offers the two fixes that
 -- exist and not that one.
 ppResError (UnboundAuthority n _) =
-  "Unknown authority '\{n}': an authority name refers to an argument named to its left in the same signature. Bind it by naming the argument, `(\{n} : String) -> <FileRead \{n}> …`, or write the label bare for any authority"
+  "Unknown authority '\{n}': an authority name refers to a binder written to its left in the same signature — a named argument `(\{n} : String) -> <FileRead \{n}> …`, an `Authority`-kinded type argument such as `Handle \{n}` — or to an `Authority` parameter of the enclosing data declaration. Bind it there, or write the label bare for any authority"
 ppResError (MisplacedAuthorityBinder n _) =
   "A named argument `(\{n} : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"
 ppResError (AmbiguousEffect n mods _) =
@@ -5305,7 +5388,52 @@ stampDeclTyOrigins aliases scope d =
   unqualAliasDecl
     aliases
     scope
-    (mapOriginsInDecl (stampTyHead aliases scope) (fillIfaceOccOrigin scope) d)
+    (stampDeclKinds
+      scope
+      (mapOriginsInDecl
+        (stampTyHead aliases scope)
+        (fillIfaceOccOrigin scope)
+        d))
+
+-- An `Authority L` kind names an effect label exactly as a row atom does, and
+-- acquires `L`'s declaring identity the same way (`stampEffAtoms`): on the
+-- head's parameter kinds and on every constructor's existential binders.
+stampDeclKinds : OrdMap TyConOrigin -> Decl -> Decl
+stampDeclKinds scope (d@(DData { dataParamKinds, dataCtorBinders })) = DData { d |
+  dataParamKinds = map (stampKindOpt scope) dataParamKinds,
+  dataCtorBinders = map (stampBinders scope) dataCtorBinders,
+}
+stampDeclKinds scope (d@(DNewtype { newtypeParamKinds, newtypeCtorBinders })) = DNewtype { d |
+  newtypeParamKinds = map (stampKindOpt scope) newtypeParamKinds,
+  newtypeCtorBinders = stampBinders scope newtypeCtorBinders,
+}
+stampDeclKinds scope (d@(DTypeAlias { tyAliasParamKinds })) = DTypeAlias { d |
+  tyAliasParamKinds = map (stampKindOpt scope) tyAliasParamKinds,
+}
+stampDeclKinds scope (d@(DInterface { typaramKinds, ... })) = DInterface { d |
+  typaramKinds = map (stampKindOpt scope) typaramKinds,
+}
+stampDeclKinds scope (DAttrib attrs inner) =
+  DAttrib attrs (stampDeclKinds scope inner)
+stampDeclKinds _ d = d
+
+stampBinders : OrdMap TyConOrigin ->
+  List (String, KindAnn) ->
+  List (String, KindAnn)
+stampBinders scope binders = map (b => (fst b, stampKind scope (snd b))) binders
+
+stampKindOpt : OrdMap TyConOrigin -> Option KindAnn -> Option KindAnn
+stampKindOpt scope (Some k) = Some (stampKind scope k)
+stampKindOpt _ None = None
+
+stampKind : OrdMap TyConOrigin -> KindAnn -> KindAnn
+stampKind scope (KindAuthority l OriginUnresolved) =
+  match omLookup (effectKey l) scope
+    Some o => KindAuthority l o
+    None => KindAuthority l OriginUnresolved
+stampKind scope (KindArrow a b) =
+  KindArrow (stampKind scope a) (stampKind scope b)
+stampKind _ k = k
 
 -- ⚠️ The three arms are enumerated rather than wildcarded ON PURPOSE: a fourth
 -- `TyConOrigin` inhabitant should be MADE TO SHOW UP here rather than falling
@@ -6272,7 +6400,7 @@ takeOriginTrace _ =
   originTraceLog := []
   rows
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -6357,15 +6485,40 @@ takeOriginTrace _ =
 (DTypeSig false "checkTypeIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkTypeIn" (PWild (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
 (DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyVar" PWild)) (EListLit))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "::" (EVar "n") (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env"))) (EVar "ts")))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "::" (EVar "n") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound")))) (EVar "cur")) (EVar "env")) (EVar "b"))))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
+(DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyAuth" PWild PWild)) (EListLit))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkTypeIn" (PWild (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")))
+(DTypeSig false "checkTypesLeftToRight" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "ResError")))))))
+(DFunDef false "checkTypesLeftToRight" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "checkTypesLeftToRight" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "t")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "ts"))))
+(DTypeSig false "tyVarsWritten" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "tyVarsWritten" ((PCon "TyVar" (PVar "n"))) (EListLit (EVar "n")))
+(DFunDef false "tyVarsWritten" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
+(DFunDef false "tyVarsWritten" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
+(DFunDef false "tyVarsWritten" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "tyVarsWritten")) (EVar "ts")))
+(DFunDef false "tyVarsWritten" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" (PWild) (EListLit))
+(DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
+(DFunDef false "authorityParams" (PWild PWild) (EListLit))
+(DTypeSig false "checkKindLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
+(DFunDef false "checkKindLabels" ((PVar "env") (PVar "kinds")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkKindLabel") (EVar "env"))) (EVar "kinds")))
+(DTypeSig false "checkKindLabel" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "List") (TyCon "ResError")))))
+(DFunDef false "checkKindLabel" ((PVar "env") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild))) (EApp (EApp (EApp (EVar "checkEffect") (EVar "None")) (EVar "env")) (EVar "l")))
+(DFunDef false "checkKindLabel" (PWild PWild) (EListLit))
+(DTypeSig false "checkBinderLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
+(DFunDef false "checkBinderLabels" ((PVar "env") (PVar "binders")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "checkKindLabel") (EVar "env")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
 (DTypeSig false "checkEffAtoms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkEffAtoms" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "atoms")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env")) (EFieldAccess (EVar "a") "eatLabel")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "n")) () (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))) (arm PWild () (EListLit)))))) (EVar "atoms")))
 (DTypeSig false "checkAuthorityName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -6651,20 +6804,27 @@ takeOriginTrace _ =
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false)) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkVariant") (EVar "env"))) (EVar "vs")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "vs")) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkInterfaceDecl") (EVar "env")) (EVar "supers")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplDecl") (EVar "env")) (EVar "iface")) (EVar "tys")) (EVar "reqs")) (EVar "methods")))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "rhs")))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "fty")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "None")) (EVar "env")) (EVar "rhs"))))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs"))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))) (EVar "None")) (EVar "env")) (EVar "fty"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DAttrib" PWild (PVar "inner"))) (EApp (EApp (EVar "checkDecl") (EVar "env")) (EVar "inner")))
 (DFunDef false "checkDecl" (PWild PWild) (EListLit))
-(DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkVariant" ((PVar "env") (PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys")))
-(DFunDef false "checkVariant" ((PVar "env") (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkFieldType") (EVar "env"))) (EVar "fs")))
-(DTypeSig false "checkFieldType" (TyFun (TyCon "Env") (TyFun (TyCon "Field") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkFieldType" ((PVar "env") (PCon "Field" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DTypeSig false "padBinders" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))))))
+(DFunDef false "padBinders" ((PList) PWild) (EListLit))
+(DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs"))))
+(DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EListLit))))
+(DTypeSig false "checkVariants" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyCon "ResError")))))))
+(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
+(DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "None")) (EVar "env"))) (EVar "tys")))
+(DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkFieldType") (EVar "env")) (EVar "bound"))) (EVar "fs")))
+(DTypeSig false "checkFieldType" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Field") (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "checkFieldType" ((PVar "env") (PVar "bound") (PCon "Field" PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "None")) (EVar "env")) (EVar "t")))
 (DTypeSig false "checkProp" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkProp" ((PVar "env") (PVar "params") (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkPropParamTy") (EVar "env"))) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EVar "map") (EVar "propParamName")) (EVar "params")))) (EVar "body"))))
 (DTypeSig false "checkPropParamTy" (TyFun (TyCon "Env") (TyFun (TyCon "PropParam") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -7034,7 +7194,7 @@ takeOriginTrace _ =
 (DFunDef false "ppResError" ((PCon "AmbiguousConstructor" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous constructor: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EVar "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". A module alias cannot tell two constructors apart. Bring in the constructors of only one — e.g. `import <mod>.{T(..)}` — and import the other without `(..)` and without an alias"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousAliasCtor" (PVar "n") (PVar "mid") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous constructor: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' names `"))) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "`'s constructor, but this module declares a constructor of that name itself. The alias prefix is dropped before the constructor table is consulted, and that table is keyed by the bare name, so the two cannot be told apart. Rename one of them"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousType" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous type: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EVar "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` — or drop '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' from the other's import list"))))
-(DFunDef false "ppResError" ((PCon "UnboundAuthority" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown authority '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': an authority name refers to an argument named to its left in the same signature. Bind it by naming the argument, `("))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : String) -> <FileRead "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "> …`, or write the label bare for any authority"))))
+(DFunDef false "ppResError" ((PCon "UnboundAuthority" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown authority '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': an authority name refers to a binder written to its left in the same signature — a named argument `("))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : String) -> <FileRead "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "> …`, an `Authority`-kinded type argument such as `Handle "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` — or to an `Authority` parameter of the enclosing data declaration. Bind it there, or write the label bare for any authority"))))
 (DFunDef false "ppResError" ((PCon "MisplacedAuthorityBinder" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "A named argument `(")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousEffect" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous effect label: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is declared by "))) (EApp (EVar "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ", and both declarations are in scope. A label is identified by the module that declares it, so these are two different effects and a row cannot tell them apart by spelling. Import only one of those modules here, or rename one of the declarations"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousInterface" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous interface: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EVar "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` — or drop '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' from the other's import list"))))
@@ -7567,7 +7727,23 @@ takeOriginTrace _ =
 (DFunDef false "aliasOfUsePath" ((PCon "UseAlias" PWild (PVar "a"))) (EListLit (EVar "a")))
 (DFunDef false "aliasOfUsePath" (PWild) (EListLit))
 (DTypeSig false "stampDeclTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "stampDeclTyOrigins" ((PVar "aliases") (PVar "scope") (PVar "d")) (EApp (EApp (EApp (EVar "unqualAliasDecl") (EVar "aliases")) (EVar "scope")) (EApp (EApp (EApp (EVar "mapOriginsInDecl") (EApp (EApp (EVar "stampTyHead") (EVar "aliases")) (EVar "scope"))) (EApp (EVar "fillIfaceOccOrigin") (EVar "scope"))) (EVar "d"))))
+(DFunDef false "stampDeclTyOrigins" ((PVar "aliases") (PVar "scope") (PVar "d")) (EApp (EApp (EApp (EVar "unqualAliasDecl") (EVar "aliases")) (EVar "scope")) (EApp (EApp (EVar "stampDeclKinds") (EVar "scope")) (EApp (EApp (EApp (EVar "mapOriginsInDecl") (EApp (EApp (EVar "stampTyHead") (EVar "aliases")) (EVar "scope"))) (EApp (EVar "fillIfaceOccOrigin") (EVar "scope"))) (EVar "d")))))
+(DTypeSig false "stampDeclKinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DData" ((rf "dataParamKinds" None) (rf "dataCtorBinders" None)) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataParamKinds" (EApp (EApp (EVar "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "dataParamKinds"))) (fa "dataCtorBinders" (EApp (EApp (EVar "map") (EApp (EVar "stampBinders") (EVar "scope"))) (EVar "dataCtorBinders"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DNewtype" ((rf "newtypeParamKinds" None) (rf "newtypeCtorBinders" None)) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeParamKinds" (EApp (EApp (EVar "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "newtypeParamKinds"))) (fa "newtypeCtorBinders" (EApp (EApp (EVar "stampBinders") (EVar "scope")) (EVar "newtypeCtorBinders"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasParamKinds" None)) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasParamKinds" (EApp (EApp (EVar "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "tyAliasParamKinds"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DInterface" ((rf "typaramKinds" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "typaramKinds" (EApp (EApp (EVar "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "typaramKinds"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclKinds") (EVar "scope")) (EVar "inner"))))
+(DFunDef false "stampDeclKinds" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "stampBinders" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))))
+(DFunDef false "stampBinders" ((PVar "scope") (PVar "binders")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
+(DTypeSig false "stampKindOpt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "Option") (TyCon "KindAnn")))))
+(DFunDef false "stampKindOpt" ((PVar "scope") (PCon "Some" (PVar "k"))) (EApp (EVar "Some") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "k"))))
+(DFunDef false "stampKindOpt" (PWild (PCon "None")) (EVar "None"))
+(DTypeSig false "stampKind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "KindAnn") (TyCon "KindAnn"))))
+(DFunDef false "stampKind" ((PVar "scope") (PCon "KindAuthority" (PVar "l") (PCon "OriginUnresolved"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "effectKey") (EVar "l"))) (EVar "scope")) (arm (PCon "Some" (PVar "o")) () (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "o"))) (arm (PCon "None") () (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")))))
+(DFunDef false "stampKind" ((PVar "scope") (PCon "KindArrow" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "KindArrow") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "a"))) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "b"))))
+(DFunDef false "stampKind" (PWild (PVar "k")) (EVar "k"))
 (DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))))))
 (DFunDef false "stampTyHead" ((PVar "aliases") (PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EApp (EApp (EVar "aliasStampHead") (EVar "aliases")) (EVar "t")) (EVar "n")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
 (DFunDef false "stampTyHead" (PWild (PVar "scope") (PCon "TyEffect" (PVar "atoms") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "atoms2") (PVar "changed")) (EApp (EApp (EVar "stampEffAtoms") (EVar "scope")) (EVar "atoms"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "atoms2")) (EVar "tail")) (EVar "t")) (EVar "changed")))))
@@ -7785,7 +7961,7 @@ takeOriginTrace _ =
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EUnOp "!" (EVar "originTraceLog"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -7870,15 +8046,40 @@ takeOriginTrace _ =
 (DTypeSig false "checkTypeIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkTypeIn" (PWild (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
 (DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyVar" PWild)) (EListLit))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "::" (EVar "n") (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env"))) (EVar "ts")))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "::" (EVar "n") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound")))) (EVar "cur")) (EVar "env")) (EVar "b"))))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
+(DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyAuth" PWild PWild)) (EListLit))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkTypeIn" (PWild (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")))
+(DTypeSig false "checkTypesLeftToRight" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "ResError")))))))
+(DFunDef false "checkTypesLeftToRight" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "checkTypesLeftToRight" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "t")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "ts"))))
+(DTypeSig false "tyVarsWritten" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "tyVarsWritten" ((PCon "TyVar" (PVar "n"))) (EListLit (EVar "n")))
+(DFunDef false "tyVarsWritten" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
+(DFunDef false "tyVarsWritten" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
+(DFunDef false "tyVarsWritten" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "tyVarsWritten")) (EVar "ts")))
+(DFunDef false "tyVarsWritten" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "tyVarsWritten") (EVar "t")))
+(DFunDef false "tyVarsWritten" (PWild) (EListLit))
+(DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
+(DFunDef false "authorityParams" (PWild PWild) (EListLit))
+(DTypeSig false "checkKindLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
+(DFunDef false "checkKindLabels" ((PVar "env") (PVar "kinds")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkKindLabel") (EVar "env"))) (EVar "kinds")))
+(DTypeSig false "checkKindLabel" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "List") (TyCon "ResError")))))
+(DFunDef false "checkKindLabel" ((PVar "env") (PCon "Some" (PCon "KindAuthority" (PVar "l") PWild))) (EApp (EApp (EApp (EVar "checkEffect") (EVar "None")) (EVar "env")) (EVar "l")))
+(DFunDef false "checkKindLabel" (PWild PWild) (EListLit))
+(DTypeSig false "checkBinderLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
+(DFunDef false "checkBinderLabels" ((PVar "env") (PVar "binders")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "checkKindLabel") (EVar "env")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
 (DTypeSig false "checkEffAtoms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkEffAtoms" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "atoms")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env")) (EFieldAccess (EVar "a") "eatLabel")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "n")) () (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))) (arm PWild () (EListLit)))))) (EVar "atoms")))
 (DTypeSig false "checkAuthorityName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -8164,20 +8365,27 @@ takeOriginTrace _ =
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkVariant") (EVar "env"))) (EVar "vs")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "vs")) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkInterfaceDecl") (EVar "env")) (EVar "supers")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplDecl") (EVar "env")) (EVar "iface")) (EVar "tys")) (EVar "reqs")) (EVar "methods")))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "rhs")))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "fty")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "None")) (EVar "env")) (EVar "rhs"))))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs"))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))) (EVar "None")) (EVar "env")) (EVar "fty"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DAttrib" PWild (PVar "inner"))) (EApp (EApp (EVar "checkDecl") (EVar "env")) (EVar "inner")))
 (DFunDef false "checkDecl" (PWild PWild) (EListLit))
-(DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkVariant" ((PVar "env") (PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys")))
-(DFunDef false "checkVariant" ((PVar "env") (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkFieldType") (EVar "env"))) (EVar "fs")))
-(DTypeSig false "checkFieldType" (TyFun (TyCon "Env") (TyFun (TyCon "Field") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkFieldType" ((PVar "env") (PCon "Field" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DTypeSig false "padBinders" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))))))
+(DFunDef false "padBinders" ((PList) PWild) (EListLit))
+(DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs"))))
+(DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EListLit))))
+(DTypeSig false "checkVariants" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyCon "ResError")))))))
+(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
+(DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "None")) (EVar "env"))) (EVar "tys")))
+(DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkFieldType") (EVar "env")) (EVar "bound"))) (EVar "fs")))
+(DTypeSig false "checkFieldType" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Field") (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "checkFieldType" ((PVar "env") (PVar "bound") (PCon "Field" PWild (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "None")) (EVar "env")) (EVar "t")))
 (DTypeSig false "checkProp" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkProp" ((PVar "env") (PVar "params") (PVar "body")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkPropParamTy") (EVar "env"))) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EMethodRef "map") (EVar "propParamName")) (EVar "params")))) (EVar "body"))))
 (DTypeSig false "checkPropParamTy" (TyFun (TyCon "Env") (TyFun (TyCon "PropParam") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -8547,7 +8755,7 @@ takeOriginTrace _ =
 (DFunDef false "ppResError" ((PCon "AmbiguousConstructor" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous constructor: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EMethodRef "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". A module alias cannot tell two constructors apart. Bring in the constructors of only one — e.g. `import <mod>.{T(..)}` — and import the other without `(..)` and without an alias"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousAliasCtor" (PVar "n") (PVar "mid") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous constructor: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' names `"))) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "`'s constructor, but this module declares a constructor of that name itself. The alias prefix is dropped before the constructor table is consulted, and that table is keyed by the bare name, so the two cannot be told apart. Rename one of them"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousType" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous type: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EMethodRef "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` — or drop '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' from the other's import list"))))
-(DFunDef false "ppResError" ((PCon "UnboundAuthority" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown authority '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': an authority name refers to an argument named to its left in the same signature. Bind it by naming the argument, `("))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : String) -> <FileRead "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "> …`, or write the label bare for any authority"))))
+(DFunDef false "ppResError" ((PCon "UnboundAuthority" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown authority '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': an authority name refers to a binder written to its left in the same signature — a named argument `("))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : String) -> <FileRead "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "> …`, an `Authority`-kinded type argument such as `Handle "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` — or to an `Authority` parameter of the enclosing data declaration. Bind it there, or write the label bare for any authority"))))
 (DFunDef false "ppResError" ((PCon "MisplacedAuthorityBinder" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "A named argument `(")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousEffect" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous effect label: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is declared by "))) (EApp (EMethodRef "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ", and both declarations are in scope. A label is identified by the module that declares it, so these are two different effects and a row cannot tell them apart by spelling. Import only one of those modules here, or rename one of the declarations"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousInterface" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous interface: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EMethodRef "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` — or drop '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' from the other's import list"))))
@@ -9080,7 +9288,23 @@ takeOriginTrace _ =
 (DFunDef false "aliasOfUsePath" ((PCon "UseAlias" PWild (PVar "a"))) (EListLit (EVar "a")))
 (DFunDef false "aliasOfUsePath" (PWild) (EListLit))
 (DTypeSig false "stampDeclTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "stampDeclTyOrigins" ((PVar "aliases") (PVar "scope") (PVar "d")) (EApp (EApp (EApp (EVar "unqualAliasDecl") (EVar "aliases")) (EVar "scope")) (EApp (EApp (EApp (EVar "mapOriginsInDecl") (EApp (EApp (EVar "stampTyHead") (EVar "aliases")) (EVar "scope"))) (EApp (EVar "fillIfaceOccOrigin") (EVar "scope"))) (EVar "d"))))
+(DFunDef false "stampDeclTyOrigins" ((PVar "aliases") (PVar "scope") (PVar "d")) (EApp (EApp (EApp (EVar "unqualAliasDecl") (EVar "aliases")) (EVar "scope")) (EApp (EApp (EVar "stampDeclKinds") (EVar "scope")) (EApp (EApp (EApp (EVar "mapOriginsInDecl") (EApp (EApp (EVar "stampTyHead") (EVar "aliases")) (EVar "scope"))) (EApp (EVar "fillIfaceOccOrigin") (EVar "scope"))) (EVar "d")))))
+(DTypeSig false "stampDeclKinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DData" ((rf "dataParamKinds" None) (rf "dataCtorBinders" None)) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataParamKinds" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "dataParamKinds"))) (fa "dataCtorBinders" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampBinders") (EVar "scope"))) (EVar "dataCtorBinders"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DNewtype" ((rf "newtypeParamKinds" None) (rf "newtypeCtorBinders" None)) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeParamKinds" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "newtypeParamKinds"))) (fa "newtypeCtorBinders" (EApp (EApp (EVar "stampBinders") (EVar "scope")) (EVar "newtypeCtorBinders"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasParamKinds" None)) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasParamKinds" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "tyAliasParamKinds"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PAs "d" (PRec "DInterface" ((rf "typaramKinds" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "typaramKinds" (EApp (EApp (EMethodRef "map") (EApp (EVar "stampKindOpt") (EVar "scope"))) (EVar "typaramKinds"))))))
+(DFunDef false "stampDeclKinds" ((PVar "scope") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclKinds") (EVar "scope")) (EVar "inner"))))
+(DFunDef false "stampDeclKinds" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "stampBinders" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))))
+(DFunDef false "stampBinders" ((PVar "scope") (PVar "binders")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
+(DTypeSig false "stampKindOpt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyApp (TyCon "Option") (TyCon "KindAnn")))))
+(DFunDef false "stampKindOpt" ((PVar "scope") (PCon "Some" (PVar "k"))) (EApp (EVar "Some") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "k"))))
+(DFunDef false "stampKindOpt" (PWild (PCon "None")) (EVar "None"))
+(DTypeSig false "stampKind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "KindAnn") (TyCon "KindAnn"))))
+(DFunDef false "stampKind" ((PVar "scope") (PCon "KindAuthority" (PVar "l") (PCon "OriginUnresolved"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "effectKey") (EVar "l"))) (EVar "scope")) (arm (PCon "Some" (PVar "o")) () (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "o"))) (arm (PCon "None") () (EApp (EApp (EVar "KindAuthority") (EVar "l")) (EVar "OriginUnresolved")))))
+(DFunDef false "stampKind" ((PVar "scope") (PCon "KindArrow" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "KindArrow") (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "a"))) (EApp (EApp (EVar "stampKind") (EVar "scope")) (EVar "b"))))
+(DFunDef false "stampKind" (PWild (PVar "k")) (EVar "k"))
 (DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))))))
 (DFunDef false "stampTyHead" ((PVar "aliases") (PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EApp (EApp (EVar "aliasStampHead") (EVar "aliases")) (EVar "t")) (EVar "n")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
 (DFunDef false "stampTyHead" (PWild (PVar "scope") (PCon "TyEffect" (PVar "atoms") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "atoms2") (PVar "changed")) (EApp (EApp (EVar "stampEffAtoms") (EVar "scope")) (EVar "atoms"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "atoms2")) (EVar "tail")) (EVar "t")) (EVar "changed")))))

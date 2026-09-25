@@ -1,0 +1,11 @@
+main : <IO> Unit
+packCfg : Unit -> AnyHandle
+pack : String -> AnyHandle
+readAny : AnyHandle -> <FileRead> Result String String
+readClause : AnyHandle -> <FileRead> Result String String
+readInferred : AnyHandle -> <FileRead> Result String String
+readIt : Handle p -> <FileRead p> Result String String
+repack : AnyHandle -> AnyHandle
+repackClause : AnyHandle -> AnyHandle
+sameAs : Handle p -> String @p -> Result String String
+useInside : AnyHandle -> Result String String

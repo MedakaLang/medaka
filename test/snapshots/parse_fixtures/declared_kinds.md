@@ -1,5 +1,5 @@
 # META
-source_lines=36
+source_lines=58
 stages=PARSE,PRINTER,DESUGAR,MARK
 # SOURCE
 -- Declared type-parameter kinds on declaration heads
@@ -38,6 +38,28 @@ data Effect = Effect Int
 
 -- no annotation anywhere: the pre-existing shape, unchanged
 data Wrap f a = W (f a)
+
+-- `Authority L` kinds (EFFECTS-SEMANTICS §4.1, §6.1): a head parameter, its
+-- field qualifier, an index argument spelled by a name, a literal and `*`,
+-- and a constructor's existential binder — every spelling the formatter
+-- must hand back unchanged.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+
+data Conf (p : Authority FileRead) = Conf { path : String @p, retries : Int }
+
+newtype Boxed (p : Authority FileRead) = MkBoxed (Handle p)
+
+type Cfg = Handle "config/*"
+
+type AnyH = Handle *
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle s) = readFile s
 # PARSE
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) ())
 (DNewtype false "Box" ("e") "MkBox" (TyCon "Int") ())
@@ -49,6 +71,16 @@ data Wrap f a = W (f a)
 (DData Private "Type" () ((variant "Type" (ConPos (TyCon "Int")))) ())
 (DData Private "Effect" () ((variant "Effect" (ConPos (TyCon "Int")))) ())
 (DData Private "Wrap" ("f" "a") ((variant "W" (ConPos (TyApp (TyVar "f") (TyVar "a"))))) ())
+(DData Private "Handle" ("p") ((variant "Handle" (ConPos (TyQual (TyCon "String") "p")))) ())
+(DData Private "AnyHandle" () ((variant "AnyHandle" (ConPos (TyApp (TyCon "Handle") (TyVar "p"))))) ())
+(DData Private "Conf" ("p") ((variant "Conf" (ConNamed (field "path" (TyQual (TyCon "String") "p")) (field "retries" (TyCon "Int"))))) ())
+(DNewtype false "Boxed" ("p") "MkBoxed" (TyApp (TyCon "Handle") (TyVar "p")) ())
+(DTypeAlias false "Cfg" () (TyApp (TyCon "Handle") (TyAuth "config/*")))
+(DTypeAlias false "AnyH" () (TyApp (TyCon "Handle") (TyAuth None)))
+(DTypeSig false "open" (TyFun (TyNamed "path" (TyCon "String")) (TyApp (TyCon "Handle") (TyVar "path"))))
+(DFunDef false "open" ((PVar "path")) (EApp (EVar "Handle") (EVar "path")))
+(DTypeSig false "readIt" (TyFun (TyApp (TyCon "Handle") (TyVar "p")) (TyEffect ((atom "FileRead" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readIt" ((PCon "Handle" (PVar "s"))) (EApp (EVar "readFile") (EVar "s")))
 # PRINTER
 data Async (e : Effect) a = Done a | Suspend (Unit -> Async e a)
 newtype Box (e : Effect) = MkBox Int
@@ -63,6 +95,16 @@ interface Mixed (g : (Type -> Type) -> Type) (h : Effect) (a : Type) where
 data Type = Type Int
 data Effect = Effect Int
 data Wrap f a = W (f a)
+data Handle (p : Authority FileRead) = Handle (String @p)
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+data Conf (p : Authority FileRead) = Conf { path : String @p, retries : Int }
+newtype Boxed (p : Authority FileRead) = MkBoxed (Handle p)
+type Cfg = Handle "config/*"
+type AnyH = Handle *
+open : (path : String) -> Handle path
+open path = Handle path
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle s) = readFile s
 # DESUGAR
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) ())
 (DNewtype false "Box" ("e") "MkBox" (TyCon "Int") ())
@@ -74,6 +116,16 @@ data Wrap f a = W (f a)
 (DData Private "Type" () ((variant "Type" (ConPos (TyCon "Int")))) ())
 (DData Private "Effect" () ((variant "Effect" (ConPos (TyCon "Int")))) ())
 (DData Private "Wrap" ("f" "a") ((variant "W" (ConPos (TyApp (TyVar "f") (TyVar "a"))))) ())
+(DData Private "Handle" ("p") ((variant "Handle" (ConPos (TyQual (TyCon "String") "p")))) ())
+(DData Private "AnyHandle" () ((variant "AnyHandle" (ConPos (TyApp (TyCon "Handle") (TyVar "p"))))) ())
+(DData Private "Conf" ("p") ((variant "Conf" (ConNamed (field "path" (TyQual (TyCon "String") "p")) (field "retries" (TyCon "Int"))))) ())
+(DNewtype false "Boxed" ("p") "MkBoxed" (TyApp (TyCon "Handle") (TyVar "p")) ())
+(DTypeAlias false "Cfg" () (TyApp (TyCon "Handle") (TyAuth "config/*")))
+(DTypeAlias false "AnyH" () (TyApp (TyCon "Handle") (TyAuth None)))
+(DTypeSig false "open" (TyFun (TyNamed "path" (TyCon "String")) (TyApp (TyCon "Handle") (TyVar "path"))))
+(DFunDef false "open" ((PVar "path")) (EApp (EVar "Handle") (EVar "path")))
+(DTypeSig false "readIt" (TyFun (TyApp (TyCon "Handle") (TyVar "p")) (TyEffect ((atom "FileRead" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readIt" ((PCon "Handle" (PVar "s"))) (EApp (EVar "readFile") (EVar "s")))
 # MARK
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) ())
 (DNewtype false "Box" ("e") "MkBox" (TyCon "Int") ())
@@ -85,3 +137,13 @@ data Wrap f a = W (f a)
 (DData Private "Type" () ((variant "Type" (ConPos (TyCon "Int")))) ())
 (DData Private "Effect" () ((variant "Effect" (ConPos (TyCon "Int")))) ())
 (DData Private "Wrap" ("f" "a") ((variant "W" (ConPos (TyApp (TyVar "f") (TyVar "a"))))) ())
+(DData Private "Handle" ("p") ((variant "Handle" (ConPos (TyQual (TyCon "String") "p")))) ())
+(DData Private "AnyHandle" () ((variant "AnyHandle" (ConPos (TyApp (TyCon "Handle") (TyVar "p"))))) ())
+(DData Private "Conf" ("p") ((variant "Conf" (ConNamed (field "path" (TyQual (TyCon "String") "p")) (field "retries" (TyCon "Int"))))) ())
+(DNewtype false "Boxed" ("p") "MkBoxed" (TyApp (TyCon "Handle") (TyVar "p")) ())
+(DTypeAlias false "Cfg" () (TyApp (TyCon "Handle") (TyAuth "config/*")))
+(DTypeAlias false "AnyH" () (TyApp (TyCon "Handle") (TyAuth None)))
+(DTypeSig false "open" (TyFun (TyNamed "path" (TyCon "String")) (TyApp (TyCon "Handle") (TyVar "path"))))
+(DFunDef false "open" ((PVar "path")) (EApp (EVar "Handle") (EVar "path")))
+(DTypeSig false "readIt" (TyFun (TyApp (TyCon "Handle") (TyVar "p")) (TyEffect ((atom "FileRead" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readIt" ((PCon "Handle" (PVar "s"))) (EApp (EVar "readFile") (EVar "s")))

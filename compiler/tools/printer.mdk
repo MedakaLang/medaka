@@ -37,6 +37,8 @@
 import frontend.ast.{
   EffAtomTy(..),
   effAtomSurface,
+  authTermSurface,
+  ctorBindersSurface,
   DeriveRef(..),
   deriveRefName,
   dDataUnresolved,
@@ -74,7 +76,7 @@ import frontend.ast.{
   Attr(..),
 }
 import support.util.{
-  joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
+  zipL, joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
 }
 import list.{last, sortBy}
 
@@ -984,6 +986,7 @@ printType (TyRow [] (a :: b :: rest) _) =
   Cat (text "(") (Cat (text (joinWith " | " (a :: b :: rest))) (text ")"))
 printType (TyRow es tail _) =
   Cat (text "<") (Cat (effectInside es tail) (text ">"))
+printType (TyAuth p _) = text (authTermSurface escStringLit p)
 printType (TyConstrained cs t) =
   Cat (constraintsDoc cs) (Cat (text " => ") (printType t))
 printType (TyNamed n t) =
@@ -1036,6 +1039,7 @@ printTypeAtom (TyVar n) = text n
 printTypeAtom (TyTuple ts) = printType (TyTuple ts)
 -- A bare row atom is already a complete atom (`<Stdout>`) — print it bare.
 printTypeAtom (TyRow es tail loc) = printType (TyRow es tail loc)
+printTypeAtom (TyAuth p loc) = printType (TyAuth p loc)
 -- A binder already carries its own parentheses.
 printTypeAtom (TyNamed n t) = printType (TyNamed n t)
 -- A `TyEffect` in argument position keeps its parentheses: its wrapped type can
@@ -2024,11 +2028,29 @@ useMemberDoc (UseMember n allCtors _ alias) =
 --     f : T,
 --     g : U,
 --   }
-printVariant : Variant -> Doc
-printVariant (Variant name (ConPos tys)) =
-  Cat (text name) (concatD (map (t => Cat (text " ") (printTypeAtom t)) tys))
-printVariant (Variant name (ConNamed fields nameOmitted)) =
-  recordVariantDoc name fields nameOmitted []
+printVariant : List (String, KindAnn) -> Variant -> Doc
+printVariant binders (Variant name (ConPos tys)) =
+  Cat
+    (text name)
+    (Cat
+      (bindersDoc binders)
+      (concatD (map (t => Cat (text " ") (printTypeAtom t)) tys)))
+printVariant binders (Variant name (ConNamed fields nameOmitted)) =
+  Cat (bindersDoc binders) (recordVariantDoc name fields nameOmitted [])
+
+-- A constructor's existential binders, ` (p : Authority L)` each.
+bindersDoc : List (String, KindAnn) -> Doc
+bindersDoc [] = Nil
+bindersDoc binders = Cat (text " ") (text (ctorBindersSurface binders))
+
+-- The binder list is positional with the variants; a short list reads as
+-- "no binders" rather than truncating.
+padBindersP : List Variant ->
+  List (List (String, KindAnn)) ->
+  List (List (String, KindAnn))
+padBindersP [] _ = []
+padBindersP (_ :: vs) (b :: bs) = b :: padBindersP vs bs
+padBindersP (_ :: vs) [] = [] :: padBindersP vs []
 
 -- `Name { … }` with an optional deriving clause that stays inline when the
 -- record fits one line and drops to its own indented line when it breaks.
@@ -2068,9 +2090,10 @@ printNamedFieldData : DataVis ->
   List String ->
   List (Option KindAnn) ->
   List Variant ->
+  List (List (String, KindAnn)) ->
   List DeriveRef ->
   Doc
-printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] derives =
+printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] [[]] derives =
   let eqPart =
     if nameOmitted then
       text " = {"
@@ -2088,8 +2111,8 @@ printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitt
   let deriveDoc =
     if isEmptyL derives then Nil else indentBlock (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
-printNamedFieldData vis n params kinds variants derives =
-  printDecl (dDataUnresolved vis n params kinds variants derives)
+printNamedFieldData vis n params kinds variants binders derives =
+  printDecl (dDataUnresolved vis n params kinds variants binders derives)
 
 tyParamsDoc : List String -> List (Option KindAnn) -> Doc
 tyParamsDoc params kinds =
@@ -2118,26 +2141,30 @@ visPrefix VisPrivate = Nil
 --     name : String,
 --   }
 --     deriving (Eq)
-dataBodyDoc : List Variant -> List DeriveRef -> Doc
-dataBodyDoc [] derives = derivesInline derives
-dataBodyDoc [Variant name (ConNamed fields nameOmitted)] derives =
+dataBodyDoc : List Variant ->
+  List (List (String, KindAnn)) ->
+  List DeriveRef ->
+  Doc
+dataBodyDoc [] _ derives = derivesInline derives
+dataBodyDoc [Variant name (ConNamed fields nameOmitted)] [[]] derives =
   Cat (text " = ") (recordVariantDoc name fields nameOmitted derives)
-dataBodyDoc (v :: vs) derives =
+dataBodyDoc (v :: vs) (b :: bs) derives =
   group
     (Cat
       (text " =")
       (nest
         (Cat
-          (Cat (FlatAlt (Cat Line (text "| ")) (text " ")) (printVariant v))
+          (Cat (FlatAlt (Cat Line (text "| ")) (text " ")) (printVariant b v))
           (Cat
             (concatD
               (map
-                (v2 =>
+                (vb =>
                   Cat
                     (FlatAlt (Cat Line (text "| ")) (text " | "))
-                    (printVariant v2))
-                vs))
+                    (printVariant (snd vb) (fst vb)))
+                (zipL vs bs)))
             (derivesLineOrInline derives)))))
+dataBodyDoc vs [] derives = dataBodyDoc vs (padBindersP vs []) derives
 
 derivesInline : List DeriveRef -> Doc
 derivesInline [] = Nil
@@ -2157,12 +2184,14 @@ printDataDeclCommented : DataVis ->
   List String ->
   List (Option KindAnn) ->
   List Variant ->
+  List (List (String, KindAnn)) ->
   List DeriveRef ->
   List (List String, List String) ->
   Doc
-printDataDeclCommented vis n params kinds variants derives vcomments =
+printDataDeclCommented vis n params kinds variants binders derives vcomments =
   let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
-  let variantDocs = dataVariantDocsCommented variants vcomments
+  let variantDocs =
+    dataVariantDocsCommented variants (padBindersP variants binders) vcomments
   let deriveDoc =
     if isEmptyL derives then Nil else indentBlock (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat variantDocs deriveDoc))
@@ -2173,30 +2202,42 @@ commentLinesDoc cs = concatD (map (c => Cat Hardline (text c)) cs)
 trailingCommentsDoc : List String -> Doc
 trailingCommentsDoc cs = concatD (map (c => Cat (text "  ") (text c)) cs)
 
-variantCommentedDoc : Variant -> (List String, List String) -> Doc
-variantCommentedDoc v (leading, trailing) =
+variantCommentedDoc : List (String, KindAnn) ->
+  Variant ->
+  (List String, List String) ->
+  Doc
+variantCommentedDoc binders v (leading, trailing) =
   Cat
     (commentLinesDoc leading)
     (Cat
       Hardline
-      (Cat (text "| ") (Cat (printVariant v) (trailingCommentsDoc trailing))))
+      (Cat
+        (text "| ")
+        (Cat (printVariant binders v) (trailingCommentsDoc trailing))))
 
 dataVariantDocsCommented : List Variant ->
+  List (List (String, KindAnn)) ->
   List (List String, List String) ->
   Doc
-dataVariantDocsCommented [] _ = Nil
-dataVariantDocsCommented _ [] = Nil
-dataVariantDocsCommented (v :: vs) (vc :: vcs) =
+dataVariantDocsCommented [] _ _ = Nil
+dataVariantDocsCommented _ _ [] = Nil
+dataVariantDocsCommented (v :: vs) (b :: bs) (vc :: vcs) =
   Cat
     (text " =")
     (nest
-      (Cat (variantCommentedDoc v vc) (concatD (map2VariantComment vs vcs))))
+      (Cat
+        (variantCommentedDoc b v vc)
+        (concatD (map2VariantComment vs bs vcs))))
+dataVariantDocsCommented vs [] vcs =
+  dataVariantDocsCommented vs (padBindersP vs []) vcs
 
-map2VariantComment : List Variant -> List (List String, List String) -> List Doc
-map2VariantComment [] _ = []
-map2VariantComment _ [] = []
-map2VariantComment (v :: vs) (vc :: vcs) =
-  variantCommentedDoc v vc :: map2VariantComment vs vcs
+map2VariantComment : List Variant ->
+  List (List (String, KindAnn)) ->
+  List (List String, List String) ->
+  List Doc
+map2VariantComment (v :: vs) (b :: bs) (vc :: vcs) =
+  variantCommentedDoc b v vc :: map2VariantComment vs bs vcs
+map2VariantComment _ _ _ = []
 
 -- `export` above a VALUE-level declaration (a type signature or an extern
 -- declaration) sits on its own line, never collapsed onto the signature
@@ -2232,9 +2273,11 @@ printDecl (DFunDef pub n pats body) =
     (Cat (defHeader n pats) (printDefRhs body))
 printDecl (DLetGroup pub bindings) =
   Cat (if pub then text "export " else Nil) (letGroupDecl bindings)
-printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) =
+printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders, dataDerives = derives }) =
   let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
-  Cat (visPrefix vis) (Cat head (dataBodyDoc variants derives))
+  Cat
+    (visPrefix vis)
+    (Cat head (dataBodyDoc variants (padBindersP variants binders) derives))
 printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = params, tyAliasParamKinds = kinds, tyAliasRhs = rhs }) =
   Cat
     (if pub then text "export " else Nil)
@@ -2243,10 +2286,14 @@ printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = param
       (Cat
         (text n)
         (Cat (tyParamsDoc params kinds) (Cat (text " = ") (printType rhs)))))
-printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) =
+printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = con, newtypeCtorBinders = binders, newtypeFieldTy = fty, newtypeDerives = derives }) =
   let head = Cat (text "newtype ") (Cat (text n) (tyParamsDoc params kinds))
   let body =
-    Cat (text " = ") (Cat (text con) (Cat (text " ") (printTypeAtom fty)))
+    Cat
+      (text " = ")
+      (Cat
+        (text con)
+        (Cat (bindersDoc binders) (Cat (text " ") (printTypeAtom fty))))
   Cat
     (if pub then text "export " else Nil)
     (Cat head (Cat body (group (nest (derivesLineOrInline derives)))))
@@ -2420,6 +2467,7 @@ ppTyPrec p (TyEffect effs tail t) =
 ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
   "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
+ppTyPrec _ (TyAuth p _) = authTermSurface escStringLit p
 ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
 ppTyPrec _ (TyQual t n) = "\{ppTyPrec 2 t} @\{n}"
 ppTyPrec _ (TyConstrained cs t) =

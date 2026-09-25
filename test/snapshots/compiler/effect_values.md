@@ -1,5 +1,5 @@
 # META
-source_lines=250
+source_lines=251
 stages=DESUGAR,MARK
 # SOURCE
 -- Produced values join at positive positions. This is neither type equality
@@ -57,6 +57,7 @@ freshShape ops (TFun _ _ _) =
 freshShape ops (TApp head _) =
   TApp (freshApplicationHead ops head) (ops.vjoFreshType ())
 freshShape ops (TEff _) = TEff (ops.vjoFreshRow ())
+freshShape ops (TAuth q) = TAuth (ops.vjoFreshAuth (authDomainTop q))
 freshShape ops (TQual inner q) =
   TQual (freshShape ops inner) (ops.vjoFreshAuth (authDomainTop q))
 freshShape _ t = t
@@ -272,6 +273,7 @@ qualAuth value = match normalize value
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TFun" PWild PWild PWild)) (EApp (EApp (EApp (EVar "TFun") (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit))) (EApp (EFieldAccess (EVar "ops") "vjoFreshRow") (ELit LUnit))) (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TApp" (PVar "head") PWild)) (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "freshApplicationHead") (EVar "ops")) (EVar "head"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TEff" PWild)) (EApp (EVar "TEff") (EApp (EFieldAccess (EVar "ops") "vjoFreshRow") (ELit LUnit))))
+(DFunDef false "freshShape" ((PVar "ops") (PCon "TAuth" (PVar "q"))) (EApp (EVar "TAuth") (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TQual" (PVar "inner") (PVar "q"))) (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "freshShape") (EVar "ops")) (EVar "inner"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
 (DFunDef false "freshShape" (PWild (PVar "t")) (EVar "t"))
 (DTypeSig false "freshApplicationHead" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyCon "Mono"))))
@@ -360,6 +362,7 @@ qualAuth value = match normalize value
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TFun" PWild PWild PWild)) (EApp (EApp (EApp (EVar "TFun") (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit))) (EApp (EFieldAccess (EVar "ops") "vjoFreshRow") (ELit LUnit))) (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TApp" (PVar "head") PWild)) (EApp (EApp (EVar "TApp") (EApp (EApp (EVar "freshApplicationHead") (EVar "ops")) (EVar "head"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshType") (ELit LUnit))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TEff" PWild)) (EApp (EVar "TEff") (EApp (EFieldAccess (EVar "ops") "vjoFreshRow") (ELit LUnit))))
+(DFunDef false "freshShape" ((PVar "ops") (PCon "TAuth" (PVar "q"))) (EApp (EVar "TAuth") (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
 (DFunDef false "freshShape" ((PVar "ops") (PCon "TQual" (PVar "inner") (PVar "q"))) (EApp (EApp (EVar "TQual") (EApp (EApp (EVar "freshShape") (EVar "ops")) (EVar "inner"))) (EApp (EFieldAccess (EVar "ops") "vjoFreshAuth") (EApp (EVar "authDomainTop") (EVar "q")))))
 (DFunDef false "freshShape" (PWild (PVar "t")) (EVar "t"))
 (DTypeSig false "freshApplicationHead" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyCon "Mono"))))

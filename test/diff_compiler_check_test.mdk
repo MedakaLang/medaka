@@ -285,7 +285,7 @@ rows = [
         pairedWith = None,
         golden = InFixtureDir "oracle.tcmod",
         grade = SortedEqual,
-        fixtures = 15,
+        fixtures = 16,
       },
     ],
     batched = False,
@@ -373,9 +373,7 @@ dirEntries dir = match fixtureDirs dir
   Err e => Err e
   Ok dirs => entriesIn (sort dirs) []
 
-entriesIn : List String ->
-  List String ->
-  <FileRead> Result String (List String)
+entriesIn : List String -> List String -> <FileRead> Result String (List String)
 entriesIn [] acc = Ok (reverse acc)
 entriesIn (d :: rest) acc = match readFile "\{d}/entry"
   Err e => Err "\{basename d}: no readable entry file: \{e}"
@@ -395,9 +393,7 @@ orderedEntries dir = match fixtureDirs dir
   Err e => Err e
   Ok dirs => orderedIn (sort dirs) []
 
-orderedIn : List String ->
-  List String ->
-  <FileRead> Result String (List String)
+orderedIn : List String -> List String -> <FileRead> Result String (List String)
 orderedIn [] acc = Ok (reverse acc)
 orderedIn (d :: rest) acc = match readFile "\{d}/order"
   Err e => Err "\{basename d}: no readable order file: \{e}"

@@ -25,6 +25,7 @@ ambiguousHeadErrors : Env -> String -> Option Loc -> List ResError
 ambiguousIfaceErrors : Env -> String -> Option Loc -> List ResError
 ambiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ambiguousTypeErrors : Env -> String -> Option Loc -> List ResError
+authorityParams : List String -> List (Option KindAnn) -> List String
 bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String, Int)
 bestInPool : SugQuery -> List SugCand -> Option (String, Int) -> Option (String, Int)
 bestOfNames : SugQuery -> List String -> Option String
@@ -52,13 +53,14 @@ charMaskGo : Int -> Array Char -> Int -> Int -> Int
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
 checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
 checkAuthorityName : List String -> Option Loc -> String -> List ResError
+checkBinderLabels : Env -> List (String, KindAnn) -> List ResError
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
 checkDecl : Env -> Decl -> List ResError
 checkEffAtoms : List String -> Option Loc -> Env -> List EffAtomTy -> List ResError
 checkEffect : Option Loc -> Env -> String -> List ResError
 checkExpr : Option Loc -> Env -> Scope -> Expr -> List ResError
 checkFieldAssign : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
-checkFieldType : Env -> Field -> List ResError
+checkFieldType : Env -> List String -> Field -> List ResError
 checkFunClause : Option Loc -> Env -> Scope -> FunClause -> List ResError
 checkGuard : Option Loc -> Env -> Scope -> Guard -> List ResError
 checkGuardArm : Option Loc -> Env -> Scope -> GuardArm -> List ResError
@@ -68,6 +70,8 @@ checkImplIface : Env -> String -> List ImplMethod -> List ResError
 checkImplMethod : Env -> ImplMethod -> List ResError
 checkInterfaceDecl : Env -> List Super -> List IfaceMethod -> List ResError
 checkInterp : Option Loc -> Env -> Scope -> InterpPart -> List ResError
+checkKindLabel : Env -> Option KindAnn -> List ResError
+checkKindLabels : Env -> List (Option KindAnn) -> List ResError
 checkLet : Option Loc -> Env -> Scope -> Bool -> Pat -> Expr -> Expr -> List ResError
 checkLetBind : Option Loc -> Env -> Scope -> LetBind -> List ResError
 checkLetGroup : Option Loc -> Env -> Scope -> List LetBind -> Expr -> List ResError
@@ -86,8 +90,10 @@ checkStmts : Option Loc -> Env -> Scope -> List DoStmt -> List ResError
 checkSuper : Env -> Super -> List ResError
 checkType : Option Loc -> Env -> Ty -> List ResError
 checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
+checkTypesLeftToRight : List String -> Option Loc -> Env -> List Ty -> List ResError
 checkVar : Option Loc -> Env -> Scope -> String -> List ResError
-checkVariant : Env -> Variant -> List ResError
+checkVariant : Env -> List String -> Variant -> List ResError
+checkVariants : Env -> List String -> List Variant -> List (List (String, KindAnn)) -> List ResError
 closeMissing : List String -> List String -> Map String Unit -> Map String Unit
 collectImports : Map String ModuleExports -> List Decl -> ImportAdds
 contigGo : Map String Unit -> List String -> List Decl -> List ResError
@@ -283,6 +289,7 @@ ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, Strin
 ownersForTypes : List String -> List (String, String) -> List (String, String)
 ownersOf : String -> Map String (List String) -> List String
 ownsAnyField : String -> List (String, String) -> Bool
+padBinders : List Variant -> List (List (String, KindAnn)) -> List (List (String, KindAnn))
 patBindings : Pat -> List String
 patGroupDupErrors : Option Loc -> String -> List Pat -> List ResError
 patsBindings : List Pat -> List String
@@ -342,10 +349,12 @@ selfBinding : String -> (String, String)
 setOriginTrace : Bool -> Unit
 singleFileImportErrors : List Decl -> List ResError
 stampArm : Map String Int -> Arm -> Arm
+stampBinders : Map String TyConOrigin -> List (String, KindAnn) -> List (String, KindAnn)
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampClause : Map String Int -> FunClause -> FunClause
 stampClauseWith : Map String Int -> (List Pat, Expr) -> (List Pat, Expr)
 stampDecl : Map String Int -> Decl -> Decl
+stampDeclKinds : Map String TyConOrigin -> Decl -> Decl
 stampDeclOrigin : String -> Decl -> Decl
 stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclTyOrigins : List String -> Map String TyConOrigin -> Decl -> Decl
@@ -361,6 +370,8 @@ stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampIfaceMethod : Map String Int -> IfaceMethod -> IfaceMethod
 stampImplMethod : Map String Int -> ImplMethod -> ImplMethod
 stampInterp : Map String Int -> InterpPart -> InterpPart
+stampKind : Map String TyConOrigin -> KindAnn -> KindAnn
+stampKindOpt : Map String TyConOrigin -> Option KindAnn -> Option KindAnn
 stampKv : Map String Int -> (Expr, Expr) -> (Expr, Expr)
 stampLet : Map String Int -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLetBind : Map String Int -> LetBind -> LetBind
@@ -398,6 +409,7 @@ takeOriginTrace : Unit -> List (String, List Decl)
 topBinderNames : List Decl -> List String
 tupleCtorTyNames : List String
 tyOriginScope : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> Map String TyConOrigin
+tyVarsWritten : Ty -> List String
 typeAmbigMods : Env -> String -> List String
 typeAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 typeCtorsAllOf : List Decl -> List (String, List String)

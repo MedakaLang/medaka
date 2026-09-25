@@ -370,6 +370,83 @@ position without evidence (every attempt was caught at a later application).
    twice, the manifest's bare-name keys (a format decision for Val), the
    hard-coded Product `Host` axis.
 
+## Data-half session (2026-09-25)
+
+What landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Data-half checkpoint" and stated normatively in
+[Effects semantics](../spec/EFFECTS-SEMANTICS.md) §4.1; the codes are in
+`compiler/DIAGNOSTIC-CODES-DESIGN.md`; the surface is in `docs/spec/SYNTAX.md`.
+This section records the decisions, the traps and what is owed.
+
+**Ratified by Val before coding (AskUserQuestion, 2026-09-25), each the
+recommended option of a short proposal:**
+
+1. *Syntax.* `data Handle (p : Authority FileRead) = Handle (String @p)`, the
+   spec's §6.1 kind. An `Authority`-kinded index slot is kind-directed like an
+   `Effect` slot: a named argument's name, an implicitly quantified lowercase
+   name binding to its right as a type variable does (`read : Handle p ->
+   <FileRead p> String`), or a domain literal. `@` stays name-only.
+2. *Top in an index slot is `*`.*
+3. *Construction.* A constructor whose fields carry the binder is a proof
+   source anywhere it is visible; one that carries it in no field is trusted
+   only at home, so `public export data` requires every constructor to carry it.
+4. *Existential* = a kinded binder leading a constructor's fields, built last.
+5. *Patterns* recover the declared field types under the index, directed, and
+   never refine the index.
+6. *Manifest keys qualify only on collision* (the leftover's format).
+
+**Design decisions made while implementing, each a general rule:**
+
+- *A name is a binder only where something binds it.* The arrow half minted an
+  authority from any atom that named a binder, because the resolver had
+  refused every unbound name. With index slots admitting a bare name to the
+  left, the resolver's rule became "written to the left" and the kind moved
+  to the typechecker: `sigVarsFor` binds a name only as a `String` named
+  argument or an index-slot occupant (`authorityBinderBound`), and a name
+  nothing binds is `T-AUTHORITY-KIND`, never a silent top.
+- *An existential's scope is a match arm or a function clause, not a `let`.*
+  Both have an end; the check at the end reads the ordinary level
+  discipline (the scope runs one level deeper, the opened cells are raised to
+  it, anything older that received them lowers them) plus the scope's own
+  value type. The first cut minted the opened cells at the outer level and
+  every arm reported a false escape. The clause form was added after lint's
+  own `rule-destructure-in-param` steered a fixture toward it. No solver scope
+  is opened for the arm: the enclosing scope decides the obligations (rigid,
+  so a literal never satisfies one) and publication defaults a sourceless
+  opened cell to top, which is §4's widening. An arm-owned solver scope was
+  rejected as order-dependent across arms.
+- *Record construction is an argument flow.* `unifyFieldAssignIdx` ran no `α`,
+  so a literal into a qualified field hit `top ⊑ q`. It now goes through
+  `argumentIntoOrd`, the same route as a call, with the value-first wording
+  the record path always had; an explicit record sub-pattern binds through
+  `bindFrom` so the punned and explicit forms agree.
+- *`RecordInfo` carries authorities.* The record table was kind-blind (a
+  `KRow` parameter was a plain type variable there); it now mints the same
+  reprs as `registerVariants` and instantiates them together
+  (`RecordSubst`).
+- *`deriving` requires instances only of `Type`-kinded parameters.* The
+  deriver asked `Eq e` of an `Effect` parameter; the kind list now reaches
+  `paramRequires` and the doc generator's mirror of it.
+
+**Traps paid for in this session:**
+
+- `medaka check` on a probe that declares externs refuses them without `<FFI>`
+  (`T-FFI-UNLABELLED`), while the matrix sibling's `checkOneDiags` does not:
+  a probe replayed from a matrix row must use a prelude wrapper, not an
+  extern. Likewise the sibling runs without the prelude, so a row that needs
+  `:=`/`setRef` belongs in `test/typecheck_error_fixtures`, and a plain
+  `String` field that leaks reports `T-EFFECT-LEAK`, which the sibling's
+  `rejects` (`T-AUTHORITY` only) does not count — use `expectFalse (accepts …)`.
+- The worktree guard refuses compound shells and `sed -n "$(…)p"`; every
+  multi-step check went into a scratchpad script.
+- `checkDeclaredKinds`'s exhaustiveness warnings are printed only for the
+  entry file of a `check`; scanning each edited module with its own `medaka
+  check` found seven `Ty` walkers still missing a `TyAuth` arm that the
+  whole-closure check had not surfaced.
+- The engine gate's eval and wasm arms are ORACLES: a fixture using new syntax
+  reads as "eval printed nothing" and "wasm emitter: unexpected `(`" until
+  `build_oracles.sh --for 'diff_compiler_engines*'` has run on the new source.
+
 ## Delivered code and invariants to preserve
 
 | File under compiler/types | Responsibility at the checkpoint |

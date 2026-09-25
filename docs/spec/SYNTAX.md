@@ -197,6 +197,42 @@ A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  The quoted underscore
 (`<Store "_">`) is a parse error naming the replacement.
 
+A `data` head may declare an `Authority`-kinded parameter, `(p : Authority
+Store)`: the label fixes the domain, and the parameter may qualify a field
+(`String @p`), parameterize an atom in a field's arrow (`<Store p>`) or index
+another type (`Other p`).  Applying the constructor checks the stored value
+against the field's qualifier, so the constructor is a proof source; matching
+recovers exactly the declared field types under the scrutinee's index and never
+learns anything about the index.  An `Authority`-kinded type-ARGUMENT slot
+takes an authority term, kind-directed as an `Effect` slot takes a row: a named
+argument's name (`Handle path`), a bare lowercase name, which is a quantified
+authority variable of the signature usable to its right exactly as a type
+variable is (`read : Handle p -> <Store p> Int`), a literal of the label's
+domain (`Handle "config/*"`), or `*` for the whole domain (`Handle *`, what a
+handle opened at a runtime path is).  The index is invariant.  A constructor may
+bind an existential authority by a kinded group leading its fields: a match arm
+or a function clause whose pattern names it opens a fresh authority scoped to
+that arm or clause; a `let` pattern cannot.  A `public export data` with an
+`Authority` parameter must carry it in every constructor's fields; a
+constructor that does not is a proof source only in its declaring module, which
+exports the type abstractly (`export data`).
+
+```medaka
+data Handle (p : Authority Store) = Handle (String @p)  -- the field is qualified
+data AnyHandle = AnyHandle (p : Authority Store) (Handle p)  -- an existential binder
+data Conf (p : Authority Store) = Conf { path : String @p, retries : Int }
+open : (path : String) -> Handle path  -- a handle at the argument's authority
+open path = Handle path
+read : Handle p -> <Store p> Int  -- `p` quantifies like a type variable
+read (Handle s) = load s
+readAny : AnyHandle -> <Store> Int  -- the opened authority widens to the domain
+readAny (AnyHandle h) = read h
+cfg : Unit -> Handle "config/*"  -- a literal index
+cfg _ = Handle "config/app.toml"
+anyAt : String -> Handle *  -- the whole domain
+anyAt s = Handle s
+```
+
 A row may name several tail variables (#821): `<IO | e | e2>` is the row of `IO`
 together with whatever either variable performs.  In an `Effect`-kinded type-
 ARGUMENT slot a label-free join is written with parentheses instead of angle
@@ -634,12 +670,15 @@ newtype Age = Age Int deriving (Eq)
 ## Declared parameter kinds (`(p : Kind)` on a head)
 
 A type parameter's kind is written on the declaration head; `Kind ::= Type | Effect
-| Kind -> Kind | ( Kind )`, arrow right-associative. `Type` and `Effect` are ordinary
-identifiers recognised only in kind position (not keywords). Partial annotation is the
-common case. An UNANNOTATED parameter is never `Effect`-kinded — a parameter used as an
-effect row (an arrow's `<e>` tail, or an `Effect` slot of another type) MUST be declared,
-or `T-EFFECT-KIND-MISMATCH` is reported at the field that demands it. `impl` heads take no
-annotation. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §6.1–§6.5.
+| Authority Label | Kind -> Kind | ( Kind )`, arrow right-associative. `Type`, `Effect`
+and `Authority` are ordinary identifiers recognised only in kind position (not
+keywords). Partial annotation is the common case. An UNANNOTATED parameter is never
+`Effect`- or `Authority`-kinded — a parameter used as an effect row (an arrow's `<e>`
+tail, or an `Effect` slot of another type) MUST be declared, or
+`T-EFFECT-KIND-MISMATCH` is reported at the field that demands it; a parameter used as
+an authority (`String @p`, `<L p>`, an `Authority` slot) MUST be declared `(p :
+Authority L)`. `impl` heads take no annotation, and an `interface` head takes no
+`Authority` kind. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §4.1, §6.1–§6.5.
 
 ```medaka
 data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
@@ -651,6 +690,9 @@ interface Suspendable (f : Effect -> Type -> Type) where
 
 data Wrap (g : (Type -> Type) -> Type) = W (g Option)  -- Effect-free arrow kinds may also be written
 data Phantom (e : Effect) a = Phantom a  -- legal: declared, never used
+data Handle (p : Authority FileRead) = Handle (String @p)  -- an authority index, its field qualified
+newtype Boxed (p : Authority FileRead) = MkBoxed (Handle p)  -- the index passed on
+type Cfg = Handle "config/*"  -- a literal index; `Handle *` is the whole domain
 ```
 
 ## Interfaces & implementations

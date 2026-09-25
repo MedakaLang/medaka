@@ -3,7 +3,7 @@ andLeft : Expr -> List Expr -> Expr
 anyRefutable : List Pat -> Bool
 appliedHead : String -> List String -> Ty
 appliedHeadGo : Ty -> List String -> Ty
-applyDeriveParams : String -> List String -> Decl -> Decl
+applyDeriveParams : String -> List String -> List (Option KindAnn) -> Decl -> Decl
 armChain : List Guard -> Expr -> Expr -> Expr
 assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
 attribHead : List Attr -> List Decl -> List Decl
@@ -22,11 +22,11 @@ concatLeft : Expr -> List Expr -> Expr
 concatLists : List (List a) -> List a
 concatMapDecl : (Decl -> List Decl) -> List Decl -> List Decl
 concatStrings : List Expr -> Expr
-dataDerivers : String -> List String -> List Variant -> List (String, Unit -> Decl)
+dataDerivers : String -> List String -> List (Option KindAnn) -> List Variant -> List (String, Unit -> Decl)
 declDeriveErrors : Decl -> List (String, Option Loc)
 deriveEqData : String -> List Variant -> Decl
-deriveForData : String -> List String -> List Variant -> String -> Option Decl
-deriveForNewtype : String -> List String -> String -> Ty -> String -> Option Decl
+deriveForData : String -> List String -> List (Option KindAnn) -> List Variant -> String -> Option Decl
+deriveForNewtype : String -> List String -> List (Option KindAnn) -> String -> Ty -> String -> Option Decl
 deriveGenericData : String -> List Variant -> Decl
 deriveHashData : String -> List Variant -> Decl
 deriveImpls : (String -> Option Decl) -> List DeriveRef -> List Decl
@@ -99,7 +99,7 @@ mergedType : Ty -> Ty -> Ty
 methodAt : Map String IfaceMethod -> String -> IfaceMethod
 methodName : IfaceMethod -> String
 moduleAliases : List Decl -> List String
-newtypeDerivers : String -> List String -> String -> Ty -> List (String, Unit -> Decl)
+newtypeDerivers : String -> List String -> List (Option KindAnn) -> String -> Ty -> List (String, Unit -> Decl)
 ordArms : List Variant -> List Arm
 ordBody : Int -> Int -> List String -> List String -> Expr
 ordCell : Int -> Variant -> (Int, Variant) -> Arm
@@ -130,6 +130,7 @@ stripLocE : Expr -> Expr
 synthDefaultMethods : List ImplMethod -> List IfaceMethod -> List ImplMethod
 synthFromDefault : IfaceMethod -> ImplMethod
 toRep : String -> Expr
+typeKindedParams : List String -> List (Option KindAnn) -> List String
 unknownDerive : String -> List String -> DeriveRef -> List (String, Option Loc)
 wrapDoOrigin : List DoStmt -> Expr -> Expr
 wrappedFieldCall : String -> String -> Expr

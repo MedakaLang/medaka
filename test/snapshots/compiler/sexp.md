@@ -1,5 +1,5 @@
 # META
-source_lines=377
+source_lines=378
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -98,6 +98,7 @@ tySexp (TyEffect labels tail t) =
   node "TyEffect" [slist (map effAtomSexp labels), tailSexp tail, tySexp t]
 tySexp (TyRow labels tail _) =
   node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
+tySexp (TyAuth p _) = node "TyAuth" [effParamSexp p]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 tySexp (TyNamed n t) = node "TyNamed" [escStr n, tySexp t]
@@ -420,6 +421,7 @@ deferNodeName False = "EDo"
 (DFunDef false "tySexp" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "node") (ELit (LString "TyTuple"))) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "ts"))))
 (DFunDef false "tySexp" ((PCon "TyEffect" (PVar "labels") (PVar "tail") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyEffect"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")))))
+(DFunDef false "tySexp" ((PCon "TyAuth" (PVar "p") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EListLit (EApp (EVar "effParamSexp") (EVar "p")))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EListLit (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EVar "n")))))
@@ -606,6 +608,7 @@ deferNodeName False = "EDo"
 (DFunDef false "tySexp" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "node") (ELit (LString "TyTuple"))) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "ts"))))
 (DFunDef false "tySexp" ((PCon "TyEffect" (PVar "labels") (PVar "tail") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyEffect"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "tailSexp") (EVar "tail")))))
+(DFunDef false "tySexp" ((PCon "TyAuth" (PVar "p") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyAuth"))) (EListLit (EApp (EVar "effParamSexp") (EVar "p")))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyNamed"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "tySexp" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "TyQual"))) (EListLit (EApp (EVar "tySexp") (EVar "t")) (EApp (EVar "escStr") (EVar "n")))))
