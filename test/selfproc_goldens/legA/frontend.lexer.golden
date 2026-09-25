@@ -191,5 +191,9 @@ uniEscText : Array Char -> Int -> Int -> String
 uniEscWellFormed : Array Char -> Int -> Int -> Bool
 uniHexSigLen : Array Char -> Int -> Int -> Int
 uniIsSurrogate : Int -> Bool
+wideBase : Array Char -> Int -> Int
+wideHalves : Int -> List Char -> Option (Int, Int)
+wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)
+wideIntTok : Array Char -> Int -> Int -> Int -> Int -> Int -> List Char -> List RawTok
 wouldIndent : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 wouldIndentPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)

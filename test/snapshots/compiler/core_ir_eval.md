@@ -1,5 +1,5 @@
 # META
-source_lines=741
+source_lines=742
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -171,6 +171,7 @@ cevalField env (CField k e) = (k, ceval env e)
 litValue : Lit -> Value e
 litValue (LInt n) = VInt n
 litValue (LFloat f) = VFloat f
+litValue (LU64 hi lo) = VU64 hi lo
 litValue (LString s) = VString s
 litValue (LChar c) = VChar c
 litValue (LBool b) = VBool b
@@ -788,6 +789,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "litValue" (TyFun (TyCon "Lit") (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "litValue" ((PCon "LInt" (PVar "n"))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "litValue" ((PCon "LFloat" (PVar "f"))) (EApp (EVar "VFloat") (EVar "f")))
+(DFunDef false "litValue" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "litValue" ((PCon "LString" (PVar "s"))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "litValue" ((PCon "LChar" (PVar "c"))) (EApp (EVar "VChar") (EVar "c")))
 (DFunDef false "litValue" ((PCon "LBool" (PVar "b"))) (EApp (EVar "VBool") (EVar "b")))
@@ -982,6 +984,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "litValue" (TyFun (TyCon "Lit") (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "litValue" ((PCon "LInt" (PVar "n"))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "litValue" ((PCon "LFloat" (PVar "f"))) (EApp (EVar "VFloat") (EVar "f")))
+(DFunDef false "litValue" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "litValue" ((PCon "LString" (PVar "s"))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "litValue" ((PCon "LChar" (PVar "c"))) (EApp (EVar "VChar") (EVar "c")))
 (DFunDef false "litValue" ((PCon "LBool" (PVar "b"))) (EApp (EVar "VBool") (EVar "b")))

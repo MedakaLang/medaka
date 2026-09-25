@@ -445,6 +445,7 @@ checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> 
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
+checkWideLiterals : List (Mono, String, Bool, Option Loc) -> Unit
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
@@ -1396,6 +1397,7 @@ inferMethodCandidateAt : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitMethod : TcEnv -> MethodSchemeRow -> Ref Route -> Mono
+inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
 inferParamPolarities : List (TabKey, List Polarity) -> List String -> List Variant -> List Polarity
@@ -1435,6 +1437,7 @@ inferShadowStandaloneArmAt : TcEnv -> String -> List (Ref (Option Int)) -> List 
 inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
 inferStmt : TcEnv -> DoStmt -> TcEnv
 inferTestBodies : TcEnv -> List Decl -> Unit
+inferU64LitPat : Int -> Int -> (Mono, List (String, Scheme))
 inferUnop : String -> Mono -> Mono
 inferUnopE : TcEnv -> String -> Expr -> Ref Route -> Mono
 inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
@@ -1443,6 +1446,7 @@ inferVar : TcEnv -> String -> Mono
 inferVarId : TcEnv -> String -> Int -> Mono
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
+inferWideLit : TcEnv -> Int -> Ref Route -> String -> Mono
 inferredConstraintIds : String -> List Int -> List Int
 inferredIfacePairs : String -> List Int -> List (IfaceRef, Int)
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
@@ -2199,6 +2203,7 @@ reexportedMethodsOf : List (String, List String) -> Decl -> List String
 reexportedOrigins : List Decl -> String -> List (String, String)
 reexportedOriginsOf : Decl -> String -> List (String, String)
 refStored : Mono -> Mono
+refuseU64LitPat : String -> Option Loc -> Unit
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
 regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
@@ -2603,6 +2608,8 @@ typeMismatchReportRest : Mono -> Mono -> Unit
 typeParamAsRowMsg : String -> String -> String
 tyvarId : Ref Tyvar -> Int
 tyvarLevel : Ref Tyvar -> Int
+u64LiteralFits : Route -> Int -> Bool
+u64RangeText : String
 uOblArgs : UObligation -> List Mono
 uOblIsDecidableNow : UObligation -> Bool
 unannotatedGradedParamMsg : String -> String -> List Kind -> String

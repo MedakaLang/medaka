@@ -1,5 +1,5 @@
 # META
-source_lines=325
+source_lines=326
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -128,6 +128,7 @@ addrOfGo (frame :: rest) n depth = match slotIn frame n 0
 annotateExpr : List (List String) -> Expr -> Expr
 annotateExpr _ (ELit l) = ELit l
 annotateExpr _ (ENumLit n r d lx) = ENumLit n r d lx  -- PLAN.md #11: leaf, passthrough
+annotateExpr _ (EWideLit hi lo d lx) = EWideLit hi lo d lx
 annotateExpr _ (EMethodRef m) = EMethodRef m
 annotateExpr _ (EDictApp d) = EDictApp d
 annotateExpr _ (EMethodAt name seed ev) = EMethodAt name seed ev
@@ -365,6 +366,7 @@ annotateProgram prog = map annotateDecl prog
 (DTypeSig false "annotateExpr" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "annotateExpr" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "ELit") (EVar "l")))
 (DFunDef false "annotateExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
+(DFunDef false "annotateExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "d")) (EVar "lx")))
 (DFunDef false "annotateExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "annotateExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
 (DFunDef false "annotateExpr" (PWild (PCon "EMethodAt" (PVar "name") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (EVar "seed")) (EVar "ev")))
@@ -492,6 +494,7 @@ annotateProgram prog = map annotateDecl prog
 (DTypeSig false "annotateExpr" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "annotateExpr" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "ELit") (EVar "l")))
 (DFunDef false "annotateExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
+(DFunDef false "annotateExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "d")) (EVar "lx")))
 (DFunDef false "annotateExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "annotateExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
 (DFunDef false "annotateExpr" (PWild (PCon "EMethodAt" (PVar "name") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "name")) (EVar "seed")) (EVar "ev")))

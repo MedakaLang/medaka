@@ -1,5 +1,5 @@
 # META
-source_lines=1803
+source_lines=1804
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -1684,6 +1684,7 @@ renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
 -- `EVarAt` is handled above, not here: it carries a renameable NAME (see its arm).
 renameScoped _ _ (e@(ELit _)) = e
 renameScoped _ _ (e@(ENumLit _ _ _ _)) = e
+renameScoped _ _ (e@(EWideLit _ _ _ _)) = e
 renameScoped _ _ (e@(EMethodRef _)) = e
 renameScoped _ _ (e@(EDictApp _)) = e
 renameScoped _ _ (e@(ESection (SecBare _))) = e
@@ -2152,6 +2153,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ESection" (PCon "SecBare" PWild)))) (EVar "e"))
@@ -2560,6 +2562,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ESection" (PCon "SecBare" PWild)))) (EVar "e"))

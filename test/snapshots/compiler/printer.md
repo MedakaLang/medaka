@@ -1,5 +1,5 @@
 # META
-source_lines=2471
+source_lines=2478
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -78,7 +78,7 @@ import frontend.ast.{
   Attr(..),
 }
 import support.util.{
-  joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
+  u64HalvesHex, joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
 }
 import list.{last, sortBy}
 
@@ -949,6 +949,7 @@ printLit (LString s) = text (escStringLit s)
 printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
+printLit (LU64 hi lo) = text ("0x" ++ u64HalvesHex hi lo)
 
 isNegLit : Lit -> Bool
 isNegLit (LInt n) = n < 0
@@ -1170,6 +1171,7 @@ binopPrec op
   | op == "-" = precAdd
   | op == "*" = precMul
   | op == "/" = precMul
+  | op == "%" = precMul
   | otherwise = precInfix
 
 isRightAssoc : String -> Bool
@@ -1180,6 +1182,7 @@ isRightAssoc _ = False
 exprPrec : Expr -> Int
 exprPrec (ELit l) = if isNegLit l then precUnary else precAtom
 exprPrec (ENumLit n _ _ _) = if n < 0 then precUnary else precAtom
+exprPrec (EWideLit _ _ _ _) = precAtom
 exprPrec (EVar _) = precAtom
 exprPrec (EVarId _ _) = precAtom
 exprPrec (EMethodRef _) = precAtom
@@ -1308,6 +1311,7 @@ isSimpleArg e = not (isHuggableArg e)
 isFillAtom : Expr -> Bool
 isFillAtom e = match stripLocE e
   ENumLit _ _ _ _ => True
+  EWideLit _ _ _ _ => True
   ELit _ => True
   EVar _ => True
   EVarId _ _ => True
@@ -1348,6 +1352,8 @@ printExprRaw _ (ELit l) = printLit l
 -- separators survive (`0xD800`, `1_000`); a synthesized literal carries "".
 printExprRaw _ (ENumLit n _ _ lx) =
   text (if lx == "" then intToString n else lx)
+printExprRaw _ (EWideLit hi lo _ lx) =
+  text (if lx == "" then "0x" ++ u64HalvesHex hi lo else lx)
 printExprRaw _ (EVar n) = text n
 printExprRaw _ (EVarId n _) = text n
 printExprRaw _ (EMethodRef n) = text n
@@ -1942,6 +1948,7 @@ isTightNegLitArg e = match stripLocE e
 
 headIsNumericHead : Expr -> Bool
 headIsNumericHead (ENumLit _ _ _ _) = True
+headIsNumericHead (EWideLit _ _ _ _) = True
 headIsNumericHead (ELit (LInt _)) = True
 headIsNumericHead (ELit (LFloat _)) = True
 headIsNumericHead _ = False
@@ -2475,7 +2482,7 @@ declLine : Decl -> String
 declLine d = render (printDecl d) ++ "\n"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
+(DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
@@ -2830,6 +2837,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printLit" ((PCon "LChar" (PVar "c"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "escapeCharLit") (EVar "c"))) (ELit (LString "'")))))
 (DFunDef false "printLit" ((PCon "LBool" (PVar "b"))) (EApp (EVar "text") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False")))))
 (DFunDef false "printLit" ((PCon "LUnit")) (EApp (EVar "text") (ELit (LString "()"))))
+(DFunDef false "printLit" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo")))))
 (DTypeSig false "isNegLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
 (DFunDef false "isNegLit" ((PCon "LInt" (PVar "n"))) (EBinOp "<" (EVar "n") (ELit (LInt 0))))
 (DFunDef false "isNegLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "-")))))))
@@ -2947,7 +2955,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "precAtom" (TyCon "Int"))
 (DFunDef false "precAtom" () (ELit (LInt 15)))
 (DTypeSig false "binopPrec" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "binopPrec" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString ":="))) (EVar "precAssign") (EIf (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EVar "precPipe") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">>"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<<"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "||"))) (EVar "precOr") (EIf (EBinOp "==" (EVar "op") (ELit (LString "&&"))) (EVar "precAnd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EVar "precCons") (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EVar "precAppend") (EIf (EBinOp "==" (EVar "op") (ELit (LString "+"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "*"))) (EVar "precMul") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/"))) (EVar "precMul") (EIf (EVar "otherwise") (EVar "precInfix") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))))))
+(DFunDef false "binopPrec" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString ":="))) (EVar "precAssign") (EIf (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EVar "precPipe") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">>"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<<"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "||"))) (EVar "precOr") (EIf (EBinOp "==" (EVar "op") (ELit (LString "&&"))) (EVar "precAnd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EVar "precCons") (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EVar "precAppend") (EIf (EBinOp "==" (EVar "op") (ELit (LString "+"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "*"))) (EVar "precMul") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/"))) (EVar "precMul") (EIf (EBinOp "==" (EVar "op") (ELit (LString "%"))) (EVar "precMul") (EIf (EVar "otherwise") (EVar "precInfix") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))))))))))
 (DTypeSig false "isRightAssoc" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isRightAssoc" ((PLit (LString "::"))) (EVar "True"))
 (DFunDef false "isRightAssoc" ((PLit (LString ":="))) (EVar "True"))
@@ -2955,6 +2963,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "exprPrec" (TyFun (TyCon "Expr") (TyCon "Int")))
 (DFunDef false "exprPrec" ((PCon "ELit" (PVar "l"))) (EIf (EApp (EVar "isNegLit") (EVar "l")) (EVar "precUnary") (EVar "precAtom")))
 (DFunDef false "exprPrec" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EVar "precUnary") (EVar "precAtom")))
+(DFunDef false "exprPrec" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVar" PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVarId" PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EMethodRef" PWild)) (EVar "precAtom"))
@@ -3017,7 +3026,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "isSimpleArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isSimpleArg" ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isHuggableArg") (EVar "e"))))
 (DTypeSig false "isFillAtom" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
+(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isFillable" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "isFillable" ((PVar "es")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "es")) (ELit (LInt 2))) (EApp (EApp (EVar "allList") (EVar "isFillAtom")) (EVar "es"))))
 (DTypeSig false "collectionDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Doc"))))))
@@ -3030,6 +3039,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "printExprRaw" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Doc"))))
 (DFunDef false "printExprRaw" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "printLit") (EVar "l")))
 (DFunDef false "printExprRaw" (PWild (PCon "ENumLit" (PVar "n") PWild PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EApp (EVar "intToString") (EVar "n")) (EVar "lx"))))
+(DFunDef false "printExprRaw" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo"))) (EVar "lx"))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EMethodRef" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
@@ -3201,6 +3211,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "isTightNegLitArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ELit" (PVar "l")) () (EApp (EVar "isNegLit") (EVar "l"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EBinOp "<" (EVar "n") (ELit (LInt 0)))) (arm PWild () (EVar "False"))))
 (DTypeSig false "headIsNumericHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" (PWild) (EVar "False"))
@@ -3374,7 +3385,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "declLine" ((PVar "d")) (EBinOp "++" (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "d"))) (ELit (LString "\n"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
+(DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
@@ -3729,6 +3740,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printLit" ((PCon "LChar" (PVar "c"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "escapeCharLit") (EVar "c"))) (ELit (LString "'")))))
 (DFunDef false "printLit" ((PCon "LBool" (PVar "b"))) (EApp (EVar "text") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False")))))
 (DFunDef false "printLit" ((PCon "LUnit")) (EApp (EVar "text") (ELit (LString "()"))))
+(DFunDef false "printLit" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo")))))
 (DTypeSig false "isNegLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
 (DFunDef false "isNegLit" ((PCon "LInt" (PVar "n"))) (EBinOp "<" (EVar "n") (ELit (LInt 0))))
 (DFunDef false "isNegLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "-")))))))
@@ -3846,7 +3858,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "precAtom" (TyCon "Int"))
 (DFunDef false "precAtom" () (ELit (LInt 15)))
 (DTypeSig false "binopPrec" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "binopPrec" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString ":="))) (EVar "precAssign") (EIf (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EVar "precPipe") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">>"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<<"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "||"))) (EVar "precOr") (EIf (EBinOp "==" (EVar "op") (ELit (LString "&&"))) (EVar "precAnd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EVar "precCons") (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EVar "precAppend") (EIf (EBinOp "==" (EVar "op") (ELit (LString "+"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "*"))) (EVar "precMul") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/"))) (EVar "precMul") (EIf (EVar "otherwise") (EVar "precInfix") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))))))))))))
+(DFunDef false "binopPrec" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString ":="))) (EVar "precAssign") (EIf (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EVar "precPipe") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">>"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<<"))) (EVar "precCompose") (EIf (EBinOp "==" (EVar "op") (ELit (LString "||"))) (EVar "precOr") (EIf (EBinOp "==" (EVar "op") (ELit (LString "&&"))) (EVar "precAnd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">"))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "<="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString ">="))) (EVar "precCmp") (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EVar "precCons") (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EVar "precAppend") (EIf (EBinOp "==" (EVar "op") (ELit (LString "+"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EVar "precAdd") (EIf (EBinOp "==" (EVar "op") (ELit (LString "*"))) (EVar "precMul") (EIf (EBinOp "==" (EVar "op") (ELit (LString "/"))) (EVar "precMul") (EIf (EBinOp "==" (EVar "op") (ELit (LString "%"))) (EVar "precMul") (EIf (EVar "otherwise") (EVar "precInfix") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))))))))))
 (DTypeSig false "isRightAssoc" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isRightAssoc" ((PLit (LString "::"))) (EVar "True"))
 (DFunDef false "isRightAssoc" ((PLit (LString ":="))) (EVar "True"))
@@ -3854,6 +3866,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "exprPrec" (TyFun (TyCon "Expr") (TyCon "Int")))
 (DFunDef false "exprPrec" ((PCon "ELit" (PVar "l"))) (EIf (EApp (EVar "isNegLit") (EVar "l")) (EVar "precUnary") (EVar "precAtom")))
 (DFunDef false "exprPrec" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EVar "precUnary") (EVar "precAtom")))
+(DFunDef false "exprPrec" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVar" PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVarId" PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EMethodRef" PWild)) (EVar "precAtom"))
@@ -3916,7 +3929,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "isSimpleArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isSimpleArg" ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isHuggableArg") (EVar "e"))))
 (DTypeSig false "isFillAtom" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
+(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isFillable" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "isFillable" ((PVar "es")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "es")) (ELit (LInt 2))) (EApp (EApp (EVar "allList") (EVar "isFillAtom")) (EVar "es"))))
 (DTypeSig false "collectionDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Doc"))))))
@@ -3929,6 +3942,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "printExprRaw" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Doc"))))
 (DFunDef false "printExprRaw" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "printLit") (EVar "l")))
 (DFunDef false "printExprRaw" (PWild (PCon "ENumLit" (PVar "n") PWild PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EApp (EVar "intToString") (EVar "n")) (EVar "lx"))))
+(DFunDef false "printExprRaw" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo"))) (EVar "lx"))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EMethodRef" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
@@ -4100,6 +4114,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "isTightNegLitArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ELit" (PVar "l")) () (EApp (EVar "isNegLit") (EVar "l"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EBinOp "<" (EVar "n") (ELit (LInt 0)))) (arm PWild () (EVar "False"))))
 (DTypeSig false "headIsNumericHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" (PWild) (EVar "False"))

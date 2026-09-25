@@ -1,5 +1,5 @@
 # META
-source_lines=638
+source_lines=650
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -640,6 +640,18 @@ export
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault target [] = [dirOf target]
 rootsOrDefault _ roots = roots
+
+-- A `U64` literal's 32-bit halves (`ast.LU64`) as 16 lowercase hexadecimal digits,
+-- zero-padded, with no prefix: the one rendering every printer and emitter shares.
+export
+u64HalvesHex : Int -> Int -> String
+u64HalvesHex hi lo = hexDigits 8 hi "" ++ hexDigits 8 lo ""
+
+hexDigits : Int -> Int -> String -> String
+hexDigits 0 _ acc = acc
+hexDigits k n acc =
+  let d = n % 16
+  hexDigits (k - 1) (n / 16) (stringSlice d (d + 1) "0123456789abcdef" ++ acc)
 # DESUGAR
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
@@ -814,6 +826,11 @@ rootsOrDefault _ roots = roots
 (DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "rootsOrDefault" ((PVar "target") (PList)) (EListLit (EApp (EVar "dirOf") (EVar "target"))))
 (DFunDef false "rootsOrDefault" (PWild (PVar "roots")) (EVar "roots"))
+(DTypeSig true "u64HalvesHex" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "u64HalvesHex" ((PVar "hi") (PVar "lo")) (EBinOp "++" (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "hi")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "lo")) (ELit (LString "")))))
+(DTypeSig false "hexDigits" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "hexDigits" ((PLit (LInt 0)) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "hexDigits" ((PVar "k") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "d") (EBinOp "%" (EVar "n") (ELit (LInt 16)))) (DoExpr (EApp (EApp (EApp (EVar "hexDigits") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))) (EVar "acc"))))))
 # MARK
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
@@ -988,3 +1005,8 @@ rootsOrDefault _ roots = roots
 (DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "rootsOrDefault" ((PVar "target") (PList)) (EListLit (EApp (EVar "dirOf") (EVar "target"))))
 (DFunDef false "rootsOrDefault" (PWild (PVar "roots")) (EVar "roots"))
+(DTypeSig true "u64HalvesHex" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "u64HalvesHex" ((PVar "hi") (PVar "lo")) (EBinOp "++" (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "hi")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "lo")) (ELit (LString "")))))
+(DTypeSig false "hexDigits" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "hexDigits" ((PLit (LInt 0)) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "hexDigits" ((PVar "k") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "d") (EBinOp "%" (EVar "n") (ELit (LInt 16)))) (DoExpr (EApp (EApp (EApp (EVar "hexDigits") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))) (EVar "acc"))))))

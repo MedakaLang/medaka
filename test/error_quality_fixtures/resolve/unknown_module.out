@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/resolve/unknown_module.mdk:1:0: unknown module: collections — available modules: args, array, async, base32, base64, bits64, bytebuilder, byteparser, bytes, crypto.hmac, crypto.sha256, fs, hash_map, hash_set, hex, http, io, json, list, map, math, mut_bytes, net, net_async, nonempty, path, regex, set, string, test, test_process, time, toml, u16, u32, u8, validation, vector
+error: test/error_quality_fixtures/resolve/unknown_module.mdk:1:0: unknown module: collections — available modules: args, array, async, base32, base64, bytebuilder, byteparser, bytes, crypto.hmac, crypto.sha256, fs, hash_map, hash_set, hex, http, io, json, list, map, math, mut_bytes, net, net_async, nonempty, path, regex, set, string, test, test_process, time, toml, u16, u32, u64, u8, validation, vector
   |
 1 | import collections.HashMap
   | ^

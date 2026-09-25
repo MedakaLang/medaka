@@ -231,6 +231,7 @@ innerDeclOf : Decl -> Decl
 intBound : ParserE <> Lit
 intBoundFor : Token -> ParserE <> Lit
 intLitTooBigMsg : String
+intMinAsWide : String -> Expr
 intMinLit : Int
 intPatRest : Lit -> ParserE <> Pat
 interpOpenFor : Token -> ParserE <> String
@@ -608,6 +609,8 @@ whereBindingsCons : ParserE <> (List (String, List Pat, Expr))
 whereBindingsLoop : ParserE <> (List (String, List Pat, Expr))
 whereEol : Expr -> ParserE <> Expr
 whereTail : Expr -> ParserE <> Expr
+wideNegMsg : String -> String
+widePatMsg : String -> String
 withAllFor : Int -> String -> Token -> ParserE <> UseMember
 withAllOrNot : Int -> String -> ParserE <> UseMember
 zipFieldIdxs : List Field -> List Int -> List (Option Int)

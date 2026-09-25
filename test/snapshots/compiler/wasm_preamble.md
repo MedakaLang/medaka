@@ -1,5 +1,5 @@
 # META
-source_lines=1833
+source_lines=1961
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -681,86 +681,189 @@ appendRuntimeLines = [
 --     ⚠️ #305: a 3-way cannot express NaN's unorderedness, so the emitter does NOT
 --     compare this against 0 for an ordering op — it calls $mdk_value_lt/le/gt/ge,
 --     which answer $float directly and use this only for the $str/int shapes.
-export
-valueEqRuntimeLines : List String
-valueEqRuntimeLines = [
-  "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
-  "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    ;; both operands are $str structs -> byte equality.",
-  "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
-  "      (then (return (ref.i31 (i32.eq",
-  "        (i32.const 1)",
-  "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1",
-  "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the",
-  "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.",
-  "    (if (i32.and (ref.test (ref $float) (local.get $a)) (ref.test (ref $float) (local.get $b)))",
-  "      (then (return (ref.i31 (f64.eq",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    ;; otherwise immediate/struct identity (i31 Int/Bool/Char/Unit, or ctor cells).",
-  "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have",
-  "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.",
-  "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))",
-  "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
-  "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))",
-  "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --",
-  "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)",
-  "    (local $o i32) (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)",
-  "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
-  "      (then",
-  "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.",
-  "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))",
-  "        (return (i32.sub (local.get $o) (i32.const 1)))))",
-  "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.",
-  "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`",
-  "    ;; compare (`a > b` on a Num/Ord type-var param) reaches here with $float cells;",
-  "    ;; without this arm $mdk_unbox_int would ref.cast the $float to $boxint -> trap.",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then",
-  "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))",
-  "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))",
-  "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))",
-  "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))",
-  "        (return (i32.const 0))))",
-  "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).",
-  "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
-  "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",
-  "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
-  "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
-  "    (i32.const 0))",
-  -- #305 (S0): per-op IEEE relational predicates — the WasmGC peers of native's
-  -- mdk_value_lt/le/gt/ge.  $mdk_value_cmp's 3-way -1/0/1 STRUCTURALLY CANNOT
-  -- express NaN's unorderedness (its $float arm returns 0/EQ for an unordered
-  -- pair), so lowering `<=` as `cmp <= 0` read `nan <= nan` as True.  These take
-  -- the $float arm as a direct f64 predicate (f64.lt/le/gt/ge are IEEE — all
-  -- FALSE at NaN, matching the monomorphic emitFloatBinRef path) and delegate
-  -- every other shape to the 3-way, exact for $str/int.  Return an i31 Bool.
-  "  ;; -- #305 per-op IEEE relational predicates (Float f64 pred; else 3-way) --",
-  "  (func $mdk_value_lt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.lt",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
-  "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.le",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
-  "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.gt",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
-  "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.ge",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+-- ── U64 arms of the shape-dispatched helpers (INTEGER-TYPES-DESIGN §5.1) ──────
+-- A `U64` is a `$u64` cell (an i64 payload read unsigned), a struct type distinct
+-- from `$boxint` and `$float` in the rec group, so no other arm's `ref.test`
+-- accepts one.  Each helper that dispatches on value shape takes a flag and
+-- splices its U64 arm only when the program uses `U64` (`WasmEmit.useU64`, which
+-- is also what declares `$u64`), so a program without one emits the same text.
+-- The arm tests the LEFT operand, as the `$float` arms do: both operands of a
+-- well-typed binop share a shape.
+u64OnlyW : Bool -> List String -> List String
+u64OnlyW u64 lines = if u64 then lines else []
+
+u64GetW : String -> String
+u64GetW v = "(struct.get $u64 0 (ref.cast (ref $u64) (local.get \{v})))"
+
+-- `==` for `$mdk_value_eq` / `$mdk_value_eq_num`: the payloads' bit equality.
+u64EqArmW : Bool -> List String
+u64EqArmW u64 = u64OnlyW u64 [
+  "    (if (ref.test (ref $u64) (local.get $a))",
+  "      (then (return (ref.i31 (i64.eq \{u64GetW "$a"} \{u64GetW "$b"})))))",
 ]
+
+-- the unsigned 3-way for `$mdk_value_cmp` / `$mdk_value_cmp_num`, into their
+-- `$ia`/`$ib` i64 locals.  The ordering predicates (`$mdk_value_lt`…) reach it
+-- through the 3-way, which is exact for an integer.
+u64CmpArmW : Bool -> List String
+u64CmpArmW u64 = u64OnlyW u64 [
+  "    (if (ref.test (ref $u64) (local.get $a))",
+  "      (then",
+  "        (local.set $ia \{u64GetW "$a"})",
+  "        (local.set $ib \{u64GetW "$b"})",
+  "        (if (i64.lt_u (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
+  "        (if (i64.gt_u (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
+  "        (return (i32.const 0))))",
+]
+
+-- `+`/`-`/`*` for `$mdk_value_add`/`sub`/`mul`: the i64 op wraps modulo 2^64.
+u64ArithArmW : Bool -> String -> List String
+u64ArithArmW u64 instr = u64OnlyW u64 [
+  "    (if (ref.test (ref $u64) (local.get $a))",
+  "      (then (return (struct.new $u64 (\{instr} \{u64GetW "$a"} \{u64GetW "$b"})))))",
+]
+
+-- `/`/`%` for `$mdk_value_div`/`mod`: unsigned, with the divisor guard the Int
+-- arm uses, into the helper's `$vdr` local.
+u64DivArmW : Bool -> String -> List String -> List String
+u64DivArmW u64 instr trap =
+  u64OnlyW
+    u64
+    ([
+        "    (if (ref.test (ref $u64) (local.get $a))",
+        "      (then",
+        "        (local.set $vdr \{u64GetW "$b"})",
+        "        (if (i64.eqz (local.get $vdr)) (then",
+      ]
+      ++ trap
+      ++ [
+        "        ))",
+        "        (return (struct.new $u64 (\{instr} \{u64GetW "$a"} (local.get $vdr))))))",
+      ])
+
+-- The `U64` kernels no single instruction covers.  A shift amount is an `Int`;
+-- read unsigned, every amount outside 0..63 (a negative one included) gives 0,
+-- where `i64.shl`/`i64.shr_u` alone would take it modulo 64.  `$mdk_u64_mulhi` is
+-- the high half of the 128-bit product from the four 32x32 partial products,
+-- each of which fits an i64: the middle column sums three values below 2^32, so
+-- its carry is `mid >> 32`.
+export
+u64RuntimeLines : List String
+u64RuntimeLines = [
+  "  ;; -- U64 kernels: range-checked shifts and the high half of the product --",
+  "  (func $mdk_u64_shl (param $x i64) (param $k i64) (result i64)",
+  "    (select (i64.shl (local.get $x) (local.get $k)) (i64.const 0)",
+  "      (i64.lt_u (local.get $k) (i64.const 64))))",
+  "  (func $mdk_u64_shr (param $x i64) (param $k i64) (result i64)",
+  "    (select (i64.shr_u (local.get $x) (local.get $k)) (i64.const 0)",
+  "      (i64.lt_u (local.get $k) (i64.const 64))))",
+  "  (func $mdk_u64_mulhi (param $a i64) (param $b i64) (result i64)",
+  "    (local $al i64) (local $ah i64) (local $bl i64) (local $bh i64)",
+  "    (local $lh i64) (local $hl i64) (local $mid i64)",
+  "    (local.set $al (i64.and (local.get $a) (i64.const 0xFFFFFFFF)))",
+  "    (local.set $ah (i64.shr_u (local.get $a) (i64.const 32)))",
+  "    (local.set $bl (i64.and (local.get $b) (i64.const 0xFFFFFFFF)))",
+  "    (local.set $bh (i64.shr_u (local.get $b) (i64.const 32)))",
+  "    (local.set $lh (i64.mul (local.get $al) (local.get $bh)))",
+  "    (local.set $hl (i64.mul (local.get $ah) (local.get $bl)))",
+  "    (local.set $mid (i64.add (i64.add",
+  "      (i64.shr_u (i64.mul (local.get $al) (local.get $bl)) (i64.const 32))",
+  "      (i64.and (local.get $lh) (i64.const 0xFFFFFFFF)))",
+  "      (i64.and (local.get $hl) (i64.const 0xFFFFFFFF))))",
+  "    (i64.add (i64.add (i64.add",
+  "      (i64.mul (local.get $ah) (local.get $bh))",
+  "      (i64.shr_u (local.get $lh) (i64.const 32)))",
+  "      (i64.shr_u (local.get $hl) (i64.const 32)))",
+  "      (i64.shr_u (local.get $mid) (i64.const 32))))",
+]
+
+export
+valueEqRuntimeLines : Bool -> List String
+valueEqRuntimeLines u64 =
+  [
+      "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
+      "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    ;; both operands are $str structs -> byte equality.",
+      "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
+      "      (then (return (ref.i31 (i32.eq",
+      "        (i32.const 1)",
+      "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1",
+    ]
+    ++ u64EqArmW u64
+    ++ [
+      "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the",
+      "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.",
+      "    (if (i32.and (ref.test (ref $float) (local.get $a)) (ref.test (ref $float) (local.get $b)))",
+      "      (then (return (ref.i31 (f64.eq",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    ;; otherwise immediate/struct identity (i31 Int/Bool/Char/Unit, or ctor cells).",
+      "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have",
+      "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.",
+      "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))",
+      "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))",
+      "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --",
+      "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)",
+      "    (local $o i32) (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)",
+      "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
+      "      (then",
+      "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.",
+      "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))",
+      "        (return (i32.sub (local.get $o) (i32.const 1)))))",
+      "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.",
+      "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`",
+      "    ;; compare (`a > b` on a Num/Ord type-var param) reaches here with $float cells;",
+      "    ;; without this arm $mdk_unbox_int would ref.cast the $float to $boxint -> trap.",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then",
+      "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))",
+      "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))",
+      "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))",
+      "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))",
+      "        (return (i32.const 0))))",
+    ]
+    ++ u64CmpArmW u64
+    ++ [
+      "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).",
+      "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
+      "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",
+      "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
+      "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
+      "    (i32.const 0))",
+      -- #305 (S0): per-op IEEE relational predicates — the WasmGC peers of native's
+      -- mdk_value_lt/le/gt/ge.  $mdk_value_cmp's 3-way -1/0/1 STRUCTURALLY CANNOT
+      -- express NaN's unorderedness (its $float arm returns 0/EQ for an unordered
+      -- pair), so lowering `<=` as `cmp <= 0` read `nan <= nan` as True.  These take
+      -- the $float arm as a direct f64 predicate (f64.lt/le/gt/ge are IEEE — all
+      -- FALSE at NaN, matching the monomorphic emitFloatBinRef path) and delegate
+      -- every other shape to the 3-way, exact for $str/int.  Return an i31 Bool.
+      "  ;; -- #305 per-op IEEE relational predicates (Float f64 pred; else 3-way) --",
+      "  (func $mdk_value_lt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.lt",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.le",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.gt",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+      "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.ge",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))",
+    ]
 
 -- ── A0 (poly-`Num`-on-Float): runtime value-tag-dispatched arithmetic helpers ──
 -- The WasmGC port of native's runtime tag-dispatched `mdk_num_add/sub/mul/div/mod`
@@ -820,48 +923,63 @@ valueModZeroTrapW =
 -- (useValueArith). See wasm_emit.mdk's valueAddRt/valueSubRt/valueMulRt/
 -- valueDivRt/valueModRt bindings for the per-flag gating this backs.
 export
-valueAddRuntimeLines : List String
-valueAddRuntimeLines = [
-  "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
-  "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
-  "      (then (struct.new $float (f64.add",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
-]
+valueAddRuntimeLines : Bool -> List String
+valueAddRuntimeLines u64 =
+  [
+      "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
+      "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+    ]
+    ++ u64ArithArmW u64 "i64.add"
+    ++ [
+      "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
+      "      (then (struct.new $float (f64.add",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
+      "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+    ]
 
 export
-valueSubRuntimeLines : List String
-valueSubRuntimeLines = [
-  "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
-  "      (then (struct.new $float (f64.sub",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
-]
+valueSubRuntimeLines : Bool -> List String
+valueSubRuntimeLines u64 =
+  [
+      "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+    ]
+    ++ u64ArithArmW u64 "i64.sub"
+    ++ [
+      "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
+      "      (then (struct.new $float (f64.sub",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
+      "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+    ]
 
 export
-valueMulRuntimeLines : List String
-valueMulRuntimeLines = [
-  "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
-  "      (then (struct.new $float (f64.mul",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
-]
+valueMulRuntimeLines : Bool -> List String
+valueMulRuntimeLines u64 =
+  [
+      "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+    ]
+    ++ u64ArithArmW u64 "i64.mul"
+    ++ [
+      "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
+      "      (then (struct.new $float (f64.mul",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
+      "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+    ]
 
 export
-valueDivRuntimeLines : List String
-valueDivRuntimeLines =
+valueDivRuntimeLines : Bool -> List String
+valueDivRuntimeLines u64 =
   [
       "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
       "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
       "  ;; if zero, else div_s using the stashed value (unbox once, not twice).",
       "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
+    ]
+    ++ u64DivArmW u64 "i64.div_u" valueDivZeroTrapW
+    ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (f64.div",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
@@ -877,8 +995,8 @@ valueDivRuntimeLines =
     ]
 
 export
-valueModRuntimeLines : List String
-valueModRuntimeLines =
+valueModRuntimeLines : Bool -> List String
+valueModRuntimeLines u64 =
   [
       "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`",
       "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native",
@@ -886,6 +1004,9 @@ valueModRuntimeLines =
       "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.",
       "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
+    ]
+    ++ u64DivArmW u64 "i64.rem_u" valueModZeroTrapW
+    ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (call $mdk_float_rem",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
@@ -906,56 +1027,63 @@ valueModRuntimeLines =
 -- demanded, since the isCmpOp poly-num routing branch (wasm_emit.mdk) never
 -- touches $mdk_value_add/sub/mul/div/mod.
 export
-valueCmpNumRuntimeLines : List String
-valueCmpNumRuntimeLines = [
-  "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
-  "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.eq",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))",
-  "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)",
-  "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then",
-  "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))",
-  "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))",
-  "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))",
-  "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))",
-  "        (return (i32.const 0))))",
-  "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
-  "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",
-  "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
-  "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
-  "    (i32.const 0))",
-  -- #305: the num-only peers of $mdk_value_lt/le/gt/ge (same law, no $str) —
-  -- IEEE f64 predicate on a $float operand, else the exact int 3-way.
-  "  (func $mdk_value_lt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.lt",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
-  "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.le",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
-  "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.gt",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
-  "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (if (ref.test (ref $float) (local.get $a))",
-  "      (then (return (ref.i31 (f64.ge",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
-  "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
-]
+valueCmpNumRuntimeLines : Bool -> List String
+valueCmpNumRuntimeLines u64 =
+  [
+      "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
+      "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+    ]
+    ++ u64EqArmW u64
+    ++ [
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.eq",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))",
+      "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)",
+      "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then",
+      "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))",
+      "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))",
+      "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))",
+      "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))",
+      "        (return (i32.const 0))))",
+    ]
+    ++ u64CmpArmW u64
+    ++ [
+      "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
+      "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",
+      "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
+      "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
+      "    (i32.const 0))",
+      -- #305: the num-only peers of $mdk_value_lt/le/gt/ge (same law, no $str) —
+      -- IEEE f64 predicate on a $float operand, else the exact int 3-way.
+      "  (func $mdk_value_lt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.lt",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.le",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.gt",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+      "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+      "    (if (ref.test (ref $float) (local.get $a))",
+      "      (then (return (ref.i31 (f64.ge",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+      "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))",
+      "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))",
+    ]
 
 -- ── W8 RNG — deterministic SplitMix64 (RUNTIME-DESIGN §5 RNG) ─────────────────
 -- Byte-identical to medaka_rt.c's shared SplitMix64 (the same algorithm the OCaml
@@ -1866,8 +1994,22 @@ charFromCodeRuntimeLines = [
 (DFunDef false "strConcatRuntimeLines" () (EListLit (ELit (LString "  ;; ── W8 stringConcat (List String) — walk the W7 cons list ──")) (ELit (LString "  (func $mdk_str_concat (param $list (ref eq)) (result (ref $str))")) (ELit (LString "    (local $w (ref eq)) (local $cell (ref $C_Cons)) (local $s (ref $str))")) (ELit (LString "    (local $total i32) (local $cpc i32) (local $off i32) (local $bl i32)")) (ELit (LString "    (local $buf (ref $u8arr)) (local $sb (ref $u8arr))")) (ELit (LString "    ;; pass 1: total byte length + total codepoints.")) (ELit (LString "    (local.set $total (i32.const 0)) (local.set $cpc (i32.const 0))")) (ELit (LString "    (local.set $w (local.get $list))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.eqz (ref.test (ref $C_Cons) (local.get $w))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $w)))")) (ELit (LString "      (local.set $s (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell))))")) (ELit (LString "      (local.set $total (i32.add (local.get $total) (array.len (struct.get $str $bytes (local.get $s)))))")) (ELit (LString "      (local.set $cpc (i32.add (local.get $cpc) (struct.get $str $cp_count (local.get $s))))")) (ELit (LString "      (local.set $w (struct.get $C_Cons 2 (local.get $cell))) (br $l)))")) (ELit (LString "    ;; pass 2: copy each segment's bytes into a flat buffer.")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $total)))")) (ELit (LString "    (local.set $off (i32.const 0))")) (ELit (LString "    (local.set $w (local.get $list))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.eqz (ref.test (ref $C_Cons) (local.get $w))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $w)))")) (ELit (LString "      (local.set $s (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell))))")) (ELit (LString "      (local.set $sb (struct.get $str $bytes (local.get $s)))")) (ELit (LString "      (local.set $bl (array.len (local.get $sb)))")) (ELit (LString "      (array.copy $u8arr $u8arr (local.get $buf) (local.get $off) (local.get $sb) (i32.const 0) (local.get $bl))")) (ELit (LString "      (local.set $off (i32.add (local.get $off) (local.get $bl)))")) (ELit (LString "      (local.set $w (struct.get $C_Cons 2 (local.get $cell))) (br $l2)))")) (ELit (LString "    (struct.new $str (local.get $cpc) (local.get $buf)))"))))
 (DTypeSig true "appendRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "appendRuntimeLines" () (EListLit (ELit (LString "  ;; ── W13 runtime-dispatched `++` (String concat OR List append) ──")) (ELit (LString "  ;; List append is ITERATIVE (destination-passing over the mut $C_Cons tail),")) (ELit (LString "  ;; mirroring the native mdk_list_append: walk `a` head-first, struct.new each")) (ELit (LString "  ;; result cell with a placeholder i31 tail, struct.set it into the previous")) (ELit (LString "  ;; cell's mut tail, and after the loop point the final tail at `b`.  O(1) extra")) (ELit (LString "  ;; space, no self-recursion → no wasm-stack growth proportional to length(a).")) (ELit (LString "  (func $mdk_append (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $cell (ref $C_Cons))")) (ELit (LString "    (local $result (ref eq))")) (ELit (LString "    (local $dest (ref $C_Cons))")) (ELit (LString "    (local $new (ref $C_Cons))")) (ELit (LString "    ;; String `++`: left is a $str struct → byte concat.")) (ELit (LString "    (if (ref.test (ref $str) (local.get $a))")) (ELit (LString "      (then (return (call $mdk_str_append (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))")) (ELit (LString "    ;; List `++`: a Nil (non-$C_Cons) left → b unchanged.")) (ELit (LString "    (if (i32.eqz (ref.test (ref $C_Cons) (local.get $a)))")) (ELit (LString "      (then (return (local.get $b))))")) (ELit (LString "    ;; First cell: copy head(a), placeholder i31 tail (overwritten before any read).")) (ELit (LString "    (local.set $cell (ref.cast (ref $C_Cons) (local.get $a)))")) (ELit (LString "    (local.set $dest (struct.new $C_Cons (i32.const 0)")) (ELit (LString "      (struct.get $C_Cons 1 (local.get $cell)) (ref.i31 (i32.const 0))))")) (ELit (LString "    (local.set $result (local.get $dest))")) (ELit (LString "    ;; Walk the rest of `a`, appending a fresh cell into the previous mut tail.")) (ELit (LString "    (block $done")) (ELit (LString "      (loop $l")) (ELit (LString "        ;; If tail(cell) is not a Cons (i.e. Nil), we are done.")) (ELit (LString "        (br_if $done (i32.eqz (ref.test (ref $C_Cons)")) (ELit (LString "          (struct.get $C_Cons 2 (local.get $cell)))))")) (ELit (LString "        (local.set $cell (ref.cast (ref $C_Cons)")) (ELit (LString "          (struct.get $C_Cons 2 (local.get $cell))))")) (ELit (LString "        (local.set $new (struct.new $C_Cons (i32.const 0)")) (ELit (LString "          (struct.get $C_Cons 1 (local.get $cell)) (ref.i31 (i32.const 0))))")) (ELit (LString "        (struct.set $C_Cons 2 (local.get $dest) (local.get $new))")) (ELit (LString "        (local.set $dest (local.get $new))")) (ELit (LString "        (br $l)))")) (ELit (LString "    ;; Final tail → b (sharing it, not copying).")) (ELit (LString "    (struct.set $C_Cons 2 (local.get $dest) (local.get $b))")) (ELit (LString "    (local.get $result))"))))
-(DTypeSig true "valueEqRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueEqRuntimeLines" () (EListLit (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --")) (ELit (LString "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    ;; both operands are $str structs -> byte equality.")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i32.eq")) (ELit (LString "        (i32.const 1)")) (ELit (LString "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1")) (ELit (LString "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the")) (ELit (LString "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.")) (ELit (LString "    (if (i32.and (ref.test (ref $float) (local.get $a)) (ref.test (ref $float) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    ;; otherwise immediate/struct identity (i31 Int/Bool/Char/Unit, or ctor cells).")) (ELit (LString "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have")) (ELit (LString "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.")) (ELit (LString "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")) (ELit (LString "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))")) (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --")) (ELit (LString "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $o i32) (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then")) (ELit (LString "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.")) (ELit (LString "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))")) (ELit (LString "        (return (i32.sub (local.get $o) (i32.const 1)))))")) (ELit (LString "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.")) (ELit (LString "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`")) (ELit (LString "    ;; compare (`a > b` on a Num/Ord type-var param) reaches here with $float cells;")) (ELit (LString "    ;; without this arm $mdk_unbox_int would ref.cast the $float to $boxint -> trap.")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")) (ELit (LString "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).")) (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  ;; -- #305 per-op IEEE relational predicates (Float f64 pred; else 3-way) --")) (ELit (LString "  (func $mdk_value_lt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))"))))
+(DTypeSig false "u64OnlyW" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "u64OnlyW" ((PVar "u64") (PVar "lines")) (EIf (EVar "u64") (EVar "lines") (EListLit)))
+(DTypeSig false "u64GetW" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "u64GetW" ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "(struct.get $u64 0 (ref.cast (ref $u64) (local.get ")) (EApp (EVar "display") (EVar "v"))) (ELit (LString ")))"))))
+(DTypeSig false "u64EqArmW" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "u64EqArmW" ((PVar "u64")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "      (then (return (ref.i31 (i64.eq ")) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")))))"))))))
+(DTypeSig false "u64CmpArmW" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "u64CmpArmW" ((PVar "u64")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (ELit (LString "      (then")) (EBinOp "++" (EBinOp "++" (ELit (LString "        (local.set $ia ")) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (ELit (LString "        (local.set $ib ")) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")"))) (ELit (LString "        (if (i64.lt_u (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "        (if (i64.gt_u (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")))))
+(DTypeSig false "u64ArithArmW" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "u64ArithArmW" ((PVar "u64") (PVar "instr")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "      (then (return (struct.new $u64 (")) (EApp (EVar "display") (EVar "instr"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")))))"))))))
+(DTypeSig false "u64DivArmW" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "u64DivArmW" ((PVar "u64") (PVar "instr") (PVar "trap")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (ELit (LString "      (then")) (EBinOp "++" (EBinOp "++" (ELit (LString "        (local.set $vdr ")) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")"))) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then"))) (EVar "trap")) (EListLit (ELit (LString "        ))")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "        (return (struct.new $u64 (")) (EApp (EVar "display") (EVar "instr"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString " (local.get $vdr))))))")))))))
+(DTypeSig true "u64RuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "u64RuntimeLines" () (EListLit (ELit (LString "  ;; -- U64 kernels: range-checked shifts and the high half of the product --")) (ELit (LString "  (func $mdk_u64_shl (param $x i64) (param $k i64) (result i64)")) (ELit (LString "    (select (i64.shl (local.get $x) (local.get $k)) (i64.const 0)")) (ELit (LString "      (i64.lt_u (local.get $k) (i64.const 64))))")) (ELit (LString "  (func $mdk_u64_shr (param $x i64) (param $k i64) (result i64)")) (ELit (LString "    (select (i64.shr_u (local.get $x) (local.get $k)) (i64.const 0)")) (ELit (LString "      (i64.lt_u (local.get $k) (i64.const 64))))")) (ELit (LString "  (func $mdk_u64_mulhi (param $a i64) (param $b i64) (result i64)")) (ELit (LString "    (local $al i64) (local $ah i64) (local $bl i64) (local $bh i64)")) (ELit (LString "    (local $lh i64) (local $hl i64) (local $mid i64)")) (ELit (LString "    (local.set $al (i64.and (local.get $a) (i64.const 0xFFFFFFFF)))")) (ELit (LString "    (local.set $ah (i64.shr_u (local.get $a) (i64.const 32)))")) (ELit (LString "    (local.set $bl (i64.and (local.get $b) (i64.const 0xFFFFFFFF)))")) (ELit (LString "    (local.set $bh (i64.shr_u (local.get $b) (i64.const 32)))")) (ELit (LString "    (local.set $lh (i64.mul (local.get $al) (local.get $bh)))")) (ELit (LString "    (local.set $hl (i64.mul (local.get $ah) (local.get $bl)))")) (ELit (LString "    (local.set $mid (i64.add (i64.add")) (ELit (LString "      (i64.shr_u (i64.mul (local.get $al) (local.get $bl)) (i64.const 32))")) (ELit (LString "      (i64.and (local.get $lh) (i64.const 0xFFFFFFFF)))")) (ELit (LString "      (i64.and (local.get $hl) (i64.const 0xFFFFFFFF))))")) (ELit (LString "    (i64.add (i64.add (i64.add")) (ELit (LString "      (i64.mul (local.get $ah) (local.get $bh))")) (ELit (LString "      (i64.shr_u (local.get $lh) (i64.const 32)))")) (ELit (LString "      (i64.shr_u (local.get $hl) (i64.const 32)))")) (ELit (LString "      (i64.shr_u (local.get $mid) (i64.const 32))))"))))
+(DTypeSig true "valueEqRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueEqRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --")) (ELit (LString "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    ;; both operands are $str structs -> byte equality.")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i32.eq")) (ELit (LString "        (i32.const 1)")) (ELit (LString "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1"))) (EApp (EVar "u64EqArmW") (EVar "u64"))) (EListLit (ELit (LString "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the")) (ELit (LString "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.")) (ELit (LString "    (if (i32.and (ref.test (ref $float) (local.get $a)) (ref.test (ref $float) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    ;; otherwise immediate/struct identity (i31 Int/Bool/Char/Unit, or ctor cells).")) (ELit (LString "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have")) (ELit (LString "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.")) (ELit (LString "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")) (ELit (LString "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))")) (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --")) (ELit (LString "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $o i32) (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then")) (ELit (LString "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.")) (ELit (LString "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))")) (ELit (LString "        (return (i32.sub (local.get $o) (i32.const 1)))))")) (ELit (LString "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.")) (ELit (LString "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`")) (ELit (LString "    ;; compare (`a > b` on a Num/Ord type-var param) reaches here with $float cells;")) (ELit (LString "    ;; without this arm $mdk_unbox_int would ref.cast the $float to $boxint -> trap.")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")))) (EApp (EVar "u64CmpArmW") (EVar "u64"))) (EListLit (ELit (LString "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).")) (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  ;; -- #305 per-op IEEE relational predicates (Float f64 pred; else 3-way) --")) (ELit (LString "  (func $mdk_value_lt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")))))
 (DTypeSig false "asciiTrapBytesW" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "asciiTrapBytesW" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "asciiTrapGoW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "asciiTrapGoW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1876,18 +2018,18 @@ charFromCodeRuntimeLines = [
 (DFunDef false "valueDivZeroTrapW" () (EBinOp "++" (EApp (EVar "asciiTrapBytesW") (ELit (LString "runtime error [E-DIV-ZERO]: division by zero\n"))) (EListLit (ELit (LString "        unreachable")))))
 (DTypeSig false "valueModZeroTrapW" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "valueModZeroTrapW" () (EBinOp "++" (EApp (EVar "asciiTrapBytesW") (ELit (LString "runtime error [E-MOD-ZERO]: modulo by zero\n"))) (EListLit (ELit (LString "        unreachable")))))
-(DTypeSig true "valueAddRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueAddRuntimeLines" () (EListLit (ELit (LString "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --")) (ELit (LString "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.add")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))"))))
-(DTypeSig true "valueSubRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueSubRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.sub")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))"))))
-(DTypeSig true "valueMulRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueMulRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.mul")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))"))))
-(DTypeSig true "valueDivRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueDivRuntimeLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int")) (ELit (LString "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line")) (ELit (LString "  ;; if zero, else div_s using the stashed value (unbox once, not twice).")) (ELit (LString "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.div")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then"))) (EVar "valueDivZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
-(DTypeSig true "valueModRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueModRuntimeLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`")) (ELit (LString "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native")) (ELit (LString "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).")) (ELit (LString "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.")) (ELit (LString "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (call $mdk_float_rem")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then"))) (EVar "valueModZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
-(DTypeSig true "valueCmpNumRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueCmpNumRuntimeLines" () (EListLit (ELit (LString "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --")) (ELit (LString "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))")) (ELit (LString "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")) (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  (func $mdk_value_lt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))"))))
+(DTypeSig true "valueAddRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueAddRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --")) (ELit (LString "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EApp (EVar "u64ArithArmW") (EVar "u64")) (ELit (LString "i64.add")))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.add")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")))))
+(DTypeSig true "valueSubRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueSubRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EApp (EVar "u64ArithArmW") (EVar "u64")) (ELit (LString "i64.sub")))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.sub")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")))))
+(DTypeSig true "valueMulRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueMulRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EApp (EVar "u64ArithArmW") (EVar "u64")) (ELit (LString "i64.mul")))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.mul")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")))))
+(DTypeSig true "valueDivRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueDivRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int")) (ELit (LString "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line")) (ELit (LString "  ;; if zero, else div_s using the stashed value (unbox once, not twice).")) (ELit (LString "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)"))) (EApp (EApp (EApp (EVar "u64DivArmW") (EVar "u64")) (ELit (LString "i64.div_u"))) (EVar "valueDivZeroTrapW"))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.div")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then")))) (EVar "valueDivZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
+(DTypeSig true "valueModRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueModRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`")) (ELit (LString "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native")) (ELit (LString "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).")) (ELit (LString "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.")) (ELit (LString "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)"))) (EApp (EApp (EApp (EVar "u64DivArmW") (EVar "u64")) (ELit (LString "i64.rem_u"))) (EVar "valueModZeroTrapW"))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (call $mdk_float_rem")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then")))) (EVar "valueModZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
+(DTypeSig true "valueCmpNumRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueCmpNumRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --")) (ELit (LString "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EVar "u64EqArmW") (EVar "u64"))) (EListLit (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))")) (ELit (LString "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")))) (EApp (EVar "u64CmpArmW") (EVar "u64"))) (EListLit (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  (func $mdk_value_lt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")))))
 (DTypeSig true "rngStateGlobalLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "rngStateGlobalLines" () (EListLit (ELit (LString "  (global $mdk_rng_state (mut i64) (i64.const 0))"))))
 (DTypeSig true "rngRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -1963,8 +2105,22 @@ charFromCodeRuntimeLines = [
 (DFunDef false "strConcatRuntimeLines" () (EListLit (ELit (LString "  ;; ── W8 stringConcat (List String) — walk the W7 cons list ──")) (ELit (LString "  (func $mdk_str_concat (param $list (ref eq)) (result (ref $str))")) (ELit (LString "    (local $w (ref eq)) (local $cell (ref $C_Cons)) (local $s (ref $str))")) (ELit (LString "    (local $total i32) (local $cpc i32) (local $off i32) (local $bl i32)")) (ELit (LString "    (local $buf (ref $u8arr)) (local $sb (ref $u8arr))")) (ELit (LString "    ;; pass 1: total byte length + total codepoints.")) (ELit (LString "    (local.set $total (i32.const 0)) (local.set $cpc (i32.const 0))")) (ELit (LString "    (local.set $w (local.get $list))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.eqz (ref.test (ref $C_Cons) (local.get $w))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $w)))")) (ELit (LString "      (local.set $s (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell))))")) (ELit (LString "      (local.set $total (i32.add (local.get $total) (array.len (struct.get $str $bytes (local.get $s)))))")) (ELit (LString "      (local.set $cpc (i32.add (local.get $cpc) (struct.get $str $cp_count (local.get $s))))")) (ELit (LString "      (local.set $w (struct.get $C_Cons 2 (local.get $cell))) (br $l)))")) (ELit (LString "    ;; pass 2: copy each segment's bytes into a flat buffer.")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $total)))")) (ELit (LString "    (local.set $off (i32.const 0))")) (ELit (LString "    (local.set $w (local.get $list))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.eqz (ref.test (ref $C_Cons) (local.get $w))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $w)))")) (ELit (LString "      (local.set $s (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell))))")) (ELit (LString "      (local.set $sb (struct.get $str $bytes (local.get $s)))")) (ELit (LString "      (local.set $bl (array.len (local.get $sb)))")) (ELit (LString "      (array.copy $u8arr $u8arr (local.get $buf) (local.get $off) (local.get $sb) (i32.const 0) (local.get $bl))")) (ELit (LString "      (local.set $off (i32.add (local.get $off) (local.get $bl)))")) (ELit (LString "      (local.set $w (struct.get $C_Cons 2 (local.get $cell))) (br $l2)))")) (ELit (LString "    (struct.new $str (local.get $cpc) (local.get $buf)))"))))
 (DTypeSig true "appendRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "appendRuntimeLines" () (EListLit (ELit (LString "  ;; ── W13 runtime-dispatched `++` (String concat OR List append) ──")) (ELit (LString "  ;; List append is ITERATIVE (destination-passing over the mut $C_Cons tail),")) (ELit (LString "  ;; mirroring the native mdk_list_append: walk `a` head-first, struct.new each")) (ELit (LString "  ;; result cell with a placeholder i31 tail, struct.set it into the previous")) (ELit (LString "  ;; cell's mut tail, and after the loop point the final tail at `b`.  O(1) extra")) (ELit (LString "  ;; space, no self-recursion → no wasm-stack growth proportional to length(a).")) (ELit (LString "  (func $mdk_append (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $cell (ref $C_Cons))")) (ELit (LString "    (local $result (ref eq))")) (ELit (LString "    (local $dest (ref $C_Cons))")) (ELit (LString "    (local $new (ref $C_Cons))")) (ELit (LString "    ;; String `++`: left is a $str struct → byte concat.")) (ELit (LString "    (if (ref.test (ref $str) (local.get $a))")) (ELit (LString "      (then (return (call $mdk_str_append (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))")) (ELit (LString "    ;; List `++`: a Nil (non-$C_Cons) left → b unchanged.")) (ELit (LString "    (if (i32.eqz (ref.test (ref $C_Cons) (local.get $a)))")) (ELit (LString "      (then (return (local.get $b))))")) (ELit (LString "    ;; First cell: copy head(a), placeholder i31 tail (overwritten before any read).")) (ELit (LString "    (local.set $cell (ref.cast (ref $C_Cons) (local.get $a)))")) (ELit (LString "    (local.set $dest (struct.new $C_Cons (i32.const 0)")) (ELit (LString "      (struct.get $C_Cons 1 (local.get $cell)) (ref.i31 (i32.const 0))))")) (ELit (LString "    (local.set $result (local.get $dest))")) (ELit (LString "    ;; Walk the rest of `a`, appending a fresh cell into the previous mut tail.")) (ELit (LString "    (block $done")) (ELit (LString "      (loop $l")) (ELit (LString "        ;; If tail(cell) is not a Cons (i.e. Nil), we are done.")) (ELit (LString "        (br_if $done (i32.eqz (ref.test (ref $C_Cons)")) (ELit (LString "          (struct.get $C_Cons 2 (local.get $cell)))))")) (ELit (LString "        (local.set $cell (ref.cast (ref $C_Cons)")) (ELit (LString "          (struct.get $C_Cons 2 (local.get $cell))))")) (ELit (LString "        (local.set $new (struct.new $C_Cons (i32.const 0)")) (ELit (LString "          (struct.get $C_Cons 1 (local.get $cell)) (ref.i31 (i32.const 0))))")) (ELit (LString "        (struct.set $C_Cons 2 (local.get $dest) (local.get $new))")) (ELit (LString "        (local.set $dest (local.get $new))")) (ELit (LString "        (br $l)))")) (ELit (LString "    ;; Final tail → b (sharing it, not copying).")) (ELit (LString "    (struct.set $C_Cons 2 (local.get $dest) (local.get $b))")) (ELit (LString "    (local.get $result))"))))
-(DTypeSig true "valueEqRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueEqRuntimeLines" () (EListLit (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --")) (ELit (LString "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    ;; both operands are $str structs -> byte equality.")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i32.eq")) (ELit (LString "        (i32.const 1)")) (ELit (LString "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1")) (ELit (LString "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the")) (ELit (LString "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.")) (ELit (LString "    (if (i32.and (ref.test (ref $float) (local.get $a)) (ref.test (ref $float) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    ;; otherwise immediate/struct identity (i31 Int/Bool/Char/Unit, or ctor cells).")) (ELit (LString "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have")) (ELit (LString "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.")) (ELit (LString "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")) (ELit (LString "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))")) (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --")) (ELit (LString "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $o i32) (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then")) (ELit (LString "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.")) (ELit (LString "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))")) (ELit (LString "        (return (i32.sub (local.get $o) (i32.const 1)))))")) (ELit (LString "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.")) (ELit (LString "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`")) (ELit (LString "    ;; compare (`a > b` on a Num/Ord type-var param) reaches here with $float cells;")) (ELit (LString "    ;; without this arm $mdk_unbox_int would ref.cast the $float to $boxint -> trap.")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")) (ELit (LString "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).")) (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  ;; -- #305 per-op IEEE relational predicates (Float f64 pred; else 3-way) --")) (ELit (LString "  (func $mdk_value_lt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))"))))
+(DTypeSig false "u64OnlyW" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "u64OnlyW" ((PVar "u64") (PVar "lines")) (EIf (EVar "u64") (EVar "lines") (EListLit)))
+(DTypeSig false "u64GetW" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "u64GetW" ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "(struct.get $u64 0 (ref.cast (ref $u64) (local.get ")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ")))"))))
+(DTypeSig false "u64EqArmW" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "u64EqArmW" ((PVar "u64")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "      (then (return (ref.i31 (i64.eq ")) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")))))"))))))
+(DTypeSig false "u64CmpArmW" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "u64CmpArmW" ((PVar "u64")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (ELit (LString "      (then")) (EBinOp "++" (EBinOp "++" (ELit (LString "        (local.set $ia ")) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (ELit (LString "        (local.set $ib ")) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")"))) (ELit (LString "        (if (i64.lt_u (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "        (if (i64.gt_u (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")))))
+(DTypeSig false "u64ArithArmW" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "u64ArithArmW" ((PVar "u64") (PVar "instr")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "      (then (return (struct.new $u64 (")) (EApp (EMethodRef "display") (EVar "instr"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")))))"))))))
+(DTypeSig false "u64DivArmW" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "u64DivArmW" ((PVar "u64") (PVar "instr") (PVar "trap")) (EApp (EApp (EVar "u64OnlyW") (EVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    (if (ref.test (ref $u64) (local.get $a))")) (ELit (LString "      (then")) (EBinOp "++" (EBinOp "++" (ELit (LString "        (local.set $vdr ")) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$b"))))) (ELit (LString ")"))) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then"))) (EVar "trap")) (EListLit (ELit (LString "        ))")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "        (return (struct.new $u64 (")) (EApp (EMethodRef "display") (EVar "instr"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "u64GetW") (ELit (LString "$a"))))) (ELit (LString " (local.get $vdr))))))")))))))
+(DTypeSig true "u64RuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "u64RuntimeLines" () (EListLit (ELit (LString "  ;; -- U64 kernels: range-checked shifts and the high half of the product --")) (ELit (LString "  (func $mdk_u64_shl (param $x i64) (param $k i64) (result i64)")) (ELit (LString "    (select (i64.shl (local.get $x) (local.get $k)) (i64.const 0)")) (ELit (LString "      (i64.lt_u (local.get $k) (i64.const 64))))")) (ELit (LString "  (func $mdk_u64_shr (param $x i64) (param $k i64) (result i64)")) (ELit (LString "    (select (i64.shr_u (local.get $x) (local.get $k)) (i64.const 0)")) (ELit (LString "      (i64.lt_u (local.get $k) (i64.const 64))))")) (ELit (LString "  (func $mdk_u64_mulhi (param $a i64) (param $b i64) (result i64)")) (ELit (LString "    (local $al i64) (local $ah i64) (local $bl i64) (local $bh i64)")) (ELit (LString "    (local $lh i64) (local $hl i64) (local $mid i64)")) (ELit (LString "    (local.set $al (i64.and (local.get $a) (i64.const 0xFFFFFFFF)))")) (ELit (LString "    (local.set $ah (i64.shr_u (local.get $a) (i64.const 32)))")) (ELit (LString "    (local.set $bl (i64.and (local.get $b) (i64.const 0xFFFFFFFF)))")) (ELit (LString "    (local.set $bh (i64.shr_u (local.get $b) (i64.const 32)))")) (ELit (LString "    (local.set $lh (i64.mul (local.get $al) (local.get $bh)))")) (ELit (LString "    (local.set $hl (i64.mul (local.get $ah) (local.get $bl)))")) (ELit (LString "    (local.set $mid (i64.add (i64.add")) (ELit (LString "      (i64.shr_u (i64.mul (local.get $al) (local.get $bl)) (i64.const 32))")) (ELit (LString "      (i64.and (local.get $lh) (i64.const 0xFFFFFFFF)))")) (ELit (LString "      (i64.and (local.get $hl) (i64.const 0xFFFFFFFF))))")) (ELit (LString "    (i64.add (i64.add (i64.add")) (ELit (LString "      (i64.mul (local.get $ah) (local.get $bh))")) (ELit (LString "      (i64.shr_u (local.get $lh) (i64.const 32)))")) (ELit (LString "      (i64.shr_u (local.get $hl) (i64.const 32)))")) (ELit (LString "      (i64.shr_u (local.get $mid) (i64.const 32))))"))))
+(DTypeSig true "valueEqRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueEqRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --")) (ELit (LString "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    ;; both operands are $str structs -> byte equality.")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i32.eq")) (ELit (LString "        (i32.const 1)")) (ELit (LString "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1"))) (EApp (EVar "u64EqArmW") (EVar "u64"))) (EListLit (ELit (LString "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the")) (ELit (LString "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.")) (ELit (LString "    (if (i32.and (ref.test (ref $float) (local.get $a)) (ref.test (ref $float) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    ;; otherwise immediate/struct identity (i31 Int/Bool/Char/Unit, or ctor cells).")) (ELit (LString "    ;; layer-17 §2.1: a >2^30 Int is a $boxint struct, so two equal large Ints have")) (ELit (LString "    ;; distinct identities — when either side is a $boxint compare the unboxed i64.")) (ELit (LString "    (if (i32.or (ref.test (ref $boxint) (local.get $a)) (ref.test (ref $boxint) (local.get $b)))")) (ELit (LString "      (then (return (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")) (ELit (LString "    (ref.i31 (i32.eqz (i32.eqz (ref.eq (local.get $a) (local.get $b))))))")) (ELit (LString "  ;; -- layer-9 runtime-shape-dispatched ordering (String byte-order OR i31 signed) -> i32 -1/0/1 --")) (ELit (LString "  (func $mdk_value_cmp (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $o i32) (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)")) (ELit (LString "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))")) (ELit (LString "      (then")) (ELit (LString "        ;; $mdk_str_compare -> Ordering i31 (Lt 0 / Eq 1 / Gt 2); map to -1/0/1.")) (ELit (LString "        (local.set $o (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b))))))")) (ELit (LString "        (return (i32.sub (local.get $o) (i32.const 1)))))")) (ELit (LString "    ;; A2 (poly-Ord-on-Float): a boxed $float operand -> f64 compare -> -1/0/1.")) (ELit (LString "    ;; Mirrors the arith helpers' left-operand $float discriminant.  A poly `Ord`")) (ELit (LString "    ;; compare (`a > b` on a Num/Ord type-var param) reaches here with $float cells;")) (ELit (LString "    ;; without this arm $mdk_unbox_int would ref.cast the $float to $boxint -> trap.")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")))) (EApp (EVar "u64CmpArmW") (EVar "u64"))) (EListLit (ELit (LString "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).")) (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  ;; -- #305 per-op IEEE relational predicates (Float f64 pred; else 3-way) --")) (ELit (LString "  (func $mdk_value_lt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp (local.get $a) (local.get $b)) (i32.const 0))))")))))
 (DTypeSig false "asciiTrapBytesW" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "asciiTrapBytesW" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "asciiTrapGoW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "asciiTrapGoW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1973,18 +2129,18 @@ charFromCodeRuntimeLines = [
 (DFunDef false "valueDivZeroTrapW" () (EBinOp "++" (EApp (EVar "asciiTrapBytesW") (ELit (LString "runtime error [E-DIV-ZERO]: division by zero\n"))) (EListLit (ELit (LString "        unreachable")))))
 (DTypeSig false "valueModZeroTrapW" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "valueModZeroTrapW" () (EBinOp "++" (EApp (EVar "asciiTrapBytesW") (ELit (LString "runtime error [E-MOD-ZERO]: modulo by zero\n"))) (EListLit (ELit (LString "        unreachable")))))
-(DTypeSig true "valueAddRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueAddRuntimeLines" () (EListLit (ELit (LString "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --")) (ELit (LString "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.add")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))"))))
-(DTypeSig true "valueSubRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueSubRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.sub")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))"))))
-(DTypeSig true "valueMulRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueMulRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.mul")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))"))))
-(DTypeSig true "valueDivRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueDivRuntimeLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int")) (ELit (LString "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line")) (ELit (LString "  ;; if zero, else div_s using the stashed value (unbox once, not twice).")) (ELit (LString "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.div")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then"))) (EVar "valueDivZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
-(DTypeSig true "valueModRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueModRuntimeLines" () (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`")) (ELit (LString "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native")) (ELit (LString "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).")) (ELit (LString "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.")) (ELit (LString "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)")) (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (call $mdk_float_rem")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then"))) (EVar "valueModZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
-(DTypeSig true "valueCmpNumRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "valueCmpNumRuntimeLines" () (EListLit (ELit (LString "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --")) (ELit (LString "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))")) (ELit (LString "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")) (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  (func $mdk_value_lt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))"))))
+(DTypeSig true "valueAddRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueAddRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --")) (ELit (LString "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EApp (EVar "u64ArithArmW") (EVar "u64")) (ELit (LString "i64.add")))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.add")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")))))
+(DTypeSig true "valueSubRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueSubRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EApp (EVar "u64ArithArmW") (EVar "u64")) (ELit (LString "i64.sub")))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.sub")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")))))
+(DTypeSig true "valueMulRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueMulRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EApp (EVar "u64ArithArmW") (EVar "u64")) (ELit (LString "i64.mul")))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.mul")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))")))))
+(DTypeSig true "valueDivRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueDivRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int")) (ELit (LString "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line")) (ELit (LString "  ;; if zero, else div_s using the stashed value (unbox once, not twice).")) (ELit (LString "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)"))) (EApp (EApp (EApp (EVar "u64DivArmW") (EVar "u64")) (ELit (LString "i64.div_u"))) (EVar "valueDivZeroTrapW"))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (f64.div")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then")))) (EVar "valueDivZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
+(DTypeSig true "valueModRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueModRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`")) (ELit (LString "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native")) (ELit (LString "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).")) (ELit (LString "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.")) (ELit (LString "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (local $vdr i64)"))) (EApp (EApp (EApp (EVar "u64DivArmW") (EVar "u64")) (ELit (LString "i64.rem_u"))) (EVar "valueModZeroTrapW"))) (EListLit (ELit (LString "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (struct.new $float (call $mdk_float_rem")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "        (if (i64.eqz (local.get $vdr)) (then")))) (EVar "valueModZeroTrapW")) (EListLit (ELit (LString "        ))")) (ELit (LString "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))")))))
+(DTypeSig true "valueCmpNumRuntimeLines" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueCmpNumRuntimeLines" ((PVar "u64")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --")) (ELit (LString "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))"))) (EApp (EVar "u64EqArmW") (EVar "u64"))) (EListLit (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.eq")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i64.eq (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))")) (ELit (LString "  (func $mdk_value_cmp_num (param $a (ref eq)) (param $b (ref eq)) (result i32)")) (ELit (LString "    (local $fa f64) (local $fb f64) (local $ia i64) (local $ib i64)")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then")) (ELit (LString "        (local.set $fa (struct.get $float 0 (ref.cast (ref $float) (local.get $a))))")) (ELit (LString "        (local.set $fb (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))")) (ELit (LString "        (if (f64.lt (local.get $fa) (local.get $fb)) (then (return (i32.const -1))))")) (ELit (LString "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))")) (ELit (LString "        (return (i32.const 0))))")))) (EApp (EVar "u64CmpArmW") (EVar "u64"))) (EListLit (ELit (LString "    (local.set $ia (call $mdk_unbox_int (local.get $a)))")) (ELit (LString "    (local.set $ib (call $mdk_unbox_int (local.get $b)))")) (ELit (LString "    (if (i64.lt_s (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))")) (ELit (LString "    (if (i64.gt_s (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))")) (ELit (LString "    (i32.const 0))")) (ELit (LString "  (func $mdk_value_lt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.lt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.lt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_le_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.le")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.le_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_gt_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.gt")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.gt_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")) (ELit (LString "  (func $mdk_value_ge_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))")) (ELit (LString "    (if (ref.test (ref $float) (local.get $a))")) (ELit (LString "      (then (return (ref.i31 (f64.ge")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))")) (ELit (LString "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))))")) (ELit (LString "    (ref.i31 (i32.ge_s (call $mdk_value_cmp_num (local.get $a) (local.get $b)) (i32.const 0))))")))))
 (DTypeSig true "rngStateGlobalLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "rngStateGlobalLines" () (EListLit (ELit (LString "  (global $mdk_rng_state (mut i64) (i64.const 0))"))))
 (DTypeSig true "rngRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))

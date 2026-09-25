@@ -1,5 +1,5 @@
 # META
-source_lines=2151
+source_lines=2152
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -1496,6 +1496,7 @@ roleOf (TInterpOpen _) _ _ _ = Some 5
 roleOf (TInterpMid _) _ _ _ = Some 5
 roleOf (TInterpEnd _) _ _ _ = Some 5
 roleOf (TInt _ _) _ _ _ = Some 6
+roleOf (TWideInt _ _ _) _ _ _ = Some 6
 roleOf (TFloat _) _ _ _ = Some 6
 roleOf (TBool _) _ _ _ = Some 0
 roleOf t _ _ _ = if isKeywordTok t then Some 0 else None
@@ -2472,6 +2473,7 @@ unit = ()
 (DFunDef false "roleOf" ((PCon "TInterpMid" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpEnd" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInt" PWild PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 6))))
+(DFunDef false "roleOf" ((PCon "TWideInt" PWild PWild PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 6))))
 (DFunDef false "roleOf" ((PCon "TFloat" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 6))))
 (DFunDef false "roleOf" ((PCon "TBool" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 0))))
 (DFunDef false "roleOf" ((PVar "t") PWild PWild PWild) (EIf (EApp (EVar "isKeywordTok") (EVar "t")) (EApp (EVar "Some") (ELit (LInt 0))) (EVar "None")))
@@ -2922,6 +2924,7 @@ unit = ()
 (DFunDef false "roleOf" ((PCon "TInterpMid" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInterpEnd" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TInt" PWild PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 6))))
+(DFunDef false "roleOf" ((PCon "TWideInt" PWild PWild PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 6))))
 (DFunDef false "roleOf" ((PCon "TFloat" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 6))))
 (DFunDef false "roleOf" ((PCon "TBool" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 0))))
 (DFunDef false "roleOf" ((PVar "t") PWild PWild PWild) (EIf (EApp (EVar "isKeywordTok") (EVar "t")) (EApp (EVar "Some") (ELit (LInt 0))) (EVar "None")))
