@@ -94,6 +94,8 @@
 import array.{get, make, concat, range, makeWith}
 import bytes as B
 import bytes.{Bytes}
+import u8 as U8
+import u32 as U32
 import lib.bitio.{
   BitWriter,
   newBitWriter,
@@ -333,7 +335,7 @@ hasHash pos n = pos + 2 < n
 
 byteAt : Bytes -> Int -> Int
 byteAt arr i = match B.get i arr
-  Some v => v
+  Some v => U8.toInt v
   None => panic "deflate: byteAt index \{i} out of range (unreachable)"
 
 -- The chain link stored at position `p`: the previous position with the same
@@ -622,7 +624,7 @@ gzipCompress input =
   let payload = deflate input
   let crc = crc32 input
   let isize = bitAnd (B.length input) mask32
-  B.concat [emitGzipHeader hdr, payload, emitGzipTrailer crc isize]
+  B.concat [emitGzipHeader hdr, payload, emitGzipTrailer (U32.toInt crc) isize]
 
 -- ---------------------------------------------------------------------------
 -- Tests — hand-derived exact bytes (`test`), and properties checked against

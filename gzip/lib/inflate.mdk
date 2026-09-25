@@ -40,6 +40,8 @@ import array.{get, make, sliceClamped}
 import vector.{Vector, new, push, get as maGet, toArray, fromList}
 import bytes as B
 import bytes.{Bytes}
+import u8 as U8
+import u32 as U32
 import lib.bitio.{
   BitReader,
   newBitReader,
@@ -160,7 +162,7 @@ pushAllGo bytes i n out
   | i >= n = ()
   | otherwise = match B.get i bytes
     Some b =>
-      let _ = push b out
+      let _ = push (U8.toInt b) out
       pushAllGo bytes (i + 1) n out
     None => ()
 
@@ -510,7 +512,7 @@ gunzipMember bytes = do
   let payload = B.sliceClamped off (n - 8) bytes
   decoded <- inflate payload
   (storedCrc, storedIsize) <- parseGzipTrailer bytes
-  _ <- checkCrc (crc32 decoded) storedCrc
+  _ <- checkCrc (U32.toInt (crc32 decoded)) storedCrc
   _ <- checkIsize (B.length decoded) storedIsize
   Ok decoded
 

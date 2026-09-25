@@ -7,15 +7,17 @@
 -- use and cached, not recomputed per call); the message bytes checksummed
 -- by `crc32`/`adler32` are `Bytes`.
 --
--- Medaka's `Int` is 63-bit, so every place the algorithm assumes 32-bit
--- wraparound is masked explicitly with `crc32Mask` (0xFFFFFFFF).
--- `shiftRight` is a LOGICAL (unsigned) shift (stdlib/runtime.mdk), which is
--- exactly what the reflected CRC algorithm needs — an arithmetic shift would
--- drag sign bits into the table build and the per-byte update.
+-- The CRC register, the polynomial and the table are `U32`, whose arithmetic
+-- is modulo 2^32, so the 32-bit wraparound the algorithm assumes is carried
+-- by the type rather than by a mask. `U32.shiftRight` is a logical shift,
+-- which is what the reflected algorithm needs. Adler-32 stays on `Int`: its
+-- sums are reduced modulo 65521, which is not a power-of-two wrap.
 
 import array.{makeWith, get, fromList}
 import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain}
+import u8 as U8
+import u32 as U32
 import test.{expectEqual}
 
 -- ---------------------------------------------------------------------------
@@ -23,13 +25,8 @@ import test.{expectEqual}
 -- ---------------------------------------------------------------------------
 
 -- The reflected CRC-32 (IEEE 802.3) polynomial, 0xEDB88320.
-crcPoly : Int
+crcPoly : U32
 crcPoly = 3988292384
-
--- 32-bit wraparound mask, 0xFFFFFFFF — Medaka's Int is 63-bit so this must
--- be applied explicitly everywhere the algorithm assumes 32-bit overflow.
-crc32Mask : Int
-crc32Mask = 4294967295
 
 -- Adler-32's modulus, the largest prime below 2^16 (RFC 1950 §2.2).
 adlerMod : Int
@@ -41,27 +38,31 @@ adlerMod = 65521
 
 -- One bit of the reflected-CRC table build: shift right, XOR the polynomial
 -- in if the bit shifted out was set.
-crcStep : Int -> Int
+crcStep : U32 -> U32
 crcStep c =
-  if bitAnd c 1 == 1 then bitXor crcPoly (shiftRight c 1) else shiftRight c 1
+  if U32.bitAnd c 1 == 1 then
+    U32.bitXor crcPoly (U32.shiftRight c 1)
+  else
+    U32.shiftRight c 1
 
 -- Fold `crcStep` over all 8 bits of the table entry for byte `n`.
-crcTableEntry : Int -> Int
+crcTableEntry : U32 -> U32
 crcTableEntry n =
   crcStep
     (crcStep (crcStep (crcStep (crcStep (crcStep (crcStep (crcStep n)))))))
 
--- The 256-entry reflected CRC-32 lookup table, built once.
-crcTable : Array Int
-crcTable = makeWith 256 crcTableEntry
+-- The 256-entry reflected CRC-32 lookup table, built once. `makeWith` hands
+-- out the indices 0..255, which `fromInt` converts without loss.
+crcTable : Array U32
+crcTable = makeWith 256 (i => crcTableEntry (fromInt i))
 
 -- | The CRC-32 initial register value, 0xFFFFFFFF.
 --
 -- > crc32Init
 -- 4294967295
 export
-crc32Init : Int
-crc32Init = crc32Mask
+crc32Init : U32
+crc32Init = 4294967295
 
 -- | Fold one byte into a running (un-finalized) CRC register. Streaming
 -- callers call this once per byte, then finalize once with `crc32Final`.
@@ -69,24 +70,24 @@ crc32Init = crc32Mask
 -- > crc32Final (crc32Update crc32Init 97)
 -- 3904355907
 export
-crc32Update : Int -> Int -> Int
+crc32Update : U32 -> U8 -> U32
 crc32Update crc byte =
-  let idx = bitAnd (bitXor crc byte) 255
+  let idx = U32.toInt (U32.bitAnd (U32.bitXor crc (U32.fromU8 byte)) 255)
   match get idx crcTable
-    Some entry => bitXor entry (shiftRight crc 8)
+    Some entry => U32.bitXor entry (U32.shiftRight crc 8)
     -- idx is bitAnd _ 255, so it is always 0..255 and crcTable always has
     -- 256 entries — this arm cannot be reached by any input. Panic rather
     -- than silently returning `crc` unchanged: a violated invariant here
     -- must be loud, not a quietly wrong checksum.
     None => panic "crc32Update: table index out of 0..255 range (unreachable)"
 
--- | Finalize a running CRC register: invert (XOR 0xFFFFFFFF).
+-- | Finalize a running CRC register: invert every bit (XOR 0xFFFFFFFF).
 --
 -- > crc32Final crc32Init
 -- 0
 export
-crc32Final : Int -> Int
-crc32Final crc = bitXor crc crc32Mask
+crc32Final : U32 -> U32
+crc32Final crc = U32.bitNot crc
 
 -- | CRC-32 (IEEE, gzip's checksum) of a byte sequence — the one-shot form of
 -- `crc32Init` / `crc32Update` / `crc32Final`.
@@ -94,7 +95,7 @@ crc32Final crc = bitXor crc crc32Mask
 -- > crc32 (fromArrayAssumeByteDomain (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
 -- 3421780262
 export
-crc32 : Bytes -> Int
+crc32 : Bytes -> U32
 crc32 bytes = crc32Final (B.fold crc32Update crc32Init bytes)
 
 -- ---------------------------------------------------------------------------
@@ -118,7 +119,7 @@ adlerStep pair byte =
 export
 adler32 : Bytes -> Int
 adler32 bytes =
-  let (a, b) = B.fold adlerStep (1, 0) bytes
+  let (a, b) = B.fold (acc byte => adlerStep acc (U8.toInt byte)) (1, 0) bytes
   shiftLeft b 16 + a
 
 -- ---------------------------------------------------------------------------
@@ -168,7 +169,10 @@ test "adler32 of high bytes (>= 0x80) matches zlib" =
 -- in if the bit shifted out was set" against a *freshly-XORed-in* byte),
 -- rather than via `crcTable`/`crc32Update`. It hardcodes its own copy of
 -- the polynomial (`refPoly`, NOT the module's `crcPoly` binding) so a
--- corruption of `crcPoly` cannot silently corrupt the reference too.
+-- corruption of `crcPoly` cannot silently corrupt the reference too. It also
+-- runs on `Int` with an explicit 32-bit mask (`refMask`) rather than on
+-- `U32`, so a defect in `U32`'s wrapping or bit operations makes the two
+-- sides disagree instead of corrupting both.
 --
 -- This is deliberately a different algorithm shape from the table-driven
 -- path — table lookup vs. per-bit loop — so a bug in the table build (wrong
@@ -179,6 +183,10 @@ test "adler32 of high bytes (>= 0x80) matches zlib" =
 -- so is a tautology that no crc32Update bug can break — this is not.
 refPoly : Int
 refPoly = 3988292384
+
+-- 0xFFFFFFFF, the reference's initial register and final XOR.
+refMask : Int
+refMask = 4294967295
 
 refCrcBit : Int -> Int
 refCrcBit c =
@@ -192,22 +200,23 @@ refCrcBits c 0 = c
 refCrcBits c n = refCrcBits (refCrcBit c) (n - 1)
 
 refCrc32 : Bytes -> Int
-refCrc32 bytes = bitXor (B.fold refCrcByte crc32Mask bytes) crc32Mask
+refCrc32 bytes =
+  bitXor (B.fold (crc b => refCrcByte crc (U8.toInt b)) refMask bytes) refMask
 
 prop "crc32 (table-driven) agrees with an independent bit-serial reference" (bytes : List Int) =
   let bs = map mask8 bytes
-  crc32 (fromArrayAssumeByteDomain (fromList bs))
+  U32.toInt (crc32 (fromArrayAssumeByteDomain (fromList bs)))
     == refCrc32 (fromArrayAssumeByteDomain (fromList bs))
 
 -- Mask an arbitrary generated Int down to a single byte (0..255).
 mask8 : Int -> Int
 mask8 n = bitAnd n 255
 
--- Every CRC-32 result is a genuine 32-bit value — catches 63-bit sign-bit
--- leakage, the specific way this algorithm could break on Medaka's Int.
+-- Every CRC-32 result widens to a genuine 32-bit value — catches 63-bit
+-- sign-bit leakage through the `U32` to `Int` conversion.
 prop "crc32 of a single byte lands in 0..0xFFFFFFFF" (b : Int) =
-  let c = crc32 (fromArrayAssumeByteDomain (fromList [mask8 b]))
-  c >= 0 && c <= crc32Mask
+  let c = U32.toInt (crc32 (fromArrayAssumeByteDomain (fromList [mask8 b])))
+  c >= 0 && c <= refMask
 
 -- Adler-32's `a` component is an independent re-derivation of half the
 -- algorithm (1 + sum of bytes, mod 65521) — a table/loop bug in `adlerStep`

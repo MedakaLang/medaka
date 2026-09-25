@@ -25,9 +25,9 @@
 --
 -- MTIME/XFL/OS are logically unsigned (uint32/uint8/uint8); `emitU32LE`
 -- truncates a negative or oversized `Int` to that width by construction
--- (masks its own low byte per round), and the XFL/OS emit sites mask
--- explicitly with `bitAnd _ 255` before calling `emitU8` (which panics on an
--- out-of-range byte rather than masking), so a header built from an
+-- (masks its own low byte per round), and the XFL/OS emit sites narrow
+-- explicitly with `U8.truncate` (the one conversion that keeps the low 8
+-- bits rather than refusing), so a header built from an
 -- out-of-range field still WRAPS on emit exactly the way `Int` wraps
 -- elsewhere in this codebase, rather than being rejected. `prop
 -- "emitGzipHeader/parseGzipHeader round-trips (numeric fields)"` below
@@ -56,6 +56,7 @@ import bytebuilder.{
 import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain}
 import string.{toUtf8, fromUtf8}
+import u8 as U8
 import array  -- brings `impl Foldable Array` (toList) into scope; see AGENTS.md bare-import note
 import test.{expectEqual, fail}
 
@@ -63,13 +64,13 @@ import test.{expectEqual, fail}
 -- Named constants (STYLE §12 — name the meaning)
 -- ---------------------------------------------------------------------------
 
-gzipMagic0 : Int
+gzipMagic0 : U8
 gzipMagic0 = 0x1F
 
-gzipMagic1 : Int
+gzipMagic1 : U8
 gzipMagic1 = 0x8B
 
-cmDeflate : Int
+cmDeflate : U8
 cmDeflate = 8
 
 flagFhcrc : Int
@@ -116,7 +117,7 @@ checkMagic magic
   | magic[0] == gzipMagic0 && magic[1] == gzipMagic1 = deferPure ()
   | otherwise = failWith "not a gzip stream (bad magic)"
 
-checkCm : Int -> ByteParser Unit
+checkCm : U8 -> ByteParser Unit
 checkCm cm
   | cm == cmDeflate = deferPure ()
   | otherwise =
@@ -129,12 +130,13 @@ checkReserved flg
     failWith "reserved FLG bits (5,6,7) must be 0, got FLG=\{flg}"
   | otherwise = deferPure ()
 
--- One NUL-terminated byte run (FNAME / FCOMMENT payload, NUL not included).
+-- One NUL-terminated byte run (FNAME / FCOMMENT payload, NUL not included),
+-- widened to `Int` for `fromUtf8`.
 nulTerminated : ByteParser (List Int)
 nulTerminated = defer
   bs <- many (satisfy (/= 0))
   _ <- byte 0
-  deferPure bs
+  deferPure (map U8.toInt bs)
 
 -- FEXTRA: 2-byte LE length, then that many bytes, discarded (no extra-field
 -- registry is modeled here).
@@ -172,7 +174,8 @@ gzipHeaderParser = defer
   _ <- checkMagic magic
   cm <- anyByte
   _ <- checkCm cm
-  flg <- anyByte
+  flgByte <- anyByte
+  let flg = U8.toInt flgByte
   _ <- checkReserved flg
   mtimeVal <- leUint 4
   xflVal <- anyByte
@@ -185,8 +188,8 @@ gzipHeaderParser = defer
     mtime = mtimeVal,
     name = nameVal,
     comment = commentVal,
-    xfl = xflVal,
-    os = osVal,
+    xfl = U8.toInt xflVal,
+    os = U8.toInt osVal,
   }
 
 {- | Parse a gzip member header. Returns the header and the byte offset at
@@ -269,10 +272,10 @@ emitGzipHeader h =
   emitU8 gzipMagic0 buf
   emitU8 gzipMagic1 buf
   emitU8 cmDeflate buf
-  emitU8 (flagsOf h) buf
+  emitU8 (fromInt (flagsOf h)) buf
   emitU32LE h.mtime buf
-  emitU8 (bitAnd h.xfl 255) buf
-  emitU8 (bitAnd h.os 255) buf
+  emitU8 (U8.truncate h.xfl) buf
+  emitU8 (U8.truncate h.os) buf
   emitOptionalField h.name buf
   emitOptionalField h.comment buf
   buildBytes buf
