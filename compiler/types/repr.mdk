@@ -13,8 +13,13 @@
 -- Effect domains and rows have their own owners. Import those representations
 -- directly from effect_domain/effect_rows rather than through this module.
 
+import types.effect_authority.{
+  Authority(..), Authvar(..), authvarId, authvarName, authNorm,
+  renderAuthorityWith
+}
 import types.effect_rows.{
   renderAtoms,
+  renderAtomsWith,
   Atom(..),
   effrowNorm,
   effrowLabels,
@@ -166,6 +171,12 @@ public export data Mono =
   | TFun Mono EffRow Mono
   -- arg -> <effect row> result
   | TEff EffRow
+  -- A qualified value type `τ @q`: the value's domain-directed abstraction is
+  -- bounded by the authority `q`.  Introduced by a signature's named argument
+  -- (`(path : String)` elaborates its domain to `String @κ`) or an explicit
+  -- `@p`; forgotten safely toward the plain type, never invented from one.
+  -- Erases before any runtime layout.
+  | TQual Mono Authority
 
 -- An effect row occupying a type-CONSTRUCTOR ARGUMENT slot, for a data type
 -- with an effect-row parameter (`data Async e a = … <e> …`).  Produced ONLY
@@ -184,11 +195,12 @@ public export data Tyvar =
 -- states the identity class it claims, so a reviewer grades a CALL rather than
 -- re-deriving what a bare third argument meant.
 
--- forall <quantified tyvar ids> <quantified effvar ids>. mono
--- A generalized term binding: type and row binders scope over BOTH the value
--- and its forcing effect. Strict locals, constructors and functions have an
--- empty forcing row; lazy top-level initializers retain their evaluation row.
-public export data Scheme = Forall (List Int) (List Int) EffRow Mono
+-- forall <quantified tyvar ids> <quantified effvar ids> <quantified authvar ids>. mono
+-- A generalized term binding: type, row and authority binders scope over BOTH
+-- the value and its forcing effect and are instantiated together under one
+-- substitution. Strict locals, constructors and functions have an empty
+-- forcing row; lazy top-level initializers retain their evaluation row.
+public export data Scheme = Forall (List Int) (List Int) (List Int) EffRow Mono
 
 -- #838 I1: the unified obligation record.  `pred.args` is the
 -- ALREADY-PROJECTED dispatch/argument vector — exactly the call channel's existing
@@ -317,7 +329,7 @@ normalizeLink cell t = match t
 -- ── rendering ─────────────────────────────────────────────────────────────
 export
 ppScheme : Scheme -> String
-ppScheme (Forall _ _ force t) = ppBinding (Ref []) (Ref 0) force t
+ppScheme (Forall _ _ _ force t) = ppBinding (Ref []) (Ref 0) force t
 
 ppBinding : Ref (List (Int, String)) -> Ref Int -> EffRow -> Mono -> String
 ppBinding ctx cnt force t = match rowFlat force
@@ -330,7 +342,7 @@ ppEffectPrefix : Ref (List (Int, String)) ->
   String
 ppEffectPrefix _ _ ([], []) = ""
 ppEffectPrefix ctx cnt (labels, members) =
-  let atoms = renderAtoms labels
+  let atoms = renderAtomsWith (ppAuthvarName ctx cnt) labels
   let tails = joinWith " | " (map (ppEffvarName ctx cnt) members)
   let inside =
     if atoms == "" then
@@ -352,7 +364,7 @@ ppEffectPrefix ctx cnt (labels, members) =
 export
 ppSchemeCon : List VecObl -> Scheme -> String
 ppSchemeCon [] s = ppScheme s
-ppSchemeCon cons (Forall _ _ force t) =
+ppSchemeCon cons (Forall _ _ _ force t) =
   let ctx = Ref []
   let cnt = Ref 0
   let body = ppBinding ctx cnt force t
@@ -433,6 +445,51 @@ ppGo ctx cnt prec t = match normalize t
   TApp a b => ppApp ctx cnt prec a b
   TFun a eff b => ppFun ctx cnt prec a eff b
   TEff r => ppEffArg ctx cnt r
+  TQual inner q => ppQual ctx cnt prec inner q
+
+-- `T @p` outside an arrow domain (an arrow domain renders as the named
+-- argument `(p : T)` in `ppFun`, the form a signature writes).
+export
+ppQual : Ref (List (Int, String)) ->
+  Ref Int ->
+  Int ->
+  Mono ->
+  Authority ->
+  String
+ppQual ctx cnt prec inner q =
+  wrapIf (prec > 2) "\{ppGo ctx cnt 3 inner} @\{ppAuthority ctx cnt q}"
+
+-- The authority term without a leading space, under the shared naming context.
+export
+ppAuthority : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+ppAuthority ctx cnt q =
+  let s = renderAuthorityWith (ppAuthvarName ctx cnt) q
+  if stringLength s > 0 && stringSlice 0 1 s == " " then
+    stringSlice 1 (stringLength s) s
+  else
+    s
+
+-- A signature binder's own name where it has one and is not already taken by
+-- a different variable in this context; otherwise a letter from a private
+-- namespace, as an effect variable takes one.
+export
+ppAuthvarName : Ref (List (Int, String)) -> Ref Int -> Ref Authvar -> String
+ppAuthvarName ctx cnt cell =
+  let key = authvarId cell + 2000000
+  match lookupAssocI key !ctx
+    Some s => s
+    None => match authvarName cell
+      Some n =>
+        if nameTaken n !ctx then
+          assignName ctx cnt key
+        else
+          ctx := (key, n) :: !ctx
+          n
+      None => assignName ctx cnt key
+
+nameTaken : String -> List (Int, String) -> Bool
+nameTaken _ [] = False
+nameTaken n ((_, s) :: rest) = s == n || nameTaken n rest
 
 -- Render a row sitting in type-argument position (the `e` of `Async e a`).  Bare
 -- open tail → the row var's name (reads `Async e a`); labels → `<IO>`/`<IO | e>`;
@@ -444,7 +501,7 @@ ppEffArg ctx cnt r = match effrowNorm r
   EffRow labels tail =>
     let lbl = match labels
       [] => ""
-      ls => renderAtoms ls
+      ls => renderAtomsWith (ppAuthvarName ctx cnt) ls
     let tailS = match tail
       Some cell => ppEffvarName ctx cnt cell
       None => ""
@@ -500,10 +557,18 @@ ppFun : Ref (List (Int, String)) ->
   Mono ->
   String
 ppFun ctx cnt prec a eff b =
-  let sa = ppGo ctx cnt 2 a
+  let sa = ppDomain ctx cnt a
   let se = ppEffectPrefix ctx cnt (rowFlat eff)
   let sb = ppGo ctx cnt 1 b
   wrapIf (prec > 1) "\{sa} -> \{se}\{sb}"
+
+-- A qualified arrow domain renders as the named argument that introduces
+-- it, `(p : T)`, so a printed scheme is the signature a user would write.
+ppDomain : Ref (List (Int, String)) -> Ref Int -> Mono -> String
+ppDomain ctx cnt a = match normalize a
+  TQual inner (AVar cell) =>
+    "(\{ppAuthvarName ctx cnt cell} : \{ppGo ctx cnt 0 inner})"
+  _ => ppGo ctx cnt 2 a
 
 export
 effStr : List Atom -> String

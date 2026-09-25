@@ -1,0 +1,13 @@
+-- Two prefix authorities joined across branches render as their longest
+-- common prefix with a trailing wildcard, which is written syntax: the
+-- inferred scheme copied into a signature is accepted as the same row.
+effect Net Prefix
+
+extern visit : (host : String) -> <Net host, FFI> Unit
+
+joined b = if b then visit "a.com/x" else visit "a.com.evil/x"
+
+written : Bool -> <FFI, Net "a.com*"> Unit
+written b = if b then visit "a.com/x" else visit "a.com.evil/x"
+
+main = println 1

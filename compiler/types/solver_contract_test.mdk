@@ -72,8 +72,8 @@ resetCounts _ =
   seenGoalContexts := []
   seenDestinationContexts := []
 
-makeTestSubstitution : List Int -> List Int -> TestSubstitution
-makeTestSubstitution typeVariables effectVariables =
+makeTestSubstitution : List Int -> List Int -> List Int -> TestSubstitution
+makeTestSubstitution typeVariables effectVariables _ =
   let serial = !makeCount + 1
   makeCount := serial
   seenTypeVariables := typeVariables
@@ -197,6 +197,7 @@ sharedScheme = QualifiedScheme {
     Forall
       [101, 103]
       [202, 204]
+      []
       (EffRow [] (Some oldEffectCell))
       (TFun
         (TVar oldTypeCell)
@@ -381,7 +382,7 @@ test "one type/effect substitution is shared and each instantiation is fresh" =
 
 vectorScheme : QualifiedScheme
 vectorScheme = QualifiedScheme {
-  hm = Forall [] [] (EffRow [] None) (TRigid "body"),
+  hm = Forall [] [] [] (EffRow [] None) (TRigid "body"),
   qualifiers = [
     Qualifier {
       predicate = ClassPredicate {

@@ -1,0 +1,2 @@
+main : <IO> Unit
+ok : (p : String) -> <FileRead p> Result String String

@@ -14,22 +14,30 @@ test "arrow rendering preserves open tails and shared row identities" =
   expectAll [
     expectEqual
       "(Unit -> <a> Unit) -> <Audit | a | b> Unit"
-      (ppScheme (Forall [] [7, 8] (EffRow [] None) body)),
+      (ppScheme (Forall [] [7, 8] [] (EffRow [] None) body)),
     expectEqual
       "<a> ((Unit -> <a> Unit) -> <Audit | a | b> Unit)"
-      (ppScheme (Forall [] [7, 8] (EffRow [] (Some input)) body)),
+      (ppScheme (Forall [] [7, 8] [] (EffRow [] (Some input)) body)),
   ]
 
 test "binding renderers distinguish forcing from a latent arrow" = expectAll [
-  expectEqual "Unit" (ppScheme (Forall [] [] (EffRow [] None) (TRigid "Unit"))),
+  expectEqual
+    "Unit"
+    (ppScheme (Forall [] [] [] (EffRow [] None) (TRigid "Unit"))),
   expectEqual
     "<Audit> Unit"
     (ppScheme
-      (Forall [] [] (EffRow [atomBuiltin "Audit" PUnit] None) (TRigid "Unit"))),
+      (Forall
+        []
+        []
+        []
+        (EffRow [atomBuiltin "Audit" PUnit] None)
+        (TRigid "Unit"))),
   expectEqual
     "<Audit> (Unit -> Unit)"
     (ppScheme
       (Forall
+        []
         []
         []
         (EffRow [atomBuiltin "Audit" PUnit] None)
@@ -41,9 +49,14 @@ test "force and value indices share rendered quantified row names" =
   let row = EffRow [] (Some cell)
   let body = TApp (TRigid "Box") (TEff row)
   expectAll [
-    expectEqual "<a> Box a" (ppScheme (Forall [] [7] row body)),
+    expectEqual "<a> Box a" (ppScheme (Forall [] [7] [] row body)),
     expectEqual
       "<Audit | a> Box a"
       (ppScheme
-        (Forall [] [7] (EffRow [atomBuiltin "Audit" PUnit] (Some cell)) body)),
+        (Forall
+          []
+          [7]
+          []
+          (EffRow [atomBuiltin "Audit" PUnit] (Some cell))
+          body)),
   ]

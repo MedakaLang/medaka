@@ -1,11 +1,11 @@
--- WS-3b EXEC hole-fill ⊑ ACCEPT.  `runCommand : String -> List String ->
--- <Exec> …` carries the universal hole; the call-site α recovers the literal
--- argv0 "/usr/bin/ls" and the DOMAIN-DIRECTED fill builds the Prefix pattern
--- <Exec "/usr/bin/ls"> (Prefix domain).  Declared bound <Exec "/usr/bin/*">
--- (a prefix pattern) ADMITS "/usr/bin/ls" ⇒ ACCEPT.
-effect Exec Prefix
+-- EXEC named-argument ⊑ ACCEPT.  `runCommand : (program : String) ->
+-- List String -> <Exec program> …` binds its Exec authority to argv0; at the
+-- call site that argument is the literal "/usr/bin/ls", so the atom is the
+-- Prefix pattern <Exec "/usr/bin/ls"> (Prefix domain).  Declared bound
+-- <Exec "/usr/bin/*"> (a prefix pattern) ADMITS "/usr/bin/ls" ⇒ ACCEPT.
+-- Exec is the builtin Prefix-domain label; a local declaration would be another label
 
-extern runCommand : String -> List String -> <Exec> Result String (Int, String, String)
+extern runCommand : (program : String) -> List String -> <Exec program> Result String (Int, String, String)
 
 runLs : Unit -> <Exec "/usr/bin/*", FFI> Result String (Int, String, String)
 runLs _ = runCommand "/usr/bin/ls" []

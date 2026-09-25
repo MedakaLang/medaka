@@ -6,6 +6,7 @@ import test.{expectAll, expectEqual, expectGreaterThan, expectLessThan}
 import list.{range, replicate}
 import support.opcount.{opBump, opSnap, setOpCounting}
 import types.effect_domain.{Param(..)}
+import types.effect_authority.{Authority(..)}
 import types.effect_rows.{
   atomBuiltin, atomsUnion, renderAtoms, EffRow(..), effrowLabels
 }
@@ -118,6 +119,11 @@ ops harness modes collector = ValueJoinOps {
   vjoFreshType = freshType harness,
   vjoFreshRow = freshRow harness,
   vjoCollectRows = collector,
+  vjoFreshAuth = top => AConst top,
+  vjoCollectAuth =
+    qs => match qs
+      q :: _ => q
+      [] => AConst PUnit,
 }
 
 arrow : EffRow -> Mono

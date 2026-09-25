@@ -551,7 +551,7 @@ effectHoleSnapshot = "test/snapshots/diff_fixtures_types/effect_param_hole.md"
 effectHoleWs2Src : String
 effectHoleWs2Src = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch _ =",
   "  let dest = \"a.com/foo\"",
   "  netGet dest",
@@ -562,7 +562,7 @@ effectHoleWs2Src = unlines [
 effectHoleRejectSiblingSrc : String
 effectHoleRejectSiblingSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
   "fetch _ = netGet \"a.com.evil.com/x\"",
   "main : <IO> Unit",
@@ -572,7 +572,7 @@ effectHoleRejectSiblingSrc = unlines [
 effectHoleRejectComputedSrc : String
 effectHoleRejectComputedSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch : String -> <FFI, Net \"a.com/*\"> String",
   "fetch url = netGet url",
   "main : <IO> Unit",
@@ -582,7 +582,7 @@ effectHoleRejectComputedSrc = unlines [
 effectHoleRejectOuterComputedSrc : String
 effectHoleRejectOuterComputedSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : String -> <FFI, Net> String",
+  "extern netGet : (url : String) -> <FFI, Net url> String",
   "fetch : String -> <FFI, Net \"a.com/*\"> String",
   "fetch url =",
   "  let dest = url",
@@ -628,12 +628,12 @@ effectHoleFailures =
           let acceptFail =
             if hasParseErr natText then
               Some
-                "native-cli/check emitted an error accepting the <Net> hole fixture"
+                "native-cli/check emitted an error accepting the named-extern fixture"
             else
               None
           let inferFail =
             if containsAll natText [
-              "netGet : String -> <FFI, Net> String",
+              "netGet : (url : String) -> <FFI, Net url> String",
               "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
             ] then
               None
@@ -726,7 +726,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 107
+typecheckErrorFixtureCount = 116
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -734,6 +734,15 @@ typecheckErrorFixtureCount = 107
    the prelude-aware driver; every other fixture runs through both. -}
 typecheckPreludeDep : List String
 typecheckPreludeDep = [
+  "effect_named_authority_launder.mdk",
+  "effect_named_authority_ok.mdk",
+  "effect_named_authority_dynamic_launder.mdk",
+  "effect_named_authority_binder_errors.mdk",
+  "effect_named_authority_ref_launder.mdk",
+  "effect_named_authority_ref_ok.mdk",
+  "effect_rename_destination_launder.mdk",
+  "effect_rename_destination_ok.mdk",
+  "effect_prefix_join_render.mdk",
   "effect_deferred_callback_launder.mdk",
   "effect_deferred_callback_eager_ok.mdk",
   "int_vs_string.mdk",

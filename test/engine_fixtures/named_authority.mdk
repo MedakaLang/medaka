@@ -1,0 +1,21 @@
+-- Named authorities erase: a signature's named argument binds the authority of
+-- its effect atom, the body is checked against it, and at runtime nothing
+-- remains of the binder.  Every engine must print the same three lines.  The
+-- label is declared here so the fixture needs no host extern: a declared row
+-- may be wider than what the body performs.
+effect Audit Prefix
+
+tag : (p : String) -> <Audit p> String
+tag p = p ++ "!"
+
+sub : (p : String) -> <Audit p> String
+sub p = tag (p ++ "/x")
+
+pick : Bool -> <Audit "cfg/*"> String
+pick b = if b then tag "cfg/a" else sub "cfg/b"
+
+main : <Audit "cfg/*", IO> Unit
+main =
+  println (tag "cfg/app")
+  println (sub "cfg/app")
+  println (pick False)

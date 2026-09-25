@@ -66,10 +66,15 @@ EXPORT
 NEWLINE
 IDENT "stat"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -121,10 +126,15 @@ EXPORT
 NEWLINE
 IDENT "isDir"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -150,10 +160,15 @@ EXPORT
 NEWLINE
 IDENT "isFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -179,10 +194,15 @@ EXPORT
 NEWLINE
 IDENT "fileSize"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -208,18 +228,31 @@ EXPORT
 NEWLINE
 IDENT "copyFile"
 COLON
+LPAREN
+IDENT "src"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
+LPAREN
+IDENT "dst"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "src"
 COMMA
 UPPER "FileWrite"
+IDENT "dst"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "copyFile"
 IDENT "src"

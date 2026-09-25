@@ -114,20 +114,19 @@ dotFor : Expr -> Token -> ParserE <> Expr
 dotTail : Expr -> ParserE <> Expr
 dottedGo : Expr -> List String -> Expr -> Expr
 dropFirst : List a -> List a
-effAtomP : ParserE <> (String, Option String)
+effAtomP : ParserE <> EffAtomTy
 effDomainFor : Token -> ParserE <> (Option String)
 effDomainP : ParserE <> (Option String)
-effParamDispatch : Token -> Token -> ParserE <> (Option String)
-effParamFor : Token -> ParserE <> (Option String)
-effParamP : ParserE <> (Option String)
-effectBody : ParserE <> (List (String, Option String), List String)
-effectBodyFor : Token -> ParserE <> (List (String, Option String), List String)
+effHoleRetiredMsg : String
+effParamDispatch : Token -> Token -> ParserE <> EffParamTy
+effParamFor : Token -> ParserE <> EffParamTy
+effParamP : ParserE <> EffParamTy
+effSetLiteralP : ParserE <> EffParamTy
+effectBody : ParserE <> (List EffAtomTy, List String)
+effectBodyFor : Token -> ParserE <> (List EffAtomTy, List String)
 elseBranch : ParserE <> Expr
 elsePresent : ParserE <> Expr
 emit : a -> ParserE <> a
-encodeAxis : (String, String) -> String
-encodeProductParam : List (String, String) -> String
-encodeSetParam : List String -> String
 endsDecl : Token -> Bool
 eqGuardIfMsg : String
 eqGuardShapeFrom : Array Token -> Int -> Int -> Bool
@@ -257,7 +256,6 @@ isOpenDelim : Token -> Bool
 isPlainIdentTok : Token -> Bool
 isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
-joinSemi : List String -> String
 kindArrowRest : KindAnn -> Token -> ParserE <> KindAnn
 kindAtomEmit : KindAnn -> ParserE <> KindAnn
 kindAtomFor : Token -> ParserE <> KindAnn
@@ -328,10 +326,11 @@ methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Opti
 missingWhereIfaceMsg : String
 missingWhereImplMsg : String
 mkAttr : String -> Option String -> Attr
-mkEffect : (List (String, Option String), List String) -> Ty -> Ty
+mkEffect : (List EffAtomTy, List String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
-mkRow : (List (String, Option String), List String) -> Loc -> Ty
+mkRow : (List EffAtomTy, List String) -> Loc -> Ty
+namedArgNeedsArrowMsg : String
 namedImplRemovedMsg : String
 negIntPat : ParserE <> Pat
 negIntRng : Lit -> ParserE <> Pat
@@ -497,13 +496,13 @@ positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
 positionsVariantLines : Positions -> List Int
 postfixTail : Expr -> ParserE <> Expr
-productAxes : ParserE <> (List (String, String))
-productAxesMore : ParserE <> (List (String, String))
-productAxesMoreFor : Token -> Token -> ParserE <> (List (String, String))
-productAxis : ParserE <> (String, String)
-productAxisVal : ParserE <> String
-productAxisValFor : Token -> ParserE <> String
-productParamP : ParserE <> (Option String)
+productAxes : ParserE <> (List (String, EffParamTy))
+productAxesMore : ParserE <> (List (String, EffParamTy))
+productAxesMoreFor : Token -> Token -> ParserE <> (List (String, EffParamTy))
+productAxis : ParserE <> (String, EffParamTy)
+productAxisVal : ParserE <> EffParamTy
+productAxisValFor : Token -> ParserE <> EffParamTy
+productParamP : ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
 propParam : ParserE <> PropParam
 rangeAfter : Expr -> Bool -> ParserE <> Expr
@@ -566,6 +565,7 @@ tupleCtorTailFor : Int -> Token -> ParserE <> Ty
 tupleCtorTyName : Int -> String
 tupleCtorTyOfArity : Int -> ParserE <> Ty
 tuplePatOrSingle : List Pat -> Pat
+tyAfterApp : Ty -> ParserE <> Ty
 tyAppSpine : Ty -> Option (String, List Ty)
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
 tyApplyAll : Ty -> List Ty -> Ty
@@ -577,6 +577,8 @@ tyFor : Token -> ParserE <> Ty
 tyParamFor : Token -> ParserE <> (String, Option KindAnn)
 tyParamP : ParserE <> (String, Option KindAnn)
 tyParamsP : ParserE <> (List (String, Option KindAnn))
+tyQualTail : Ty -> ParserE <> Ty
+tyQualTailFor : Ty -> Token -> Token -> ParserE <> Ty
 tyTupleOrSingle : List Ty -> Ty
 unaryFor : Token -> ParserE <> Expr
 unexpectedLeftoverMsg : String -> Array Token -> Array Int -> Int -> Int -> String

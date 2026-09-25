@@ -109,7 +109,7 @@ on `[waitRead fd]`, or on `[waitRead fd, deadline]` to give up after a
 ## `waitRead`
 
 ```
-waitRead : Int -> Wait <Net _ | e>
+waitRead : Int -> Wait <Net | e>
 waitRead fd
 ```
 
@@ -120,7 +120,7 @@ Polls the descriptor, so `<Net>` joins `e`.
 ## `waitWrite`
 
 ```
-waitWrite : Int -> Wait <Net _ | e>
+waitWrite : Int -> Wait <Net | e>
 waitWrite fd
 ```
 

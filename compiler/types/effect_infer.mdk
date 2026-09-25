@@ -1,7 +1,13 @@
 -- Scoped effect collection. A capture observes performed rows without solving
 -- them; inference allowances and signature constraints belong to the checker.
 import types.effect_rows.{EffRow(..), Effvar, collectRows}
-import support.util.{reverseL}
+import types.effect_domain.{Param(..), canonParam, productNorm, subTopOf}
+import types.effect_authority.{Authority(..), authJoin, authTop}
+import types.repr.{Mono(..), normalize}
+import frontend.ast.{
+  Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..)
+}
+import support.util.{reverseL, lookupAssoc}
 
 export
 recordEffect : Ref (List EffRow) -> EffRow -> Unit
@@ -20,3 +26,106 @@ captureEffects ambient makeJoin body =
   let performed = collectRows makeJoin (reverseL !ambient)
   ambient := saved
   (result, performed)
+
+-- ── the abstraction α ──────────────────────────────────────────────────────
+-- The authority a string-producing expression may denote, in the domain of
+-- the label it flows to: a literal is that literal; a prefix-domain
+-- concatenation is bounded by its left operand; `if`/`match` join their
+-- branches; a `let`-bound name reads its definition; a value whose checked
+-- type is qualified reads the qualifier; anything else is the domain's top.
+-- Over-approximation is the only sound direction, so an unknown shape is top.
+export
+alphaOf : Param ->
+  (String -> Option Mono) ->
+  List (String, Expr) ->
+  Expr ->
+  Mono ->
+  Authority
+alphaOf top varType lets e ty = match alphaSyntax top varType lets e
+  Some q => q
+  None => typeAuthority top ty
+
+-- The qualifier a checked type carries, else the domain's top.
+export
+typeAuthority : Param -> Mono -> Authority
+typeAuthority top ty = match normalize ty
+  TQual _ q => q
+  _ => authTop top
+
+alphaSyntax : Param ->
+  (String -> Option Mono) ->
+  List (String, Expr) ->
+  Expr ->
+  Option Authority
+alphaSyntax top vt lets (ELoc _ e) = alphaSyntax top vt lets e
+alphaSyntax top vt lets (EDoOrigin _ e) = alphaSyntax top vt lets e
+alphaSyntax top vt lets (EAnnot e _) = alphaSyntax top vt lets e
+alphaSyntax top vt lets (EHeadAnnot e _) = alphaSyntax top vt lets e
+alphaSyntax top _ _ (ELit (LString s)) = Some (literalAuthority top s)
+alphaSyntax top vt lets (EBinOp op a _ _)
+  | op == "++" = concatAuthority top vt lets a
+alphaSyntax _ _ _ (EBinOp _ _ _ _) = None
+alphaSyntax top vt lets (EVar x) = varAuthority top vt lets x
+alphaSyntax top vt lets (EVarId x _) = varAuthority top vt lets x
+alphaSyntax top vt lets (EVarAt x _) = varAuthority top vt lets x
+alphaSyntax top vt lets (ELet _ _ (PVar x _) e1 e2) =
+  alphaSyntax top vt ((x, e1) :: lets) e2
+alphaSyntax top vt lets (ELet _ _ _ _ e2) = alphaSyntax top vt lets e2
+alphaSyntax top vt lets (ELetGroup binds body) =
+  alphaSyntax top vt (collectBinds binds lets) body
+alphaSyntax top vt lets (EIf _ t f) =
+  joinBranches [alphaSyntax top vt lets t, alphaSyntax top vt lets f]
+alphaSyntax top vt lets (EMatch _ arms) =
+  joinBranches (map (arm => alphaSyntax top vt lets (armBody arm)) arms)
+alphaSyntax _ _ _ _ = None
+
+armBody : Arm -> Expr
+armBody (Arm _ _ rhs) = rhs
+
+-- A domain element from a literal: a Prefix pattern, a singleton Set, or a
+-- product's primary axis; an atomic label abstracts every value to its top.
+literalAuthority : Param -> String -> Authority
+literalAuthority (PPrefix _) s = AConst (canonParam (PPrefix (Some s)))
+literalAuthority (PSet _) s = AConst (PSet (Some [s]))
+literalAuthority (PProduct _) s =
+  AConst (productNorm [("Host", canonParam (PPrefix (Some s)))])
+literalAuthority top _ = authTop top
+
+-- In a prefix-shaped domain a justified left prefix bounds the whole; in the
+-- Set domain appending changes the member, so the result is top.
+concatAuthority : Param ->
+  (String -> Option Mono) ->
+  List (String, Expr) ->
+  Expr ->
+  Option Authority
+concatAuthority (top@(PPrefix _)) vt lets a = alphaSyntax top vt lets a
+concatAuthority (top@(PProduct _)) vt lets a = alphaSyntax top vt lets a
+concatAuthority _ _ _ _ = None
+
+-- A name reads its same-body `let` definition first, then its checked type.
+varAuthority : Param ->
+  (String -> Option Mono) ->
+  List (String, Expr) ->
+  String ->
+  Option Authority
+varAuthority top vt lets x = match lookupAssoc x lets
+  Some rhs => alphaSyntax top vt lets rhs
+  None => match vt x
+    Some ty => match normalize ty
+      TQual _ q => Some q
+      _ => None
+    None => None
+
+-- Every branch must be known for the join to say more than the top.
+joinBranches : List (Option Authority) -> Option Authority
+joinBranches [] = None
+joinBranches [q] = q
+joinBranches (q :: rest) = match (q, joinBranches rest)
+  (Some a, Some b) => Some (authJoin a b)
+  _ => None
+
+collectBinds : List LetBind -> List (String, Expr) -> List (String, Expr)
+collectBinds [] acc = acc
+collectBinds ((LetBind n clauses) :: rest) acc = match clauses
+  [FunClause [] rhs] => collectBinds rest ((n, rhs) :: acc)
+  _ => collectBinds rest acc

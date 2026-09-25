@@ -1,6 +1,6 @@
--- WS-3b EXEC hole-fill on the REAL stdlib builtin `runCommand` ⊄ REJECT.  α
--- fills <Exec "/usr/bin/ls"> from argv0; the declared bound <Exec "/bin/*">
--- does not cover "/usr/bin/ls" (different prefix) ⇒ REJECT
+-- EXEC named-argument reject on the REAL stdlib builtin `runCommand`.  Its
+-- Exec authority is argv0, the literal "/usr/bin/ls"; the declared bound
+-- <Exec "/bin/*"> does not cover "/usr/bin/ls" (different prefix) ⇒ REJECT
 -- (performs <Exec "/usr/bin/ls">).
 runLs : Unit -> <Exec "/bin/*"> Result String (Int, String, String)
 runLs _ = runCommand "/usr/bin/ls" []

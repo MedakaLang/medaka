@@ -68,7 +68,7 @@ instead of the whole job.
 ### `boundedVerb`
 
 ```
-boundedVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+boundedVerb : String -> List String -> <Exec> Result String (Int, String, String)
 boundedVerb cmd args
 ```
 
@@ -85,7 +85,7 @@ Ok (3, "hi", "")
 ### `boundedVerbSeconds`
 
 ```
-boundedVerbSeconds : Int -> String -> List String -> <Exec _> Result String (Int, String, String)
+boundedVerbSeconds : Int -> String -> List String -> <Exec> Result String (Int, String, String)
 boundedVerbSeconds secs cmd args
 ```
 
@@ -107,7 +107,7 @@ Ok (127, "", True)
 ### `scratchDir`
 
 ```
-scratchDir : <Exec _> Result String String
+scratchDir : <Exec "mktemp*"> Result String String
 ```
 
 A fresh, empty directory for a test that has to write files.
@@ -126,7 +126,7 @@ Ok True
 ### `expectSpawnOk`
 
 ```
-expectSpawnOk : String -> List String -> <Exec _> Expectation
+expectSpawnOk : (cmd : String) -> List String -> <Exec cmd> Expectation
 expectSpawnOk cmd args
 ```
 
@@ -145,7 +145,7 @@ Fail "`false` exited 1: \"\"" "exit 0" "exit 1"
 ### `expectSpawnFails`
 
 ```
-expectSpawnFails : String -> List String -> String -> <Exec _> Expectation
+expectSpawnFails : (cmd : String) -> List String -> String -> <Exec cmd> Expectation
 expectSpawnFails cmd args needle
 ```
 
@@ -166,7 +166,7 @@ Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing \"b
 ### `expectSpawnFailsAll`
 
 ```
-expectSpawnFailsAll : String -> List String -> List String -> <Exec _> Expectation
+expectSpawnFailsAll : (cmd : String) -> List String -> List String -> <Exec cmd> Expectation
 expectSpawnFailsAll cmd args needles
 ```
 
@@ -190,7 +190,7 @@ Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing [\"
 ### `expectSpawnOkLine`
 
 ```
-expectSpawnOkLine : String -> List String -> String -> <Exec _> Expectation
+expectSpawnOkLine : (cmd : String) -> List String -> String -> <Exec cmd> Expectation
 expectSpawnOkLine cmd args wantLine
 ```
 
@@ -229,7 +229,7 @@ None
 ### `testAssertionCount`
 
 ```
-testAssertionCount : String -> List String -> <Exec _, IO> Result String Int
+testAssertionCount : String -> List String -> <Exec, IO> Result String Int
 testAssertionCount path extraArgs
 ```
 
@@ -279,7 +279,7 @@ the entries.
 ### `unrosteredTestFiles`
 
 ```
-unrosteredTestFiles : String -> List String -> <FileRead _> Result String (List String)
+unrosteredTestFiles : String -> List String -> <FileRead> Result String (List String)
 unrosteredTestFiles dir known
 ```
 
@@ -291,7 +291,7 @@ test file in `dir` is accounted for.
 ### `missingTestFiles`
 
 ```
-missingTestFiles : String -> List String -> <FileRead _> Result String (List String)
+missingTestFiles : String -> List String -> <FileRead> Result String (List String)
 missingTestFiles dir wanted
 ```
 

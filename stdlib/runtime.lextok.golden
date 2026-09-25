@@ -112,10 +112,15 @@ NEWLINE
 EXTERN
 IDENT "readFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -124,10 +129,15 @@ NEWLINE
 EXTERN
 IDENT "readFileBytes"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -139,79 +149,122 @@ NEWLINE
 EXTERN
 IDENT "writeFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
+DEDENT
+NEWLINE
 EXTERN
 IDENT "writeFileBytes"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+DEDENT
 NEWLINE
 EXTERN
 IDENT "writeFileMode"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+DEDENT
 NEWLINE
 EXTERN
 IDENT "appendFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
+DEDENT
+NEWLINE
 EXTERN
 IDENT "fileExists"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Bool"
 NEWLINE
 EXTERN
 IDENT "fileMode"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -220,20 +273,30 @@ NEWLINE
 EXTERN
 IDENT "canonicalizePath"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "String"
 NEWLINE
 EXTERN
 IDENT "listDir"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -245,10 +308,15 @@ NEWLINE
 EXTERN
 IDENT "makeDir"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -257,10 +325,15 @@ NEWLINE
 EXTERN
 IDENT "removeFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -269,24 +342,44 @@ NEWLINE
 EXTERN
 IDENT "rename"
 COLON
+LPAREN
+IDENT "src"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
+LPAREN
+IDENT "dst"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "src"
+COMMA
+UPPER "FileWrite"
+IDENT "dst"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
+DEDENT
+NEWLINE
 EXTERN
 IDENT "fsync"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -295,10 +388,15 @@ NEWLINE
 EXTERN
 IDENT "removeDir"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -307,10 +405,15 @@ NEWLINE
 EXTERN
 IDENT "statFile"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
@@ -338,10 +441,15 @@ NEWLINE
 EXTERN
 IDENT "getEnv"
 COLON
+LPAREN
+IDENT "name"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "Env"
+IDENT "name"
 GT
 UPPER "Option"
 UPPER "String"
@@ -389,7 +497,11 @@ NEWLINE
 EXTERN
 IDENT "runCommand"
 COLON
+LPAREN
+IDENT "program"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 INDENT
 UPPER "List"
@@ -397,6 +509,7 @@ UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "program"
 GT
 UPPER "Result"
 UPPER "String"
@@ -483,10 +596,15 @@ NEWLINE
 EXTERN
 IDENT "netResolve"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -498,12 +616,17 @@ NEWLINE
 EXTERN
 IDENT "netTcpConnect"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -512,12 +635,17 @@ NEWLINE
 EXTERN
 IDENT "netTcpListen"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -711,12 +839,17 @@ NEWLINE
 EXTERN
 IDENT "netConnectStart"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"

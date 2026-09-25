@@ -361,8 +361,8 @@ hole.
 ### 4.1 Named authorities, fields and scoped constraints
 
 The parameter forms are a literal, a named authority, or a bare label meaning
-top. The historical quoted underscore is not a fourth form: it must not bypass
-body checking in either source or extern declarations.
+top. The quoted underscore is not a form: the parser rejects it in every
+declaration, source or extern, naming the named-arrow replacement.
 
 A named arrow argument `(path : String) -> <FileRead path> String` binds a fresh
 authority `κ` scoped over the result type. Elaboration qualifies that argument
@@ -370,6 +370,12 @@ as `String @κ` and records `FileRead · κ` on the arrow. The relationship is t
 the argument's position and resolved binder identity, not the spelling of the
 definition's pattern or the name of the called function. Pattern names may differ
 from signature binders. Partial applications retain the instantiated relationship.
+Binders are lexical and signature-local: an atom or qualifier may name only a
+binder written to its left in the same signature (`R-UNBOUND-AUTHORITY`), and a
+named argument is well-formed only immediately left of an arrow
+(`R-MISPLACED-AUTHORITY-BINDER`). A binder must have type `String`
+(`T-AUTHORITY-BINDER`) and serves labels of one domain (`T-AUTHORITY-DOMAIN`).
+A qualifier is written with a spaced `@`: `String @p`.
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
 labels shares a variable; incompatible-domain uses are ill-formed. Product
@@ -379,11 +385,21 @@ mismatches are errors, never proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
-`α_𝔻(argument) ⊑ κ`. A flexible `κ` accumulates lower bounds by symbolic join,
-subject to its upper bounds. An unresolved constraint remains an obligation;
-it is not successful coverage. At a definition, universally bound `κ` is rigid:
-an unrelated literal cannot establish `literal ⊑ κ`. An honest wrapper may
-forward the argument or perform a domain-preserving operation on it.
+`α_𝔻(argument) ⊑ κ`, where `α` reads the argument's syntax first (a literal, a
+`++` whose left operand is justified in a prefix-shaped domain, a same-body
+`let`, a branch join) and otherwise the argument's checked type: the qualifier
+of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
+symbolic join, subject to its upper bounds; the scope that owns it takes the
+least solution, variables bounded by each other collapsing to one representative
+first. An obligation over a variable no binding owns — a value binding kept
+monomorphic by the value restriction — is decided once over every use in the
+module. An unresolved constraint remains an obligation; it is not successful
+coverage. At a definition, universally bound `κ` is rigid: an unrelated literal
+cannot establish `literal ⊑ κ`. An honest wrapper may forward the argument or
+perform a domain-preserving operation on it. Publication quantifies an authority
+variable only where the published type gives a caller a way to supply it, a
+qualified argument slot; a variable occurring only in rows has no source and
+publishes as the domain's top.
 
 Symbolic joins flatten and deduplicate identities without replacing variables
 by top. `q₁ ⊔ q₂ ⊑ q` requires both operands to be covered; `q ⊑ q` and
@@ -411,11 +427,19 @@ The directed value relation accepts `τ @qa` at `τ @qe` iff `qa ⊑ qe` and the
 underlying types are compatible. An unqualified expected type forgets authority;
 an unqualified actual value cannot gain a narrower qualifier without
 expression-directed evidence. Arrow types compose this relation with variance.
-Unification with a type metavariable retains a value qualifier, so ordinary
-polymorphic identity can preserve it. Forgetting a qualifier to an ordinary value
-type safely loses precision; inventing one from an unqualified value requires the
-expression-directed proof above. Branches join authorities. Mutable storage and
-authority indices are invariant: every write must satisfy the stored qualifier.
+A value qualifier reaches a type metavariable only through a directed flow: an
+argument into a flexible slot (which receives an allowance above the value's
+authority, so several values can converge), a declared parameter, a match
+scrutinee, or an application's result. Undirected unification equates value
+types and erases a top-level qualifier, since it cannot tell which side is the
+value: `p ++ "/x"` equates two Strings, and the result of an operator is a new
+value whose authority is `α`'s business. Ordinary polymorphic identity preserves
+a qualifier through its argument and result flows. Forgetting a qualifier to an
+ordinary value type safely loses precision; inventing one from an unqualified
+value requires the expression-directed proof above. Branches join authorities.
+Composition `g >> h` takes `g`'s own domain, qualifier included, and pipes
+`x |> f` are the application `f x`. Mutable storage and authority indices are
+invariant: every write must satisfy the stored qualifier.
 
 Medaka remains rank-1 HM. A generalized alias can instantiate its scheme afresh;
 a higher-order argument retains one instantiated monotype and its relationships,
@@ -958,11 +982,14 @@ checking and named-authority contract above.
 
 The active migration and its explicit completed/remaining work are recorded in
 [Effects within the typechecker](../../compiler/EFFECTS-ARCHITECTURE.md).
-In particular, a modular concrete algebra and binding forcing rows alone do not
-implement §4.1 or §5.1. No conformance claim may turn a pending proof into success
-or describe the whole effects system as laundering-free while a known channel
-remains. Issue status belongs in the issue tracker; the archived observations explain
-counterexamples but are not a live backlog.
+The named-authority checkpoint there implements §4.1's named arrows, qualified
+values, resolved label identity, the abstraction `α`, the scoped authority
+solver and publication; qualified data fields, constructor proof sources and
+authority-indexed existentials remain the proposed surface of §4.1, not
+implemented. No conformance claim may turn a pending proof into success or
+describe the whole effects system as laundering-free while a known channel
+remains. Issue status belongs in the issue tracker; the archived observations
+explain counterexamples but are not a live backlog.
 
 ---
 

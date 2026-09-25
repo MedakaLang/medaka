@@ -1,5 +1,5 @@
 # META
-source_lines=683
+source_lines=747
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -17,11 +17,14 @@ stages=DESUGAR,MARK
 -- Effect domains and rows have their own owners. Import those representations
 -- directly from effect_domain/effect_rows rather than through this module.
 
-import types.effect_domain.{
-  renderAtoms,
-  Atom(..),
+import types.effect_authority.{
+  Authority(..), Authvar(..), authvarId, authvarName, authNorm,
+  renderAuthorityWith
 }
 import types.effect_rows.{
+  renderAtoms,
+  renderAtomsWith,
+  Atom(..),
   effrowNorm,
   effrowLabels,
   rowFlat,
@@ -30,7 +33,9 @@ import types.effect_rows.{
   EffRow(..),
   Effvar(..),
 }
-import frontend.ast.{Ty(..), Constraint(..), TyConOrigin(..)}
+import frontend.ast.{
+  Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface
+}
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
@@ -170,6 +175,12 @@ public export data Mono =
   | TFun Mono EffRow Mono
   -- arg -> <effect row> result
   | TEff EffRow
+  -- A qualified value type `τ @q`: the value's domain-directed abstraction is
+  -- bounded by the authority `q`.  Introduced by a signature's named argument
+  -- (`(path : String)` elaborates its domain to `String @κ`) or an explicit
+  -- `@p`; forgotten safely toward the plain type, never invented from one.
+  -- Erases before any runtime layout.
+  | TQual Mono Authority
 
 -- An effect row occupying a type-CONSTRUCTOR ARGUMENT slot, for a data type
 -- with an effect-row parameter (`data Async e a = … <e> …`).  Produced ONLY
@@ -188,11 +199,12 @@ public export data Tyvar =
 -- states the identity class it claims, so a reviewer grades a CALL rather than
 -- re-deriving what a bare third argument meant.
 
--- forall <quantified tyvar ids> <quantified effvar ids>. mono
--- A generalized term binding: type and row binders scope over BOTH the value
--- and its forcing effect. Strict locals, constructors and functions have an
--- empty forcing row; lazy top-level initializers retain their evaluation row.
-public export data Scheme = Forall (List Int) (List Int) EffRow Mono
+-- forall <quantified tyvar ids> <quantified effvar ids> <quantified authvar ids>. mono
+-- A generalized term binding: type, row and authority binders scope over BOTH
+-- the value and its forcing effect and are instantiated together under one
+-- substitution. Strict locals, constructors and functions have an empty
+-- forcing row; lazy top-level initializers retain their evaluation row.
+public export data Scheme = Forall (List Int) (List Int) (List Int) EffRow Mono
 
 -- #838 I1: the unified obligation record.  `pred.args` is the
 -- ALREADY-PROJECTED dispatch/argument vector — exactly the call channel's existing
@@ -321,7 +333,7 @@ normalizeLink cell t = match t
 -- ── rendering ─────────────────────────────────────────────────────────────
 export
 ppScheme : Scheme -> String
-ppScheme (Forall _ _ force t) = ppBinding (Ref []) (Ref 0) force t
+ppScheme (Forall _ _ _ force t) = ppBinding (Ref []) (Ref 0) force t
 
 ppBinding : Ref (List (Int, String)) -> Ref Int -> EffRow -> Mono -> String
 ppBinding ctx cnt force t = match rowFlat force
@@ -334,7 +346,7 @@ ppEffectPrefix : Ref (List (Int, String)) ->
   String
 ppEffectPrefix _ _ ([], []) = ""
 ppEffectPrefix ctx cnt (labels, members) =
-  let atoms = renderAtoms labels
+  let atoms = renderAtomsWith (ppAuthvarName ctx cnt) labels
   let tails = joinWith " | " (map (ppEffvarName ctx cnt) members)
   let inside =
     if atoms == "" then
@@ -356,7 +368,7 @@ ppEffectPrefix ctx cnt (labels, members) =
 export
 ppSchemeCon : List VecObl -> Scheme -> String
 ppSchemeCon [] s = ppScheme s
-ppSchemeCon cons (Forall _ _ force t) =
+ppSchemeCon cons (Forall _ _ _ force t) =
   let ctx = Ref []
   let cnt = Ref 0
   let body = ppBinding ctx cnt force t
@@ -437,6 +449,51 @@ ppGo ctx cnt prec t = match normalize t
   TApp a b => ppApp ctx cnt prec a b
   TFun a eff b => ppFun ctx cnt prec a eff b
   TEff r => ppEffArg ctx cnt r
+  TQual inner q => ppQual ctx cnt prec inner q
+
+-- `T @p` outside an arrow domain (an arrow domain renders as the named
+-- argument `(p : T)` in `ppFun`, the form a signature writes).
+export
+ppQual : Ref (List (Int, String)) ->
+  Ref Int ->
+  Int ->
+  Mono ->
+  Authority ->
+  String
+ppQual ctx cnt prec inner q =
+  wrapIf (prec > 2) "\{ppGo ctx cnt 3 inner} @\{ppAuthority ctx cnt q}"
+
+-- The authority term without a leading space, under the shared naming context.
+export
+ppAuthority : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+ppAuthority ctx cnt q =
+  let s = renderAuthorityWith (ppAuthvarName ctx cnt) q
+  if stringLength s > 0 && stringSlice 0 1 s == " " then
+    stringSlice 1 (stringLength s) s
+  else
+    s
+
+-- A signature binder's own name where it has one and is not already taken by
+-- a different variable in this context; otherwise a letter from a private
+-- namespace, as an effect variable takes one.
+export
+ppAuthvarName : Ref (List (Int, String)) -> Ref Int -> Ref Authvar -> String
+ppAuthvarName ctx cnt cell =
+  let key = authvarId cell + 2000000
+  match lookupAssocI key !ctx
+    Some s => s
+    None => match authvarName cell
+      Some n =>
+        if nameTaken n !ctx then
+          assignName ctx cnt key
+        else
+          ctx := (key, n) :: !ctx
+          n
+      None => assignName ctx cnt key
+
+nameTaken : String -> List (Int, String) -> Bool
+nameTaken _ [] = False
+nameTaken n ((_, s) :: rest) = s == n || nameTaken n rest
 
 -- Render a row sitting in type-argument position (the `e` of `Async e a`).  Bare
 -- open tail → the row var's name (reads `Async e a`); labels → `<IO>`/`<IO | e>`;
@@ -448,7 +505,7 @@ ppEffArg ctx cnt r = match effrowNorm r
   EffRow labels tail =>
     let lbl = match labels
       [] => ""
-      ls => renderAtoms ls
+      ls => renderAtomsWith (ppAuthvarName ctx cnt) ls
     let tailS = match tail
       Some cell => ppEffvarName ctx cnt cell
       None => ""
@@ -504,10 +561,18 @@ ppFun : Ref (List (Int, String)) ->
   Mono ->
   String
 ppFun ctx cnt prec a eff b =
-  let sa = ppGo ctx cnt 2 a
+  let sa = ppDomain ctx cnt a
   let se = ppEffectPrefix ctx cnt (rowFlat eff)
   let sb = ppGo ctx cnt 1 b
   wrapIf (prec > 1) "\{sa} -> \{se}\{sb}"
+
+-- A qualified arrow domain renders as the named argument that introduces
+-- it, `(p : T)`, so a printed scheme is the signature a user would write.
+ppDomain : Ref (List (Int, String)) -> Ref Int -> Mono -> String
+ppDomain ctx cnt a = match normalize a
+  TQual inner (AVar cell) =>
+    "(\{ppAuthvarName ctx cnt cell} : \{ppGo ctx cnt 0 inner})"
+  _ => ppGo ctx cnt 2 a
 
 export
 effStr : List Atom -> String
@@ -636,12 +701,14 @@ ppTy (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
 ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
+ppTy (TyNamed n t) = "(\{n} : \{ppTy t})"
+ppTy (TyQual t n) = "\{ppTyAtom t} @\{n}"
 
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
 export
-ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffInsideTy : List EffAtomTy -> List String -> String
 ppEffInsideTy effs tails =
   let labs = map ppEffAtomTy effs
   match tails
@@ -652,13 +719,10 @@ ppEffInsideTy effs tails =
         [] => tls
         _ => "\{joinWith ", " labs} | \{tls}"
 
--- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
+-- effect atom renderer for ppTy: the label and its written parameter.
 export
-ppEffAtomTy : (String, Option String) -> String
-ppEffAtomTy (l, None) = l
--- Intentional cross-file duplicate of the same helper in doc.mdk AND eval.mdk's ppEffAtomK; not consolidating (tiny helper / divergent-by-design backend trio).
--- lint-disable-next-line rule-duplicate-body
-ppEffAtomTy (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
+ppEffAtomTy : EffAtomTy -> String
+ppEffAtomTy a = effAtomSurface escStr a
 
 -- single constraint: no outer parens; multiple: wrap in parens (mirrors OCaml)
 export
@@ -686,13 +750,13 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = [] }) =
 ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
   "\{iface} \{joinWith " " (map ppTyAtom tys)}"
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "renderAtoms" false) (mem "Atom" true))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarName" false) (mem "authNorm" false) (mem "renderAuthorityWith" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "escStr" false))))
-(DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
+(DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow"))) (variant "TQual" (ConPos (TyCon "Mono") (TyCon "Authority")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
-(DData Public "Scheme" () ((variant "Forall" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "EffRow") (TyCon "Mono")))) ())
+(DData Public "Scheme" () ((variant "Forall" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "EffRow") (TyCon "Mono")))) ())
 (DData Public "IfaceRef" () ((variant "IfaceRef" (ConNamed (field "irName" (TyCon "String")) (field "irOrigin" (TyCon "TyConOrigin"))))) ())
 (DData Public "VecObl" () ((variant "VecObl" (ConNamed (field "voIface" (TyCon "IfaceRef")) (field "voIds" (TyApp (TyCon "List") (TyCon "Int"))) (field "voArgs" (TyApp (TyCon "List") (TyCon "Mono")))))) ())
 (DTypeSig true "lookupAssocI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyVar "b"))) (TyApp (TyCon "Option") (TyVar "b")))))
@@ -703,15 +767,15 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "normalizeLink" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "normalizeLink" ((PVar "cell") (PVar "t")) (EMatch (EVar "t") (arm (PCon "TVar" (PVar "c2")) () (EMatch (EUnOp "!" (EVar "c2")) (arm (PCon "Unbound" PWild PWild) () (EVar "t")) (arm (PCon "Link" (PVar "t2")) () (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "normalizeLink") (EVar "c2")) (EVar "t2"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Link") (EVar "r")))) (DoExpr (EVar "r")))))) (arm PWild () (EVar "t"))))
 (DTypeSig true "ppScheme" (TyFun (TyCon "Scheme") (TyCon "String")))
-(DFunDef false "ppScheme" ((PCon "Forall" PWild PWild (PVar "force") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "ppBinding") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "force")) (EVar "t")))
+(DFunDef false "ppScheme" ((PCon "Forall" PWild PWild PWild (PVar "force") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "ppBinding") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "force")) (EVar "t")))
 (DTypeSig false "ppBinding" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "String"))))))
 (DFunDef false "ppBinding" ((PVar "ctx") (PVar "cnt") (PVar "force") (PVar "t")) (EMatch (EApp (EVar "rowFlat") (EVar "force")) (arm (PTuple (PList) (PList)) () (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "t"))) (arm (PVar "flat") () (EBinOp "++" (EApp (EApp (EApp (EVar "ppEffectPrefix") (EVar "ctx")) (EVar "cnt")) (EVar "flat")) (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "t"))))))
 (DTypeSig false "ppEffectPrefix" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyCon "String")))))
 (DFunDef false "ppEffectPrefix" (PWild PWild (PTuple (PList) (PList))) (ELit (LString "")))
-(DFunDef false "ppEffectPrefix" ((PVar "ctx") (PVar "cnt") (PTuple (PVar "labels") (PVar "members"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "renderAtoms") (EVar "labels"))) (DoLet false false (PVar "tails") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "members")))) (DoLet false false (PVar "inside") (EIf (EBinOp "==" (EVar "atoms") (ELit (LString ""))) (EVar "tails") (EIf (EBinOp "==" (EVar "tails") (ELit (LString ""))) (EVar "atoms") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "atoms"))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "tails"))) (ELit (LString "")))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EVar "inside"))) (ELit (LString "> "))))))
+(DFunDef false "ppEffectPrefix" ((PVar "ctx") (PVar "cnt") (PTuple (PVar "labels") (PVar "members"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "renderAtomsWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "labels"))) (DoLet false false (PVar "tails") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "members")))) (DoLet false false (PVar "inside") (EIf (EBinOp "==" (EVar "atoms") (ELit (LString ""))) (EVar "tails") (EIf (EBinOp "==" (EVar "tails") (ELit (LString ""))) (EVar "atoms") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "atoms"))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "tails"))) (ELit (LString "")))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EVar "inside"))) (ELit (LString "> "))))))
 (DTypeSig true "ppSchemeCon" (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyFun (TyCon "Scheme") (TyCon "String"))))
 (DFunDef false "ppSchemeCon" ((PList) (PVar "s")) (EApp (EVar "ppScheme") (EVar "s")))
-(DFunDef false "ppSchemeCon" ((PVar "cons") (PCon "Forall" PWild PWild (PVar "force") (PVar "t"))) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "body") (EApp (EApp (EApp (EApp (EVar "ppBinding") (EVar "ctx")) (EVar "cnt")) (EVar "force")) (EVar "t"))) (DoLet false false (PVar "rendered") (EApp (EVar "sortUniqS") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "cons")))) (DoLet false false (PVar "ctxStr") (EMatch (EVar "rendered") (arm (PList (PVar "c")) () (EVar "c")) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "rendered"))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ctxStr"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "body"))) (ELit (LString ""))))))
+(DFunDef false "ppSchemeCon" ((PVar "cons") (PCon "Forall" PWild PWild PWild (PVar "force") (PVar "t"))) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "body") (EApp (EApp (EApp (EApp (EVar "ppBinding") (EVar "ctx")) (EVar "cnt")) (EVar "force")) (EVar "t"))) (DoLet false false (PVar "rendered") (EApp (EVar "sortUniqS") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "cons")))) (DoLet false false (PVar "ctxStr") (EMatch (EVar "rendered") (arm (PList (PVar "c")) () (EVar "c")) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "rendered"))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ctxStr"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "body"))) (ELit (LString ""))))))
 (DTypeSig true "renderConstraintCtx" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "renderConstraintCtx" (PWild PWild (PList)) (EListLit))
 (DFunDef false "renderConstraintCtx" ((PVar "ctx") (PVar "cnt") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "s") (EIf (EApp (EVar "isEmptyL") (EFieldAccess (EVar "o") "voArgs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EApp (EApp (EApp (EVar "nameOf") (EVar "ctx")) (EVar "cnt")) (EVar "id")))) (EFieldAccess (EVar "o") "voIds")))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3)))) (EFieldAccess (EVar "o") "voArgs")))))) (DoExpr (EBinOp "::" (EVar "s") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "rest"))))))
@@ -724,9 +788,18 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "assignName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s"))))
 (DTypeSig true "ppGo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "String"))))))
-(DFunDef false "ppGo" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppVar") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "TCon" (PVar "n") PWild) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppApp") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "b"))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ppFun") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "eff")) (EVar "b"))) (arm (PCon "TEff" (PVar "r")) () (EApp (EApp (EApp (EVar "ppEffArg") (EVar "ctx")) (EVar "cnt")) (EVar "r")))))
+(DFunDef false "ppGo" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppVar") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "TCon" (PVar "n") PWild) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppApp") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "b"))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ppFun") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "eff")) (EVar "b"))) (arm (PCon "TEff" (PVar "r")) () (EApp (EApp (EApp (EVar "ppEffArg") (EVar "ctx")) (EVar "cnt")) (EVar "r"))) (arm (PCon "TQual" (PVar "inner") (PVar "q")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppQual") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "inner")) (EVar "q")))))
+(DTypeSig true "ppQual" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Authority") (TyCon "String")))))))
+(DFunDef false "ppQual" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "inner") (PVar "q")) (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "inner")))) (ELit (LString " @"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q")))) (ELit (LString "")))))
+(DTypeSig true "ppAuthority" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
+(DFunDef false "ppAuthority" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "renderAuthorityWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "q"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString " ")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "s")))))
+(DTypeSig true "ppAuthvarName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")))))
+(DFunDef false "ppAuthvarName" ((PVar "ctx") (PVar "cnt") (PVar "cell")) (EBlock (DoLet false false (PVar "key") (EBinOp "+" (EApp (EVar "authvarId") (EVar "cell")) (ELit (LInt 2000000)))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "key")) (EUnOp "!" (EVar "ctx"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EMatch (EApp (EVar "authvarName") (EVar "cell")) (arm (PCon "Some" (PVar "n")) () (EIf (EApp (EApp (EVar "nameTaken") (EVar "n")) (EUnOp "!" (EVar "ctx"))) (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "key")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "key") (EVar "n")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "n"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "key")))))))))
+(DTypeSig false "nameTaken" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "nameTaken" (PWild (PList)) (EVar "False"))
+(DFunDef false "nameTaken" ((PVar "n") (PCons (PTuple PWild (PVar "s")) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "s") (EVar "n")) (EApp (EApp (EVar "nameTaken") (EVar "n")) (EVar "rest"))))
 (DTypeSig true "ppEffArg" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "EffRow") (TyCon "String")))))
-(DFunDef false "ppEffArg" ((PVar "ctx") (PVar "cnt") (PVar "r")) (EMatch (EApp (EVar "effrowNorm") (EVar "r")) (arm (PCon "EffRow" (PVar "labels") (PVar "tail")) () (EBlock (DoLet false false (PVar "lbl") (EMatch (EVar "labels") (arm (PList) () (ELit (LString ""))) (arm (PVar "ls") () (EApp (EVar "renderAtoms") (EVar "ls"))))) (DoLet false false (PVar "tailS") (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EIf (EBinOp "&&" (EApp (EVar "isJoinCell") (EVar "cell")) (EBinOp "==" (EVar "lbl") (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "tailS")) (ELit (LString ")"))) (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))) (arm (PCon "None") () (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))))))))
+(DFunDef false "ppEffArg" ((PVar "ctx") (PVar "cnt") (PVar "r")) (EMatch (EApp (EVar "effrowNorm") (EVar "r")) (arm (PCon "EffRow" (PVar "labels") (PVar "tail")) () (EBlock (DoLet false false (PVar "lbl") (EMatch (EVar "labels") (arm (PList) () (ELit (LString ""))) (arm (PVar "ls") () (EApp (EApp (EVar "renderAtomsWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "ls"))))) (DoLet false false (PVar "tailS") (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EIf (EBinOp "&&" (EApp (EVar "isJoinCell") (EVar "cell")) (EBinOp "==" (EVar "lbl") (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "tailS")) (ELit (LString ")"))) (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))) (arm (PCon "None") () (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))))))))
 (DTypeSig true "ppEffvarName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "String")))))
 (DFunDef false "ppEffvarName" ((PVar "ctx") (PVar "cnt") (PVar "cell")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "nameOf") (EVar "ctx")) (EVar "cnt")) (EBinOp "+" (EApp (EVar "effvarId") (EVar "m")) (ELit (LInt 1000000)))))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell"))))))))
 (DTypeSig true "ppEffArgFmt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -736,7 +809,9 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "ppApp" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "String")))))))
 (DFunDef false "ppApp" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "a") (PVar "b")) (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" (PVar "ts")) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "ts")))) (ELit (LString ")")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "a"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "b"))) (DoExpr (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "sa"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "sb"))) (ELit (LString "")))))))))
 (DTypeSig true "ppFun" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "String"))))))))
-(DFunDef false "ppFun" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "a") (PVar "eff") (PVar "b")) (EBlock (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "a"))) (DoLet false false (PVar "se") (EApp (EApp (EApp (EVar "ppEffectPrefix") (EVar "ctx")) (EVar "cnt")) (EApp (EVar "rowFlat") (EVar "eff")))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 1))) (EVar "b"))) (DoExpr (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "sa"))) (ELit (LString " -> "))) (EApp (EVar "display") (EVar "se"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sb"))) (ELit (LString "")))))))
+(DFunDef false "ppFun" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "a") (PVar "eff") (PVar "b")) (EBlock (DoLet false false (PVar "sa") (EApp (EApp (EApp (EVar "ppDomain") (EVar "ctx")) (EVar "cnt")) (EVar "a"))) (DoLet false false (PVar "se") (EApp (EApp (EApp (EVar "ppEffectPrefix") (EVar "ctx")) (EVar "cnt")) (EApp (EVar "rowFlat") (EVar "eff")))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 1))) (EVar "b"))) (DoExpr (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "sa"))) (ELit (LString " -> "))) (EApp (EVar "display") (EVar "se"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sb"))) (ELit (LString "")))))))
+(DTypeSig false "ppDomain" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "ppDomain" ((PVar "ctx") (PVar "cnt") (PVar "a")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TQual" (PVar "inner") (PCon "AVar" (PVar "cell"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt")) (EVar "cell")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "inner")))) (ELit (LString ")")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "a")))))
 (DTypeSig true "effStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "effStr" ((PList)) (ELit (LString "")))
 (DFunDef false "effStr" ((PVar "labels")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "renderAtoms") (EVar "labels"))) (ELit (LString "> "))))
@@ -776,11 +851,12 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DFunDef false "ppTy" ((PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (ELit (LString ")"))))
 (DFunDef false "ppTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "ppTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ""))))
-(DTypeSig true "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "ppTy" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ")"))))
+(DFunDef false "ppTy" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppTyAtom") (EVar "t")))) (ELit (LString " @"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
+(DTypeSig true "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "ppEffInsideTy" ((PVar "effs") (PVar "tails")) (EBlock (DoLet false false (PVar "labs") (EApp (EApp (EVar "map") (EVar "ppEffAtomTy")) (EVar "effs"))) (DoExpr (EMatch (EVar "tails") (arm (PList) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs"))) (arm PWild () (EBlock (DoLet false false (PVar "tls") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails"))) (DoExpr (EMatch (EVar "effs") (arm (PList) () (EVar "tls")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "tls"))) (ELit (LString ""))))))))))))
-(DTypeSig true "ppEffAtomTy" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
-(DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
+(DTypeSig true "ppEffAtomTy" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
+(DFunDef false "ppEffAtomTy" ((PVar "a")) (EApp (EApp (EVar "effAtomSurface") (EVar "escStr")) (EVar "a")))
 (DTypeSig true "ppConstraints" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "String")))
 (DFunDef false "ppConstraints" ((PList (PVar "c"))) (EApp (EVar "ppConstraint") (EVar "c")))
 (DFunDef false "ppConstraints" ((PVar "cs")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppConstraint")) (EVar "cs")))) (ELit (LString ")"))))
@@ -795,13 +871,13 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DFunDef false "ppConstraint" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PList))) false)) (EVar "iface"))
 (DFunDef false "ppConstraint" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "tys"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString ""))))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "renderAtoms" false) (mem "Atom" true))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authvarName" false) (mem "authNorm" false) (mem "renderAuthorityWith" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "renderAtomsWith" false) (mem "Atom" true) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "rowFlat" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "escStr" false))))
-(DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
+(DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow"))) (variant "TQual" (ConPos (TyCon "Mono") (TyCon "Authority")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
-(DData Public "Scheme" () ((variant "Forall" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "EffRow") (TyCon "Mono")))) ())
+(DData Public "Scheme" () ((variant "Forall" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "EffRow") (TyCon "Mono")))) ())
 (DData Public "IfaceRef" () ((variant "IfaceRef" (ConNamed (field "irName" (TyCon "String")) (field "irOrigin" (TyCon "TyConOrigin"))))) ())
 (DData Public "VecObl" () ((variant "VecObl" (ConNamed (field "voIface" (TyCon "IfaceRef")) (field "voIds" (TyApp (TyCon "List") (TyCon "Int"))) (field "voArgs" (TyApp (TyCon "List") (TyCon "Mono")))))) ())
 (DTypeSig true "lookupAssocI" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyVar "b"))) (TyApp (TyCon "Option") (TyVar "b")))))
@@ -812,15 +888,15 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "normalizeLink" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "normalizeLink" ((PVar "cell") (PVar "t")) (EMatch (EVar "t") (arm (PCon "TVar" (PVar "c2")) () (EMatch (EUnOp "!" (EVar "c2")) (arm (PCon "Unbound" PWild PWild) () (EVar "t")) (arm (PCon "Link" (PVar "t2")) () (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "normalizeLink") (EVar "c2")) (EVar "t2"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Link") (EVar "r")))) (DoExpr (EVar "r")))))) (arm PWild () (EVar "t"))))
 (DTypeSig true "ppScheme" (TyFun (TyCon "Scheme") (TyCon "String")))
-(DFunDef false "ppScheme" ((PCon "Forall" PWild PWild (PVar "force") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "ppBinding") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "force")) (EVar "t")))
+(DFunDef false "ppScheme" ((PCon "Forall" PWild PWild PWild (PVar "force") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "ppBinding") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "force")) (EVar "t")))
 (DTypeSig false "ppBinding" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "String"))))))
 (DFunDef false "ppBinding" ((PVar "ctx") (PVar "cnt") (PVar "force") (PVar "t")) (EMatch (EApp (EVar "rowFlat") (EVar "force")) (arm (PTuple (PList) (PList)) () (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "t"))) (arm (PVar "flat") () (EBinOp "++" (EApp (EApp (EApp (EVar "ppEffectPrefix") (EVar "ctx")) (EVar "cnt")) (EDictApp "flat")) (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "t"))))))
 (DTypeSig false "ppEffectPrefix" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyCon "String")))))
 (DFunDef false "ppEffectPrefix" (PWild PWild (PTuple (PList) (PList))) (ELit (LString "")))
-(DFunDef false "ppEffectPrefix" ((PVar "ctx") (PVar "cnt") (PTuple (PVar "labels") (PVar "members"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "renderAtoms") (EVar "labels"))) (DoLet false false (PVar "tails") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "members")))) (DoLet false false (PVar "inside") (EIf (EBinOp "==" (EVar "atoms") (ELit (LString ""))) (EVar "tails") (EIf (EBinOp "==" (EVar "tails") (ELit (LString ""))) (EVar "atoms") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "atoms"))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "tails"))) (ELit (LString "")))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EVar "inside"))) (ELit (LString "> "))))))
+(DFunDef false "ppEffectPrefix" ((PVar "ctx") (PVar "cnt") (PTuple (PVar "labels") (PVar "members"))) (EBlock (DoLet false false (PVar "atoms") (EApp (EApp (EVar "renderAtomsWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "labels"))) (DoLet false false (PVar "tails") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "members")))) (DoLet false false (PVar "inside") (EIf (EBinOp "==" (EVar "atoms") (ELit (LString ""))) (EVar "tails") (EIf (EBinOp "==" (EVar "tails") (ELit (LString ""))) (EVar "atoms") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "atoms"))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "tails"))) (ELit (LString "")))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EVar "inside"))) (ELit (LString "> "))))))
 (DTypeSig true "ppSchemeCon" (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyFun (TyCon "Scheme") (TyCon "String"))))
 (DFunDef false "ppSchemeCon" ((PList) (PVar "s")) (EApp (EVar "ppScheme") (EVar "s")))
-(DFunDef false "ppSchemeCon" ((PVar "cons") (PCon "Forall" PWild PWild (PVar "force") (PVar "t"))) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "body") (EApp (EApp (EApp (EApp (EVar "ppBinding") (EVar "ctx")) (EVar "cnt")) (EVar "force")) (EVar "t"))) (DoLet false false (PVar "rendered") (EApp (EVar "sortUniqS") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "cons")))) (DoLet false false (PVar "ctxStr") (EMatch (EVar "rendered") (arm (PList (PVar "c")) () (EVar "c")) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "rendered"))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ctxStr"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "body"))) (ELit (LString ""))))))
+(DFunDef false "ppSchemeCon" ((PVar "cons") (PCon "Forall" PWild PWild PWild (PVar "force") (PVar "t"))) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "body") (EApp (EApp (EApp (EApp (EVar "ppBinding") (EVar "ctx")) (EVar "cnt")) (EVar "force")) (EVar "t"))) (DoLet false false (PVar "rendered") (EApp (EVar "sortUniqS") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "cons")))) (DoLet false false (PVar "ctxStr") (EMatch (EVar "rendered") (arm (PList (PVar "c")) () (EVar "c")) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "rendered"))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ctxStr"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "body"))) (ELit (LString ""))))))
 (DTypeSig true "renderConstraintCtx" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "renderConstraintCtx" (PWild PWild (PList)) (EListLit))
 (DFunDef false "renderConstraintCtx" ((PVar "ctx") (PVar "cnt") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "s") (EIf (EApp (EVar "isEmptyL") (EFieldAccess (EVar "o") "voArgs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EApp (EApp (EApp (EVar "nameOf") (EVar "ctx")) (EVar "cnt")) (EVar "id")))) (EFieldAccess (EVar "o") "voIds")))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3)))) (EFieldAccess (EVar "o") "voArgs")))))) (DoExpr (EBinOp "::" (EVar "s") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "rest"))))))
@@ -833,9 +909,18 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "assignName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s"))))
 (DTypeSig true "ppGo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "String"))))))
-(DFunDef false "ppGo" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppVar") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "TCon" (PVar "n") PWild) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppApp") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "b"))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ppFun") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "eff")) (EVar "b"))) (arm (PCon "TEff" (PVar "r")) () (EApp (EApp (EApp (EVar "ppEffArg") (EVar "ctx")) (EVar "cnt")) (EVar "r")))))
+(DFunDef false "ppGo" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppVar") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "TCon" (PVar "n") PWild) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppApp") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "b"))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ppFun") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "eff")) (EVar "b"))) (arm (PCon "TEff" (PVar "r")) () (EApp (EApp (EApp (EVar "ppEffArg") (EVar "ctx")) (EVar "cnt")) (EVar "r"))) (arm (PCon "TQual" (PVar "inner") (PVar "q")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppQual") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "inner")) (EVar "q")))))
+(DTypeSig true "ppQual" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Authority") (TyCon "String")))))))
+(DFunDef false "ppQual" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "inner") (PVar "q")) (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "inner")))) (ELit (LString " @"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q")))) (ELit (LString "")))))
+(DTypeSig true "ppAuthority" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
+(DFunDef false "ppAuthority" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "renderAuthorityWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "q"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString " ")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "s")))))
+(DTypeSig true "ppAuthvarName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")))))
+(DFunDef false "ppAuthvarName" ((PVar "ctx") (PVar "cnt") (PVar "cell")) (EBlock (DoLet false false (PVar "key") (EBinOp "+" (EApp (EVar "authvarId") (EVar "cell")) (ELit (LInt 2000000)))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "key")) (EUnOp "!" (EVar "ctx"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EMatch (EApp (EVar "authvarName") (EVar "cell")) (arm (PCon "Some" (PVar "n")) () (EIf (EApp (EApp (EVar "nameTaken") (EVar "n")) (EUnOp "!" (EVar "ctx"))) (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "key")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "key") (EVar "n")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "n"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "key")))))))))
+(DTypeSig false "nameTaken" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "nameTaken" (PWild (PList)) (EVar "False"))
+(DFunDef false "nameTaken" ((PVar "n") (PCons (PTuple PWild (PVar "s")) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "s") (EVar "n")) (EApp (EApp (EVar "nameTaken") (EVar "n")) (EVar "rest"))))
 (DTypeSig true "ppEffArg" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "EffRow") (TyCon "String")))))
-(DFunDef false "ppEffArg" ((PVar "ctx") (PVar "cnt") (PVar "r")) (EMatch (EApp (EVar "effrowNorm") (EVar "r")) (arm (PCon "EffRow" (PVar "labels") (PVar "tail")) () (EBlock (DoLet false false (PVar "lbl") (EMatch (EVar "labels") (arm (PList) () (ELit (LString ""))) (arm (PVar "ls") () (EApp (EVar "renderAtoms") (EVar "ls"))))) (DoLet false false (PVar "tailS") (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EIf (EBinOp "&&" (EApp (EVar "isJoinCell") (EVar "cell")) (EBinOp "==" (EVar "lbl") (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "tailS")) (ELit (LString ")"))) (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))) (arm (PCon "None") () (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))))))))
+(DFunDef false "ppEffArg" ((PVar "ctx") (PVar "cnt") (PVar "r")) (EMatch (EApp (EVar "effrowNorm") (EVar "r")) (arm (PCon "EffRow" (PVar "labels") (PVar "tail")) () (EBlock (DoLet false false (PVar "lbl") (EMatch (EVar "labels") (arm (PList) () (ELit (LString ""))) (arm (PVar "ls") () (EApp (EApp (EVar "renderAtomsWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "ls"))))) (DoLet false false (PVar "tailS") (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppEffvarName") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "None") () (ELit (LString ""))))) (DoExpr (EMatch (EVar "tail") (arm (PCon "Some" (PVar "cell")) () (EIf (EBinOp "&&" (EApp (EVar "isJoinCell") (EVar "cell")) (EBinOp "==" (EVar "lbl") (ELit (LString "")))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "tailS")) (ELit (LString ")"))) (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))) (arm (PCon "None") () (EApp (EApp (EVar "ppEffArgFmt") (EVar "lbl")) (EVar "tailS")))))))))
 (DTypeSig true "ppEffvarName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "String")))))
 (DFunDef false "ppEffvarName" ((PVar "ctx") (PVar "cnt") (PVar "cell")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "nameOf") (EVar "ctx")) (EVar "cnt")) (EBinOp "+" (EApp (EVar "effvarId") (EVar "m")) (ELit (LInt 1000000)))))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell"))))))))
 (DTypeSig true "ppEffArgFmt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -845,7 +930,9 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "ppApp" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "String")))))))
 (DFunDef false "ppApp" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "a") (PVar "b")) (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" (PVar "ts")) () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "ts")))) (ELit (LString ")")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "a"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "b"))) (DoExpr (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "sa"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "sb"))) (ELit (LString "")))))))))
 (DTypeSig true "ppFun" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "String"))))))))
-(DFunDef false "ppFun" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "a") (PVar "eff") (PVar "b")) (EBlock (DoLet false false (PVar "sa") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "a"))) (DoLet false false (PVar "se") (EApp (EApp (EApp (EVar "ppEffectPrefix") (EVar "ctx")) (EVar "cnt")) (EApp (EVar "rowFlat") (EVar "eff")))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 1))) (EVar "b"))) (DoExpr (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "sa"))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EVar "se"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sb"))) (ELit (LString "")))))))
+(DFunDef false "ppFun" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "a") (PVar "eff") (PVar "b")) (EBlock (DoLet false false (PVar "sa") (EApp (EApp (EApp (EVar "ppDomain") (EVar "ctx")) (EVar "cnt")) (EVar "a"))) (DoLet false false (PVar "se") (EApp (EApp (EApp (EVar "ppEffectPrefix") (EVar "ctx")) (EVar "cnt")) (EApp (EVar "rowFlat") (EVar "eff")))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 1))) (EVar "b"))) (DoExpr (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "sa"))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EVar "se"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sb"))) (ELit (LString "")))))))
+(DTypeSig false "ppDomain" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "ppDomain" ((PVar "ctx") (PVar "cnt") (PVar "a")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TQual" (PVar "inner") (PCon "AVar" (PVar "cell"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt")) (EVar "cell")))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "inner")))) (ELit (LString ")")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 2))) (EVar "a")))))
 (DTypeSig true "effStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "effStr" ((PList)) (ELit (LString "")))
 (DFunDef false "effStr" ((PVar "labels")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "renderAtoms") (EVar "labels"))) (ELit (LString "> "))))
@@ -885,11 +972,12 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DFunDef false "ppTy" ((PCon "TyRow" (PList) (PCons (PVar "a") (PCons (PVar "b") (PVar "rest"))) PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "rest")))))) (ELit (LString ")"))))
 (DFunDef false "ppTy" ((PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "ppTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppConstraints") (EVar "cs")))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ""))))
-(DTypeSig true "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "ppTy" ((PCon "TyNamed" (PVar "n") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "t")))) (ELit (LString ")"))))
+(DFunDef false "ppTy" ((PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppTyAtom") (EVar "t")))) (ELit (LString " @"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
+(DTypeSig true "ppEffInsideTy" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "ppEffInsideTy" ((PVar "effs") (PVar "tails")) (EBlock (DoLet false false (PVar "labs") (EApp (EApp (EMethodRef "map") (EVar "ppEffAtomTy")) (EVar "effs"))) (DoExpr (EMatch (EVar "tails") (arm (PList) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs"))) (arm PWild () (EBlock (DoLet false false (PVar "tls") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails"))) (DoExpr (EMatch (EVar "effs") (arm (PList) () (EVar "tls")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labs")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "tls"))) (ELit (LString ""))))))))))))
-(DTypeSig true "ppEffAtomTy" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
-(DFunDef false "ppEffAtomTy" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
+(DTypeSig true "ppEffAtomTy" (TyFun (TyCon "EffAtomTy") (TyCon "String")))
+(DFunDef false "ppEffAtomTy" ((PVar "a")) (EApp (EApp (EVar "effAtomSurface") (EVar "escStr")) (EVar "a")))
 (DTypeSig true "ppConstraints" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "String")))
 (DFunDef false "ppConstraints" ((PList (PVar "c"))) (EApp (EVar "ppConstraint") (EVar "c")))
 (DFunDef false "ppConstraints" ((PVar "cs")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppConstraint")) (EVar "cs")))) (ELit (LString ")"))))

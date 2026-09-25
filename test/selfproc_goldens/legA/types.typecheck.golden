@@ -17,7 +17,7 @@ addMethodIdentCand : String -> Ident -> (IfaceRef, List String, Ty, List (String
 addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
-addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
+addVariants : TcEnv -> List (String, Mono) -> SigVars -> List Int -> List Int -> Mono -> List Variant -> TcEnv
 admittedCandIfaces : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List IfaceRef
 admittedDeclHits : ImplEnv -> String -> IfaceRef -> List Mono -> Option Bool
 admittedDeclHitters : ImplEnv -> String -> List IfaceRef -> List Mono -> Option (List IfaceRef)
@@ -32,7 +32,7 @@ admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
 admittedRowFor : String -> Registry MethodSchemeRow -> Option MethodSchemeRow
 admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
 aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
-aliasArgBindings : List (String, Ref Effvar) -> List (String, Mono) -> List String -> List Kind -> List Ty -> (List (String, Ref Effvar), List (String, Mono))
+aliasArgBindings : SigVars -> List (String, Mono) -> List String -> List Kind -> List Ty -> (List (String, Ref Effvar), List (String, Mono))
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
 aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> String -> Unit
@@ -83,10 +83,6 @@ allInRange : List Int -> Int -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
 allModuleLines : List (String, List (String, Scheme)) -> List String
 allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
-alpha : List (String, Expr) -> Expr -> KP
-alphaArms : List (String, Expr) -> Option String -> List Arm -> KP
-alphaCollectBinds : List LetBind -> List (String, Expr) -> List (String, Expr)
-alphaLeftPrefix : KP -> KP
 ambigReexportHelp : String -> String -> List String -> String
 ambigReexportMsg : String -> String -> List String -> String
 ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
@@ -108,7 +104,6 @@ anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
-anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
 anyIn : List Int -> List Int -> Bool
 anyKRow : List Kind -> Bool
@@ -117,12 +112,13 @@ anyMember : List String -> List String -> Bool
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool
 anyRootMatch : Int -> List (Mono, Loc) -> Bool
 anyRowDeclaredType : List Kind -> List Kind -> Bool
-anyRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> List Ty -> Bool
+anyRowSlotArg : SigVars -> List (String, Mono) -> List Ty -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
 anyUsePathBinds : List Decl -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 anyUsePathBindsCtor : List Decl -> String -> String -> Ident -> Bool
+appArgExpr : Expr -> Option Expr
 appArgLoc : Expr -> Option Loc
-appFallback : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
+appFallback : SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 appNodeArg : Expr -> Expr
 appSpineArgCount : Expr -> Int
 appSpineExpr : Expr -> (Expr, List Expr)
@@ -133,7 +129,8 @@ appSpineNodes : Expr -> List Expr
 appendDataUniverse : String -> List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : String -> List Decl -> Unit
-applicationRow : Mono -> Mono -> Mono -> EffRow
+applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
+applicationRowTyped : Mono -> Mono -> Mono -> EffRow
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyMethodAdmittedSets : List Decl -> Map String (List IfaceRef)
 applyMethodScopeOverrides : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
@@ -160,6 +157,9 @@ argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, Lis
 argReqRoute : String -> String -> ScopeId -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argRwOf : MarkCtx -> Map String Unit -> (String -> EvId -> Unit) -> ArgRw
 argStampPairs : PendingEntry -> List (Int, String)
+argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
+argumentInto : TcEnv -> Option Expr -> Mono -> Mono -> Unit
+argumentIntoTyped : Mono -> Mono -> Unit
 arithDispatchMethod : String -> Option String
 arithEntry : Obligation -> List (Ref Route, Mono)
 arithGoalsIn : List Obligation -> List (Ref Route, Mono)
@@ -174,14 +174,16 @@ assumAnswerKind : AssumAnswer -> AssumptionTraceKind
 assumAnswerName : AssumAnswer -> String
 assumptionTraceEnabled : Ref Bool
 assumptionTraceEntries : Ref (List AssumptionTraceEntry)
-astEffrowE : List (String, Ref Effvar) -> Ty -> EffRow
+astEffrowE : SigVars -> Ty -> EffRow
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
 atomOfLabel : String -> Atom
-atomOfWritten : (String, Option String) -> Atom
+atomOfWrittenIn : SigVars -> EffAtomTy -> Atom
 atomParamIsTop : Atom -> Bool
+atomicLabelParamError : String -> Unit
 atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
 atomsEscape : List Atom -> List Atom -> List Atom
-atomsOfWritten : List (String, Option String) -> List Atom
+atomsOfWritten : List EffAtomTy -> List Atom
+atomsOfWrittenIn : SigVars -> List EffAtomTy -> List Atom
 attachCoherenceConflict : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 attachEntryPayload : (a -> a) -> List (String, a) -> List (String, a)
 attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List (String, EnvBinding)
@@ -190,26 +192,38 @@ attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((Strin
 attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List VecObl) -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
+authBindersOf : Ty -> List (String, Param)
+authCellsIn : Mono -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+authRoots : Mono -> Map Int Unit -> Map Int Unit
+authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
+authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+authorityFailureMsg : String -> Authority -> Authority -> String
+authvarIdOf : (String, Ref Authvar) -> Int
 bangOnBoolHelp : String
 bangOnBoolMsg : String
 bareLocalBound : BareLocals -> String -> Bool
 beginAssumptionTrace : Unit -> Unit
 beginDefaultBodyRNoneTrace : Unit -> Unit
-beginEffectContract : EffRow -> Mono -> Map Int Unit
+beginEffectContract : EffRow -> Mono -> (Map Int Unit, Map Int Unit)
 beginEffectSummaryScope : Unit -> Unit
 beginMethodReturnTrace : Unit -> Unit
 beginModuleMarking : String -> List Decl -> Map String Int -> Map String Scheme -> Unit
 beginNumericPredicateTrace : Unit -> Unit
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindEach : List (Ref Effvar) -> EffRow -> Unit
+bindFrom : Mono -> Mono -> Unit
 bindOutsideDoMsg : String
 bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
 bindTyName : List (String, String) -> String -> String -> Option (List (String, String))
 bindValueUpper : Ref Tyvar -> Mono -> Unit
 bindVar : Ref Tyvar -> Mono -> Unit
+binderDomainMsg : String -> String
+binderIsString : Ty -> String -> Bool
+binderTypeMsg : String -> String -> String
 bindingDeclared : TcEnv -> String -> Option CDeclared
 bindingDeclaredAt : TcEnv -> String -> MethodTrackedInstantiation -> Option CDeclared
-bindingForceFromAst : List (String, Ref Effvar) -> Ty -> EffRow
+bindingForceFromAst : SigVars -> Ty -> EffRow
 bindingWithStandalone : EnvBinding -> (StandaloneOrigin, ValueScheme) -> EnvBinding
 bindsName : Option (Map String Unit) -> String -> Bool
 binopBuiltinHead : String -> String -> Bool
@@ -257,6 +271,7 @@ callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
 callUOblsWindow : Int -> List UObligation
+calleeArrow : Mono -> (Mono, EffRow, Mono)
 candIfaceOf : (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> IfaceRef
 candsOneIface : List KeyEntry -> Option String
 captureScope : Unit -> ScopeId
@@ -325,6 +340,7 @@ checkAdmittedOccObls : Unit -> Unit
 checkAnnotTooGeneral : Ty -> List Mono -> Unit
 checkArgEffVarCoverage : Option String -> List (String, List Kind) -> String -> Ty -> Unit
 checkArgEffVars : Option String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
+checkAuthorityBinder : String -> Ty -> Ty -> Unit
 checkBodyImpl : ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
@@ -335,7 +351,7 @@ checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
 checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
-checkEffectAtoms : List (String, Option String) -> Unit
+checkEffectAtoms : List EffAtomTy -> Unit
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
 checkEffectParams : List Decl -> Unit
 checkEffectParamsDecl : Decl -> Unit
@@ -391,7 +407,7 @@ checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> ScopeId ->
 checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneDiagsK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneDiagsSynthetic : List Decl -> List Decl -> List (String, List Decl) -> (List TcDiag, List TcDiag)
-checkOneEffectParam : String -> String -> Unit
+checkOneEffectParam : String -> Param -> EffParamTy -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkOneMatchToLines : List Decl -> List Decl -> String
@@ -401,6 +417,7 @@ checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, Li
 checkOneToLines : List Decl -> String
 checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkPhantomMethods : ClassEnv -> Int -> Unit
+checkPrefixLiteral : String -> String -> Unit
 checkProductAxes : String -> Param -> Unit
 checkProductAxesGo : String -> List (String, Param) -> Unit
 checkRecBindNonFunction : String -> Expr -> Unit
@@ -493,6 +510,7 @@ cohWhereSuffix : String -> String -> String
 collapsesEffvarsMsg : String -> Ty -> String
 collapsesTyvarsMsg : String -> Ty -> String
 collectAbstractRecordTypes : List Decl -> List String
+collectAuthAllowance : List Authority -> Authority
 collectByParam : List String -> List (String, Mono) -> List Mono
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
 collectDictSites : Expr -> List (List Route)
@@ -504,6 +522,7 @@ collectTyIds : List Mono -> List Int
 collectValueAllowance : List EffRow -> EffRow
 composeOp : Mono -> Mono -> Bool -> Mono
 computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String, String)
+concreteAtom : Atom -> Bool
 concreteHeadVarIds : Mono -> List Int
 concreteReqMatchByIface : IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 consOp : Mono -> Mono -> Mono
@@ -691,6 +710,7 @@ decodeAxis : String -> (String, Param)
 decodeAxisVal : String -> Param
 decodeProductParam : String -> Param
 decodeSetParam : String -> List String
+dedupBinders : List (String, Param) -> List (String, Param) -> List (String, Param)
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
 dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
@@ -708,6 +728,7 @@ defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
 defaultEachMemberWith : Option Int -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNumWith : Option Int -> Map String Unit -> List UObligation -> List Mono -> Unit
+defaultSourcelessAuthorities : EffRow -> Mono -> Unit
 defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 deferEffectRelation : Bool -> EffRow -> EffRow -> Unit
@@ -780,7 +801,7 @@ dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
 dropMethodIdentCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))
 dropModSchemes : (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
 dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
-dtopFor : String -> Param
+dtopFor : EffLabel -> Param
 eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
 eagerRefs : Expr -> List String
 eagerRefsArm : Arm -> List String
@@ -831,6 +852,7 @@ emptyImplUniverse : ImplUniverse
 emptyMethodModulePredicateSlot : String -> List String -> IfaceMethod -> List ((String, String), List MethodPredicateSlot)
 emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String), List MethodPredicateSlot)
 emptyShadowDicts : ShadowDicts
+emptySigVars : SigVars
 enclDictVarOf : Option PredicateRequest -> Mono -> String -> ScopeId -> Option EvidenceBinderId
 enclPreds : String -> List PredicateSlot
 enclSlot : String -> Mono -> Option Int
@@ -853,6 +875,7 @@ entryHeadMatches : Ty -> List Ty -> List Mono -> Bool
 entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
 entryReportFromDiags : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> String
 envAlphaLets : TcEnv -> List (String, Expr)
+envVarType : TcEnv -> String -> Option Mono
 eqCompareOp : Mono -> Mono -> Mono
 eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
@@ -897,11 +920,11 @@ extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
-externSigsToMap : List Decl -> Map String (String, List (String, Option String)) -> Map String (String, List (String, Option String))
+externSigsToMap : List Decl -> Map String (String, List EffAtomTy) -> Map String (String, List EffAtomTy)
 ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
 ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
-ffiCheckCatalogRowOne : String -> Ty -> List (String, Option String) -> Unit
+ffiCheckCatalogRowOne : String -> Ty -> List EffAtomTy -> Unit
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
@@ -917,7 +940,7 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
-ffiHasAtom : List (String, Option String) -> Bool
+ffiHasAtom : List EffAtomTy -> Bool
 ffiIsBuiltinExternName : String -> Bool
 ffiNonCrossableMsg : String -> Ty -> String
 ffiNullaryMsg : String -> String
@@ -934,7 +957,7 @@ ffiStampMode : String -> Bool
 ffiStampModeOwned : String -> Bool
 ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
 ffiUnlabelledMsg : String -> String
-ffiWrittenRow : Ty -> List (String, Option String)
+ffiWrittenRow : Ty -> List EffAtomTy
 fieldAssignDictSites : FieldAssign -> List (List Route)
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
@@ -948,9 +971,7 @@ fieldOwnerReachFilter : List String -> List String
 fieldOwnerReachable : String -> Bool
 fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
-fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
-fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
-fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
+fieldTypeE : SigVars -> List (String, Mono) -> Field -> Mono
 filterImplTysFor : List Decl -> String -> String -> List (List Ty)
 filterMaybeIds : List (Option Int) -> List Int
 filterMaybeMonos : List (Option Mono) -> List Mono
@@ -967,7 +988,7 @@ findTvarInMono : Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
 finishAssumptionTrace : Unit -> List AssumptionTraceEntry
 finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
-finishEffectContract : Map Int Unit -> Unit
+finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishModuleMarking : ModuleMarking -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
@@ -993,17 +1014,21 @@ firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
 firstTvar : Mono -> Mono -> Int -> Option Mono
 fixedSibling : Int -> List (Int, String) -> Option String
 flatGroupIsCore : List String -> Bool
-foldAppFallback : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
-foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
+foldAppFallback : SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
+foldAppKinds : SigVars -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
 foldModules : Bool -> Bool -> (String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a)) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, List Decl) -> b
-foldRowSlotArgs : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
+foldRowSlotArgs : SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldrFun : List Mono -> Mono -> Mono
 forceInstantiation : MethodTrackedInstantiation -> Mono
 foreachUnit : (a -> Unit) -> List a -> Unit
 formBareLocals : UsePath -> BareLocals -> BareLocals
 forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
+freeAuthvars : Mono -> List Int
 freeEffvars : Mono -> List Int
 freeGenVars : Int -> Mono -> List Int
+freshAuthBinder : (String, Param) -> (String, Ref Authvar)
+freshAuthSubstFor : List Int -> Mono -> EffRow -> List (Int, Authority)
+freshAuthvar : Param -> Option String -> Ref Authvar
 freshCrossRun : TcEnv -> CrossRun
 freshDriverState : Unit -> DriverState
 freshEffMap : List String -> List (String, Ref Effvar)
@@ -1013,6 +1038,7 @@ freshEffvar : Unit -> Ref Effvar
 freshEffvarAt : Int -> Ref Effvar
 freshEvId : Unit -> EvId
 freshGraphRun : Unit -> GraphRun
+freshInferenceAuthvar : Option (Ref Authvar) -> Ref Authvar
 freshInferenceEffvar : Unit -> Ref Effvar
 freshPerRun : Unit -> PerRun
 freshSubst : List Int -> List (Int, Mono)
@@ -1020,10 +1046,11 @@ freshToggles : Unit -> Toggles
 freshTvMap : List String -> List (String, Mono)
 freshVar : Unit -> Mono
 freshVars : Int -> List Mono
+fromAstDomainE : SigVars -> List (String, Mono) -> Ty -> Mono
 fromAstType : List (String, Mono) -> Ty -> Mono
-fromAstTypeApp : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
-fromAstTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
-fromAstTypeVarApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
+fromAstTypeApp : SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
+fromAstTypeE : SigVars -> List (String, Mono) -> Ty -> Mono
+fromAstTypeVarApp : SigVars -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 funArity : Mono -> Int
 funClauseDictSites : FunClause -> List (List Route)
 funClauseEVars : FunClause -> List String
@@ -1033,6 +1060,7 @@ funDefs : List Decl -> List (String, (List Pat, Expr))
 funDomain : Mono -> Mono
 genBindingRestricted : Bool -> EffRow -> Mono -> Scheme
 genRestricted : Bool -> Mono -> Scheme
+generalizableAuthvars : List (Ref Authvar) -> List Int
 generalizableEffvar : Ref Effvar -> List Int
 generalize : Mono -> Scheme
 generalizeBinding : EffRow -> Mono -> Scheme
@@ -1114,7 +1142,6 @@ headTyconMono : Mono -> Option HeadKey
 headTyconNameMono : Mono -> Option String
 headTyconTy : Ty -> Option HeadKey
 headlessBucketKey : RegKey
-holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
@@ -1303,10 +1330,10 @@ indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
 indexRowMismatchMsg : List Atom -> List Atom -> String
 infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
-inferApp : List (String, Expr) -> Expr -> Mono -> Mono -> Mono
+inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
 inferAppArgsAgainst : TcEnv -> Expr -> Mono -> List Expr -> Mono
 inferAppExpr : TcEnv -> Expr -> Expr -> Mono
-inferAppNodes : List (String, Expr) -> Mono -> List (Expr, Mono) -> Mono
+inferAppNodes : TcEnv -> Mono -> List (Expr, Mono) -> Mono
 inferAppNotFunction : Expr -> Mono -> Mono -> Mono
 inferAppResultFirst : TcEnv -> Expr -> List Expr -> Mono -> Mono
 inferArm : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
@@ -1459,6 +1486,7 @@ intercalateComma : List String -> String
 interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
 ioAliasLabels : List String
+ioLabel : EffLabel
 isBareTyvarMono : Mono -> Bool
 isCompareMethod : String -> Bool
 isConPat : Pat -> Bool
@@ -1471,7 +1499,6 @@ isDirectInterfaceDecl : Decl -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
-isHoleParam : Param -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
 isMangledExportOfAny : List (String, List (String, a)) -> String -> Bool
@@ -1480,9 +1507,10 @@ isMonoScheme : Scheme -> Bool
 isNonexpansive : TcEnv -> Expr -> Bool
 isPreludeMid : String -> Bool
 isRigidCell : Ref Effvar -> Bool
-isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
+isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isShadowStandalone : TcEnv -> String -> Bool
+isStringTy : Ty -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
 isUnboundTvar : Mono -> Bool
@@ -1506,15 +1534,15 @@ keyForSite : String -> List Mono -> Option String
 kindAnnAtom : KindAnn -> Kind
 kindAnnHasEffect : KindAnn -> Bool
 kindAnnSlots : KindAnn -> List Kind
-kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> Mono
+kindArgMono : SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
 kindName : Kind -> String
 kindOfAnn : Option KindAnn -> Kind
 kindPublicDataDecl : Decl -> Bool
 kindsEq : List Kind -> List Kind -> Bool
-kpLcp : String -> String -> KP
 krowArgVarAtoms : List Kind -> List (List Atom) -> List Ty -> List (String, List Atom)
 krowArgVarNames : List Kind -> List Ty -> List String
-krowEtbl : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
+krowEtbl : List String -> List Kind -> List Mono -> SigVars
+krowRows : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
 krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotVarOccs : List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
@@ -1573,6 +1601,7 @@ lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
 lookupStandaloneVar : TcEnv -> String -> Option Scheme
 lookupTraceEvidence : EvId -> List EvEntry -> Option EvVal
 lookupVar : TcEnv -> String -> Option Scheme
+lowerAuthLevels : Int -> Authority -> Unit
 lowerMembers : Int -> List (Ref Effvar) -> Unit
 lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : Mono -> Unit
@@ -1800,6 +1829,9 @@ monosTvarIds : List Int -> List Mono -> List Int
 nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceRows : List Decl -> List (String, List String)
 nameableIfaceShadows : List Decl -> List String -> List String
+namedArgTypes : Ty -> List (String, Ty)
+namedAtomBinder : EffAtomTy -> List (String, Param)
+namedAtomBinders : Ty -> List (String, Param)
 namesToSet : List String -> Map String Unit -> Map String Unit
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
@@ -1864,7 +1896,7 @@ oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
-occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
+occsOfTails : List String -> List EffAtomTy -> List (String, List Atom)
 occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
@@ -1915,16 +1947,17 @@ paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> O
 paramPolaritiesIn : List (TabKey, List Polarity) -> TabKey -> Option (List Polarity)
 paramPolaritiesOf : TabKey -> Option (List Polarity)
 paramRowAtomOccs : String -> Ty -> List (List Atom)
-paramRowAtomsFor : String -> List String -> List (String, Option String) -> List (List Atom)
+paramRowAtomsFor : String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsOf : TabKey -> Option (List (List Atom))
 paramVarianceGuard : Mono -> Mono -> Mono -> Unit
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
 patVarsListTc : List Pat -> List String
 patVarsTc : Pat -> List String
 payloadAstTypes : ConPayload -> List Ty
-payloadTypesE : List (String, Ref Effvar) -> List (String, Mono) -> ConPayload -> List Mono
+payloadTypesE : SigVars -> List (String, Mono) -> ConPayload -> List Mono
 peelArrows : Int -> Mono -> List Mono
 peelOntoParams : Option Mono -> List Mono -> List Pat -> Unit
+peelQual : Mono -> Mono
 perRun : Ref PerRun
 performEffect : Ref (List EffRow) -> EffRow -> Unit
 phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
@@ -1947,7 +1980,7 @@ pinnedTwoTypes : Mono -> Mono -> Mono -> String
 pinnedTwoTypesG : Mono -> Mono -> Mono -> String
 pinnedUniqueEntry : List (Mono, String, String, Option Loc) -> Option (Mono, String, String, Option Loc)
 pinsTyvarMsg : String -> Ty -> List String -> String
-pipeOp : Mono -> Mono -> Mono
+pipeOp : TcEnv -> Expr -> Expr -> Mono -> Mono -> Mono
 placeholderMonoOf : String -> List (String, Mono) -> Mono
 plainAppHead : TcEnv -> Expr -> Bool
 plainAppHeadVar : TcEnv -> Expr -> Bool
@@ -2064,6 +2097,8 @@ qualSchemeOblsFor : String -> Option (List VecObl)
 qualifiedArgumentKinds : Option Loc -> List (String, List Kind) -> List (List Kind) -> List Ty -> List (String, List Kind)
 qualifiedConstraintKinds : Option Loc -> List (String, List Kind) -> List Constraint -> List (String, List Kind)
 qualifiedKindScope : List (String, List Kind) -> Ty -> List (String, List Kind)
+qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
+qualifyBy : SigVars -> String -> Mono -> Mono
 quotedNames : List String -> String
 rangeFromCount : Int -> Int -> List Int
 reachableStandaloneSig : List (String, List Decl) -> Int -> List Decl -> String -> Option (Option Ty)
@@ -2150,6 +2185,7 @@ reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
 reexportedOrigins : List Decl -> String -> List (String, String)
 reexportedOriginsOf : Decl -> String -> List (String, String)
+refStored : Mono -> Mono
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
 regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
@@ -2163,7 +2199,7 @@ registerData : TcEnv -> Decl -> TcEnv
 registerDispatchMonos : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Int -> List Int -> List Int -> Unit
 registerEachActive : List Int -> EvidenceBinderId -> Unit
 registerEachActiveId : List Int -> EvidenceBinderId -> Unit
-registerEffectDomain : String -> Option String -> Unit
+registerEffectDomain : EffLabel -> Option String -> Unit
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
 registerFunPredGivenSlots : List PredicateSlot -> EvidenceBinderId -> Unit
 registerImplMethodDictOne : ScopeId -> Int -> String -> List (String, Mono) -> Unit
@@ -2209,10 +2245,12 @@ reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
 reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousImportsIn : Map String Unit -> List Decl -> Unit
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
+reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportNumlitMismatch : List Mono -> Option Loc -> Unit
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
+reportRowFailure : SummaryFailure (Option Loc, String) -> Unit
 reportSigTooGeneral : String -> Ty -> Option (Int, String, String) -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
@@ -2297,15 +2335,16 @@ rowArgNames : Ty -> List String
 rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List String -> List String
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
-rowArgOf : List (String, Ref Effvar) -> Ty -> EffRow
+rowArgOf : SigVars -> Ty -> EffRow
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
+rowFreeAuthvars : EffRow -> List Int
 rowFreeEffvars : EffRow -> List Int
 rowHasMethodIn : List String -> Map String Unit -> Bool
 rowHasRigid : EffRow -> Bool
 rowInto : Bool -> EffRow -> EffRow -> Unit
-rowKindMismatchMsg : List (String, Option String) -> List String -> String
+rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
-rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
+rowSlotArgMono : SigVars -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
 rowTailIsJoin : EffRow -> Bool
 rowText : String -> String
@@ -2313,10 +2352,12 @@ runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> Im
 runStampCtxs : List StampCtx -> Unit
 runStampStep : StampCtx -> StampStep -> Unit
 runStampSteps : StampCtx -> List StampStep -> Unit
+sameDomainTop : Param -> Param -> Bool
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
 sameRootId : Int -> Mono -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
 sameTraceEvId : EvId -> EvId -> Bool
+sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
 sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> Map String Unit
 sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List ScopedMember -> List (String, Scheme)
 schemeBodyOf : Scheme -> Mono
@@ -2392,6 +2433,9 @@ sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvarIds : List Mono -> List Int
 sigTvarNamedIds : List (String, Mono) -> List (String, Int)
 sigVarFixedBy : List (Int, String) -> List (String, Mono) -> Option (String, String)
+sigVarsFor : Ty -> List String -> SigVars
+sigVarsRows : List (String, Ref Effvar) -> SigVars
+sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
 siteEntry : Obligation -> List PendingEntry
@@ -2404,13 +2448,12 @@ sitesFor : String -> Map String (List a) -> List a
 solveExactReturn : MethodReturnRequest -> MethodReturnResolution
 solveExactReturnInstance : MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
 solveExactReturnOnce : MethodReturnRequest -> MethodReturnResolution
+solveFlexibleUpper : Authority -> Authority -> Bool
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
 sourceBindingArity : Expr -> Int
 spellCtxOf : List Decl -> SpellCtx
-spineFirstArg : Expr -> Option Expr
-spineHeadIsApp : Expr -> Bool
 spineHeadMono : Mono -> Mono
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
@@ -2449,14 +2492,17 @@ stripLeadingMethodConstraints : Ty -> Ty
 stripTyConstraints : Ty -> Ty
 stripTyWrap : Ty -> Ty
 substArgVec : List (Int, Mono) -> Mono -> List Mono -> List Mono
+substAtom : List (Int, Authority) -> Atom -> Atom
+substAtoms : List (Int, Authority) -> List Atom -> List Atom
+substAuth : List (Int, Authority) -> Authority -> Authority
 substField : List (Int, Mono) -> (String, Mono) -> (String, Mono)
 substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
-substMono : List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
+substMono : List (Int, Mono) -> List (Int, Ref Effvar) -> List (Int, Authority) -> Mono -> Mono
 substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
 substOblArg : Mono -> List (Int, Mono) -> Option Mono
 substOblArgs : List Mono -> List (Int, Mono) -> Option (List Mono)
 substParams : List String -> List (String, Ty) -> List Ty
-substRow : List (Int, Ref Effvar) -> EffRow -> EffRow
+substRow : List (Int, Ref Effvar) -> List (Int, Authority) -> EffRow -> EffRow
 substTyVars : List (String, Ty) -> Ty -> Ty
 substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
 suggestField : String -> List String -> Option String
@@ -2480,8 +2526,8 @@ tagAllLitLocs : Mono -> String -> Unit
 tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit
 tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)
 tagNumlitCtxIf : Mono -> Mono -> String -> Unit
-tailCell : List (String, Ref Effvar) -> List String -> Option (Ref Effvar)
-tailCellsOf : List (String, Ref Effvar) -> List String -> List (Ref Effvar)
+tailCell : SigVars -> List String -> Option (Ref Effvar)
+tailCellsOf : SigVars -> List String -> List (Ref Effvar)
 taintAndDrop : Int -> List (Mono, Loc) -> List (Mono, Loc)
 takeAlphaConstraint : List (String, String) -> Constraint -> List Constraint -> List Constraint -> Option (List (String, String), List Constraint)
 takeFirst : Int -> List a -> List a
@@ -2571,8 +2617,10 @@ unifyRowN : EffRow -> EffRow -> Unit
 unifyRowPlain : EffRow -> EffRow -> Unit
 unifySourceDomains : Int -> Mono -> Mono -> Unit
 unifySpineProbe : Mono -> List Mono -> Unit
-unifySpineResult : Mono -> List Mono -> Mono
+unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
+unifyStruct : Mono -> Mono -> Unit
+unifyValue : Mono -> Mono -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 uniqueImplRequires : List (String, Mono) -> Map String Unit -> List Require -> List Require
 uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
@@ -2627,14 +2675,17 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+wantAuthority : Authority -> Authority -> Unit
 wantedMatches : Wanted -> Wanted -> Bool
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
-writtenBindingForce : List (String, Ref Effvar) -> Ty -> Option EffRow
+writtenAxis : (String, EffParamTy) -> (String, Param)
+writtenBindingForce : SigVars -> Ty -> Option EffRow
+writtenParam : Param -> EffParamTy -> Param
 xmodOblArgId : Mono -> List Int
 xmodVecObl : CSlot -> List Mono -> VecObl
+zipBindFrom : List Mono -> List Mono -> Unit
 zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
 zipMethodSlotSubst : List Int -> List Int -> List Mono -> List (Int, Mono)
 zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)
-zipUnify : List Mono -> List Mono -> Unit

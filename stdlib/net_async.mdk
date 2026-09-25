@@ -55,7 +55,9 @@ connect : String -> Int -> Async <Net | e> (Result String Connection)
 connect host port =
   deferThen (startConnect host port) (started => connectStarted started)
 
-startConnect : String -> Int -> Async <Net | e> (Result String Int)
+startConnect : (host : String) ->
+  Int ->
+  Async <Net host | e> (Result String Int)
 startConnect host port = liftIO (u => netConnectStart host port)
 
 connectStarted : Result String Int -> Async <Net | e> (Result String Connection)

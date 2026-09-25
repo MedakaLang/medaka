@@ -7,11 +7,17 @@ NEWLINE
 EXTERN
 IDENT "netGet"
 COLON
+LPAREN
+IDENT "url"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
+UPPER "FFI"
+COMMA
 UPPER "Net"
-UNDERSCORE
+IDENT "url"
 GT
 UPPER "String"
 NEWLINE
@@ -22,6 +28,8 @@ ARROW
 LT
 UPPER "Net"
 STRING "a.com/*"
+COMMA
+UPPER "FFI"
 GT
 UPPER "String"
 NEWLINE
@@ -47,8 +55,8 @@ NEWLINE
 EOF
 === AST ===
 effect Net Prefix
-extern netGet : String -> <Net _> String
-fetch : Unit -> <Net "a.com/*"> String
+extern netGet : (url : String) -> <FFI, Net url> String
+fetch : Unit -> <Net "a.com/*", FFI> String
 fetch _ = netGet "a.com/foo"
 main : <IO> Unit
 main = println "effect hole ok"

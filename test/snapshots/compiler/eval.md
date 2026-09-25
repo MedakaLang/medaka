@@ -1,5 +1,5 @@
 # META
-source_lines=5040
+source_lines=5046
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -650,6 +650,8 @@ countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
 countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
+countTyvars (TyNamed _ t) = countTyvars t
+countTyvars (TyQual t _) = countTyvars t
 
 sumInts : List Int -> Int
 sumInts [] = 0
@@ -736,6 +738,7 @@ headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
+headTycon (TyQual t _) = headTycon t
 headTycon (TyTuple ts) = Some (tupleHeadTag (listLen ts))
 headTycon (TyFun _ _) = Some funHeadTag
 headTycon _ = None
@@ -747,6 +750,7 @@ dispatchPositionsOf mty params = filterMentions 0 (argsOfTy mty) params
 argsOfTy : Ty -> List Ty
 argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
+argsOfTy (TyFun (TyNamed _ a) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
 argsOfTy _ = []
 
@@ -764,6 +768,8 @@ tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
+tyMentions (TyNamed _ t) params = tyMentions t params
+tyMentions (TyQual t _) params = tyMentions t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name — the same relationship `TyVar`
 -- above already tracks for an ordinary type parameter used unwrapped.
@@ -4691,7 +4697,7 @@ evalModulesOutput preludeDecls modules =
 -- that is a property of the buffered-stdout design, tracked separately as
 -- "`run` drops stdout on panic", and streaming stderr is a step toward, not away
 -- from, fixing it.
-pReadFile : Value e -> <FileRead "_" | e> Value e
+pReadFile : Value e -> <FileRead | e> Value e
 pReadFile (VString path) = match readFile path
   Ok s => VCon "Ok" [VString s]
   Err m => VCon "Err" [VString m]
@@ -4794,29 +4800,29 @@ pEPutStrLn (VString s) =
 pEPutStrLn _ = panic "ePutStrLn: not a String"
 
 -- ── File ──────────────────────────────────────────────────────────────────
-pReadFileBytes : Value e -> <FileRead "_" | e> Value e
+pReadFileBytes : Value e -> <FileRead | e> Value e
 pReadFileBytes (VString path) =
   resultToValue (mapResultOk vIntArray (readFileBytes path))
 pReadFileBytes _ = panic "readFileBytes: not a String"
 
-pFileExists : Value e -> <FileRead "_" | e> Value e
+pFileExists : Value e -> <FileRead | e> Value e
 pFileExists (VString path) = VBool (fileExists path)
 pFileExists _ = panic "fileExists: not a String"
 
-pFileMode : Value e -> <FileRead "_" | e> Value e
+pFileMode : Value e -> <FileRead | e> Value e
 pFileMode (VString path) = resultToValue (mapResultOk VInt (fileMode path))
 pFileMode _ = panic "fileMode: not a String"
 
-pCanonicalizePath : Value e -> <FileRead "_" | e> Value e
+pCanonicalizePath : Value e -> <FileRead | e> Value e
 pCanonicalizePath (VString path) = VString (canonicalizePath path)
 pCanonicalizePath _ = panic "canonicalizePath: not a String"
 
-pListDir : Value e -> <FileRead "_" | e> Value e
+pListDir : Value e -> <FileRead | e> Value e
 pListDir (VString path) = resultToValue (mapResultOk vStringList (listDir path))
 pListDir _ = panic "listDir: not a String"
 
 -- statFile : String -> Result String (Int, Bool, Bool, Float)  (size, isDir, isFile, mtime)
-pStatFile : Value e -> <FileRead "_" | e> Value e
+pStatFile : Value e -> <FileRead | e> Value e
 pStatFile (VString path) = resultToValue (mapResultOk statTuple (statFile path))
 pStatFile _ = panic "statFile: not a String"
 
@@ -4824,41 +4830,41 @@ statTuple : (Int, Bool, Bool, Float) -> Value e
 statTuple (sz, isDir, isFile, mtime) =
   VTuple [VInt sz, VBool isDir, VBool isFile, VFloat mtime]
 
-pWriteFile : Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFile : Value e -> Value e -> <FileWrite | e> Value e
 pWriteFile (VString path) (VString s) = unitResultToValue (writeFile path s)
 pWriteFile _ _ = panic "writeFile: expected String String"
 
-pWriteFileBytes : Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFileBytes : Value e -> Value e -> <FileWrite | e> Value e
 pWriteFileBytes (VString path) bs =
   unitResultToValue (writeFileBytes path (unIntArray bs))
 pWriteFileBytes _ _ = panic "writeFileBytes: expected String (Array Int)"
 
-pWriteFileMode : Value e -> Value e -> Value e -> <FileWrite "_" | e> Value e
+pWriteFileMode : Value e -> Value e -> Value e -> <FileWrite | e> Value e
 pWriteFileMode (VString path) (VInt mode) (VString s) =
   unitResultToValue (writeFileMode path mode s)
 pWriteFileMode _ _ _ = panic "writeFileMode: expected String Int String"
 
-pAppendFile : Value e -> Value e -> <FileWrite "_" | e> Value e
+pAppendFile : Value e -> Value e -> <FileWrite | e> Value e
 pAppendFile (VString path) (VString s) = unitResultToValue (appendFile path s)
 pAppendFile _ _ = panic "appendFile: expected String String"
 
-pMakeDir : Value e -> <FileWrite "_" | e> Value e
+pMakeDir : Value e -> <FileWrite | e> Value e
 pMakeDir (VString path) = unitResultToValue (makeDir path)
 pMakeDir _ = panic "makeDir: not a String"
 
-pRemoveFile : Value e -> <FileWrite "_" | e> Value e
+pRemoveFile : Value e -> <FileWrite | e> Value e
 pRemoveFile (VString path) = unitResultToValue (removeFile path)
 pRemoveFile _ = panic "removeFile: not a String"
 
-pRemoveDir : Value e -> <FileWrite "_" | e> Value e
+pRemoveDir : Value e -> <FileWrite | e> Value e
 pRemoveDir (VString path) = unitResultToValue (removeDir path)
 pRemoveDir _ = panic "removeDir: not a String"
 
-pRename : Value e -> Value e -> <FileWrite "_" | e> Value e
+pRename : Value e -> Value e -> <FileWrite | e> Value e
 pRename (VString old) (VString new) = unitResultToValue (rename old new)
 pRename _ _ = panic "rename: expected String String"
 
-pFsync : Value e -> <FileWrite "_" | e> Value e
+pFsync : Value e -> <FileWrite | e> Value e
 pFsync (VString path) = unitResultToValue (fsync path)
 pFsync _ = panic "fsync: expected String"
 
@@ -4876,7 +4882,7 @@ progArgsRef = Ref []
 pArgs : Value e -> <Env | e> Value e
 pArgs _ = vStringList !progArgsRef
 
-pGetEnv : Value e -> <Env "_" | e> Value e
+pGetEnv : Value e -> <Env | e> Value e
 pGetEnv (VString name) = vOptionString (getEnv name)
 pGetEnv _ = panic "getEnv: not a String"
 
@@ -5220,6 +5226,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
+(DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "sumInts" ((PList)) (ELit (LInt 0)))
 (DFunDef false "sumInts" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "+" (EVar "x") (EApp (EVar "sumInts") (EVar "xs"))))
@@ -5232,6 +5240,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "headTycon" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTycon") (EVar "a")))
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
+(DFunDef false "headTycon" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "ts")))))
 (DFunDef false "headTycon" ((PCon "TyFun" PWild PWild)) (EApp (EVar "Some") (EVar "funHeadTag")))
 (DFunDef false "headTycon" (PWild) (EVar "None"))
@@ -5240,6 +5249,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "argsOfTy" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "argsOfTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
 (DFunDef false "argsOfTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
+(DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a")) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" (PWild) (EListLit))
 (DTypeSig false "filterMentions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -5253,6 +5263,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
@@ -6493,7 +6505,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "firstOrEmpty" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "evalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
 (DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "evalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
-(DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pReadFile" ((PCon "VString" (PVar "path"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "s")) () (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EApp (EVar "VString") (EVar "s"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EVar "VString") (EVar "m")))))))
 (DFunDef false "pReadFile" (PWild) (EApp (EVar "panic") (ELit (LString "readFile: not a String"))))
 (DTypeSig false "resultToValue" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e"))))
@@ -6531,58 +6543,58 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pEPutStrLn" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stderr") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pEPutStrLn" ((PCon "VString" (PVar "s"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "s"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pEPutStrLn" (PWild) (EApp (EVar "panic") (ELit (LString "ePutStrLn: not a String"))))
-(DTypeSig false "pReadFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pReadFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pReadFileBytes" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "vIntArray")) (EApp (EVar "readFileBytes") (EVar "path")))))
 (DFunDef false "pReadFileBytes" (PWild) (EApp (EVar "panic") (ELit (LString "readFileBytes: not a String"))))
-(DTypeSig false "pFileExists" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pFileExists" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFileExists" ((PCon "VString" (PVar "path"))) (EApp (EVar "VBool") (EApp (EVar "fileExists") (EVar "path"))))
 (DFunDef false "pFileExists" (PWild) (EApp (EVar "panic") (ELit (LString "fileExists: not a String"))))
-(DTypeSig false "pFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFileMode" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "VInt")) (EApp (EVar "fileMode") (EVar "path")))))
 (DFunDef false "pFileMode" (PWild) (EApp (EVar "panic") (ELit (LString "fileMode: not a String"))))
-(DTypeSig false "pCanonicalizePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pCanonicalizePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pCanonicalizePath" ((PCon "VString" (PVar "path"))) (EApp (EVar "VString") (EApp (EVar "canonicalizePath") (EVar "path"))))
 (DFunDef false "pCanonicalizePath" (PWild) (EApp (EVar "panic") (ELit (LString "canonicalizePath: not a String"))))
-(DTypeSig false "pListDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pListDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pListDir" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "vStringList")) (EApp (EVar "listDir") (EVar "path")))))
 (DFunDef false "pListDir" (PWild) (EApp (EVar "panic") (ELit (LString "listDir: not a String"))))
-(DTypeSig false "pStatFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pStatFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pStatFile" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "statTuple")) (EApp (EVar "statFile") (EVar "path")))))
 (DFunDef false "pStatFile" (PWild) (EApp (EVar "panic") (ELit (LString "statFile: not a String"))))
 (DTypeSig false "statTuple" (TyFun (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "statTuple" ((PTuple (PVar "sz") (PVar "isDir") (PVar "isFile") (PVar "mtime"))) (EApp (EVar "VTuple") (EListLit (EApp (EVar "VInt") (EVar "sz")) (EApp (EVar "VBool") (EVar "isDir")) (EApp (EVar "VBool") (EVar "isFile")) (EApp (EVar "VFloat") (EVar "mtime")))))
-(DTypeSig false "pWriteFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pWriteFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pWriteFile" ((PCon "VString" (PVar "path")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "s"))))
 (DFunDef false "pWriteFile" (PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFile: expected String String"))))
-(DTypeSig false "pWriteFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pWriteFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pWriteFileBytes" ((PCon "VString" (PVar "path")) (PVar "bs")) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "writeFileBytes") (EVar "path")) (EApp (EVar "unIntArray") (EVar "bs")))))
 (DFunDef false "pWriteFileBytes" (PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileBytes: expected String (Array Int)"))))
-(DTypeSig false "pWriteFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DTypeSig false "pWriteFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "pWriteFileMode" ((PCon "VString" (PVar "path")) (PCon "VInt" (PVar "mode")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "mode")) (EVar "s"))))
 (DFunDef false "pWriteFileMode" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileMode: expected String Int String"))))
-(DTypeSig false "pAppendFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pAppendFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pAppendFile" ((PCon "VString" (PVar "path")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "appendFile") (EVar "path")) (EVar "s"))))
 (DFunDef false "pAppendFile" (PWild PWild) (EApp (EVar "panic") (ELit (LString "appendFile: expected String String"))))
-(DTypeSig false "pMakeDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pMakeDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pMakeDir" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "makeDir") (EVar "path"))))
 (DFunDef false "pMakeDir" (PWild) (EApp (EVar "panic") (ELit (LString "makeDir: not a String"))))
-(DTypeSig false "pRemoveFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pRemoveFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pRemoveFile" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "removeFile") (EVar "path"))))
 (DFunDef false "pRemoveFile" (PWild) (EApp (EVar "panic") (ELit (LString "removeFile: not a String"))))
-(DTypeSig false "pRemoveDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pRemoveDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pRemoveDir" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "removeDir") (EVar "path"))))
 (DFunDef false "pRemoveDir" (PWild) (EApp (EVar "panic") (ELit (LString "removeDir: not a String"))))
-(DTypeSig false "pRename" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pRename" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pRename" ((PCon "VString" (PVar "old")) (PCon "VString" (PVar "new"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "rename") (EVar "old")) (EVar "new"))))
 (DFunDef false "pRename" (PWild PWild) (EApp (EVar "panic") (ELit (LString "rename: expected String String"))))
-(DTypeSig false "pFsync" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pFsync" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFsync" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "fsync") (EVar "path"))))
 (DFunDef false "pFsync" (PWild) (EApp (EVar "panic") (ELit (LString "fsync: expected String"))))
 (DTypeSig true "progArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "progArgsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "pArgs" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pArgs" (PWild) (EApp (EVar "vStringList") (EUnOp "!" (EVar "progArgsRef"))))
-(DTypeSig false "pGetEnv" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "Env")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pGetEnv" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pGetEnv" ((PCon "VString" (PVar "name"))) (EApp (EVar "vOptionString") (EApp (EVar "getEnv") (EVar "name"))))
 (DFunDef false "pGetEnv" (PWild) (EApp (EVar "panic") (ELit (LString "getEnv: not a String"))))
 (DTypeSig false "pExecutablePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -6799,6 +6811,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
+(DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "sumInts" ((PList)) (ELit (LInt 0)))
 (DFunDef false "sumInts" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "+" (EVar "x") (EApp (EVar "sumInts") (EVar "xs"))))
@@ -6811,6 +6825,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "headTycon" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTycon") (EVar "a")))
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
+(DFunDef false "headTycon" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "ts")))))
 (DFunDef false "headTycon" ((PCon "TyFun" PWild PWild)) (EApp (EVar "Some") (EVar "funHeadTag")))
 (DFunDef false "headTycon" (PWild) (EVar "None"))
@@ -6819,6 +6834,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "argsOfTy" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "argsOfTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
 (DFunDef false "argsOfTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
+(DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a")) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" (PWild) (EListLit))
 (DTypeSig false "filterMentions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -6832,6 +6848,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
@@ -8072,7 +8090,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "firstOrEmpty" ((PCons (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "evalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
 (DFunDef false "evalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "evalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
-(DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pReadFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pReadFile" ((PCon "VString" (PVar "path"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "s")) () (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EApp (EVar "VString") (EVar "s"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EVar "VString") (EVar "m")))))))
 (DFunDef false "pReadFile" (PWild) (EApp (EVar "panic") (ELit (LString "readFile: not a String"))))
 (DTypeSig false "resultToValue" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e"))))
@@ -8110,58 +8128,58 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pEPutStrLn" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stderr") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pEPutStrLn" ((PCon "VString" (PVar "s"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "s"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pEPutStrLn" (PWild) (EApp (EVar "panic") (ELit (LString "ePutStrLn: not a String"))))
-(DTypeSig false "pReadFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pReadFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pReadFileBytes" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "vIntArray")) (EApp (EVar "readFileBytes") (EVar "path")))))
 (DFunDef false "pReadFileBytes" (PWild) (EApp (EVar "panic") (ELit (LString "readFileBytes: not a String"))))
-(DTypeSig false "pFileExists" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pFileExists" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFileExists" ((PCon "VString" (PVar "path"))) (EApp (EVar "VBool") (EApp (EVar "fileExists") (EVar "path"))))
 (DFunDef false "pFileExists" (PWild) (EApp (EVar "panic") (ELit (LString "fileExists: not a String"))))
-(DTypeSig false "pFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFileMode" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "VInt")) (EApp (EVar "fileMode") (EVar "path")))))
 (DFunDef false "pFileMode" (PWild) (EApp (EVar "panic") (ELit (LString "fileMode: not a String"))))
-(DTypeSig false "pCanonicalizePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pCanonicalizePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pCanonicalizePath" ((PCon "VString" (PVar "path"))) (EApp (EVar "VString") (EApp (EVar "canonicalizePath") (EVar "path"))))
 (DFunDef false "pCanonicalizePath" (PWild) (EApp (EVar "panic") (ELit (LString "canonicalizePath: not a String"))))
-(DTypeSig false "pListDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pListDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pListDir" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "vStringList")) (EApp (EVar "listDir") (EVar "path")))))
 (DFunDef false "pListDir" (PWild) (EApp (EVar "panic") (ELit (LString "listDir: not a String"))))
-(DTypeSig false "pStatFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileRead")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pStatFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileRead") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pStatFile" ((PCon "VString" (PVar "path"))) (EApp (EVar "resultToValue") (EApp (EApp (EVar "mapResultOk") (EVar "statTuple")) (EApp (EVar "statFile") (EVar "path")))))
 (DFunDef false "pStatFile" (PWild) (EApp (EVar "panic") (ELit (LString "statFile: not a String"))))
 (DTypeSig false "statTuple" (TyFun (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float")) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "statTuple" ((PTuple (PVar "sz") (PVar "isDir") (PVar "isFile") (PVar "mtime"))) (EApp (EVar "VTuple") (EListLit (EApp (EVar "VInt") (EVar "sz")) (EApp (EVar "VBool") (EVar "isDir")) (EApp (EVar "VBool") (EVar "isFile")) (EApp (EVar "VFloat") (EVar "mtime")))))
-(DTypeSig false "pWriteFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pWriteFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pWriteFile" ((PCon "VString" (PVar "path")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "writeFile") (EVar "path")) (EVar "s"))))
 (DFunDef false "pWriteFile" (PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFile: expected String String"))))
-(DTypeSig false "pWriteFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pWriteFileBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pWriteFileBytes" ((PCon "VString" (PVar "path")) (PVar "bs")) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "writeFileBytes") (EVar "path")) (EApp (EVar "unIntArray") (EVar "bs")))))
 (DFunDef false "pWriteFileBytes" (PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileBytes: expected String (Array Int)"))))
-(DTypeSig false "pWriteFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DTypeSig false "pWriteFileMode" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "pWriteFileMode" ((PCon "VString" (PVar "path")) (PCon "VInt" (PVar "mode")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EApp (EVar "writeFileMode") (EVar "path")) (EVar "mode")) (EVar "s"))))
 (DFunDef false "pWriteFileMode" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "writeFileMode: expected String Int String"))))
-(DTypeSig false "pAppendFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pAppendFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pAppendFile" ((PCon "VString" (PVar "path")) (PCon "VString" (PVar "s"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "appendFile") (EVar "path")) (EVar "s"))))
 (DFunDef false "pAppendFile" (PWild PWild) (EApp (EVar "panic") (ELit (LString "appendFile: expected String String"))))
-(DTypeSig false "pMakeDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pMakeDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pMakeDir" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "makeDir") (EVar "path"))))
 (DFunDef false "pMakeDir" (PWild) (EApp (EVar "panic") (ELit (LString "makeDir: not a String"))))
-(DTypeSig false "pRemoveFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pRemoveFile" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pRemoveFile" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "removeFile") (EVar "path"))))
 (DFunDef false "pRemoveFile" (PWild) (EApp (EVar "panic") (ELit (LString "removeFile: not a String"))))
-(DTypeSig false "pRemoveDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pRemoveDir" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pRemoveDir" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "removeDir") (EVar "path"))))
 (DFunDef false "pRemoveDir" (PWild) (EApp (EVar "panic") (ELit (LString "removeDir: not a String"))))
-(DTypeSig false "pRename" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DTypeSig false "pRename" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pRename" ((PCon "VString" (PVar "old")) (PCon "VString" (PVar "new"))) (EApp (EVar "unitResultToValue") (EApp (EApp (EVar "rename") (EVar "old")) (EVar "new"))))
 (DFunDef false "pRename" (PWild PWild) (EApp (EVar "panic") (ELit (LString "rename: expected String String"))))
-(DTypeSig false "pFsync" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "FileWrite")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pFsync" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("FileWrite") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFsync" ((PCon "VString" (PVar "path"))) (EApp (EVar "unitResultToValue") (EApp (EVar "fsync") (EVar "path"))))
 (DFunDef false "pFsync" (PWild) (EApp (EVar "panic") (ELit (LString "fsync: expected String"))))
 (DTypeSig true "progArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "progArgsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "pArgs" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pArgs" (PWild) (EApp (EVar "vStringList") (EUnOp "!" (EVar "progArgsRef"))))
-(DTypeSig false "pGetEnv" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ((hole "Env")) (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DTypeSig false "pGetEnv" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pGetEnv" ((PCon "VString" (PVar "name"))) (EApp (EVar "vOptionString") (EApp (EVar "getEnv") (EVar "name"))))
 (DFunDef false "pGetEnv" (PWild) (EApp (EVar "panic") (ELit (LString "getEnv: not a String"))))
 (DTypeSig false "pExecutablePath" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Env") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))

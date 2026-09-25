@@ -1,9 +1,9 @@
--- WS-3b EXEC hole-fill ⊄ REJECT.  α fills <Exec "/usr/bin/ls"> from argv0; the
--- declared bound <Exec "/bin/*"> does NOT cover "/usr/bin/ls" (different prefix)
--- ⇒ REJECT (performs <Exec "/usr/bin/ls">).
-effect Exec Prefix
+-- EXEC named-argument ⊄ REJECT.  `runCommand`'s Exec authority is its argv0
+-- argument, the literal "/usr/bin/ls"; the declared bound <Exec "/bin/*"> does
+-- NOT cover "/usr/bin/ls" (different prefix) ⇒ REJECT (performs <Exec "/usr/bin/ls">).
+-- Exec is the builtin Prefix-domain label; a local declaration would be another label
 
-extern runCommand : String -> List String -> <Exec> Result String (Int, String, String)
+extern runCommand : (program : String) -> List String -> <Exec program> Result String (Int, String, String)
 
 runLs : Unit -> <Exec "/bin/*"> Result String (Int, String, String)
 runLs _ = runCommand "/usr/bin/ls" []

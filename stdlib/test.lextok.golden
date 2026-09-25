@@ -2026,12 +2026,17 @@ EXPORT
 NEWLINE
 IDENT "expectGolden"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "String"
 ARROW
 LT
 UPPER "FileRead"
+IDENT "path"
 GT
 UPPER "Expectation"
 NEWLINE

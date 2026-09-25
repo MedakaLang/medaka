@@ -206,16 +206,24 @@ EXPORT
 NEWLINE
 IDENT "writeFilePrivate"
 COLON
+LPAREN
+IDENT "path"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "String"
 ARROW
 LT
 UPPER "FileWrite"
+IDENT "path"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "writeFilePrivate"
 IDENT "path"
@@ -230,13 +238,19 @@ EXPORT
 NEWLINE
 IDENT "runCommandOk"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "cmd"
 GT
 UPPER "Result"
 UPPER "String"
@@ -245,6 +259,8 @@ UPPER "String"
 COMMA
 UPPER "String"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "runCommandOk"
 IDENT "cmd"
@@ -320,13 +336,19 @@ EXPORT
 NEWLINE
 IDENT "runVerb"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "cmd"
 GT
 UPPER "Result"
 UPPER "String"
@@ -337,6 +359,8 @@ UPPER "String"
 COMMA
 UPPER "String"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "runVerb"
 IDENT "cmd"

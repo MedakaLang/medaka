@@ -19,6 +19,7 @@ import frontend.ast.{
   Ty(..),
   TyConOrigin(..),
   EffAtomTy(..),
+  EffParamTy(..),
   mapTyInDecl,
   firstTyLoc,
   firstTyLocList,
@@ -233,6 +234,13 @@ public export data ResError =
   -- along two paths) is one provenance and is not ambiguous; the module's own
   -- declaration settles the name.
   | AmbiguousEffect String (List String) (Option Loc)
+  -- an authority name written in a row (`<FileRead p>`) or a qualifier
+  -- (`String @p`) with no `(p : T)` binder to its left in the same signature.
+  -- Authority names are lexically bound, never implicitly quantified: a typo
+  -- would otherwise silently become "any authority".
+  | UnboundAuthority String (Option Loc)
+  -- a `(name : T)` binder somewhere other than an arrow's domain.
+  | MisplacedAuthorityBinder String (Option Loc)
   -- an internal-only array-kernel extern (arrayGetUnsafe, …) referenced from a
   -- module that is neither in the standard library nor compiled with
   -- `--allow-internal` (see internalExterns / Env.internalGuard)
@@ -297,6 +305,8 @@ resErrorLoc (AmbiguousAliasCtor _ _ l) = l
 resErrorLoc (AmbiguousType _ _ l) = l
 resErrorLoc (AmbiguousInterface _ _ l) = l
 resErrorLoc (AmbiguousEffect _ _ l) = l
+resErrorLoc (UnboundAuthority _ l) = l
+resErrorLoc (MisplacedAuthorityBinder _ l) = l
 resErrorLoc (InternalExternAccess _ l) = l
 resErrorLoc (ReassignImmutable _ l) = l
 resErrorLoc (DuplicateInterfaceMethod _ _ _ l) = l
@@ -443,7 +453,13 @@ patGroupDupErrors loc kind ps =
 -- `cur` (Stage B) is the enclosing `ELoc` span threaded from the expr walk (or
 -- `None` at decl level).
 checkType : Option Loc -> Env -> Ty -> List ResError
-checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
+checkType cur env t = checkTypeIn [] cur env t
+
+-- [bound] is the authority binders in scope: every `(p : T)` arrow domain to
+-- the left in this signature.  A row atom's named parameter and a `@p`
+-- qualifier must name one of them.
+checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
+checkTypeIn _ cur env (TyCon { tyConName = n, tyConLoc = loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
     -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
     -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
@@ -452,7 +468,7 @@ checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
     ambiguousTypeErrors env n (orElseLoc loc cur)
   else
     [UnknownType n (orElseLoc loc cur) (suggestType env n)]
-checkType _ _ (TyVar _) = []
+checkTypeIn _ _ _ (TyVar _) = []
 -- (helper below `checkType`) — accept the bare tuple type constructors
 -- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
 -- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
@@ -460,14 +476,18 @@ checkType _ _ (TyVar _) = []
 -- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
 -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
 -- typecheck's `tupleHeadTagTc`.
-checkType cur env (TyApp a b) = checkType cur env a ++ checkType cur env b
-checkType cur env (TyFun a b) = checkType cur env a ++ checkType cur env b
-checkType cur env (TyTuple ts) = flatMap (checkType cur env) ts
-checkType cur env (TyEffect labels _ t) =
-  flatMap (checkEffect cur env) (map effAtomLabelOf labels)
-    ++ checkType cur env t
-checkType cur env (TyNamed _ t) = checkType cur env t
-checkType cur env (TyQual t _) = checkType cur env t
+checkTypeIn bound cur env (TyApp a b) =
+  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
+checkTypeIn bound cur env (TyFun (TyNamed n a) b) =
+  checkTypeIn bound cur env a ++ checkTypeIn (n :: bound) cur env b
+checkTypeIn bound cur env (TyFun a b) =
+  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
+checkTypeIn bound cur env (TyTuple ts) = flatMap (checkTypeIn bound cur env) ts
+checkTypeIn bound cur env (TyEffect labels _ t) =
+  checkEffAtoms bound cur env labels ++ checkTypeIn bound cur env t
+checkTypeIn _ cur _ (TyNamed n _) = [MisplacedAuthorityBinder n cur]
+checkTypeIn bound cur env (TyQual t n) =
+  checkTypeIn bound cur env t ++ checkAuthorityName bound cur n
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -476,16 +496,31 @@ checkType cur env (TyQual t _) = checkType cur env t
 -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
 -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
 -- location>` to the signature it was written in.
-checkType cur env (TyConstrained cs t) =
+checkTypeIn bound cur env (TyConstrained cs t) =
   flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-    ++ checkType cur env t
+    ++ checkTypeIn bound cur env t
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
-checkType cur env (TyRow labels _ _) =
-  flatMap (checkEffect cur env) (map effAtomLabelOf labels)
+checkTypeIn bound cur env (TyRow labels _ _) =
+  checkEffAtoms bound cur env labels
 
-effAtomLabelOf : EffAtomTy -> String
-effAtomLabelOf a = a.eatLabel
+checkEffAtoms : List String ->
+  Option Loc ->
+  Env ->
+  List EffAtomTy ->
+  List ResError
+checkEffAtoms bound cur env atoms =
+  flatMap
+    (a =>
+      checkEffect cur env a.eatLabel
+        ++ (match a.eatParam
+          EPName n => checkAuthorityName bound cur n
+          _ => []))
+    atoms
+
+checkAuthorityName : List String -> Option Loc -> String -> List ResError
+checkAuthorityName bound cur n =
+  if contains n bound then [] else [UnboundAuthority n cur]
 
 builtInEffects : List String
 builtInEffects = [
@@ -2503,6 +2538,9 @@ resErrorSexp (AmbiguousInterface n mods _) =
   "(AmbiguousInterface " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousEffect n mods _) =
   "(AmbiguousEffect " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (UnboundAuthority n _) = "(UnboundAuthority " ++ escStr n ++ ")"
+resErrorSexp (MisplacedAuthorityBinder n _) =
+  "(MisplacedAuthorityBinder " ++ escStr n ++ ")"
 resErrorSexp (ReassignImmutable n _) = "(ReassignImmutable " ++ escStr n ++ ")"
 resErrorSexp (DuplicateInterfaceMethod m a b _) =
   "(DuplicateInterfaceMethod \{escStr m} \{escStr a} \{escStr b})"
@@ -2657,6 +2695,10 @@ ppResError (AmbiguousType n mods _) =
 -- alias is still impossible — only a value member may be renamed, so
 -- `import m.{Foo as Bar}` is rejected — so the message offers the two fixes that
 -- exist and not that one.
+ppResError (UnboundAuthority n _) =
+  "Unknown authority '\{n}': an authority name refers to an argument named to its left in the same signature. Bind it by naming the argument, `(\{n} : String) -> <FileRead \{n}> …`, or write the label bare for any authority"
+ppResError (MisplacedAuthorityBinder n _) =
+  "A named argument `(\{n} : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"
 ppResError (AmbiguousEffect n mods _) =
   "Ambiguous effect label: '\{n}' is declared by \{ambigModPhrase mods}, and both declarations are in scope. A label is identified by the module that declares it, so these are two different effects and a row cannot tell them apart by spelling. Import only one of those modules here, or rename one of the declarations"
 ppResError (AmbiguousInterface n mods _) =
@@ -2715,6 +2757,8 @@ resErrorCode (AmbiguousAliasCtor _ _ _) = "R-AMBIGUOUS-CTOR"
 resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
 resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
 resErrorCode (AmbiguousEffect _ _ _) = "R-AMBIGUOUS-EFFECT"
+resErrorCode (UnboundAuthority _ _) = "R-UNBOUND-AUTHORITY"
+resErrorCode (MisplacedAuthorityBinder _ _) = "R-MISPLACED-AUTHORITY-BINDER"
 resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
 resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
 resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"

@@ -33,7 +33,7 @@ public export data FileStat = FileStat {
 {- | The metadata of a path as a `FileStat`, or `Err` when the path cannot
    be examined, for instance because it does not exist. -}
 export
-stat : String -> <FileRead> Result String FileStat
+stat : (path : String) -> <FileRead path> Result String FileStat
 stat p =
   map
     ((sz, d, f, m) => FileStat { size = sz, isDir = d, isFile = f, mtime = m })
@@ -41,17 +41,17 @@ stat p =
 
 {- | Whether a path exists and is a directory. -}
 export
-isDir : String -> <FileRead> Result String Bool
+isDir : (path : String) -> <FileRead path> Result String Bool
 isDir p = map (st => st.isDir) (stat p)
 
 {- | Whether a path exists and is a regular file. -}
 export
-isFile : String -> <FileRead> Result String Bool
+isFile : (path : String) -> <FileRead path> Result String Bool
 isFile p = map (st => st.isFile) (stat p)
 
 {- | The size of a file in bytes. -}
 export
-fileSize : String -> <FileRead> Result String Int
+fileSize : (path : String) -> <FileRead path> Result String Int
 fileSize p = map (st => st.size) (stat p)
 
 -- # Operations
@@ -60,7 +60,9 @@ fileSize p = map (st => st.size) (stat p)
 
    A read failure is reported before anything is written. -}
 export
-copyFile : String -> String -> <FileRead, FileWrite> Result String Unit
+copyFile : (src : String) ->
+  (dst : String) ->
+  <FileRead src, FileWrite dst> Result String Unit
 copyFile src dst = match readFileBytes src
   Ok bytes => writeFileBytes dst bytes
   Err e => Err e

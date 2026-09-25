@@ -1,0 +1,9 @@
+-- A named argument an atom refers to must be a String, and one binder
+-- cannot serve labels of different domains.
+notAString : (n : Int) -> <FileRead n> Result String String
+notAString n = readFile "x/"
+
+twoDomains : (p : String) -> <FileRead p, Env p> Result String String
+twoDomains p = readFile p
+
+main = println 1

@@ -1,5 +1,5 @@
 # META
-source_lines=359
+source_lines=357
 stages=DESUGAR,MARK
 # SOURCE
 {- | TCP connections and name resolution.
@@ -52,7 +52,7 @@ public export data Shutdown = ShutdownRead | ShutdownWrite | ShutdownBoth
 
    `resolve "localhost"` gives `Ok ["127.0.0.1"]` or similar. -}
 export
-resolve : String -> <Net "_"> Result String (List String)
+resolve : (host : String) -> <Net host> Result String (List String)
 resolve host = netResolve host
 
 {- | A connection to `host` on `port`.
@@ -60,7 +60,7 @@ resolve host = netResolve host
    The host name is resolved first. `withConnection` is the form that
    closes the connection for you. -}
 export
-connect : String -> Int -> <Net "_"> Result String Connection
+connect : (host : String) -> Int -> <Net host> Result String Connection
 connect host port = map Connection (netTcpConnect host port)
 
 -- # Servers
@@ -69,17 +69,17 @@ connect host port = map Connection (netTcpConnect host port)
 
    Port `0` lets the system pick a free port; `listenPort` reports which. -}
 export
-listen : String -> Int -> <Net "_"> Result String Listener
+listen : (addr : String) -> Int -> <Net addr> Result String Listener
 listen addr port = map Listener (netTcpListen addr port)
 
 -- | The port a listener is bound to.
 export
-listenPort : Listener -> <Net "_"> Result String Int
+listenPort : Listener -> <Net> Result String Int
 listenPort (Listener fd) = netListenPort fd
 
 -- | Waits for the next connection to a listener.
 export
-accept : Listener -> <Net "_"> Result String Connection
+accept : Listener -> <Net> Result String Connection
 accept (Listener fd) = map Connection (netTcpAccept fd)
 
 -- # Transfer
@@ -89,7 +89,7 @@ accept (Listener fd) = map Connection (netTcpAccept fd)
 
    `sendAll` is the form that sends everything. -}
 export
-send : Connection -> Array Int -> <Net "_"> Result String Int
+send : Connection -> Array Int -> <Net> Result String Int
 send (Connection fd) bs = netSend fd bs
 
 {- | Receives up to `n` bytes in one call.
@@ -97,7 +97,7 @@ send (Connection fd) bs = netSend fd bs
    An empty array means the peer has closed the connection. `recvAll` is the
    form that reads to the end. -}
 export
-recv : Connection -> Int -> <Net "_"> Result String (Array Int)
+recv : Connection -> Int -> <Net> Result String (Array Int)
 recv (Connection fd) n = netRecv fd n
 
 {- | Sends every byte, looping over `send` as needed.
@@ -105,7 +105,7 @@ recv (Connection fd) n = netRecv fd n
    `Err` on the first failed send, or when a send writes nothing, which is
    treated as a stalled connection. -}
 export
-sendAll : Connection -> Array Int -> <Net "_"> Result String Unit
+sendAll : Connection -> Array Int -> <Net> Result String Unit
 sendAll (Connection fd) bs =
   sendAllFrom (bytes off => netSendFrom fd bytes off) bs 0
 
@@ -213,7 +213,7 @@ test "sendAll returns the first host error without another write" =
     expectEqual [0, 2] !offsets,
   ]
 
-recvAllLoop : Connection -> Vector Int -> <Net "_"> Result String (Array Int)
+recvAllLoop : Connection -> Vector Int -> <Net> Result String (Array Int)
 recvAllLoop conn buf = match recv conn 4096
   Err e => Err e
   Ok chunk =>
@@ -228,14 +228,14 @@ recvAllLoop conn buf = match recv conn 4096
    `Err` on the first failed receive; whatever was read before it is
    discarded. -}
 export
-recvAll : Connection -> <Net "_"> Result String (Array Int)
+recvAll : Connection -> <Net> Result String (Array Int)
 recvAll conn = recvAllLoop conn (new ())
 
 -- # Text
 
 -- | Sends a string as UTF-8, every byte of it.
 export
-sendString : Connection -> String -> <Net "_"> Result String Unit
+sendString : Connection -> String -> <Net> Result String Unit
 sendString conn s = sendAll conn (toUtf8 s)
 
 {- | Receives everything until the peer closes the connection, decoded as
@@ -244,17 +244,15 @@ sendString conn s = sendAll conn (toUtf8 s)
    For a connection that stays open, read a line at a time with `recvLine`
    or a bounded amount with `recv`. -}
 export
-recvString : Connection -> <Net "_"> Result String String
+recvString : Connection -> <Net> Result String String
 recvString conn = map fromUtf8 (recvAll conn)
 
 -- | Sends a string as UTF-8 followed by a newline.
 export
-sendLine : Connection -> String -> <Net "_"> Result String Unit
+sendLine : Connection -> String -> <Net> Result String Unit
 sendLine conn s = sendString conn (s ++ "\n")
 
-recvLineLoop : Connection ->
-  Vector Int ->
-  <Net "_"> Result String (Option String)
+recvLineLoop : Connection -> Vector Int -> <Net> Result String (Option String)
 recvLineLoop conn buf = match recv conn 1
   Err e => Err e
   Ok chunk =>
@@ -275,14 +273,14 @@ recvLineLoop conn buf = match recv conn 1
    A final line with no newline is still returned. Reads one byte per call,
    so it suits small line-based messages, not bulk transfer. -}
 export
-recvLine : Connection -> <Net "_"> Result String (Option String)
+recvLine : Connection -> <Net> Result String (Option String)
 recvLine conn = recvLineLoop conn (new ())
 
 -- # Lifecycle
 
 -- | Shuts down one or both directions of a connection without closing it.
 export
-shutdown : Connection -> Shutdown -> <Net "_"> Result String Unit
+shutdown : Connection -> Shutdown -> <Net> Result String Unit
 shutdown (Connection fd) how = netShutdown fd (shutdownCode how)
 
 shutdownCode : Shutdown -> Int
@@ -294,12 +292,12 @@ shutdownCode ShutdownBoth = 2
 
    Closing twice is not an error. `withConnection` closes for you. -}
 export
-close : Connection -> <Net "_"> Result String Unit
+close : Connection -> <Net> Result String Unit
 close (Connection fd) = netClose fd
 
 -- | Closes a listener.
 export
-closeListener : Listener -> <Net "_"> Result String Unit
+closeListener : Listener -> <Net> Result String Unit
 closeListener (Listener fd) = netClose fd
 
 {- | Sets a connection's send and receive timeout.
@@ -307,7 +305,7 @@ closeListener (Listener fd) = netClose fd
    A zero duration means no timeout. Set one on any long-lived connection
    so a stalled peer cannot block forever. -}
 export
-setTimeout : Connection -> Duration -> <Net "_"> Result String Unit
+setTimeout : Connection -> Duration -> <Net> Result String Unit
 setTimeout (Connection fd) d = netSetTimeout fd (toMillis d)
 
 {- | Connects to `host` on `port`, runs `body` on the connection, and closes
@@ -320,8 +318,8 @@ setTimeout (Connection fd) d = netSetTimeout fd (toMillis d)
 export
 withConnection : String ->
   Int ->
-  (Connection -> <Net "_"> Result String a) ->
-  <Net "_"> Result String a
+  (Connection -> <Net> Result String a) ->
+  <Net> Result String a
 withConnection host port body = match connect host port
   Err e => Err e
   Ok conn =>
@@ -336,8 +334,8 @@ withConnection host port body = match connect host port
 export
 withListener : String ->
   Int ->
-  (Listener -> <Net "_"> Result String a) ->
-  <Net "_"> Result String a
+  (Listener -> <Net> Result String a) ->
+  <Net> Result String a
 withListener addr port body = match listen addr port
   Err e => Err e
   Ok lis =>
@@ -353,8 +351,8 @@ withListener addr port body = match listen addr port
    `withListener` to close the listener when the loop ends. -}
 export
 serveLoop : Listener ->
-  (Connection -> <Net "_"> Result String Unit) ->
-  <Net "_"> Result String Unit
+  (Connection -> <Net> Result String Unit) ->
+  <Net> Result String Unit
 serveLoop lis handle = match accept lis
   Err e => Err e
   Ok conn =>
@@ -370,21 +368,21 @@ serveLoop lis handle = match accept lis
 (DData Public "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
 (DData Public "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
 (DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
-(DTypeSig true "resolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig true "resolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolve" ((PVar "host")) (EApp (EVar "netResolve") (EVar "host")))
-(DTypeSig true "connect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DTypeSig true "connect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
 (DFunDef false "connect" ((PVar "host") (PVar "port")) (EApp (EApp (EVar "map") (EVar "Connection")) (EApp (EApp (EVar "netTcpConnect") (EVar "host")) (EVar "port"))))
-(DTypeSig true "listen" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Listener"))))))
+(DTypeSig true "listen" (TyFun (TyNamed "addr" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "addr"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Listener"))))))
 (DFunDef false "listen" ((PVar "addr") (PVar "port")) (EApp (EApp (EVar "map") (EVar "Listener")) (EApp (EApp (EVar "netTcpListen") (EVar "addr")) (EVar "port"))))
-(DTypeSig true "listenPort" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DTypeSig true "listenPort" (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "listenPort" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netListenPort") (EVar "fd")))
-(DTypeSig true "accept" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
+(DTypeSig true "accept" (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
 (DFunDef false "accept" ((PCon "Listener" (PVar "fd"))) (EApp (EApp (EVar "map") (EVar "Connection")) (EApp (EVar "netTcpAccept") (EVar "fd"))))
-(DTypeSig true "send" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DTypeSig true "send" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "send" ((PCon "Connection" (PVar "fd")) (PVar "bs")) (EApp (EApp (EVar "netSend") (EVar "fd")) (EVar "bs")))
-(DTypeSig true "recv" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DTypeSig true "recv" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "recv" ((PCon "Connection" (PVar "fd")) (PVar "n")) (EApp (EApp (EVar "netRecv") (EVar "fd")) (EVar "n")))
-(DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendAll" ((PCon "Connection" (PVar "fd")) (PVar "bs")) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam ((PVar "bytes") (PVar "off")) (EApp (EApp (EApp (EVar "netSendFrom") (EVar "fd")) (EVar "bytes")) (EVar "off")))) (EVar "bs")) (ELit (LInt 0))))
 (DTypeSig false "sendAllFrom" (TyFun (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DFunDef false "sendAllFrom" ((PVar "write") (PVar "bs") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bs"))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "write") (EVar "bs")) (EVar "off")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EApp (EVar "sendAllFrom") (EVar "write")) (EVar "bs")) (EBinOp "+" (EVar "off") (EVar "n")))))))
@@ -401,37 +399,37 @@ serveLoop lis handle = match accept lis
 (DTypeSig false "testFirstErrorSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
 (DFunDef false "testFirstErrorSend" ((PVar "calls") (PVar "offsets") PWild (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EVar "Ok") (ELit (LInt 2))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "boom"))) (EApp (EVar "Err") (ELit (LString "late call"))))))))
 (DTest false "sendAll returns the first host error without another write" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EVar "testFirstErrorSend") (EVar "calls")) (EVar "offsets"))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "boom")))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)))) (EUnOp "!" (EVar "offsets"))))))))
-(DTypeSig false "recvAllLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DTypeSig false "recvAllLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "recvAllLoop" ((PVar "conn") (PVar "buf")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 4096))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "chunk")) (ELit (LInt 0))) (EApp (EVar "Ok") (EApp (EVar "toArray") (EVar "buf"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (ELet false PWild (EApp (EApp (EVar "push") (EVar "b")) (EVar "buf")) (EVar "acc")))) (ELit LUnit)) (EVar "chunk"))) (DoExpr (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EVar "buf"))))))))
-(DTypeSig true "recvAll" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
+(DTypeSig true "recvAll" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
 (DFunDef false "recvAll" ((PVar "conn")) (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EApp (EVar "new") (ELit LUnit))))
-(DTypeSig true "sendString" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "sendString" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EVar "toUtf8") (EVar "s"))))
-(DTypeSig true "recvString" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DTypeSig true "recvString" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "recvString" ((PVar "conn")) (EApp (EApp (EVar "map") (EVar "fromUtf8")) (EApp (EVar "recvAll") (EVar "conn"))))
-(DTypeSig true "sendLine" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "sendLine" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendLine" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendString") (EVar "conn")) (EBinOp "++" (EVar "s") (ELit (LString "\n")))))
-(DTypeSig false "recvLineLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DTypeSig false "recvLineLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "recvLineLoop" ((PVar "conn") (PVar "buf")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 1))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "chunk")) (ELit (LInt 0))) (EIf (EApp (EVar "isEmpty") (EVar "buf")) (EApp (EVar "Ok") (EVar "None")) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf")))))) (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chunk"))) (DoExpr (EIf (EBinOp "==" (EVar "b") (ELit (LInt 10))) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf"))))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "push") (EVar "b")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EVar "buf")))))))))))
-(DTypeSig true "recvLine" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DTypeSig true "recvLine" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "recvLine" ((PVar "conn")) (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EApp (EVar "new") (ELit LUnit))))
-(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Shutdown") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Shutdown") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "shutdown" ((PCon "Connection" (PVar "fd")) (PVar "how")) (EApp (EApp (EVar "netShutdown") (EVar "fd")) (EApp (EVar "shutdownCode") (EVar "how"))))
 (DTypeSig false "shutdownCode" (TyFun (TyCon "Shutdown") (TyCon "Int")))
 (DFunDef false "shutdownCode" ((PCon "ShutdownRead")) (ELit (LInt 0)))
 (DFunDef false "shutdownCode" ((PCon "ShutdownWrite")) (ELit (LInt 1)))
 (DFunDef false "shutdownCode" ((PCon "ShutdownBoth")) (ELit (LInt 2)))
-(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "close" ((PCon "Connection" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "closeListener" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Duration") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Duration") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "setTimeout" ((PCon "Connection" (PVar "fd")) (PVar "d")) (EApp (EApp (EVar "netSetTimeout") (EVar "fd")) (EApp (EVar "toMillis") (EVar "d"))))
-(DTypeSig true "withConnection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
+(DTypeSig true "withConnection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
 (DFunDef false "withConnection" ((PVar "host") (PVar "port") (PVar "body")) (EMatch (EApp (EApp (EVar "connect") (EVar "host")) (EVar "port")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "body") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EVar "r"))))))
-(DTypeSig true "withListener" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
+(DTypeSig true "withListener" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
 (DFunDef false "withListener" ((PVar "addr") (PVar "port") (PVar "body")) (EMatch (EApp (EApp (EVar "listen") (EVar "addr")) (EVar "port")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "lis")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "body") (EVar "lis"))) (DoLet false false PWild (EApp (EVar "closeListener") (EVar "lis"))) (DoExpr (EVar "r"))))))
-(DTypeSig true "serveLoop" (TyFun (TyCon "Listener") (TyFun (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "serveLoop" (TyFun (TyCon "Listener") (TyFun (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "serveLoop" ((PVar "lis") (PVar "handle")) (EMatch (EApp (EVar "accept") (EVar "lis")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false PWild (EApp (EVar "handle") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EApp (EApp (EVar "serveLoop") (EVar "lis")) (EVar "handle")))))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "setInPlace" false))))
@@ -442,21 +440,21 @@ serveLoop lis handle = match accept lis
 (DData Public "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
 (DData Public "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
 (DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
-(DTypeSig true "resolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig true "resolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolve" ((PVar "host")) (EApp (EVar "netResolve") (EVar "host")))
-(DTypeSig true "connect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
+(DTypeSig true "connect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
 (DFunDef false "connect" ((PVar "host") (PVar "port")) (EApp (EApp (EMethodRef "map") (EVar "Connection")) (EApp (EApp (EVar "netTcpConnect") (EVar "host")) (EVar "port"))))
-(DTypeSig true "listen" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Listener"))))))
+(DTypeSig true "listen" (TyFun (TyNamed "addr" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "addr"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Listener"))))))
 (DFunDef false "listen" ((PVar "addr") (PVar "port")) (EApp (EApp (EMethodRef "map") (EVar "Listener")) (EApp (EApp (EVar "netTcpListen") (EVar "addr")) (EVar "port"))))
-(DTypeSig true "listenPort" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DTypeSig true "listenPort" (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "listenPort" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netListenPort") (EVar "fd")))
-(DTypeSig true "accept" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
+(DTypeSig true "accept" (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection")))))
 (DFunDef false "accept" ((PCon "Listener" (PVar "fd"))) (EApp (EApp (EMethodRef "map") (EVar "Connection")) (EApp (EVar "netTcpAccept") (EVar "fd"))))
-(DTypeSig true "send" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DTypeSig true "send" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "send" ((PCon "Connection" (PVar "fd")) (PVar "bs")) (EApp (EApp (EVar "netSend") (EVar "fd")) (EVar "bs")))
-(DTypeSig true "recv" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DTypeSig true "recv" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "recv" ((PCon "Connection" (PVar "fd")) (PVar "n")) (EApp (EApp (EVar "netRecv") (EVar "fd")) (EVar "n")))
-(DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendAll" ((PCon "Connection" (PVar "fd")) (PVar "bs")) (EApp (EApp (EApp (EVar "sendAllFrom") (ELam ((PVar "bytes") (PVar "off")) (EApp (EApp (EApp (EVar "netSendFrom") (EVar "fd")) (EVar "bytes")) (EVar "off")))) (EVar "bs")) (ELit (LInt 0))))
 (DTypeSig false "sendAllFrom" (TyFun (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
 (DFunDef false "sendAllFrom" ((PVar "write") (PVar "bs") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bs"))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "write") (EVar "bs")) (EVar "off")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EApp (EVar "sendAllFrom") (EVar "write")) (EVar "bs")) (EBinOp "+" (EVar "off") (EVar "n")))))))
@@ -473,35 +471,35 @@ serveLoop lis handle = match accept lis
 (DTypeSig false "testFirstErrorSend" (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
 (DFunDef false "testFirstErrorSend" ((PVar "calls") (PVar "offsets") PWild (PVar "off")) (EBlock (DoLet false false (PVar "call") (EUnOp "!" (EVar "calls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "calls")) (EBinOp "+" (EVar "call") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "offsets")) (EBinOp "++" (EUnOp "!" (EVar "offsets")) (EListLit (EVar "off"))))) (DoExpr (EIf (EBinOp "==" (EVar "call") (ELit (LInt 0))) (EApp (EVar "Ok") (ELit (LInt 2))) (EIf (EBinOp "==" (EVar "call") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "boom"))) (EApp (EVar "Err") (ELit (LString "late call"))))))))
 (DTest false "sendAll returns the first host error without another write" (EBlock (DoLet false false (PVar "calls") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "offsets") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "sendAllFrom") (EApp (EApp (EVar "testFirstErrorSend") (EVar "calls")) (EVar "offsets"))) (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))) (ELit (LInt 0)))) (DoExpr (EApp (EVar "expectAll") (EListLit (EApp (EApp (EVar "expectEqual") (EApp (EVar "Err") (ELit (LString "boom")))) (EVar "result")) (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EUnOp "!" (EVar "calls"))) (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 0)) (ELit (LInt 2)))) (EUnOp "!" (EVar "offsets"))))))))
-(DTypeSig false "recvAllLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DTypeSig false "recvAllLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "recvAllLoop" ((PVar "conn") (PVar "buf")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 4096))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "chunk")) (ELit (LInt 0))) (EApp (EVar "Ok") (EApp (EVar "toArray") (EVar "buf"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (ELet false PWild (EApp (EApp (EVar "push") (EVar "b")) (EVar "buf")) (EVar "acc")))) (ELit LUnit)) (EVar "chunk"))) (DoExpr (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EVar "buf"))))))))
-(DTypeSig true "recvAll" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
+(DTypeSig true "recvAll" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
 (DFunDef false "recvAll" ((PVar "conn")) (EApp (EApp (EVar "recvAllLoop") (EVar "conn")) (EApp (EVar "new") (ELit LUnit))))
-(DTypeSig true "sendString" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "sendString" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EVar "toUtf8") (EVar "s"))))
-(DTypeSig true "recvString" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DTypeSig true "recvString" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "recvString" ((PVar "conn")) (EApp (EApp (EMethodRef "map") (EVar "fromUtf8")) (EApp (EVar "recvAll") (EVar "conn"))))
-(DTypeSig true "sendLine" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "sendLine" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendLine" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendString") (EVar "conn")) (EBinOp "++" (EVar "s") (ELit (LString "\n")))))
-(DTypeSig false "recvLineLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DTypeSig false "recvLineLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "recvLineLoop" ((PVar "conn") (PVar "buf")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 1))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "chunk")) (ELit (LInt 0))) (EIf (EApp (EMethodRef "isEmpty") (EVar "buf")) (EApp (EVar "Ok") (EVar "None")) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf")))))) (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chunk"))) (DoExpr (EIf (EBinOp "==" (EVar "b") (ELit (LInt 10))) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf"))))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "push") (EVar "b")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EVar "buf")))))))))))
-(DTypeSig true "recvLine" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DTypeSig true "recvLine" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "recvLine" ((PVar "conn")) (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EApp (EVar "new") (ELit LUnit))))
-(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Shutdown") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Shutdown") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "shutdown" ((PCon "Connection" (PVar "fd")) (PVar "how")) (EApp (EApp (EVar "netShutdown") (EVar "fd")) (EApp (EVar "shutdownCode") (EVar "how"))))
 (DTypeSig false "shutdownCode" (TyFun (TyCon "Shutdown") (TyCon "Int")))
 (DFunDef false "shutdownCode" ((PCon "ShutdownRead")) (ELit (LInt 0)))
 (DFunDef false "shutdownCode" ((PCon "ShutdownWrite")) (ELit (LInt 1)))
 (DFunDef false "shutdownCode" ((PCon "ShutdownBoth")) (ELit (LInt 2)))
-(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "close" ((PCon "Connection" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "closeListener" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Duration") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Duration") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "setTimeout" ((PCon "Connection" (PVar "fd")) (PVar "d")) (EApp (EApp (EVar "netSetTimeout") (EVar "fd")) (EApp (EVar "toMillis") (EVar "d"))))
-(DTypeSig true "withConnection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
+(DTypeSig true "withConnection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
 (DFunDef false "withConnection" ((PVar "host") (PVar "port") (PVar "body")) (EMatch (EApp (EApp (EVar "connect") (EVar "host")) (EVar "port")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "body") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EVar "r"))))))
-(DTypeSig true "withListener" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
+(DTypeSig true "withListener" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Listener") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
 (DFunDef false "withListener" ((PVar "addr") (PVar "port") (PVar "body")) (EMatch (EApp (EApp (EVar "listen") (EVar "addr")) (EVar "port")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "lis")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "body") (EVar "lis"))) (DoLet false false PWild (EApp (EVar "closeListener") (EVar "lis"))) (DoExpr (EVar "r"))))))
-(DTypeSig true "serveLoop" (TyFun (TyCon "Listener") (TyFun (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DTypeSig true "serveLoop" (TyFun (TyCon "Listener") (TyFun (TyFun (TyCon "Connection") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "serveLoop" ((PVar "lis") (PVar "handle")) (EMatch (EApp (EVar "accept") (EVar "lis")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false PWild (EApp (EVar "handle") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EApp (EApp (EVar "serveLoop") (EVar "lis")) (EVar "handle")))))))

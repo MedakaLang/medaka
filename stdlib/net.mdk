@@ -48,7 +48,7 @@ public export data Shutdown = ShutdownRead | ShutdownWrite | ShutdownBoth
 
    `resolve "localhost"` gives `Ok ["127.0.0.1"]` or similar. -}
 export
-resolve : String -> <Net> Result String (List String)
+resolve : (host : String) -> <Net host> Result String (List String)
 resolve host = netResolve host
 
 {- | A connection to `host` on `port`.
@@ -56,7 +56,7 @@ resolve host = netResolve host
    The host name is resolved first. `withConnection` is the form that
    closes the connection for you. -}
 export
-connect : String -> Int -> <Net> Result String Connection
+connect : (host : String) -> Int -> <Net host> Result String Connection
 connect host port = map Connection (netTcpConnect host port)
 
 -- # Servers
@@ -65,7 +65,7 @@ connect host port = map Connection (netTcpConnect host port)
 
    Port `0` lets the system pick a free port; `listenPort` reports which. -}
 export
-listen : String -> Int -> <Net> Result String Listener
+listen : (addr : String) -> Int -> <Net addr> Result String Listener
 listen addr port = map Listener (netTcpListen addr port)
 
 -- | The port a listener is bound to.

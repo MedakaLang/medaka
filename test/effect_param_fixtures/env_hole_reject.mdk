@@ -1,9 +1,9 @@
--- WS-3b ENV hole-fill ⊄ REJECT.  α fills <Env {"HOME"}> from the literal arg;
--- the declared bound {"PATH"} does NOT contain HOME ⇒ {"HOME"} ⊄ {"PATH"} ⇒
--- the escape check REJECTS (a TYPE ERROR performing <Env {"HOME"}>).
-effect Env Set
+-- ENV named-argument ⊄ REJECT.  `getEnv`'s Env authority is its argument, the
+-- literal "HOME", so the body performs <Env {"HOME"}>; the declared bound
+-- {"PATH"} does NOT contain HOME ⇒ {"HOME"} ⊄ {"PATH"} ⇒ a TYPE ERROR.
+-- Env is the builtin Set-domain label; a local declaration would be another label
 
-extern getEnv : String -> <Env> Option String
+extern getEnv : (name : String) -> <Env name> Option String
 
 readHome : Unit -> <Env {"PATH"}> Option String
 readHome _ = getEnv "HOME"

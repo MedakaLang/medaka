@@ -111,7 +111,7 @@ boundedVerbSeconds secs cmd args =
    > map (startsWith "/") scratchDir
    Ok True -}
 export
-scratchDir : <Exec> Result String String
+scratchDir : <Exec "mktemp*"> Result String String
 scratchDir = match runVerb "mktemp" ["-d"]
   Err e => Err e
   Ok (0, out, _) => Ok (trim out)
@@ -129,7 +129,7 @@ scratchDir = match runVerb "mktemp" ["-d"]
    > expectSpawnOk "false" []
    Fail "`false` exited 1: \"\"" "exit 0" "exit 1" -}
 export
-expectSpawnOk : String -> List String -> <Exec> Expectation
+expectSpawnOk : (cmd : String) -> List String -> <Exec cmd> Expectation
 expectSpawnOk cmd args =
   let line = unwords (cmd :: args)
   match runVerb cmd args
@@ -156,7 +156,10 @@ expectSpawnOk cmd args =
    > expectSpawnFails "true" [] "boom"
    Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing \"boom\"" "exit 0, output \"\"" -}
 export
-expectSpawnFails : String -> List String -> String -> <Exec> Expectation
+expectSpawnFails : (cmd : String) ->
+  List String ->
+  String ->
+  <Exec cmd> Expectation
 expectSpawnFails cmd args needle =
   let line = unwords (cmd :: args)
   let want = "nonzero exit, output containing \{debug needle}"
@@ -190,7 +193,10 @@ expectSpawnFails cmd args needle =
    > expectSpawnFailsAll "true" [] ["alpha"]
    Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing [\"alpha\"]" "exit 0, output \"\"" -}
 export
-expectSpawnFailsAll : String -> List String -> List String -> <Exec> Expectation
+expectSpawnFailsAll : (cmd : String) ->
+  List String ->
+  List String ->
+  <Exec cmd> Expectation
 expectSpawnFailsAll cmd args needles =
   let line = unwords (cmd :: args)
   let want = "nonzero exit, output containing \{debug needles}"
@@ -221,7 +227,10 @@ expectSpawnFailsAll cmd args needles =
    > expectSpawnOkLine "echo" ["said hi"] "hi"
    Fail "`echo said hi` exited 0 but no output line equals \"hi\": \"said hi\\n\"" "exit 0, output with a line \"hi\"" "exit 0, output \"said hi\\n\"" -}
 export
-expectSpawnOkLine : String -> List String -> String -> <Exec> Expectation
+expectSpawnOkLine : (cmd : String) ->
+  List String ->
+  String ->
+  <Exec cmd> Expectation
 expectSpawnOkLine cmd args wantLine =
   let line = unwords (cmd :: args)
   let want = "exit 0, output with a line \{debug wantLine}"

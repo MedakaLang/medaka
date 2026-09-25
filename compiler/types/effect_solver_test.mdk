@@ -73,6 +73,7 @@ finish solver protected =
     protected
     Tip
     Tip
+    Tip
     capabilityEscape
     makeJoin
     makeResidual
@@ -86,6 +87,7 @@ finishRetained solver rows =
       rows
   closeSummaryScope
     solver
+    Tip
     Tip
     retained
     Tip
@@ -103,6 +105,7 @@ finishBorrowed solver rows =
   let retained = M.mapWithKey (_ _ => ()) cells
   closeSummaryScope
     solver
+    Tip
     Tip
     retained
     cells

@@ -214,6 +214,7 @@ IDENT "scratchDir"
 COLON
 LT
 UPPER "Exec"
+STRING "mktemp*"
 GT
 UPPER "Result"
 UPPER "String"
@@ -272,13 +273,18 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnOk"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "cmd"
 GT
 UPPER "Expectation"
 NEWLINE
@@ -374,17 +380,26 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnFails"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "cmd"
 GT
 UPPER "Expectation"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "expectSpawnFails"
 IDENT "cmd"
@@ -511,18 +526,27 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnFailsAll"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "cmd"
 GT
 UPPER "Expectation"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "expectSpawnFailsAll"
 IDENT "cmd"
@@ -664,17 +688,26 @@ EXPORT
 NEWLINE
 IDENT "expectSpawnOkLine"
 COLON
+LPAREN
+IDENT "cmd"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "List"
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
 LT
 UPPER "Exec"
+IDENT "cmd"
 GT
 UPPER "Expectation"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "expectSpawnOkLine"
 IDENT "cmd"

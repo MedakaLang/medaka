@@ -2082,7 +2082,19 @@ tyFor : Token -> Parser Ty
 tyFor TLt = parseEffectTy
 tyFor _ = defer
   left <- parseTyApp
-  orElse (tyArrowTail left) (deferPure left)
+  tyAfterApp left
+
+-- A named argument `(name : T)` binds an authority for the rest of the
+-- signature, so it can only be an arrow's domain: without the arrow there is
+-- no "rest" for the name to scope over.
+tyAfterApp : Ty -> Parser Ty
+tyAfterApp (left@(TyNamed _ _)) =
+  orElse (tyArrowTail left) (failP namedArgNeedsArrowMsg)
+tyAfterApp left = orElse (tyArrowTail left) (deferPure left)
+
+namedArgNeedsArrowMsg : String
+namedArgNeedsArrowMsg =
+  "a named argument `(name : T)` must be followed by `->`: the name is an authority the rest of the signature refers to, as in `(path : String) -> <FileRead path> Result String String`"
 
 -- `< labels? (| tail)? > ty` — an effect-annotated type.  A bare lowercase ident
 -- inside the angles is the tail var (no labels), e.g. `<e> a`.
@@ -2194,6 +2206,9 @@ effParamFor (TString s) = defer
 effParamFor TUnderscore = defer
   pos <- getPos
   fatalAtP effHoleRetiredMsg pos
+effParamFor (TIdent n) = defer
+  advance
+  deferPure (EPName n)
 effParamFor TLBrace = effSetLiteralP
 effParamFor _ = deferPure EPTop
 
@@ -2290,7 +2305,24 @@ parseTyApp : Parser Ty
 parseTyApp = defer
   head <- parseTyAtom
   args <- many parseTyAtom
-  deferPure (tyApplyAll head args)
+  tyQualTail (tyApplyAll head args)
+
+-- An explicit authority qualifier `T @p` on a whole type application: `@`
+-- after whitespace (the lexer's `TAt`, never the adjacent as-pattern `TAsAt`)
+-- followed by the binder's name.  `p` must be bound by a `(p : T)` binder to
+-- the left, which resolve checks.
+tyQualTail : Ty -> Parser Ty
+tyQualTail ty = defer
+  t <- peekP
+  t2 <- peek2P
+  tyQualTailFor ty t t2
+
+tyQualTailFor : Ty -> Token -> Token -> Parser Ty
+tyQualTailFor ty TAt (TIdent n) = defer
+  advance
+  advance
+  deferPure (TyQual ty n)
+tyQualTailFor ty _ _ = deferPure ty
 
 tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
@@ -2408,6 +2440,13 @@ parseTyParenBody (TIdent _) = defer
 parseTyParenBody _ = parseTyParenTuple
 
 parseTyParenIdent : Token -> Parser Ty
+-- `(name : T)`: an arrow-domain binder naming the argument's authority.
+parseTyParenIdent TColon = defer
+  n <- identNameP
+  expectTok TColon
+  t <- parseTy
+  expectTok TRParen
+  deferPure (TyNamed n t)
 parseTyParenIdent TPipe = defer
   s <- getPos
   v <- identNameP

@@ -74,10 +74,15 @@ EXPORT
 NEWLINE
 IDENT "resolve"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -96,12 +101,17 @@ EXPORT
 NEWLINE
 IDENT "connect"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
@@ -123,12 +133,17 @@ EXPORT
 NEWLINE
 IDENT "listen"
 COLON
+LPAREN
+IDENT "addr"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "addr"
 GT
 UPPER "Result"
 UPPER "String"

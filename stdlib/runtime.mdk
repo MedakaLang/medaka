@@ -70,18 +70,23 @@ extern setRef : Ref a -> a -> Unit
 -- # Files
 
 -- | The contents of a file as a string, or `Err` with the host's message.
-extern readFile : String -> <FileRead> Result String String
+extern readFile : (path : String) -> <FileRead path> Result String String
 
 -- | The contents of a file as bytes, `0` to `255` each, or `Err` with the
 -- host's message.
-extern readFileBytes : String -> <FileRead> Result String (Array Int)
+extern readFileBytes : (path : String) ->
+  <FileRead path> Result String (Array Int)
 
 -- | Writes a string to a file, replacing any existing contents.
-extern writeFile : String -> String -> <FileWrite> Result String Unit
+extern writeFile : (path : String) ->
+  String ->
+  <FileWrite path> Result String Unit
 
 -- | Writes bytes, `0` to `255` each, to a file, replacing any existing
 -- contents.
-extern writeFileBytes : String -> Array Int -> <FileWrite> Result String Unit
+extern writeFileBytes : (path : String) ->
+  Array Int ->
+  <FileWrite path> Result String Unit
 
 -- | Writes a string to a file, replacing any existing contents, and leaves
 -- the file at exactly the permission bits the given mode names (`384` is
@@ -90,46 +95,54 @@ extern writeFileBytes : String -> Array Int -> <FileWrite> Result String Unit
 -- The contents never exist at a wider mode: the mode is set on the open
 -- file before the first byte is written, so neither the process umask nor a
 -- pre-existing file's own mode can widen the result.
-extern writeFileMode : String -> Int -> String -> <FileWrite> Result String Unit
+extern writeFileMode : (path : String) ->
+  Int ->
+  String ->
+  <FileWrite path> Result String Unit
 
 -- | Appends a string to a file, creating it when it does not exist.
-extern appendFile : String -> String -> <FileWrite> Result String Unit
+extern appendFile : (path : String) ->
+  String ->
+  <FileWrite path> Result String Unit
 
 -- | Whether a path exists.
-extern fileExists : String -> <FileRead> Bool
+extern fileExists : (path : String) -> <FileRead path> Bool
 
 -- | A path's permission bits, `0` to `4095` (`384` is `rw-------`), or
 -- `Err` with the host's message. Symbolic links are followed.
-extern fileMode : String -> <FileRead> Result String Int
+extern fileMode : (path : String) -> <FileRead path> Result String Int
 
 -- | The absolute path with `.`, `..`, and symbolic links resolved. The
 -- input, unchanged, when it cannot be resolved.
-extern canonicalizePath : String -> <FileRead> String
+extern canonicalizePath : (path : String) -> <FileRead path> String
 
 -- | The names of the entries in a directory.
-extern listDir : String -> <FileRead> Result String (List String)
+extern listDir : (path : String) -> <FileRead path> Result String (List String)
 
 -- | Creates a directory.
-extern makeDir : String -> <FileWrite> Result String Unit
+extern makeDir : (path : String) -> <FileWrite path> Result String Unit
 
 -- | Deletes a file.
-extern removeFile : String -> <FileWrite> Result String Unit
+extern removeFile : (path : String) -> <FileWrite path> Result String Unit
 
 -- | Moves or renames a path.
-extern rename : String -> String -> <FileWrite> Result String Unit
+extern rename : (src : String) ->
+  (dst : String) ->
+  <FileWrite src, FileWrite dst> Result String Unit
 
 -- | Flushes a path's contents to durable storage. Works on a regular file or
 -- a directory; the durability of a `rename` is a property of the containing
 -- directory, not of either file.
-extern fsync : String -> <FileWrite> Result String Unit
+extern fsync : (path : String) -> <FileWrite path> Result String Unit
 
 -- | Removes an empty directory.
-extern removeDir : String -> <FileWrite> Result String Unit
+extern removeDir : (path : String) -> <FileWrite path> Result String Unit
 
 -- | A path's size in bytes, whether it is a directory, whether it is a
 -- regular file, and its modification time in seconds. `fs.stat` returns the
 -- same as a record.
-extern statFile : String -> <FileRead> Result String (Int, Bool, Bool, Float)
+extern statFile : (path : String) ->
+  <FileRead path> Result String (Int, Bool, Bool, Float)
 
 -- # Processes and environment
 
@@ -137,7 +150,7 @@ extern statFile : String -> <FileRead> Result String (Int, Bool, Bool, Float)
 extern args : Unit -> <Env> List String
 
 -- | The value of an environment variable, or `None` when it is unset.
-extern getEnv : String -> <Env> Option String
+extern getEnv : (name : String) -> <Env name> Option String
 
 -- | The absolute path of the running executable.
 extern executablePath : Unit -> <Env> String
@@ -163,9 +176,9 @@ extern buildDate : Unit -> <Env> String
 -- code, the captured standard output, and the captured standard error; a
 -- non-zero exit code is still `Ok`. `Err` carries the host's message when
 -- the program could not be started.
-extern runCommand : String ->
+extern runCommand : (program : String) ->
   List String ->
-  <Exec> Result String (Int, String, String)
+  <Exec program> Result String (Int, String, String)
 
 -- | Ends the program with an exit code.
 extern exit : Int -> Unit
@@ -235,15 +248,15 @@ extern assertSnapshot : String -> String -> <IO> Unit
 -- newtypes are a stdlib concern (stdlib/net.mdk).  See NET-DESIGN.md.
 
 -- | The numeric addresses a host name resolves to.
-extern netResolve : String -> <Net> Result String (List String)
+extern netResolve : (host : String) -> <Net host> Result String (List String)
 
 -- | Opens a TCP connection to a host and port. The result is the
 -- connection's descriptor.
-extern netTcpConnect : String -> Int -> <Net> Result String Int
+extern netTcpConnect : (host : String) -> Int -> <Net host> Result String Int
 
 -- | Starts listening for TCP connections on an address and port. Port `0`
 -- picks a free port. The result is the listener's descriptor.
-extern netTcpListen : String -> Int -> <Net> Result String Int
+extern netTcpListen : (host : String) -> Int -> <Net host> Result String Int
 
 -- | The port a listener is bound to. Use it after listening on port `0`.
 extern netListenPort : Int -> <Net> Result String Int
@@ -307,7 +320,7 @@ extern netTryAccept : Int -> <Net> Result String (Option Int)
    result is a non-blocking descriptor that is not connected yet: wait for it
    to become writable, then ask `netConnectCheck` whether it arrived. Name
    resolution still blocks. -}
-extern netConnectStart : String -> Int -> <Net> Result String Int
+extern netConnectStart : (host : String) -> Int -> <Net host> Result String Int
 
 {- | Whether a descriptor from `netConnectStart` has finished its handshake.
    `None` means not yet, so a woken task asks again rather than trusting the

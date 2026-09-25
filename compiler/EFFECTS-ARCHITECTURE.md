@@ -222,6 +222,7 @@ claims the full authority package or closes its pinned issues.
    and structured surface parameters. Named arguments, wrappers, partial application
    and all determining extern positions form one semantic change. Migrate underscore
    signatures and discharge #3382/#3383 only when their pins reject for the right reason.
+   Delivered: the named-authority checkpoint below.
 6. Add authority-bearing data fields and patterns, handles, callback rows and method
    signatures on that representation. Check invariance and scope escape, including
    mutability, constructor abstraction and same-named binders in unrelated modules.
@@ -457,14 +458,14 @@ Still required before this package can be called complete or laundering-free:
    have only unknown type shapes. The dual published/recursive envelopes solve
    explicit returned-arrow equations, but HM equality can still identify
    unknown alternatives before their eventual arrow shapes are available.
-3. Named authorities, qualified fields and constructor proof sources (#3385),
-   together with retiring underscore and first-argument hole filling
-   (#3382/#3383). Those existing laundering regressions remain release blockers.
-4. Resolved effect-label identity and domain-schema agreement; current atoms
-   still use strings, and the legacy mixed-domain join fallback remains. Prefix
-   rendering also needs canonicalization (#3391): a raw common prefix can render
-   as a pattern rejected in a written signature. This has a reproducing pin;
-   no laundering was demonstrated by that rendering mismatch.
+3. Qualified data fields, constructor proof sources and authority-indexed
+   existentials (#3385's data half). Named authorities on arrows, the retirement
+   of the underscore and of first-argument hole filling, resolved effect-label
+   identity and prefix-join canonicalization are delivered (the named-authority
+   checkpoint); #3382, #3383 and #3391 are regressions under
+   `test/typecheck_error_fixtures/effect_*` and their must-fail pins drain.
+4. A located `R-AMBIGUOUS-EFFECT`: an effect atom carries no source location, so
+   the ambiguity of two imported same-spelled labels reports unlocated.
 5. One invocation-protocol summary consumed by manifests and policy, with
    conservative unresolved authority reporting.
 6. Full multi-module/engine coverage, final fixpoint and scaling evidence for the
@@ -472,6 +473,79 @@ Still required before this package can be called complete or laundering-free:
 
 The normative semantics specify the destination. Historical implementation
 censuses are archived, not evidence that these obligations have been delivered.
+
+### Named-authority checkpoint
+
+What landed, in the order the decision record prescribed:
+
+1. **Identity.** An effect label is `EffLabel name origin` (`types/effect_rows.mdk`),
+   keyed `mod::Name` for a module-declared label and bare for a builtin. The
+   resolver stamps every `EffAtomTy` and `DEffect` with its declaring origin,
+   exports carry `(name, origin)` provenance, and writing a label that two
+   imports declare is `R-AMBIGUOUS-EFFECT` (unlocated: an atom has no `Loc`).
+   Two modules' same-spelled labels stay distinct atoms in a joined row. Domain
+   schemas are registered by label, and core's labels reach every importer
+   through the prelude origin layer.
+2. **Authority terms.** `types/effect_authority.mdk` owns
+   `Authority = AConst Param | AVar (Ref Authvar) | AJoin`, normalization (a
+   join flattens, folds its concrete members through the domain join and drops
+   nothing symbolic), `authSub` and rendering. An `Atom` is a resolved label plus
+   an authority term; rows insert by joining same-label authorities and
+   `atomsDiff` keeps symbolic pairs it cannot prove.
+3. **Representation.** `Mono` gains `TQual Mono Authority`; `Scheme` quantifies
+   type, row and authority variables; every visitor (substitution, free
+   variables, levels, occurs, generalization, rendering) carries the new sort and
+   one substitution serves an occurrence's type, rows and authorities.
+4. **Surface.** `EffParamTy` is structured (`EPTop`/`EPLit`/`EPName`/`EPSet`/
+   `EPProduct`); the parser accepts `(name : String) ->` (`TyNamed`) and
+   `T @name` (`TyQual`) and rejects the quoted underscore with a located message;
+   printer, formatter, LSP, lint, codemod, sexp and doc carry the forms; the
+   resolver checks lexical binder scope (`R-UNBOUND-AUTHORITY`,
+   `R-MISPLACED-AUTHORITY-BINDER`).
+5. **Checking.** A signature's named binder elaborates to a rigid `κ` inside the
+   body (`ScopedMember.smDeclaredAuths`, `perRun.rigidAuthvarsRef`); the domain
+   is `String @κ` (`T-AUTHORITY-BINDER`, `T-AUTHORITY-DOMAIN` on ill-formed
+   binders). `argumentInto` is the one proof route: an argument flowing into a
+   qualified domain wants `α(argument) ⊑ q` (`types/effect_infer.mdk`), through
+   direct calls, aliases, partial application, higher-order apply, composition
+   (`calleeArrow`), pipes and the standalone-shadow selections (a user binding
+   named like a prelude method, whose spine `unifySpineResult` now applies
+   through `applicationRow`) alike. `fillHolesInRow`, `spineFirstArg` and the
+   alpha-based hole filling are deleted. Undirected unification erases a
+   top-level qualifier; `bindFrom` carries it verbatim into a declared parameter,
+   a match scrutinee, a let pattern and an application's result; `refStored`
+   reads a cell's stored type verbatim; a flexible receiving slot takes an
+   allowance above the value's authority. The scoped solver (`effect_solver.mdk`)
+   records wanteds, solves each scope's owned flexible variables to their least
+   solution (SCC-collapsed), transfers what an enclosing scope owns, and
+   `closeRootAuthorities` decides the module-level residue of value bindings the
+   value restriction keeps monomorphic. An ill-typed binder binds no authority
+   (`binderIsString`), so its diagnostic does not cascade into the body.
+6. **Publication.** `generalizeBinding` quantifies authority variables that have a
+   qualified-argument source and publishes the rest as the domain's top. The
+   policy checker (`tools/check_policy.mdk`) reads authorities through `authSub`
+   and prints a symbolic atom as the label bare in a manifest.
+7. **Migration.** `stdlib/runtime.mdk` and the wrappers in `fs`, `io`, `net`,
+   `net_async`, `test` and `test_process` declare named arrows wherever the body
+   forwards or prefix-extends the argument; `rename` carries both paths. The
+   effect-parameter fixture corpora declare named externs.
+8. **Prefix join.** Two prefixes join to their longest common prefix spelled
+   `lcp*`, written syntax a signature accepts (#3391).
+
+Not delivered, and stated as such in the semantics: qualified data fields,
+constructor proof sources and existentials. A destructured qualified value
+(`Some x` from `Option (String @κ)`) loses its qualifier, conservatively; a
+lambda parameter gains a qualifier only from a directed flow.
+
+Coverage: `types/effect_authority_test.mdk` (the anti-laundering matrix with
+its honest controls: literal versus dynamic, honest and dishonest wrapper,
+binder renaming, both `rename` positions, alias, partial, apply, compose,
+branch join, let, Set versus Prefix concatenation, binder errors, the algebra);
+`test/typecheck_error_fixtures/effect_named_authority_*`,
+`effect_rename_destination_*` and `effect_prefix_join_render` (the #3382,
+#3383 and #3391 regressions, the `Ref` invariance pair and the dynamic-path
+launder, each negative beside a control); `test/engine_fixtures/named_authority`
+with an absolute pin under eval, native and wasm.
 
 ### Foundation verification
 

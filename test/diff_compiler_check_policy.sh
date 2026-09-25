@@ -122,7 +122,7 @@ param_case "param-bare-accept"    "Net,FFI"                0 "accepted"
 
 # ── WS-2: α SCOPE-SEEDING (E3 precision, NATIVE-ONLY) ────────────────────────
 # Same fixture shape as WS-1b but the capability URL is bound by an OUTER-BODY
-# `let dest = "<literal>"` then passed to the <Net _> extern.  Pre-WS-2 α ran
+# `let dest = "<literal>"` then passed to the `<Net url>` extern.  Pre-WS-2 α ran
 # with an empty `lets` at the fill site → `netGet dest` collapsed to ⊤ →
 # OVER-REJECTED under a wildcard policy.  WS-2 seeds α with the enclosing body's
 # let scope, so the inferred row carries the recovered literal prefix and the

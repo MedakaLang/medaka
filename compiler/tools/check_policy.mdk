@@ -302,7 +302,7 @@ monoEffects m = match normalize m
 
 export
 schemeEffects : Scheme -> List Atom
-schemeEffects (Forall _ _ force mono) =
+schemeEffects (Forall _ _ _ force mono) =
   atomsUnion (effrowLabels force) (monoEffects mono)
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom

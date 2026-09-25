@@ -58,7 +58,7 @@ public export data Instantiation = Instantiation {
 }
 
 public export data InstantiationServices subst = InstantiationServices {
-  makeSubstitution : List Int -> List Int -> subst,
+  makeSubstitution : List Int -> List Int -> List Int -> subst,
   substituteBody : subst -> Mono -> Mono,
   substituteForce : subst -> EffRow -> EffRow,
   substituteArgument : subst -> Mono -> Mono,
@@ -164,7 +164,7 @@ instantiateQualifiedAt : ExistingInstantiationServices subst ->
   Option Instantiation
 instantiateQualifiedAt services subst scope origin targets qualified =
   match qualified.hm
-    Forall _ _ schemeForce schemeBody =>
+    Forall _ _ _ schemeForce schemeBody =>
       map
         (arguments => Instantiation {
           body = services.substituteExistingBody subst schemeBody,
@@ -186,8 +186,9 @@ instantiateQualified : InstantiationServices subst ->
   QualifiedScheme ->
   Instantiation
 instantiateQualified services scope origin qualified = match qualified.hm
-  Forall typeVariables effectVariables schemeForce schemeBody =>
-    let subst = services.makeSubstitution typeVariables effectVariables
+  Forall typeVariables effectVariables authorityVariables schemeForce schemeBody =>
+    let subst =
+      services.makeSubstitution typeVariables effectVariables authorityVariables
     Instantiation {
       body = services.substituteBody subst schemeBody,
       force = services.substituteForce subst schemeForce,

@@ -163,6 +163,23 @@ relay : (Unit -> <IO | e | e2> a) -> <IO | e | e2> a  -- a JOIN of tail vars
 relay g = g ()
 ```
 
+An effect label's parameter is a literal, the name of an argument written to
+its left in the same signature, or absent (the label bare, meaning the whole
+domain).  A named argument is written `(name : String)` immediately left of an
+arrow; an atom that names it charges the effect on whatever that argument is:
+
+```medaka
+effect Store Prefix
+extern load : (path : String) -> <Store path> Int
+extern move : (src : String) -> (dst : String) -> <Store src, Store dst> Unit
+sub : (path : String) -> <Store path> Int  -- may read path or narrow it, nothing else
+sub path = load (path ++ "/x")
+```
+
+A qualified value type is written with a spaced `@`: `String @path` names the
+argument's authority on a value derived from it.  The quoted underscore
+(`<Store "_">`) is a parse error naming the replacement.
+
 A row may name several tail variables (#821): `<IO | e | e2>` is the row of `IO`
 together with whatever either variable performs.  In an `Effect`-kinded type-
 ARGUMENT slot a label-free join is written with parentheses instead of angle

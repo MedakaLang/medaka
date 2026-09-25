@@ -1,0 +1,1 @@
+TYPE ERROR: Effectful value used where <Env, FileRead "config/*"> is allowed, but it performs <FileRead>

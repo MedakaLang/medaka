@@ -4,19 +4,23 @@ effStr : List Atom -> String
 letters : String
 lookupAssocI : Int -> List (Int, a) -> Option a
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
+nameTaken : String -> List (Int, String) -> Bool
 normalize : Mono -> Mono
 normalizeLink : Ref Tyvar -> Mono -> Mono
 ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
+ppAuthority : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+ppAuthvarName : Ref (List (Int, String)) -> Ref Int -> Ref Authvar -> String
 ppBinding : Ref (List (Int, String)) -> Ref Int -> EffRow -> Mono -> String
 ppConName : String -> String
 ppConstraint : Constraint -> String
 ppConstraints : List Constraint -> String
+ppDomain : Ref (List (Int, String)) -> Ref Int -> Mono -> String
 ppEach : Ref (List (Int, String)) -> Ref Int -> Int -> List Mono -> List String
 ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
 ppEffArgFmt : String -> String -> String
-ppEffAtomTy : (String, Option String) -> String
-ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffAtomTy : EffAtomTy -> String
+ppEffInsideTy : List EffAtomTy -> List String -> String
 ppEffectPrefix : Ref (List (Int, String)) -> Ref Int -> (List Atom, List (Ref Effvar)) -> String
 ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
 ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> String
@@ -24,6 +28,7 @@ ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
 ppMono : Mono -> String
 ppMonosShared : List Mono -> String
 ppPredArgsShared : List Mono -> String
+ppQual : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Authority -> String
 ppScheme : Scheme -> String
 ppSchemeCon : List VecObl -> Scheme -> String
 ppTy : Ty -> String

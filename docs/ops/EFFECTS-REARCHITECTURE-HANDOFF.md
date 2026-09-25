@@ -1,16 +1,18 @@
 # Effects rearchitecture session handoff
 
-**Status:** INCOMPLETE — draft PR; CI green on head `fbe6d455b`
-(run 36064803849, every job), authority work not started. Handoff first
-recorded 2026-09-24; continuation session the same day.
+**Status:** INCOMPLETE — draft PR. The named-authority work (#3385's arrow
+half, #3382, #3383, #3391) landed in the session of 2026-09-24/25 (see
+"Named-authority session"); the data half of #3385 and the final CI run on
+that head are still owed. CI was last green on head `fbe6d455b` (run
+36064803849, every job). Handoff first recorded 2026-09-24.
 
 ## Resume here
 
 Continue [PR #3393](https://github.com/MedakaLang/medaka/pull/3393), branch
 `effects-architecture-one-shot`. The source checkpoint is the branch head; the
-continuation session below is its last commit. `main` is merged in as of
-`9d7fd98ac`. Do not enqueue the PR until a fresh CI run on the stabilized head
-is read to terminal and the named-authority work below has been decided.
+named-authority session below is its last commits. `main` is merged in as of
+`9d7fd98ac`. Do not enqueue the PR until a fresh CI run on the head is read to
+terminal; Val decides the merge.
 
 Read, in order:
 
@@ -146,12 +148,153 @@ thirteen previously red gates (`diff_compiler_check_json`,
 gate families, the self-compile fixpoint, and preflight's full expansion. CI is
 the authority for those.
 
+## Named-authority session (2026-09-24/25)
+
+What landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Named-authority checkpoint" and stated normatively in
+[Effects semantics](../spec/EFFECTS-SEMANTICS.md) §1, §4.1 and §11; the codes
+are in `compiler/DIAGNOSTIC-CODES-DESIGN.md`; the surface is in
+`docs/spec/SYNTAX.md`. This section records the decisions, the traps and what
+is owed, not the design.
+
+**Ratified by Val before coding (AskUserQuestion, 2026-09-24):**
+
+1. *Layer 1 only.* This increment covers named arrows, qualified argument values
+   and label identity. Qualified data fields, constructor proof sources and
+   authority-indexed existentials keep their proposed syntax in the semantics and
+   are not implemented; nothing pretends otherwise.
+2. *Lexical-only binders.* An atom or qualifier may name only a binder written to
+   its left in the same signature. No implicit free names, no module-level
+   authority names.
+3. *Keep the literal grammar; a binder fills the Host axis.* Product atoms keep
+   `Host="…" Method={…}`; `<Net host>` with a named binder qualifies the Host
+   axis, other axes stay as written or top.
+4. *Spaced ` @p` only.* `String @p` is the qualifier; a tight `@` is not lexed
+   as one.
+
+**Design decisions made while implementing, each a general rule:**
+
+- *Undirected unification erases a top-level qualifier.* `unifyN` cannot tell
+  which side is the value, so `TQual a q ~ b` equates `a ~ b`, and a metavariable
+  meeting a `TQual` binds to the inner type. The first cut kept the qualifier on
+  a variable and demanded `top ⊑ q` against a plain side; that rejected
+  `p ++ "/x"` inside `appendOp` (the operands are equated) and would have let an
+  unconstrained value (`v : a`) gain a qualifier through `v == p`. A qualifier now
+  reaches a variable only through a directed flow: `argumentInto` (an allowance
+  above the value's authority in a flexible slot), `bindFrom` (a declared
+  parameter in `peelOntoParams`, a match scrutinee, a `let`/do pattern, an
+  application's result). `appendOp` returns the operands' plain value type: an
+  operator's result is a new value whose authority is `α`'s to decide, which is
+  what keeps `n ++ "_X"` in a Set domain at top while `p ++ "/x"` in a Prefix
+  domain keeps `p`.
+- *Composition and pipes are not applications of an unknown value.* `composeOp`
+  used to apply `g` to a fresh variable, which abstracted to top and solved `g`'s
+  authority away; it now takes `g`'s own arrow (`calleeArrow`). `x |> f` routes
+  through `applicationRow` with the argument's syntax, so a literal piped into a
+  named extern is proved like `f x`.
+- *A module-level residue is solved once.* A value binding the value restriction
+  keeps monomorphic (`comp = load >> f`) leaves an authority variable no binding
+  owns; its lower bounds arrive from later bindings. `checkAuthorities` transfers
+  such wanteds to `SummarySolver.essRoot` when there is no enclosing scope, and
+  `closeRootAuthorities` (called from `processTopGroups` after the last SCC) takes
+  the least solution over every use and decides them. The first-scope-binds
+  alternative was rejected as order-dependent and strictly less permissive than
+  the least solution.
+- *A local `effect Env` is another label.* With identity by declaring origin, a
+  module that declares `effect Env Set` and redeclares `getEnv` writes a row over
+  its own label, which the catalog-row cover check rightly refuses. The six
+  `test/effect_param_fixtures` dropped their local declarations (the builtin
+  labels already carry the domain). This is the type-shadowing rule applied to
+  labels, not a defect.
+- *`α` reads syntax before types.* Typecheck sees `EVar`/`EVarId` (`EVarAt` is
+  minted by `annotateProgram` after typecheck); the `EVarAt` arm in
+  `effect_infer.mdk` is harmless but never hit during inference.
+- *A second application route was hiding in the standalone-shadow arms.* A
+  user binding named like a prelude method (`sub` beside `Num.sub`) is applied
+  through `unifySpineResult`, which took argument TYPES only, so every argument
+  abstracted to top and a wrapper so named could not be called within a bound.
+  Found by the engine fixture (`sub` was its wrapper's name); invisible to the
+  matrix sibling, which runs without the prelude. The spine helper now takes the
+  argument nodes and applies through `applicationRow`. The lesson generalizes:
+  any arm that consumes a `List Mono` of applied arguments is a route that has
+  lost the argument's syntax; `unifySpineProbe` is the one that remains, and it
+  is a probe whose instance is discarded.
+- *A cell read is a directed flow.* `!r` and `r.value` unified the cell's type
+  with `Ref inner` undirectedly, which erased the stored qualifier; `refStored`
+  reads it verbatim (the `Ref` invariance pair pins both directions).
+
+**Traps paid for in this session:**
+
+- Every `compiler/**.mdk` or `stdlib/**.mdk` edit after a build starts makes
+  the binary stale; `MEDAKA_STRICT=1` then exits 1 with only a stderr warning,
+  and a suite script that filters stdout reads as "no output". Two suite runs and
+  one delegated verification were lost to this. Batch edits, then build.
+- `stdlib/test_process.mdk` is outside `medaka_cli.mdk`'s closure, so the strict
+  closure check cannot see an invalid written pattern there (`<Exec "mktemp">`
+  needed a delimiter: `"mktemp*"`); `make snapshot-check` found it.
+- `medaka test` on a `*_test.mdk` interprets the compiler from source, so a
+  typechecker change can be exercised there before any rebuild; the scratch
+  driver that printed each matrix row's diagnostics found the concat and
+  composition defects in one run.
+- The `must_fail` gate's drain instruction is `git rm -r` of the pin directory;
+  this session's tool policy refused that deletion ("security test removal"),
+  so the three drained pins are still in the tree and the `soundness` job's
+  must-fail step will report `3382`/`3383` DRAINED and `3391` CONTROL-BROKE
+  until Val removes them. Nothing else is owed for those issues.
+
+**Receipts on the final source state (build 11, oracles rebuilt after it):**
+
+- `MEDAKA_STRICT=1 ./medaka check compiler/driver/medaka_cli.mdk`: 0 errors.
+- Sibling suites: `effect_authority_test` 10/10, `effect_bindings_test` 75/75,
+  `typecheck_test` 75/75, `effect_solver_test` 28/28, `effect_values_test` 5/5,
+  `effect_domain_test` 7/7, `effect_rows_test` 9/9, `effect_infer_test` 2/2,
+  `repr_test` 3/3, `solver_contract_test` 3/3, `check_policy_test` 2/2,
+  `route_key` 38/38; domain fixture suites: param 6/6, product 8/8, builtin
+  44/44.
+- `MEDAKA_REQUIRE_WASM=1 ONLY=engine/named_authority diff_compiler_engines`:
+  eval, native and wasm agree and match the absolute pin (three lines).
+- The nine typecheck-error goldens were captured from `check_main`, read
+  against §4.1 before blessing, and the `ok` control's argument was corrected
+  once (`"config"` is not within `"config/*"` under the delimiter discipline;
+  the wrapper narrows within the argument, so the caller must pass a path
+  inside the bound).
+- `run_gates.sh` over fmt, check*, snapshot*, selfproc, lextok, native_cli,
+  eval*, must_fail, bootstrap_lex, fixture_corpus_coverage, source_bytes,
+  lint*, effect_polarity, manifest*, engines: 26 pass; `diff_compiler_fmt`
+  passes through `medaka gate run` (the bare runner leaves `MEDAKA_ROOT`
+  unset, which silences the reimpl lint rows, as the test's own header says);
+  `diff_compiler_check_wrapper_callers` passes after the ledger row for the
+  matrix sibling; `diff_compiler_must_fail` reports 3382/3383 DRAINED and 3391
+  CONTROL-BROKE, the drain this session could not delete.
+- Snapshots re-blessed for the 33 moved compiler/stdlib sources plus the
+  diff fixture, `--new` for `effect_authority.mdk`; LEG A re-captured (the
+  removed lines are the deleted and re-typed helpers); lextok goldens for the
+  migrated stdlib files; the native-cli check golden, boot_lex golden and
+  combined golden of `effect_param_hole`; `docs/stdlib` regenerated.
+- `docs-links`, `agent-doc-symbols` (one ledger row for the archived census's
+  retired `Known`), comment-register census, shout-diff and the registry
+  keying ratchet: green.
+- The CI run on the pushed head is recorded in the PR.
+
+**Owed after this session:**
+
+1. Delete `test/must_fail_fixtures/3382-*`, `3383-*`, `3391-*` (drained; the
+   regressions live under `test/typecheck_error_fixtures/effect_*`) and close
+   #3382, #3383, #3391 when the PR merges.
+2. The data half of #3385 (delivery item 6 in the architecture).
+3. A located `R-AMBIGUOUS-EFFECT` (an `EffAtomTy` carries no `Loc`).
+4. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
+   lambda parameter without a directed flow lose the qualifier: conservative,
+   documented in the architecture, not a launder.
+5. The whole-diff adversarial review and the CI run on the final head.
+
 ## Delivered code and invariants to preserve
 
 | File under compiler/types | Responsibility at the checkpoint |
 |---|---|
-| effect_domain.mdk | Concrete Unit/Prefix/Set/Product algebra; Atom still lives here temporarily |
-| effect_rows.mdk | Row DAG operations, normalization, visited maps and shared labelled links |
+| effect_domain.mdk | Concrete Unit/Prefix/Set/Product algebra; `canonParam`; the prefix join canonical form (`lcp*`) |
+| effect_authority.mdk | Authority terms (`AConst`/`AVar`/`AJoin`), normalization, `authSub`, rendering |
+| effect_rows.mdk | `EffLabel` identity, `Atom = label + authority`, row DAG operations, normalization, visited maps and shared labelled links |
 | effect_infer.mdk | Scoped, non-solving effect capture |
 | effect_bindings.mdk | Source arity and body/forcing summaries; distinct produced and recursive rows |
 | effect_values.mdk | Structural positive envelopes for branch/clause/literal/receiving joins |
@@ -212,25 +355,19 @@ claiming purity. Keep inference, signatures, docs and snapshots consistent.
 These are tracked by the draft PR and its architecture delivery checklist; this
 list is not a claim that an independent full-head review found nothing else.
 
-1. An exact-head, whole-diff adversarial review (CI is green on `fbe6d455b`,
-   run 36064803849; a later head owes its own run).
-2. Named authorities, qualified fields and constructor proof sources (#3385).
-3. Retire unchecked quoted underscore and first-argument hole filling: known
-   laundering #3382/#3383 still exists. Keep legacy soundness checks until their
-   replacements cover every route.
-4. Resolved effect-label identity and consistent domain schemas; string labels
-   and mixed-domain fallback remain.
-5. General qualified directed residual constraints in schemes, plus fully
+1. An exact-head, whole-diff adversarial review, and the CI run on the final
+   head read to terminal (CI was last green on `fbe6d455b`, run 36064803849).
+2. Qualified data fields, constructor proof sources and existentials (#3385's
+   data half). Named authorities on arrows, the underscore's retirement, label
+   identity and the prefix-join canonical form are delivered.
+3. Removal of the three drained must-fail pins (see "Owed after this session").
+4. General qualified directed residual constraints in schemes, plus fully
    delayed unknown-shape produced-value joins.
-6. Shared invocation-protocol summaries for policy/manifest consumers rather
+5. Shared invocation-protocol summaries for policy/manifest consumers rather
    than re-deriving semantics by structural traversal.
-7. Prefix rendering/canonicalization #3391 (S2; no demonstrated laundering).
-8. Final performance, cross-engine, self-hosting and CI verification after all
+6. Final performance, cross-engine, self-hosting and CI verification after all
    semantic changes. Earlier successful subsets do not discharge this.
 
-Open issue pins are already durable under `test/must_fail_fixtures/`:
-`3382-user-signature-effect-hole-unchecked`,
-`3383-rename-destination-uncharged`, and `3391-prefix-join-render`.
 The branch also changed `819-impl-head-tyvar-pinned`; recheck its current contract.
 The #825 drain above is new evidence. #830/#2111 remain relevant semantic history.
 #3328 remains open although this branch implements forcing preservation; verify
@@ -324,10 +461,14 @@ or callee-name hole filling; raw-field qualifiers without construction evidence;
 making mutable indices covariant; trusting cross-engine agreement without value
 pins; deleting legacy off-spine soundness checks before equivalent coverage.
 
-## Next authority design: researched, NOT implemented
+## Authority design: the route that was implemented
 
-The architecture/spec own the contract; the following is a proposed concrete
-implementation route, not a description of current symbols or final decisions.
+This was the proposed route before the named-authority session; it was followed
+in the order given, with the deviations recorded in "Named-authority session"
+above. The module names are now real (`types/effect_authority.mdk`,
+`types/effect_rows.mdk`'s `EffLabel`/`Atom`, `TQual`, the five-field `Forall`,
+`EffParamTy`, `TyNamed`/`TyQual`). The "Ratify before coding" list was ratified
+as recorded above. Qualified fields/constructors remain the proposed surface.
 
 **Prerequisite: nominal effect identity.** Introduce an effect reference keyed
 by defining origin and name, stamp declarations/occurrences, preserve exported

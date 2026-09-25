@@ -1,0 +1,2 @@
+TYPE ERROR: Effectful value used where <FileWrite "tmp/*"> is allowed, but it performs <FileWrite>
+TYPE ERROR: Effectful value used where <FileWrite "tmp/*"> is allowed, but it performs <FileWrite>

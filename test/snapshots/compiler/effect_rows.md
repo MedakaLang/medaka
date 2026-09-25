@@ -1,14 +1,196 @@
 # META
-source_lines=246
+source_lines=428
 stages=DESUGAR,MARK
 # SOURCE
--- Effect row cells and their normalized views. A join retains every member's
--- atoms: compressing it to only its unbound leaves would erase effects.
+-- Effect atoms and rows. An atom is a resolved label refined by an authority
+-- term; a row is a finite label map plus an optional tail. Two atoms on one
+-- label are never two members: they collapse to one by the authority join.
+-- A row's tail is a DAG of cells; a join retains every member's atoms, since
+-- compressing it to only its unbound leaves would erase effects.
 
-import support.util.{reverseL}
+import support.util.{reverseL, joinWith}
 import support.opcount.{opBump}
-import types.effect_domain.{Atom, atomsUnion}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+import types.effect_domain.{Param}
+import types.effect_authority.{
+  Authority(..), Authvar, authJoin, authSub, authConst, renderAuthority,
+  renderAuthorityWith
+}
+import frontend.ast.{TyConOrigin(..)}
 import map.{Map(..), has, set}
+
+-- A label is its spelling together with the identity of the declaration it
+-- names: `OriginBuiltin` for the language's own labels, the declaring module
+-- for a user `effect`, unresolved in a flat program. The key an atom map uses
+-- is the identity, so two modules' same-spelled labels are two atoms.
+public export data EffLabel = EffLabel String TyConOrigin
+
+public export data Atom = Atom EffLabel Authority
+
+export
+effLabelName : EffLabel -> String
+effLabelName (EffLabel n _) = n
+
+export
+effLabelOrigin : EffLabel -> TyConOrigin
+effLabelOrigin (EffLabel _ o) = o
+
+export
+labelKey : EffLabel -> String
+labelKey (EffLabel n o) = match o
+  OriginModule m => "\{m}::\{n}"
+  _ => n
+
+export
+builtinLabel : String -> EffLabel
+builtinLabel n = EffLabel n OriginBuiltin
+
+export
+atomLabel : Atom -> String
+atomLabel (Atom l _) = effLabelName l
+
+export
+atomLabelOf : Atom -> EffLabel
+atomLabelOf (Atom l _) = l
+
+export
+atomKey : Atom -> String
+atomKey (Atom l _) = labelKey l
+
+export
+atomAuth : Atom -> Authority
+atomAuth (Atom _ a) = a
+
+-- The concrete parameter an atom carries, when nothing symbolic is left in it.
+export
+atomConst : Atom -> Option Param
+atomConst (Atom _ a) = authConst a
+
+export
+atomBuiltin : String -> Param -> Atom
+atomBuiltin n p = Atom (builtinLabel n) (AConst p)
+
+export
+atomWith : EffLabel -> Param -> Atom
+atomWith l p = Atom l (AConst p)
+
+-- Rendering order is by spelling first, then by identity, so a row prints the
+-- way it always has and only a genuine same-spelling collision orders by module.
+sortKey : Atom -> String
+sortKey a = "\{atomLabel a} \{atomKey a}"
+
+export
+renderAtom : Atom -> String
+renderAtom a = atomLabel a ++ renderAuthority (atomAuth a)
+
+export
+renderAtomWith : (Ref Authvar -> String) -> Atom -> String
+renderAtomWith name a = atomLabel a ++ renderAuthorityWith name (atomAuth a)
+
+export
+renderAtoms : List Atom -> String
+renderAtoms atoms = joinWith ", " (map renderAtom (atomsNorm atoms))
+
+export
+renderAtomsWith : (Ref Authvar -> String) -> List Atom -> String
+renderAtomsWith name atoms =
+  joinWith ", " (map (renderAtomWith name) (atomsNorm atoms))
+
+export
+atomInsert : Atom -> List Atom -> List Atom
+atomInsert x [] = [x]
+atomInsert x (y :: ys) = match stringCompare (sortKey x) (sortKey y)
+  Lt => x :: y :: ys
+  Eq => Atom (atomLabelOf y) (authJoin (atomAuth x) (atomAuth y)) :: ys
+  Gt => y :: atomInsert x ys
+
+export
+atomsNorm : List Atom -> List Atom
+atomsNorm [] = []
+atomsNorm [x] = [x]
+atomsNorm [x, y] = atomInsert y [x]
+atomsNorm [x, y, z] = atomInsert z (atomInsert y [x])
+atomsNorm xs = atomsFromIndex (atomIndex xs omEmpty)
+
+-- Rows normally contain one or two labels, where a tree would be needless
+-- allocation. Once a row grows past that fixed small case, index by the sort
+-- key. The map's in-order keys also retain the canonical rendering order.
+-- `authJoin x old` deliberately matches atomInsert: a later occurrence is
+-- joined into the earlier one in the same direction.
+atomIndex : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndex [] m = m
+atomIndex (x :: xs) m =
+  let k = sortKey x
+  let next = match omLookup k m
+    None => x
+    Some old => Atom (atomLabelOf old) (authJoin (atomAuth x) (atomAuth old))
+  atomIndex xs (omInsert k next m)
+
+atomIndexFirst : List Atom -> OrdMap Atom -> OrdMap Atom
+atomIndexFirst [] m = m
+atomIndexFirst (x :: xs) m = match omLookup (sortKey x) m
+  None => atomIndexFirst xs (omInsert (sortKey x) x m)
+  Some _ => atomIndexFirst xs m
+
+atomsFromIndex : OrdMap Atom -> List Atom
+atomsFromIndex m = atomsFromKeys (omKeys m) m
+
+atomsFromKeys : List String -> OrdMap Atom -> List Atom
+atomsFromKeys [] _ = []
+atomsFromKeys (k :: ks) m = match omLookup k m
+  Some atom => atom :: atomsFromKeys ks m
+  None => atomsFromKeys ks m
+
+export
+atomsUnion : List Atom -> List Atom -> List Atom
+atomsUnion a b = atomsNorm (a ++ b)
+
+-- The atoms of [xs] not proven covered by [ys]: a label absent from [ys], or
+-- present with an authority that does not provably cover. A symbolic pair
+-- that cannot be decided yet stays in the difference; the caller decides
+-- whether that is an escape or a pending obligation.
+export
+atomsDiff : List Atom -> List Atom -> List Atom
+atomsDiff [] _ = []
+atomsDiff xs [] = xs
+atomsDiff [x] ys = atomsDiffOne x ys
+atomsDiff [x, y] ys = atomsDiffOne x ys ++ atomsDiffOne y ys
+atomsDiff xs [y] = atomsDiffOneAgainst xs y
+atomsDiff xs ys = reverseL (atomsDiffIndexed xs (atomIndexFirst ys omEmpty) [])
+
+atomsDiffOne : Atom -> List Atom -> List Atom
+atomsDiffOne x ys = match findAtom (atomKey x) ys
+  None => [x]
+  Some y => if authSub (atomAuth x) (atomAuth y) then [] else [x]
+
+atomsDiffOneAgainst : List Atom -> Atom -> List Atom
+atomsDiffOneAgainst xs y = reverseL (atomsDiffOneAgainstGo xs y [])
+
+atomsDiffOneAgainstGo : List Atom -> Atom -> List Atom -> List Atom
+atomsDiffOneAgainstGo [] _ acc = acc
+atomsDiffOneAgainstGo (x :: xs) y acc =
+  if atomKey x == atomKey y && authSub (atomAuth x) (atomAuth y) then
+    atomsDiffOneAgainstGo xs y acc
+  else
+    atomsDiffOneAgainstGo xs y (x :: acc)
+
+atomsDiffIndexed : List Atom -> OrdMap Atom -> List Atom -> List Atom
+atomsDiffIndexed [] _ acc = acc
+atomsDiffIndexed (x :: xs) index acc = match omLookup (sortKey x) index
+  Some y =>
+    if authSub (atomAuth x) (atomAuth y) then
+      atomsDiffIndexed xs index acc
+    else
+      atomsDiffIndexed xs index (x :: acc)
+  None => atomsDiffIndexed xs index (x :: acc)
+
+-- The atom whose label has identity key [k], by first occurrence.
+export
+findAtom : String -> List Atom -> Option Atom
+findAtom _ [] = None
+findAtom k (y :: ys) = if k == atomKey y then Some y else findAtom k ys
+
+-- ── rows ──────────────────────────────────────────────────────────────────
 
 public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
 
@@ -249,10 +431,89 @@ dedupCellsGo (cell :: cells) seen acc =
   else
     dedupCellsGo cells (set id () seen) (cell :: acc)
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Atom" false) (mem "atomsUnion" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" false) (mem "authJoin" false) (mem "authSub" false) (mem "authConst" false) (mem "renderAuthority" false) (mem "renderAuthorityWith" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true) (mem "has" false) (mem "set" false))))
+(DData Public "EffLabel" () ((variant "EffLabel" (ConPos (TyCon "String") (TyCon "TyConOrigin")))) ())
+(DData Public "Atom" () ((variant "Atom" (ConPos (TyCon "EffLabel") (TyCon "Authority")))) ())
+(DTypeSig true "effLabelName" (TyFun (TyCon "EffLabel") (TyCon "String")))
+(DFunDef false "effLabelName" ((PCon "EffLabel" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "effLabelOrigin" (TyFun (TyCon "EffLabel") (TyCon "TyConOrigin")))
+(DFunDef false "effLabelOrigin" ((PCon "EffLabel" PWild (PVar "o"))) (EVar "o"))
+(DTypeSig true "labelKey" (TyFun (TyCon "EffLabel") (TyCon "String")))
+(DFunDef false "labelKey" ((PCon "EffLabel" (PVar "n") (PVar "o"))) (EMatch (EVar "o") (arm (PCon "OriginModule" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "::"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (arm PWild () (EVar "n"))))
+(DTypeSig true "builtinLabel" (TyFun (TyCon "String") (TyCon "EffLabel")))
+(DFunDef false "builtinLabel" ((PVar "n")) (EApp (EApp (EVar "EffLabel") (EVar "n")) (EVar "OriginBuiltin")))
+(DTypeSig true "atomLabel" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "atomLabel" ((PCon "Atom" (PVar "l") PWild)) (EApp (EVar "effLabelName") (EVar "l")))
+(DTypeSig true "atomLabelOf" (TyFun (TyCon "Atom") (TyCon "EffLabel")))
+(DFunDef false "atomLabelOf" ((PCon "Atom" (PVar "l") PWild)) (EVar "l"))
+(DTypeSig true "atomKey" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "atomKey" ((PCon "Atom" (PVar "l") PWild)) (EApp (EVar "labelKey") (EVar "l")))
+(DTypeSig true "atomAuth" (TyFun (TyCon "Atom") (TyCon "Authority")))
+(DFunDef false "atomAuth" ((PCon "Atom" PWild (PVar "a"))) (EVar "a"))
+(DTypeSig true "atomConst" (TyFun (TyCon "Atom") (TyApp (TyCon "Option") (TyCon "Param"))))
+(DFunDef false "atomConst" ((PCon "Atom" PWild (PVar "a"))) (EApp (EVar "authConst") (EVar "a")))
+(DTypeSig true "atomBuiltin" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "Atom"))))
+(DFunDef false "atomBuiltin" ((PVar "n") (PVar "p")) (EApp (EApp (EVar "Atom") (EApp (EVar "builtinLabel") (EVar "n"))) (EApp (EVar "AConst") (EVar "p"))))
+(DTypeSig true "atomWith" (TyFun (TyCon "EffLabel") (TyFun (TyCon "Param") (TyCon "Atom"))))
+(DFunDef false "atomWith" ((PVar "l") (PVar "p")) (EApp (EApp (EVar "Atom") (EVar "l")) (EApp (EVar "AConst") (EVar "p"))))
+(DTypeSig false "sortKey" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "sortKey" ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "atomKey") (EVar "a")))) (ELit (LString ""))))
+(DTypeSig true "renderAtom" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "renderAtom" ((PVar "a")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EVar "renderAuthority") (EApp (EVar "atomAuth") (EVar "a")))))
+(DTypeSig true "renderAtomWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
+(DFunDef false "renderAtomWith" ((PVar "name") (PVar "a")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EApp (EVar "atomAuth") (EVar "a")))))
+(DTypeSig true "renderAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "renderAtoms" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EApp (EVar "atomsNorm") (EVar "atoms")))))
+(DTypeSig true "renderAtomsWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
+(DFunDef false "renderAtomsWith" ((PVar "name") (PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EApp (EVar "renderAtomWith") (EVar "name"))) (EApp (EVar "atomsNorm") (EVar "atoms")))))
+(DTypeSig true "atomInsert" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "atomInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "sortKey") (EVar "x"))) (EApp (EVar "sortKey") (EVar "y"))) (arm (PCon "Lt") () (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys")))) (arm (PCon "Eq") () (EBinOp "::" (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "y"))) (EApp (EApp (EVar "authJoin") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EVar "ys"))) (arm (PCon "Gt") () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "atomInsert") (EVar "x")) (EVar "ys"))))))
+(DTypeSig true "atomsNorm" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "atomsNorm" ((PList)) (EListLit))
+(DFunDef false "atomsNorm" ((PList (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "atomsNorm" ((PList (PVar "x") (PVar "y"))) (EApp (EApp (EVar "atomInsert") (EVar "y")) (EListLit (EVar "x"))))
+(DFunDef false "atomsNorm" ((PList (PVar "x") (PVar "y") (PVar "z"))) (EApp (EApp (EVar "atomInsert") (EVar "z")) (EApp (EApp (EVar "atomInsert") (EVar "y")) (EListLit (EVar "x")))))
+(DFunDef false "atomsNorm" ((PVar "xs")) (EApp (EVar "atomsFromIndex") (EApp (EApp (EVar "atomIndex") (EVar "xs")) (EVar "omEmpty"))))
+(DTypeSig false "atomIndex" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "OrdMap") (TyCon "Atom")))))
+(DFunDef false "atomIndex" ((PList) (PVar "m")) (EVar "m"))
+(DFunDef false "atomIndex" ((PCons (PVar "x") (PVar "xs")) (PVar "m")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "sortKey") (EVar "x"))) (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m")) (arm (PCon "None") () (EVar "x")) (arm (PCon "Some" (PVar "old")) () (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "old"))) (EApp (EApp (EVar "authJoin") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "old"))))))) (DoExpr (EApp (EApp (EVar "atomIndex") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "next")) (EVar "m"))))))
+(DTypeSig false "atomIndexFirst" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "OrdMap") (TyCon "Atom")))))
+(DFunDef false "atomIndexFirst" ((PList) (PVar "m")) (EVar "m"))
+(DFunDef false "atomIndexFirst" ((PCons (PVar "x") (PVar "xs")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "sortKey") (EVar "x"))) (EVar "m")) (arm (PCon "None") () (EApp (EApp (EVar "atomIndexFirst") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "sortKey") (EVar "x"))) (EVar "x")) (EVar "m")))) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "atomIndexFirst") (EVar "xs")) (EVar "m")))))
+(DTypeSig false "atomsFromIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "atomsFromIndex" ((PVar "m")) (EApp (EApp (EVar "atomsFromKeys") (EApp (EVar "omKeys") (EVar "m"))) (EVar "m")))
+(DTypeSig false "atomsFromKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsFromKeys" ((PList) PWild) (EListLit))
+(DFunDef false "atomsFromKeys" ((PCons (PVar "k") (PVar "ks")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "atom")) () (EBinOp "::" (EVar "atom") (EApp (EApp (EVar "atomsFromKeys") (EVar "ks")) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EVar "atomsFromKeys") (EVar "ks")) (EVar "m")))))
+(DTypeSig true "atomsUnion" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsUnion" ((PVar "a") (PVar "b")) (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "a") (EVar "b"))))
+(DTypeSig true "atomsDiff" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsDiff" ((PList) PWild) (EListLit))
+(DFunDef false "atomsDiff" ((PVar "xs") (PList)) (EVar "xs"))
+(DFunDef false "atomsDiff" ((PList (PVar "x")) (PVar "ys")) (EApp (EApp (EVar "atomsDiffOne") (EVar "x")) (EVar "ys")))
+(DFunDef false "atomsDiff" ((PList (PVar "x") (PVar "y")) (PVar "ys")) (EBinOp "++" (EApp (EApp (EVar "atomsDiffOne") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "atomsDiffOne") (EVar "y")) (EVar "ys"))))
+(DFunDef false "atomsDiff" ((PVar "xs") (PList (PVar "y"))) (EApp (EApp (EVar "atomsDiffOneAgainst") (EVar "xs")) (EVar "y")))
+(DFunDef false "atomsDiff" ((PVar "xs") (PVar "ys")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EApp (EApp (EVar "atomIndexFirst") (EVar "ys")) (EVar "omEmpty"))) (EListLit))))
+(DTypeSig false "atomsDiffOne" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsDiffOne" ((PVar "x") (PVar "ys")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "ys")) (arm (PCon "None") () (EListLit (EVar "x"))) (arm (PCon "Some" (PVar "y")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y"))) (EListLit) (EListLit (EVar "x"))))))
+(DTypeSig false "atomsDiffOneAgainst" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "Atom") (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsDiffOneAgainst" ((PVar "xs") (PVar "y")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "atomsDiffOneAgainstGo") (EVar "xs")) (EVar "y")) (EListLit))))
+(DTypeSig false "atomsDiffOneAgainstGo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))
+(DFunDef false "atomsDiffOneAgainstGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "atomsDiffOneAgainstGo" ((PCons (PVar "x") (PVar "xs")) (PVar "y") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "atomKey") (EVar "y"))) (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EApp (EApp (EApp (EVar "atomsDiffOneAgainstGo") (EVar "xs")) (EVar "y")) (EVar "acc")) (EApp (EApp (EApp (EVar "atomsDiffOneAgainstGo") (EVar "xs")) (EVar "y")) (EBinOp "::" (EVar "x") (EVar "acc")))))
+(DTypeSig false "atomsDiffIndexed" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))
+(DFunDef false "atomsDiffIndexed" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "atomsDiffIndexed" ((PCons (PVar "x") (PVar "xs")) (PVar "index") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "sortKey") (EVar "x"))) (EVar "index")) (arm (PCon "Some" (PVar "y")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y"))) (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EVar "index")) (EVar "acc")) (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EVar "index")) (EBinOp "::" (EVar "x") (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EVar "index")) (EBinOp "::" (EVar "x") (EVar "acc"))))))
+(DTypeSig true "findAtom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyCon "Atom")))))
+(DFunDef false "findAtom" (PWild (PList)) (EVar "None"))
+(DFunDef false "findAtom" ((PVar "k") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "==" (EVar "k") (EApp (EVar "atomKey") (EVar "y"))) (EApp (EVar "Some") (EVar "y")) (EApp (EApp (EVar "findAtom") (EVar "k")) (EVar "ys"))))
 (DData Public "EffRow" () ((variant "EffRow" (ConPos (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar")))))) ())
 (DData Public "Effvar" () ((variant "EUnbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "ELink" (ConPos (TyCon "Int") (TyCon "EffRow"))) (variant "EJoin" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (variant "ESummary" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig true "effrowNorm" (TyFun (TyCon "EffRow") (TyCon "EffRow")))
@@ -327,10 +588,89 @@ dedupCellsGo (cell :: cells) seen acc =
 (DFunDef false "dedupCellsGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "dedupCellsGo" ((PCons (PVar "cell") (PVar "cells")) (PVar "seen") (PVar "acc")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoExpr (EIf (EApp (EApp (EVar "has") (EVar "id")) (EVar "seen")) (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EVar "seen")) (EVar "acc")) (EApp (EApp (EApp (EVar "dedupCellsGo") (EVar "cells")) (EApp (EApp (EApp (EVar "set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EVar "cell") (EVar "acc")))))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Atom" false) (mem "atomsUnion" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" false) (mem "authJoin" false) (mem "authSub" false) (mem "authConst" false) (mem "renderAuthority" false) (mem "renderAuthorityWith" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true))))
 (DUse false (UseGroup ("map") ((mem "Map" true) (mem "has" false) (mem "set" false))))
+(DData Public "EffLabel" () ((variant "EffLabel" (ConPos (TyCon "String") (TyCon "TyConOrigin")))) ())
+(DData Public "Atom" () ((variant "Atom" (ConPos (TyCon "EffLabel") (TyCon "Authority")))) ())
+(DTypeSig true "effLabelName" (TyFun (TyCon "EffLabel") (TyCon "String")))
+(DFunDef false "effLabelName" ((PCon "EffLabel" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "effLabelOrigin" (TyFun (TyCon "EffLabel") (TyCon "TyConOrigin")))
+(DFunDef false "effLabelOrigin" ((PCon "EffLabel" PWild (PVar "o"))) (EVar "o"))
+(DTypeSig true "labelKey" (TyFun (TyCon "EffLabel") (TyCon "String")))
+(DFunDef false "labelKey" ((PCon "EffLabel" (PVar "n") (PVar "o"))) (EMatch (EVar "o") (arm (PCon "OriginModule" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "::"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (arm PWild () (EVar "n"))))
+(DTypeSig true "builtinLabel" (TyFun (TyCon "String") (TyCon "EffLabel")))
+(DFunDef false "builtinLabel" ((PVar "n")) (EApp (EApp (EVar "EffLabel") (EVar "n")) (EVar "OriginBuiltin")))
+(DTypeSig true "atomLabel" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "atomLabel" ((PCon "Atom" (PVar "l") PWild)) (EApp (EVar "effLabelName") (EVar "l")))
+(DTypeSig true "atomLabelOf" (TyFun (TyCon "Atom") (TyCon "EffLabel")))
+(DFunDef false "atomLabelOf" ((PCon "Atom" (PVar "l") PWild)) (EVar "l"))
+(DTypeSig true "atomKey" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "atomKey" ((PCon "Atom" (PVar "l") PWild)) (EApp (EVar "labelKey") (EVar "l")))
+(DTypeSig true "atomAuth" (TyFun (TyCon "Atom") (TyCon "Authority")))
+(DFunDef false "atomAuth" ((PCon "Atom" PWild (PVar "a"))) (EVar "a"))
+(DTypeSig true "atomConst" (TyFun (TyCon "Atom") (TyApp (TyCon "Option") (TyCon "Param"))))
+(DFunDef false "atomConst" ((PCon "Atom" PWild (PVar "a"))) (EApp (EVar "authConst") (EVar "a")))
+(DTypeSig true "atomBuiltin" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "Atom"))))
+(DFunDef false "atomBuiltin" ((PVar "n") (PVar "p")) (EApp (EApp (EVar "Atom") (EApp (EVar "builtinLabel") (EVar "n"))) (EApp (EVar "AConst") (EVar "p"))))
+(DTypeSig true "atomWith" (TyFun (TyCon "EffLabel") (TyFun (TyCon "Param") (TyCon "Atom"))))
+(DFunDef false "atomWith" ((PVar "l") (PVar "p")) (EApp (EApp (EVar "Atom") (EVar "l")) (EApp (EVar "AConst") (EVar "p"))))
+(DTypeSig false "sortKey" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "sortKey" ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "atomKey") (EVar "a")))) (ELit (LString ""))))
+(DTypeSig true "renderAtom" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "renderAtom" ((PVar "a")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EVar "renderAuthority") (EApp (EVar "atomAuth") (EVar "a")))))
+(DTypeSig true "renderAtomWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
+(DFunDef false "renderAtomWith" ((PVar "name") (PVar "a")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EApp (EVar "atomAuth") (EVar "a")))))
+(DTypeSig true "renderAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "renderAtoms" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EApp (EVar "atomsNorm") (EVar "atoms")))))
+(DTypeSig true "renderAtomsWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
+(DFunDef false "renderAtomsWith" ((PVar "name") (PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderAtomWith") (EVar "name"))) (EApp (EVar "atomsNorm") (EVar "atoms")))))
+(DTypeSig true "atomInsert" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "atomInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "sortKey") (EVar "x"))) (EApp (EVar "sortKey") (EVar "y"))) (arm (PCon "Lt") () (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys")))) (arm (PCon "Eq") () (EBinOp "::" (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "y"))) (EApp (EApp (EVar "authJoin") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EVar "ys"))) (arm (PCon "Gt") () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "atomInsert") (EVar "x")) (EVar "ys"))))))
+(DTypeSig true "atomsNorm" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "atomsNorm" ((PList)) (EListLit))
+(DFunDef false "atomsNorm" ((PList (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "atomsNorm" ((PList (PVar "x") (PVar "y"))) (EApp (EApp (EVar "atomInsert") (EVar "y")) (EListLit (EVar "x"))))
+(DFunDef false "atomsNorm" ((PList (PVar "x") (PVar "y") (PVar "z"))) (EApp (EApp (EVar "atomInsert") (EVar "z")) (EApp (EApp (EVar "atomInsert") (EVar "y")) (EListLit (EVar "x")))))
+(DFunDef false "atomsNorm" ((PVar "xs")) (EApp (EVar "atomsFromIndex") (EApp (EApp (EVar "atomIndex") (EVar "xs")) (EVar "omEmpty"))))
+(DTypeSig false "atomIndex" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "OrdMap") (TyCon "Atom")))))
+(DFunDef false "atomIndex" ((PList) (PVar "m")) (EVar "m"))
+(DFunDef false "atomIndex" ((PCons (PVar "x") (PVar "xs")) (PVar "m")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "sortKey") (EVar "x"))) (DoLet false false (PVar "next") (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m")) (arm (PCon "None") () (EVar "x")) (arm (PCon "Some" (PVar "old")) () (EApp (EApp (EVar "Atom") (EApp (EVar "atomLabelOf") (EVar "old"))) (EApp (EApp (EVar "authJoin") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "old"))))))) (DoExpr (EApp (EApp (EVar "atomIndex") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "next")) (EVar "m"))))))
+(DTypeSig false "atomIndexFirst" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "OrdMap") (TyCon "Atom")))))
+(DFunDef false "atomIndexFirst" ((PList) (PVar "m")) (EVar "m"))
+(DFunDef false "atomIndexFirst" ((PCons (PVar "x") (PVar "xs")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "sortKey") (EVar "x"))) (EVar "m")) (arm (PCon "None") () (EApp (EApp (EVar "atomIndexFirst") (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "sortKey") (EVar "x"))) (EVar "x")) (EVar "m")))) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "atomIndexFirst") (EVar "xs")) (EVar "m")))))
+(DTypeSig false "atomsFromIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "atomsFromIndex" ((PVar "m")) (EApp (EApp (EVar "atomsFromKeys") (EApp (EVar "omKeys") (EVar "m"))) (EVar "m")))
+(DTypeSig false "atomsFromKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsFromKeys" ((PList) PWild) (EListLit))
+(DFunDef false "atomsFromKeys" ((PCons (PVar "k") (PVar "ks")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "atom")) () (EBinOp "::" (EVar "atom") (EApp (EApp (EVar "atomsFromKeys") (EVar "ks")) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EVar "atomsFromKeys") (EVar "ks")) (EVar "m")))))
+(DTypeSig true "atomsUnion" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsUnion" ((PVar "a") (PVar "b")) (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "a") (EVar "b"))))
+(DTypeSig true "atomsDiff" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsDiff" ((PList) PWild) (EListLit))
+(DFunDef false "atomsDiff" ((PVar "xs") (PList)) (EVar "xs"))
+(DFunDef false "atomsDiff" ((PList (PVar "x")) (PVar "ys")) (EApp (EApp (EVar "atomsDiffOne") (EVar "x")) (EVar "ys")))
+(DFunDef false "atomsDiff" ((PList (PVar "x") (PVar "y")) (PVar "ys")) (EBinOp "++" (EApp (EApp (EVar "atomsDiffOne") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "atomsDiffOne") (EVar "y")) (EVar "ys"))))
+(DFunDef false "atomsDiff" ((PVar "xs") (PList (PVar "y"))) (EApp (EApp (EVar "atomsDiffOneAgainst") (EVar "xs")) (EVar "y")))
+(DFunDef false "atomsDiff" ((PVar "xs") (PVar "ys")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EApp (EApp (EVar "atomIndexFirst") (EVar "ys")) (EVar "omEmpty"))) (EListLit))))
+(DTypeSig false "atomsDiffOne" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsDiffOne" ((PVar "x") (PVar "ys")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "ys")) (arm (PCon "None") () (EListLit (EVar "x"))) (arm (PCon "Some" (PVar "y")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y"))) (EListLit) (EListLit (EVar "x"))))))
+(DTypeSig false "atomsDiffOneAgainst" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "Atom") (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "atomsDiffOneAgainst" ((PVar "xs") (PVar "y")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "atomsDiffOneAgainstGo") (EVar "xs")) (EVar "y")) (EListLit))))
+(DTypeSig false "atomsDiffOneAgainstGo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))
+(DFunDef false "atomsDiffOneAgainstGo" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "atomsDiffOneAgainstGo" ((PCons (PVar "x") (PVar "xs")) (PVar "y") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "atomKey") (EVar "y"))) (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EApp (EApp (EApp (EVar "atomsDiffOneAgainstGo") (EVar "xs")) (EVar "y")) (EVar "acc")) (EApp (EApp (EApp (EVar "atomsDiffOneAgainstGo") (EVar "xs")) (EVar "y")) (EBinOp "::" (EVar "x") (EVar "acc")))))
+(DTypeSig false "atomsDiffIndexed" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))
+(DFunDef false "atomsDiffIndexed" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "atomsDiffIndexed" ((PCons (PVar "x") (PVar "xs")) (PVar "index") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "sortKey") (EVar "x"))) (EMethodRef "index")) (arm (PCon "Some" (PVar "y")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y"))) (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EMethodRef "index")) (EVar "acc")) (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EMethodRef "index")) (EBinOp "::" (EVar "x") (EVar "acc"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "atomsDiffIndexed") (EVar "xs")) (EMethodRef "index")) (EBinOp "::" (EVar "x") (EVar "acc"))))))
+(DTypeSig true "findAtom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyCon "Atom")))))
+(DFunDef false "findAtom" (PWild (PList)) (EVar "None"))
+(DFunDef false "findAtom" ((PVar "k") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "==" (EVar "k") (EApp (EVar "atomKey") (EVar "y"))) (EApp (EVar "Some") (EVar "y")) (EApp (EApp (EVar "findAtom") (EVar "k")) (EVar "ys"))))
 (DData Public "EffRow" () ((variant "EffRow" (ConPos (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar")))))) ())
 (DData Public "Effvar" () ((variant "EUnbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "ELink" (ConPos (TyCon "Int") (TyCon "EffRow"))) (variant "EJoin" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (variant "ESummary" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig true "effrowNorm" (TyFun (TyCon "EffRow") (TyCon "EffRow")))

@@ -417,7 +417,7 @@ forcingFor source name =
     desugar (parseLocated (effectPrelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some (Forall _ _ force _) => renderAtoms (effrowLabels force)
+    Some (Forall _ _ _ force _) => renderAtoms (effrowLabels force)
     None => "<missing binding>"
 
 renderedFor : String -> String -> String
@@ -437,7 +437,7 @@ forcingTailCount source name =
     desugar (parseLocated (effectPrelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some (Forall _ _ force _) => length (snd (rowFlat force))
+    Some (Forall _ _ _ force _) => length (snd (rowFlat force))
     None => -1
 
 messagesFor : String -> List String

@@ -1,0 +1,3 @@
+main : <IO> Unit
+mv : Unit -> <FileWrite "tmp/*"> Result String Unit
+partial : Unit -> <FileWrite "tmp/*"> Result String Unit

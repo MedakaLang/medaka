@@ -1,10 +1,10 @@
--- WS-3b ENV multi-call djoin ∪.  Two `getEnv` calls with DIFFERENT literals
--- each fill a singleton (<Env {"A"}>, <Env {"B"}>); the row join is the set
+-- ENV multi-call djoin ∪.  Two `getEnv` calls with DIFFERENT literal arguments
+-- each bind a singleton (<Env {"A"}>, <Env {"B"}>); the row join is the set
 -- UNION <Env {"A","B"}> (proves djoin = ∪ for the Set domain).  Declared at the
 -- union ⇒ ACCEPT.
-effect Env Set
+-- Env is the builtin Set-domain label; a local declaration would be another label
 
-extern getEnv : String -> <Env> Option String
+extern getEnv : (name : String) -> <Env name> Option String
 
 both : Unit -> <Env {"A", "B"}, FFI> (Option String, Option String)
 both _ = (getEnv "A", getEnv "B")

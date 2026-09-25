@@ -5,7 +5,8 @@ constraintSexp : Constraint -> String
 declSexp : Decl -> String
 deferNodeName : Bool -> String
 doStmtSexp : DoStmt -> String
-effAtomSexp : (String, Option String) -> String
+effAtomSexp : EffAtomTy -> String
+effParamSexp : EffParamTy -> String
 exprSexp : Expr -> String
 fieldAssignSexp : FieldAssign -> String
 fieldSexp : Field -> String

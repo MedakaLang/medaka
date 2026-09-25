@@ -1,0 +1,9 @@
+-- #3383: rename writes two paths, and both are charged against the bound.
+-- The destination is outside it, so this must reject.
+mv : Unit -> <FileWrite "tmp/*"> Result String Unit
+mv _ = rename "tmp/a" "/etc/passwd"
+
+swapped : Unit -> <FileWrite "tmp/*"> Result String Unit
+swapped _ = rename "/etc/passwd" "tmp/a"
+
+main = println 1

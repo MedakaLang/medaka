@@ -4,15 +4,24 @@
 -- any cells are linked, including filtered cycles through higher-order calls.
 import map as M
 import map.{Map(..)}
-import types.effect_rows.{
-  Atom, atomsUnion, atomsDiff, EffRow(..), Effvar(..), effvarId, rowFlat,
-  rowFlatMembers, rowHasSummary, linkRow, solveSummaryCell
+import types.effect_authority.{
+  Authority(..), Authvar(..), authvarId, authNorm, authSub, authVars,
+  authJoinAll, linkAuthvar
 }
-import support.util.{reverseL, isNonEmptyL, isEmptyL}
+import types.effect_rows.{
+  Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
+  Effvar(..), effvarId, rowFlat, rowFlatMembers, rowHasSummary, linkRow,
+  solveSummaryCell
+}
+import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList}
 import support.scc.{tarjanSCCs}
 
 export data SummarySolver c = SummarySolver {
   essStack : Ref (List (SummaryScope c)),
+  -- obligations over a variable no binding owns: a value binding kept
+  -- monomorphic by the value restriction has its authority determined by
+  -- every use in the module, so these are solved once the module is inferred
+  essRoot : Ref (List (AuthWanted c)),
 }
 
 data SummaryScope c = SummaryScope {
@@ -23,6 +32,15 @@ data SummaryScope c = SummaryScope {
   essExistentials : Ref (Map Int (Ref Effvar)),
   essAllowances : Ref (Map Int (Ref Effvar)),
   essRelations : Ref (List (RowRelation c)),
+  essAuthorities : Ref (List (AuthWanted c)),
+}
+
+-- A directed authority obligation `awLower ⊑ awUpper`, recorded where a value
+-- flows into a qualified slot or where a row check meets a symbolic pair.
+public export data AuthWanted c = AuthWanted {
+  awLower : Authority,
+  awUpper : Authority,
+  awContext : c,
 }
 
 data SummaryNode = SummaryNode {
@@ -43,11 +61,14 @@ public export data SummaryFailure c = SummaryFailure {
   esfUpper : EffRow,
   esfExact : Bool,
   esfContext : c,
+  -- an authority obligation `lower ⊑ upper` this scope could neither prove
+  -- nor hand outward; the rows are then empty
+  esfAuthority : Option (Authority, Authority),
 }
 
 export
 newSolver : Unit -> SummarySolver c
-newSolver _ = SummarySolver { essStack = Ref [] }
+newSolver _ = SummarySolver { essStack = Ref [], essRoot = Ref [] }
 
 export
 hasSummaryScope : SummarySolver c -> Bool
@@ -65,6 +86,7 @@ openSummaryScope solver owner level =
         essExistentials = Ref Tip,
         essAllowances = Ref Tip,
         essRelations = Ref [],
+        essAuthorities = Ref [],
       }
       :: solver.essStack.value
 
@@ -140,6 +162,14 @@ recordRelation solver exact context lower upper =
         esrProtected = Tip,
       }
       :: scope.essRelations.value
+
+export
+recordAuthority : SummarySolver c -> c -> Authority -> Authority -> Unit
+recordAuthority solver context lower upper =
+  let scope = currentScope solver
+  scope.essAuthorities :=
+    AuthWanted { awLower = lower, awUpper = upper, awContext = context }
+      :: scope.essAuthorities.value
 
 data SolveEdge = SolveEdge {
   eseTarget : Int,
@@ -423,23 +453,58 @@ validateRelations solver protected escape (rel :: rest) =
           esfUpper = rel.esrUpper,
           esfExact = rel.esrExact,
           esfContext = rel.esrContext,
+          esfAuthority = None,
         }
         :: validateRelations solver protected escape rest
   else
     let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
     let (upperAtoms, upperCells) = rowFlat rel.esrUpper
     let failures = validateRelations solver protected escape rest
-    if isNonEmptyL (escape rel.esrExact lowerAtoms upperAtoms)
+    let escaping =
+      authorityEscapes
+        (currentScope solver)
+        rel.esrContext
+        upperAtoms
+        (escape rel.esrExact lowerAtoms upperAtoms)
+    if isNonEmptyL escaping
       || missingLeaves lowerCells (leafSet upperCells) then
       SummaryFailure {
           esfLower = rel.esrLower,
           esfUpper = rel.esrUpper,
           esfExact = rel.esrExact,
           esfContext = rel.esrContext,
+          esfAuthority = None,
         }
         :: failures
     else
       failures
+
+-- An escaping atom whose label the upper row carries with a symbolic
+-- authority is an authority obligation, not a missing label: record
+-- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
+authorityEscapes : SummaryScope c -> c -> List Atom -> List Atom -> List Atom
+authorityEscapes _ _ _ [] = []
+authorityEscapes scope context upper (x :: rest) =
+  let others = authorityEscapes scope context upper rest
+  match findAtom (atomKey x) upper
+    Some y =>
+      if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
+        scope.essAuthorities :=
+          AuthWanted {
+              awLower = atomAuth x,
+              awUpper = atomAuth y,
+              awContext = context,
+            }
+            :: scope.essAuthorities.value
+        others
+      else
+        x :: others
+    None => x :: others
+
+isSymbolic : Authority -> Bool
+isSymbolic q = match authVars q
+  [] => False
+  _ => True
 
 -- A residual proof may move outward, but a local scheme cannot freshen its
 -- flexible endpoints away from that proof. Keep exactly those leaves at the
@@ -459,13 +524,18 @@ export
 closeSummaryScope : SummarySolver c ->
   Map Int Unit ->
   Map Int Unit ->
+  Map Int Unit ->
   Map Int (Ref Effvar) ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   (List (Ref Effvar) -> Ref Effvar) ->
   (Int -> Ref Effvar) ->
   List (SummaryFailure c)
-closeSummaryScope solver protected retained borrowed escape makeJoin makeResidual =
+closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual =
   let scope = currentScope solver
+  -- Authorities first: an argument's lower bounds decide a callee's flexible
+  -- authority before any row is compared, so a row check sees concrete atoms
+  -- wherever the body determined them.
+  let _ = solveOwnedAuthorities scope rigidAuths
   let summaries = M.values scope.essNodes.value
   let untransferred =
     filter
@@ -540,10 +610,220 @@ closeSummaryScope solver protected retained borrowed escape makeJoin makeResidua
       makeResidual
   let unproven = filter (rel => not (relationProven escape rel)) residual0
   let failures = validateRelations solver frozen escape unproven
+  -- Row validation may have derived new authority obligations; solve the
+  -- variables they bound, then decide every obligation this scope owns.
+  let _ = solveOwnedAuthorities scope rigidAuths
+  let authFailures = checkAuthorities solver scope rigidAuths
   solver.essStack := match solver.essStack.value
     _ :: rest => rest
     [] => panic "effect scope stack underflow"
-  failures
+  failures ++ authFailures
+
+-- ── authorities ────────────────────────────────────────────────────────────
+
+-- A flexible authority this scope may solve: allocated at or below this
+-- scope's level and after its floor, and not a declaration universal.
+ownedFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+ownedFlexibleAuth scope rigid cell = match !cell
+  AUnbound id level _ _ =>
+    level >= scope.essLevel && id > scope.essEffvarFloor && not (M.has id rigid)
+  ALink _ _ => False
+
+outerFlexibleAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+outerFlexibleAuth scope rigid cell = match !cell
+  AUnbound id level _ _ =>
+    (level < scope.essLevel || id <= scope.essEffvarFloor)
+      && not (M.has id rigid)
+  ALink _ _ => False
+
+localRigidAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+localRigidAuth scope rigid cell = match !cell
+  AUnbound id level _ _ =>
+    M.has id rigid && level >= scope.essLevel && id > scope.essEffvarFloor
+  ALink _ _ => False
+
+-- Every owned flexible variable takes the join of its lower bounds, its
+-- least solution.  Variables bounded by each other collapse to one
+-- representative first, so no solution can refer back to itself.
+solveOwnedAuthorities : SummaryScope c -> Map Int Unit -> Unit
+solveOwnedAuthorities scope rigid =
+  solveAuthorities
+    (ownedFlexibleAuth scope rigid)
+    (reverseL scope.essAuthorities.value)
+
+solveAuthorities : (Ref Authvar -> Bool) -> List (AuthWanted c) -> Unit
+solveAuthorities owned wanteds =
+  let lowers =
+    fold
+      (acc w => match authNorm w.awUpper
+        AVar cell =>
+          if owned cell then
+            M.set
+              (authvarId cell)
+              (cell, w.awLower :: lowersOf (authvarId cell) acc)
+              acc
+          else
+            acc
+        _ => acc)
+      Tip
+      wanteds
+  match M.keys lowers
+    [] => ()
+    ids =>
+      let names = map intToString ids
+      let idOfName = fold (acc id => M.set (intToString id) id acc) Tip ids
+      let edges =
+        fold
+          (acc id =>
+            M.set
+              (intToString id)
+              (map
+                intToString
+                (dependencies owned lowers (snd (nodeOf id lowers))))
+              acc)
+          Tip
+          ids
+      fold
+        (_ members => solveClass lowers idOfName members)
+        ()
+        (tarjanSCCs names edges)
+
+lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
+lowersOf id m = match M.get id m
+  Some (_, ls) => ls
+  None => []
+
+nodeOf : Int ->
+  Map Int (Ref Authvar, List Authority) ->
+  (Ref Authvar, List Authority)
+nodeOf id m = match M.get id m
+  Some node => node
+  None => panic "missing authority equation vertex"
+
+dependencies : (Ref Authvar -> Bool) ->
+  Map Int (Ref Authvar, List Authority) ->
+  List Authority ->
+  List Int
+dependencies owned nodes ls =
+  flatMap
+    (q =>
+      flatMap
+        (cell =>
+          if M.has (authvarId cell) nodes && owned cell then
+            [authvarId cell]
+          else
+            [])
+        (authVars q))
+    ls
+
+solveClass : Map Int (Ref Authvar, List Authority) ->
+  Map String Int ->
+  List String ->
+  Unit
+solveClass _ _ [] = ()
+solveClass nodes idOfName (first :: rest) =
+  let repId = idOfVertex idOfName first
+  let (rep, _) = nodeOf repId nodes
+  let members = map (idOfVertex idOfName) rest
+  let _ =
+    fold
+      (_ id =>
+        let (cell, _) = nodeOf id nodes
+        linkAuthvar cell (AVar rep))
+      ()
+      members
+  let all = flatMap (id => snd (nodeOf id nodes)) (repId :: members)
+  let kept = filter (q => not (isVar repId q)) (joinMembers (authJoinAll all))
+  match kept
+    [] => ()
+    _ => linkAuthvar rep (authJoinAll kept)
+
+idOfVertex : Map String Int -> String -> Int
+idOfVertex idOfName name = match M.get name idOfName
+  Some id => id
+  None => panic "missing authority vertex name"
+
+joinMembers : Authority -> List Authority
+joinMembers q = match authNorm q
+  AJoin ms => ms
+  other => [other]
+
+isVar : Int -> Authority -> Bool
+isVar id (AVar cell) = authvarId cell == id
+isVar _ _ = False
+
+-- Decide each obligation: proved; owed to an enclosing scope, when it
+-- mentions a variable that scope owns and none this scope declared rigid;
+-- else a failure of this scope.
+checkAuthorities : SummarySolver c ->
+  SummaryScope c ->
+  Map Int Unit ->
+  List (SummaryFailure c)
+checkAuthorities solver scope rigid =
+  flatMap
+    (w =>
+      let lo = authNorm w.awLower
+      let hi = authNorm w.awUpper
+      if authSub lo hi then
+        []
+      else
+        let cells = authVars lo ++ authVars hi
+        let transferable =
+          anyList (outerFlexibleAuth scope rigid) cells
+            && not (anyList (localRigidAuth scope rigid) cells)
+        match solver.essStack.value
+          _ :: parent :: _ =>
+            if transferable then
+              parent.essAuthorities :=
+                AuthWanted {
+                    awLower = lo,
+                    awUpper = hi,
+                    awContext = w.awContext,
+                  }
+                  :: parent.essAuthorities.value
+              []
+            else
+              [authorityFailure w.awContext lo hi]
+          _ =>
+            if transferable then
+              solver.essRoot :=
+                AuthWanted {
+                    awLower = lo,
+                    awUpper = hi,
+                    awContext = w.awContext,
+                  }
+                  :: solver.essRoot.value
+              []
+            else
+              [authorityFailure w.awContext lo hi])
+    (reverseL scope.essAuthorities.value)
+
+-- Once every binding of the module is inferred, the variables no binding
+-- owned take their least solution over every use, and each obligation over
+-- them is decided.
+export
+closeRootAuthorities : SummarySolver c ->
+  Map Int Unit ->
+  List (SummaryFailure c)
+closeRootAuthorities solver rigid =
+  let wanteds = reverseL solver.essRoot.value
+  let _ = solveAuthorities (cell => not (M.has (authvarId cell) rigid)) wanteds
+  solver.essRoot := []
+  flatMap
+    (w =>
+      let lo = authNorm w.awLower
+      let hi = authNorm w.awUpper
+      if authSub lo hi then [] else [authorityFailure w.awContext lo hi])
+    wanteds
+
+authorityFailure : c -> Authority -> Authority -> SummaryFailure c
+authorityFailure context lo hi = SummaryFailure {
+  esfLower = EffRow [] None,
+  esfUpper = EffRow [] None,
+  esfExact = False,
+  esfContext = context,
+  esfAuthority = Some (lo, hi),
+}
 
 -- A flexible leaf created before this scope opened, or at an enclosing level,
 -- belongs to an enclosing scope: an outer allowance, an outer instantiation
