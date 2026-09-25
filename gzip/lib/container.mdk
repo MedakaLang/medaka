@@ -23,11 +23,10 @@
 -- header bytes, which does not exist in this tree yet — wiring it here would
 -- couple this module to that sibling before it's written.
 --
--- MTIME/XFL/OS are logically unsigned (uint32/uint8/uint8); `emitU32LE`
--- truncates a negative or oversized `Int` to that width by construction
--- (masks its own low byte per round), and the XFL/OS emit sites narrow
--- explicitly with `U8.truncate` (the one conversion that keeps the low 8
--- bits rather than refusing), so a header built from an
+-- MTIME/XFL/OS are logically unsigned (uint32/uint8/uint8); the emit sites
+-- narrow them explicitly with `U32.truncate` and `U8.truncate` (the one
+-- conversion into each type that keeps the low bits rather than refusing), so
+-- a header built from an
 -- out-of-range field still WRAPS on emit exactly the way `Int` wraps
 -- elsewhere in this codebase, rather than being rejected. `prop
 -- "emitGzipHeader/parseGzipHeader round-trips (numeric fields)"` below
@@ -57,6 +56,7 @@ import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain}
 import string.{toUtf8, fromUtf8}
 import u8 as U8
+import u32 as U32
 import array  -- brings `impl Foldable Array` (toList) into scope; see AGENTS.md bare-import note
 import test.{expectEqual, fail}
 
@@ -273,7 +273,7 @@ emitGzipHeader h =
   emitU8 gzipMagic1 buf
   emitU8 cmDeflate buf
   emitU8 (fromInt (flagsOf h)) buf
-  emitU32LE h.mtime buf
+  emitU32LE (U32.truncate h.mtime) buf
   emitU8 (U8.truncate h.xfl) buf
   emitU8 (U8.truncate h.os) buf
   emitOptionalField h.name buf
@@ -290,8 +290,8 @@ export
 emitGzipTrailer : Int -> Int -> Bytes
 emitGzipTrailer crc isize =
   let buf = newBuilder ()
-  emitU32LE crc buf
-  emitU32LE isize buf
+  emitU32LE (U32.truncate crc) buf
+  emitU32LE (U32.truncate isize) buf
   buildBytes buf
 
 -- ---------------------------------------------------------------------------

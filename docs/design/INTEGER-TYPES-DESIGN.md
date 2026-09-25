@@ -3,7 +3,10 @@
 Status: N1 BUILT (the tagged tier: `U8`/`U16`/`U32`, their modules, the literal
 range check and literal patterns). N2 BUILT (a byte is a `U8` in `bytes`,
 `mut_bytes`, `bytebuilder` and `byteparser`; SHA-256, HMAC, the PBKDF2 block
-index, CRC-32 and the property runner's `fmix32` on `U32`). N3–N6 are design.
+index, CRC-32 and the property runner's `fmix32` on `U32`). N3 BUILT (boxed
+`U64` on all three engines, wide literals, the `u64` module with `mulWide`,
+`addCarry` and `subBorrow`, `bits64` retired, the multi-byte codecs typed).
+N4–N6 are design.
 Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
@@ -141,6 +144,17 @@ interface's doc comment). That is a call per operation.
    constructor, so every `_ =>` arm over literals is audited as a set
    (`AGENTS.md`, `[T-GLOBAL-TABLE]`).
 
+   As built: the lexer mints a wide token for a magnitude from `2^62 + 1` to
+   `2^64 - 1` and refuses anything larger; the parser builds `EWideLit` (the
+   value's two 32-bit halves and the lexeme), and a positive `2^62` in an
+   expression, which the lexer admits as an `Int` so that `-2^62` stays
+   writable, becomes the wide literal it spells. The typechecker infers a
+   wide literal exactly as an ordinary one and accepts it only where its type
+   grounded to `U64` (`checkWideLiterals`); every other ground type, a type
+   still polymorphic at the module's end, and a negated wide literal are
+   `L-INT-OVERFLOW`. A literal grounded to `U64`, wide or not, is rewritten
+   to the constant `LU64 hi lo`, which is all the engines see.
+
 5. **Pattern literals** become typed by the scrutinee among the *builtin*
    integer heads only (`Int`, `U8`, `U16`, `U32`, `U64`). A literal
    pattern on a builtin integer is a constant compare and needs no `Eq`
@@ -149,6 +163,11 @@ interface's doc comment). That is a call per operation.
    not a dead arm. Exhaustiveness treats a fixed-width literal as it treats
    an `Int` literal today. User `Num` newtypes still do not get literal
    patterns; that is a separate feature with a different mechanism.
+
+   As built, `U64` is the exception: no engine's matcher compares a boxed
+   cell against a constant, so a literal pattern whose scrutinee is a `U64`
+   is refused at compile time (`a literal pattern cannot match a U64`, with
+   a guard as the fix) rather than compiled to an arm that never matches.
 
 6. **The operators join the builtin set** for the U types. The typechecker
    already records which builtin operation an operator resolved to (`Int`
@@ -234,9 +253,10 @@ is the `Num` method rather than a module function, so it is written `fromInt n`
 ### 5.1 `U64`'s asymmetry
 
 `U64 -> Int` is a narrowing, since `Int` holds 63 bits. `U64.toInt` is
-therefore `U64 -> Option Int`, and the masking form is `U64.truncateToInt`.
-The name of that masking form is the one conversion name this document
-leaves for the N3 packet to confirm against the rest of the table.
+therefore `U64 -> Option Int`, and the masking form is `U64.truncateToInt`,
+which keeps the low 63 bits (bit 62 becomes the sign). N3 ships that name;
+it is the one conversion name this document left for the N3 packet to
+confirm, and the confirmation is Val's.
 
 `U64` also carries the limb vocabulary, which is what lets
 `pds/lib/scalar.mdk` go from 16 limbs to 4:
@@ -297,7 +317,16 @@ The interpreter, `compiler/eval/eval.mdk`, is a Medaka program compiled
 with a 63-bit `Int`, so it cannot hold a native `U64` until the emitter
 that compiles it supports one. It carries a `U64` as two `Int` halves
 until then, and can do so indefinitely; interpreter speed is not this
-epic's goal. The compiler's own source adopts `U64` only after emitter
+epic's goal.
+
+As built: the native cell is `{ header, payload }` with the reserved
+composite header `MDK_TAG(5, 0)` (the byte block's is slot 4), so the
+runtime's type-lost equality and ordering tell it from a `Float`; the
+interpreter's value is `VU64 hi lo` with its arithmetic in
+`compiler/eval/u64_halves.mdk`. Arithmetic and comparisons at `U64` are
+builtin operators stamped `RScalar "U64"`; the rest of the `u64` module is
+Medaka over eight kernel externs (`u64Truncate`, `u64TruncateToInt`, the
+three bitwise operations, the two shifts and `u64MulHigh`). The compiler's own source adopts `U64` only after emitter
 support has landed and the seed has been re-minted twice, the ratchet B2
 used for `ByteBlock` (`docs/design/BYTES-DESIGN.md`).
 

@@ -16,6 +16,7 @@
 -- (`sqVarint`): a round-trip `sqVarintBytes → sqVarint` reproduces the value.
 
 import byteparser.{ByteParser, ByteParserE, BResult(..), runByteParser}
+import u64 as U64
 
 -- ---------------------------------------------------------------------------
 -- Named constants (STYLE §12 — name the meaning, fold makes shifts free)
@@ -47,6 +48,10 @@ groupMask = 127
 -- Ok 128
 -- > runByteParser sqVarint (arrayFromList [0x81, 0x80, 0x01])
 -- Ok 16385
+-- > runByteParser sqVarint (arrayFromList [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+-- Ok -1
+-- > runByteParser sqVarint (arrayFromList [0xA0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00])
+-- Err "varint: value does not fit Int at byte 8"
 export
 sqVarint : ByteParser Int
 sqVarint = ByteParserE sqVarintGo
@@ -58,7 +63,7 @@ sqVarintGo input pos = sqVarintLoop input pos 0 1
 -- Process one byte of a varint.  `b` is the byte value, already fetched.
 sqVarintStep : Array Int -> Int -> Int -> Int -> Int -> BResult Int
 sqVarintStep input pos acc byteNum b
-  | byteNum == 9 = BOk (acc * 256 + b) (pos + 1)
+  | byteNum == 9 = ninthByte acc b pos
   | b >= contBit =
     sqVarintLoop
       input
@@ -66,6 +71,17 @@ sqVarintStep input pos acc byteNum b
       (shiftLeft acc 7 + bitAnd b groupMask)
       (byteNum + 1)
   | otherwise = BOk (shiftLeft acc 7 + bitAnd b groupMask) (pos + 1)
+
+-- The ninth byte completes a 64-bit two's-complement value, the top 56 bits in
+-- `acc` and the low 8 in `b`. It is an `Int` when bits 63 and 62 agree, and is
+-- then exactly the low 63 bits; any other value is refused rather than wrapped.
+ninthByte : Int -> Int -> Int -> BResult Int
+ninthByte acc b pos =
+  let x = U64.bitOr (U64.shiftLeft (U64.truncate acc) 8) (U64.truncate b)
+  if x < 0x4000000000000000 || x >= 0xC000000000000000 then
+    BOk (U64.truncateToInt x) (pos + 1)
+  else
+    BErr "varint: value does not fit Int" pos
 
 sqVarintLoop : Array Int -> Int -> Int -> Int -> BResult Int
 sqVarintLoop input pos acc byteNum

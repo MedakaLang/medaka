@@ -1,0 +1,4 @@
+-- #3423: 2^64 fits no integer type; the lexer refuses it.
+import u64
+
+main = println (18446744073709551616 : U64)

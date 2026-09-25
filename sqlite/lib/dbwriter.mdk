@@ -349,7 +349,7 @@ setU32BE page off v =
 encodeInteriorCell : Int -> Int -> Array Int
 encodeInteriorCell childPage rowid =
   let buf = newBuilder ()
-  emitU32BE childPage buf
+  emitU32BE (fromInt childPage) buf
   emitBytes (varintAsBytes rowid) buf
   buildArray buf
 
@@ -490,7 +490,7 @@ buildFileHeader : Int -> Array Int
 buildFileHeader pageCount =
   let buf = newBuilder ()
   emitBytes magicBytes buf  -- 0..15  magic (16 bytes)
-  emitU16BE pageSize buf  -- 16     page size
+  emitU16BE (fromInt pageSize) buf  -- 16     page size
   emitU8 1 buf  -- 18     write version
   emitU8 1 buf  -- 19     read version
   emitU8 0 buf  -- 20     reserved per page
@@ -498,7 +498,7 @@ buildFileHeader pageCount =
   emitU8 32 buf  -- 22     min payload frac
   emitU8 32 buf  -- 23     leaf payload frac
   emitU32BE 1 buf  -- 24     change counter
-  emitU32BE pageCount buf  -- 28     page count
+  emitU32BE (fromInt pageCount) buf  -- 28     page count
   emitU32BE 0 buf  -- 32     freelist trunk
   emitU32BE 0 buf  -- 36     freelist count
   emitU32BE 1 buf  -- 40     schema cookie
@@ -515,7 +515,7 @@ buildFileHeader pageCount =
   emitU32BE 0 buf  -- 84     reserved
   emitU32BE 0 buf  -- 88     reserved
   emitU32BE 1 buf  -- 92     version-valid-for
-  emitU32BE sqliteVersionNumber buf  -- 96     sqlite version number
+  emitU32BE (fromInt sqliteVersionNumber) buf  -- 96     sqlite version number
   buildArray buf
 
 -- ---------------------------------------------------------------------------

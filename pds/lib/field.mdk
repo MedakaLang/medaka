@@ -73,9 +73,9 @@
    products, reduce once" restructuring.
 
    ── Two bounds that do NOT apply here ────────────────────────────────
-   `stdlib/bits64.mdk`'s published `< 2^35` is a FOUR-limb column of 16-bit
-   limbs inside a 64-bit value. This module is ten limbs of 26 bits inside a
-   256-bit value; that number has nothing to do with this one.
+   The retired `bits64` module's published `< 2^35` is a FOUR-limb column of
+   16-bit limbs inside a 64-bit value. This module is ten limbs of 26 bits
+   inside a 256-bit value; that number has nothing to do with this one.
 
    And the REFERENCE'S OWN PROOF DOES NOT TRANSFER. `secp256k1_fe_mul_inner`
    admits 30-bit limbs (`VERIFY_BITS(a[i], 30)`) and all EIGHTEEN of its

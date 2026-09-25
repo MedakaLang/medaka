@@ -1,0 +1,11 @@
+-- #3422: no engine's matcher compares a boxed U64 against a constant, so a
+-- literal pattern at a U64 scrutinee is refused rather than compiled to an arm
+-- that never matches.
+import u64
+
+isZero : U64 -> Bool
+isZero x = match x
+  0 => True
+  _ => False
+
+main = println (isZero 0)

@@ -16,12 +16,18 @@
 -- exactly `[0, len)`, in emission order, with no reverse pass.
 
 import array.{reverse as arrayReverse}
-import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
+import byteparser.{
+  runByteParser, beUint, beSint, leUint, leSint, takeBytes, beU16, beU32, beU64,
+  leU16, leU32, leU64
+}
 import bytes.{
   Bytes, adoptByteBlockUnsafe, fromArrayAssumeByteDomain, fromByteBlockPrefix,
   lendByteBlockUnsafe, encodeUtf8, toArray
 }
 import u8 as U8
+import u16 as U16
+import u32 as U32
+import u64 as U64
 
 -- # The builder
 
@@ -133,13 +139,14 @@ export
 builderParts : Builder -> (Bytes, Int)
 builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
 
--- | Appends a two-byte unsigned integer, most significant byte first. The
--- inverse of `beUint 2`.
+-- | Appends a `U16` as two bytes, most significant byte first. The inverse
+-- of `beU16`.
 export
-emitU16BE : Int -> Builder -> Unit
+emitU16BE : U16 -> Builder -> Unit
 emitU16BE v buf =
-  emitLowByte (shiftRight v 8) buf
-  emitLowByte v buf
+  let n = U16.toInt v
+  emitLowByte (shiftRight n 8) buf
+  emitLowByte n buf
 
 -- | Appends a three-byte unsigned integer, most significant byte first.
 -- The inverse of `beUint 3`.
@@ -150,23 +157,33 @@ emitU24BE v buf =
   emitLowByte (shiftRight v 8) buf
   emitLowByte v buf
 
--- | Appends a four-byte unsigned integer, most significant byte first. The
--- inverse of `beUint 4`.
+-- | Appends a `U32` as four bytes, most significant byte first. The inverse
+-- of `beU32`.
 export
-emitU32BE : Int -> Builder -> Unit
+emitU32BE : U32 -> Builder -> Unit
 emitU32BE v buf =
-  emitLowByte (shiftRight v 24) buf
-  emitLowByte (shiftRight v 16) buf
-  emitLowByte (shiftRight v 8) buf
-  emitLowByte v buf
+  let n = U32.toInt v
+  emitLowByte (shiftRight n 24) buf
+  emitLowByte (shiftRight n 16) buf
+  emitLowByte (shiftRight n 8) buf
+  emitLowByte n buf
 
--- | Appends a two-byte unsigned integer, least significant byte first. The
--- inverse of `leUint 2`.
+-- | Appends a `U64` as eight bytes, most significant byte first. The inverse
+-- of `beU64`.
 export
-emitU16LE : Int -> Builder -> Unit
+emitU64BE : U64 -> Builder -> Unit
+emitU64BE v buf =
+  emitU32BE (U32.truncateU64 (U64.shiftRight v 32)) buf
+  emitU32BE (U32.truncateU64 v) buf
+
+-- | Appends a `U16` as two bytes, least significant byte first. The inverse
+-- of `leU16`.
+export
+emitU16LE : U16 -> Builder -> Unit
 emitU16LE v buf =
-  emitLowByte v buf
-  emitLowByte (shiftRight v 8) buf
+  let n = U16.toInt v
+  emitLowByte n buf
+  emitLowByte (shiftRight n 8) buf
 
 -- | Appends a three-byte unsigned integer, least significant byte first.
 -- The inverse of `leUint 3`.
@@ -177,15 +194,24 @@ emitU24LE v buf =
   emitLowByte (shiftRight v 8) buf
   emitLowByte (shiftRight v 16) buf
 
--- | Appends a four-byte unsigned integer, least significant byte first. The
--- inverse of `leUint 4`.
+-- | Appends a `U32` as four bytes, least significant byte first. The inverse
+-- of `leU32`.
 export
-emitU32LE : Int -> Builder -> Unit
+emitU32LE : U32 -> Builder -> Unit
 emitU32LE v buf =
-  emitLowByte v buf
-  emitLowByte (shiftRight v 8) buf
-  emitLowByte (shiftRight v 16) buf
-  emitLowByte (shiftRight v 24) buf
+  let n = U32.toInt v
+  emitLowByte n buf
+  emitLowByte (shiftRight n 8) buf
+  emitLowByte (shiftRight n 16) buf
+  emitLowByte (shiftRight n 24) buf
+
+-- | Appends a `U64` as eight bytes, least significant byte first. The inverse
+-- of `leU64`.
+export
+emitU64LE : U64 -> Builder -> Unit
+emitU64LE v buf =
+  emitU32LE (U32.truncateU64 v) buf
+  emitU32LE (U32.truncateU64 (U64.shiftRight v 32)) buf
 
 -- `beSint n` reads `n` bytes as unsigned, then if the value >= 2^(8n-1)
 -- (sign bit set) subtracts 2^(8n) to get the negative.  Inverse: for v >= 0,
@@ -250,14 +276,14 @@ build1 f =
 -- > runByteParser (beUint 1) (build1 (emitU8 127))
 -- Ok 127
 
--- emitU16BE ↔ beUint 2
--- > runByteParser (beUint 2) (build1 (emitU16BE 0))
+-- emitU16BE ↔ beU16
+-- > runByteParser beU16 (build1 (emitU16BE 0))
 -- Ok 0
--- > runByteParser (beUint 2) (build1 (emitU16BE 256))
+-- > runByteParser beU16 (build1 (emitU16BE 256))
 -- Ok 256
--- > runByteParser (beUint 2) (build1 (emitU16BE 65535))
+-- > runByteParser beU16 (build1 (emitU16BE 65535))
 -- Ok 65535
--- > runByteParser (beUint 2) (build1 (emitU16BE 258))
+-- > runByteParser beU16 (build1 (emitU16BE 258))
 -- Ok 258
 
 -- emitU24BE ↔ beUint 3
@@ -268,22 +294,22 @@ build1 f =
 -- > runByteParser (beUint 3) (build1 (emitU24BE 65536))
 -- Ok 65536
 
--- emitU32BE ↔ beUint 4
--- > runByteParser (beUint 4) (build1 (emitU32BE 0))
+-- emitU32BE ↔ beU32
+-- > runByteParser beU32 (build1 (emitU32BE 0))
 -- Ok 0
--- > runByteParser (beUint 4) (build1 (emitU32BE 4294967295))
+-- > runByteParser beU32 (build1 (emitU32BE 4294967295))
 -- Ok 4294967295
--- > runByteParser (beUint 4) (build1 (emitU32BE 1048576))
+-- > runByteParser beU32 (build1 (emitU32BE 1048576))
 -- Ok 1048576
 
--- emitU16LE ↔ leUint 2
--- > runByteParser (leUint 2) (build1 (emitU16LE 0))
+-- emitU16LE ↔ leU16
+-- > runByteParser leU16 (build1 (emitU16LE 0))
 -- Ok 0
--- > runByteParser (leUint 2) (build1 (emitU16LE 256))
+-- > runByteParser leU16 (build1 (emitU16LE 256))
 -- Ok 256
--- > runByteParser (leUint 2) (build1 (emitU16LE 65535))
+-- > runByteParser leU16 (build1 (emitU16LE 65535))
 -- Ok 65535
--- > runByteParser (leUint 2) (build1 (emitU16LE 258))
+-- > runByteParser leU16 (build1 (emitU16LE 258))
 -- Ok 258
 
 -- emitU24LE ↔ leUint 3
@@ -294,12 +320,12 @@ build1 f =
 -- > runByteParser (leUint 3) (build1 (emitU24LE 65536))
 -- Ok 65536
 
--- emitU32LE ↔ leUint 4
--- > runByteParser (leUint 4) (build1 (emitU32LE 0))
+-- emitU32LE ↔ leU32
+-- > runByteParser leU32 (build1 (emitU32LE 0))
 -- Ok 0
--- > runByteParser (leUint 4) (build1 (emitU32LE 4294967295))
+-- > runByteParser leU32 (build1 (emitU32LE 4294967295))
 -- Ok 4294967295
--- > runByteParser (leUint 4) (build1 (emitU32LE 1048576))
+-- > runByteParser leU32 (build1 (emitU32LE 1048576))
 -- Ok 1048576
 
 -- LE emits the reverse byte sequence of the matching BE emit:
@@ -312,6 +338,18 @@ build1 f =
 -- Ok Bytes "04030201"
 -- > runByteParser (takeBytes 4) (build1 (emitU32BE 0x01020304))
 -- Ok Bytes "01020304"
+-- > runByteParser (takeBytes 8) (build1 (emitU64LE 0x0102030405060708))
+-- Ok Bytes "0807060504030201"
+-- > runByteParser (takeBytes 8) (build1 (emitU64BE 0x0102030405060708))
+-- Ok Bytes "0102030405060708"
+
+-- emitU64BE ↔ beU64 and emitU64LE ↔ leU64, at values above `Int`'s range
+-- > runByteParser beU64 (build1 (emitU64BE 0x9E3779B97F4A7C15))
+-- Ok 11400714819323198485
+-- > runByteParser leU64 (build1 (emitU64LE 0xFFFFFFFFFFFFFFFF))
+-- Ok 18446744073709551615
+-- > runByteParser leU64 (build1 (emitU64LE 0x8000000000000001))
+-- Ok 9223372036854775809
 
 -- emitBytes ↔ takeBytes
 -- > runByteParser (takeBytes 3) (build1 (emitBytes (fromArrayAssumeByteDomain [|10, 20, 30|])))
@@ -404,17 +442,31 @@ build1 f =
 -- Values are kept in-width (0..65535 for 16-bit, signed range for the signed
 -- prop) to avoid masking surprises from out-of-range inputs.
 
--- emitU16LE → leUint 2 recovers the original value.
-prop "emitU16LE/leUint 2 round-trip" (v : Int) =
-  let w = bitAnd v 65535
-  match runByteParser (leUint 2) (build1 (emitU16LE w))
+-- emitU16LE → leU16 recovers the original value.
+prop "emitU16LE/leU16 round-trip" (v : Int) =
+  let w = U16.truncate v
+  match runByteParser leU16 (build1 (emitU16LE w))
     Ok got => got == w
     Err _ => False
 
--- emitU32LE → leUint 4 recovers the original value.
-prop "emitU32LE/leUint 4 round-trip" (v : Int) =
-  let w = bitAnd v 4294967295
-  match runByteParser (leUint 4) (build1 (emitU32LE w))
+-- emitU32LE → leU32 recovers the original value.
+prop "emitU32LE/leU32 round-trip" (v : Int) =
+  let w = U32.truncate v
+  match runByteParser leU32 (build1 (emitU32LE w))
+    Ok got => got == w
+    Err _ => False
+
+-- emitU64LE → leU64 and emitU64BE → beU64 recover the original value, which
+-- spans all 64 bits: `v` and a shifted copy of it fill both halves.
+prop "emitU64LE/leU64 round-trip" (v : Int) =
+  let w = U64.bitXor (U64.truncate v) (U64.shiftLeft (U64.truncate v) 33)
+  match runByteParser leU64 (build1 (emitU64LE w))
+    Ok got => got == w
+    Err _ => False
+
+prop "emitU64BE/beU64 round-trip" (v : Int) =
+  let w = U64.bitXor (U64.truncate v) (U64.shiftLeft (U64.truncate v) 33)
+  match runByteParser beU64 (build1 (emitU64BE w))
     Ok got => got == w
     Err _ => False
 
@@ -429,12 +481,12 @@ prop "emitLeSint 2/leSint 2 round-trip" (v : Int) =
 -- BE emit followed by byte-reversal then LE parse agrees with a direct BE
 -- parse of the same bytes, i.e. reversing a BE encoding and reading it LE
 -- reproduces the original value (16-bit width).
-prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
-  let w = bitAnd v 65535
+prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
+  let w = U16.truncate v
   match runByteParser (takeBytes 2) (build1 (emitU16BE w))
     Err _ => False
     Ok bytes =>
       let reversedArr = arrayReverse (toArray bytes)
-      match runByteParser (leUint 2) reversedArr
+      match runByteParser leU16 reversedArr
         Ok got => got == w
         Err _ => False

@@ -416,6 +416,23 @@ test "a terabyte declared in a 10-byte frame is refused with 1009, not allocated
   setInPlace 3 0x01 wire
   expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
 
+-- #2905: a 64-bit length from 2^62 up to 2^63 - 1 is past `Int`, and read as
+-- an `Int` it wrapped to a negative number that the minimal-encoding check
+-- then reported as a 1002. It is an oversized length, so it is a 1009.
+test "a 64-bit length of 2^62 is refused as too big (1009), not as malformed" =
+  let wire = make 10 0x00
+  setInPlace 0 0x82 wire
+  setInPlace 1 0x7f wire
+  setInPlace 2 0x40 wire
+  expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
+
+test "a 64-bit length of 2^63 - 1 is refused as too big (1009)" =
+  let wire = make 10 0xff
+  setInPlace 0 0x82 wire
+  setInPlace 1 0x7f wire
+  setInPlace 2 0x7f wire
+  expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
+
 test "a declared length beyond the bytes in hand needs more, never allocates" =
   expectTrue
     (isNeedMore

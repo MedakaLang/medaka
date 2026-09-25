@@ -51,19 +51,19 @@ p18 = (1, "hi")  -- Tuple
 `Int` is a 63-bit tagged signed integer (`intMinBound`/`intMaxBound` = `-2^62`
 / `2^62 - 1`, i.e. `-4611686018427387904` / `4611686018427387903`), not a full
 64-bit machine word. An **integer literal** whose magnitude exceeds `2^62` is a
-lex error (`L-INT-OVERFLOW`) — `println 9223372036854775807` (a legal-looking
-64-bit-max literal) no longer silently prints `-1`, it is rejected. The lexer
-sees only the unsigned digits (the `-` is a separate token), so it must admit
-magnitude `2^62` = `4611686018427387904` to keep the negative minimum
-`-4611686018427387904` writable, and wraps that digit string to `intMinBound`
-on the spot; `4611686018427387905` (= `2^62 + 1`) and above are true lex
-errors. The remaining sign ambiguity is resolved one phase later, in the
-**parser**: a bare *positive* `4611686018427387904` is **rejected**
-(`integer literal too large for Int (max 4611686018427387903)`, same
-`L-INT-OVERFLOW` code) rather than silently wrapping to the negative minimum —
-`intMinBound` is reachable only through the adjacent-sign form
-`-4611686018427387904`, where the parser fuses the `-` and the digits into one
-negative literal. **Arithmetic** overflow wraps
+**wide literal**: only a `U64` holds it (see below), so where its type grounds
+to `Int` (or defaults to it) it is an `L-INT-OVERFLOW` compile error —
+`println 9223372036854775807` (a legal-looking 64-bit-max literal) does not
+silently print `-1`, it is rejected (`integer literal 9223372036854775807 does
+not fit Int`). The lexer sees only the unsigned digits (the `-` is a separate
+token), so it admits magnitude `2^62` = `4611686018427387904` as an `Int`
+literal to keep the negative minimum `-4611686018427387904` writable; a bare
+*positive* `4611686018427387904` in an expression is the wide literal 2^62,
+refused at `Int`, and `intMinBound` is reachable only through the adjacent-sign
+form `-4611686018427387904`, where the parser fuses the `-` and the digits into
+one negative literal. A literal of `2^64` or more fits no type and is a lex
+error (`integer literal too large for U64 (max 2^64 - 1)`); a negated wide
+literal (`-0xFFFFFFFFFFFFFFFF`) is refused too. **Arithmetic** overflow wraps
 two's-complement-style **by design** — a documented footgun, not a bug (decided
 2026-07-15): `Int` is a fixed-width machine integer (as in C, Go, or Haskell's
 Int), not an arbitrary-precision bignum, so `4611686018427387903 + 1` wraps to a
@@ -85,7 +85,16 @@ literal 300 does not fit U8 (0..255)`). A computed value never narrows silently:
 `fromInt` panics out of range, `tryFromInt` answers `None`, and `truncate` is
 the only masking conversion. A literal **pattern** is typed by its scrutinee
 when that is `U8`/`U16`/`U32` (`classify : U8 -> String; classify 10 = …`) and
-is range-checked the same way; otherwise it is an `Int`. Design:
+is range-checked the same way; otherwise it is an `Int`.
+
+**`U64`** holds `0 .. 2^64 - 1` in a boxed cell (it does not fit `Int`'s tagged
+word); its operations live in the stdlib module `u64` (`import u64 as U64`). Its
+arithmetic wraps modulo 2^64 like the rest of the family, and it compares
+unsigned. A literal in `U64` position may be a wide literal
+(`0x9E3779B97F4A7C15`, `18446744073709551615`); a negative one is refused.
+Converting back narrows, since `Int` holds 63 bits: `U64.toInt` answers an
+`Option Int`, and `U64.truncateToInt` keeps the low 63 bits. A literal
+**pattern** cannot match a `U64` (compare in a guard, `x if x == 0`). Design:
 `docs/design/INTEGER-TYPES-DESIGN.md`.
 
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take

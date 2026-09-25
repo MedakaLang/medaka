@@ -1,0 +1,4 @@
+-- #3422: U64's checked narrowing at -1, a computed value no U64 holds.
+import u64
+
+main = println (fromInt (0 - 1) : U64)
