@@ -550,13 +550,14 @@ else
 
   # ── build: MutBytes/Builder panic messages (stdlib/mut_bytes.mdk,
   # stdlib/bytebuilder.mdk) ──────────────────────────────────────────────────
-  # Ten `panic` arms across the two types that no other vehicle reaches:
-  # MutBytes.setInPlace's value-range and bounds checks, MutBytes.make's
-  # negative-length check, MutBytes.fill's value-range check, MutBytes.blit's
-  # three negative-argument checks and two bounds checks, and Builder.emitU8's
-  # value-range check. Pin the runtime abort text and exit code for each so a
-  # change to any of the ten messages, or a regression that drops the guard
-  # entirely, is caught. The two blit bounds fixtures pass an offset of Int's
+  # Seven `panic` arms that no other vehicle reaches: MutBytes.setInPlace's
+  # bounds check, MutBytes.make's negative-length check, and MutBytes.blit's
+  # three negative-argument checks and two bounds checks. Pin the runtime abort
+  # text and exit code for each so a change to any of the seven messages, or a
+  # regression that drops the guard entirely, is caught. A byte VALUE out of
+  # range is no longer a panic here: the byte is a `U8`, so it is refused at
+  # compile time or by `fromInt` (test/fixed_width_refusal_fixtures).
+  # The two blit bounds fixtures pass an offset of Int's
   # maximum: a guard written as `off + len > length` wraps negative, passes,
   # and reaches an unchecked memmove, so the failure is a segfault rather than
   # a panic.
@@ -576,17 +577,13 @@ else
         "$mb_name" "$mb_want" "$mb_status" "$(cat "$mb_err" 2>/dev/null)"
     fi
   }
-  mb_case mutbytes_set_range "MutBytes.setInPlace: value out of range 0..255"
   mb_case mutbytes_set_oob   "MutBytes.setInPlace: index out of bounds"
   mb_case mutbytes_make_neg  "MutBytes.make: negative length"
-  mb_case mutbytes_fill_range "MutBytes.fill: value out of range 0..255"
   mb_case mutbytes_blit_neg_len "MutBytes.blit: negative length"
   mb_case mutbytes_blit_neg_srcoff "MutBytes.blit: negative srcOff"
   mb_case mutbytes_blit_neg_dstoff "MutBytes.blit: negative dstOff"
   mb_case mutbytes_blit_src_oob "MutBytes.blit: source out of bounds"
   mb_case mutbytes_blit_dst_oob "MutBytes.blit: destination out of bounds"
-  mb_case emitu8_range       "Builder.emitU8: value out of range 0..255"
-  mb_case emitu8_negative    "Builder.emitU8: value out of range 0..255"
 
   # ── build: sequence bounds guards (#3267, #3192, #3256) ─────────────────
   # The built-binary arm of the `sl_run_case` rows above, on the same ten

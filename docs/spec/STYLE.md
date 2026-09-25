@@ -372,8 +372,8 @@ sqVarint9Threshold = shiftLeft 1 56          -- 9-byte varint boundary, 2^56
 contBit : Int
 contBit = 128                                -- varint continuation bit (meaning, not 0x80)
 
-emitU32BE v buf =
-  emitU8 (bitAnd (shiftRight v 24) 255) buf  -- high byte
-  emitU8 (bitAnd (shiftRight v 16) 255) buf
+putU32BE v out =
+  setInPlace 0 (bitAnd (shiftRight v 24) 255) out  -- high byte
+  setInPlace 1 (bitAnd (shiftRight v 16) 255) out
   -- 255 stays bare: the byte mask is idiomatic, naming it adds nothing
 ```

@@ -10,8 +10,8 @@ goes the other way. Both `freeze` and `thaw` copy, so neither result
 shares storage with its source.
 
 `length` is the byte count, `get` reads one byte as an `Option`, and
-`mb[i]` is the panicking form. Every write checks both the index and the
-`0` to `255` range.
+`mb[i]` is the panicking form. A byte is a `U8`, as in `Bytes`, so a
+write cannot be out of range; every write checks its index.
 
 `length` is also a prelude name, and `make`, `get`, `setInPlace`, `fill`
 and `blit` are also exported by `array`. Import the module qualified, as
@@ -33,7 +33,7 @@ it back as a `Bytes` with `freeze`.
 3
 ```
 
-Instances: [`Index`](#index-mutbytes-int-int), [`Debug`](#debug-mutbytes)
+Instances: [`Index`](#index-mutbytes-int-u8), [`Debug`](#debug-mutbytes)
 
 ## Allocation
 
@@ -49,8 +49,8 @@ A mutable byte string of `n` zero bytes.
 Panics when `n` is negative.
 
 ```medaka
-> get 2 (make 3)
-Some 0
+> get 2 (make 3) |> option (-1) U8.toInt
+0
 ```
 
 ## Reading
@@ -72,7 +72,7 @@ The number of bytes in `mb`, fixed when it was allocated.
 ### `get`
 
 ```
-get : Int -> MutBytes -> Option Int
+get : Int -> MutBytes -> Option U8
 get i mb
 ```
 
@@ -82,8 +82,8 @@ The byte at index `i` of `mb`, or `None` when `i` is out of range.
 answers `None` where `mb[i]` raises an index error.
 
 ```medaka
-> get 1 (make 2)
-Some 0
+> get 1 (make 2) |> option (-1) U8.toInt
+0
 > get 2 (make 2)
 None
 > get (-1) (make 2)
@@ -95,30 +95,27 @@ None
 ### `setInPlace`
 
 ```
-setInPlace : Int -> Int -> MutBytes -> Unit
+setInPlace : Int -> U8 -> MutBytes -> Unit
 setInPlace i v mb
 ```
 
 Replaces the byte at index `i` of `mb` with `v`.
 
-Panics when `i` is out of range, and when `v` falls outside `0` to `255`.
-The value is never masked to its low eight bits.
+Panics when `i` is out of range.
 
 ```medaka
-> let mb = make 2 in let _ = setInPlace 0 65 mb in get 0 mb
-Some 65
+> let mb = make 2 in let _ = setInPlace 0 65 mb in get 0 mb |> option (-1) U8.toInt
+65
 ```
 
 ### `fill`
 
 ```
-fill : Int -> MutBytes -> Unit
+fill : U8 -> MutBytes -> Unit
 fill v mb
 ```
 
 Replaces every byte of `mb` with `v`.
-
-Panics when `v` falls outside `0` to `255`.
 
 ```medaka
 > let mb = make 3 in let _ = fill 7 mb in debug mb
@@ -186,10 +183,10 @@ A write to the result does not reach `b`.
 
 ## Instances
 
-### `Index MutBytes Int Int`
+### `Index MutBytes Int U8`
 
 ```
-impl Index MutBytes Int Int
+impl Index MutBytes Int U8
 ```
 
 `mb[i]` reads the byte at `i` in `O(1)`.

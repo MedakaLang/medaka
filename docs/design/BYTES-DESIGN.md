@@ -12,6 +12,16 @@ alongside it (Ruling 1 below is corrected accordingly). `slice`/`view`/`compact`
 as a triad and the caller migration remain later milestones of the Bytes
 epic (#3134).
 
+**The element type is `U8`** (#3415, integer-stack milestone N2,
+`docs/design/INTEGER-TYPES-DESIGN.md`). `get`, `b[i]`, `fold`, `forEach`,
+`any`, `all` and `map` hand out a `U8`, and `map`, `elemIndex`,
+`mut_bytes.setInPlace`, `mut_bytes.fill` and `bytebuilder.emitU8` take one.
+Indices, lengths and offsets stay `Int`, and so do the bulk `Array Int` doors
+(`fromArray`, `fromArrayAssumeByteDomain`, `toArray`). `byteparser` still
+reads an `Array Int` (#3414); its single-byte primitives hand out a `U8` and
+fail the parse on an element outside `0` to `255`. See the element-type
+section below for what this changed in the rulings.
+
 This document records the decisions the epic is built on, so later waves cite
 a written ruling instead of a recollection. Each section below is one ruling
 taken on 2026-09-16, plus the one deviation accepted on 2026-09-17, plus the
@@ -248,7 +258,10 @@ its input, not by convenience:
   out-of-range index. Ruling 3 made this split for the index dimension; this
   extends it to the value dimension. An `Option`-returning write was
   considered and rejected: an unfireable `None` arm would land in every
-  decoder loop in the tree that builds bytes one at a time.
+  decoder loop in the tree that builds bytes one at a time. Superseded in
+  its value half by the element type: since N2 the written value is a `U8`,
+  so it cannot be out of range, and the refusal moved to the conversion into
+  `U8` (see "The element type" below). The index half still panics.
 
 Two corrections to this milestone's earlier description, each with its
 mechanism:
@@ -264,6 +277,36 @@ mechanism:
   seed emitter can no longer compile HEAD, which happens only if
   `compiler/**` or `stdlib/core.mdk` adopts `Bytes` — out of scope for this
   epic (see "The B1 surface" above).
+
+## The element type — a byte is a `U8` (#3415, 2026-09-25)
+
+Val ruled on 2026-09-24 that a byte is a `U8`, a member of the fixed-width
+family, rather than an `Int` or a bespoke `Byte`. N2 of the integer stack
+carried it out. What it changed here:
+
+- **The range check has one home.** The value-range panics in `map`,
+  `setInPlace`, `fill` and `emitU8` are gone. A literal byte outside `0` to
+  `255` is a compile-time error (`emitU8 300`), and a computed one crosses
+  into `U8` through `fromInt`, which panics, or `u8.truncate`, which is the
+  only masking door and is named for it. The three-door table above keeps its
+  bulk rows unchanged.
+- **Arithmetic on a read byte widens first.** `U8` arithmetic wraps, so code
+  that combines bytes into a larger number writes `u8.toInt b`. A literal-
+  seeded fold accumulator (`fold (acc b => acc + b) 0`) would otherwise sum in
+  `U8` and wrap; the migration widened every such fold.
+- **`Hashable Bytes` is unchanged.** A byte string still hashes as the
+  `Array Int` of its bytes, and a `U8` hashes as its `Int`.
+- **Two `U8` doors (Val, 2026-09-25).** `fromU8Array : Array U8 -> Bytes`
+  is total: its elements are bytes by type, and a literal out of range is a
+  compile-time error, so a constant is `fromU8Array [|0x1f, 0x8b|]`. It is
+  the replacement #3412 asked for, which lets B6 delete
+  `fromArrayAssumeByteDomain`. `toU8Array : Bytes -> Array U8` is its
+  inverse. `fromArray`/`toArray` stay on `Array Int`: it is the FFI's
+  sequence type, and data from outside arrives as `Int` and needs the
+  refusing door.
+- **Not settled here:** the comparison `b[i] == 13` does not type-check yet,
+  because the literal defaults to `Int` before `Index` fixes the element type
+  (#3437); code writes `u8.toInt b[i] == 13` until that is fixed.
 
 `adoptByteBlockUnsafe`, `lendByteBlockUnsafe`, and `fromByteBlockPrefix` are
 the only exports naming `ByteBlock` directly (`stdlib/bytes.mdk`'s

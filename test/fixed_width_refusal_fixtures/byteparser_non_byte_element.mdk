@@ -1,0 +1,6 @@
+-- #3415: an input element outside 0..255 is not a byte.  Reading it panics
+-- rather than failing the parse, so `many anyByte` cannot stop at it and
+-- succeed on the prefix `[1]`, and nothing is printed.
+import byteparser.{anyByte, many, runByteParser}
+
+main = println (runByteParser (many anyByte) [|1, 300, 2|])

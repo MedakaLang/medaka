@@ -240,7 +240,7 @@ bytesOf bs = match B.fromArray bs
 -- the value whose bytes are [hi] and [lo], when the string is exactly two long.
 fromTwo : Bytes -> Int -> Int -> Option U16
 fromTwo b hi lo = match (B.length b, B.get hi b, B.get lo b)
-  (2, Some h, Some l) => Some (u16Truncate (h * 256 + l))
+  (2, Some h, Some l) => Some (u16Truncate (u8ToInt h * 256 + u8ToInt l))
   _ => None
 
 {- | The value as 2 bytes, most significant first.

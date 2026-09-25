@@ -67,7 +67,8 @@ validAsciiValue input i end =
     byte >= 32 && byte <= 126 && validAsciiValue input (i + 1) end
 
 emitRequestBytes : Array Int -> Builder -> Unit
-emitRequestBytes bytes out = forEachWithIndex (_ byte => emitU8 byte out) bytes
+emitRequestBytes bytes out =
+  forEachWithIndex (_ byte => emitU8 (fromInt byte) out) bytes
 
 emitRequestText : String -> Builder -> Unit
 emitRequestText text out = emitRequestBytes (toUtf8 text) out

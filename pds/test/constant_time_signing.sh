@@ -25,6 +25,7 @@ write_internal_claimed_source_files() {
     pds/lib/scalar.mdk \
     stdlib/crypto/sha256.mdk \
     stdlib/crypto/hmac.mdk \
+    stdlib/u32.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/test/constant_time_signing_main.mdk
@@ -39,6 +40,7 @@ write_public_claimed_source_files() {
     pds/lib/scalar.mdk \
     stdlib/crypto/sha256.mdk \
     stdlib/crypto/hmac.mdk \
+    stdlib/u32.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/lib/sign.mdk \
@@ -59,8 +61,9 @@ expected_internal_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
-462197452 13158  stdlib/crypto/sha256.mdk
-1587269726 8367  stdlib/crypto/hmac.mdk
+1010065562 13066  stdlib/crypto/sha256.mdk
+2034797298 8367  stdlib/crypto/hmac.mdk
+2973717346 9537  stdlib/u32.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
@@ -71,8 +74,9 @@ expected_public_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
-462197452 13158  stdlib/crypto/sha256.mdk
-1587269726 8367  stdlib/crypto/hmac.mdk
+1010065562 13066  stdlib/crypto/sha256.mdk
+2034797298 8367  stdlib/crypto/hmac.mdk
+2973717346 9537  stdlib/u32.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
@@ -81,21 +85,26 @@ EOF
 }
 
 # The signing closure's SHA-256 and HMAC live in stdlib/crypto/, reached by
-# `import crypto.sha256` / `import crypto.hmac` rather than `import lib.<mod>`.
+# `import crypto.sha256` / `import crypto.hmac` rather than `import lib.<mod>`,
+# and SHA-256's word arithmetic is stdlib/u32.mdk, reached by `import u32`.
 # Following only the `lib.` form would silently shrink the audited closure to
 # the pds half, which is the one failure this whole function exists to
-# prevent, so the second arm below follows the crypto.* form too. It is
-# restricted to the stdlib modules
-# the signing path actually carries: a blanket `^import <anything>` arm would
-# drag in `array`, `string` and every transitive leaf, and the manifest is a
+# prevent, so the second arm below follows those stdlib imports too. It is
+# restricted to the stdlib modules whose code the signing path actually
+# carries: a blanket `^import <anything>` arm would drag in `array`, `string`
+# and every transitive leaf (u32.mdk's own u8/u16/bytes imports among them,
+# none of which reach the emitted closure), and the manifest is a
 # hand-maintained claim about the SIGNING source, not about the stdlib.
-SIGNING_STDLIB_MODULES='sha256 hmac'
+# Entries are paths under stdlib/ without the extension; the import form is
+# the path with `/` spelled `.`.
+SIGNING_STDLIB_MODULES='crypto/sha256 crypto/hmac u32'
 
 derive_stdlib_imports() {
   file=$1
-  for mod in $SIGNING_STDLIB_MODULES; do
-    if grep -E -q "^import crypto\.${mod}(\.|\$| )" "$file"; then
-      printf 'stdlib/crypto/%s.mdk\n' "$mod"
+  for rel in $SIGNING_STDLIB_MODULES; do
+    pattern=$(printf '%s' "$rel" | sed 's|/|\\.|g')
+    if grep -E -q "^import ${pattern}(\.|\$| )" "$file"; then
+      printf 'stdlib/%s.mdk\n' "$rel"
     fi
   done
 }
@@ -210,6 +219,7 @@ restore_source_tree() {
     pds/lib/scalar.mdk \
     stdlib/crypto/sha256.mdk \
     stdlib/crypto/hmac.mdk \
+    stdlib/u32.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/test/constant_time_signing_main.mdk
@@ -340,10 +350,11 @@ conditional_jumps() {
 }
 
 cp -R "$ROOT/pds" "$WORK/pds"
-# Two of the claimed signing sources now live in stdlib/, and the scratch tree
+# Three of the claimed signing sources live in stdlib/, and the scratch tree
 # is what every source-shape control runs against, so it needs them too.
 mkdir -p "$WORK/stdlib/crypto"
 cp "$ROOT/stdlib/crypto/sha256.mdk" "$ROOT/stdlib/crypto/hmac.mdk" "$WORK/stdlib/crypto/"
+cp "$ROOT/stdlib/u32.mdk" "$WORK/stdlib/"
 write_internal_claimed_source_files > "$WORK/internal-source.claimed"
 write_public_claimed_source_files > "$WORK/public-source.claimed"
 internal_source_closure_ok "$ROOT" "$WORK/internal-source.claimed" || fail 'baseline internal signing source matches the exact manifest and independently derived closure'
@@ -507,7 +518,9 @@ sed '/stdlib\/crypto\/sha256.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.
 if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib closure omission unexpectedly green'; fi
 sed '/stdlib\/crypto\/hmac.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
 if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib HMAC omission unexpectedly green'; fi
-pass 'M15 claimed stdlib SHA-256/HMAC omission is rejected by independently derived source closure'
+sed '/stdlib\/u32.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
+if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib U32 omission unexpectedly green'; fi
+pass 'M15 claimed stdlib SHA-256/HMAC/U32 omission is rejected by independently derived source closure'
 cmp "$WORK/manifest.baseline" "$WORK/internal-source.claimed" >/dev/null || fail 'M15 claimed source manifest restores byte-exactly'
 
 apply_mutation M16 "$WORK/pds/lib/secp256k1.mdk" \
@@ -548,12 +561,19 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # `hmacSha256FixedBytes` path this carrier reaches never calls it, only
 # `hmacSha256Key`/`hmacSha256WithKey` do, and neither is on this route. 172
 # definitions after, 171 before.
-[ "$closure_grade" = '753408558 5064' ] || fail "emitted transitive closure drifted ($closure_grade)"
-# Two of the five modules live in stdlib/crypto/, which mangles as `crypto_`
-# rather than `lib_`, so the prefixes are spelled out rather than built from a
-# module name.
+# Re-derived when SHA-256's words moved from masked `Int` to `U32`, measured
+# symbol by symbol against the previous closure: `mdk_crypto_sha256__mask32`,
+# `mdk_crypto_sha256__rotr32` and the `mdk_force_crypto_sha256__{h0Init,k}`
+# thunks are gone; eleven `mdk_u32__` helpers entered (`bitAnd`, `bitOr`,
+# `bitXor`, `bitNot`, `shiftLeft`, `shiftRight`, `rotateLeft`, `rotateRight`,
+# `rotateAmount`, `truncate`, `toInt`), plus `mdk_impl_Int_display`, which only
+# the shift helpers' negative-amount panic message calls. 180 definitions.
+[ "$closure_grade" = '280489640 5172' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
+# than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
+# rather than built from a module name.
 for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_crypto_sha256__ mdk_crypto_hmac__ \
-  mdk_lib_hmac_sha256__ mdk_lib_secp256k1__
+  mdk_u32__ mdk_lib_hmac_sha256__ mdk_lib_secp256k1__
 do
   grep -F -q "$prefix" "$WORK/full-closure.lst" || fail "emitted closure reaches $prefix"
 done
@@ -578,7 +598,16 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # gains a row identical in shape to the one `mdk_crypto_sha256__sha256AssumeByteDomain`
 # already carried (a straight-line fold, no branch), and every other row is
 # unchanged; no branch anywhere in the closure tests a byte.
-[ "$control_grade" = '4123652682 7488' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived for the same `U32` move as the closure grade above, row by row.
+# The SHA-256 rows keep their branch counts (compressRounds 2, compressBlock 1,
+# extendSchedule 1, the rest 0) and lose calls, since `+` on a `U32` is inline;
+# digestWord gains the one `toInt` call. The new rows' branches all test the
+# shift or rotate amount, never the word: shiftLeft and shiftRight 3 each
+# (amount below 0, amount 32 or more, the guard chain's closing `otherwise`),
+# rotateAmount 2 (the constant 32 divisor's zero checks), rotateLeft 1
+# (amount 0). Every SHA-256 call site passes a literal amount. The bit helpers,
+# truncate and toInt have no branch, and Int_display has none either.
+[ "$control_grade" = '3001358583 7705' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -768,7 +797,7 @@ if grep -F -q 'ForTest' "$WORK/full-closure.lst"; then
   fail 'public consumer closure reaches a ForTest symbol'
 fi
 for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_crypto_sha256__ mdk_crypto_hmac__ \
-  mdk_lib_hmac_sha256__ mdk_lib_secp256k1__ mdk_lib_sign__
+  mdk_u32__ mdk_lib_hmac_sha256__ mdk_lib_secp256k1__ mdk_lib_sign__
 do
   grep -F -q "$prefix" "$WORK/full-closure.lst" || fail "public union reaches $prefix"
 done
@@ -811,7 +840,11 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # like `mdk_crypto_sha256__sha256AssumeByteDomain`'s own (straight-line, no branch),
 # 190 -> 191. `mdk_crypto_sha256__sha256FoldKeyBlock` does not appear — this route
 # never reaches `hmacSha256Key`/`hmacSha256WithKey`, only `hmacSha256FixedBytes`.
-if [ "$public_closure_grade" != '2064625633 5599' ] || [ "$public_control_grade" != '3271666870 8291' ]; then
+# Re-derived again for SHA-256's move to `U32`, the same row changes as the
+# internal-carrier grades above and no others: four SHA-256 definitions leave,
+# the eleven `mdk_u32__` helpers and `mdk_impl_Int_display` enter (191 -> 199),
+# and every new branch tests a public shift or rotate amount.
+if [ "$public_closure_grade" != '809436099 5707' ] || [ "$public_control_grade" != '3931792192 8508' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

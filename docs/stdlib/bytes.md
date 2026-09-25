@@ -2,20 +2,25 @@
 
 An immutable string of bytes.
 
-`Bytes` holds a sequence of byte values, each `0` to `255`, that cannot
-be changed once built. Use it for data that is bytes, such as a file's
-contents, a hash digest, or a UTF-8 encoding, and `Array Int` for a
-sequence of numbers that happen to be small. A byte string of `n` bytes
-occupies `n` bytes.
+`Bytes` holds a sequence of bytes that cannot be changed once built. A
+byte is a `U8`, from `0` to `255`: `get`, `b[i]`, `fold` and the other
+element-wise functions hand one out, and `map` and `elemIndex` take one.
+Indices, lengths and offsets are `Int`. Use it for data that is bytes,
+such as a file's contents, a hash digest, or a UTF-8 encoding, and
+`Array Int` for a sequence of numbers that happen to be small. A byte
+string of `n` bytes occupies `n` bytes.
 
-`fromArray` builds a byte string from an `Array Int` and answers `None`
-when an element is outside `0` to `255`, so no `Bytes` value holds
-anything else. `encodeUtf8` builds one from a `String`. `toArray` and
-`decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
+`fromU8Array` builds a byte string from an `Array U8`, so a constant is
+written `fromU8Array [|0x1f, 0x8b|]` and an element out of range is a
+compile-time error. `fromArray` builds one from an `Array Int` and
+answers `None` when an element is outside `0` to `255`, so no `Bytes`
+value holds anything else. `encodeUtf8` builds one from a `String`.
+`toU8Array`, `toArray` and `decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
 sibling, for building a byte string a byte at a time.
 
 `length` is the byte count, `get` reads one byte as an `Option`, and
-`b[i]` is the panicking form. `slice`, `take`, `drop`, `indexOf`,
+`b[i]` is the panicking form. `u8.toInt` widens a byte for arithmetic
+that must not wrap at `255`. `slice`, `take`, `drop`, `indexOf`,
 `startsWith` and the rest follow the shapes of `string` and `list`.
 Byte strings compare lexicographically and can key a `hash_map.HashMap`
 or a `hash_set.HashSet`. `b1 ++ b2` joins two.
@@ -49,7 +54,7 @@ doors cross to and from the runtime's `ByteBlock` without a conversion.
 3
 ```
 
-Instances: [`Index`](#index-bytes-int-int), [`Slice`](#slice-bytes), [`Semigroup`](#semigroup-bytes), [`Monoid`](#monoid-bytes), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Hashable`](#hashable-bytes), [`Debug`](#debug-bytes)
+Instances: [`Index`](#index-bytes-int-u8), [`Slice`](#slice-bytes), [`Semigroup`](#semigroup-bytes), [`Monoid`](#monoid-bytes), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Hashable`](#hashable-bytes), [`Debug`](#debug-bytes)
 
 ## Conversion
 
@@ -107,6 +112,40 @@ The bytes of `b` as an array, in order.
 [|104, 105|]
 ```
 
+### `fromU8Array`
+
+```
+fromU8Array : Array U8 -> Bytes
+fromU8Array arr
+```
+
+The byte string holding the elements of `arr`, in order.
+
+Every element is a byte by its type, so nothing is checked or masked. A
+literal element outside `0` to `255` is a compile-time error.
+
+```medaka
+> debug (fromU8Array [|0x1f, 0x8b, 0|])
+"Bytes \"1f8b00\""
+> length (fromU8Array [||])
+0
+```
+
+### `toU8Array`
+
+```
+toU8Array : Bytes -> Array U8
+```
+
+The bytes of `b` as an array of `U8`, in order.
+
+```medaka
+> toU8Array (encodeUtf8 "hi") == [|104, 105|]
+True
+> toU8Array (fromU8Array [|7, 255|]) == [|7, 255|]
+True
+```
+
 ## Reading
 
 ### `length`
@@ -143,7 +182,7 @@ False
 ### `get`
 
 ```
-get : Int -> Bytes -> Option Int
+get : Int -> Bytes -> Option U8
 get i _
 ```
 
@@ -153,8 +192,8 @@ The byte at index `i`, or `None` when `i` is out of range.
 answers `None` where `b[i]` raises an index error.
 
 ```medaka
-> get 0 (fromArrayAssumeByteDomain [|7, 8, 9|])
-Some 7
+> get 0 (fromArrayAssumeByteDomain [|7, 8, 9|]) |> option 0 U8.toInt
+7
 > get 3 (fromArrayAssumeByteDomain [|7, 8, 9|])
 None
 > get (-1) (fromArrayAssumeByteDomain [|7, 8, 9|])
@@ -242,28 +281,25 @@ split clamp into `b`.
 ### `elemIndex`
 
 ```
-elemIndex : Int -> Bytes -> Option Int
+elemIndex : U8 -> Bytes -> Option Int
 elemIndex v _
 ```
 
 The index of the first byte equal to `v`, or `None` when no byte is.
 
 The needle is a single byte; `indexOf` searches for a whole byte string.
-A `v` outside `0` to `255` equals no byte, so the answer is `None`.
 
 ```medaka
 > elemIndex 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
 Some 1
 > elemIndex 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
 None
-> elemIndex 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
-None
 ```
 
 ### `elemIndexWithin`
 
 ```
-elemIndexWithin : Int -> Int -> Int -> Bytes -> Option Int
+elemIndexWithin : Int -> Int -> U8 -> Bytes -> Option Int
 elemIndexWithin lo hi v _
 ```
 
@@ -398,42 +434,43 @@ False
 ### `fold`
 
 ```
-fold : (b -> Int -> <e> b) -> b -> Bytes -> <e> b
+fold : (b -> U8 -> <e> b) -> b -> Bytes -> <e> b
 fold f init _
 ```
 
 The result of applying `f` to an accumulator and each byte of `b` in
 turn, starting from `init` and reading left to right.
 
-Each byte is passed as an `Int`. This is a plain function, not
+Each byte is passed as a `U8`, so an accumulator that sums bytes widens
+each one with `u8.toInt` first. This is a plain function, not
 `Foldable`'s method, and named in an import list it shadows the prelude's
 `fold` for the whole importing module.
 
 ```medaka
-> fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [|1, 2, 3|])
-6
-> fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [||])
+> fold (acc b => acc + U8.toInt b) 0 (fromArrayAssumeByteDomain [|200, 100|])
+300
+> fold (acc b => acc + U8.toInt b) 0 (fromArrayAssumeByteDomain [||])
 0
 ```
 
 ### `forEach`
 
 ```
-forEach : (Int -> <e> Unit) -> Bytes -> <e> Unit
+forEach : (U8 -> <e> Unit) -> Bytes -> <e> Unit
 forEach f _
 ```
 
 Runs `f` on each byte of `b` in order, for its effect.
 
 ```medaka
-> let acc = Ref [] in let _ = forEach (x => acc := x :: !acc) (fromArrayAssumeByteDomain [|7, 8, 9|]) in !acc
+> let acc = Ref [] in let _ = forEach (x => acc := U8.toInt x :: !acc) (fromArrayAssumeByteDomain [|7, 8, 9|]) in !acc
 [9, 8, 7]
 ```
 
 ### `any`
 
 ```
-any : (Int -> <e> Bool) -> Bytes -> <e> Bool
+any : (U8 -> <e> Bool) -> Bytes -> <e> Bool
 any f _
 ```
 
@@ -450,7 +487,7 @@ False
 ### `all`
 
 ```
-all : (Int -> <e> Bool) -> Bytes -> <e> Bool
+all : (U8 -> <e> Bool) -> Bytes -> <e> Bool
 all f _
 ```
 
@@ -467,18 +504,19 @@ False
 ### `map`
 
 ```
-map : (Int -> <e> Int) -> Bytes -> <e> Bytes
+map : (U8 -> <e> U8) -> Bytes -> <e> Bytes
 map f _
 ```
 
 The byte string of the same length holding `f` applied to each byte of
 `b`.
 
-Panics when `f` answers a value outside `0` to `255`.
+`f` answers a `U8`, so every result is a byte. Arithmetic on one wraps,
+as `U8`'s does.
 
 ```medaka
-> toArray (map (x => x + 1) (fromArrayAssumeByteDomain [|7, 8, 9|]))
-[|8, 9, 10|]
+> toArray (map (x => x + 1) (fromArrayAssumeByteDomain [|7, 8, 255|]))
+[|8, 9, 0|]
 ```
 
 ## Combining
@@ -638,10 +676,10 @@ to be immutable. Read it; do not write it.
 
 ## Instances
 
-### `Index Bytes Int Int`
+### `Index Bytes Int U8`
 
 ```
-impl Index Bytes Int Int
+impl Index Bytes Int U8
 ```
 
 `b[i]` reads the byte at `i` in `O(1)`.

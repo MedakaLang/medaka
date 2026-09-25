@@ -1,0 +1,6 @@
+-- #3415: `fromU8Array` is total because its elements are bytes by type, so
+-- an out-of-range element in a constant is refused at compile time on every
+-- verb, never masked to 44.
+import bytes as B
+
+main = println (debug (B.fromU8Array [|0x1f, 300|]))

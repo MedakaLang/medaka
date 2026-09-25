@@ -1,5 +1,5 @@
 # META
-source_lines=1244
+source_lines=1245
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -32,6 +32,7 @@ import frontend.ast.{
   ConPayload(..),
 }
 import types.route_key.{implRouteKeyWord}
+import u32 as U32
 import eval.eval.{
   Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasTag, ppValue
 }
@@ -81,17 +82,17 @@ rngNextLocal : Unit -> Int
 -- Run the raw state through a Murmur3-style `fmix32` finalizer instead: two
 -- multiply/xor-shift rounds so every output bit depends nonlinearly on many
 -- state bits (full avalanche), leaving no short-period window for a caller
--- to extract. Each multiply is masked to 32 bits (`bitAnd … 4294967295`)
--- since Int is wider than 32 bits and wraps. State advancement is
--- unchanged, so `--seed` reproducibility is unaffected.
+-- to extract. The finalizer's words are `U32`, so each multiply wraps
+-- modulo 2^32 as `fmix32` requires. The state stays an `Int` below 2^31, so
+-- its advancement cannot overflow and `--seed` reproducibility is unaffected.
 rngNextLocal _ =
   let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
   propRngStateRef := s
-  let h1 = bitXor s (shiftRight s 16)
-  let h2 = bitAnd (h1 * 2246822507) 4294967295
-  let h3 = bitXor h2 (shiftRight h2 13)
-  let h4 = bitAnd (h3 * 3266489909) 4294967295
-  bitXor h4 (shiftRight h4 16)
+  let h1 = fromInt (bitXor s (shiftRight s 16)) : U32
+  let h2 = h1 * 2246822507
+  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
+  let h4 = h3 * 3266489909
+  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
 
 randIntRange : Int -> Int -> Int
 randIntRange lo hi =
@@ -1249,6 +1250,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
+(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1258,7 +1260,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (DoLet false false (PVar "h2") (EApp (EApp (EVar "bitAnd") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (ELit (LInt 4294967295)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "bitXor") (EVar "h2")) (EApp (EApp (EVar "shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EApp (EApp (EVar "bitAnd") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (ELit (LInt 4294967295)))) (DoExpr (EApp (EApp (EVar "bitXor") (EVar "h4")) (EApp (EApp (EVar "shiftRight") (EVar "h4")) (ELit (LInt 16)))))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EAnnot (EApp (EVar "fromInt") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (TyCon "U32"))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
 (DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -1550,6 +1552,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
+(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1559,7 +1562,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (DoLet false false (PVar "h2") (EApp (EApp (EVar "bitAnd") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (ELit (LInt 4294967295)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "bitXor") (EVar "h2")) (EApp (EApp (EVar "shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EApp (EApp (EVar "bitAnd") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (ELit (LInt 4294967295)))) (DoExpr (EApp (EApp (EVar "bitXor") (EVar "h4")) (EApp (EApp (EVar "shiftRight") (EVar "h4")) (ELit (LInt 16)))))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EAnnot (EApp (EMethodRef "fromInt") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (TyCon "U32"))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
 (DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))

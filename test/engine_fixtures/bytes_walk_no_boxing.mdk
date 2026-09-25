@@ -13,17 +13,18 @@
 
 import bytes as B
 import bytes.{Bytes}
+import u8 as U8
 
 subject : Bytes
 subject = B.fromArrayAssumeByteDomain [|3, 1, 4, 1, 5, 9, 2, 6|]
 
 sumBytes : Bytes -> Int
-sumBytes b = B.fold (+) 0 b
+sumBytes b = B.fold (acc x => acc + U8.toInt x) 0 b
 
 countOver : Int -> Bytes -> Int
 countOver lim b =
   let seen = Ref 0
-  let _ = B.forEach (x => if x > lim then seen := !seen + 1) b
+  let _ = B.forEach (x => if U8.toInt x > lim then seen := !seen + 1) b
   !seen
 
 main = (

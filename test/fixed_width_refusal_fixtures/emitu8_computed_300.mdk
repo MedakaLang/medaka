@@ -1,0 +1,10 @@
+-- #3415: a byte only known at runtime crosses into U8 through the checked
+-- `fromInt`, which panics on 300.  The builder never holds a wrapped 44, so
+-- nothing is printed.
+import bytebuilder.{newBuilder, emitU8, buildArray}
+
+main =
+  let buf = newBuilder ()
+  let n = length [1..=300]
+  emitU8 (fromInt n) buf
+  println (buildArray buf)

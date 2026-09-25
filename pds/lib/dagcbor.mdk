@@ -53,18 +53,18 @@ validBytes bytes i =
 emitArgument : Int -> Int -> Builder -> Unit
 emitArgument major value out =
   if value < 24 then
-    emitU8 (shiftLeft major 5 + value) out
+    emitU8 (fromInt (shiftLeft major 5 + value)) out
   else if value <= 255 then
-    emitU8 (shiftLeft major 5 + 24) out
-    emitU8 value out
+    emitU8 (fromInt (shiftLeft major 5 + 24)) out
+    emitU8 (fromInt value) out
   else if value <= 65535 then
-    emitU8 (shiftLeft major 5 + 25) out
+    emitU8 (fromInt (shiftLeft major 5 + 25)) out
     emitBeUint 2 value out
   else if value <= 4294967295 then
-    emitU8 (shiftLeft major 5 + 26) out
+    emitU8 (fromInt (shiftLeft major 5 + 26)) out
     emitBeUint 4 value out
   else
-    emitU8 (shiftLeft major 5 + 27) out
+    emitU8 (fromInt (shiftLeft major 5 + 27)) out
     emitBeUint 8 value out
 
 keyCompare : String -> String -> Ordering

@@ -196,6 +196,8 @@ An immutable string of bytes.
 - [`fromArray`](bytes.md#fromarray)
 - [`fromArrayAssumeByteDomain`](bytes.md#fromarrayassumebytedomain)
 - [`toArray`](bytes.md#toarray)
+- [`fromU8Array`](bytes.md#fromu8array)
+- [`toU8Array`](bytes.md#tou8array)
 - [`length`](bytes.md#length)
 - [`isEmpty`](bytes.md#isempty)
 - [`get`](bytes.md#get)

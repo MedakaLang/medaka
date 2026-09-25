@@ -128,7 +128,7 @@ hmacSha256FixedBytes key message =
    the inner and outer hash, two SHA-256 compressions for a message that
    fits in the tag's own 32 bytes, instead of `hmacSha256`'s four. -}
 export data HmacSha256Key =
-  | HmacSha256Key (Int, Int, Int, Int, Int, Int, Int, Int) (Int, Int, Int, Int, Int, Int, Int, Int)
+  | HmacSha256Key (U32, U32, U32, U32, U32, U32, U32, U32) (U32, U32, U32, U32, U32, U32, U32, U32)
 
 {- | Precomputes the ipad/opad compressions for `key`, once. -}
 export

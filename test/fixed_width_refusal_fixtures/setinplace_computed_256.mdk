@@ -1,0 +1,10 @@
+-- #3415: a computed 256 written positionally is refused by the checked
+-- `fromInt` panic, never stored as 0, so nothing is printed.
+import bytes as B
+import mut_bytes as MB
+
+main =
+  let mb = MB.make 4
+  let n = length [1..=256]
+  MB.setInPlace 0 (fromInt n) mb
+  println (B.toArray (MB.freeze mb))

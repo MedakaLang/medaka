@@ -1,5 +1,0 @@
-import mut_bytes.{make, setInPlace}
-
-main =
-  let mb = make 4
-  setInPlace 0 256 mb

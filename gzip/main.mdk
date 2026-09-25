@@ -35,6 +35,7 @@ import array.{fromList}
 import bytes as B
 import bytes.{Bytes}
 import lib.container.{GzipHeader, parseGzipHeader, parseGzipTrailer}
+import u32 as U32
 import lib.crc32.{crc32}
 import lib.bitio.{newBitReader, getBits}
 
@@ -85,7 +86,7 @@ main = match parseGzipHeader helloGz
     match parseGzipTrailer helloGz
       Err e => println ("trailer parse failed: " ++ e)
       Ok (storedCrc, storedSize) =>
-        let ourCrc = crc32 helloBytes
+        let ourCrc = U32.toInt (crc32 helloBytes)
         let _ =
           println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
         let _ = println "crc32 of \"hello\" = \{debug ourCrc}"

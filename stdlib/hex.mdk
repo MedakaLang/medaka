@@ -22,6 +22,7 @@ import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
+import u8 as U8
 
 -- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
 -- call site below only ever indexes within the array's own known length, so
@@ -54,7 +55,7 @@ encodeGo : Bytes -> Int -> Bool -> List Char -> List Char
 encodeGo bs i upper acc
   | i < 0 = acc
   | otherwise =
-    let (hi, lo) = byteToHexChars bs[i] upper
+    let (hi, lo) = byteToHexChars (U8.toInt bs[i]) upper
     encodeGo bs (i - 1) upper (hi :: lo :: acc)
 
 encodeAs : Bytes -> Bool -> String
