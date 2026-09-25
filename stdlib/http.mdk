@@ -36,6 +36,7 @@ import json.{Json, parse}
 import list.{reverse}
 import string.{fromUtf8, toUtf8}
 import test.{expectEqual, expectTrue}
+import u8 as U8
 
 -- # Resource limits
 
@@ -363,9 +364,15 @@ lowerAscii input start end =
 -- over the container and dispatch on every byte of every header scanned.
 -- The `Array`-based originals stay for callers not yet migrated; B5 removes
 -- them, and the duplication with them (`docs/design/BYTES-DESIGN.md`).
+-- The byte at `i` of `input`, widened to an `Int` so the grammar predicates
+-- shared with the `Array`-based twins read it unchanged.
+byteAt : Bytes -> Int -> Int
+byteAt input i = U8.toInt input[i]
+
 lowerAsciiBytes : Bytes -> Int -> Int -> String
 lowerAsciiBytes input start end =
-  fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
+  fromUtf8
+    (arrayMakeWith (end - start) (i => lowerByte (byteAt input (start + i))))
 
 -- | Whether `byte` is one of the ASCII bytes HTTP allows in a token, such as
 -- a method or a field name.
@@ -403,7 +410,7 @@ allTokenBytes input pos end =
   if pos >= end then
     True
   else
-    isTokenByte input[pos] && allTokenBytes input (pos + 1) end
+    isTokenByte (byteAt input pos) && allTokenBytes input (pos + 1) end
 
 isHexByte : Int -> Bool
 isHexByte byte =
@@ -440,11 +447,11 @@ validTarget input pos end query =
   if pos >= end then
     True
   else
-    let byte = input[pos]
+    let byte = byteAt input pos
     if byte == 37 then
       pos + 2 < end
-        && isHexByte input[pos + 1]
-        && isHexByte input[pos + 2]
+        && isHexByte (byteAt input (pos + 1))
+        && isHexByte (byteAt input (pos + 2))
         && validTarget input (pos + 3) end query
     else
       let pchar =
@@ -479,7 +486,7 @@ validFieldValueBytes input pos end =
   if pos >= end then
     True
   else
-    let byte = input[pos]
+    let byte = byteAt input pos
     (byte == 9 || byte >= 32 && byte /= 127)
       && validFieldValueBytes input (pos + 1) end
 
@@ -509,14 +516,14 @@ findCrlfChecked label input avail start pos limit =
     Err (Fatal (HttpResourceExcess "http: \{label} exceeds its resource limit"))
   else if pos >= avail then
     incomplete "http: truncated \{label}; expected CRLF"
-  else if input[pos] == 10 then
+  else if byteAt input pos == 10 then
     malformed "http: bare LF in \{label}"
-  else if input[pos] == 13 then
+  else if byteAt input pos == 13 then
     -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
     -- CRLF, so it keeps that diagnostic while staying completable.
     if pos + 1 >= avail then
       incomplete "http: bare CR in \{label}"
-    else if input[pos + 1] /= 10 then
+    else if byteAt input (pos + 1) /= 10 then
       malformed "http: bare CR in \{label}"
     else
       Ok pos
@@ -549,7 +556,7 @@ parseRequestLine input avail start cursor = do
     malformed "http: invalid method token"
   else if secondSpace == firstSpace + 1 then
     malformed "http: empty request target"
-  else if input[firstSpace + 1] /= 47
+  else if byteAt input (firstSpace + 1) /= 47
     || not (validTarget input (firstSpace + 1) secondSpace False) then
     malformed
       "http: request target must be an origin-form ASCII target without a fragment"
@@ -579,7 +586,7 @@ trimLeftOws value pos end =
 
 trimLeftOwsBytes : Bytes -> Int -> Int -> Int
 trimLeftOwsBytes input pos end =
-  if pos < end && (input[pos] == 32 || input[pos] == 9) then
+  if pos < end && (byteAt input pos == 32 || byteAt input pos == 9) then
     trimLeftOwsBytes input (pos + 1) end
   else
     pos
@@ -596,14 +603,15 @@ trimRightOws value start end =
 
 trimRightOwsBytes : Bytes -> Int -> Int -> Int
 trimRightOwsBytes input start end =
-  if end > start && (input[end - 1] == 32 || input[end - 1] == 9) then
+  if end > start
+    && (byteAt input (end - 1) == 32 || byteAt input (end - 1) == 9) then
     trimRightOwsBytes input start (end - 1)
   else
     end
 
 parseHeaderLine : Bytes -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
-  if input[start] == 32 || input[start] == 9 then
+  if byteAt input start == 32 || byteAt input start == 9 then
     malformed "http: obsolete folded header lines are forbidden"
   else match elemIndexWithin start end 58 input
     None => malformed "http: malformed header field; missing colon"
@@ -798,7 +806,7 @@ scanTokenEnd value pos end =
 
 scanTokenEndBytes : Bytes -> Int -> Int -> Int
 scanTokenEndBytes input pos end =
-  if pos < end && isTokenByte input[pos] then
+  if pos < end && isTokenByte (byteAt input pos) then
     scanTokenEndBytes input (pos + 1) end
   else
     pos
@@ -1002,7 +1010,7 @@ emitArray bytes i out =
   if i >= arrayLength bytes then
     ()
   else
-    emitU8 bytes[i] out
+    emitU8 (fromInt bytes[i]) out
     emitArray bytes (i + 1) out
 
 -- | The value of one ASCII hexadecimal digit, or `None` when `byte` is not
@@ -1023,7 +1031,7 @@ parseHexSizeGo : Bytes -> Int -> Int -> Int -> Result FrameError Int
 parseHexSizeGo input pos end acc =
   if pos >= end then
     Ok acc
-  else match hexDigit input[pos]
+  else match hexDigit (byteAt input pos)
     None => malformed "http: invalid chunk size"
     Some digit =>
       if acc > (maxHttpBodyBytes - digit) / 16 then
@@ -1045,7 +1053,7 @@ skipOws value pos end =
 
 skipOwsBytes : Bytes -> Int -> Int -> Int
 skipOwsBytes input pos end =
-  if pos < end && (input[pos] == 32 || input[pos] == 9) then
+  if pos < end && (byteAt input pos == 32 || byteAt input pos == 9) then
     skipOwsBytes input (pos + 1) end
   else
     pos
@@ -1054,19 +1062,19 @@ scanQuoted : Bytes -> Int -> Int -> Result FrameError Int
 scanQuoted input pos end =
   if pos >= end then
     malformed "http: unterminated quoted chunk extension"
-  else if input[pos] == 34 then
+  else if byteAt input pos == 34 then
     Ok (pos + 1)
-  else if input[pos] == 92 then
+  else if byteAt input pos == 92 then
     if pos + 1 >= end then
       malformed "http: truncated quoted-pair in chunk extension"
     else
-      let escaped = input[pos + 1]
+      let escaped = byteAt input (pos + 1)
       if escaped == 9 || escaped == 32 || escaped >= 33 && escaped /= 127 then
         scanQuoted input (pos + 2) end
       else
         malformed "http: control byte in quoted chunk extension"
   else
-    let byte = input[pos]
+    let byte = byteAt input pos
     if byte == 9
       || byte == 32
       || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
@@ -1078,7 +1086,7 @@ parseChunkExtensionValue : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkExtensionValue input pos end =
   if pos >= end then
     malformed "http: missing chunk extension value"
-  else if input[pos] == 34 then
+  else if byteAt input pos == 34 then
     scanQuoted input (pos + 1) end
   else
     let valueEnd = scanTokenEndBytes input pos end
@@ -1092,7 +1100,7 @@ parseChunkExtensionsGo input pos end =
   let start = skipOwsBytes input pos end
   if start == end then
     Ok ()
-  else if input[start] /= 59 then
+  else if byteAt input start /= 59 then
     malformed "http: invalid chunk extension separator"
   else
     let nameStart = skipOwsBytes input (start + 1) end
@@ -1101,7 +1109,7 @@ parseChunkExtensionsGo input pos end =
       malformed "http: empty chunk extension name"
     else
       let afterName = skipOwsBytes input nameEnd end
-      if afterName < end && input[afterName] == 61 then do
+      if afterName < end && byteAt input afterName == 61 then do
         valueEnd <- parseChunkExtensionValue
           input
           (skipOwsBytes input (afterName + 1) end)
@@ -1206,7 +1214,8 @@ chunkDataEnd input avail dataPos size =
     incomplete "http: truncated body at byte \{intToString avail}"
   else if afterChunk + 2 > avail then
     incomplete "http: truncated CRLF after chunk data"
-  else if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then
+  else if byteAt input afterChunk /= 13
+    || byteAt input (afterChunk + 1) /= 10 then
     malformed "http: missing CRLF after chunk data"
   else
     Ok (afterChunk + 2)
@@ -2277,13 +2286,13 @@ decodeQueryBytes input pos end out =
   if pos >= end then
     Ok ()
   else if input[pos] /= 37 then
-    let () = emitU8 input[pos] out
+    let () = emitU8 (fromInt input[pos]) out
     decodeQueryBytes input (pos + 1) end out
   else if pos + 2 >= end then
     Err "http: malformed percent escape in query"
   else match (percentNibble input[pos + 1], percentNibble input[pos + 2])
     (Some high, Some low) =>
-      let () = emitU8 (high * 16 + low) out
+      let () = emitU8 (fromInt (high * 16 + low)) out
       decodeQueryBytes input (pos + 3) end out
     _ => Err "http: malformed percent escape in query"
 

@@ -191,7 +191,7 @@ emitArray bytes i out =
   if i >= arrayLength bytes then
     ()
   else
-    emitU8 bytes[i] out
+    emitU8 (fromInt bytes[i]) out
     emitArray bytes (i + 1) out
 
 emitSections : List (Cid, Array Int) -> Builder -> Unit
