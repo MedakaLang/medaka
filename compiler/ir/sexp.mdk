@@ -274,8 +274,12 @@ declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, 
     slist (map (d => escStr (deriveRefName d)) ds),
   ]
 declSexp (DUse pub path _) = node "DUse" [boolStr pub, usePathSexp path]
-declSexp (DEffect pub n dom _) =
-  node "DEffect" [boolStr pub, escStr n, optStrSexp dom]
+declSexp (DEffect pub n dom axes _) = node "DEffect" [
+  boolStr pub,
+  escStr n,
+  optStrSexp dom,
+  slist (map axisSexp axes),
+]
 declSexp (DProp pub name params body) = node "DProp" [
   boolStr pub,
   escStr name,
@@ -376,3 +380,6 @@ programToSexp prog = joinNl (map declSexp prog)
 deferNodeName : Bool -> String
 deferNodeName True = "EDefer"
 deferNodeName False = "EDo"
+
+axisSexp : (String, String) -> String
+axisSexp (name, dom) = node "axis" [escStr name, escStr dom]

@@ -208,7 +208,7 @@ authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
 authorityAsTypeMsg : String -> String
 authorityBinderBound : Ty -> String -> Bool
-authorityFailureMsg : String -> Authority -> Authority -> String
+authorityFailureMsg : String -> Authority -> Authority -> Option Authority -> String
 authorityNamesWritten : Ty -> List String
 authorityParamAsRowMsg : String -> String -> String
 authorityParamAsTypeMsg : String -> String -> String
@@ -367,6 +367,7 @@ checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
 checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
+checkDomainAxes : String -> Option String -> List (String, String) -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffectAtoms : List EffAtomTy -> Unit
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
@@ -421,7 +422,7 @@ checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> 
 checkModulesK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, Scheme))
 checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings)
 checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
-checkOneAxis : String -> String -> Param -> Unit
+checkOneAxis : String -> List (String, Param) -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
@@ -439,8 +440,8 @@ checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkPhantomAuthorityExport : DataVis -> String -> List String -> List Variant -> Unit
 checkPhantomMethods : ClassEnv -> Int -> Unit
 checkPrefixLiteral : String -> String -> Unit
-checkProductAxes : String -> Param -> Unit
-checkProductAxesGo : String -> List (String, Param) -> Unit
+checkProductAxes : String -> Param -> Param -> Unit
+checkProductAxesGo : String -> List (String, Param) -> List (String, Param) -> Unit
 checkRecBindNonFunction : String -> Expr -> Unit
 checkRecursiveValue : BindingSummary -> Unit
 checkRedundantGo : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
@@ -817,6 +818,7 @@ doStmtEVars : DoStmt -> List String
 doStmtSites : DoStmt -> List (Ref Route)
 domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
+domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> Unit
 driveGraphK : GraphOut -> DrainDiags -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driverState : Ref DriverState
@@ -858,6 +860,8 @@ effectParamMsg : String -> String -> String
 effectRoots : Mono -> Map Int Unit -> Map Int Unit
 effectRowCells : EffRow -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 effectRowRoots : EffRow -> Map Int Unit -> Map Int Unit
+effectSiteKey : String -> String -> String
+effectSiteOf : String -> Option String -> Option Loc
 effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
@@ -1045,6 +1049,7 @@ firstTvar : Mono -> Mono -> Int -> Option Mono
 fixedSibling : Int -> List (Int, String) -> Option String
 fixedWidthLiteralFits : Route -> Int -> Bool
 flatGroupIsCore : List String -> Bool
+flushPendingEscapes : Unit -> Unit
 foldAppFallback : SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldAppKinds : SigVars -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
 foldModules : Bool -> Bool -> (String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a)) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, List Decl) -> b
@@ -1605,6 +1610,7 @@ liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
 locGoalKey : Option Loc -> String
+locKey : Option Loc -> String
 locSameFileAs : Option Loc -> Option Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
 localBindingSummary : LetBind -> (String, BindingSummary)
@@ -1680,6 +1686,7 @@ memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Dec
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
 memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
 memberSuffix : String -> String
+mentionsEscaped : Authority -> Bool
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
@@ -2183,6 +2190,7 @@ recordCandIsType : Ident -> Ident -> String -> Bool
 recordDeclaredBindingCall : CDeclared -> List (Int, Mono) -> Unit
 recordDoMonadError : Loc -> Unit
 recordEffectBody : EffRow -> EffRow -> Unit
+recordEffectSites : EffRow -> Unit
 recordEvidence : List Obligation -> Unit
 recordExactMethodObligation : MethodReturnRequest -> Mono
 recordExistentials : List (String, Ref Authvar) -> Unit
@@ -2255,7 +2263,7 @@ registerData : TcEnv -> Decl -> TcEnv
 registerDispatchMonos : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Int -> List Int -> List Int -> Unit
 registerEachActive : List Int -> EvidenceBinderId -> Unit
 registerEachActiveId : List Int -> EvidenceBinderId -> Unit
-registerEffectDomain : EffLabel -> Option String -> Unit
+registerEffectDomain : EffLabel -> Option String -> List (String, String) -> Unit
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
 registerFunPredGivenSlots : List PredicateSlot -> EvidenceBinderId -> Unit
 registerImplMethodDictOne : ScopeId -> Int -> String -> List (String, Mono) -> Unit
@@ -2515,6 +2523,7 @@ solveExactReturn : MethodReturnRequest -> MethodReturnResolution
 solveExactReturnInstance : MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
 solveExactReturnOnce : MethodReturnRequest -> MethodReturnResolution
 solveFlexibleUpper : Authority -> Authority -> Bool
+solvedUpper : Option Authority -> Bool
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef

@@ -2005,7 +2005,7 @@ localTyNamesL (DData { dataName = n }) = [n]
 localTyNamesL (DNewtype { newtypeName = n }) = [n]
 localTyNamesL (DTypeAlias { tyAliasName = n }) = [n]
 localTyNamesL (DInterface { name = n }) = [n]
-localTyNamesL (DEffect _ n _ _) = [n]
+localTyNamesL (DEffect _ n _ _ _) = [n]
 localTyNamesL (DAttrib _ d) = localTyNamesL d
 localTyNamesL _ = []
 
@@ -5740,7 +5740,7 @@ nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
-nonDefRefL (DEffect _ _ _ _) = []
+nonDefRefL (DEffect _ _ _ _ _) = []
 nonDefRefL (DTypeAlias { tyAliasOrigin = _ }) = []
 nonDefRefL (DNewtype { newtypeOrigin = _ }) = []
 nonDefRefL d = bodyIdents d

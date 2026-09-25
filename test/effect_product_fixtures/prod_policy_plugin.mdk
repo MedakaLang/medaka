@@ -5,11 +5,14 @@
 -- that the tree-walking interpreter cannot perform.  A policy admitting that
 -- product ACCEPTS; a narrower product policy REJECTS.
 -- lint-disable-file rule-dead-code
-effect Net Product
+effect Net Product (Host : Prefix, Method : Set)
 
-extern fetch : String -> <FFI, Net Host="idp.example.com/api" Method={"GET"}> String
+extern fetch : String ->
+  <FFI, Net Host="idp.example.com/api" Method={"GET"}> String
 
-transform : String -> Unit -> <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI> String
+transform : String ->
+  Unit ->
+  <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI> String
 transform req = _ => fetch req
 
 main : <IO> Unit

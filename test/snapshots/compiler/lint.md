@@ -2009,7 +2009,7 @@ localTyNamesL (DData { dataName = n }) = [n]
 localTyNamesL (DNewtype { newtypeName = n }) = [n]
 localTyNamesL (DTypeAlias { tyAliasName = n }) = [n]
 localTyNamesL (DInterface { name = n }) = [n]
-localTyNamesL (DEffect _ n _ _) = [n]
+localTyNamesL (DEffect _ n _ _ _) = [n]
 localTyNamesL (DAttrib _ d) = localTyNamesL d
 localTyNamesL _ = []
 
@@ -5744,7 +5744,7 @@ nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
-nonDefRefL (DEffect _ _ _ _) = []
+nonDefRefL (DEffect _ _ _ _ _) = []
 nonDefRefL (DTypeAlias { tyAliasOrigin = _ }) = []
 nonDefRefL (DNewtype { newtypeOrigin = _ }) = []
 nonDefRefL d = bodyIdents d
@@ -7509,7 +7509,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "localTyNamesL" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n"))) false)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PRec "DInterface" ((rf "name" (PVar "n"))) false)) (EListLit (EVar "n")))
-(DFunDef false "localTyNamesL" ((PCon "DEffect" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PCon "DEffect" PWild (PVar "n") PWild PWild PWild)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localTyNamesL") (EVar "d")))
 (DFunDef false "localTyNamesL" (PWild) (EListLit))
 (DTypeSig false "tyNamesOf" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
@@ -8800,7 +8800,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DTypeAlias" ((rf "tyAliasOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DNewtype" ((rf "newtypeOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PVar "d")) (EApp (EVar "bodyIdents") (EVar "d")))
@@ -9585,7 +9585,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "localTyNamesL" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n"))) false)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PRec "DInterface" ((rf "name" (PVar "n"))) false)) (EListLit (EVar "n")))
-(DFunDef false "localTyNamesL" ((PCon "DEffect" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PCon "DEffect" PWild (PVar "n") PWild PWild PWild)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localTyNamesL") (EVar "d")))
 (DFunDef false "localTyNamesL" (PWild) (EListLit))
 (DTypeSig false "tyNamesOf" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
@@ -10876,7 +10876,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DTypeAlias" ((rf "tyAliasOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DNewtype" ((rf "newtypeOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PVar "d")) (EApp (EVar "bodyIdents") (EVar "d")))

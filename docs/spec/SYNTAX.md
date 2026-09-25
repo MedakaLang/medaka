@@ -246,7 +246,16 @@ FileRead, FileWrite, FFI`; declare more):
 ```medaka
 effect KV  -- a user/platform effect label, usable as <KV> in rows
 export effect Fetch  -- export-marked (cross-module import works; Phase 146 gap 3 ✅ 2026-06-07)
+effect Store Prefix  -- a domain-carrying label: `<Store "cfg/*">`
+effect Var Set  -- `<Var {"HOME", "PATH"}>`
+effect Http Product (Host : Prefix, Method : Set)  -- a Product declares its axes;
+-- `<Http "a.com/*">` lifts into the FIRST axis, `<Http Host="a.com/*" Method={"GET"}>`
+-- names them; a Product without axes, or axes on another domain, is refused
 ```
+
+A row atom whose authority is a symbolic join prints as one atom per operand,
+`<FileWrite src, FileWrite dst>`, which is also how it is written: the parser
+joins same-label atoms into one.
 
 ## Function definitions
 

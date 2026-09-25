@@ -355,20 +355,19 @@ position without evidence (every attempt was caught at a later application).
   keying ratchet: green.
 - CI on `bbb98f13c` (run 36090508390) was green except the must-fail step's drained pins; with the pins removed, the full dispatched run on `35654f79f` (run 36105896609, `workflow_dispatch`, unnarrowed) was green on every job, `compiler-soundness` included. The review fixes landed as `d5bcbca70`; its dispatched run (36121365015) was green on every job but the perf gate, whose two-sided `modules:typecheck` TIME row fired its own under-2.00 promotion branch (r2=1.97), so that row is drained from `KNOWN_SLOW_TIME` (the Ir row in `stage_ir_scaling` stays the arm of record for #1879); the full dispatched run on the drained head `0fc8d0bfe` (36123654759) was green on every job. The PR had meanwhile become CONFLICTING with `main` (N1's fixed-width integers rewired match inference in the same functions), which is why GitHub had stopped creating `pull_request` runs; `main` is merged in as `403e1fdee` with the typechecker merged by hand (produced-value join, `bindFrom` and `captureEffects` kept; N1's literal-pattern bookkeeping and deferred match checks threaded through) and every derived golden re-derived from the merged compiler, LEG A additive-only against the branch tip (GitHub stopped creating `pull_request` runs for this branch's pushes after 353b4e21a, so the branch's runs are dispatched by hand). Locally on `d5bcbca70`: strict closure clean, whole-source typecheck PASS, C3a/C3b yes, matrix 14/14, every sibling and domain suite green, `named_authority` on all three engines, perf 0 regressed, 29 gates green plus the census after its re-derivation.
 
-**Owed after this session:**
+**Owed after this session** (the named-authority session's list, as the
+data-half session left it):
 
-1. Close #3382, #3383, #3391 when the PR merges (the PR body carries the
-   closing keywords; their regressions live under
-   `test/typecheck_error_fixtures/effect_*`).
-2. The data half of #3385 (delivery item 6 in the architecture).
-3. A located `R-AMBIGUOUS-EFFECT` (an `EffAtomTy` carries no `Loc`).
-4. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
+1. #3382, #3383, #3391 closed with the merge. The data half (item 2) and the
+   leftovers (items 3 and 5) landed in the data-half session; what each left
+   is listed there: a span on `TyQual`, the `ELoc` restore, the `@(a | b)`
+   qualifier form.
+2. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
    lambda parameter without a directed flow lose the qualifier: conservative,
    documented in the architecture, not a launder.
-5. The review's S2/S3 leftovers listed above: error locations, the
-   solved-bound wording, the symbolic-join render, one defect reporting
-   twice, the manifest's bare-name keys (a format decision for Val), the
-   hard-coded Product `Host` axis.
+3. Delivery item 7: migrating precision-dependent stdlib signatures to
+   handles, and the declaration-kind/re-export gaps (#3327/#3304) the new
+   surface depends on.
 
 ## Data-half session (2026-09-25)
 
@@ -427,6 +426,51 @@ recommended option of a short proposal:**
 - *`deriving` requires instances only of `Type`-kinded parameters.* The
   deriver asked `Eq e` of an `Effect` parameter; the kind list now reaches
   `paramRequires` and the doc generator's mirror of it.
+
+**The review leftovers, in the order the prompt listed them:**
+
+- *A located `R-AMBIGUOUS-EFFECT`.* `EffAtomTy` carries `eatLoc`, the atom's
+  span from the parser; resolve locates the ambiguous-, unknown-label and
+  unbound-authority diagnostics of an atom there. A qualifier's `TyQual`
+  still has no span (an `Option Loc` on it fans out to some thirty-five
+  sites), so `String @p` with an unbound `p` at declaration level stays
+  unlocated: owed.
+- *Locations on a body or a last arm.* The cause is that `infer`'s `ELoc` arm
+  sets `currentLoc` and never restores it, so a check that runs after a body
+  reads the body's last leaf. The general fix (restore after each `ELoc`)
+  moves pinned locations across the JSON and LSP corpora and was not taken in
+  this pass; instead an effect failure derived from a row check is located by
+  effect provenance: `performEffect` records, per binding and label, the
+  first site that performed the label (`effectSitesRef`), and
+  `reportEffectSummaryFailures` reports there (`esfLabel` on the solver's
+  failure). A value-flow obligation already carried the argument's span. The
+  `ELoc` restore remains owed.
+- *"declared row admits only X" for a solved bound.* The solver's failure now
+  carries the upper term as recorded (`esfWrittenUpper`); a variable since
+  solved gets its own wording ("not a written bound but what this binding's
+  other uses … determined together"), and a written bound says "declared
+  bound", since an index is not a row.
+- *`(src | dst)`.* A joined atom renders as one atom per operand
+  (`renderAtomWith`), the spelling the parser folds back; the `@(a | b)`
+  qualifier form is unchanged and still unspellable (rare: a value whose
+  authority is a join of two binders).
+- *One defect twice.* Three mechanisms, each general: identical
+  `lower ⊑ upper` failures from one scope report once (`distinctFailures`),
+  an identical (code, span, message) is recorded once (`pushTypeErrorAt`,
+  which also folds a default body's generic check and its per-instance copy),
+  and the retained post-hoc escape walk skips a member the solver already
+  reported (`rowFailureReportedRef`).
+- *`literalAuthority`'s `Host`.* A Product label declares its axis schema,
+  `effect L Product (Host : Prefix, Method : Set)`, carried on `DEffect` and
+  registered as the label's top (`PProduct` of the axes at their tops, in
+  declaration order; `subTopOf`/`isSubTop`/`canonParam` treat it as the top);
+  the literal lifts into the first axis (`productPrimaryLift`), a written
+  product is checked against the declared axes, and no axis name is spelled in
+  the compiler. The six product fixtures declare their schema; a custom-axis
+  fixture, a no-axes negative and an unknown-axis negative pin the rule.
+- *Manifest keys.* Val's format: qualify only on collision. `manifestKey`
+  writes a label bare unless two origins spell it in one row, then each as a
+  quoted `"mod.Name"` key; `atomPermitted` accepts either spelling.
 
 **Traps paid for in this session:**
 

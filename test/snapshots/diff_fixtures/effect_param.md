@@ -311,8 +311,8 @@ NEWLINE
 NEWLINE
 EOF
 # DESUGAR
-(DEffect false "Net" (Some "Prefix"))
-(DEffect false "Stdout" None)
+(DEffect false "Net" (Some "Prefix") ())
+(DEffect false "Stdout" None ())
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
@@ -331,8 +331,8 @@ EOF
 (DTypeSig false "liftIO2" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") (Some "e") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyRow ("IO") (Some "e"))) (TyVar "a"))))
 (DFunDef false "liftIO2" ((PVar "act")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "act") (EVar "u"))))))
 # MARK
-(DEffect false "Net" (Some "Prefix"))
-(DEffect false "Stdout" None)
+(DEffect false "Net" (Some "Prefix") ())
+(DEffect false "Stdout" None ())
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))

@@ -1,5 +1,5 @@
 # META
-source_lines=2519
+source_lines=2531
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -2333,8 +2333,10 @@ printDecl (DUse pub path _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (text "import ") (printUsePath path !importForcedRef))
-printDecl (DEffect pub name domain _) =
-  Cat (effDeclHead pub) (Cat (text name) (effDomainDoc domain))
+printDecl (DEffect pub name domain axes _) =
+  Cat
+    (effDeclHead pub)
+    (Cat (text name) (Cat (effDomainDoc domain) (effAxesDoc axes)))
 printDecl (DProp pub propName propParams propBody) =
   Cat
     (if pub then text "export " else Nil)
@@ -2521,6 +2523,16 @@ programToString decls = stringConcat (map declLine decls)
 
 declLine : Decl -> String
 declLine d = render (printDecl d) ++ "\n"
+
+-- `(Host : Prefix, Method : Set)` after a Product domain word.
+effAxesDoc : List (String, String) -> Doc
+effAxesDoc [] = Nil
+effAxesDoc axes =
+  Cat
+    (text " (")
+    (Cat
+      (text (joinWith ", " (map (a => "\{fst a} : \{snd a}") axes)))
+      (text ")"))
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
@@ -3350,7 +3362,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printDecl" ((PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None)) false)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EIf (EVar "def") (EApp (EVar "text") (ELit (LString "default "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "interface ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "tyParamsDoc") (EVar "typarams")) (EVar "typaramKinds"))) (EApp (EApp (EVar "Cat") (EApp (EVar "superDoc") (EVar "supers"))) (EIf (EApp (EVar "isEmptyL") (EVar "methods")) (EVar "Nil") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " where")))) (EApp (EVar "methodsBlock") (EApp (EApp (EVar "map") (EVar "ifaceMethodPiece")) (EVar "methods"))))))))))))
 (DFunDef false "printDecl" ((PRec "DImpl" ((rf "pub" None) (rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) false)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "impl ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "implHead") (EVar "iface")) (EVar "tys"))) (EApp (EApp (EVar "Cat") (EApp (EVar "reqsDoc") (EVar "reqs"))) (EIf (EApp (EVar "isEmptyL") (EVar "methods")) (EVar "Nil") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " where")))) (EApp (EVar "methodsBlock") (EApp (EApp (EVar "map") (EVar "implMethodPiece")) (EVar "methods"))))))))))
 (DFunDef false "printDecl" ((PCon "DUse" (PVar "pub") (PVar "path") PWild)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "import ")))) (EApp (EApp (EVar "printUsePath") (EVar "path")) (EUnOp "!" (EVar "importForcedRef"))))))
-(DFunDef false "printDecl" ((PCon "DEffect" (PVar "pub") (PVar "name") (PVar "domain") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "effDeclHead") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EVar "effDomainDoc") (EVar "domain")))))
+(DFunDef false "printDecl" ((PCon "DEffect" (PVar "pub") (PVar "name") (PVar "domain") (PVar "axes") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "effDeclHead") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "effDomainDoc") (EVar "domain"))) (EApp (EVar "effAxesDoc") (EVar "axes"))))))
 (DFunDef false "printDecl" ((PCon "DProp" (PVar "pub") (PVar "propName") (PVar "propParams") (PVar "propBody"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "prop ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EVar "escStringLit") (EVar "propName")))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (EVar "propParamDoc")) (EVar "propParams")))) (EApp (EVar "printDefRhs") (EVar "propBody")))))))
 (DFunDef false "printDecl" ((PCon "DTest" (PVar "pub") (PVar "testName") (PVar "testBody"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "test ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EVar "escStringLit") (EVar "testName")))) (EApp (EVar "printDefRhs") (EVar "testBody"))))))
 (DFunDef false "printDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (EVar "attrDoc")) (EVar "attrs")))) (EApp (EVar "printDecl") (EVar "inner"))))
@@ -3431,6 +3443,9 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "programToString" ((PVar "decls")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EVar "declLine")) (EVar "decls"))))
 (DTypeSig false "declLine" (TyFun (TyCon "Decl") (TyCon "String")))
 (DFunDef false "declLine" ((PVar "d")) (EBinOp "++" (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "d"))) (ELit (LString "\n"))))
+(DTypeSig false "effAxesDoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Doc")))
+(DFunDef false "effAxesDoc" ((PList)) (EVar "Nil"))
+(DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
@@ -4260,7 +4275,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printDecl" ((PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "typaramKinds" None) (rf "supers" None) (rf "methods" None)) false)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EIf (EVar "def") (EApp (EVar "text") (ELit (LString "default "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "interface ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "tyParamsDoc") (EVar "typarams")) (EVar "typaramKinds"))) (EApp (EApp (EVar "Cat") (EApp (EVar "superDoc") (EVar "supers"))) (EIf (EApp (EVar "isEmptyL") (EVar "methods")) (EVar "Nil") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " where")))) (EApp (EVar "methodsBlock") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodPiece")) (EVar "methods"))))))))))))
 (DFunDef false "printDecl" ((PRec "DImpl" ((rf "pub" None) (rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) false)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "impl ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "implHead") (EVar "iface")) (EVar "tys"))) (EApp (EApp (EVar "Cat") (EApp (EVar "reqsDoc") (EVar "reqs"))) (EIf (EApp (EVar "isEmptyL") (EVar "methods")) (EVar "Nil") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " where")))) (EApp (EVar "methodsBlock") (EApp (EApp (EMethodRef "map") (EVar "implMethodPiece")) (EVar "methods"))))))))))
 (DFunDef false "printDecl" ((PCon "DUse" (PVar "pub") (PVar "path") PWild)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "import ")))) (EApp (EApp (EVar "printUsePath") (EVar "path")) (EUnOp "!" (EVar "importForcedRef"))))))
-(DFunDef false "printDecl" ((PCon "DEffect" (PVar "pub") (PVar "name") (PVar "domain") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "effDeclHead") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EVar "effDomainDoc") (EVar "domain")))))
+(DFunDef false "printDecl" ((PCon "DEffect" (PVar "pub") (PVar "name") (PVar "domain") (PVar "axes") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "effDeclHead") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "effDomainDoc") (EVar "domain"))) (EApp (EVar "effAxesDoc") (EVar "axes"))))))
 (DFunDef false "printDecl" ((PCon "DProp" (PVar "pub") (PVar "propName") (PVar "propParams") (PVar "propBody"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "prop ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EVar "escStringLit") (EVar "propName")))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (EVar "propParamDoc")) (EVar "propParams")))) (EApp (EVar "printDefRhs") (EVar "propBody")))))))
 (DFunDef false "printDecl" ((PCon "DTest" (PVar "pub") (PVar "testName") (PVar "testBody"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "test ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EVar "escStringLit") (EVar "testName")))) (EApp (EVar "printDefRhs") (EVar "testBody"))))))
 (DFunDef false "printDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (EVar "attrDoc")) (EVar "attrs")))) (EApp (EVar "printDecl") (EVar "inner"))))
@@ -4341,3 +4356,6 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "programToString" ((PVar "decls")) (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EVar "declLine")) (EVar "decls"))))
 (DTypeSig false "declLine" (TyFun (TyCon "Decl") (TyCon "String")))
 (DFunDef false "declLine" ((PVar "d")) (EBinOp "++" (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "d"))) (ELit (LString "\n"))))
+(DTypeSig false "effAxesDoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Doc")))
+(DFunDef false "effAxesDoc" ((PList)) (EVar "Nil"))
+(DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))

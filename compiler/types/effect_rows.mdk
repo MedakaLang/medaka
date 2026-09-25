@@ -10,7 +10,7 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 import types.effect_domain.{Param}
 import types.effect_authority.{
   Authority(..), Authvar, authJoin, authSub, authConst, renderAuthority,
-  renderAuthorityWith
+  authvarDefaultName, authNorm, renderAuthorityWith
 }
 import frontend.ast.{TyConOrigin(..)}
 import map.{Map(..), has, set}
@@ -77,11 +77,17 @@ sortKey a = "\{atomLabel a} \{atomKey a}"
 
 export
 renderAtom : Atom -> String
-renderAtom a = atomLabel a ++ renderAuthority (atomAuth a)
+renderAtom a = renderAtomWith authvarDefaultName a
 
+-- An atom whose authority is a symbolic join renders as one atom per operand
+-- (`FileWrite dst, FileWrite src`), the spelling a signature writes and the
+-- parser folds back into one atom; the join form ` (a | b)` is not one.
 export
 renderAtomWith : (Ref Authvar -> String) -> Atom -> String
-renderAtomWith name a = atomLabel a ++ renderAuthorityWith name (atomAuth a)
+renderAtomWith name a = match authNorm (atomAuth a)
+  AJoin ms =>
+    joinWith ", " (map (m => atomLabel a ++ renderAuthorityWith name m) ms)
+  q => atomLabel a ++ renderAuthorityWith name q
 
 export
 renderAtoms : List Atom -> String

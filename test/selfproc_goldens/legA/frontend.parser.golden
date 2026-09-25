@@ -120,6 +120,9 @@ dotTail : Expr -> ParserE <> Expr
 dottedGo : Expr -> List String -> Expr -> Expr
 dropFirst : List a -> List a
 effAtomP : ParserE <> EffAtomTy
+effAxesFor : Token -> ParserE <> (List (String, String))
+effAxesP : ParserE <> (List (String, String))
+effAxisP : ParserE <> (String, String)
 effDomainFor : Token -> ParserE <> (Option String)
 effDomainP : ParserE <> (Option String)
 effHoleRetiredMsg : String

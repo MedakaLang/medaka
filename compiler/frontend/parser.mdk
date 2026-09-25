@@ -23,7 +23,7 @@ import frontend.ast.{
   Ty(..),
   EffAtomTy(..),
   EffParamTy(..),
-  effAtomWith,
+  effAtomAt,
   effectDeclUnstamped,
   KindAnn(..),
   Constraint(..),
@@ -2137,9 +2137,11 @@ effectBodyFor _ = deferPure ([], [])
 -- (a product).  The identity is acquired by resolve.
 effAtomP : Parser EffAtomTy
 effAtomP = defer
+  s <- getPos
   l <- upperNameP
   p <- effParamP
-  deferPure (effAtomWith l p)
+  q <- getPos
+  deferPure (effAtomAt l p (locOfSpan s q))
 
 effParamP : Parser EffParamTy
 effParamP = defer
@@ -3032,8 +3034,34 @@ parseEffect pub = defer
   expectTok TEffect
   name <- upperNameP
   dom <- effDomainP
+  axes <- effAxesP
   skipNewlines
-  deferPure (effectDeclUnstamped pub name dom)
+  deferPure (effectDeclUnstamped pub name dom axes)
+
+-- A Product label's axis schema, `(Host : Prefix, Method : Set)`: each axis
+-- named with the domain it is drawn from, in the order written, the first
+-- being the primary axis a bare literal lifts into.  Only a Product carries
+-- one; the typechecker refuses a schema on any other domain and a Product
+-- without one.
+effAxesP : Parser (List (String, String))
+effAxesP = defer
+  t <- peekP
+  effAxesFor t
+
+effAxesFor : Token -> Parser (List (String, String))
+effAxesFor TLParen = defer
+  advance
+  axes <- sepBy1 effAxisP (expectTok TComma)
+  expectTok TRParen
+  deferPure axes
+effAxesFor _ = deferPure []
+
+effAxisP : Parser (String, String)
+effAxisP = defer
+  name <- upperNameP
+  expectTok TColon
+  dom <- upperNameP
+  deferPure (name, dom)
 
 effDomainP : Parser (Option String)
 effDomainP = defer
@@ -4433,7 +4461,7 @@ declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DEffect _ _ _ _) i =
+declNameTokIdxAt toks (DEffect _ _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DProp _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))

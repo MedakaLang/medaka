@@ -2329,8 +2329,10 @@ printDecl (DUse pub path _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (text "import ") (printUsePath path !importForcedRef))
-printDecl (DEffect pub name domain _) =
-  Cat (effDeclHead pub) (Cat (text name) (effDomainDoc domain))
+printDecl (DEffect pub name domain axes _) =
+  Cat
+    (effDeclHead pub)
+    (Cat (text name) (Cat (effDomainDoc domain) (effAxesDoc axes)))
 printDecl (DProp pub propName propParams propBody) =
   Cat
     (if pub then text "export " else Nil)
@@ -2517,3 +2519,13 @@ programToString decls = stringConcat (map declLine decls)
 
 declLine : Decl -> String
 declLine d = render (printDecl d) ++ "\n"
+
+-- `(Host : Prefix, Method : Set)` after a Product domain word.
+effAxesDoc : List (String, String) -> Doc
+effAxesDoc [] = Nil
+effAxesDoc axes =
+  Cat
+    (text " (")
+    (Cat
+      (text (joinWith ", " (map (a => "\{fst a} : \{snd a}") axes)))
+      (text ")"))

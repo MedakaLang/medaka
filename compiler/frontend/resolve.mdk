@@ -566,12 +566,14 @@ checkEffAtoms : List String ->
   Env ->
   List EffAtomTy ->
   List ResError
+-- An atom's own span locates its diagnostics; the enclosing expression's is
+-- the fallback for an atom a tool synthesised without one.
 checkEffAtoms bound cur env atoms =
   flatMap
     (a =>
-      checkEffect cur env a.eatLabel
+      checkEffect (orElseLoc a.eatLoc cur) env a.eatLabel
         ++ (match a.eatParam
-          EPName n => checkAuthorityName bound cur n
+          EPName n => checkAuthorityName bound (orElseLoc a.eatLoc cur) n
           _ => []))
     atoms
 
@@ -1905,7 +1907,7 @@ dataRecordNames (_ :: rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _ _) :: rest) = n :: effectNames rest
+effectNames ((DEffect _ n _ _ _) :: rest) = n :: effectNames rest
 effectNames ((DAttrib _ d) :: rest) = effectNames (d :: rest)
 effectNames (_ :: rest) = effectNames rest
 
@@ -4204,7 +4206,7 @@ nsEffects = ExpNs {
   nsGet = exp => exp.expEffects,
   nsDirectOf =
     d => match d
-      DEffect True n _ _ => [n]
+      DEffect True n _ _ _ => [n]
       _ => [],
   nsCarry =
     path src => match path
@@ -5821,8 +5823,8 @@ stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
   DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
 stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
   DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
-stampDeclOrigin mid (DEffect pub n dom o) =
-  DEffect pub n dom (fillDeclOrigin mid o)
+stampDeclOrigin mid (DEffect pub n dom axes o) =
+  DEffect pub n dom axes (fillDeclOrigin mid o)
 stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
 stampDeclOrigin _ d = d
 

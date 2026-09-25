@@ -1,5 +1,5 @@
 # META
-source_lines=6397
+source_lines=6399
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -570,12 +570,14 @@ checkEffAtoms : List String ->
   Env ->
   List EffAtomTy ->
   List ResError
+-- An atom's own span locates its diagnostics; the enclosing expression's is
+-- the fallback for an atom a tool synthesised without one.
 checkEffAtoms bound cur env atoms =
   flatMap
     (a =>
-      checkEffect cur env a.eatLabel
+      checkEffect (orElseLoc a.eatLoc cur) env a.eatLabel
         ++ (match a.eatParam
-          EPName n => checkAuthorityName bound cur n
+          EPName n => checkAuthorityName bound (orElseLoc a.eatLoc cur) n
           _ => []))
     atoms
 
@@ -1909,7 +1911,7 @@ dataRecordNames (_ :: rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _ _) :: rest) = n :: effectNames rest
+effectNames ((DEffect _ n _ _ _) :: rest) = n :: effectNames rest
 effectNames ((DAttrib _ d) :: rest) = effectNames (d :: rest)
 effectNames (_ :: rest) = effectNames rest
 
@@ -4208,7 +4210,7 @@ nsEffects = ExpNs {
   nsGet = exp => exp.expEffects,
   nsDirectOf =
     d => match d
-      DEffect True n _ _ => [n]
+      DEffect True n _ _ _ => [n]
       _ => [],
   nsCarry =
     path src => match path
@@ -5825,8 +5827,8 @@ stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
   DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
 stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
   DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
-stampDeclOrigin mid (DEffect pub n dom o) =
-  DEffect pub n dom (fillDeclOrigin mid o)
+stampDeclOrigin mid (DEffect pub n dom axes o) =
+  DEffect pub n dom axes (fillDeclOrigin mid o)
 stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
 stampDeclOrigin _ d = d
 
@@ -6520,7 +6522,7 @@ takeOriginTrace _ =
 (DTypeSig false "checkBinderLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkBinderLabels" ((PVar "env") (PVar "binders")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "checkKindLabel") (EVar "env")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
 (DTypeSig false "checkEffAtoms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkEffAtoms" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "atoms")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env")) (EFieldAccess (EVar "a") "eatLabel")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "n")) () (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))) (arm PWild () (EListLit)))))) (EVar "atoms")))
+(DFunDef false "checkEffAtoms" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "atoms")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EVar "checkEffect") (EApp (EApp (EVar "orElseLoc") (EFieldAccess (EVar "a") "eatLoc")) (EVar "cur"))) (EVar "env")) (EFieldAccess (EVar "a") "eatLabel")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "n")) () (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EApp (EApp (EVar "orElseLoc") (EFieldAccess (EVar "a") "eatLoc")) (EVar "cur"))) (EVar "n"))) (arm PWild () (EListLit)))))) (EVar "atoms")))
 (DTypeSig false "checkAuthorityName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkAuthorityName" ((PVar "bound") (PVar "cur") (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")) (EListLit) (EListLit (EApp (EApp (EVar "UnboundAuthority") (EVar "n")) (EVar "cur")))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
@@ -6872,7 +6874,7 @@ takeOriginTrace _ =
 (DFunDef false "dataRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "dataRecordNames") (EVar "rest")))
 (DTypeSig false "effectNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "effectNames" ((PList)) (EListLit))
-(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
+(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "effectNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "effectNames") (EVar "rest")))
 (DTypeSig false "ctorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -7464,7 +7466,7 @@ takeOriginTrace _ =
 (DTypeSig false "nsIfaceMethods" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "nsIfaceMethods" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n")) (rf "methods" None)) true) () (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods"))))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "ifaceMethodPairs") (EVar "src")) (EApp (EApp (EVar "filterContains") (EFieldAccess (EVar "src") "expInterfaces")) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src")))))))))
 (DTypeSig false "nsEffects" (TyApp (TyCon "ExpNs") (TyCon "String")))
-(DFunDef false "nsEffects" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expEffects"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DEffect" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EFieldAccess (EVar "src") "expEffects")) (arm PWild () (EListLit))))))))
+(DFunDef false "nsEffects" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expEffects"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DEffect" (PCon "True") (PVar "n") PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EFieldAccess (EVar "src") "expEffects")) (arm PWild () (EListLit))))))))
 (DTypeSig false "nsEffectOrigins" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "nsEffectOrigins" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expEffectOrigins"))) (fa "nsDirectOf" (ELam (PWild) (EListLit))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EFieldAccess (EVar "src") "expEffectOrigins")) (arm PWild () (EListLit))))))))
 (DTypeSig false "nsNewtypeCtors" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))))
@@ -7891,7 +7893,7 @@ takeOriginTrace _ =
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DNewtype" ((rf "newtypeOrigin" (PVar "o"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasOrigin" (PVar "o"))) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" (PVar "o"))) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
-(DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "o"))) (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") (PVar "o"))) (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "axes")) (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclOrigin") (EVar "mid")) (EVar "d"))))
 (DFunDef false "stampDeclOrigin" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "fillDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))
@@ -8081,7 +8083,7 @@ takeOriginTrace _ =
 (DTypeSig false "checkBinderLabels" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkBinderLabels" ((PVar "env") (PVar "binders")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "checkKindLabel") (EVar "env")) (EApp (EVar "Some") (EApp (EVar "snd") (EVar "b")))))) (EVar "binders")))
 (DTypeSig false "checkEffAtoms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkEffAtoms" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "atoms")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env")) (EFieldAccess (EVar "a") "eatLabel")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "n")) () (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))) (arm PWild () (EListLit)))))) (EVar "atoms")))
+(DFunDef false "checkEffAtoms" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "atoms")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EVar "checkEffect") (EApp (EApp (EVar "orElseLoc") (EFieldAccess (EVar "a") "eatLoc")) (EVar "cur"))) (EVar "env")) (EFieldAccess (EVar "a") "eatLabel")) (EMatch (EFieldAccess (EVar "a") "eatParam") (arm (PCon "EPName" (PVar "n")) () (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EApp (EApp (EVar "orElseLoc") (EFieldAccess (EVar "a") "eatLoc")) (EVar "cur"))) (EVar "n"))) (arm PWild () (EListLit)))))) (EVar "atoms")))
 (DTypeSig false "checkAuthorityName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkAuthorityName" ((PVar "bound") (PVar "cur") (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")) (EListLit) (EListLit (EApp (EApp (EVar "UnboundAuthority") (EVar "n")) (EVar "cur")))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
@@ -8433,7 +8435,7 @@ takeOriginTrace _ =
 (DFunDef false "dataRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "dataRecordNames") (EVar "rest")))
 (DTypeSig false "effectNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "effectNames" ((PList)) (EListLit))
-(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
+(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "effectNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "effectNames") (EVar "rest")))
 (DTypeSig false "ctorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -9025,7 +9027,7 @@ takeOriginTrace _ =
 (DTypeSig false "nsIfaceMethods" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "nsIfaceMethods" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expIfaceMethods"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n")) (rf "methods" None)) true) () (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods"))))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "ifaceMethodPairs") (EVar "src")) (EApp (EApp (EVar "filterContains") (EFieldAccess (EVar "src") "expInterfaces")) (EApp (EApp (EVar "reexportOrigins") (EVar "path")) (EVar "src")))))))))
 (DTypeSig false "nsEffects" (TyApp (TyCon "ExpNs") (TyCon "String")))
-(DFunDef false "nsEffects" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expEffects"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DEffect" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EFieldAccess (EVar "src") "expEffects")) (arm PWild () (EListLit))))))))
+(DFunDef false "nsEffects" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expEffects"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DEffect" (PCon "True") (PVar "n") PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EFieldAccess (EVar "src") "expEffects")) (arm PWild () (EListLit))))))))
 (DTypeSig false "nsEffectOrigins" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "nsEffectOrigins" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expEffectOrigins"))) (fa "nsDirectOf" (ELam (PWild) (EListLit))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EMatch (EVar "path") (arm (PCon "UseWild" PWild) () (EFieldAccess (EVar "src") "expEffectOrigins")) (arm PWild () (EListLit))))))))
 (DTypeSig false "nsNewtypeCtors" (TyApp (TyCon "ExpNs") (TyTuple (TyCon "String") (TyCon "String"))))
@@ -9452,7 +9454,7 @@ takeOriginTrace _ =
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DNewtype" ((rf "newtypeOrigin" (PVar "o"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasOrigin" (PVar "o"))) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" (PVar "o"))) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
-(DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "o"))) (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") (PVar "o"))) (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "axes")) (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclOrigin") (EVar "mid")) (EVar "d"))))
 (DFunDef false "stampDeclOrigin" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "fillDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))

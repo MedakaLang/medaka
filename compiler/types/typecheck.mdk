@@ -189,6 +189,7 @@ import types.effect_domain.{
   canonParam,
   subTopOf,
   lookupAxis,
+  productPrimaryLift,
   djoin,
   djoinN,
   joinAxis,
@@ -525,18 +526,57 @@ seedEffectDomains _ =
 
 -- register a label's domain from its `effect` decl: Some "Prefix" ⇒ Prefix;
 -- None ⇒ atomic.
-registerEffectDomain : EffLabel -> Option String -> Unit
-registerEffectDomain label domain =
-  let entry = (labelKey label, domainParam domain)
+-- A Product label registers its declared axis schema as its top (each axis
+-- at the top of its own domain, in declaration order); the schema is what
+-- names the primary axis a bare literal lifts into and the axes a written
+-- product may name.  A Product without axes, or axes on any other domain, is
+-- refused at the declaration (`T-EFFECT-PARAM`).
+registerEffectDomain : EffLabel ->
+  Option String ->
+  List (String, String) ->
+  Unit
+registerEffectDomain label domain axes =
+  let entry = (labelKey label, domainParamWith domain axes)
   driverState.value.effectDomains :=
     entry :: driverState.value.effectDomains.value
+
+checkDomainAxes : String -> Option String -> List (String, String) -> Unit
+checkDomainAxes l (Some "Product") [] =
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg
+      l
+      "a Product label declares its axes: `effect \{l} Product (Host : Prefix, Method : Set)`, the first axis being the one a bare literal lifts into")
+checkDomainAxes l (Some "Product") axes =
+  fold
+    (_ a => match snd a
+      "Prefix" => ()
+      "Set" => ()
+      other =>
+        pushTypeError
+          "T-EFFECT-PARAM"
+          (effectParamMsg
+            l
+            "axis '\{fst a}' of label '\{l}' names the domain '\{other}'; an axis is drawn from `Prefix` or `Set`"))
+    ()
+    axes
+checkDomainAxes _ _ [] = ()
+checkDomainAxes l _ _ =
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg l "only a `Product` label declares axes")
 
 -- the ⊤-param a declared label carries: atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
 domainParam : Option String -> Param
 domainParam (Some "Prefix") = PPrefix None
 domainParam (Some "Set") = PSet None
-domainParam (Some "Product") = PProduct []  -- WS-4: structured (multi-axis) domain ⊤
+domainParam (Some "Product") = PProduct []
 domainParam _ = PUnit
+
+domainParamWith : Option String -> List (String, String) -> Param
+domainParamWith (Some "Product") axes =
+  PProduct (map (a => (fst a, domainParam (Some (snd a)))) axes)
+domainParamWith domain _ = domainParam domain
 
 -- The same thing over a module GRAPH, in `deAllDecls` order (prelude first, then
 -- the loader's dependency-first modules) but without flattening it: the Module-mode
@@ -560,8 +600,8 @@ populateUnitsGo ((_, prog) :: rest) =
 
 populateGo : List Decl -> Unit
 populateGo [] = ()
-populateGo ((DEffect _ name domain origin) :: rest) =
-  let _ = registerEffectDomain (EffLabel name origin) domain
+populateGo ((DEffect _ name domain axes origin) :: rest) =
+  let _ = registerEffectDomain (EffLabel name origin) domain axes
   populateGo rest
 populateGo (_ :: rest) = populateGo rest
 
@@ -580,7 +620,7 @@ dtopFor label =
   match lookupDomain (labelKey label) driverState.value.effectDomains.value
     PPrefix None => PPrefix None
     PSet None => PSet None
-    PProduct _ => PProduct []  -- WS-4: product domain ⊤ (no axis constrained)
+    p@(PProduct _) => p
     _ => PUnit
 
 -- lift one of the language's own labels to its ⊤-param atom
@@ -651,8 +691,7 @@ writtenParam top EPTop = top
 writtenParam (PPrefix None) (EPLit s) = canonParam (PPrefix (Some s))
 writtenParam (PSet None) (EPLit s) = PSet (Some [s])
 writtenParam (PSet None) (EPSet xs) = PSet (Some (sortUniqS xs))
-writtenParam (PProduct _) (EPLit s) =
-  productNorm [("Host", canonParam (PPrefix (Some s)))]
+writtenParam (PProduct schema) (EPLit s) = productPrimaryLift schema s
 writtenParam (PProduct _) (EPProduct axes) = productNorm (map writtenAxis axes)
 writtenParam top _ = top
 
@@ -695,7 +734,7 @@ decodeProductParam s =
   if n >= 4 && stringSlice 0 3 s == "@P{" && stringSlice (n - 1) n s == "}" then
     productNorm (map decodeAxis (splitOnSemi (stringSlice 3 (n - 1) s)))
   else
-    productNorm [("Host", PPrefix (Some s))]
+    PProduct []
 
 -- decode one `Axis=val` axis spec.  val = `"…"` ⇒ Prefix; `{a,b}` ⇒ Set.
 decodeAxis : String -> (String, Param)
@@ -875,7 +914,33 @@ minLevelOf (m :: ms) = minI (effvarLevel m) (minLevelOf ms)
 -- Accumulation records what ran. It never solves the performed row's variables:
 -- two independently effectful computations contribute their join, not equality.
 performEffect : Ref (List EffRow) -> EffRow -> Unit
-performEffect cur eff = recordEffect cur eff
+performEffect cur eff =
+  let _ = recordEffectSites eff
+  recordEffect cur eff
+
+recordEffectSites : EffRow -> Unit
+recordEffectSites eff =
+  fold
+    (_ atom =>
+      let key = effectSiteKey perRun.value.currentFn.value (atomKey atom)
+      if omHasKey key perRun.value.effectSitesRef.value then
+        ()
+      else
+        perRun.value.effectSitesRef :=
+          omInsert key !currentLoc perRun.value.effectSitesRef.value)
+    ()
+    (fst (rowFlat eff))
+
+effectSiteKey : String -> String -> String
+effectSiteKey fn label = "\{fn}\t\{label}"
+
+-- The site a binding first performed a label at, if any.
+effectSiteOf : String -> Option String -> Option Loc
+effectSiteOf _ None = None
+effectSiteOf fn (Some label) =
+  match omLookup (effectSiteKey fn label) perRun.value.effectSitesRef.value
+    Some loc => loc
+    None => None
 
 beginEffectSummaryScope : Unit -> Unit
 beginEffectSummaryScope _ =
@@ -923,14 +988,22 @@ reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
 reportEffectSummaryFailures [] = ()
 reportEffectSummaryFailures (failure :: rest) =
   let saved = !currentLoc
-  currentLoc := fst failure.esfContext
+  let fn = snd failure.esfContext
+  currentLoc :=
+    orElseLoc (effectSiteOf fn failure.esfLabel) (fst failure.esfContext)
   let _ = match failure.esfAuthority
     Some (lo, hi) =>
-      pushTypeErrorAt
-        "T-AUTHORITY"
-        !currentLoc
-        (authorityFailureMsg (snd failure.esfContext) lo hi)
-    None => reportRowFailure failure
+      if mentionsEscaped lo || mentionsEscaped hi then
+        ()
+      else
+        pushTypeErrorAt
+          "T-AUTHORITY"
+          !currentLoc
+          (authorityFailureMsg fn lo hi failure.esfWrittenUpper)
+    None =>
+      perRun.value.rowFailureReportedRef :=
+        omInsert fn () perRun.value.rowFailureReportedRef.value
+      reportRowFailure failure
   currentLoc := saved
   reportEffectSummaryFailures rest
 
@@ -1555,6 +1628,10 @@ checkDeclaredKindsGo prog (d :: rest) =
 
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsDecl prog (DAttrib _ d) = checkDeclaredKindsDecl prog d
+-- An effect label's domain schema is declared on its head as a data type's
+-- kinds are: a Product declares its axes, nothing else does.
+checkDeclaredKindsDecl _ (DEffect _ name domain axes _) =
+  checkDomainAxes name domain axes
 checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) =
   let _ =
     checkHeadKinds
@@ -2616,7 +2693,10 @@ checkEffectAtoms (a :: rest) =
     EPTop => ()
     p =>
       let l = EffLabel a.eatLabel a.eatOrigin
-      checkOneEffectParam a.eatLabel (dtopFor l) p
+      let saved = !currentLoc
+      currentLoc := orElseLoc a.eatLoc saved
+      let _ = checkOneEffectParam a.eatLabel (dtopFor l) p
+      currentLoc := saved
   checkEffectAtoms rest
 
 -- A written parameter must be an element of its label's domain: a Prefix
@@ -2630,8 +2710,9 @@ checkOneEffectParam _ _ (EPName _) = ()
 checkOneEffectParam _ _ EPTop = ()
 checkOneEffectParam l (PPrefix None) (EPLit pat) = checkPrefixLiteral l pat
 checkOneEffectParam _ (PSet None) (EPLit _) = ()
-checkOneEffectParam l (PProduct _) (EPLit pat) =
-  checkOneAxis l "Host" (PPrefix (Some pat))
+checkOneEffectParam l (PProduct schema) (EPLit pat) = match schema
+  (name, _) :: _ => checkOneAxis l schema name (PPrefix (Some pat))
+  [] => ()
 checkOneEffectParam l _ (EPLit _) = atomicLabelParamError l
 checkOneEffectParam _ (PSet None) (EPSet _) = ()
 checkOneEffectParam l (PPrefix None) (EPSet _) =
@@ -2645,8 +2726,8 @@ checkOneEffectParam l (PProduct _) (EPSet _) =
       l
       "label '\{l}' takes named axes (`Host=… Method=…`), not a bare set")
 checkOneEffectParam l _ (EPSet _) = atomicLabelParamError l
-checkOneEffectParam l (PProduct _) (EPProduct axes) =
-  checkProductAxes l (productNorm (map writtenAxis axes))
+checkOneEffectParam l (PProduct schema) (EPProduct axes) =
+  checkProductAxes l (PProduct schema) (productNorm (map writtenAxis axes))
 checkOneEffectParam l PUnit (EPProduct _) = atomicLabelParamError l
 checkOneEffectParam l _ (EPProduct _) =
   pushTypeError
@@ -2726,34 +2807,51 @@ atomicLabelParamError l =
       l
       "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)")
 
--- WS-4: validate a decoded product's axes: a Host (Prefix) axis must pass
--- prefixPatternOk; a Method (Set) axis is always well-formed; any other axis name
--- is rejected (only Host/Method are known product axes for Net).
-checkProductAxes : String -> Param -> Unit
-checkProductAxes l (PProduct axes) = checkProductAxesGo l axes
-checkProductAxes _ _ = ()
+-- A written product's axes against the label's declared schema: every axis
+-- must be declared, a Prefix axis takes a delimiter-terminated pattern, a Set
+-- axis a set.
+checkProductAxes : String -> Param -> Param -> Unit
+checkProductAxes l (PProduct schema) (PProduct axes) =
+  checkProductAxesGo l schema axes
+checkProductAxes _ _ _ = ()
 
-checkProductAxesGo : String -> List (String, Param) -> Unit
-checkProductAxesGo _ [] = ()
-checkProductAxesGo l ((name, p) :: rest) =
-  let _ = checkOneAxis l name p
-  checkProductAxesGo l rest
+checkProductAxesGo : String ->
+  List (String, Param) ->
+  List (String, Param) ->
+  Unit
+checkProductAxesGo _ _ [] = ()
+checkProductAxesGo l schema ((name, p) :: rest) =
+  let _ = checkOneAxis l schema name p
+  checkProductAxesGo l schema rest
 
-checkOneAxis : String -> String -> Param -> Unit
-checkOneAxis l "Host" (PPrefix (Some pat)) =
-  if prefixPatternOk pat then
-    ()
-  else
+checkOneAxis : String -> List (String, Param) -> String -> Param -> Unit
+checkOneAxis l schema name p = match lookupAxis name schema
+  None =>
     pushTypeError
       "T-EFFECT-PARAM"
-      (effectParamMsg l (prefixPatternErrMsg "Host pattern" pat))
-checkOneAxis _ "Method" _ = ()
-checkOneAxis l name _ =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg
-      l
-      ("unknown product axis '" ++ name ++ "' (known axes: Host, Method)"))
+      (effectParamMsg
+        l
+        "unknown product axis '\{name}' (declared axes: \{joinWith ", " (map fst schema)})")
+  Some (PPrefix _) => match p
+    PPrefix (Some pat) =>
+      if prefixPatternOk pat then
+        ()
+      else
+        pushTypeError
+          "T-EFFECT-PARAM"
+          (effectParamMsg l (prefixPatternErrMsg "\{name} pattern" pat))
+    PPrefix None => ()
+    _ =>
+      pushTypeError
+        "T-EFFECT-PARAM"
+        (effectParamMsg l "axis '\{name}' takes a prefix pattern, not a set")
+  Some (PSet _) => match p
+    PSet _ => ()
+    _ =>
+      pushTypeError
+        "T-EFFECT-PARAM"
+        (effectParamMsg l "axis '\{name}' takes a set, not a pattern")
+  Some _ => ()
 
 -- replace a row's bound tail effvar with its fresh instance from [esub], so each
 -- call site of a polymorphic HOF gets its own effect variable
@@ -9181,9 +9279,27 @@ pushTypeError code msg =
 -- deduping `pushTypeErrorOnceAt` is for obligation errors, which two checkers can
 -- each detect; a coherence conflict is pushed exactly once per run.  `None` falls
 -- back to `currentLoc`, i.e. the old behaviour.
+-- The same diagnostic at the same span is one diagnostic: a default body
+-- checked generically and again as each instance's copy, or two checks
+-- deriving one obligation, report it once.  The identity is the binding, the
+-- span and the text: an unlocated diagnostic is never folded, and a probe
+-- that parses without location state (every span degenerate and equal)
+-- still keeps one report per binding.
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorAt code loc msg =
-  recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
+  let at = orElseLoc loc !currentLoc
+  let key = "\{code}\t\{perRun.value.currentFn.value}\t\{locKey at}\t\{msg}"
+  if isSome at && omHasKey key perRun.value.typeErrorKeySetRef.value then
+    noteTypeErrorDetected ()
+  else
+    perRun.value.typeErrorKeySetRef :=
+      omInsert key () perRun.value.typeErrorKeySetRef.value
+    recordTypeError (TcDiag code 1 at msg None None)
+
+locKey : Option Loc -> String
+locKey None = ""
+locKey (Some (Loc file line col _ _)) =
+  "\{file}:\{intToString line}:\{intToString col}"
 
 -- #11 soundness: REPORT an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
@@ -10357,6 +10473,25 @@ data PerRun = PerRun {
   -- EXISTENTIAL (a binder written on the constructor, not the head); keyed by
   -- the id itself, so a same-named constructor in another module cannot answer.
   ctorExistentialsRef : Ref (Map Int Unit),
+  -- Effect provenance: for each (binding, label key), the first site in that
+  -- binding that performed the label, so a failure about the label's
+  -- authority or its presence points at the call rather than at the body or
+  -- its last arm.  Keyed `fn\tlabelKey`; first site wins.
+  effectSitesRef : Ref (OrdMap (Option Loc)),
+  -- Binding names for which the scoped solver already reported a row
+  -- failure, so the retained post-hoc escape walk does not report the same
+  -- leak a second time.
+  rowFailureReportedRef : Ref (OrdMap Unit),
+  -- Every recorded (code, location, message) triple: the same diagnostic at
+  -- the same span is one diagnostic, however many checks derive it.
+  typeErrorKeySetRef : Ref (OrdMap Unit),
+  -- Existential cells reported as escaping their scope: an obligation over
+  -- one is a consequence of the escape, not a second defect.
+  escapedExistentialsRef : Ref (Map Int Unit),
+  -- The retained post-hoc escape walk's findings, held until the group's
+  -- solver scope has closed, so the scoped report (located at the call)
+  -- wins and the walk adds only what the solver did not see.
+  pendingEscapesRef : Ref (List (String, Option Loc, String)),
   -- The existential cells the pattern site currently being inferred opened,
   -- parked per pattern site exactly as `patLitPending` is (`takePatLits`).
   openedExistentialsRef : Ref (List (Ref Authvar)),
@@ -10468,6 +10603,11 @@ freshPerRun _ = PerRun {
   rigidEffvarsRef = Ref Tip,
   rigidAuthvarsRef = Ref Tip,
   ctorExistentialsRef = Ref Tip,
+  effectSitesRef = Ref omEmpty,
+  rowFailureReportedRef = Ref omEmpty,
+  typeErrorKeySetRef = Ref omEmpty,
+  escapedExistentialsRef = Ref Tip,
+  pendingEscapesRef = Ref [],
   openedExistentialsRef = Ref [],
   openedExistentialsStackRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -10787,12 +10927,19 @@ reportAuthorityFailure loc lower upper =
   pushTypeErrorAt
     "T-AUTHORITY"
     loc
-    (authorityFailureMsg perRun.value.currentFn.value lower upper)
+    (authorityFailureMsg perRun.value.currentFn.value lower upper (Some upper))
 
 -- Against a named authority the remedy is to derive the value from the
--- argument; against a written bound it is to stay within, or widen, the bound.
-authorityFailureMsg : String -> Authority -> Authority -> String
-authorityFailureMsg name lower upper =
+-- argument; against a written bound it is to stay within, or widen, the
+-- bound; against a bound the scope SOLVED — an upper term recorded as a
+-- flexible variable that this binding's other uses determined — the remedy
+-- is to make every use lie within one bound, since nothing was written.
+authorityFailureMsg : String ->
+  Authority ->
+  Authority ->
+  Option Authority ->
+  String
+authorityFailureMsg name lower upper written =
   let lo =
     if authIsTop lower then
       "the whole domain"
@@ -10801,8 +10948,24 @@ authorityFailureMsg name lower upper =
   let hi = ppAuthority (Ref []) (Ref 0) upper
   if authHasVars upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare"
+  else if solvedUpper written then
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
   else
-    "Binding '\{name}' reaches \{lo} where its declared row admits only \{hi}. Stay within the declared bound, or widen it to cover what the body reaches"
+    "Binding '\{name}' reaches \{lo} where its declared bound admits only \{hi}. Stay within the declared bound, or widen it to cover what the body reaches"
+
+mentionsEscaped : Authority -> Bool
+mentionsEscaped q =
+  anyList
+    (cell =>
+      IdMap.has (authvarId cell) perRun.value.escapedExistentialsRef.value)
+    (authVars q)
+
+-- The upper term was recorded as a variable and has since been solved.
+solvedUpper : Option Authority -> Bool
+solvedUpper (Some (AVar cell)) = match !cell
+  ALink _ _ => True
+  AUnbound _ _ _ _ => False
+solvedUpper _ = False
 
 -- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
 -- The arrow-row unifier's closed~closed arm demands equality, and a seam that
@@ -20496,6 +20659,11 @@ closeExistentialScope (ExistentialScope opened level) t loc =
   fold
     (_ cell =>
       if IdMap.has (authvarId cell) inValue || authvarLevel cell < level then
+        perRun.value.escapedExistentialsRef :=
+          IdMap.set
+            (authvarId cell)
+            ()
+            perRun.value.escapedExistentialsRef.value
         pushTypeErrorAt
           "T-AUTHORITY-ESCAPE"
           loc
@@ -21708,6 +21876,7 @@ processLetGroup env binds =
   let _ = inferLetBinds env2 (zipL binds summaries)
   let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
   let _ = finishValueEffects (map (p => (snd p).bsValue) summaries)
+  let _ = flushPendingEscapes ()
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
   -- where-group boundary (and not arg-reachable from any member type) before the
@@ -37841,6 +38010,7 @@ processSCC env sigs grouped0 members =
   let _ = checkSigsTooGeneral sigTvMaps
   let _ = checkSigsFixedByExpansive env2 groupedStamped scopedMembers sigTvMaps
   let _ = registerConstraintRegs regs
+  let _ = flushPendingEscapes ()
   let _ = exitLevel ()
   -- PLAN.md #11 (locked §0.2): GROUP-LEVEL + per-binding Num defaulting.  Ground
   -- every ambiguous Num-only var to Int before this group generalizes.  A live var
@@ -38648,13 +38818,33 @@ checkEffectEscape sigs m effs =
 
         [] => ()
         extras =>
-          pushTypeError
-            "T-EFFECT-LEAK"
-            (effectEscapeMsg
-              m
-              (declaredEffects ty)
-              (declaredEffectTail ty)
-              extras)
+          perRun.value.pendingEscapesRef :=
+            (
+                m,
+                !currentLoc,
+                effectEscapeMsg
+                  m
+                  (declaredEffects ty)
+                  (declaredEffectTail ty)
+                  extras,
+              )
+              :: perRun.value.pendingEscapesRef.value
+
+-- After a group's solver scope has closed: report the walk's finding for a
+-- member the solver said nothing about, and drop it for one it reported.
+flushPendingEscapes : Unit -> Unit
+flushPendingEscapes _ =
+  let pending = reverseL perRun.value.pendingEscapesRef.value
+  perRun.value.pendingEscapesRef := []
+  fold
+    (_ entry =>
+      let (m, loc, msg) = entry
+      if omHasKey m perRun.value.rowFailureReportedRef.value then
+        ()
+      else
+        pushTypeErrorAt "T-EFFECT-LEAK" loc msg)
+    ()
+    pending
 
 concreteAtom : Atom -> Bool
 concreteAtom a = not (authHasVars (atomAuth a))

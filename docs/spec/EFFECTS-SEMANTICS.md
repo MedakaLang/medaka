@@ -388,9 +388,12 @@ A qualifier is written with a spaced `@`: `String @p`.
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
 labels shares a variable; incompatible-domain uses are ill-formed. Product
-domains retain their declared axis schema, including any designated primary
-axis used by an unqualified string argument. Missing axes mean top. Domain
-mismatches are errors, never proofs of containment.
+domains retain their declared axis schema, `effect L Product (Host : Prefix,
+Method : Set)`: the axes are declared in order and the first is the primary
+axis an unqualified string argument or a bare written literal lifts into; a
+written product may name only declared axes; a Product declared without axes
+is ill-formed. Missing axes mean top. Domain mismatches are errors, never
+proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates

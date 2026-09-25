@@ -307,7 +307,7 @@ declEffectWarns acts (d :: ds) =
   declEffectWarn acts d ++ declEffectWarns acts ds
 
 declEffectWarn : List (String, EffAction) -> Decl -> List String
-declEffectWarn acts (DEffect _ name _ _) = match lookupAssoc name acts
+declEffectWarn acts (DEffect _ name _ _ _) = match lookupAssoc name acts
   None => []
   Some _ => [
     "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched",
