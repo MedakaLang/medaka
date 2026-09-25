@@ -235,6 +235,7 @@ import support.util.{
   startsWith,
   splitNl,
   stringTrimLeft,
+  u64HalvesHex,
 }
 import ir.core_ir_lower.{ifaceIdsAtTag, ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
@@ -294,6 +295,7 @@ import backend.wasm_preamble.{
   valueDivRuntimeLines,
   valueModRuntimeLines,
   valueCmpNumRuntimeLines,
+  u64RuntimeLines,
   rngStateGlobalLines,
   rngRuntimeLines,
   hashRuntimeLines,
@@ -395,6 +397,7 @@ data WasmEmit = WasmEmit {
   useRefBox : Ref Bool,
   useStrLeaf : Ref Bool,
   useFloat : Ref Bool,
+  useU64 : Ref Bool,
   useStrSearch : Ref Bool,
   useValueAdd : Ref Bool,
   useValueSub : Ref Bool,
@@ -461,6 +464,7 @@ freshWasmEmit mode = WasmEmit {
   useRefBox = Ref False,
   useStrLeaf = Ref False,
   useFloat = Ref False,
+  useU64 = Ref False,
   useStrSearch = Ref False,
   useValueAdd = Ref False,
   useValueSub = Ref False,
@@ -1429,6 +1433,7 @@ emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
       || !emit.useRng
       || !emit.useHash
       || !emit.useFloat
+      || !emit.useU64
       || !emit.useStrSearch
       || !emit.useCharClass
       || !emit.useIO
@@ -1824,6 +1829,15 @@ isLeafExternW name = contains
     "intBitNot",
     "intShiftLeft",
     "intShiftRight",
+    -- the `U64` kernels (a `$u64` cell in, a `$u64` cell or an Int out).
+    "u64Truncate",
+    "u64TruncateToInt",
+    "u64BitAnd",
+    "u64BitOr",
+    "u64BitXor",
+    "u64ShiftLeft",
+    "u64ShiftRight",
+    "u64MulHigh",
     -- #101: libm math externs.  IEEE-exact ops lower to native f64 opcodes
     -- (sqrt/floor/ceil/trunc → f64.sqrt/floor/ceil/trunc; round → $mdk_round, C-round
     -- half-away-from-zero); transcendentals lower to JS `Math.*` HOST IMPORTS ($mdk_<name>,
@@ -1853,6 +1867,20 @@ isLeafExternW name = contains
     "hypot",
     "floatRem",
   ]
+
+-- the `U64` kernel externs: each consumes or produces a `$u64` cell, so each
+-- demands the `$u64` type and `u64RuntimeLines` (the shifts and `u64MulHigh`).
+isU64ExternW : String -> Bool
+isU64ExternW name = contains name [
+  "u64Truncate",
+  "u64TruncateToInt",
+  "u64BitAnd",
+  "u64BitOr",
+  "u64BitXor",
+  "u64ShiftLeft",
+  "u64ShiftRight",
+  "u64MulHigh",
+]
 
 -- #101: the libm math externs whose wasm lowering is a JS `Math.*` HOST IMPORT
 -- (transcendentals + the two-arg pow/atan2/hypot).  These force WasmEmit.useMath so the
@@ -2057,6 +2085,12 @@ externArityW name =
       "intBitXor",
       "intShiftLeft",
       "intShiftRight",
+      "u64BitAnd",
+      "u64BitOr",
+      "u64BitXor",
+      "u64ShiftLeft",
+      "u64ShiftRight",
+      "u64MulHigh",
       "pow",
       "atan2",
       "hypot",
@@ -2310,6 +2344,9 @@ scanExprW7 emit (CMethod _ _ route implRoutes methRoutes) =
 -- would false-positive; useFloat is instead forced by a Float literal, a Float
 -- extern, OR a Float-kinded main, post-scan in emitProgram.)
 scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
+-- A `U64` value is born from a literal, a `U64` operator, or a `u64` kernel
+-- extern (noteW8Extern), so those three demand the `$u64` type and runtime.
+scanExprW7 emit (CLit (LU64 _ _)) = setRef emit.useU64 True
 -- A String/Char literal forces the $str rep.  `programUsesStr` already sees
 -- literals in top-level bindings; this scan is the only one that walks impl
 -- method bodies, so without this arm a prelude impl such as
@@ -2319,8 +2356,11 @@ scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
 scanExprW7 emit (CLit (LString _)) = setRef emit.useStr True
 scanExprW7 emit (CLit (LChar _)) = setRef emit.useStr True
 scanExprW7 emit (CLam _ b) = scanExprW7 emit b
-scanExprW7 emit (CBinPrim op l r _) =
-  let _ = noteW8Binop emit op in let _ = scanExprW7 emit l in scanExprW7 emit r
+scanExprW7 emit (CBinPrim op l r tag) =
+  let _ = if tag == "U64" then setRef emit.useU64 True
+  let _ = noteW8Binop emit op
+  let _ = scanExprW7 emit l
+  scanExprW7 emit r
 scanExprW7 emit (CUnOp _ x) = scanExprW7 emit x
 scanExprW7 emit (CIf c t f) =
   let _ = scanExprW7 emit c in let _ = scanExprW7 emit t in scanExprW7 emit f
@@ -2403,6 +2443,7 @@ noteW8Extern emit name =
   -- #101: libm math externs that produce/consume a boxed $float force the Float runtime
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
   let _ = if isFloatMathExternW name then setRef emit.useFloat True
+  let _ = if isU64ExternW name then setRef emit.useU64 True
   -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
   -- force emit.useMath so mathHostImportLines is declared.
   let _ = if isMathHostExternW name then setRef emit.useMath True
@@ -3231,6 +3272,8 @@ emitLitI32 emit (LString _) =
   gapLTy emit "String literal (the (array i8) rep) is W6"
 emitLitI32 emit (LChar _) =
   gapLTy emit "Char literal is W6 (string/unicode slice)"
+emitLitI32 emit (LU64 _ _) =
+  gapLTy emit "U64 literal (a boxed $u64 cell) needs ref-mode"
 
 emitVarI32 : WasmEmit ->
   List String ->
@@ -3550,29 +3593,35 @@ emitRefProgram prog groups =
   -- layer-9: $mdk_value_eq / $mdk_value_cmp (runtime-shape-dispatched comparison).
   -- Needs $str (forced via useStr when this is set) + $mdk_str_compare (forced via
   -- useStrSearch in emitValueCmpRef).
+  -- A U64 program splices a `$u64` arm into each shape-dispatched helper below.
+  let u64 = (progEmit prog).useU64.value
   let valueCmpRt =
-    if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []
+    if (progEmit prog).useValueCmp.value then valueEqRuntimeLines u64 else []
   -- A0: runtime value-tag-dispatched arithmetic helpers ($mdk_value_add/…), emitted only
   -- when a poly-`Num` operand actually routes to THAT operator's helper (A1). Split
   -- per-operator (S2/#2359 correction) so e.g. a program using only `-` doesn't also
   -- define $mdk_value_add/mul/div/mod. Reference $float/$boxint (always declared) +
   -- $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
   let valueAddRt =
-    if (progEmit prog).useValueAdd.value then valueAddRuntimeLines else []
+    if (progEmit prog).useValueAdd.value then valueAddRuntimeLines u64 else []
   let valueSubRt =
-    if (progEmit prog).useValueSub.value then valueSubRuntimeLines else []
+    if (progEmit prog).useValueSub.value then valueSubRuntimeLines u64 else []
   let valueMulRt =
-    if (progEmit prog).useValueMul.value then valueMulRuntimeLines else []
+    if (progEmit prog).useValueMul.value then valueMulRuntimeLines u64 else []
   let valueDivRt =
-    if (progEmit prog).useValueDiv.value then valueDivRuntimeLines else []
+    if (progEmit prog).useValueDiv.value then valueDivRuntimeLines u64 else []
   let valueModRt =
-    if (progEmit prog).useValueMod.value then valueModRuntimeLines else []
+    if (progEmit prog).useValueMod.value then valueModRuntimeLines u64 else []
   -- A1 (poly-`Ord`-on-Float, string-free): the num-only cmp sextet (eq_num/cmp_num/
   -- lt_num/le_num/gt_num/ge_num), gated as ONE block (mirrors valueCmpRt's precedent
   -- for the $str-capable sibling) — independent of which arith op(s), if any, are
   -- also demanded in this emission.
   let valueCmpNumRt =
-    if (progEmit prog).useValueCmpNum.value then valueCmpNumRuntimeLines else []
+    if (progEmit prog).useValueCmpNum.value then
+      valueCmpNumRuntimeLines u64
+    else
+      []
+  let u64Rt = if u64 then u64RuntimeLines else []
   let stderrRt =
     if (progEmit prog).useEPut.value then stderrRuntimeLines else []
   let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
@@ -3680,6 +3729,7 @@ emitRefProgram prog groups =
       ++ valueDivRt
       ++ valueModRt
       ++ valueCmpNumRt
+      ++ u64Rt
       ++ stderrRt
       ++ rngRt
       ++ hashRt
@@ -3804,7 +3854,11 @@ emitW7Types emit =
       ["    (type $refbox (sub (struct (field (mut (ref eq))))))"]
     else
       []
-  listT ++ tupTs ++ arrT ++ refT
+  -- a `U64` is a `$u64` cell, never an i31 or a `$boxint`: the i64 payload is read
+  -- unsigned, and a separate type keeps every `ref.test` on the other shapes false.
+  let u64T =
+    if !emit.useU64 then ["    (type $u64 (sub (struct (field i64))))"] else []
+  listT ++ tupTs ++ arrT ++ refT ++ u64T
 
 tupleTypeDecl : Int -> List String
 tupleTypeDecl n =
@@ -6724,6 +6778,10 @@ emitLitRef _ LUnit = ["i32.const 0", "ref.i31"]
 -- composes with the surrounding flat instruction stream (a folded form mid-stream breaks
 -- wasm-tools' stack tracking).
 emitLitRef _ (LFloat f) = ["f64.const " ++ floatToString f, "struct.new $float"]
+-- a `U64` literal boxes its 64 bits, written in hex so a value past 2^63 needs no
+-- signed spelling.
+emitLitRef _ (LU64 hi lo) =
+  ["i64.const 0x" ++ u64HalvesHex hi lo, "struct.new $u64"]
 -- W6: a String literal is a §3.3 `$str` boxed value.  Its UTF-8 bytes go in a
 -- passive data segment (the §11-preferred non-const-array init), read at run time by
 -- `array.new_data`; the cached cp_count is computed at emit time (UTF-8 codepoint
@@ -7081,6 +7139,8 @@ emitBinRef prog env d op l r tag =
   -- `$mdk_value_add` would not wrap.
   if isArithOp op && isFixedWidthHead tag then
     emitIntBinRef prog env d op l r tag
+  else if isArithOrCmp op && tag == "U64" then
+    emitU64BinRef prog env d op l r
   else if isArithOrCmp op
     && (tag == "Float"
       || cexprIsFloat prog env l
@@ -7170,6 +7230,76 @@ emitIntBinRef prog env d op l r tag =
       ++ [wasmBinOp64 (progEmit prog) op]
       ++ fixedWidthWrapW tag op
       ++ ["call $mdk_box_int"]
+
+-- A `U64` operator (the typechecker stamps both arithmetic and comparison sites
+-- `U64`): unbox both i64 payloads, then the unsigned i64 op.  `+ - *` wrap modulo
+-- 2^64 for free; `/`/`%` take the Int path's divisor guard; a comparison yields
+-- the i31 Bool the Int path does.
+emitU64BinRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  CExpr ->
+  CExpr ->
+  List String
+emitU64BinRef prog env d op l r =
+  let li = emitRefExpr prog env d l ++ unboxU64W
+  let ri = emitRefExpr prog env d r ++ unboxU64W
+  if op == "/" || op == "%" then
+    li
+      ++ ri
+      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ [wasmU64Op op, "struct.new $u64"]
+  else if isCmpOp op then
+    li ++ ri ++ [wasmU64Op op, "ref.i31"]
+  else
+    li ++ ri ++ [wasmU64Op op, "struct.new $u64"]
+
+unboxU64W : List String
+unboxU64W = ["ref.cast (ref $u64)", "struct.get $u64 0"]
+
+-- a binary `U64` kernel: both payloads, one i64 instruction (or helper call), reboxed.
+emitU64KernelRef : Prog ->
+  List String ->
+  Int ->
+  CExpr ->
+  CExpr ->
+  String ->
+  List String
+emitU64KernelRef prog env d a b instr =
+  emitRefExpr prog env d a
+    ++ unboxU64W
+    ++ emitRefExpr prog env d b
+    ++ unboxU64W
+    ++ [instr, "struct.new $u64"]
+
+-- a `U64` shift: the payload and the Int amount, through the range-checked helper.
+emitU64ShiftRef : Prog ->
+  List String ->
+  Int ->
+  CExpr ->
+  CExpr ->
+  String ->
+  List String
+emitU64ShiftRef prog env d a k helper =
+  emitRefExpr prog env d a
+    ++ unboxU64W
+    ++ emitRefExpr prog env d k
+    ++ ["call $mdk_unbox_int", helper, "struct.new $u64"]
+
+wasmU64Op : String -> String
+wasmU64Op "+" = "i64.add"
+wasmU64Op "-" = "i64.sub"
+wasmU64Op "*" = "i64.mul"
+wasmU64Op "/" = "i64.div_u"
+wasmU64Op "%" = "i64.rem_u"
+wasmU64Op "==" = "i64.eq"
+wasmU64Op "/=" = "i64.ne"
+wasmU64Op "<" = "i64.lt_u"
+wasmU64Op ">" = "i64.gt_u"
+wasmU64Op "<=" = "i64.le_u"
+wasmU64Op ">=" = "i64.ge_u"
+wasmU64Op op = panic ("wasm: not a U64 op '" ++ op ++ "'")
 
 -- A1: a binop with a POLYMORPHIC `Num`/`Ord` operand — a bare CVar bound to a param
 -- seeded into numPolyLocals.  Only such operands route to the runtime value-dispatch
@@ -7396,6 +7526,7 @@ cexprIsFloat prog env (CVar x _) =
 cexprIsFloat prog env (CBinPrim op l r tag) =
   isArithOp op
     && not (isFixedWidthHead tag)
+    && tag /= "U64"
     && (tag == "Float" || cexprIsFloat prog env l || cexprIsFloat prog env r)
 cexprIsFloat prog env (CUnOp "-" x) = cexprIsFloat prog env x
 cexprIsFloat prog env (CLet _ (PVar x _) _ b) = cexprIsFloat prog (x :: env) b
@@ -8165,6 +8296,25 @@ emitLeafExternRef prog env d "u32Truncate" [a] =
 emitLeafExternRef prog env d "u8ToInt" [a] = emitRefExpr prog env d a
 emitLeafExternRef prog env d "u16ToInt" [a] = emitRefExpr prog env d a
 emitLeafExternRef prog env d "u32ToInt" [a] = emitRefExpr prog env d a
+-- `u64Truncate` boxes the Int's sign-extended i64, which is its value modulo
+-- 2^64; `u64TruncateToInt` reboxes the payload as an Int, and `$mdk_box_int`'s
+-- renormalization from bit 62 is exactly "the low 63 bits, bit 62 the sign".
+emitLeafExternRef prog env d "u64Truncate" [a] =
+  emitRefExpr prog env d a ++ ["call $mdk_unbox_int", "struct.new $u64"]
+emitLeafExternRef prog env d "u64TruncateToInt" [a] =
+  emitRefExpr prog env d a ++ unboxU64W ++ ["call $mdk_box_int"]
+emitLeafExternRef prog env d "u64BitAnd" [a, b] =
+  emitU64KernelRef prog env d a b "i64.and"
+emitLeafExternRef prog env d "u64BitOr" [a, b] =
+  emitU64KernelRef prog env d a b "i64.or"
+emitLeafExternRef prog env d "u64BitXor" [a, b] =
+  emitU64KernelRef prog env d a b "i64.xor"
+emitLeafExternRef prog env d "u64MulHigh" [a, b] =
+  emitU64KernelRef prog env d a b "call $mdk_u64_mulhi"
+emitLeafExternRef prog env d "u64ShiftLeft" [a, k] =
+  emitU64ShiftRef prog env d a k "call $mdk_u64_shl"
+emitLeafExternRef prog env d "u64ShiftRight" [a, k] =
+  emitU64ShiftRef prog env d a k "call $mdk_u64_shr"
 -- #101: libm math externs.  IEEE-exact unary ops → native f64 opcodes (correctly-rounded,
 -- byte-match native libm); round → $mdk_round (C round(): half away from zero);
 -- transcendentals → JS Math.* host imports; binary pow/atan2/hypot → host imports;
@@ -12501,7 +12651,12 @@ maxIndexAt (CIf c t f) d =
   maxI (maxIndexAt c d) (maxI (maxIndexAt t d) (maxIndexAt f d))
 maxIndexAt (CLet _ pat a b) d =
   maxI (letStashIndex pat a d) (maxI (maxIndexAt a d) (maxIndexAt b d))
-maxIndexAt (CBinPrim _ a b _) d = maxI (maxIndexAt a d) (maxIndexAt b d)
+-- a `/` or `%` stashes its divisor in `$__divr<d>` (emitDivZeroGuard), so like the
+-- four nodes below it counts `d` even over leaf operands, or an Int or `U64`
+-- division nested two matches deep names an undeclared `$__divr2`.
+maxIndexAt (CBinPrim op a b _) d =
+  let sub = maxI (maxIndexAt a d) (maxIndexAt b d)
+  if op == "/" || op == "%" then maxI d sub else sub
 maxIndexAt (CUnOp _ a) d = maxIndexAt a d
 maxIndexAt (CApp f a) d = maxI (maxIndexAt f d) (maxIndexAt a d)
 maxIndexAt (CBlock stmts) d = foldMaxI (map (s => maxIndexAtStmt s d) stmts)
