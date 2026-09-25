@@ -215,7 +215,10 @@ or a function clause whose pattern names it opens a fresh authority scoped to
 that arm or clause; a `let` pattern cannot.  A `public export data` with an
 `Authority` parameter must carry it in every constructor's fields; a
 constructor that does not is a proof source only in its declaring module, which
-exports the type abstractly (`export data`).
+exports the type abstractly (`export data`).  Outside the declaring module a
+construction claims an index only as far as its arguments prove it:
+`Tok 1 [] : Tok *`, and `Tok 1 [] : Tok "cfg/*"` is refused.  A field read
+of a record field under an existential binder recovers the domain's top.
 
 ```medaka
 effect Store Prefix

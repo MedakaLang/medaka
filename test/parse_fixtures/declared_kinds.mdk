@@ -56,3 +56,6 @@ open path = Handle path
 
 readIt : Handle p -> <FileRead p> Result String String
 readIt (Handle s) = readFile s
+
+-- a constructor's existential binder leading a record's fields
+data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }

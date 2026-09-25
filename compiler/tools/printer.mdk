@@ -2036,7 +2036,7 @@ printVariant binders (Variant name (ConPos tys)) =
       (bindersDoc binders)
       (concatD (map (t => Cat (text " ") (printTypeAtom t)) tys)))
 printVariant binders (Variant name (ConNamed fields nameOmitted)) =
-  Cat (bindersDoc binders) (recordVariantDoc name fields nameOmitted [])
+  recordVariantDoc name binders fields nameOmitted []
 
 -- A constructor's existential binders, ` (p : Authority L)` each.
 bindersDoc : List (String, KindAnn) -> Doc
@@ -2054,9 +2054,18 @@ padBindersP (_ :: vs) [] = [] :: padBindersP vs []
 
 -- `Name { … }` with an optional deriving clause that stays inline when the
 -- record fits one line and drops to its own indented line when it breaks.
-recordVariantDoc : String -> List Field -> Bool -> List DeriveRef -> Doc
-recordVariantDoc name fields nameOmitted derives =
-  let namePart = if nameOmitted then text "{" else Cat (text name) (text " {")
+recordVariantDoc : String ->
+  List (String, KindAnn) ->
+  List Field ->
+  Bool ->
+  List DeriveRef ->
+  Doc
+recordVariantDoc name binders fields nameOmitted derives =
+  let namePart =
+    if nameOmitted then
+      text "{"
+    else
+      Cat (text name) (Cat (bindersDoc binders) (text " {"))
   let sep = Cat (text ",") Line
   let derivesTail =
     if isEmptyL derives then
@@ -2147,7 +2156,7 @@ dataBodyDoc : List Variant ->
   Doc
 dataBodyDoc [] _ derives = derivesInline derives
 dataBodyDoc [Variant name (ConNamed fields nameOmitted)] [[]] derives =
-  Cat (text " = ") (recordVariantDoc name fields nameOmitted derives)
+  Cat (text " = ") (recordVariantDoc name [] fields nameOmitted derives)
 dataBodyDoc (v :: vs) (b :: bs) derives =
   group
     (Cat

@@ -630,13 +630,47 @@ session"):
    and the constructor binders (`ctorBindersSource`); `ppDomain` renders a
    qualified domain as `(p : T)` only at the binder's first occurrence, after an
    index it is `T @p`.
+8. **Claims.** A constructor applied outside its declaring module has its
+   result's index variables split from its fields' (`claimCtorIndices`, at
+   the constructor's use and at record creation): the result carries a fresh
+   claim β, the fields keep α, and the pair is parked on the open solver
+   scope's frame (`authorityClaimsRef`). The scope's close decides every
+   frame inside the solver (`closeSummaryScope`'s `decideClaims` callback,
+   after row validation has turned every row check into an authority
+   obligation and before the scope's variables are solved): the grounded set
+   is the least fixpoint over the scope's obligations from the rigid cells
+   and the variables the scope's bindings carry in an argument position
+   (`qualifierAuthIds`, now domain-only), claims ground each other
+   (`decideAuthorityClaimsGo`), an evidenced claim records `α ⊑ β`, and an
+   unevidenced one takes the top — reported as `authorityClaimMsg` at the
+   construction when the result flow has already pinned β to a bound the top
+   does not lie within. The syntactic export check (`T-AUTHORITY-PHANTOM-EXPORT`)
+   stays as the declaration-site report; the claim is what makes a carrying
+   field that proves nothing (`[]`, an idle closure) harmless. A record read
+   outside a pattern instantiates an existential binder as the domain's top
+   (`sharedAuthority`); an alias's `Authority` parameter is a link, never an
+   obligation (`aliasArgBindings`); an impl head elaborates under declared
+   kinds through the one `implHeadMonos` (inference and coherence); every
+   head's kinds are recorded before any field elaborates (`recordDeclKinds`);
+   a binder used at two domain shapes is reported whatever binds it
+   (`reportBinderDomains`); an effect failure is located at the first site
+   whose authority lies outside the admitted bound (`effectSiteOf`); a
+   Product label's axes are distinct and a bare literal lifts into a Set
+   first axis as a one-element set (`productPrimaryLift`, the one lift); a
+   signature's own unlocated diagnostics land on the signature
+   (`sigToSchemeTvsIn`); and the LSP hover's `generalize` quantifies without
+   defaulting (`quantifyFree`), since its cells are shared with published
+   schemes.
 
-Coverage: `types/effect_authority_test.mdk` (seven data-half groups beside
-the arrow half's); `test/typecheck_error_fixtures/effect_data_field_{ok,launder}`,
-`effect_existential_{ok,launder}`, `effect_phantom_export`;
+Coverage: `types/effect_authority_test.mdk` (the data-half groups beside
+the arrow half's, the review's findings each beside its control, and a
+two-module claim group through `checkModulesDiagsChain`);
+`test/typecheck_error_fixtures/effect_data_field_{ok,launder}` (extended with
+the review's cases), `effect_existential_{ok,launder}`, `effect_phantom_export`;
 `test/check_module_fixtures/authority_handle_import` (the kind and the
 abstract handle across a module boundary); `test/parse_fixtures/declared_kinds`
-(the formatter round trip of every new spelling); the engine fixture above.
+(the formatter round trip of every new spelling, the existential record
+constructor included); the engine fixture above.
 
 ### Foundation verification
 

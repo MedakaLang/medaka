@@ -32,4 +32,29 @@ overwrite _ r = r := Handle "/etc/passwd"
 repoint : Conf p -> Conf p
 repoint c = { c | path = "/etc/passwd" }
 
+-- an alias over an indexed head keeps the index's bound
+type Cfg (q : Authority FileRead) = Handle q
+
+mkCfgBad : Unit -> Cfg "config/*"
+mkCfgBad _ = Handle "/etc/passwd"
+
+-- a type in an `Authority` slot of an impl head is a kind error
+impl Eq (Handle Int) where
+  eq (Handle _) (Handle _) = True
+
+-- a record read cannot open an existential: the value proves nothing about
+-- an authority the read cannot name
+data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
+
+unsealAt : Sealed -> Handle "config/*"
+unsealAt s = Handle s.path
+
+-- a forwarder publishes the top, and the top is not a narrower index
+data Raw (p : Authority FileRead) = Raw Int
+
+mkRaw = Raw
+
+forgeRaw : Unit -> Raw "config/*"
+forgeRaw _ = mkRaw 3
+
 main = println 1

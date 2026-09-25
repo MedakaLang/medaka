@@ -1,5 +1,5 @@
 # META
-source_lines=2531
+source_lines=2540
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -2040,7 +2040,7 @@ printVariant binders (Variant name (ConPos tys)) =
       (bindersDoc binders)
       (concatD (map (t => Cat (text " ") (printTypeAtom t)) tys)))
 printVariant binders (Variant name (ConNamed fields nameOmitted)) =
-  Cat (bindersDoc binders) (recordVariantDoc name fields nameOmitted [])
+  recordVariantDoc name binders fields nameOmitted []
 
 -- A constructor's existential binders, ` (p : Authority L)` each.
 bindersDoc : List (String, KindAnn) -> Doc
@@ -2058,9 +2058,18 @@ padBindersP (_ :: vs) [] = [] :: padBindersP vs []
 
 -- `Name { … }` with an optional deriving clause that stays inline when the
 -- record fits one line and drops to its own indented line when it breaks.
-recordVariantDoc : String -> List Field -> Bool -> List DeriveRef -> Doc
-recordVariantDoc name fields nameOmitted derives =
-  let namePart = if nameOmitted then text "{" else Cat (text name) (text " {")
+recordVariantDoc : String ->
+  List (String, KindAnn) ->
+  List Field ->
+  Bool ->
+  List DeriveRef ->
+  Doc
+recordVariantDoc name binders fields nameOmitted derives =
+  let namePart =
+    if nameOmitted then
+      text "{"
+    else
+      Cat (text name) (Cat (bindersDoc binders) (text " {"))
   let sep = Cat (text ",") Line
   let derivesTail =
     if isEmptyL derives then
@@ -2151,7 +2160,7 @@ dataBodyDoc : List Variant ->
   Doc
 dataBodyDoc [] _ derives = derivesInline derives
 dataBodyDoc [Variant name (ConNamed fields nameOmitted)] [[]] derives =
-  Cat (text " = ") (recordVariantDoc name fields nameOmitted derives)
+  Cat (text " = ") (recordVariantDoc name [] fields nameOmitted derives)
 dataBodyDoc (v :: vs) (b :: bs) derives =
   group
     (Cat
@@ -3292,7 +3301,7 @@ effAxesDoc axes =
 (DFunDef false "useMemberDoc" ((PCon "UseMember" (PVar "n") (PVar "allCtors") PWild (PVar "alias"))) (EBlock (DoLet false false (PVar "base") (EIf (EVar "allCtors") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "text") (ELit (LString "(..)")))) (EApp (EVar "text") (EVar "n")))) (DoExpr (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EApp (EApp (EVar "Cat") (EVar "base")) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString " as ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))))) (arm (PCon "None") () (EVar "base"))))))
 (DTypeSig false "printVariant" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyCon "Variant") (TyCon "Doc"))))
 (DFunDef false "printVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "bindersDoc") (EVar "binders"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "tys"))))))
-(DFunDef false "printVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (EApp (EApp (EVar "Cat") (EApp (EVar "bindersDoc") (EVar "binders"))) (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EVar "fields")) (EVar "nameOmitted")) (EListLit))))
+(DFunDef false "printVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (EApp (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EVar "binders")) (EVar "fields")) (EVar "nameOmitted")) (EListLit)))
 (DTypeSig false "bindersDoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "Doc")))
 (DFunDef false "bindersDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "bindersDoc" ((PVar "binders")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EApp (EVar "ctorBindersSurface") (EVar "binders")))))
@@ -3300,8 +3309,8 @@ effAxesDoc axes =
 (DFunDef false "padBindersP" ((PList) PWild) (EListLit))
 (DFunDef false "padBindersP" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBindersP") (EVar "vs")) (EVar "bs"))))
 (DFunDef false "padBindersP" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBindersP") (EVar "vs")) (EListLit))))
-(DTypeSig false "recordVariantDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc"))))))
-(DFunDef false "recordVariantDoc" ((PVar "name") (PVar "fields") (PVar "nameOmitted") (PVar "derives")) (EBlock (DoLet false false (PVar "namePart") (EIf (EVar "nameOmitted") (EApp (EVar "text") (ELit (LString "{"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EVar "text") (ELit (LString " {")))))) (DoLet false false (PVar "sep") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ",")))) (EVar "Line"))) (DoLet false false (PVar "derivesTail") (EIf (EApp (EVar "isEmptyL") (EVar "derives")) (EVar "Nil") (EApp (EApp (EVar "FlatAlt") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printDerives") (EVar "derives"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printDerives") (EVar "derives")))))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EVar "namePart")) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EVar "sep")) (EApp (EApp (EVar "map") (EVar "fieldTyDoc")) (EVar "fields")))) (EVar "trailingCommaDoc"))))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "}")))) (EVar "derivesTail")))))))))
+(DTypeSig false "recordVariantDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))))))
+(DFunDef false "recordVariantDoc" ((PVar "name") (PVar "binders") (PVar "fields") (PVar "nameOmitted") (PVar "derives")) (EBlock (DoLet false false (PVar "namePart") (EIf (EVar "nameOmitted") (EApp (EVar "text") (ELit (LString "{"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "bindersDoc") (EVar "binders"))) (EApp (EVar "text") (ELit (LString " {"))))))) (DoLet false false (PVar "sep") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ",")))) (EVar "Line"))) (DoLet false false (PVar "derivesTail") (EIf (EApp (EVar "isEmptyL") (EVar "derives")) (EVar "Nil") (EApp (EApp (EVar "FlatAlt") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printDerives") (EVar "derives"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printDerives") (EVar "derives")))))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EVar "namePart")) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EVar "sep")) (EApp (EApp (EVar "map") (EVar "fieldTyDoc")) (EVar "fields")))) (EVar "trailingCommaDoc"))))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "}")))) (EVar "derivesTail")))))))))
 (DTypeSig false "fieldTyDoc" (TyFun (TyCon "Field") (TyCon "Doc")))
 (DFunDef false "fieldTyDoc" ((PCon "Field" (PVar "fn") (PVar "ft"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "fn"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ft")))))
 (DTypeSig true "printNamedFieldData" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))))))))
@@ -3318,7 +3327,7 @@ effAxesDoc axes =
 (DFunDef false "visPrefix" ((PCon "VisPrivate")) (EVar "Nil"))
 (DTypeSig false "dataBodyDoc" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))))
 (DFunDef false "dataBodyDoc" ((PList) PWild (PVar "derives")) (EApp (EVar "derivesInline") (EVar "derives")))
-(DFunDef false "dataBodyDoc" ((PList (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (PList (PList)) (PVar "derives")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EVar "fields")) (EVar "nameOmitted")) (EVar "derives"))))
+(DFunDef false "dataBodyDoc" ((PList (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (PList (PList)) (PVar "derives")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EListLit)) (EVar "fields")) (EVar "nameOmitted")) (EVar "derives"))))
 (DFunDef false "dataBodyDoc" ((PCons (PVar "v") (PVar "vs")) (PCons (PVar "b") (PVar "bs")) (PVar "derives")) (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " =")))) (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "FlatAlt") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "text") (ELit (LString "| "))))) (EApp (EVar "text") (ELit (LString " "))))) (EApp (EApp (EVar "printVariant") (EVar "b")) (EVar "v")))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "vb")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "FlatAlt") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "text") (ELit (LString "| "))))) (EApp (EVar "text") (ELit (LString " | "))))) (EApp (EApp (EVar "printVariant") (EApp (EVar "snd") (EVar "vb"))) (EApp (EVar "fst") (EVar "vb")))))) (EApp (EApp (EVar "zipL") (EVar "vs")) (EVar "bs"))))) (EApp (EVar "derivesLineOrInline") (EVar "derives"))))))))
 (DFunDef false "dataBodyDoc" ((PVar "vs") (PList) (PVar "derives")) (EApp (EApp (EApp (EVar "dataBodyDoc") (EVar "vs")) (EApp (EApp (EVar "padBindersP") (EVar "vs")) (EListLit))) (EVar "derives")))
 (DTypeSig false "derivesInline" (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))
@@ -4205,7 +4214,7 @@ effAxesDoc axes =
 (DFunDef false "useMemberDoc" ((PCon "UseMember" (PVar "n") (PVar "allCtors") PWild (PVar "alias"))) (EBlock (DoLet false false (PVar "base") (EIf (EVar "allCtors") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "text") (ELit (LString "(..)")))) (EApp (EVar "text") (EVar "n")))) (DoExpr (EMatch (EVar "alias") (arm (PCon "Some" (PVar "a")) () (EApp (EApp (EVar "Cat") (EVar "base")) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (ELit (LString " as ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))))) (arm (PCon "None") () (EVar "base"))))))
 (DTypeSig false "printVariant" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyCon "Variant") (TyCon "Doc"))))
 (DFunDef false "printVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "bindersDoc") (EVar "binders"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "tys"))))))
-(DFunDef false "printVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (EApp (EApp (EVar "Cat") (EApp (EVar "bindersDoc") (EVar "binders"))) (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EVar "fields")) (EVar "nameOmitted")) (EListLit))))
+(DFunDef false "printVariant" ((PVar "binders") (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (EApp (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EVar "binders")) (EVar "fields")) (EVar "nameOmitted")) (EListLit)))
 (DTypeSig false "bindersDoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyCon "Doc")))
 (DFunDef false "bindersDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "bindersDoc" ((PVar "binders")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EApp (EVar "ctorBindersSurface") (EVar "binders")))))
@@ -4213,8 +4222,8 @@ effAxesDoc axes =
 (DFunDef false "padBindersP" ((PList) PWild) (EListLit))
 (DFunDef false "padBindersP" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBindersP") (EVar "vs")) (EVar "bs"))))
 (DFunDef false "padBindersP" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBindersP") (EVar "vs")) (EListLit))))
-(DTypeSig false "recordVariantDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc"))))))
-(DFunDef false "recordVariantDoc" ((PVar "name") (PVar "fields") (PVar "nameOmitted") (PVar "derives")) (EBlock (DoLet false false (PVar "namePart") (EIf (EVar "nameOmitted") (EApp (EVar "text") (ELit (LString "{"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EVar "text") (ELit (LString " {")))))) (DoLet false false (PVar "sep") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ",")))) (EVar "Line"))) (DoLet false false (PVar "derivesTail") (EIf (EApp (EVar "isEmptyL") (EVar "derives")) (EVar "Nil") (EApp (EApp (EVar "FlatAlt") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printDerives") (EVar "derives"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printDerives") (EVar "derives")))))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EVar "namePart")) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EVar "sep")) (EApp (EApp (EMethodRef "map") (EVar "fieldTyDoc")) (EVar "fields")))) (EVar "trailingCommaDoc"))))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "}")))) (EVar "derivesTail")))))))))
+(DTypeSig false "recordVariantDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))))))
+(DFunDef false "recordVariantDoc" ((PVar "name") (PVar "binders") (PVar "fields") (PVar "nameOmitted") (PVar "derives")) (EBlock (DoLet false false (PVar "namePart") (EIf (EVar "nameOmitted") (EApp (EVar "text") (ELit (LString "{"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "name"))) (EApp (EApp (EVar "Cat") (EApp (EVar "bindersDoc") (EVar "binders"))) (EApp (EVar "text") (ELit (LString " {"))))))) (DoLet false false (PVar "sep") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ",")))) (EVar "Line"))) (DoLet false false (PVar "derivesTail") (EIf (EApp (EVar "isEmptyL") (EVar "derives")) (EVar "Nil") (EApp (EApp (EVar "FlatAlt") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printDerives") (EVar "derives"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printDerives") (EVar "derives")))))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EVar "namePart")) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EVar "sep")) (EApp (EApp (EMethodRef "map") (EVar "fieldTyDoc")) (EVar "fields")))) (EVar "trailingCommaDoc"))))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "}")))) (EVar "derivesTail")))))))))
 (DTypeSig false "fieldTyDoc" (TyFun (TyCon "Field") (TyCon "Doc")))
 (DFunDef false "fieldTyDoc" ((PCon "Field" (PVar "fn") (PVar "ft"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "fn"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ft")))))
 (DTypeSig true "printNamedFieldData" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))))))))
@@ -4231,7 +4240,7 @@ effAxesDoc axes =
 (DFunDef false "visPrefix" ((PCon "VisPrivate")) (EVar "Nil"))
 (DTypeSig false "dataBodyDoc" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))))
 (DFunDef false "dataBodyDoc" ((PList) PWild (PVar "derives")) (EApp (EVar "derivesInline") (EVar "derives")))
-(DFunDef false "dataBodyDoc" ((PList (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (PList (PList)) (PVar "derives")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EVar "fields")) (EVar "nameOmitted")) (EVar "derives"))))
+(DFunDef false "dataBodyDoc" ((PList (PCon "Variant" (PVar "name") (PCon "ConNamed" (PVar "fields") (PVar "nameOmitted")))) (PList (PList)) (PVar "derives")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EApp (EApp (EApp (EVar "recordVariantDoc") (EVar "name")) (EListLit)) (EVar "fields")) (EVar "nameOmitted")) (EVar "derives"))))
 (DFunDef false "dataBodyDoc" ((PCons (PVar "v") (PVar "vs")) (PCons (PVar "b") (PVar "bs")) (PVar "derives")) (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " =")))) (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "FlatAlt") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "text") (ELit (LString "| "))))) (EApp (EVar "text") (ELit (LString " "))))) (EApp (EApp (EVar "printVariant") (EVar "b")) (EVar "v")))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "vb")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "FlatAlt") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "text") (ELit (LString "| "))))) (EApp (EVar "text") (ELit (LString " | "))))) (EApp (EApp (EVar "printVariant") (EApp (EVar "snd") (EVar "vb"))) (EApp (EVar "fst") (EVar "vb")))))) (EApp (EApp (EVar "zipL") (EVar "vs")) (EVar "bs"))))) (EApp (EVar "derivesLineOrInline") (EVar "derives"))))))))
 (DFunDef false "dataBodyDoc" ((PVar "vs") (PList) (PVar "derives")) (EApp (EApp (EApp (EVar "dataBodyDoc") (EVar "vs")) (EApp (EApp (EVar "padBindersP") (EVar "vs")) (EListLit))) (EVar "derives")))
 (DTypeSig false "derivesInline" (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Doc")))

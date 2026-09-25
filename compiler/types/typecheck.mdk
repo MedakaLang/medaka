@@ -270,7 +270,7 @@ import types.effect_solver as EffectSolver
 import types.effect_bindings.{
   BindingSummary(..), newBindingSummary, bodyArrows, bodyRowAt
 }
-import types.effect_solver.{SummarySolver, SummaryFailure}
+import types.effect_solver.{SummarySolver, SummaryFailure, AuthWanted(..)}
 import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes
 }
@@ -548,6 +548,16 @@ checkDomainAxes l (Some "Product") [] =
       l
       "a Product label declares its axes: `effect \{l} Product (Host : Prefix, Method : Set)`, the first axis being the one a bare literal lifts into")
 checkDomainAxes l (Some "Product") axes =
+  let _ =
+    fold
+      (_ name =>
+        pushTypeError
+          "T-EFFECT-PARAM"
+          (effectParamMsg
+            l
+            "axis '\{name}' of label '\{l}' is declared twice; each axis is one name"))
+      ()
+      (repeatedNames (map fst axes) [])
   fold
     (_ a => match snd a
       "Prefix" => ()
@@ -927,27 +937,39 @@ recordEffectSites eff =
   fold
     (_ atom =>
       let key = effectSiteKey perRun.value.currentFn.value (atomKey atom)
-      if omHasKey key perRun.value.effectSitesRef.value then
-        ()
-      else
-        perRun.value.effectSitesRef :=
-          omInsert key !currentLoc perRun.value.effectSitesRef.value)
+      let sites = optionOr [] (omLookup key perRun.value.effectSitesRef.value)
+      perRun.value.effectSitesRef :=
+        omInsert
+          key
+          ((atomAuth atom, !currentLoc) :: sites)
+          perRun.value.effectSitesRef.value)
     ()
     (fst (rowFlat eff))
 
 effectSiteKey : String -> String -> String
 effectSiteKey fn label = "\{fn}\t\{label}"
 
--- The site a binding first performed a label at, if any.
-effectSiteOf : String -> Option String -> Option Loc
-effectSiteOf _ None = None
-effectSiteOf fn (Some label) =
+-- The site a binding performed a label at that the report is about: the
+-- first, in source order, whose authority does not lie within the bound
+-- the label was admitted at, else the first site.  Two reads under
+-- `<FileRead "config/*">`, the second of `/etc/passwd`, report the second.
+effectSiteOf : String -> Option String -> Option Authority -> Option Loc
+effectSiteOf _ None _ = None
+effectSiteOf fn (Some label) bound =
   match omLookup (effectSiteKey fn label) perRun.value.effectSitesRef.value
-    Some loc => loc
+    Some sites =>
+      let ordered = reverseL sites
+      let offending = match bound
+        Some hi => filterList (site => not (authSub (fst site) hi)) ordered
+        None => []
+      match offending ++ ordered
+        site :: _ => snd site
+        [] => None
     None => None
 
 beginEffectSummaryScope : Unit -> Unit
 beginEffectSummaryScope _ =
+  perRun.value.authorityClaimsRef := [] :: perRun.value.authorityClaimsRef.value
   EffectSolver.openSummaryScope
     perRun.value.effectSummaries
     (newEffvarId ())
@@ -974,18 +996,21 @@ summaryEscape : Bool -> List Atom -> List Atom -> List Atom
 summaryEscape True lower upper = atomsDiff lower upper
 summaryEscape False lower upper = atomsEscape lower upper
 
-finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
-finishEffectSummaryScope retained borrowed =
-  let failures =
-    EffectSolver.closeSummaryScope
-      perRun.value.effectSummaries
-      perRun.value.rigidEffvarsRef.value
-      perRun.value.rigidAuthvarsRef.value
-      retained
-      borrowed
-      summaryEscape
-      joinCellOf
-      freshEffvarAt
+finishEffectSummaryScope : Map Int Unit ->
+  Map Int (Ref Effvar) ->
+  Map Int Unit ->
+  Unit
+finishEffectSummaryScope retained borrowed sources =
+  let failures = EffectSolver.closeSummaryScope
+    perRun.value.effectSummaries
+    perRun.value.rigidEffvarsRef.value
+    perRun.value.rigidAuthvarsRef.value
+    retained
+    borrowed
+    summaryEscape
+    joinCellOf
+    freshEffvarAt
+    (_ => decideAuthorityClaims sources)
   reportEffectSummaryFailures failures
 
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
@@ -994,7 +1019,9 @@ reportEffectSummaryFailures (failure :: rest) =
   let saved = !currentLoc
   let fn = snd failure.esfContext
   currentLoc :=
-    orElseLoc (effectSiteOf fn failure.esfLabel) (fst failure.esfContext)
+    orElseLoc
+      (effectSiteOf fn failure.esfLabel (failureBound failure))
+      (fst failure.esfContext)
   let _ = match failure.esfAuthority
     Some (lo, hi) =>
       if mentionsEscaped lo || mentionsEscaped hi then
@@ -1010,6 +1037,15 @@ reportEffectSummaryFailures (failure :: rest) =
       reportRowFailure failure
   currentLoc := saved
   reportEffectSummaryFailures rest
+
+-- The authority the failing label was admitted at: the obligation's upper
+-- term, or the upper row's atom of that label.
+failureBound : SummaryFailure (Option Loc, String) -> Option Authority
+failureBound failure = match failure.esfAuthority
+  Some (_, hi) => Some hi
+  None => match failure.esfLabel
+    Some label => map atomAuth (findAtom label (fst (rowFlat failure.esfUpper)))
+    None => None
 
 reportRowFailure : SummaryFailure (Option Loc, String) -> Unit
 reportRowFailure failure =
@@ -1095,6 +1131,7 @@ finishValueEffects monos =
   finishEffectSummaryScope
     (fold (acc mono => effectRoots mono acc) Tip monos)
     (fold (acc mono => borrowedEffectCells mono acc) Tip monos)
+    (fold (acc mono => qualifierAuthIds mono acc) Tip monos)
 
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 borrowedEffectCells mono cells =
@@ -1142,9 +1179,176 @@ authRowRoots row roots =
 
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectContract (saved, savedAuths) =
-  let _ = finishEffectSummaryScope Tip Tip
+  let _ = finishEffectSummaryScope Tip Tip Tip
   perRun.value.rigidEffvarsRef := saved
   perRun.value.rigidAuthvarsRef := savedAuths
+
+-- A constructor's result index is a CLAIM, distinct from the variable its
+-- fields mention: `Tok 1 [] : Tok β` with the field at `List (Handle α)`.
+-- The claim is bounded by the evidence the arguments supply for α.  Where
+-- the scope's obligations ground α — a constant, a rigid, a variable the
+-- binding's own arguments carry, or a variable such a term bounds from
+-- below — the claim covers the evidence (`α ⊑ β`, the ordinary obligation a
+-- value flowing into a slot records); where nothing does, the value proves
+-- nothing and the claim is the domain's top.  A pattern recovers the
+-- declared field types under the index and mints no claim; the declaring
+-- module, trusted with phantom construction (EFFECTS-SEMANTICS §4.1), mints
+-- none either.  The decision runs inside the solver's close, once row
+-- validation has turned every row check into an authority obligation and
+-- before the scope's variables are solved (`closeSummaryScope`).
+data AuthClaim = AuthClaim {
+  acClaim : Ref Authvar,
+  acEvidence : Ref Authvar,
+  acCtor : String,
+  acFn : String,
+  acLoc : Option Loc,
+}
+
+claimCtorIndices : String -> Mono -> Mono
+claimCtorIndices ctor mono
+  | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
+    claimResultIndices ctor mono
+  | otherwise = mono
+
+claimResultIndices : String -> Mono -> Mono
+claimResultIndices ctor mono = match normalize mono
+  TFun a row b => TFun a row (claimResultIndices ctor b)
+  t => if declaredHere t then t else claimSpineIndices ctor t
+
+-- A head declared by the module under inference.
+declaredHere : Mono -> Bool
+declaredHere t = match headMonoNode t
+  TCon _ (OriginModule mid) => mid == driverState.value.currentModuleRef.value
+  _ => False
+
+claimSpineIndices : String -> Mono -> Mono
+claimSpineIndices ctor t = match normalize t
+  TApp a b => TApp (claimSpineIndices ctor a) (claimIndex ctor b)
+  other => other
+
+claimIndex : String -> Mono -> Mono
+claimIndex ctor arg = match normalize arg
+  TAuth (AVar cell) => match !cell
+    AUnbound _ _ top name =>
+      let claim = freshAuthvar top name
+      let entry = AuthClaim {
+        acClaim = claim,
+        acEvidence = cell,
+        acCtor = ctor,
+        acFn = perRun.value.currentFn.value,
+        acLoc = !currentLoc,
+      }
+      let _ = match perRun.value.authorityClaimsRef.value
+        frame :: outer =>
+          perRun.value.authorityClaimsRef := (entry :: frame) :: outer
+        [] => ()
+      TAuth (AVar claim)
+    ALink _ _ => arg
+  other => other
+
+-- Decide the closing scope's claims against its obligations (`AuthClaim`).
+-- [sources] are the authority variables the scope's bindings carry in an
+-- argument position — what a caller supplies.  Claims ground each other
+-- (`Tok 1 [Handle "config/app"]`: the inner claim, once equal to its
+-- evidence, grounds the outer's), so the decision is a fixpoint: every claim
+-- whose evidence is grounded becomes its evidence, and only what no round
+-- can ground is the top.
+decideAuthorityClaims : Map Int Unit -> Unit
+decideAuthorityClaims sources = match perRun.value.authorityClaimsRef.value
+  [] => ()
+  frame :: outer =>
+    perRun.value.authorityClaimsRef := outer
+    match frame
+      [] => ()
+      claims =>
+        decideAuthorityClaimsGo
+          (IdMap.foldlWithKey
+            (acc id _ => IdMap.set id () acc)
+            sources
+            perRun.value.rigidAuthvarsRef.value)
+          (reverseL claims)
+
+decideAuthorityClaimsGo : Map Int Unit -> List AuthClaim -> Unit
+decideAuthorityClaimsGo _ [] = ()
+decideAuthorityClaimsGo seed pending =
+  let grounded =
+    groundedAuthorities
+      (EffectSolver.scopeAuthorities perRun.value.effectSummaries)
+      seed
+  let ready =
+    filterList (c => groundedAuthority grounded (AVar c.acEvidence)) pending
+  match ready
+    [] => fold (_ c => decideAuthorityClaim False c) () pending
+    _ =>
+      let _ = fold (_ c => decideAuthorityClaim True c) () ready
+      decideAuthorityClaimsGo
+        (fold (g c => IdMap.set (authvarId c.acClaim) () g) grounded ready)
+        (filterList
+          (c => not (groundedAuthority grounded (AVar c.acEvidence)))
+          pending)
+
+-- An evidenced claim covers its evidence; an unevidenced one is the top.
+-- Where the result flow has already pinned the claim to a bound the top
+-- does not lie within (a written index, a signature's binder), the report
+-- names the constructor and the bound, at the construction site.
+decideAuthorityClaim : Bool -> AuthClaim -> Unit
+decideAuthorityClaim evidenced (AuthClaim { acClaim = claim, acEvidence = evidence, acCtor = ctor, acFn = fn, acLoc = loc }) =
+  let savedLoc = !currentLoc
+  let savedFn = perRun.value.currentFn.value
+  currentLoc := loc
+  perRun.value.currentFn := fn
+  let _ =
+    if evidenced then
+      wantAuthority (AVar evidence) (AVar claim)
+    else
+      let top = authTop (authvarDomain claim)
+      match authNorm (AVar claim)
+        AVar cell =>
+          if IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value then
+            pushTypeErrorAt
+              "T-AUTHORITY"
+              loc
+              (authorityClaimMsg ctor (AVar cell))
+          else
+            wantAuthority top (AVar claim)
+        pinned =>
+          if authSub top pinned then
+            ()
+          else
+            pushTypeErrorAt "T-AUTHORITY" loc (authorityClaimMsg ctor pinned)
+  perRun.value.currentFn := savedFn
+  currentLoc := savedLoc
+
+authorityClaimMsg : String -> Authority -> String
+authorityClaimMsg ctor bound =
+  "Constructor '\{ctor}' is applied at index \{ppAuthority (Ref []) (Ref 0) bound}, but its arguments carry no evidence for that authority: a construction claims only what its arguments prove, so this value's index is `*`. Derive the index from an argument (a qualified field, a handle, a closure's row), or claim `*`"
+
+-- A term is grounded when every variable it mentions is.
+groundedAuthority : Map Int Unit -> Authority -> Bool
+groundedAuthority grounded q =
+  allList (cell => IdMap.has (authvarId cell) grounded) (authVars q)
+
+-- The least fixpoint over the scope's obligations: the rigid and
+-- argument-carried variables, then every variable an obligation bounds from
+-- below by a grounded term.
+groundedAuthorities : List (AuthWanted (Option Loc, String)) ->
+  Map Int Unit ->
+  Map Int Unit
+groundedAuthorities wanteds grounded =
+  let (next, changed) =
+    fold
+      (acc w => match authNorm w.awUpper
+        AVar cell =>
+          if IdMap.has (authvarId cell) (fst acc) then
+            acc
+          else if groundedAuthority (fst acc) w.awLower then
+            (IdMap.set (authvarId cell) () (fst acc), True)
+          else
+            acc
+        _ => acc)
+      (grounded, False)
+      wanteds
+  if changed then groundedAuthorities wanteds next else next
 
 -- Ordinary row equality can solve flexible cells, never declaration universals.
 -- Binding-owned summaries instead record both directions for scoped solving.
@@ -2718,9 +2922,11 @@ checkOneEffectParam _ _ (EPName _) = ()
 checkOneEffectParam _ _ EPTop = ()
 checkOneEffectParam l (PPrefix None) (EPLit pat) = checkPrefixLiteral l pat
 checkOneEffectParam _ (PSet None) (EPLit _) = ()
-checkOneEffectParam l (PProduct schema) (EPLit pat) = match schema
-  (name, _) :: _ => checkOneAxis l schema name (PPrefix (Some pat))
-  [] => ()
+-- A bare literal on a Product label lifts into the first axis as the
+-- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
+-- one-element set for a Set axis.
+checkOneEffectParam l (PProduct schema) (EPLit pat) =
+  checkProductAxes l (PProduct schema) (productPrimaryLift schema pat)
 checkOneEffectParam l _ (EPLit _) = atomicLabelParamError l
 checkOneEffectParam _ (PSet None) (EPSet _) = ()
 checkOneEffectParam l (PPrefix None) (EPSet _) =
@@ -2780,13 +2986,10 @@ checkAuthorityBinder n a rest =
   match filterList (u => fst u == n) (authorityUsesOf rest)
     [] => ()
     (_, top) :: others =>
-      let _ =
-        if isStringTy a then
-          ()
-        else
-          pushTypeError "T-AUTHORITY-BINDER" (binderTypeMsg n (ppTy a))
-      if anyList (u => not (sameDomainTop top (snd u))) others then
-        pushTypeError "T-AUTHORITY-DOMAIN" (binderDomainMsg n)
+      if isStringTy a then
+        ()
+      else
+        pushTypeError "T-AUTHORITY-BINDER" (binderTypeMsg n (ppTy a))
 
 isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
@@ -2805,7 +3008,7 @@ binderTypeMsg n ty =
 
 binderDomainMsg : String -> String
 binderDomainMsg n =
-  "Named argument '\{n}' is used as the authority of labels from different domains (a path prefix and a name set are different kinds of authority). One argument determines one domain: name a second argument for the other label"
+  "Authority '\{n}' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label"
 
 atomicLabelParamError : String -> Unit
 atomicLabelParamError l =
@@ -2831,6 +3034,14 @@ checkProductAxesGo _ _ [] = ()
 checkProductAxesGo l schema ((name, p) :: rest) =
   let _ = checkOneAxis l schema name p
   checkProductAxesGo l schema rest
+
+-- The names that occur more than once, each once, in first-occurrence order.
+repeatedNames : List String -> List String -> List String
+repeatedNames [] _ = []
+repeatedNames (n :: rest) seen
+  | contains n seen = repeatedNames rest seen
+  | contains n rest = n :: repeatedNames rest (n :: seen)
+  | otherwise = repeatedNames rest seen
 
 checkOneAxis : String -> List (String, Param) -> String -> Param -> Unit
 checkOneAxis l schema name p = match lookupAxis name schema
@@ -10488,7 +10699,7 @@ data PerRun = PerRun {
   -- binding that performed the label, so a failure about the label's
   -- authority or its presence points at the call rather than at the body or
   -- its last arm.  Keyed `fn\tlabelKey`; first site wins.
-  effectSitesRef : Ref (OrdMap (Option Loc)),
+  effectSitesRef : Ref (OrdMap (List (Authority, Option Loc))),
   -- Binding names for which the scoped solver already reported a row
   -- failure, so the retained post-hoc escape walk does not report the same
   -- leak a second time.
@@ -10503,6 +10714,9 @@ data PerRun = PerRun {
   -- solver scope has closed, so the scoped report (located at the call)
   -- wins and the walk adds only what the solver did not see.
   pendingEscapesRef : Ref (List (String, Option Loc, String)),
+  -- Each open solver scope's constructor-index claims (`AuthClaim`), decided
+  -- against the scope's obligations when it closes.
+  authorityClaimsRef : Ref (List (List AuthClaim)),
   -- The existential cells the pattern site currently being inferred opened,
   -- parked per pattern site exactly as `patLitPending` is (`takePatLits`).
   openedExistentialsRef : Ref (List (Ref Authvar)),
@@ -10620,6 +10834,7 @@ freshPerRun _ = PerRun {
   typeErrorKeySetRef = Ref omEmpty,
   escapedExistentialsRef = Ref Tip,
   pendingEscapesRef = Ref [],
+  authorityClaimsRef = Ref [],
   openedExistentialsRef = Ref [],
   openedExistentialsStackRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -10909,14 +11124,18 @@ bindFrom target source = match normalize target
 
 -- `lower ⊑ upper`, as an obligation of the open inference scope, or decided
 -- on the spot outside one (an annotation checked at top level).
+-- The terms are recorded normalised: a cell already linked when the
+-- obligation is recorded (an alias parameter standing for a written index)
+-- is the written term it stands for, and only a cell the scope solves
+-- afterwards reads as a solved bound in a report (`esfWrittenUpper`).
 wantAuthority : Authority -> Authority -> Unit
 wantAuthority lower upper
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
     EffectSolver.recordAuthority
       perRun.value.effectSummaries
       (!currentLoc, perRun.value.currentFn.value)
-      lower
-      upper
+      (authNorm lower)
+      (authNorm upper)
   | authSub lower upper = ()
   | otherwise = match solveFlexibleUpper lower upper
     True => ()
@@ -11330,13 +11549,20 @@ bindOutsideDoMsg =
   "`<-` bind is only valid inside a `do` block. For IO sequencing use a bare indented block without `<-`"
 
 -- ── generalization & instantiation ────────────────────────────────────────
+-- Quantify a mono for DISPLAY (the LSP hover fallback, `mapLocalSchemes`):
+-- no defaulting, since the cells are shared with schemes already published
+-- and a default written here would rewrite them after the fact.
 generalize : Mono -> Scheme
-generalize t = generalizeBinding pureRow t
+generalize t = quantifyFree pureRow t
 
 generalizeBinding : EffRow -> Mono -> Scheme
 generalizeBinding force t =
   let _ = defaultDeferredPatLitsIn perRun.value.currentLevel.value t
   let _ = defaultSourcelessAuthorities force t
+  quantifyFree force t
+
+quantifyFree : EffRow -> Mono -> Scheme
+quantifyFree force t =
   Forall
     (dedupI (freeGenVars perRun.value.currentLevel.value t))
     (dedupI (freeEffvars t ++ rowFreeEffvars force))
@@ -11724,15 +11950,32 @@ defaultSourcelessAuthorities force t =
     ()
     candidates
 
--- The variables a caller can supply through the published type: a qualified
--- slot (`String @κ`) or an authority INDEX (`Handle κ`), in any position.
+-- The variables a caller can supply through the published type: every
+-- authority an ARGUMENT carries — a qualified slot (`String @κ`), an index
+-- (`Handle κ`) or a row (`Unit -> <L κ> Unit`) — at any depth of an arrow's
+-- domain.  A result position supplies nothing: `Unit -> Tok κ` would let a
+-- caller choose the index of a value that carries no evidence for it.
 qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
 qualifierAuthIds t acc = match normalize t
-  TFun a _ b => qualifierAuthIds b (qualifierAuthIds a acc)
+  TFun a _ b => qualifierAuthIds b (authIdsIn a acc)
   TApp a b => qualifierAuthIds b (qualifierAuthIds a acc)
-  TQual inner q => qualifierAuthIds inner (authTermIds q acc)
+  TQual inner _ => qualifierAuthIds inner acc
+  _ => acc
+
+-- Every authority a type mentions, at any depth: qualifiers, indices and the
+-- atoms of every row.
+authIdsIn : Mono -> Map Int Unit -> Map Int Unit
+authIdsIn t acc = match normalize t
+  TFun a row b => authIdsIn b (authIdsIn a (rowAuthIds row acc))
+  TApp a b => authIdsIn b (authIdsIn a acc)
+  TEff row => rowAuthIds row acc
+  TQual inner q => authIdsIn inner (authTermIds q acc)
   TAuth q => authTermIds q acc
   _ => acc
+
+rowAuthIds : EffRow -> Map Int Unit -> Map Int Unit
+rowAuthIds row acc =
+  fold (m atom => authTermIds (atomAuth atom) m) acc (fst (rowFlat row))
 
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
 authTermIds q acc =
@@ -12017,12 +12260,22 @@ rejectCyclicAliases _ =
 -- vars used in the Mono), so a caller can check post-unify whether each
 -- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
-astTypeFreshTbl ty =
+astTypeFreshTbl ty = atSignature ty (_ =>
   let rows = rowArgNames ty
   let auths = authArgBindersIn ty
   let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
   let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
-  (fromAstTypeE etbl tvs ty, tvs)
+  (fromAstTypeE etbl tvs ty, tvs))
+
+-- A diagnostic a signature's elaboration raises without a span of its own
+-- lands on the signature, not on whatever the walk last visited.
+atSignature : Ty -> (Unit -> a) -> a
+atSignature ty body =
+  let saved = !currentLoc
+  currentLoc := orElseLoc (firstTyLoc ty) saved
+  let result = body ()
+  currentLoc := saved
+  result
 
 freshTvMap : List String -> List (String, Mono)
 freshTvMap [] = []
@@ -12044,7 +12297,7 @@ sigToSchemeTvs ty = sigToSchemeTvsIn [] ty
 sigToSchemeTvsIn : List (String, List Kind) ->
   Ty ->
   (Scheme, List (String, Mono))
-sigToSchemeTvsIn scope ty =
+sigToSchemeTvsIn scope ty = atSignature ty (_ =>
   let rows = rowArgNamesIn (qualifiedKindScope scope ty) ty
   let auths = authArgBindersIn ty
   let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
@@ -12057,7 +12310,7 @@ sigToSchemeTvsIn scope ty =
       (bindingForceFromAst etbl ty)
       (fromAstTypeE etbl tvs ty),
     tvs,
-  )
+  ))
 
 -- tvs maps a declared type-parameter name to its tyvar
 -- named effect-tail variables in a signature (`<IO | e>` → ["e"]); the same
@@ -12131,6 +12384,7 @@ sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
 sigVarsForWith ty rowNames auths =
   let named = namedArgTypes ty
   let authNames = map fst auths
+  let _ = reportBinderDomains ty (namedAtomBinders ty ++ auths)
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
@@ -12142,6 +12396,23 @@ sigVarsForWith ty rowNames auths =
   }
   let _ = reportUnboundAuthorityNames ty sv
   sv
+
+-- An authority has exactly one domain: a name the signature uses at two
+-- labels of different domains — as an atom's parameter, an index slot, or
+-- one of each — is reported once, whatever binds it.
+reportBinderDomains : Ty -> List (String, Param) -> Unit
+reportBinderDomains ty uses =
+  fold
+    (_ u =>
+      if anyList
+        (v => fst v == fst u && not (sameDomainTop (snd u) (snd v)))
+        uses then
+        pushTypeErrorOnceAt
+          "T-AUTHORITY-DOMAIN"
+          (firstTyLoc ty)
+          (binderDomainMsg (fst u)))
+    ()
+    uses
 
 -- A name is an authority binder of the signature only where something binds
 -- it: a named argument (of type `String`, else `checkAuthorityBinder` reports
@@ -12525,13 +12796,12 @@ aliasArgBindings etbl tvs (p :: ps) (KRow :: ks) (arg :: args) =
   let _ = unifyIndexRow (EffRow [] (Some cell)) (rowArgOf etbl arg)
   let rest = aliasArgBindings etbl tvs ps ks args
   (sigVarsWithRows [(p, cell)] (fst rest), snd rest)
--- An `Authority` alias parameter binds a fresh cell pinned to the written
--- argument, as an index is (equality both ways).
+-- An `Authority` alias parameter stands for the written argument wherever
+-- the right-hand side names it: a cell linked to the term, so expansion is a
+-- substitution and records no obligation.
 aliasArgBindings etbl tvs (p :: ps) ((KAuth l) :: ks) (arg :: args) =
   let cell = freshAuthvar (dtopFor l) (Some p)
-  let written = authArgOf etbl tvs l arg
-  let _ = wantAuthority written (AVar cell)
-  let _ = wantAuthority (AVar cell) written
+  let _ = linkAuthvar cell (authArgOf etbl tvs l arg)
   let rest = aliasArgBindings etbl tvs ps ks args
   (sigVarsWithAuths [(p, cell)] (fst rest), snd rest)
 aliasArgBindings etbl tvs (p :: ps) (_ :: ks) (arg :: args) =
@@ -15041,7 +15311,7 @@ inferRecordCreateWith env rname ri fields =
       (recordFieldNames ri)
       (omFromPairs (map fieldAssignNamePair fields) omEmpty)
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
-  snd sr
+  claimCtorIndices rname (snd sr)
 
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignNamePair (FieldAssign fn _) = (fn, ())
@@ -17005,7 +17275,12 @@ inferVarPlainId env x id = match lookupVar env x
       recordMethodObligationOwned env x s inst.mtiBody inst.mtiSubstitution None
     None =>
       let mono = instantiateVarTrackedId env x id s
-      recordMethodObligationGuarded env x s mono
+      let guarded = recordMethodObligationGuarded env x s mono
+      -- `lookupVar` answered from the constructor table
+      if isSome (lookupBinding env x) then
+        guarded
+      else
+        claimCtorIndices x guarded
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -20740,15 +21015,15 @@ registerData env (DData { dataName = name, dataParams = params, dataParamKinds =
 -- identity, stamped by `stampDeclOrigins` at the module that declared it — the
 -- same source `registerVariants` takes `dataOrigin`/`newtypeOrigin` from, and
 -- for the same reason (see its 🚨 note: it must not come from ambient state).
-registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+  -- #2121 / EFFECTS-SEMANTICS §6.2: an alias head's DECLARED kinds are recorded
+  -- like a data head's (`recordDeclKinds`), so `type BoxAlias (e : Effect) a =
+  -- Box e a` accepts a row at its `e` slot.  `headRemainingKinds` still
+  -- abstains on an alias (it checks `aliasTableRef` first), so the
+  -- graded-instance-head check is unaffected; only the row-slot readers see
+  -- the entry.
   perRun.value.aliasTableRef :=
     (tyTabKey o name, (params, rhs)) :: perRun.value.aliasTableRef.value
-  -- #2121 / EFFECTS-SEMANTICS §6.2: an alias head's DECLARED kinds are recorded
-  -- like a data head's, so `type BoxAlias (e : Effect) a = Box e a` accepts a
-  -- row at its `e` slot.  `headRemainingKinds` still abstains on an alias
-  -- (it checks `aliasTableRef` first), so the graded-instance-head check is
-  -- unaffected; only the row-slot readers see the entry.
-  let _ = recordParamKinds o name (declParamKinds params anns)
   env
 registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeCtorBinders = binders, newtypeFieldTy = fty, newtypeOrigin = o }) =
   registerVariants o env name params anns [Variant con (ConPos [fty])] [binders]
@@ -20842,10 +21117,26 @@ instantiateRecordOpening (RecordInfo paramIds authIds result fields _) =
 -- paramIds`); only the per-field `substMono` trees for UNACCESSED fields are skipped,
 -- and those allocate no fresh tyvars, so tyvar numbering is byte-identical.
 instantiateRecordShared : RecordInfo -> (RecordSubst, Mono)
-instantiateRecordShared (RecordInfo paramIds authIds result _ _) =
+instantiateRecordShared (RecordInfo paramIds authIds result fields _) =
   let subst = freshSubst paramIds
-  let asub = freshAuthSubstFor authIds result pureRow
+  let cells =
+    if isEmptyL authIds then
+      Tip
+    else
+      fold (m f => authCellsIn (snd f) m) (authCellsIn result Tip) fields
+  let asub = map (id => (id, sharedAuthority id (IdMap.get id cells))) authIds
   (RecordSubst subst asub, substMono subst [] asub result)
+
+-- A universal freshens flexible, as at any use.  An existential binder is
+-- opened only by a pattern; a field read or update sees the value without
+-- opening it, so what it recovers is the domain's top: the value proves
+-- nothing about an authority the read cannot name.
+sharedAuthority : Int -> Option (Ref Authvar) -> Authority
+sharedAuthority id source
+  | IdMap.has id perRun.value.ctorExistentialsRef.value = match source
+    Some cell => authTop (authvarDomain cell)
+    None => authTop PUnit
+  | otherwise = AVar (freshInferenceAuthvar source)
 
 -- One record instantiation's substitution: its type params and its
 -- authorities, applied together to any field on demand.
@@ -20886,8 +21177,8 @@ registerVariants : TyConOrigin ->
   List (List (String, KindAnn)) ->
   TcEnv
 registerVariants o env name params anns variants binders =
+  -- the head's kinds were recorded ahead of every declaration (`recordDeclKinds`)
   let kinds = declParamKinds params anns
-  let _ = recordParamKinds o name kinds
   -- #1119 D-2: the VARIANCE twin, registered in the same breath and from the
   -- same decl-borne identity, so the two tables cannot come to disagree about
   -- which declaration a key names.  It runs AFTER `recordParamKinds` only
@@ -20945,6 +21236,9 @@ registerVariants o env name params anns variants binders =
 -- overlay over the data universe and therefore win, which is the ordering every reader
 -- assumes (see the `dataEnv` binding in checkBodyImpl).
 -- (`o` is the DECLARATION's identity — #1111 A-2.3; see `tyTabKey`.)
+-- Called once per head, by `recordDeclKinds` ahead of the declarations
+-- (`registerAllDataGo`): a constant-time prepend, never a scan of the table,
+-- which grows with every imported module.
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamKinds o name kinds =
   let entry = (tyTabKey o name, kinds)
@@ -25115,10 +25409,20 @@ data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 -- across args, e.g. `Conv a a`, is the SAME fresh tyvar — the oracle shares one
 -- tbl across the whole impl head; distinct impls get distinct ids).
 cohFreshTys : List Ty -> List Mono
-cohFreshTys tys =
-  let names = dedup (flatMap tyVarNames tys)
-  let tvs = freshTvMap names
-  map (fromAstType tvs) tys
+cohFreshTys tys = snd (implHeadMonos tys)
+
+-- An impl head's variables under their declared kinds: a name in an
+-- `Authority`-kinded slot (`impl Eq (Handle p)`) is an authority binder, as
+-- in a signature; every other bare name is a type variable.  One map is
+-- shared across the head's arguments, so a name reused across them is one
+-- variable.
+implHeadMonos : List Ty -> (List (String, Mono), List Mono)
+implHeadMonos tys =
+  let auths = dedupBinders (flatMap authArgBindersIn tys) []
+  let tvMap =
+    freshTvMap (removeAllS (map fst auths) (dedup (flatMap tyVarNames tys)))
+  let etbl = sigVarsWithAuths (map freshAuthBinder auths) emptySigVars
+  (tvMap, map (fromAstTypeE etbl tvMap) tys)
 
 -- #1559 A-3.7: THE `IE`→`CohImpl` ADAPTER — coherence's input, relocated off the decl
 -- walk.  Every one of the four things coherence judges on comes out of the row:
@@ -34572,8 +34876,7 @@ inferPlainImpl : TcEnv ->
   List ImplMethod ->
   Unit
 inferPlainImpl env ce cur iface tys methods =
-  let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
-  let headMonos = map (fromAstType implTvMap) tys
+  let (implTvMap, headMonos) = implHeadMonos tys
   inferImplMethods
     env
     ce
@@ -34599,8 +34902,7 @@ inferRequiresImpl : TcEnv ->
   List ImplMethod ->
   Unit
 inferRequiresImpl env rpNames ce cur iface tys reqs methods =
-  let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
-  let headMonos = map (fromAstType implTvMap) tys
+  let (implTvMap, headMonos) = implHeadMonos tys
   let scopedMethods = scopeImplMethods (captureScope ()) methods
   let _ =
     inferImplMethods env ce cur iface implTvMap headMonos reqs scopedMethods
@@ -37639,9 +37941,25 @@ registerAllDataScoped env ds allDs =
   let _ = seedParamPolarityFixpointScoped ds allDs
   registerAllDataGo env ds
 
+-- Every head's declared kinds are recorded before any declaration's fields
+-- elaborate, so a field may name a head declared later in the same list
+-- (`data A (p : Authority L) = A (H p)` above `data H (p : Authority L)`).
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
-registerAllDataGo env [] = env
-registerAllDataGo env (d :: rest) = registerAllDataGo (registerData env d) rest
+registerAllDataGo env ds =
+  let _ = fold (_ d => recordDeclKinds d) () ds
+  fold registerData env ds
+
+recordDeclKinds : Decl -> Unit
+recordDeclKinds (DAttrib _ d) = recordDeclKinds d
+recordDeclKinds (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataOrigin = o }) =
+  recordParamKinds o name (declParamKinds params anns)
+recordDeclKinds (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeOrigin = o }) =
+  recordParamKinds o name (declParamKinds params anns)
+recordDeclKinds (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
+  recordParamKinds o name (declParamKinds params anns)
+-- only a data, newtype or alias head declares parameter kinds; every other
+-- declaration has none to record
+recordDeclKinds _ = ()
 
 -- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
 -- whatever the universe/import ladder already put in the ref rather than
@@ -38024,6 +38342,10 @@ processSCC env sigs grouped0 members =
         (acc member => borrowedEffectCells member.smOwned.bsValue acc)
         Tip
         scopedMembers)
+      (fold
+        (acc member => qualifierAuthIds member.smOwned.bsValue acc)
+        Tip
+        scopedMembers)
   perRun.value.rigidEffvarsRef := savedRigidEffects
   perRun.value.rigidAuthvarsRef := savedRigidAuths
   perRun.value.groupConstraintMonosRef := []
@@ -38300,12 +38622,12 @@ preunifySigsEx sigs (member :: rest) =
 
 -- like astTypeFresh but also returns the tyvar-name → fresh-var map
 instantiateSigTracked : Ty -> (Mono, List (String, Mono), Option EffRow)
-instantiateSigTracked ty =
+instantiateSigTracked ty = atSignature ty (_ =>
   let rows = rowArgNames ty
   let auths = authArgBindersIn ty
   let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
   let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
-  (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl ty)
+  (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl ty))
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs

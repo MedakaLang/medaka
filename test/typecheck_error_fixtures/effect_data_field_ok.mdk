@@ -64,4 +64,34 @@ anyHandle s = Handle s
 readAny : Handle * -> <FileRead> Result String String
 readAny (Handle s) = readFile s
 
+-- an alias over an indexed head substitutes its parameter
+type Cfg (q : Authority FileRead) = Handle q
+
+viaAlias : Cfg p -> Handle p
+viaAlias h = h
+
+mkCfg : Unit -> Cfg "config/*"
+mkCfg _ = Handle "config/app.toml"
+
+-- a derived instance elaborates its head under the declared kind
+data Tagged (p : Authority FileRead) = Tagged (String @p) Int deriving (Eq)
+
+-- a field may name a head declared later in the file
+data Wrapped (p : Authority FileRead) = Wrapped Int (Later p)
+
+data Later (p : Authority FileRead) = Later (String @p)
+
+-- a record read outside a pattern cannot open an existential: it recovers
+-- the top
+data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
+
+unseal : Sealed -> Handle *
+unseal s = Handle s.path
+
+count : Sealed -> Int
+count s = s.n
+
+-- an unsigned forwarder of a phantom constructor publishes the top
+mkRaw = Raw
+
 main = println 1

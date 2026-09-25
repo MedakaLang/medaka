@@ -62,6 +62,7 @@ methodConstraintNamesOfDecl	Decl	2/14
 overlayScanOne	Decl	1/14
 plainAppHead	Expr	1/41
 prePassDeclScoped	Decl	5/14
+recordDeclKinds	Decl	1/14
 recordNegatedLitRange	Expr	2/41
 reexportedCtorIdentsOf	Decl	2/14
 reexportedIfaceMethodsOf	Decl	2/14

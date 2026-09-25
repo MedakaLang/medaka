@@ -136,6 +136,7 @@ dupSignatureErrors : List Decl -> List ResError
 dupValClause : Decl -> Option (String, Bool, Option Loc)
 dupValGo : Option String -> Bool -> List Decl -> List ResError
 dupValueBindingErrors : List Decl -> List ResError
+duplicateCtorBinders : List String -> List (String, KindAnn) -> List ResError
 duplicateErrors : List Decl -> List Decl -> List ResError
 dvbName : ResError -> String
 effectAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)

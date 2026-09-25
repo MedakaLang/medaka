@@ -448,6 +448,24 @@ explicit. Matching recovers exactly the declared field types under the
 scrutinee's index substitution, flowing directed and never through undirected
 unification; it never refines the index.
 
+Carrying the parameter in a field is necessary, not sufficient: a field the
+applier can fill with a value that proves nothing (`[]` at `List (Handle p)`,
+a closure performing nothing at `Unit -> <L p> Unit`) still carries it. So
+outside the declaring module a construction's index is a *claim*, distinct
+from the variable its fields mention, and it is bounded by the evidence the
+arguments supply: where the arguments ground the fields' authority κ (a
+constant, a rigid, a variable an argument of the enclosing binding carries,
+or a variable such a term bounds from below) the claim κ' covers it
+(`κ ⊑ κ'`); where nothing grounds κ, the claim is the domain's top.
+`Tok 1 [] : Tok *`, `Tok 1 [Handle "config/app"] : Tok "config/*"`, and
+`Tok 1 [] : Tok "config/*"` is refused. The declaring module mints no claim,
+which is the trust §4.1 already grants it. Two further consequences of the
+same rule: a field read outside a pattern of a field under an existential
+binder recovers the domain's top for that binder, since a read cannot open
+it; and an unsigned binding whose authority variable occurs in no argument
+position of its type publishes the top for it (`mkRaw = Raw` is
+`Int -> Raw *`), so a forwarder cannot republish a phantom constructor.
+
 An `Authority`-kinded type-argument slot takes an authority term, kind-directed
 as an `Effect` slot takes a row: a named argument's name (`open : (path :
 String) -> <FileRead path> Handle path`), a bare lowercase name, which is a

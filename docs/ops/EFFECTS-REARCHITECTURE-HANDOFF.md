@@ -359,9 +359,9 @@ position without evidence (every attempt was caught at a later application).
 data-half session left it):
 
 1. #3382, #3383, #3391 closed with the merge. The data half (item 2) and the
-   leftovers (items 3 and 5) landed in the data-half session; what each left
-   is listed there: a span on `TyQual`, the `ELoc` restore, the `@(a | b)`
-   qualifier form.
+   leftovers (items 3 and 5) landed in the data-half session, and its
+   whole-diff review's findings are answered there; what remains is listed
+   under "Owed after the data-half session".
 2. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
    lambda parameter without a directed flow lose the qualifier: conservative,
    documented in the architecture, not a launder.
@@ -471,6 +471,77 @@ recommended option of a short proposal:**
 - *Manifest keys.* Val's format: qualify only on collision. `manifestKey`
   writes a label bare unless two origins spell it in one row, then each as a
   quoted `"mod.Name"` key; `atomPermitted` accepts either spelling.
+
+**The whole-diff adversarial review (2026-09-25), reproduced and answered:**
+
+- *S0: an existential record field read published `RecEx -> Handle a`.*
+  `instantiateRecordShared` freshened the existential flexible. A read cannot
+  open the binder; it recovers the domain's top (`sharedAuthority`).
+- *S0: the phantom check is syntactic.* `Tok Int (List (Handle p))` and
+  `Cb Int (Unit -> <FileRead p> Unit)` pass `T-AUTHORITY-PHANTOM-EXPORT`, and an
+  importer built `Tok 1 []` and `Cb 1 (u => ())` at `"config/*"`. The general
+  rule: a construction's index is a claim bounded by its arguments' evidence
+  (architecture item 8, semantics §4.1). The same rule closes the S2 forwarder
+  (`export mkRaw = Raw` republished `Int -> Raw p`): publication now counts
+  only argument-position occurrences as sources (`qualifierAuthIds`), so the
+  forwarder is `Int -> Raw *`.
+- *S0: a constructor binder spelled like the head's parameter defeated the
+  check.* Resolve reports it as `R-DUP-BINDER` (`duplicateCtorBinders`).
+- *S0: `fmt` corrupted an existential record constructor* (binders printed
+  before the name). `recordVariantDoc` takes the binders.
+- *S1: `impl Eq (D p)` failed `T-AUTHORITY-KIND`;* the head elaborated its
+  variables as types. `implHeadMonos` is the one seam (inference and
+  coherence). *An alias `type H (q : Authority L) = Handle q` was unusable;*
+  its parameter recorded two obligations against itself and is now a link.
+  *A field naming a later head was rejected;* kinds are recorded for every
+  head before any field elaborates.
+- *S2, each reproduced first:* an index binder at a Set label beside a Prefix
+  one was silently one variable (`reportBinderDomains`, whatever binds it;
+  two Prefix labels stay one shape, as for a named argument); a failure
+  located at the first site performing the label rather than the offending
+  one (`effectSiteOf` picks the first site outside the bound); a Product
+  label accepted a repeated axis name; a bare literal into a Set first axis
+  was checked as a prefix pattern (one lift, `productPrimaryLift`); a
+  signature's unlocated kind error landed on the previous declaration
+  (`sigToSchemeTvsIn` sets the location). Not reproduced, so not acted on: a
+  `doc` rendering of a qualified arrow domain (it parenthesises), and an index
+  name reused as a named argument (the named argument binds, the slot refers
+  to it — coherent, kept).
+- *Found while fixing:* the LSP hover fallback's `generalize` ran the
+  sourceless default over locals whose cells are shared with published
+  schemes, so the domain-only source rule rewrote every signature binder to
+  the top after the fact. `generalize` now quantifies without defaulting
+  (`quantifyFree`); the matrix row "a wrapper publishes its argument's
+  authority" is the regression. Second: recording every head's kinds ahead
+  of the declarations was first written with a per-head table scan, and the
+  kinds table grows with every imported module, so the `modules` perf unit's
+  typecheck time climbed (r2 2.72 on this box); `recordParamKinds` is a
+  constant-time prepend again (r2 2.34 quiet). The unit's TIME row is
+  re-ledgered in `test/diff_compiler_perf_scaling.sh` (`KNOWN_SLOW_TIME`): the
+  drain that removed it on PR #3393 was the false promotion the row's own
+  note predicts, and the plain climbing clause trips on the unfixed
+  #154/#150 quadratic's own band (CI read r2 2.53 on the data-half head
+  before any of this).
+
+**Owed after the data-half session:**
+
+- A span on `TyQual`, the `ELoc` restore, the `@(a | b)` qualifier form
+  (above).
+- Delivery item 7 (stdlib migration to handles).
+- An unlocated `effect` declaration (`DEffect` carries no `Loc`): the axis
+  and kind-label diagnostics report at the file's first span.
+- The claim report reuses `T-AUTHORITY` with its own wording; an index
+  mismatch between two written indices still reads as a row failure
+  ("reaches X where its declared bound admits only Y"). A dedicated wording
+  for index equality, and naming an existential cell after the field that
+  carries it in messages, are wording work.
+- `check_policy`'s bare Product token lifts through the same first-axis
+  rule; a manifest row naming two same-spelled labels from two origins is
+  keyed qualified (above) but the policy's `Method=true` decode of a written
+  product atom was reported by the review and not reproduced.
+- `test/check_module_fixtures` is a frozen corpus (hand-derived oracles), so
+  the cross-module claim rows live in the matrix sibling through
+  `checkModulesDiagsChain` rather than there.
 
 **Traps paid for in this session:**
 

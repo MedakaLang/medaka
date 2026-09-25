@@ -178,6 +178,7 @@ assumptionTraceEnabled : Ref Bool
 assumptionTraceEntries : Ref (List AssumptionTraceEntry)
 astEffrowE : SigVars -> Ty -> EffRow
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
+atSignature : Ty -> (Unit -> a) -> a
 atomAuthorityName : EffAtomTy -> List String
 atomNamesAuthority : String -> EffAtomTy -> Bool
 atomOfLabel : String -> Atom
@@ -199,6 +200,7 @@ augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String,
 authArgBindersIn : Ty -> List (String, Param)
 authArgOf : SigVars -> List (String, Mono) -> EffLabel -> Ty -> Authority
 authCellsIn : Mono -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
+authIdsIn : Mono -> Map Int Unit -> Map Int Unit
 authRoots : Mono -> Map Int Unit -> Map Int Unit
 authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
@@ -206,6 +208,7 @@ authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
 authorityAsTypeMsg : String -> String
 authorityBinderBound : List (String, Ty) -> List String -> String -> Bool
+authorityClaimMsg : String -> Authority -> String
 authorityFailureMsg : String -> Authority -> Authority -> Option Authority -> String
 authorityNamesWritten : Ty -> List String
 authorityParamAsRowMsg : String -> String -> String
@@ -465,6 +468,10 @@ checkUndeterminedRetEffVarsDecl : Decl -> Unit
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
+claimCtorIndices : String -> Mono -> Mono
+claimIndex : String -> Mono -> Mono
+claimResultIndices : String -> Mono -> Mono
+claimSpineIndices : String -> Mono -> Mono
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
 classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
@@ -657,6 +664,9 @@ deSeedChainProbe : DeclEnvSeedAcc
 deSeedChainProbeZero : DeclEnvSeedAcc
 deSeedNameParity : String -> Bool
 deSeedRowN : DeclEnvModule
+decideAuthorityClaim : Bool -> AuthClaim -> Unit
+decideAuthorityClaims : Map Int Unit -> Unit
+decideAuthorityClaimsGo : Map Int Unit -> List AuthClaim -> Unit
 declBareLocals : List Decl -> BareLocals -> BareLocals
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
@@ -718,6 +728,7 @@ declaredEffectTail : Ty -> List String
 declaredEffects : Ty -> List Atom
 declaredEffectsAt : MethodTrackedInstantiation -> Option CDeclared -> Option CDeclared
 declaredEffectsOpen : Ty -> Bool
+declaredHere : Mono -> Bool
 declaredIfacesOn : String -> Ty -> List String
 declaredOblArgId : List Int -> Mono -> List Int
 declaredOblArgOk : List Int -> Mono -> Bool
@@ -859,7 +870,7 @@ effectRoots : Mono -> Map Int Unit -> Map Int Unit
 effectRowCells : EffRow -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 effectRowRoots : EffRow -> Map Int Unit -> Map Int Unit
 effectSiteKey : String -> String -> String
-effectSiteOf : String -> Option String -> Option Loc
+effectSiteOf : String -> Option String -> Option Authority -> Option Loc
 effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
@@ -952,6 +963,7 @@ externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
 externSigsToMap : List Decl -> Map String (String, List EffAtomTy, List (String, Int)) -> Map String (String, List EffAtomTy, List (String, Int))
+failureBound : SummaryFailure (Option Loc, String) -> Option Authority
 ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
 ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
@@ -1020,7 +1032,7 @@ findTvarN : Mono -> Int -> Option Mono
 finishAssumptionTrace : Unit -> List AssumptionTraceEntry
 finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
-finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
+finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Map Int Unit -> Unit
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishModuleMarking : ModuleMarking -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
@@ -1142,6 +1154,8 @@ groundMultiParamObligations : List Decl -> List UObligation -> Unit
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
 groundShadowReceiver : Option Mono -> Mono -> Bool -> Option Loc -> Unit
+groundedAuthorities : List (AuthWanted (Option Loc, String)) -> Map Int Unit -> Map Int Unit
+groundedAuthority : Map Int Unit -> Authority -> Bool
 groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
 groupClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 groupClausesGo : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
@@ -1295,6 +1309,7 @@ implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLabel : String -> KeyEntry -> String
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
+implHeadMonos : List Ty -> (List (String, Mono), List Mono)
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadSubstGo : List Ty -> List Mono -> Option (List (String, Mono)) -> Option (List (String, Mono))
@@ -2154,6 +2169,7 @@ qualifiedConstraintKinds : Option Loc -> List (String, List Kind) -> List Constr
 qualifiedKindScope : List (String, List Kind) -> Ty -> List (String, List Kind)
 qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
 qualifyBy : SigVars -> String -> Mono -> Mono
+quantifyFree : EffRow -> Mono -> Scheme
 quotedNames : List String -> String
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
 rangeFromCount : Int -> Int -> List Int
@@ -2186,6 +2202,7 @@ recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordCandIsType : Ident -> Ident -> String -> Bool
+recordDeclKinds : Decl -> Unit
 recordDeclaredBindingCall : CDeclared -> List (Int, Mono) -> Unit
 recordDoMonadError : Loc -> Unit
 recordEffectBody : EffRow -> EffRow -> Unit
@@ -2304,12 +2321,14 @@ renderFlatRow : (List Atom, List (Ref Effvar)) -> String
 renderKindAnn : KindAnn -> String
 renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
+repeatedNames : List String -> List String -> List String
 reportAmbiguousImpl : String -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
 reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousImportsIn : Map String Unit -> List Decl -> Unit
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
 reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
+reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportNumlitMismatch : List Mono -> Option Loc -> Unit
@@ -2402,6 +2421,7 @@ rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty ->
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
 rowArgOf : SigVars -> Ty -> EffRow
+rowAuthIds : EffRow -> Map Int Unit -> Map Int Unit
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 rowFreeAuthvars : EffRow -> List Int
 rowFreeEffvars : EffRow -> List Int
@@ -2488,6 +2508,7 @@ shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref (Option Int)),
 shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route), Expr, List Expr)
 shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
+sharedAuthority : Int -> Option (Ref Authvar) -> Authority
 sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
 sigCollapsedWith : Int -> List (String, Int) -> Option String
 sigConstraintArgTys : Ty -> List (List Ty)

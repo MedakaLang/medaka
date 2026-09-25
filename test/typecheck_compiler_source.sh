@@ -733,6 +733,12 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     review fix, #500): the `main : Async` driver rewrite must fire only for the
 #     stdlib `async` module's type, so this READS the origin against a literal —
 #     the bare-name match it replaced rewrote a user type named `Async` too.
+#   `TCon _ (OriginModule mid) => mid == driverState.value.currentModuleRef.value`
+#     — `declaredHere` (the data half's constructor-index claims): a constructor
+#     applied in its own declaring module mints no claim (EFFECTS-SEMANTICS §4.1
+#     trusts that module with phantom construction), so this READS the head's
+#     origin against the module under inference. A reader, not a decider of
+#     identity: the head's origin was minted by `tconFrom` at registration.
 #
 # 🚨 THIS LIST IS THE ONLY PLACE THE COMPARISON SET IS ENUMERATED MECHANICALLY.
 # ANY further comparison added without listing it here FAILS this gate, which is the
@@ -743,6 +749,7 @@ mono_tcon_allowed="| TCon String TyConOrigin
 TCon n o => Some (headKeyOfCon o n)
 (TCon n1 o1, TCon n2 o2) =>
 TCon \"Async\" (OriginModule \"async\") => True
+TCon _ (OriginModule mid) => mid == driverState.value.currentModuleRef.value
 unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
 cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon a oa => match s
