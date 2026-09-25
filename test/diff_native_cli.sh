@@ -363,6 +363,136 @@ if [ "$TEST_WIRED" = 1 ]; then
       fail=$((fail+1)); printf 'FAIL test/empty-dir: expected "no .mdk files found", got [%s]\n' "$empty_got"
       ;;
   esac
+
+  # ── test with no target (#3443) ──────────────────────────────────────────
+  # Bare `medaka test` tests the project enclosing the cwd: the NEAREST
+  # medaka.toml at or above it, walked exactly as `medaka test <root>` walks a
+  # directory, with the chosen root named on stderr. Outside any project it
+  # refuses (exit 1) and never tests the cwd; `--json` refuses too. This path
+  # used to print usage and exit 1 unconditionally, so every assertion below
+  # checks what ran as well as the exit code ([W-QUIETER]).
+  #
+  # Scratch projects under $TMP, not committed fixtures: the cases need a
+  # medaka.toml at a known depth, and the outside-project case needs a
+  # directory with NO manifest above it, which no path inside the repo is.
+  # Only the first case runs the default (native) engine; the rest pass
+  # `--engines eval` to keep the clang builds to two.
+  nt="$TMP/notarget"
+  mkdir -p "$nt/proj/sub/deep" "$nt/failing" "$nt/ws/a" "$nt/noproj"
+  printf '[package]\nname = "proj"\nversion = "0.1.0"\n' > "$nt/proj/medaka.toml"
+  printf '%s\n' '-- > top 1' '-- 2' 'top x = x + 1' > "$nt/proj/top.mdk"
+  printf '%s\n' '-- > inner 1' '-- 10' 'inner x = x * 10' > "$nt/proj/sub/deep/inner.mdk"
+  printf '[package]\nname = "failing"\nversion = "0.1.0"\n' > "$nt/failing/medaka.toml"
+  printf '%s\n' '-- > good 1' '-- 1' 'good x = x' > "$nt/failing/good.mdk"
+  printf '%s\n' '-- > bad 1' '-- 99' 'bad x = x' > "$nt/failing/bad.mdk"
+  printf '[workspace]\nmembers = ["a"]\n' > "$nt/ws/medaka.toml"
+  printf '%s\n' '-- > wsTool 1' '-- 1' 'wsTool x = x' > "$nt/ws/tool.mdk"
+  printf '[package]\nname = "a"\nversion = "0.1.0"\n' > "$nt/ws/a/medaka.toml"
+  printf '%s\n' '-- > member 1' '-- 1' 'member x = x' > "$nt/ws/a/member.mdk"
+  printf '%s\n' '-- > stray 1' '-- 1' 'stray x = x' > "$nt/noproj/stray.mdk"
+  proj_root="$(cd "$nt/proj" && pwd -P)"
+  ws_root="$(cd "$nt/ws" && pwd -P)"
+  member_root="$(cd "$nt/ws/a" && pwd -P)"
+
+  # Runs `medaka test <args>` with cwd $1; sets nt_out / nt_err / nt_rc.
+  nt_run() {
+    _nt_dir=$1; shift
+    nt_rc=0
+    (cd "$_nt_dir" && MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$@") \
+      >"$TMP/nt.out" 2>"$TMP/nt.err" || nt_rc=$?
+    nt_out="$(cat "$TMP/nt.out")"; nt_err="$(cat "$TMP/nt.err")"
+  }
+  nt_ok() { pass=$((pass+1)); printf 'ok   test/no-target/%s\n' "$1"; }
+  nt_bad() {
+    fail=$((fail+1)); printf 'FAIL test/no-target/%s: %s\n' "$1" "$2"
+    printf '  rc=%s\n  stdout: [%s]\n  stderr: [%s]\n' "$nt_rc" "$nt_out" "$nt_err"
+  }
+  nt_has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+
+  # 1. From the project root, default engine: both files run, root named.
+  nt_run "$nt/proj"
+  if [ "$nt_rc" -ne 0 ]; then nt_bad root "want exit 0"
+  elif ! nt_has "$nt_out" "top.mdk: 1/1 passed" || ! nt_has "$nt_out" "inner.mdk: 1/1 passed"; then
+    nt_bad root "want top.mdk and sub/deep/inner.mdk each 1/1 passed"
+  elif ! nt_has "$nt_err" "testing the project at $proj_root"; then
+    nt_bad root "want stderr to name the root $proj_root"
+  else nt_ok root; fi
+
+  # 2. From a nested subdirectory: widens to the whole project, and says so.
+  nt_run "$nt/proj/sub/deep" --engines eval
+  if [ "$nt_rc" -ne 0 ]; then nt_bad walk-up "want exit 0"
+  elif ! nt_has "$nt_out" "top.mdk: 1/1 passed" || ! nt_has "$nt_out" "inner.mdk: 1/1 passed"; then
+    nt_bad walk-up "want the whole project (top.mdk too), not just the subdirectory"
+  elif ! nt_has "$nt_err" "testing the project at $proj_root"; then
+    nt_bad walk-up "want stderr to name the root $proj_root"
+  else nt_ok walk-up; fi
+
+  # 3. Flags behave as with an explicit target: --filter narrows the walk, and
+  #    stdout AND exit code match `medaka test <root>` with the same flags. The
+  #    exit code is compared, not fixed: a directory run currently fails a file
+  #    whose tests all miss the filter (top.mdk here), and that is the explicit
+  #    target's behavior to keep or change, not this path's.
+  nt_run "$nt/proj/sub" --engines eval --filter inner --seed 7 --cases 5
+  nt_flag_out=$nt_out; nt_flag_rc=$nt_rc
+  nt_run "$nt/noproj" --engines eval --filter inner --seed 7 --cases 5 "$proj_root"
+  if ! nt_has "$nt_flag_out" "inner.mdk:1: inner 1" || nt_has "$nt_flag_out" "top 1"; then
+    nt_out=$nt_flag_out; nt_rc=$nt_flag_rc
+    nt_bad flags "want --filter inner to keep inner's doctest and drop top's"
+  elif [ "$nt_flag_out" != "$nt_out" ] || [ "$nt_flag_rc" -ne "$nt_rc" ]; then
+    printf '  no-target: rc=%s stdout: [%s]\n' "$nt_flag_rc" "$nt_flag_out"
+    nt_bad flags "want stdout and exit code identical to 'medaka test <root>' with the same flags"
+  else nt_ok flags; fi
+
+  # 4. A project with a failing doctest exits nonzero, having run both files.
+  nt_run "$nt/failing" --engines eval
+  if [ "$nt_rc" -eq 0 ]; then nt_bad failing "want nonzero exit (bad.mdk fails)"
+  elif ! nt_has "$nt_out" "bad.mdk: 0/1 passed" || ! nt_has "$nt_out" "good.mdk: 1/1 passed"; then
+    nt_bad failing "want bad.mdk 0/1 and good.mdk 1/1"
+  else nt_ok failing; fi
+
+  # 5. Workspace: the nearest manifest wins. At the workspace root the walk
+  #    reaches the member beneath it; inside the member, only the member runs.
+  nt_run "$nt/ws" --engines eval
+  if [ "$nt_rc" -ne 0 ]; then nt_bad workspace-root "want exit 0"
+  elif ! nt_has "$nt_out" "tool.mdk: 1/1 passed" || ! nt_has "$nt_out" "member.mdk: 1/1 passed"; then
+    nt_bad workspace-root "want the root's tool.mdk and member a's member.mdk"
+  elif ! nt_has "$nt_err" "testing the project at $ws_root"; then
+    nt_bad workspace-root "want stderr to name $ws_root"
+  else nt_ok workspace-root; fi
+  nt_run "$nt/ws/a" --engines eval
+  if [ "$nt_rc" -ne 0 ]; then nt_bad workspace-member "want exit 0"
+  elif ! nt_has "$nt_out" "member.mdk: 1/1 passed" || nt_has "$nt_out" "tool.mdk"; then
+    nt_bad workspace-member "want member.mdk only, not the workspace root's tool.mdk"
+  elif ! nt_has "$nt_err" "testing the project at $member_root"; then
+    nt_bad workspace-member "want stderr to name $member_root"
+  else nt_ok workspace-member; fi
+
+  # 6. No medaka.toml anywhere above: exit 1, names both fixes, tests nothing
+  #    (noproj/stray.mdk has a doctest that must not run). The precondition is
+  #    checked, not assumed: a manifest above $TMP would make this a project.
+  nt_up=$(cd "$nt/noproj" && pwd -P); nt_manifest=""
+  while :; do
+    [ -f "$nt_up/medaka.toml" ] && { nt_manifest="$nt_up/medaka.toml"; break; }
+    [ "$nt_up" = / ] && break
+    nt_up=$(dirname "$nt_up")
+  done
+  nt_run "$nt/noproj"
+  if [ -n "$nt_manifest" ]; then nt_bad no-project "precondition: $nt_manifest sits above the scratch dir"
+  elif [ "$nt_rc" -ne 1 ]; then nt_bad no-project "want exit 1"
+  elif [ -n "$nt_out" ]; then nt_bad no-project "want empty stdout (nothing may run)"
+  elif ! nt_has "$nt_err" "no medaka.toml" || ! nt_has "$nt_err" "pass a file.mdk or directory target" \
+       || ! nt_has "$nt_err" "run inside a project"; then
+    nt_bad no-project "want stderr naming the missing manifest and both fixes"
+  else nt_ok no-project; fi
+
+  # 7. --json with no target refuses inside a project too, and says why.
+  nt_run "$nt/proj" --json
+  if [ "$nt_rc" -ne 1 ]; then nt_bad json "want exit 1"
+  elif [ -n "$nt_out" ]; then nt_bad json "want empty stdout (no envelope, nothing run)"
+  elif ! nt_has "$nt_err" "medaka test --json: needs a single file.mdk target" \
+       || ! nt_has "$nt_err" "whole enclosing project"; then
+    nt_bad json "want stderr saying --json needs one file and a no-target run is the whole project"
+  else nt_ok json; fi
 else
   printf 'skip test/* (native test not yet wired)\n'
 fi

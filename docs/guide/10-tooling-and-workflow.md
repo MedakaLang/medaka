@@ -129,6 +129,14 @@ test that passes natively can fail there.
 `--filter <substring>` narrows a run to the tests whose name, or for a doctest
 whose expression, contains the substring.
 
+The target can be a file or a directory. A directory runs every `.mdk` file
+under it and fails if any of them fails. With no target, `medaka test` tests
+the project containing the current directory: it finds the nearest
+`medaka.toml` at or above it, prints that root, and tests it as a directory.
+Run from a subdirectory, it still covers the whole project. Outside any
+project it exits with an error and asks for a target. `--json` needs a single
+file target.
+
 ## `repl`
 
 ```

@@ -346,6 +346,14 @@ the pre-sprint baseline captured when it was first written; every cell below is 
 
 There is no residual C2 cell left in this table — `new` was the last one and S-5 drained it.
 
+`test`'s usage-error cell holds only **outside a project**, which is where the census probes
+from (a scratch directory with no `medaka.toml` above it). Since #3443, a no-target `medaka
+test` inside a project is not a usage error: it tests the project at the nearest `medaka.toml`
+at or above the cwd, walked like a directory target, and names that root on stderr (a
+no-target `medaka lint` finds its root the same way). Outside a project it exits 1 on stderr
+and names both fixes. `medaka test --json` with no target is refused `(stderr, 1)` either way,
+because `--json` reports on a single file.
+
 ### 5b. Empty target set (C3) — probe `medaka <verb> empty/`
 
 **Re-derived against the current binary — every row below is current, not the pre-sprint
