@@ -236,6 +236,14 @@ is owed, not the design.
   typechecker change can be exercised there before any rebuild; the scratch
   driver that printed each matrix row's diagnostics found the concat and
   composition defects in one run.
+- New syntax in `stdlib/` must be cold-bootstrappable: the first CI run on
+  the pushed head failed at "build medaka once" because the checked-in seed
+  (`compiler/seed/emitter.ll.gz`, an older compiler) cannot parse
+  `(path : String) ->` in `stdlib/test.mdk`, and every downstream job failed
+  by dependency. `sh test/refresh_seed.sh` twice, then
+  `sh test/bootstrap_from_seed.sh`, before pushing a syntax change the stdlib
+  uses; AGENTS.md's `[T-EMITTER-BENCH]` says so for codegen changes and it
+  holds for the parser too.
 - The `must_fail` gate's drain instruction is `git rm -r` of the pin directory;
   this session's tool policy refused that deletion ("security test removal"),
   so the three drained pins are still in the tree and the `soundness` job's
