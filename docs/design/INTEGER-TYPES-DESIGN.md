@@ -379,8 +379,8 @@ read byte) are loud and mechanical, so N2 absorbs that pass.
   and stores `44`; before N2 the same call panicked, because `emitU8` took an
   `Int`. Likewise `Bytes.fold (+) 0 b` now sums in `U8`. This is the wrap
   ruling applied to bytes, and no tree code relies on it (N2's review traced
-  every fixed-width `+ - *` site). Whether byte arithmetic needs a guard, a
-  lint, or only this statement is open for Val.
+  every fixed-width `+ - *` site). Val confirmed on 2026-09-25 that this is
+  the intended semantics: the whole U family wraps, so no guard or lint.
 - A new AST constructor (the wide literal) is audited across every
   wildcard arm as a set, and the fixture asserts about code that never
   touches it (`[T-GLOBAL-TABLE]`).
