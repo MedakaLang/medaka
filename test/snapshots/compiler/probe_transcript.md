@@ -1,5 +1,5 @@
 # META
-source_lines=217
+source_lines=268
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -65,8 +65,24 @@ stages=DESUGAR,MARK
 -- sequence is rejected whole rather than read.  Between them, no text a
 -- program can produce turns into a verdict it did not earn — at worst it turns
 -- into a loud error.
+--
+-- ── the target's own `main` ─────────────────────────────────────────────────
+-- Both probes append a synthesized `main` to the target's VERBATIM source, so
+-- a target that defines its own would be a duplicate definition.
+-- `renameUserMain` renames the target's top-level `main` definition heads
+-- instead: the `main` identifier tokens the lexer places at column 0, which
+-- are exactly the clause and signature heads of a top-level binding. The
+-- rename is located by tokens, never by printing, so every other byte of the
+-- target still reaches the backend unchanged, and a `main` inside a comment,
+-- a string or a nested binding is left alone.
 
-import support.util.{reverseL, startsWith, stringTrim}
+import frontend.lexer.{
+  Token(..),
+  tokenizeWithOffsetPairs,
+  lineStartsOf,
+  offsetToLineColFast,
+}
+import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
 
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
@@ -219,8 +235,44 @@ firstNonEmptyLine [] = ""
 firstNonEmptyLine (l :: rest)
   | stringTrim l == "" = firstNonEmptyLine rest
   | otherwise = stringTrim l
+
+-- What a target's own top-level `main` is renamed to inside a probe.  Nothing
+-- in a probe references it, so dead-code elimination drops it.
+export
+userMainName : String
+userMainName = "__probe_user_main__"
+
+-- `src` with every top-level `main` definition head renamed to
+-- `userMainName`; `src` itself when it defines no top-level `main`.
+export
+renameUserMain : String -> String
+renameUserMain src =
+  let (toks, spans) = tokenizeWithOffsetPairs src
+  match mainHeadLines (lineStartsOf src) toks spans
+    [] => src
+    heads => joinNl (renameHeads 1 heads (splitNl src))
+
+-- The 1-based lines, ascending, on which a `main` identifier token starts at
+-- column 0.
+mainHeadLines : Array Int -> List Token -> List (Int, Int) -> List Int
+mainHeadLines starts ((TIdent "main") :: toks) ((off, _) :: spans) =
+  match offsetToLineColFast starts off
+    (line, 0) => line :: mainHeadLines starts toks spans
+    _ => mainHeadLines starts toks spans
+mainHeadLines starts (_ :: toks) (_ :: spans) = mainHeadLines starts toks spans
+mainHeadLines _ _ _ = []
+
+renameHeads : Int -> List Int -> List String -> List String
+renameHeads _ [] lines = lines
+renameHeads _ _ [] = []
+renameHeads n (h :: hs) (l :: ls)
+  | n == h =
+    userMainName ++ stringSlice 4 (stringLength l) l
+      :: renameHeads (n + 1) hs ls
+  | otherwise = l :: renameHeads (n + 1) (h :: hs) ls
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -268,8 +320,21 @@ firstNonEmptyLine (l :: rest)
 (DTypeSig true "firstNonEmptyLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstNonEmptyLine" ((PList)) (ELit (LString "")))
 (DFunDef false "firstNonEmptyLine" ((PCons (PVar "l") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "stringTrim") (EVar "l")) (ELit (LString ""))) (EApp (EVar "firstNonEmptyLine") (EVar "rest")) (EIf (EVar "otherwise") (EApp (EVar "stringTrim") (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "userMainName" (TyCon "String"))
+(DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
+(DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EVar "src")) (arm (PVar "heads") () (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src")))))))))
+(DTypeSig false "mainHeadLines" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "mainHeadLines" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EVar "line") (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
+(DFunDef false "mainHeadLines" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))
+(DFunDef false "mainHeadLines" (PWild PWild PWild) (EListLit))
+(DTypeSig false "renameHeads" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "renameHeads" (PWild (PList) (PVar "lines")) (EVar "lines"))
+(DFunDef false "renameHeads" (PWild PWild (PList)) (EListLit))
+(DFunDef false "renameHeads" ((PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EVar "h")) (EBinOp "::" (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))) (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -317,3 +382,15 @@ firstNonEmptyLine (l :: rest)
 (DTypeSig true "firstNonEmptyLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstNonEmptyLine" ((PList)) (ELit (LString "")))
 (DFunDef false "firstNonEmptyLine" ((PCons (PVar "l") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "stringTrim") (EVar "l")) (ELit (LString ""))) (EApp (EVar "firstNonEmptyLine") (EVar "rest")) (EIf (EVar "otherwise") (EApp (EVar "stringTrim") (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "userMainName" (TyCon "String"))
+(DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
+(DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EVar "src")) (arm (PVar "heads") () (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src")))))))))
+(DTypeSig false "mainHeadLines" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "mainHeadLines" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EVar "line") (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
+(DFunDef false "mainHeadLines" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))
+(DFunDef false "mainHeadLines" (PWild PWild PWild) (EListLit))
+(DTypeSig false "renameHeads" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "renameHeads" (PWild (PList) (PVar "lines")) (EVar "lines"))
+(DFunDef false "renameHeads" (PWild PWild (PList)) (EListLit))
+(DFunDef false "renameHeads" ((PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EVar "h")) (EBinOp "::" (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))) (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

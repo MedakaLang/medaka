@@ -27,18 +27,8 @@ Format:  <reason-tag>  <scope>  <issue>  <note>
       DRAINS WHEN: #1334 closes — drop the arm and this row, and the ~69
       core.mdk examples start running natively.
 
-  OWNS-MAIN        any module defining a top-level `main`   (no issue)
-      The engine synthesizes `main` in the module under test's own namespace, so
-      a module that already defines one would be a duplicate definition.  This
-      is a DESIGN limit of the append-into-the-target scheme (which is what gives
-      the doctest bindings access to module-private names), not a bug: no module
-      in `stdlib/` or `compiler/` defines `main` except the entry points, which
-      carry no doctests.
-      DRAINS WHEN: someone needs it.  The fix would be to rename the target's own
-      `main` in the copied source, which requires a printer round-trip — rejected
-      for Stage 2 because a round-trip would test the printer as much as the
-      backend (see native_doctest.mdk's "VERBATIM source" note).
-
-Stage 3 (wiring `medaka test` to run both engines) is what turns this ledger into
-a gate-visible signal; today it is documentation of the two arms in
-`nativeSkipReason`.
+A module that defines its own top-level `main` is not an exception: the probe
+renames the target's `main` definition heads (`renameUserMain`,
+`compiler/tools/probe_transcript.mdk`) before appending the synthesized one.
+`test/diff_compiler_test_native.sh` re-checks every row above against the live
+binary.

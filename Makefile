@@ -193,7 +193,7 @@ test: medaka
 	## import closure ([W-MODULE-BLIND]), so without this line its
 	## structural `ModuleExports`/`reExp*From` companion census would never
 	## run. `--native`: parsing resolve.mdk's own live source needs
-	## `readFile`, an extern `medaka test`'s default interpreter engine does
+	## `readFile`, an extern `medaka test`'s interpreter engine does
 	## not bind.
 	./medaka test --native compiler/frontend/resolve_test.mdk
 	## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole

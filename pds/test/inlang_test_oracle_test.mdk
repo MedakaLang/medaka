@@ -43,7 +43,7 @@ data Engine = Eval | NativeCapability | NativeSpeed
 
 -- The extra `medaka test` arguments a suite is spawned with.
 engineArgs : Engine -> List String
-engineArgs Eval = []
+engineArgs Eval = ["--engines", "eval"]
 engineArgs NativeCapability = ["--native"]
 engineArgs NativeSpeed = ["--native"]
 
@@ -298,12 +298,14 @@ libKnownNames = libRosterNames ++ libExemptNames
 libModuleStem : String -> Option String
 libModuleStem name = stripSuffix ".mdk" name
 
--- Runs one `pds/lib/` or `pds/shell/` module and returns its
--- executed-assertion count, or an error naming the file and what went wrong.
+-- Runs one `pds/lib/` or `pds/shell/` module under the eval engine and
+-- returns its executed-assertion count, or an error naming the file and what
+-- went wrong.
 runLibSuite : String -> String -> <Exec, IO> Result String Int
 runLibSuite dir name =
-  match testAssertionCount (underRoot "pds/\{dir}/\{name}.mdk") []
-    Err e => Err "pds/\{dir}/\{name}.mdk: \{e}"
+  let path = "pds/\{dir}/\{name}.mdk"
+  match testAssertionCount (underRoot path) ["--engines", "eval"]
+    Err e => Err "\{path}: \{e}"
     Ok n => Ok n
 
 {- | The key one `libSuites` row is stored and looked up under.

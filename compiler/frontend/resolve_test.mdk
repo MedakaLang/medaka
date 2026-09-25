@@ -16,8 +16,8 @@
 -- `--native`: deriving the field list from the LIVE file needs `readFile`,
 -- an extern the interpreter's test capability list (`testCapableExterns`,
 -- `compiler/eval/eval.mdk`) deliberately excludes (file/env/stdin/net are
--- unavailable under `medaka test`'s default eval engine). Verified live: a
--- `readFile` call in a `test "…"` body fails to build under the default
+-- unavailable under `medaka test --engines eval`). Verified live: a
+-- `readFile` call in a `test "…"` body fails to build under the eval
 -- engine and succeeds under `medaka test --native`.
 
 import test.{expectEqual, expectTrue}

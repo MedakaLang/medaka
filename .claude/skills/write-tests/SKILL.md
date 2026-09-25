@@ -111,7 +111,7 @@ packet whose §5 names a test file should name the verb from here too — see th
 ### `stdlib/test_process.mdk`
 
 Its verbs reach a subprocess extern the interpreter does not bind, so a file
-using them runs under `medaka test --native`.
+using them runs under `medaka test` (native by default), never `--engines eval`.
 
 | You have | Verb | Instead of |
 |---|---|---|
@@ -200,13 +200,13 @@ measured, per-corpus decisions, not defaults.
   across engines** (`prop_runner.mdk`, see its own header comment) — never
   bake a specific counterexample into a golden as though it were
   reproducible.
-- **`medaka test` defaults to the interpreter, but no longer only runs it.**
-  `--engines eval,native` runs both and the exit code is the AND; `--native`
-  runs the compiled arm INSTEAD of the interpreter (epic #2600, #2588). The
-  default is still eval alone, so a bare `medaka test` report must say "passes
-  under eval," never bare "passes" — and it still says nothing about wasm,
-  which stays deferred. If a claim is about agreement between engines, ask for
-  it: `--engines eval,native`.
+- **`medaka test` defaults to the native backend, one engine only.** Doctests
+  and `test "…"` decls compile to a real binary; `prop`s always run in the
+  interpreter. `--engines eval` selects the interpreter instead and
+  `--engines eval,native` runs both with the exit code the AND. A bare
+  `medaka test` report says nothing about eval or wasm (wasm stays deferred).
+  If a claim is about agreement between engines, ask for it:
+  `--engines eval,native`.
 - **A module with `test "…"` decls and no doctests is NOT typechecked by
   `medaka test`** (#1229) — it prints a loud `note: typechecking was skipped`
   first. A sibling under a project's `test/` dir does get typechecked
@@ -217,7 +217,7 @@ measured, per-corpus decisions, not defaults.
 ## Verify
 
 ```sh
-./medaka test <file_or_sibling>.mdk     # doctests + test/prop blocks, under eval
+./medaka test <file_or_sibling>.mdk     # doctests + test blocks native, props in eval
 ./medaka test --engines eval,native <file>.mdk   # both engines; exit is the AND
 ./medaka check <file_or_sibling>.mdk    # typechecks cleanly (medaka test may skip it, #1229)
 ./medaka fmt --check <file>.mdk && ./medaka lint <file>.mdk

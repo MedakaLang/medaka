@@ -1,0 +1,36 @@
+-- A module that defines its own top-level `main` and also carries doctests and
+-- `test "…"` decls.  Both native runners append a synthesized `main`, so the
+-- module's own is renamed in the probe program (`renameUserMain`,
+-- `compiler/tools/probe_transcript.mdk`).  Every doctest and test here must
+-- pass under `medaka test --native`.
+--
+-- The other `main`s are the ones the rename must leave alone: this comment,
+-- the string in `label`, and the local binding in `twice`.
+-- main = "not a definition"
+
+import test.{expectEqual}
+
+-- > double 21
+-- 42
+-- > label
+-- "main"
+double : Int -> Int
+double n = n * 2
+
+label : String
+label = "main"
+
+twice : Int -> Int
+twice n =
+  let main = double n
+  double main
+
+test "double doubles" = expectEqual 42 (double 21)
+
+test "a local named main is untouched" = expectEqual 20 (twice 5)
+
+test "a string spelling main is untouched" = expectEqual "main" label
+
+main : <IO> Unit
+main =
+  println (double 21)

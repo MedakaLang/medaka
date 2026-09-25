@@ -1,5 +1,5 @@
 # META
-source_lines=2372
+source_lines=2369
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -173,11 +173,10 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 -- returns False (P0-212): a file that couldn't even be opened is a FAILURE,
 -- not a vacuous pass, so callers that gate `exit 1` on this Bool (rather than
 -- on the printed report, since the report is prose, not a signal) see it.
--- `engines` selects which execution engine(s) render each doctest example's
--- actual value — `[EngInterp]` (the default, byte-identical to pre-#81-Stage-3
--- behavior), `[EngNative]` under `medaka test --native` (SWAPS the engine,
--- doesn't add one), or an explicit `--engines eval,native` list. It has NO
--- effect on the prop/`test "…"` phases, which remain interpreter-only.
+-- `engines` selects which execution engine(s) run the doctest and `test "…"`
+-- phases — `[EngNative]` (the default, what `medaka build` would produce),
+-- `[EngInterp]` under `--engines eval`, or an explicit `--engines eval,native`
+-- list. It has NO effect on the prop phase, which is interpreter-only.
 -- `cases` overrides the prop sample count (`--cases`, default 100 at the CLI);
 -- `filterOpt` restricts doctests/`test "…"`/`prop "…"` to names containing a
 -- substring (`--filter`, #2295).
@@ -883,11 +882,10 @@ runDoctests engines trees target tsrc userDecls examples synthResults =
     _ => runEngines engines trees target tsrc userDecls examples synthResults
 
 -- Run the doctests under each requested engine in turn, AND-ing pass/fail
--- across engines. With exactly one engine — `[EngInterp]`, the default — the
--- report is BYTE-IDENTICAL to `medaka test`'s pre-#81-Stage-3 output: no
--- engine tag is printed, and only ONE build/run happens. `--native` adds
--- `EngNative` to the list, and each engine's block is labelled so the two
--- reports (and their independent pass/fail) don't run together.
+-- across engines. With exactly one engine (the default `[EngNative]`, or
+-- `--engines eval`) no engine tag is printed and only ONE build/run happens.
+-- With more than one, each engine's block is labelled so the reports (and
+-- their independent pass/fail) don't run together.
 runEngines : List Engine ->
   DoctestTrees ->
   String ->
@@ -1233,12 +1231,8 @@ lastModule (_ :: rest) = lastModule rest
 -- ELABORATED root module so their `expectEqual`/… call sites carry the dict
 -- argument (`import test`'s constrained assertions).
 
--- #2588: `engines` selects the execution engine(s) the same way the doctest
--- phase's does — `[EngInterp]` (the default) is byte-identical to the pre-#2588
--- report, `--native` adds `EngNative`, and each engine's block is labelled when
--- there is more than one.  Until #2588 this phase took no `Engine` at all, so
--- `--native` and `--engines` were silently inert for `test "…"` decls even
--- though they already worked for doctests.
+-- `engines` selects the execution engine(s) the same way the doctest phase's
+-- does, and each engine's block is labelled when there is more than one.
 runTestDecls : List Engine ->
   TestPair ->
   List Decl ->
@@ -1305,8 +1299,8 @@ runTestsOn EngInterp (TestPair coreM modsM) runtimeDecls target tsrc userDecls f
     (runtimeDecls ++ coreM ++ flatMap snd modsM)
     (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
     (rootTestsOf filterOpt tsrc modsM userDecls)
-runTestsOn EngNative _pair _runtimeDecls target tsrc userDecls filterOpt =
-  runTestDeclsNative target tsrc userDecls filterOpt
+runTestsOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt =
+  runTestDeclsNative target tsrc filterOpt
 
 -- The `test "…"` decls to evaluate: the elaborated root module's, with each
 -- body's source line recovered from a position-preserving reparse.
@@ -1329,11 +1323,11 @@ rootTestsOf filterOpt tsrc modsM userDecls =
 -- needs the opposite — the elaborated bodies, whose `expectEqual` call sites
 -- already carry their dictionary argument.  Both lists come from the same
 -- source through the same `--filter`, so index `i` names the same test in each.
-runTestDeclsNative : String -> String -> List Decl -> Option String -> <IO> Bool
-runTestDeclsNative target tsrc userDecls filterOpt =
+runTestDeclsNative : String -> String -> Option String -> <IO> Bool
+runTestDeclsNative target tsrc filterOpt =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
   let _ = putStrLn ("running tests in " ++ target)
-  reportNativeTests target tests (runNativeTests target tsrc userDecls tests)
+  reportNativeTests target tests (runNativeTests target tsrc tests)
 
 nativeRawTests : String -> List (String, Int, Expr)
 nativeRawTests tsrc = collectTests (parseLocated tsrc)
@@ -1870,9 +1864,9 @@ testDeclsReportOn EngInterp (TestPair coreM modsM) runtimeDecls target tsrc user
     (runtimeDecls ++ coreM ++ flatMap snd modsM)
     (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
     (rootTestsOf filterOpt tsrc modsM userDecls)
-testDeclsReportOn EngNative _pair _runtimeDecls target tsrc userDecls filterOpt =
+testDeclsReportOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
-  zipTestResults tests (runNativeTests target tsrc userDecls tests)
+  zipTestResults tests (runNativeTests target tsrc tests)
 
 zipTestResults : List (String, Int, Expr) ->
   List ExResult ->
@@ -1923,11 +1917,12 @@ testHelpText = stringConcat [
   "medaka test — Run doctests + property tests\n", "\n", "Usage:\n",
   "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n",
   "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n", "\n",
-  "  --native            run doctests through a compiled native binary\n",
-  "                      instead of the interpreter (shorthand for\n",
-  "                      --engines native)\n",
+  "  --native            run doctests and `test \"…\"` decls through a\n",
+  "                      compiled native binary (the default; shorthand\n",
+  "                      for --engines native)\n",
   "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n",
-  "                      exit code is the AND across engines\n",
+  "                      exit code is the AND across engines. `eval` is\n",
+  "                      the interpreter; property tests always use it\n",
   "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n",
   "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n",
   "                      object instead of human text (single file.mdk target\n",
@@ -1942,7 +1937,7 @@ testHelpText = stringConcat [
   "  --cases <n>           run each property with <n> generated cases\n",
   "                      instead of the default 100\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
-  "is the interpreter (eval) alone. A file.mdk or dir target is required.\n"
+  "is the native backend alone. A file.mdk or dir target is required.\n"
 ]
 
 -- #2316: any `--`-prefixed token must be one of the known `medaka test`
@@ -1950,7 +1945,7 @@ testHelpText = stringConcat [
 -- testTargets rest`) dropped ANY unrecognized `--`-shaped token
 -- unconditionally — so `--engines=native` (the `=`-form, which nothing then
 -- parsed as `--engines`) silently vanished, `parseTestEngines` saw no
--- `--engines`/`--native` at all, and the run defaulted to the interpreter and
+-- `--engines`/`--native` at all, and the run fell back to the default engine and
 -- exited 0 with no diagnostic.  The spec below is what rejects it now.
 -- Declaration order is the roster order, reproducing the old
 -- `testBoolFlags ++ testValueFlags` rendering.
@@ -2008,7 +2003,9 @@ parseTestCasesFlag a = match parseTestIntFlag "--cases" a
 -- who typed --native and got only `--engines`'s answer, with no diagnostic,
 -- has no way to know --native was ignored. So both together is a hard error
 -- naming both flags, not a silent pick.  With neither given, the default is
--- `[EngInterp]`.
+-- `[EngNative]`: the engine `medaka build` ships, so a test observes the
+-- tail-call and TRMC space laws (docs/spec/EMITTER-SEMANTICS.md §6) and the
+-- host externs the interpreter does not bind.
 export
 parseTestEngines : Args -> Result String (List Engine)
 parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
@@ -2017,7 +2014,7 @@ parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
       "--native and --engines are mutually exclusive; --native is shorthand for --engines native"
   (Some spec, False) => parseEngineList spec
   (None, True) => Ok [EngNative]
-  (None, False) => Ok [EngInterp]
+  (None, False) => Ok [EngNative]
 
 -- Comma list of engine names (`eval`/`native`) — mirrors `medaka snapshot
 -- --stages a,b`'s `parseStages`: an unknown name is a hard error naming the
@@ -2545,11 +2542,11 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "runTestsOn" (TyFun (TyCon "Engine") (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
 (DFunDef false "runTestsOn" ((PCon "EngInterp") (PCon "TestPairErr" (PVar "e")) (PVar "_runtimeDecls") (PVar "_target") (PVar "_tsrc") (PVar "_userDecls") (PVar "_filterOpt")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False"))))
 (DFunDef false "runTestsOn" ((PCon "EngInterp") (PCon "TestPair" (PVar "coreM") (PVar "modsM")) (PVar "runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EApp (EVar "gatedReportTests") (EVar "target")) (EBinOp "++" (EBinOp "++" (EVar "runtimeDecls") (EVar "coreM")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modsM")))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EApp (EApp (EVar "rootTestsOf") (EVar "filterOpt")) (EVar "tsrc")) (EVar "modsM")) (EVar "userDecls"))))
-(DFunDef false "runTestsOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EApp (EVar "runTestDeclsNative") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "filterOpt")))
+(DFunDef false "runTestsOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "_userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EVar "runTestDeclsNative") (EVar "target")) (EVar "tsrc")) (EVar "filterOpt")))
 (DTypeSig false "rootTestsOf" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))))))))
 (DFunDef false "rootTestsOf" ((PVar "filterOpt") (PVar "tsrc") (PVar "modsM") (PVar "userDecls")) (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EApp (EVar "attachRawLines") (EApp (EVar "testLineTests") (EVar "tsrc"))) (EApp (EVar "collectTests") (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))))))
-(DTypeSig false "runTestDeclsNative" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))
-(DFunDef false "runTestDeclsNative" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "running tests in ")) (EVar "target")))) (DoExpr (EApp (EApp (EApp (EVar "reportNativeTests") (EVar "target")) (EVar "tests")) (EApp (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "tests"))))))
+(DTypeSig false "runTestDeclsNative" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "runTestDeclsNative" ((PVar "target") (PVar "tsrc") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "running tests in ")) (EVar "target")))) (DoExpr (EApp (EApp (EApp (EVar "reportNativeTests") (EVar "target")) (EVar "tests")) (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "tests"))))))
 (DTypeSig false "nativeRawTests" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr")))))
 (DFunDef false "nativeRawTests" ((PVar "tsrc")) (EApp (EVar "collectTests") (EApp (EVar "parseLocated") (EVar "tsrc"))))
 (DTypeSig false "reportNativeTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "ExResult")) (TyEffect ("IO") None (TyCon "Bool"))))))
@@ -2629,7 +2626,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "testDeclsReportOn" (TyFun (TyCon "Engine") (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))))))))
 (DFunDef false "testDeclsReportOn" ((PCon "EngInterp") (PCon "TestPairErr" PWild) (PVar "_runtimeDecls") (PVar "_target") (PVar "_tsrc") (PVar "_userDecls") (PVar "_filterOpt")) (EListLit))
 (DFunDef false "testDeclsReportOn" ((PCon "EngInterp") (PCon "TestPair" (PVar "coreM") (PVar "modsM")) (PVar "runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EApp (EVar "gatedTestsCollect") (EVar "target")) (EBinOp "++" (EBinOp "++" (EVar "runtimeDecls") (EVar "coreM")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modsM")))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EApp (EApp (EVar "rootTestsOf") (EVar "filterOpt")) (EVar "tsrc")) (EVar "modsM")) (EVar "userDecls"))))
-(DFunDef false "testDeclsReportOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoExpr (EApp (EApp (EVar "zipTestResults") (EVar "tests")) (EApp (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "tests"))))))
+(DFunDef false "testDeclsReportOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "_userDecls") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoExpr (EApp (EApp (EVar "zipTestResults") (EVar "tests")) (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "tests"))))))
 (DTypeSig false "zipTestResults" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "ExResult")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))
 (DFunDef false "zipTestResults" ((PList) PWild) (EListLit))
 (DFunDef false "zipTestResults" ((PCons PWild PWild) (PList)) (EListLit))
@@ -2642,7 +2639,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "runTestsCollect" (PWild (PList)) (EListLit))
 (DFunDef false "runTestsCollect" ((PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "rest"))))
 (DTypeSig true "testHelpText" (TyCon "String"))
-(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n")) (ELit (LString "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n")) (ELit (LString "                      object instead of human text (single file.mdk target\n")) (ELit (LString "                      only; agrees with the human report's pass/fail counts\n")) (ELit (LString "                      on all three phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests and `test \"…\"` decls through a\n")) (ELit (LString "                      compiled native binary (the default; shorthand\n")) (ELit (LString "                      for --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines. `eval` is\n")) (ELit (LString "                      the interpreter; property tests always use it\n")) (ELit (LString "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n")) (ELit (LString "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n")) (ELit (LString "                      object instead of human text (single file.mdk target\n")) (ELit (LString "                      only; agrees with the human report's pass/fail counts\n")) (ELit (LString "                      on all three phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the native backend alone. A file.mdk or dir target is required.\n")))))
 (DTypeSig true "testArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test")))))))
 (DTypeSig true "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -2650,7 +2647,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig true "parseTestCasesFlag" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "parseTestCasesFlag" ((PVar "a")) (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--cases"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PCon "None")) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Ok" (PCon "Some" (PVar "n"))) () (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--cases requires a positive integer value, got '")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "'")))) (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))))))
 (DTypeSig true "parseTestEngines" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
-(DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp"))))))
+(DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative"))))))
 (DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "map") (EVar "stringTrim")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
 (DTypeSig false "parseEngineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
@@ -2893,11 +2890,11 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "runTestsOn" (TyFun (TyCon "Engine") (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
 (DFunDef false "runTestsOn" ((PCon "EngInterp") (PCon "TestPairErr" (PVar "e")) (PVar "_runtimeDecls") (PVar "_target") (PVar "_tsrc") (PVar "_userDecls") (PVar "_filterOpt")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False"))))
 (DFunDef false "runTestsOn" ((PCon "EngInterp") (PCon "TestPair" (PVar "coreM") (PVar "modsM")) (PVar "runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EApp (EVar "gatedReportTests") (EVar "target")) (EBinOp "++" (EBinOp "++" (EVar "runtimeDecls") (EVar "coreM")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modsM")))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EApp (EApp (EVar "rootTestsOf") (EVar "filterOpt")) (EVar "tsrc")) (EVar "modsM")) (EVar "userDecls"))))
-(DFunDef false "runTestsOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EApp (EVar "runTestDeclsNative") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "filterOpt")))
+(DFunDef false "runTestsOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "_userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EVar "runTestDeclsNative") (EVar "target")) (EVar "tsrc")) (EVar "filterOpt")))
 (DTypeSig false "rootTestsOf" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))))))))
 (DFunDef false "rootTestsOf" ((PVar "filterOpt") (PVar "tsrc") (PVar "modsM") (PVar "userDecls")) (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EApp (EVar "attachRawLines") (EApp (EVar "testLineTests") (EVar "tsrc"))) (EApp (EVar "collectTests") (EApp (EApp (EVar "elaboratedRootProps") (EVar "modsM")) (EVar "userDecls"))))))
-(DTypeSig false "runTestDeclsNative" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool")))))))
-(DFunDef false "runTestDeclsNative" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "running tests in ")) (EVar "target")))) (DoExpr (EApp (EApp (EApp (EVar "reportNativeTests") (EVar "target")) (EVar "tests")) (EApp (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "tests"))))))
+(DTypeSig false "runTestDeclsNative" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "runTestDeclsNative" ((PVar "target") (PVar "tsrc") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "running tests in ")) (EVar "target")))) (DoExpr (EApp (EApp (EApp (EVar "reportNativeTests") (EVar "target")) (EVar "tests")) (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "tests"))))))
 (DTypeSig false "nativeRawTests" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr")))))
 (DFunDef false "nativeRawTests" ((PVar "tsrc")) (EApp (EVar "collectTests") (EApp (EVar "parseLocated") (EVar "tsrc"))))
 (DTypeSig false "reportNativeTests" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "ExResult")) (TyEffect ("IO") None (TyCon "Bool"))))))
@@ -2977,7 +2974,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig false "testDeclsReportOn" (TyFun (TyCon "Engine") (TyFun (TyCon "TestPair") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))))))))
 (DFunDef false "testDeclsReportOn" ((PCon "EngInterp") (PCon "TestPairErr" PWild) (PVar "_runtimeDecls") (PVar "_target") (PVar "_tsrc") (PVar "_userDecls") (PVar "_filterOpt")) (EListLit))
 (DFunDef false "testDeclsReportOn" ((PCon "EngInterp") (PCon "TestPair" (PVar "coreM") (PVar "modsM")) (PVar "runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EApp (EApp (EApp (EApp (EVar "gatedTestsCollect") (EVar "target")) (EBinOp "++" (EBinOp "++" (EVar "runtimeDecls") (EVar "coreM")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modsM")))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (EApp (EApp (EApp (EApp (EVar "rootTestsOf") (EVar "filterOpt")) (EVar "tsrc")) (EVar "modsM")) (EVar "userDecls"))))
-(DFunDef false "testDeclsReportOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoExpr (EApp (EApp (EVar "zipTestResults") (EVar "tests")) (EApp (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "tests"))))))
+(DFunDef false "testDeclsReportOn" ((PCon "EngNative") (PVar "_pair") (PVar "_runtimeDecls") (PVar "target") (PVar "tsrc") (PVar "_userDecls") (PVar "filterOpt")) (EBlock (DoLet false false (PVar "tests") (EApp (EApp (EVar "filterTestsByName") (EVar "filterOpt")) (EApp (EVar "nativeRawTests") (EVar "tsrc")))) (DoExpr (EApp (EApp (EVar "zipTestResults") (EVar "tests")) (EApp (EApp (EApp (EVar "runNativeTests") (EVar "target")) (EVar "tsrc")) (EVar "tests"))))))
 (DTypeSig false "zipTestResults" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "ExResult")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "ExResult"))))))
 (DFunDef false "zipTestResults" ((PList) PWild) (EListLit))
 (DFunDef false "zipTestResults" ((PCons PWild PWild) (PList)) (EListLit))
@@ -2990,7 +2987,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "runTestsCollect" (PWild (PList)) (EListLit))
 (DFunDef false "runTestsCollect" ((PVar "env") (PCons (PTuple (PVar "name") (PVar "line") (PVar "body")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EApp (EApp (EVar "runOneTest") (EVar "env")) (EVar "body"))) (EApp (EApp (EVar "runTestsCollect") (EVar "env")) (EVar "rest"))))
 (DTypeSig true "testHelpText" (TyCon "String"))
-(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n")) (ELit (LString "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n")) (ELit (LString "                      object instead of human text (single file.mdk target\n")) (ELit (LString "                      only; agrees with the human report's pass/fail counts\n")) (ELit (LString "                      on all three phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests and `test \"…\"` decls through a\n")) (ELit (LString "                      compiled native binary (the default; shorthand\n")) (ELit (LString "                      for --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines. `eval` is\n")) (ELit (LString "                      the interpreter; property tests always use it\n")) (ELit (LString "  --json               emit a {\"file\":...,\"engine\":...,\"doctests\":...,\n")) (ELit (LString "                      \"properties\":...,\"tests\":...,\"summary\":...} JSON\n")) (ELit (LString "                      object instead of human text (single file.mdk target\n")) (ELit (LString "                      only; agrees with the human report's pass/fail counts\n")) (ELit (LString "                      on all three phases)\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the native backend alone. A file.mdk or dir target is required.\n")))))
 (DTypeSig true "testArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "testArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "test"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--native")))) (ELit (LString "shorthand for --engines native"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the structured-diagnostics envelope"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--engines")))) (ELit (LString "eval,native"))) (ELit (LString "engines to run each example under"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--filter")))) (ELit (LString "SUBSTRING"))) (ELit (LString "run only matching examples"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--seed")))) (ELit (LString "N"))) (ELit (LString "seed the property RNG"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--cases")))) (ELit (LString "N"))) (ELit (LString "property cases per test")))))))
 (DTypeSig true "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -2998,7 +2995,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DTypeSig true "parseTestCasesFlag" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "parseTestCasesFlag" ((PVar "a")) (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--cases"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PCon "None")) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Ok" (PCon "Some" (PVar "n"))) () (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--cases requires a positive integer value, got '")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "'")))) (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))))))
 (DTypeSig true "parseTestEngines" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
-(DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp"))))))
+(DFunDef false "parseTestEngines" ((PVar "a")) (EMatch (ETuple (EApp (EApp (EVar "flagValue") (ELit (LString "--engines"))) (EVar "a")) (EApp (EApp (EVar "flag") (ELit (LString "--native"))) (EVar "a"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative"))))))
 (DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseEngineList" ((PVar "spec")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EMethodRef "map") (EVar "stringTrim")) (EApp (EVar "splitLintNames") (EVar "spec"))))) (DoExpr (EMatch (EVar "names") (arm (PList) () (EApp (EVar "Err") (ELit (LString "--engines requires at least one of: eval, native")))) (arm PWild () (EApp (EVar "parseEngineNames") (EVar "names")))))))
 (DTypeSig false "parseEngineNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))

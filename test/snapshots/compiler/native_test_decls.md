@@ -1,5 +1,5 @@
 # META
-source_lines=416
+source_lines=392
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_test_decls.mdk — the NATIVE execution engine for
@@ -56,7 +56,7 @@ import driver.build_cmd.{
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
-import support.util.{joinNl, splitNl, anyList}
+import support.util.{joinNl, splitNl}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
@@ -67,6 +67,7 @@ import tools.probe_transcript.{
   lookupChunk,
   mintNonce,
   noncedPrefix,
+  renameUserMain,
   sentinelLine,
   tagsInOrder,
   valuePrintExpr,
@@ -115,62 +116,37 @@ expectedTags i (_ :: rest) =
     ]
     ++ expectedTags (i + 1) rest
 
--- ── skips that must be LOUD ─────────────────────────────────────────────────
--- A target that already defines `main` cannot host the synthesized entry point.
--- Every other shape that cannot build reports the BUILD's own error, which is
--- loud by construction.  A silent skip would read exactly like a pass, which is
--- the one outcome this engine may never produce.
-nativeTestSkipReason : String -> List Decl -> Option String
-nativeTestSkipReason target userDecls
-  | definesMain userDecls =
-    Some
-      "native test runner: SKIPPED \{target} — it already defines a top-level `main`, which the synthesized test entry point would collide with. No test was executed natively."
-  | otherwise = None
-
-definesMain : List Decl -> Bool
-definesMain decls = anyList isMainDef decls
-
-isMainDef : Decl -> Bool
-isMainDef (DFunDef _ "main" _ _) = True
-isMainDef _ = False
-
 -- ── entry point ─────────────────────────────────────────────────────────────
 -- `tests` is `(name, line, RAW body)` in the same order and after the same
 -- `--filter` the interpreter arm applies, so index `i` here is the same test
 -- the driver names at index `i`.  The result is one `ExResult` per test,
--- positionally aligned.
+-- positionally aligned.  A target that cannot build reports the BUILD's own
+-- error on every test, which is loud by construction.
 export
 runNativeTests : String ->
   String ->
-  List Decl ->
   List (String, Int, Expr) ->
   <IO> List ExResult
-runNativeTests target tsrc userDecls tests =
-  match nativeRendered target tsrc userDecls tests
-    Err reason => map (_ => Errored reason) tests
-    Ok results => results
+runNativeTests target tsrc tests = match nativeRendered target tsrc tests
+  Err reason => map (_ => Errored reason) tests
+  Ok results => results
 
 nativeRendered : String ->
   String ->
-  List Decl ->
   List (String, Int, Expr) ->
   <IO> Result String (List ExResult)
-nativeRendered target tsrc userDecls tests =
-  match nativeTestSkipReason target userDecls
-    Some reason => Err reason
-    None => match makeTempDir ()
-      Err e =>
-        Err "native test runner: could not create a scratch directory: \{e}"
-      Ok tmpDir =>
-        -- The nonce is drawn HERE, before the probe source is written, so it
-        -- reaches `runInTmp` in time to land in the generated code the target's
-        -- own (already-fixed) source cannot see or influence.
-        let nonce = mintNonce ()
-        -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
-        -- teardown, so the probe binary still exists while it runs.
-        let results = runInTmp target tsrc tests tmpDir nonce
-        let _ = cleanupTempDir tmpDir
-        results
+nativeRendered target tsrc tests = match makeTempDir ()
+  Err e => Err "native test runner: could not create a scratch directory: \{e}"
+  Ok tmpDir =>
+    -- The nonce is drawn HERE, before the probe source is written, so it
+    -- reaches `runInTmp` in time to land in the generated code the target's
+    -- own (already-fixed) source cannot see or influence.
+    let nonce = mintNonce ()
+    -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
+    -- teardown, so the probe binary still exists while it runs.
+    let results = runInTmp target tsrc tests tmpDir nonce
+    let _ = cleanupTempDir tmpDir
+    results
 
 -- ── the scratch project ─────────────────────────────────────────────────────
 -- The manifest is what carries trusted-root status to the copy, so a module
@@ -270,7 +246,7 @@ expectationAlias = "MdkProbeTest__"
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
   joinNl
-    (["import test as \{expectationAlias}", "", tsrc, ""]
+    (["import test as \{expectationAlias}", "", renameUserMain tsrc, ""]
       ++ testBindings nonce 0 tests
       ++ ["main ="]
       ++ mainLines nonce 0 tests
@@ -423,9 +399,9 @@ fromFields note _ _ _ _ =
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_test__@@")))
@@ -440,17 +416,10 @@ fromFields note _ _ _ _ =
 (DTypeSig false "expectedTags" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "expectedTags" (PWild (PList)) (EListLit (EVar "endTag")))
 (DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "++" (EListLit (EApp (EVar "startTag") (EVar "i")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "act")))) (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig false "nativeTestSkipReason" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "nativeTestSkipReason" ((PVar "target") (PVar "userDecls")) (EIf (EApp (EVar "definesMain") (EVar "userDecls")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: SKIPPED ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " — it already defines a top-level `main`, which the synthesized test entry point would collide with. No test was executed natively.")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "definesMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
-(DFunDef false "definesMain" ((PVar "decls")) (EApp (EApp (EVar "anyList") (EVar "isMainDef")) (EVar "decls")))
-(DTypeSig false "isMainDef" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isMainDef" ((PCon "DFunDef" PWild (PLit (LString "main")) PWild PWild)) (EVar "True"))
-(DFunDef false "isMainDef" (PWild) (EVar "False"))
-(DTypeSig true "runNativeTests" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "ExResult"))))))))
-(DFunDef false "runNativeTests" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "tests")) (EMatch (EApp (EApp (EApp (EApp (EVar "nativeRendered") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "tests")) (arm (PCon "Err" (PVar "reason")) () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "Errored") (EVar "reason")))) (EVar "tests"))) (arm (PCon "Ok" (PVar "results")) () (EVar "results"))))
-(DTypeSig false "nativeRendered" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult")))))))))
-(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "tests")) (EMatch (EApp (EApp (EVar "nativeTestSkipReason") (EVar "target")) (EVar "userDecls")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "Err") (EVar "reason"))) (arm (PCon "None") () (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))))
+(DTypeSig true "runNativeTests" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "ExResult")))))))
+(DFunDef false "runNativeTests" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "nativeRendered") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (arm (PCon "Err" (PVar "reason")) () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "Errored") (EVar "reason")))) (EVar "tests"))) (arm (PCon "Ok" (PVar "results")) () (EVar "results"))))
+(DTypeSig false "nativeRendered" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult"))))))))
+(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))
 (DTypeSig false "scratchManifest" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "scratchManifest" ((PVar "target")) (EApp (EApp (EVar "scratchProjectManifest") (ELit (LString "medaka_native_test"))) (EVar "target")))
 (DTypeSig false "scratchEntryName" (TyFun (TyCon "String") (TyCon "String")))
@@ -462,7 +431,7 @@ fromFields note _ _ _ _ =
 (DTypeSig false "expectationAlias" (TyCon "String"))
 (DFunDef false "expectationAlias" () (ELit (LString "MdkProbeTest__")))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "String")))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EVar "display") (EVar "expectationAlias"))) (ELit (LString ""))) (ELit (LString "")) (EVar "tsrc") (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EVar "display") (EVar "expectationAlias"))) (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
 (DTypeSig false "bindingName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "bindingName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "printerName" (TyFun (TyCon "Int") (TyCon "String")))
@@ -509,9 +478,9 @@ fromFields note _ _ _ _ =
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_test__@@")))
@@ -526,17 +495,10 @@ fromFields note _ _ _ _ =
 (DTypeSig false "expectedTags" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "expectedTags" (PWild (PList)) (EListLit (EVar "endTag")))
 (DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "++" (EListLit (EApp (EVar "startTag") (EVar "i")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EVar "fieldTag") (EVar "i")) (ELit (LString "act")))) (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig false "nativeTestSkipReason" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "nativeTestSkipReason" ((PVar "target") (PVar "userDecls")) (EIf (EApp (EVar "definesMain") (EVar "userDecls")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: SKIPPED ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " — it already defines a top-level `main`, which the synthesized test entry point would collide with. No test was executed natively.")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "definesMain" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
-(DFunDef false "definesMain" ((PVar "decls")) (EApp (EApp (EVar "anyList") (EVar "isMainDef")) (EVar "decls")))
-(DTypeSig false "isMainDef" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isMainDef" ((PCon "DFunDef" PWild (PLit (LString "main")) PWild PWild)) (EVar "True"))
-(DFunDef false "isMainDef" (PWild) (EVar "False"))
-(DTypeSig true "runNativeTests" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "ExResult"))))))))
-(DFunDef false "runNativeTests" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "tests")) (EMatch (EApp (EApp (EApp (EApp (EVar "nativeRendered") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "tests")) (arm (PCon "Err" (PVar "reason")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "Errored") (EVar "reason")))) (EVar "tests"))) (arm (PCon "Ok" (PVar "results")) () (EVar "results"))))
-(DTypeSig false "nativeRendered" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult")))))))))
-(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "tests")) (EMatch (EApp (EApp (EVar "nativeTestSkipReason") (EVar "target")) (EVar "userDecls")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "Err") (EVar "reason"))) (arm (PCon "None") () (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))))
+(DTypeSig true "runNativeTests" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "ExResult")))))))
+(DFunDef false "runNativeTests" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "nativeRendered") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (arm (PCon "Err" (PVar "reason")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "Errored") (EVar "reason")))) (EVar "tests"))) (arm (PCon "Ok" (PVar "results")) () (EVar "results"))))
+(DTypeSig false "nativeRendered" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult"))))))))
+(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))
 (DTypeSig false "scratchManifest" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "scratchManifest" ((PVar "target")) (EApp (EApp (EVar "scratchProjectManifest") (ELit (LString "medaka_native_test"))) (EVar "target")))
 (DTypeSig false "scratchEntryName" (TyFun (TyCon "String") (TyCon "String")))
@@ -548,7 +510,7 @@ fromFields note _ _ _ _ =
 (DTypeSig false "expectationAlias" (TyCon "String"))
 (DFunDef false "expectationAlias" () (ELit (LString "MdkProbeTest__")))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "String")))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EMethodRef "display") (EVar "expectationAlias"))) (ELit (LString ""))) (ELit (LString "")) (EVar "tsrc") (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EMethodRef "display") (EVar "expectationAlias"))) (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
 (DTypeSig false "bindingName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "bindingName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "printerName" (TyFun (TyCon "Int") (TyCon "String")))

@@ -322,10 +322,17 @@ EOF
 # Exit codes are the SUBJECT here, so every invocation redirects to a file and reads
 # `$?` directly. A pipe would report the LAST stage's status and a failing run would
 # read as exit 0 — the exact confusion this gate exists to remove.
+#
+# `ENGINE_ARGS` is empty (the native default) except around the cells whose claim is
+# what the INTERPRETER does with an exempt module: the exemption only skips
+# `medaka test`'s own pre-check, and the native probe build type-checks regardless,
+# so an exempt ill-typed body reaches eval's runtime panic only under `--engines eval`.
+ENGINE_ARGS=""
 run_case() {
   name="$1"; target="$2"; want_code="$3"; shift 3
   out="$TMP/$name.out"
-  ( cd "$CASE_DIR" || exit 99; "$MEDAKA" test "$target" ) > "$out" 2>&1
+  # shellcheck disable=SC2086
+  ( cd "$CASE_DIR" || exit 99; "$MEDAKA" test $ENGINE_ARGS "$target" ) > "$out" 2>&1
   got_code=$?
 
   if [ "$got_code" -ne "$want_code" ]; then
@@ -435,8 +442,10 @@ run_case 'd doctest failing' "$TMP/d_doctest_wrong_expectation.mdk" 1 \
 # The exemption cells assert the test/prop actually RAN AND PASSED, not merely exit 0:
 # a gate that fired and swallowed its own diagnostic would also exit 0, and `1/1 passed`
 # / `OK (100 tests)` are the only output a spuriously-gated run could not produce.
+ENGINE_ARGS='--engines eval'
 run_case 'e exemption preserved (hasTests)' "$TMP/e_exempt_via_testdecl.mdk" 0 \
   '  ok   ' 'sum of two' '1/1 passed'
+ENGINE_ARGS=''
 
 run_case 'h exemption preserved (hasProps)' "$TMP/h_exempt_via_prop.mdk" 0 \
   'OK (100 tests)' '1 passed, 0 failed'
@@ -457,9 +466,11 @@ run_case 'h exemption preserved (hasProps)' "$TMP/h_exempt_via_prop.mdk" 0 \
 # Cells j and m are the ones that make the announcement's SCOPE observable. i/k/l
 # alone are all satisfied by a build that announces unconditionally — which would
 # claim every type-checked module went unchecked.
+ENGINE_ARGS='--engines eval'
 run_case 'i announcement on the hasTests exemption' "$TMP/e_exempt_via_testdecl.mdk" 0 \
   'note: typechecking was skipped for' '`test "…"` decls' 'to type-check it: medaka check' \
   '1/1 passed'
+ENGINE_ARGS=''
 
 run_case 'k announcement on the hasProps exemption' "$TMP/h_exempt_via_prop.mdk" 0 \
   'note: typechecking was skipped for' '`prop "…"` decls' 'to type-check it: medaka check' \
@@ -468,9 +479,11 @@ run_case 'k announcement on the hasProps exemption' "$TMP/h_exempt_via_prop.mdk"
 # #1680's headline symptom is the UNEXPLAINED panic, so this cell asserts both halves
 # are present in one run: the panic still happens (the exemption is intact) and the
 # note that explains it does too.
+ENGINE_ARGS='--engines eval'
 run_case 'l 1680 repro: the panic is explained' "$TMP/i_1680_repro.mdk" 1 \
   'note: typechecking was skipped for' 'may therefore be an uncaught TYPE error' \
   "runtime error [E-PANIC]: unknown op '+'"
+ENGINE_ARGS=''
 
 # n/o: the `compiler/`/`stdlib/` test-vehicle sibling loses the exemption — it must
 # fail the SAME way cell a does (a real type error, not the exempted-and-panics
@@ -484,8 +497,10 @@ run_case 'o narrowing: stdlib-prefix vehicle no longer exempt' "$TMP/stdlib/o_na
 # p: same content, `_test.mdk` suffix, but no `compiler/`/`stdlib/` prefix — suffix
 # alone must NOT narrow the exemption (this is the shape `sqlite/test/*_test.mdk`
 # shares), so it still exempts and dies the old, uninformative way cell l does.
+ENGINE_ARGS='--engines eval'
 run_case 'p suffix alone insufficient: stays exempt' "$TMP/p_suffix_only_stays_exempt_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+ENGINE_ARGS=''
 
 # q: cell n's fixture, reached by a bare relative name from inside its own directory.
 # Same module, same classification — the narrowing must not depend on how the target
@@ -499,14 +514,20 @@ CASE_DIR="."
 run_case 'u narrowing: this repo own test dir no longer exempt' "$TMP/repo/test/u_repo_test_dir_test.mdk" 1 \
   'requires it to `medaka check` first' 'Type mismatch: Int vs String'
 
+ENGINE_ARGS='--engines eval'
 run_case 'v test dir without a compiler sibling: stays exempt' "$TMP/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+ENGINE_ARGS=''
 
+ENGINE_ARGS='--engines eval'
 run_case 'r substring is not a component (mycompiler): stays exempt' "$TMP/mycompiler/sqlite/test/r_substring_not_component_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+ENGINE_ARGS=''
 
+ENGINE_ARGS='--engines eval'
 run_case 's substring is not a component (newstdlib): stays exempt' "$TMP/newstdlib/s_substring_not_component_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+ENGINE_ARGS=''
 
 refute_case 'j doctest wins: no skip announced' "$TMP/j_doctest_beats_testdecl.mdk" 0 \
   'typechecking was skipped'
