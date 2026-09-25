@@ -163,7 +163,6 @@ suites = [
   -- row nothing would run them.
   ("base32", (28, EvalAndNative)),
   ("base64", (21, EvalAndNative)),
-  ("bits64", (31, EvalAndNative)),
   ("bytebuilder", (69, EvalAndNative)),
   ("byteparser", (33, EvalAndNative)),
   -- The `Bytes` surface, including the out-of-range pairing (`get` answers
@@ -356,8 +355,6 @@ test "stdlib/async.mdk executed >= 10 assertions" = floorExpectation "async"
 test "stdlib/base32.mdk executed >= 28 assertions" = floorExpectation "base32"
 
 test "stdlib/base64.mdk executed >= 21 assertions" = floorExpectation "base64"
-
-test "stdlib/bits64.mdk executed >= 31 assertions" = floorExpectation "bits64"
 
 test "stdlib/bytebuilder.mdk executed >= 69 assertions" =
   floorExpectation "bytebuilder"

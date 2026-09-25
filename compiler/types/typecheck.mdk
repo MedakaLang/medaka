@@ -49,6 +49,8 @@ import frontend.ast.{
   Lit(..),
   isFixedWidthHead,
   fixedWidthMask,
+  isU64Head,
+  isUnsignedHead,
   -- A-3.2b residual (#1512): named ONLY by `aliasFixtureAttribCore`, the doctest
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
@@ -358,6 +360,7 @@ import support.ordmap.{
 }
 import list.{replicate, drop}
 import support.util.{
+  u64HalvesHex,
   listLen,
   matchingStepPrefix,
   lookupAssoc,
@@ -10225,6 +10228,7 @@ data PerRun = PerRun {
   patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
   matchChecksDeferred : Ref (List (Mono, List Arm, Option Loc)),  -- matches whose scrutinee type was unknown after their arms (`checkDeferredMatches`)
   numlitRanges : Ref (List (Mono, Int, Option Loc)),  -- every source integer literal's (var, value, loc), for the fixed-width range check (`checkFixedWidthLiterals`)
+  wideLitRanges : Ref (List (Mono, String, Bool, Option Loc)),  -- every wide literal's (var, lexeme, negated, loc), for `checkWideLiterals`
   numlitUntainted : Ref (List (Mono, Loc)),
   numlitOpLocs : Ref (List Loc),
   numlitCtxTags : Ref (List (Loc, String)),
@@ -10328,6 +10332,7 @@ freshPerRun _ = PerRun {
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
   numlitRanges = Ref [],
+  wideLitRanges = Ref [],
   patLitPending = Ref [],
   patLitDeferred = Ref [],
   matchChecksDeferred = Ref [],
@@ -12593,6 +12598,7 @@ inferPat _ (PVar x xloc) =
   (v, [(x, monoScheme v)])
 inferPat _ PWild = (freshVar (), [])
 inferPat _ (PLit (LInt n)) = inferIntLitPat n
+inferPat _ (PLit (LU64 hi lo)) = inferU64LitPat hi lo
 inferPat _ (PLit l) = (litType l, [])
 inferPat env (PCon name pats) = inferPatCon env name pats
 inferPat env (PTuple pats) = inferPatTuple env pats
@@ -12723,6 +12729,7 @@ settlePatLitsGo final ((a, n, loc) :: rest) =
     TCon tag _ if isFixedWidthHead tag =>
       perRun.value.numlitRanges :=
         (a, n, loc) :: perRun.value.numlitRanges.value
+    TCon tag _ if isU64Head tag => refuseU64LitPat (intToString n) loc
     TVar _ if not final =>
       perRun.value.patLitDeferred :=
         (a, n, loc) :: perRun.value.patLitDeferred.value
@@ -12765,6 +12772,29 @@ litType (LString _) = tconBuiltin "String"
 litType (LChar _) = tconBuiltin "Char"
 litType (LBool _) = tconBuiltin "Bool"
 litType LUnit = tconBuiltin "Unit"
+litType (LU64 _ _) = tconBuiltin "U64"
+
+-- A `U64` is a boxed cell, and no engine's pattern matcher compares one against a
+-- constant, so a literal pattern cannot match it (INTEGER-TYPES-DESIGN §3.2 item 5
+-- builds the tagged heads only).  Refused, never compiled to an arm that silently
+-- never matches: an ordinary literal whose scrutinee grounded to `U64`
+-- (`settlePatLitsGo`), and a wide one wherever it is written (`exprToPat` keeps it
+-- as `LU64`).
+refuseU64LitPat : String -> Option Loc -> Unit
+refuseU64LitPat lit loc =
+  recordTypeError
+    (TcDiag
+      "T-TYPE-MISMATCH"
+      1
+      (orElseLoc loc !currentLoc)
+      "a literal pattern cannot match a U64 (the literal \{lit})"
+      (Some "compare in a guard instead: `x if x == \{lit}`")
+      None)
+
+inferU64LitPat : Int -> Int -> (Mono, List (String, Scheme))
+inferU64LitPat hi lo =
+  let _ = refuseU64LitPat ("0x" ++ u64HalvesHex hi lo) !currentLoc
+  (tconBuiltin "U64", [])
 
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
 inferPatCon env name pats = match lookupCtor env name
@@ -12846,6 +12876,7 @@ infer _ (ELit l) = litType l
 -- demand `Num`.  Without the prelude (bare-HM oracle, `builtinClassPresent BNum` False)
 -- `fromInt` is unbound: fall back to a plain fresh var, dref stays RNone (⇒ Int).
 infer env (ENumLit n fref dref _) = inferNumLit env n fref dref
+infer env (EWideLit _ lo dref lx) = inferWideLit env lo dref lx
 infer env (EVar x) = inferVar env x
 -- #837: EVarId carries the resolve-minted binding id; thread it to
 -- instantiateVarTracked so obligation lookup keys by (name, id).
@@ -15641,6 +15672,11 @@ recordNegatedLitRange t (ENumLit n _ _ _) =
     (_, m, loc) :: rest if m == n =>
       perRun.value.numlitRanges := (t, negate n, loc) :: rest
     _ => recordNumlitRange t (negate n)
+recordNegatedLitRange t (EWideLit _ _ _ lx) =
+  match perRun.value.wideLitRanges.value
+    (_, l, _, loc) :: rest if l == lx =>
+      perRun.value.wideLitRanges := (t, lx, True, loc) :: rest
+    _ => ()
 recordNegatedLitRange _ _ = ()
 
 inferBinop : String -> Mono -> Mono -> Mono
@@ -15969,7 +16005,26 @@ numArithOp lt rt =
 -- no longer re-anchor the literals around it (#259: `fromInt : Int -> Float` made
 -- `println (7 / 2)` print `3.5` under `run` and `3` from the built binary, exit 0).
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
-inferNumLit env n fref dref
+inferNumLit env n fref dref =
+  let a = inferNumLitVar env n fref dref
+  let _ = recordNumlitRange a n
+  a
+
+-- INTEGER-TYPES-DESIGN §3.2 item 4: a literal above 2^62 is inferred exactly as an
+-- ordinary one, a `fromInt` occurrence whose type comes from context, and is
+-- recorded for `checkWideLiterals` instead of the narrow range check, which accepts
+-- it only where that type grounded to `U64`.  The `Int` the shared route carries is
+-- a stand-in (the low half) that nothing reads for a wide literal:
+-- `rewriteBinopExpr` builds its `LU64` from the node's own halves.
+inferWideLit : TcEnv -> Int -> Ref Route -> String -> Mono
+inferWideLit env lo dref lx =
+  let a = inferNumLitVar env lo (Ref None) dref
+  perRun.value.wideLitRanges :=
+    (a, lx, False, !currentLoc) :: perRun.value.wideLitRanges.value
+  a
+
+inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
+inferNumLitVar env n fref dref
   | builtinClassPresent BNum = match perRun.value.numLitFromIntAnchorRef.value
     None => inferNumLitBare n fref
     Some anchor =>
@@ -15978,7 +16033,6 @@ inferNumLit env n fref dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       let _ = pushNumlit (a, fref, n, dref)
-      let _ = recordNumlitRange a n
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
@@ -16051,7 +16105,6 @@ inferNumLitBare n fref =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
   let _ = pushNumLitObl predicate a origin scope
   let _ = pushNumlit (a, fref, n, Ref RNone)
-  let _ = recordNumlitRange a n
   let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
   a
 
@@ -16084,9 +16137,63 @@ checkFixedWidthLiterals ((m, n, loc) :: rest) =
               "integer literal \{n} does not fit \{tag} (0..\{mask})"
               None
               None)
-      None => ()
+      None =>
+        if isU64Head tag && n < 0 then
+          recordTypeError
+            (TcDiag
+              "L-INT-OVERFLOW"
+              1
+              (orElseLoc loc !currentLoc)
+              "integer literal \{n} does not fit U64 (\{u64RangeText})"
+              None
+              None)
     _ => ()
   checkFixedWidthLiterals rest
+
+u64RangeText : String
+u64RangeText = "0..18446744073709551615"
+
+-- A wide literal is a `U64` literal or an error: at any other ground type, and at a
+-- type still polymorphic when the module ends (whose `fromInt` would receive a value
+-- no `Int` can carry), it is `L-INT-OVERFLOW`, exactly as the lexer's cap refused it
+-- before wide literals existed.  Negated (`-(0xFFFF_FFFF_FFFF_FFFF)`), it fits no
+-- type at all.
+checkWideLiterals : List (Mono, String, Bool, Option Loc) -> Unit
+checkWideLiterals [] = ()
+checkWideLiterals ((m, lx, negated, loc) :: rest) =
+  let at = orElseLoc loc !currentLoc
+  let shown = if negated then "-" ++ lx else lx
+  let _ = match normalize m
+    TCon tag _ if isU64Head tag =>
+      if negated then
+        recordTypeError
+          (TcDiag
+            "L-INT-OVERFLOW"
+            1
+            at
+            "integer literal \{shown} does not fit U64 (\{u64RangeText})"
+            None
+            None)
+    TCon tag _ =>
+      recordTypeError
+        (TcDiag
+          "L-INT-OVERFLOW"
+          1
+          at
+          "integer literal \{shown} does not fit \{tag}"
+          (Some "only a U64 holds a literal above 2^62")
+          None)
+    _ =>
+      recordTypeError
+        (TcDiag
+          "L-INT-OVERFLOW"
+          1
+          at
+          "integer literal \{shown} does not fit a type that is not known to be U64"
+          (Some
+            "only a U64 holds a literal above 2^62; annotate it, `(\{lx} : U64)`")
+          None)
+  checkWideLiterals rest
 
 recordNumlitLoc : Mono -> Unit
 recordNumlitLoc a = match !currentLoc
@@ -19133,6 +19240,7 @@ renderCallArg : Expr -> Option String
 renderCallArg (ELoc _ e) = renderCallArg e
 renderCallArg (EAnnot e _) = renderCallArg e
 renderCallArg (ENumLit n _ _ _) = Some (intToString n)
+renderCallArg (EWideLit _ _ _ lx) = Some lx
 renderCallArg (ELit (LInt n)) = Some (intToString n)
 renderCallArg (ELit (LBool True)) = Some "True"
 renderCallArg (ELit (LBool False)) = Some "False"
@@ -23778,7 +23886,7 @@ binopPrimitiveHead h = contains h ["Int", "Float", "String", "Bool", "Char"]
 binopBuiltinHead : String -> String -> Bool
 binopBuiltinHead "append" tag = binopPrimitiveHead tag || tag == "List"
 binopBuiltinHead method tag =
-  binopPrimitiveHead tag || isFixedWidthHead tag && isCompareMethod method
+  binopPrimitiveHead tag || isUnsignedHead tag && isCompareMethod method
 
 -- SHARED-FLOAT-RESIDUAL §3(C): after the module is inferred, zonk each recorded
 -- arithmetic operand mono; when it grounds to concrete Float, stamp RScalar
@@ -23804,7 +23912,7 @@ resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSite dref m = match !dref
   RNone => match headTyconNameMono m
     Some "Float" => dref := RScalar "Float"
-    Some tag => if isFixedWidthHead tag then dref := RScalar tag
+    Some tag => if isUnsignedHead tag then dref := RScalar tag
     _ => ()
   _ => ()
 
@@ -24004,11 +24112,14 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
   -- (Float/String/Bool/Char) and every ungrounded operand stay RNone, i.e. on the
   -- runtime-discriminated path they are on today.
   if isBuiltin then
-    -- a fixed-width comparison is the `Int` word compare (see binopBuiltinHead).
+    -- a fixed-width comparison is the `Int` word compare (see binopBuiltinHead);
+    -- a `U64` one compares the two boxed cells' 64-bit payloads, unsigned.
     if isBinop
       && (tag == "Int" || isFixedWidthHead tag)
       && isCompareMethod method then
       RScalar "Int"
+    else if isBinop && isU64Head tag && isCompareMethod method then
+      RScalar "U64"
     else
       RNone
   else
@@ -24068,8 +24179,8 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
         (Some route)
         []
     route
-  else if tag == "Float" || isFixedWidthHead tag then
-    -- a fixed-width head's arithmetic is a builtin too, stamped with its own tag
+  else if tag == "Float" || isUnsignedHead tag then
+    -- an unsigned head's arithmetic is a builtin too, stamped with its own tag
     -- so every engine wraps the result at that width.
     let route = RScalar tag
     let _ =
@@ -29852,6 +29963,8 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
   None => match !dref
     RNone => ELit (LInt n)
     route if fixedWidthLiteralFits route n => ELit (LInt n)
+    route if u64LiteralFits route n =>
+      ELit (LU64 (n / 4294967296) (n % 4294967296))
     route =>
       let split = binopRouteSplit route
       EApp
@@ -29866,7 +29979,17 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
 rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
   RNone => EUnOp op e routeRef
   _ => unopMethodApp op e routeRef
+-- A wide literal is a `U64` constant (`checkWideLiterals` has refused it at any
+-- other type, so a program that reaches eval/emit only has it at `U64`).
+rewriteBinopExpr (EWideLit hi lo _ _) = ELit (LU64 hi lo)
 rewriteBinopExpr e = e
+
+-- A literal routed to `U64`'s `fromInt` is a `U64` constant when it is not negative;
+-- a negative one keeps its `fromInt` call, which panics, exactly as
+-- `fixedWidthLiteralFits` leaves an out-of-range tagged literal.
+u64LiteralFits : Route -> Int -> Bool
+u64LiteralFits (RKey tag _) n = isU64Head tag && n >= 0
+u64LiteralFits _ _ = False
 
 -- A literal routed to a fixed-width head's `fromInt` is that head's word already
 -- when it is in range (the heads share Int's tagged word), so it needs no call.  The
@@ -31086,6 +31209,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     let _ =
       checkDeferredMatches (reverseL perRun.value.matchChecksDeferred.value)
     let _ = checkFixedWidthLiterals perRun.value.numlitRanges.value
+    let _ = checkWideLiterals perRun.value.wideLitRanges.value
     let _ = checkAdmittedOccObls ()
     ()
   perRun.value.localSchemesOut :=

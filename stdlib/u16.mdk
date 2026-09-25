@@ -83,6 +83,14 @@ export
 truncateU32 : U32 -> U16
 truncateU32 x = u16Truncate (u32ToInt x)
 
+{- | The low 16 bits of a `U64`, as a `U16`.
+
+   > toInt (truncateU64 0x123456)
+   13398 -}
+export
+truncateU64 : U64 -> U16
+truncateU64 x = u16Truncate (u64TruncateToInt x)
+
 -- # Bit operations
 
 {- | The bitwise and of two values.

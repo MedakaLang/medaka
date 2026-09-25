@@ -11,6 +11,12 @@ import string.{join}
 public export data Lit =
   | LInt Int
   | LFloat Float
+  -- A `U64` constant, as its high and low 32-bit halves (each `0 .. 2^32 - 1`):
+  -- the compiler's own `Int` is 63-bit, so it cannot hold the value itself.  Never
+  -- parsed: the typechecker mints it for an integer literal whose type grounded to
+  -- `U64` (`rewriteBinopExpr`), so it reaches only the interpreters and the
+  -- emitters, never a pattern.
+  | LU64 Int Int
   | LString String
   | LChar String
   | LBool Bool
@@ -1030,6 +1036,21 @@ export
 isFixedWidthHead : String -> Bool
 isFixedWidthHead h = isSome (fixedWidthMask h)
 
+-- `U64` (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2) is NOT a fixed-width head in
+-- the sense above: a 64-bit value does not fit `Int`'s tagged word, so it is a boxed
+-- cell on every engine, and nothing that `fixedWidthMask` licenses (mask after the
+-- `Int` op, word compare, in-range literal as a plain `LInt`) holds for it.  Its
+-- arithmetic is still a builtin, stamped `RScalar "U64"`.
+export
+isU64Head : String -> Bool
+isU64Head h = h == "U64"
+
+-- Every builtin unsigned head: an arithmetic or comparison operand grounded to one
+-- is lowered as a builtin rather than dispatched through its `Num`/`Ord` impl.
+export
+isUnsignedHead : String -> Bool
+isUnsignedHead h = isFixedWidthHead h || isU64Head h
+
 -- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
 -- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
 -- the marked node holds the cell, the goal's destination holds the same cell, and
@@ -1351,6 +1372,13 @@ public export data Expr =
   -- falls back to `intToString`.  Ignored by every non-printing stage (sexp/eval/
   -- typecheck/lower render from the value), so it does not perturb goldens or Eq.
   | ENumLit Int (Ref (Option Float)) (Ref Route) String
+  -- An integer literal above 2^62, which `LInt` cannot hold (INTEGER-TYPES-DESIGN
+  -- §3.2 item 4): the value's high and low 32-bit halves, the `fromInt`-route cell
+  -- (as `ENumLit`'s third field), and the source lexeme.  The lexer mints it for a
+  -- magnitude in `2^62 .. 2^64 - 1`; the typechecker accepts it only where the
+  -- literal's type grounds to `U64` (`checkWideLiterals`) and rewrites it to
+  -- `ELit (LU64 hi lo)`, so eval/emit never see it.
+  | EWideLit Int Int (Ref Route) String
 
 -- import paths: `import q.{members}`, `import q.path`, `import q.*`, `import q as A`
 --
@@ -2136,6 +2164,7 @@ mapTyInExpr f (EDoOrigin l e) =
   let (e2, c) = mapTyInExpr f e
   (EDoOrigin l e2, c)
 mapTyInExpr _ (ENumLit n rf rr lx) = (ENumLit n rf rr lx, False)
+mapTyInExpr _ (EWideLit hi lo rr lx) = (EWideLit hi lo rr lx, False)
 
 mapExprsB : (Ty -> (Ty, Bool)) -> List Expr -> (List Expr, Bool)
 mapExprsB _ [] = ([], False)

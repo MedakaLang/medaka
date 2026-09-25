@@ -439,6 +439,7 @@ litEq (LString a) (LString b) = a == b
 litEq (LChar a) (LChar b) = a == b
 litEq (LBool a) (LBool b) = a == b
 litEq LUnit LUnit = True
+litEq (LU64 ah al) (LU64 bh bl) = ah == bh && al == bl
 litEq _ _ = False
 
 defaultMatrix : List (List Pat) -> List (List Pat)

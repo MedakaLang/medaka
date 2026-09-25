@@ -636,3 +636,15 @@ export
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault target [] = [dirOf target]
 rootsOrDefault _ roots = roots
+
+-- A `U64` literal's 32-bit halves (`ast.LU64`) as 16 lowercase hexadecimal digits,
+-- zero-padded, with no prefix: the one rendering every printer and emitter shares.
+export
+u64HalvesHex : Int -> Int -> String
+u64HalvesHex hi lo = hexDigits 8 hi "" ++ hexDigits 8 lo ""
+
+hexDigits : Int -> Int -> String -> String
+hexDigits 0 _ acc = acc
+hexDigits k n acc =
+  let d = n % 16
+  hexDigits (k - 1) (n / 16) (stringSlice d (d + 1) "0123456789abcdef" ++ acc)

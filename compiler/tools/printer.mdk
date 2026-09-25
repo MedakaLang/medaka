@@ -74,7 +74,7 @@ import frontend.ast.{
   Attr(..),
 }
 import support.util.{
-  joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
+  u64HalvesHex, joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
 }
 import list.{last, sortBy}
 
@@ -945,6 +945,7 @@ printLit (LString s) = text (escStringLit s)
 printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
+printLit (LU64 hi lo) = text ("0x" ++ u64HalvesHex hi lo)
 
 isNegLit : Lit -> Bool
 isNegLit (LInt n) = n < 0
@@ -1176,6 +1177,7 @@ isRightAssoc _ = False
 exprPrec : Expr -> Int
 exprPrec (ELit l) = if isNegLit l then precUnary else precAtom
 exprPrec (ENumLit n _ _ _) = if n < 0 then precUnary else precAtom
+exprPrec (EWideLit _ _ _ _) = precAtom
 exprPrec (EVar _) = precAtom
 exprPrec (EVarId _ _) = precAtom
 exprPrec (EMethodRef _) = precAtom
@@ -1304,6 +1306,7 @@ isSimpleArg e = not (isHuggableArg e)
 isFillAtom : Expr -> Bool
 isFillAtom e = match stripLocE e
   ENumLit _ _ _ _ => True
+  EWideLit _ _ _ _ => True
   ELit _ => True
   EVar _ => True
   EVarId _ _ => True
@@ -1344,6 +1347,8 @@ printExprRaw _ (ELit l) = printLit l
 -- separators survive (`0xD800`, `1_000`); a synthesized literal carries "".
 printExprRaw _ (ENumLit n _ _ lx) =
   text (if lx == "" then intToString n else lx)
+printExprRaw _ (EWideLit hi lo _ lx) =
+  text (if lx == "" then "0x" ++ u64HalvesHex hi lo else lx)
 printExprRaw _ (EVar n) = text n
 printExprRaw _ (EVarId n _) = text n
 printExprRaw _ (EMethodRef n) = text n
@@ -1938,6 +1943,7 @@ isTightNegLitArg e = match stripLocE e
 
 headIsNumericHead : Expr -> Bool
 headIsNumericHead (ENumLit _ _ _ _) = True
+headIsNumericHead (EWideLit _ _ _ _) = True
 headIsNumericHead (ELit (LInt _)) = True
 headIsNumericHead (ELit (LFloat _)) = True
 headIsNumericHead _ = False
