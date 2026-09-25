@@ -3141,10 +3141,13 @@ runTestCmd argv0 =
           let jsonMode = flag "--json" a
           match a.positionals
             [] =>
-              let _ =
-                ePutStrLn
-                  "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
-              exit 1
+              if jsonMode then
+                let _ =
+                  ePutStrLn
+                    "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project, and --json reports on one file only"
+                exit 1
+              else
+                runTestProjectCmd engines cases filterOpt
             [target] => match listDir target
               Err _ =>
                 if jsonMode then
@@ -3167,6 +3170,27 @@ runTestCmd argv0 =
                 exit 1
               else
                 runTestManyTargets engines cases filterOpt targets
+
+-- `medaka test` with no target (#3443): test the project enclosing the current
+-- directory exactly as `medaka test <root>` would. The root is the NEAREST
+-- `medaka.toml` at or above the cwd, the same walk-up the loader, `medaka build`
+-- and a no-target `medaka lint` use. A `[workspace]` root is therefore an
+-- ordinary root: the directory walk reaches the members beneath it, and a run
+-- from inside a member stops at that member's own manifest. The chosen root goes
+-- to stderr, because a run started in a subdirectory tests more than that
+-- subdirectory. With no manifest anywhere above, it refuses; it never falls back
+-- to testing the cwd.
+runTestProjectCmd : List Engine -> Int -> Option String -> <IO> Unit
+runTestProjectCmd engines cases filterOpt =
+  let cwd = canonicalizePath "."
+  match findProjectRoot cwd
+    None =>
+      dieMsg
+        "medaka test: no target given, and no medaka.toml in \{cwd} or any directory above it; pass a file.mdk or directory target, or run inside a project"
+    Some root =>
+      let _ =
+        ePutStrLn "medaka test: no target given; testing the project at \{root}"
+      runTestManyTargets engines cases filterOpt [root]
 
 -- ── test --json (#2295 (d)) ──────────────────────────────────────────────────
 -- `medaka test --json <file.mdk>`: structured counterpart of the human

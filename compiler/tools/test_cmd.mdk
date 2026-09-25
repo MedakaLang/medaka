@@ -1933,7 +1933,10 @@ testHelpText = stringConcat [
   "  --cases <n>           run each property with <n> generated cases\n",
   "                      instead of the default 100\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
-  "is the native backend alone. A file.mdk or dir target is required.\n"
+  "is the native backend alone.\n", "\n",
+  "With no target, tests the project containing the current directory: the\n",
+  "nearest directory at or above it with a medaka.toml, walked like a dir\n",
+  "target. Outside any project, pass a file.mdk or dir target.\n"
 ]
 
 -- #2316: any `--`-prefixed token must be one of the known `medaka test`
