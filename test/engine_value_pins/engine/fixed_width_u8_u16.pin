@@ -1,0 +1,40 @@
+u8 +
+[44, 0, 0]
+u8 -
+[255, 254, 100]
+u8 *
+[0, 88, 1]
+u8 / %
+[28, 4, 1, 7]
+u8 negate
+[255, 0, 56]
+u8 compare
+[True, False, True, True]
+Gt
+u8 generic
+144
+199
+144
+(255, 0)
+u8 display debug
+[0, 1, 127, 128, 200, 255]
+[0, 1, 127, 128, 200, 255]
+u8 patterns
+[nul, newline, max, other]
+newline
+u16
+[0, 65535, 24464, 1]
+[8571, 3, 65535]
+[True, True]
+33278
+14464
+[0, 255, 256, 32768, 65535]
+[max, 256, other]
+int bystander
+300
+-1
+[three hundred, zero, other, other]
+-4611686018427387904
+-8589934591
+600
+400

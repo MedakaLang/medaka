@@ -44,14 +44,22 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, checkRunBuild, sweepUnits, verdictOf
+  Agreement(..),
+  RuntimeOutcome(..),
+  binaryRanClean,
+  checkRunBuild,
+  fatalOutcomeSweep,
+  fixtureStems,
+  summarizeSweep,
+  sweepUnits,
+  verdictOf,
 }
-import fs.{expectUnitCount, fixtureFiles}
+import fs.{expectUnitCount, fixtureFiles, mkdirAll}
 import list.{somes, sort}
 import path.{dirname, stem}
-import string.{contains, endsWith, padRight, trim, unlines}
-import test.{Expectation, fail, pass}
-import test_process.{medakaRoot}
+import string.{contains, endsWith, join, lines, padRight, trim, unlines}
+import test.{Expectation, expectEqual, fail, pass}
+import test_process.{boundedVerb, medakaBin, medakaRoot, scratchDir}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -213,3 +221,133 @@ test "check, run and build agree with every fixture's pinned verdict and value" 
     Ok entries => match expectUnitCount declaredFixtureCount entries
       Err e => fail "\{corpus}: \{e} — see `declaredFixtureCount`"
       Ok _ => sweep entries
+
+-- # Fixed-width integers: out of range is refused, never stored
+
+{- | The W-QUIETER probe for `U8`/`U16`/`U32` (epic #3417, #3420, #3421;
+   `docs/design/INTEGER-TYPES-DESIGN.md` §10) over
+   `test/fixed_width_refusal_fixtures`.
+
+   A fixed-width value outside its range has exactly two legal fates: a
+   ground literal is refused at compile time by `check`, `run` and `build`
+   alike, and a value only known at runtime (a computed `fromInt`, or a
+   literal in a generic `Num a =>` body) is refused by a panic on both the
+   run engine and the built binary. Storing the wrapped value, 300 as 44,
+   is the one outcome no row admits, which is why a runtime row pins an
+   empty stdout and a compile-time row requires exit 1 from all three verbs.
+
+   A compile-time row grades each verb's whole output for a line carrying
+   every needle, and refuses an `E-PANIC` anywhere in it: the two exits
+   look identical, and a range check that fired as an emitter panic would
+   otherwise pass. The runtime rows reuse `checkRunBuild`'s fatal-outcome
+   grading, which also requires `check` to accept the program. -}
+refusalCorpus : <IO> String
+refusalCorpus = "\{medakaRoot}/test/fixed_width_refusal_fixtures"
+
+-- The diagnostic an out-of-range literal owes: the literal, the type and its
+-- range, on the same line as the fixture's own location. The two pattern
+-- rows pin the file but not the line, since the literal's position is not
+-- what they are about.
+literalRefused : String -> String -> String -> List String
+literalRefused loc lit range =
+  [loc, "integer literal \{lit} does not fit \{range}"]
+
+compileRefusals : List (String, List String)
+compileRefusals = [
+  (
+    "literal_u8_300",
+    literalRefused "literal_u8_300.mdk:6:" "300" "U8 (0..255)",
+  ),
+  (
+    "literal_u8_negative",
+    literalRefused "literal_u8_negative.mdk:5:" "-2" "U8 (0..255)",
+  ),
+  (
+    "literal_u32_2p32",
+    literalRefused "literal_u32_2p32.mdk:5:" "4294967296" "U32 (0..4294967295)",
+  ),
+  (
+    "pattern_u8_clause_300",
+    literalRefused "pattern_u8_clause_300.mdk:" "300" "U8 (0..255)",
+  ),
+  (
+    "pattern_u8_arm_256",
+    literalRefused "pattern_u8_arm_256.mdk:" "256" "U8 (0..255)",
+  ),
+]
+
+fromIntRefused : String -> String -> RuntimeOutcome
+fromIntRefused n range = Aborts "E-PANIC" "fromInt: \{n} does not fit \{range}"
+
+-- `in_range_control` is load-bearing: without it, a check "fixed" into
+-- refusing every fixed-width value would leave this whole section green.
+runtimeRefusals : List (String, RuntimeOutcome)
+runtimeRefusals = [
+  ("fromint_u8_computed_300", fromIntRefused "300" "U8 (0..255)"),
+  ("fromint_u8_negative", fromIntRefused "-2" "U8 (0..255)"),
+  ("fromint_u32_2p32", fromIntRefused "4294967296" "U32 (0..4294967295)"),
+  ("generic_literal_u8_300", fromIntRefused "300" "U8 (0..255)"),
+  (
+    "in_range_control",
+    Prints
+      "[255, 0]\n[65535, 0]\n[4294967295, 0]\ntop\n255\n4294967295\n255\n300\n-2",
+  ),
+]
+
+-- Why one verb's handling of a compile-time row is wrong, or `None`.
+verbRefusalFailure : List String ->
+  (String, List String) ->
+  <Exec "_", IO> Option String
+verbRefusalFailure needles (verb, args) = match boundedVerb medakaBin args
+  Err e => Some "\{verb}: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    let said = out ++ err
+    let carried = any (l => all (n => contains n l) needles) (lines said)
+    if code == 1 && carried && not (contains "E-PANIC" said) then
+      None
+    else
+      Some
+        "\{verb} exit=\{intToString code} output=\{debug said}; want exit 1 and one diagnostic line carrying \{debug needles}, no E-PANIC"
+
+compileRefusalFailure : String ->
+  (String, List String) ->
+  <Exec "_", IO> Option String
+compileRefusalFailure scratch (name, needles) =
+  let entry = "\{refusalCorpus}/\{name}.mdk"
+  let verbs = [
+    ("check", ["check", entry]),
+    ("run", ["run", entry]),
+    ("build", ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
+  ]
+  match somes (map (verbRefusalFailure needles) verbs)
+    [] => None
+    whys => Some "  \{padRight 26 ' ' name} \{join "; " whys}"
+
+test "every fixed-width refusal fixture has a row, and every row a fixture" =
+  match fixtureStems refusalCorpus
+    Err e => fail "\{refusalCorpus}: \{e}"
+    Ok found =>
+      expectEqual
+        (sort (map fst compileRefusals ++ map fst runtimeRefusals))
+        found
+
+{- | `sweep` with the scratch directory made again first.
+
+   `test_process.scratchDir` is a top-level nullary, evaluated once per
+   process, and every sweep removes it when it finishes, so each sweep after
+   the module's first would be handed a path that no longer exists. -}
+afterRemadeScratch : (Unit -> <Exec "_", FileRead "_", IO> Expectation) ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+afterRemadeScratch sweep = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir => match mkdirAll dir
+    Err e => fail "could not remake \{dir}: \{e}"
+    Ok () => sweep ()
+
+test "an out-of-range fixed-width literal is refused by check, run and build" = afterRemadeScratch
+  (_ =>
+    sweepUnits compileRefusals compileRefusalFailure (r => r) summarizeSweep)
+
+test "a computed out-of-range fixed-width value panics on run and build, never stored" = afterRemadeScratch
+  (_ =>
+    fatalOutcomeSweep refusalCorpus (length runtimeRefusals) runtimeRefusals)
