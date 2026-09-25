@@ -75,7 +75,7 @@ truncateU32 x = u8Truncate (u32ToInt x)
 
 {- | The low 8 bits of a `U64`, as a `U8`.
 
-   > toInt (truncateU64 0x1234)
+   > toInt (truncateU64 (u64Truncate 0x1234))
    52 -}
 export
 truncateU64 : U64 -> U8
