@@ -1,16 +1,8 @@
 -- U8/U32 reached through an `Ord a =>` dictionary rather than at their ground
 -- type: `maximum`/`minimum`, `sort`, and a user function comparing with `>`.
--- The u8/u32 `Ord` impls define only `compare`, so every other `Ord` method is
--- the interface default.  Values straddle 2^31 so a signed comparison would
--- pick the wrong answer.
---
--- Ledgered wasm:codegen-bug #1020 (test/engine_divergence.txt): wasm's
--- dictionary dispatch has no interface-default arms, so the first defaulted
--- method traps.  eval and native agree; when wasm is fixed the ledger row
--- goes PROMOTE.
---
--- Expected (eval and native): Some 4294967295 / Some 0 / the sorted list /
--- 3000000000 / 200.
+-- The u8/u32 `Ord` impls define every method, so no generic caller reaches an
+-- interface default (the defaults are what trap on wasm, #1020).  Values
+-- straddle 2^31 so a signed comparison would pick the wrong answer.
 import u8
 import u32
 import list.{sort}
