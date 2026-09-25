@@ -295,7 +295,7 @@ is owed, not the design.
 - `docs-links`, `agent-doc-symbols` (one ledger row for the archived census's
   retired `Known`), comment-register census, shout-diff and the registry
   keying ratchet: green.
-- The first run on `21efe1579` failed at the cold bootstrap (seed, above); the run on `65912b644` is recorded in the PR.
+- CI on the final head `bbb98f13c` (run 36090508390): every job green except `compiler-soundness`, whose must-fail step reports the three drained pins and skips the whole-source typecheck and fixpoint behind them; both were run locally on that head and pass.
 
 **Owed after this session:**
 
