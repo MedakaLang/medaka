@@ -1,5 +1,5 @@
 # META
-source_lines=6399
+source_lines=6410
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -470,16 +470,30 @@ checkType cur env t = checkTypeIn [] cur env t
 -- a type variable is the elaborator's question (`Handle`'s declared kind);
 -- this pass only knows what was written where.
 checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
-checkTypeIn _ cur env (TyCon { tyConName = n, tyConLoc = loc }) =
-  if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
-    -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
-    -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
-    -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
-    -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
-    ambiguousTypeErrors env n (orElseLoc loc cur)
-  else
-    [UnknownType n (orElseLoc loc cur) (suggestType env n)]
-checkTypeIn _ _ _ (TyVar _) = []
+checkTypeIn bound cur env t = fst (checkTypeGo bound cur env t)
+
+-- One left-to-right pass: every bare name and every named argument the walk
+-- passes joins the scope the names to its right may refer to, so the whole
+-- signature is walked once (a re-walk of the left operand at every node was
+-- quadratic in the type's size).
+checkTypeGo : List String ->
+  Option Loc ->
+  Env ->
+  Ty ->
+  (List ResError, List String)
+checkTypeGo bound cur env (TyCon { tyConName = n, tyConLoc = loc }) =
+  let errs =
+    if omHasKey n env.types
+      || omHasKey n env.imported
+      || isTupleCtorTyName n then
+      -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
+      -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
+      -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
+      -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
+      ambiguousTypeErrors env n (orElseLoc loc cur)
+    else
+      [UnknownType n (orElseLoc loc cur) (suggestType env n)]
+  (errs, bound)
 -- (helper below `checkType`) — accept the bare tuple type constructors
 -- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
 -- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
@@ -487,23 +501,29 @@ checkTypeIn _ _ _ (TyVar _) = []
 -- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
 -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
 -- typecheck's `tupleHeadTagTc`.
-checkTypeIn bound cur env (TyApp a b) =
-  checkTypeIn bound cur env a
-    ++ checkTypeIn (tyVarsWritten a ++ bound) cur env b
-checkTypeIn bound cur env (TyFun (TyNamed n a) b) =
-  checkTypeIn bound cur env a
-    ++ checkTypeIn (n :: tyVarsWritten a ++ bound) cur env b
-checkTypeIn bound cur env (TyFun a b) =
-  checkTypeIn bound cur env a
-    ++ checkTypeIn (tyVarsWritten a ++ bound) cur env b
-checkTypeIn bound cur env (TyTuple ts) = checkTypesLeftToRight bound cur env ts
--- A written authority term names nothing.
-checkTypeIn _ _ _ (TyAuth _ _) = []
-checkTypeIn bound cur env (TyEffect labels _ t) =
-  checkEffAtoms bound cur env labels ++ checkTypeIn bound cur env t
-checkTypeIn _ cur _ (TyNamed n _) = [MisplacedAuthorityBinder n cur]
-checkTypeIn bound cur env (TyQual t n) =
-  checkTypeIn bound cur env t ++ checkAuthorityName bound cur n
+checkTypeGo bound _ _ (TyVar n) = ([], n :: bound)
+checkTypeGo bound cur env (TyApp a b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo b1 cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyFun (TyNamed n a) b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo (n :: b1) cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyFun a b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo b1 cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyTuple ts) = checkTypesGo bound cur env ts
+checkTypeGo bound cur env (TyEffect labels _ t) =
+  let errs = checkEffAtoms bound cur env labels
+  let (e2, b2) = checkTypeGo bound cur env t
+  (errs ++ e2, b2)
+checkTypeGo bound cur _ (TyNamed n _) =
+  ([MisplacedAuthorityBinder n cur], bound)
+checkTypeGo bound cur env (TyQual t n) =
+  let (e1, b1) = checkTypeGo bound cur env t
+  (e1 ++ checkAuthorityName b1 cur n, b1)
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -512,37 +532,28 @@ checkTypeIn bound cur env (TyQual t n) =
 -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
 -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
 -- location>` to the signature it was written in.
-checkTypeIn bound cur env (TyConstrained cs t) =
-  flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-    ++ checkTypeIn bound cur env t
+checkTypeGo bound cur env (TyConstrained cs t) =
+  let errs = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
+  let (e2, b2) = checkTypeGo bound cur env t
+  (errs ++ e2, b2)
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
-checkTypeIn bound cur env (TyRow labels _ _) =
-  checkEffAtoms bound cur env labels
+checkTypeGo bound cur env (TyRow labels _ _) =
+  (checkEffAtoms bound cur env labels, bound)
+-- A written authority term names nothing.
+checkTypeGo bound _ _ (TyAuth _ _) = ([], bound)
 
 -- Tuple components bind left to right, as arrow domains do.
-checkTypesLeftToRight : List String ->
+checkTypesGo : List String ->
   Option Loc ->
   Env ->
   List Ty ->
-  List ResError
-checkTypesLeftToRight _ _ _ [] = []
-checkTypesLeftToRight bound cur env (t :: ts) =
-  checkTypeIn bound cur env t
-    ++ checkTypesLeftToRight (tyVarsWritten t ++ bound) cur env ts
-
--- The bare names a type writes, in source order — the candidates a name to
--- the right may refer to as an authority.
-tyVarsWritten : Ty -> List String
-tyVarsWritten (TyVar n) = [n]
-tyVarsWritten (TyApp a b) = tyVarsWritten a ++ tyVarsWritten b
-tyVarsWritten (TyFun a b) = tyVarsWritten a ++ tyVarsWritten b
-tyVarsWritten (TyTuple ts) = flatMap tyVarsWritten ts
-tyVarsWritten (TyEffect _ _ t) = tyVarsWritten t
-tyVarsWritten (TyConstrained _ t) = tyVarsWritten t
-tyVarsWritten (TyNamed _ t) = tyVarsWritten t
-tyVarsWritten (TyQual t _) = tyVarsWritten t
-tyVarsWritten _ = []
+  (List ResError, List String)
+checkTypesGo bound _ _ [] = ([], bound)
+checkTypesGo bound cur env (t :: ts) =
+  let (e1, b1) = checkTypeGo bound cur env t
+  let (e2, b2) = checkTypesGo b1 cur env ts
+  (e1 ++ e2, b2)
 
 -- The names a declaration head binds as authorities: its `Authority`-kinded
 -- parameters (positional with the name list, as the kinds are stored).
@@ -6485,31 +6496,23 @@ takeOriginTrace _ =
 (DTypeSig false "checkType" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PVar "t")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EListLit)) (EVar "cur")) (EVar "env")) (EVar "t")))
 (DTypeSig false "checkTypeIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkTypeIn" (PWild (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
-(DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyVar" PWild)) (EListLit))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "::" (EVar "n") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound")))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
-(DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyAuth" PWild PWild)) (EListLit))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
-(DFunDef false "checkTypeIn" (PWild (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")))
-(DTypeSig false "checkTypesLeftToRight" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkTypesLeftToRight" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "checkTypesLeftToRight" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "t")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "ts"))))
-(DTypeSig false "tyVarsWritten" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "tyVarsWritten" ((PCon "TyVar" (PVar "n"))) (EListLit (EVar "n")))
-(DFunDef false "tyVarsWritten" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
-(DFunDef false "tyVarsWritten" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
-(DFunDef false "tyVarsWritten" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "tyVarsWritten")) (EVar "ts")))
-(DFunDef false "tyVarsWritten" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" (PWild) (EListLit))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "t")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
+(DTypeSig false "checkTypeGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EBlock (DoLet false false (PVar "errs") (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n")))))) (DoExpr (ETuple (EVar "errs") (EVar "bound")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyVar" (PVar "n"))) (ETuple (EListLit) (EBinOp "::" (EVar "n") (EVar "bound"))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EBinOp "::" (EVar "n") (EVar "b1"))) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound")))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "n"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EVar "cur")) (EVar "n"))) (EVar "b1")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound")))
+(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" PWild PWild)) (ETuple (EListLit) (EVar "bound")))
+(DTypeSig false "checkTypesGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
+(DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
 (DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))
@@ -8046,31 +8049,23 @@ takeOriginTrace _ =
 (DTypeSig false "checkType" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PVar "t")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EListLit)) (EVar "cur")) (EVar "env")) (EVar "t")))
 (DTypeSig false "checkTypeIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkTypeIn" (PWild (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
-(DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyVar" PWild)) (EListLit))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "::" (EVar "n") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound")))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "b"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
-(DFunDef false "checkTypeIn" (PWild PWild PWild (PCon "TyAuth" PWild PWild)) (EListLit))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
-(DFunDef false "checkTypeIn" (PWild (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "bound")) (EVar "cur")) (EVar "n"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
-(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")))
-(DTypeSig false "checkTypesLeftToRight" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkTypesLeftToRight" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "checkTypesLeftToRight" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "checkTypesLeftToRight") (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "t")) (EVar "bound"))) (EVar "cur")) (EVar "env")) (EVar "ts"))))
-(DTypeSig false "tyVarsWritten" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "tyVarsWritten" ((PCon "TyVar" (PVar "n"))) (EListLit (EVar "n")))
-(DFunDef false "tyVarsWritten" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
-(DFunDef false "tyVarsWritten" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyVarsWritten") (EVar "a")) (EApp (EVar "tyVarsWritten") (EVar "b"))))
-(DFunDef false "tyVarsWritten" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "tyVarsWritten")) (EVar "ts")))
-(DFunDef false "tyVarsWritten" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "tyVarsWritten") (EVar "t")))
-(DFunDef false "tyVarsWritten" (PWild) (EListLit))
+(DFunDef false "checkTypeIn" ((PVar "bound") (PVar "cur") (PVar "env") (PVar "t")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))))
+(DTypeSig false "checkTypeGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EBlock (DoLet false false (PVar "errs") (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EApp (EApp (EApp (EVar "ambiguousTypeErrors") (EVar "env")) (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n")))))) (DoExpr (ETuple (EVar "errs") (EVar "bound")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyVar" (PVar "n"))) (ETuple (EListLit) (EBinOp "::" (EVar "n") (EVar "bound"))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PCon "TyNamed" (PVar "n") (PVar "a")) (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EBinOp "::" (EVar "n") (EVar "b1"))) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "a"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "b"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "ts")))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") PWild (PCon "TyNamed" (PVar "n") PWild)) (ETuple (EListLit (EApp (EApp (EVar "MisplacedAuthorityBinder") (EVar "n")) (EVar "cur"))) (EVar "bound")))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyQual" (PVar "t") (PVar "n"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EApp (EApp (EApp (EVar "checkAuthorityName") (EVar "b1")) (EVar "cur")) (EVar "n"))) (EVar "b1")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EApp (EApp (EVar "orElseLoc") (EVar "cur")) (EApp (EVar "firstTyLoc") (EVar "t")))) (EVar "env"))) (EVar "cs"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoExpr (ETuple (EBinOp "++" (EVar "errs") (EVar "e2")) (EVar "b2")))))
+(DFunDef false "checkTypeGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "checkEffAtoms") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "labels")) (EVar "bound")))
+(DFunDef false "checkTypeGo" ((PVar "bound") PWild PWild (PCon "TyAuth" PWild PWild)) (ETuple (EListLit) (EVar "bound")))
+(DTypeSig false "checkTypesGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "ResError")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "checkTypesGo" ((PVar "bound") PWild PWild (PList)) (ETuple (EListLit) (EVar "bound")))
+(DFunDef false "checkTypesGo" ((PVar "bound") (PVar "cur") (PVar "env") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "e1") (PVar "b1")) (EApp (EApp (EApp (EApp (EVar "checkTypeGo") (EVar "bound")) (EVar "cur")) (EVar "env")) (EVar "t"))) (DoLet false false (PTuple (PVar "e2") (PVar "b2")) (EApp (EApp (EApp (EApp (EVar "checkTypesGo") (EVar "b1")) (EVar "cur")) (EVar "env")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "++" (EVar "e1") (EVar "e2")) (EVar "b2")))))
 (DTypeSig false "authorityParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "authorityParams" ((PCons (PVar "p") (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild)) (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "authorityParams" ((PCons PWild (PVar "ps")) (PCons PWild (PVar "ks"))) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))

@@ -918,7 +918,11 @@ performEffect cur eff =
   let _ = recordEffectSites eff
   recordEffect cur eff
 
+-- Most performed rows carry no atom of their own (a pure call, a row that
+-- is one tail variable), and those cost nothing here: the key is built only
+-- for an atom that is present.
 recordEffectSites : EffRow -> Unit
+recordEffectSites (EffRow [] _) = ()
 recordEffectSites eff =
   fold
     (_ atom =>
@@ -2651,7 +2655,11 @@ checkEffectParamsTy (TyFun a b) =
 checkEffectParamsTy (TyApp a b) =
   let _ = match tyAppSpine (TyApp a b)
     (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-      match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+      if anyList
+        isTyAuth
+        args then match (lookupTab
+        (tyTabKey o n)
+        perRun.value.dataParamKindsRef.value)
         Some kinds if listLen kinds == listLen args =>
           checkIndexLiterals (zipL kinds args)
         _ => ()
@@ -10473,6 +10481,9 @@ data PerRun = PerRun {
   -- EXISTENTIAL (a binder written on the constructor, not the head); keyed by
   -- the id itself, so a same-named constructor in another module cannot answer.
   ctorExistentialsRef : Ref (Map Int Unit),
+  -- set once any constructor with an existential binder is registered, so a
+  -- program without one pays nothing per pattern
+  anyExistentialsRef : Ref Bool,
   -- Effect provenance: for each (binding, label key), the first site in that
   -- binding that performed the label, so a failure about the label's
   -- authority or its presence points at the call rather than at the body or
@@ -10603,6 +10614,7 @@ freshPerRun _ = PerRun {
   rigidEffvarsRef = Ref Tip,
   rigidAuthvarsRef = Ref Tip,
   ctorExistentialsRef = Ref Tip,
+  anyExistentialsRef = Ref False,
   effectSitesRef = Ref omEmpty,
   rowFailureReportedRef = Ref omEmpty,
   typeErrorKeySetRef = Ref omEmpty,
@@ -12006,8 +12018,10 @@ rejectCyclicAliases _ =
 -- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
 astTypeFreshTbl ty =
-  let etbl = sigVarsFor ty (dedup (effTailNames ty ++ rowArgNames ty))
-  let tvs = freshTvMap (sigTyVarNames ty (rowArgNames ty))
+  let rows = rowArgNames ty
+  let auths = authArgBindersIn ty
+  let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
+  let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
   (fromAstTypeE etbl tvs ty, tvs)
 
 freshTvMap : List String -> List (String, Mono)
@@ -12032,8 +12046,9 @@ sigToSchemeTvsIn : List (String, List Kind) ->
   (Scheme, List (String, Mono))
 sigToSchemeTvsIn scope ty =
   let rows = rowArgNamesIn (qualifiedKindScope scope ty) ty
-  let tvs = freshTvMap (sigTyVarNames ty rows)
-  let etbl = sigVarsFor ty (dedup (effTailNames ty ++ rows))
+  let auths = authArgBindersIn ty
+  let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
+  let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
   (
     Forall
       (map monoTyvarId (map snd tvs))
@@ -12106,13 +12121,24 @@ sigVarsUnion inner outer = SigVars {
 }
 
 sigVarsFor : Ty -> List String -> SigVars
-sigVarsFor ty rowNames =
+sigVarsFor ty rowNames = sigVarsForWith ty rowNames (authArgBindersIn ty)
+
+-- The worker, given the signature's index-slot binders already walked once
+-- (`authArgBindersIn` looks the head's kinds up per type application, so a
+-- seam that also needs the names for its type-variable set walks once and
+-- hands the result here).
+sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
+sigVarsForWith ty rowNames auths =
+  let named = namedArgTypes ty
+  let authNames = map fst auths
   let sv = SigVars {
     svRows = freshEffMap rowNames,
     svAuths =
       map
         freshAuthBinder
-        (filterList (b => authorityBinderBound ty (fst b)) (authBindersOf ty)),
+        (filterList
+          (b => authorityBinderBound named authNames (fst b))
+          (dedupBinders (namedAtomBinders ty ++ auths) [])),
   }
   let _ = reportUnboundAuthorityNames ty sv
   sv
@@ -12122,10 +12148,10 @@ sigVarsFor ty rowNames =
 -- it and it binds nothing) or an `Authority`-kinded index slot.  An atom or a
 -- qualifier that names it is a USE; a use of a name nothing binds is a type
 -- variable used as an authority, reported by `reportUnboundAuthorityNames`.
-authorityBinderBound : Ty -> String -> Bool
-authorityBinderBound ty n = match lookupAssoc n (namedArgTypes ty)
+authorityBinderBound : List (String, Ty) -> List String -> String -> Bool
+authorityBinderBound named authNames n = match lookupAssoc n named
   Some a => isStringTy a
-  None => contains n (authArgNames ty)
+  None => contains n authNames
 
 -- Every authority name the signature writes (`<L n>`, `String @n`) must be
 -- one of its binders.  Resolve admits any name written to the left; here the
@@ -12174,12 +12200,9 @@ atomAuthorityName a = match a.eatParam
 -- The type-variable names a signature quantifies as ORDINARY type variables:
 -- everything written bare that is neither a row argument nor an authority
 -- index argument (`Handle p` — kind-directed, like `Async e a`'s `e`).
-sigTyVarNames : Ty -> List String -> List String
-sigTyVarNames ty rows =
-  removeAllS (rows ++ authArgNames ty) (tyVarNamesWithConstraints ty)
-
-authArgNames : Ty -> List String
-authArgNames ty = map fst (authArgBindersIn ty)
+sigTyVarNames : Ty -> List String -> List String -> List String
+sigTyVarNames ty rows authNames =
+  removeAllS (rows ++ authNames) (tyVarNamesWithConstraints ty)
 
 namedArgTypes : Ty -> List (String, Ty)
 namedArgTypes (TyFun (TyNamed n a) b) = (n, a) :: namedArgTypes b
@@ -12197,16 +12220,10 @@ freshAuthvar top name =
 authvarIdOf : (String, Ref Authvar) -> Int
 authvarIdOf (_, cell) = authvarId cell
 
--- Every binder an effect atom names in [ty] or an `Authority`-kinded index
--- slot carries, each with the domain top of the first label naming it (an
--- index slot's is the slot's declared label).  A binder used at two domains
--- is diagnosed by `checkAuthorityBinder`; here the first use decides.  A bare
--- name in an index slot that no named argument binds is a quantified
--- authority variable of the signature, as a bare name in a type slot is a
--- quantified type variable.
-authBindersOf : Ty -> List (String, Param)
-authBindersOf ty = dedupBinders (authorityUsesOf ty) []
-
+-- Every authority use a signature writes: a binder an atom names, each with
+-- the domain top of its label, and a bare name in an `Authority`-kinded
+-- index slot, with the slot's declared label's.  A name used at two domains
+-- is diagnosed by `checkAuthorityBinder`; the first use decides here.
 authorityUsesOf : Ty -> List (String, Param)
 authorityUsesOf ty = namedAtomBinders ty ++ authArgBindersIn ty
 
@@ -20562,7 +20579,8 @@ inferArms env scrutTy ((Arm pat gs body) :: rest) =
 
 inferArm : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
 inferArm env scrutTy pat gs body
-  | patOpensExistentials env pat = inferArmOpening env scrutTy pat gs body
+  | perRun.value.anyExistentialsRef.value && patOpensExistentials env pat =
+    inferArmOpening env scrutTy pat gs body
   | otherwise =
     let lits = takePatLits ()
     let pr = inferPat env pat
@@ -21475,7 +21493,9 @@ existentialCells binders =
     binders
 
 recordExistentials : List (String, Ref Authvar) -> Unit
+recordExistentials [] = ()
 recordExistentials cells =
+  perRun.value.anyExistentialsRef := True
   perRun.value.ctorExistentialsRef :=
     fold
       (m c => IdMap.set (authvarId (snd c)) () m)
@@ -38282,8 +38302,9 @@ preunifySigsEx sigs (member :: rest) =
 instantiateSigTracked : Ty -> (Mono, List (String, Mono), Option EffRow)
 instantiateSigTracked ty =
   let rows = rowArgNames ty
-  let tvs = freshTvMap (removeAllS rows (tyVarNamesWithConstraints ty))
-  let etbl = sigVarsFor ty (dedup (effTailNames ty ++ rows))
+  let auths = authArgBindersIn ty
+  let tvs = freshTvMap (sigTyVarNames ty rows (map fst auths))
+  let etbl = sigVarsForWith ty (dedup (effTailNames ty ++ rows)) auths
   (fromAstTypeE etbl tvs ty, tvs, writtenBindingForce etbl ty)
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
@@ -49030,3 +49051,7 @@ popMarkedClause grouped pending n =
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
+
+isTyAuth : Ty -> Bool
+isTyAuth (TyAuth _ _) = True
+isTyAuth _ = False

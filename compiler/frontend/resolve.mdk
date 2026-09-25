@@ -466,16 +466,30 @@ checkType cur env t = checkTypeIn [] cur env t
 -- a type variable is the elaborator's question (`Handle`'s declared kind);
 -- this pass only knows what was written where.
 checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
-checkTypeIn _ cur env (TyCon { tyConName = n, tyConLoc = loc }) =
-  if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
-    -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
-    -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
-    -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
-    -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
-    ambiguousTypeErrors env n (orElseLoc loc cur)
-  else
-    [UnknownType n (orElseLoc loc cur) (suggestType env n)]
-checkTypeIn _ _ _ (TyVar _) = []
+checkTypeIn bound cur env t = fst (checkTypeGo bound cur env t)
+
+-- One left-to-right pass: every bare name and every named argument the walk
+-- passes joins the scope the names to its right may refer to, so the whole
+-- signature is walked once (a re-walk of the left operand at every node was
+-- quadratic in the type's size).
+checkTypeGo : List String ->
+  Option Loc ->
+  Env ->
+  Ty ->
+  (List ResError, List String)
+checkTypeGo bound cur env (TyCon { tyConName = n, tyConLoc = loc }) =
+  let errs =
+    if omHasKey n env.types
+      || omHasKey n env.imported
+      || isTupleCtorTyName n then
+      -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
+      -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
+      -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
+      -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
+      ambiguousTypeErrors env n (orElseLoc loc cur)
+    else
+      [UnknownType n (orElseLoc loc cur) (suggestType env n)]
+  (errs, bound)
 -- (helper below `checkType`) — accept the bare tuple type constructors
 -- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
 -- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
@@ -483,23 +497,29 @@ checkTypeIn _ _ _ (TyVar _) = []
 -- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
 -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
 -- typecheck's `tupleHeadTagTc`.
-checkTypeIn bound cur env (TyApp a b) =
-  checkTypeIn bound cur env a
-    ++ checkTypeIn (tyVarsWritten a ++ bound) cur env b
-checkTypeIn bound cur env (TyFun (TyNamed n a) b) =
-  checkTypeIn bound cur env a
-    ++ checkTypeIn (n :: tyVarsWritten a ++ bound) cur env b
-checkTypeIn bound cur env (TyFun a b) =
-  checkTypeIn bound cur env a
-    ++ checkTypeIn (tyVarsWritten a ++ bound) cur env b
-checkTypeIn bound cur env (TyTuple ts) = checkTypesLeftToRight bound cur env ts
--- A written authority term names nothing.
-checkTypeIn _ _ _ (TyAuth _ _) = []
-checkTypeIn bound cur env (TyEffect labels _ t) =
-  checkEffAtoms bound cur env labels ++ checkTypeIn bound cur env t
-checkTypeIn _ cur _ (TyNamed n _) = [MisplacedAuthorityBinder n cur]
-checkTypeIn bound cur env (TyQual t n) =
-  checkTypeIn bound cur env t ++ checkAuthorityName bound cur n
+checkTypeGo bound _ _ (TyVar n) = ([], n :: bound)
+checkTypeGo bound cur env (TyApp a b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo b1 cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyFun (TyNamed n a) b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo (n :: b1) cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyFun a b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo b1 cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyTuple ts) = checkTypesGo bound cur env ts
+checkTypeGo bound cur env (TyEffect labels _ t) =
+  let errs = checkEffAtoms bound cur env labels
+  let (e2, b2) = checkTypeGo bound cur env t
+  (errs ++ e2, b2)
+checkTypeGo bound cur _ (TyNamed n _) =
+  ([MisplacedAuthorityBinder n cur], bound)
+checkTypeGo bound cur env (TyQual t n) =
+  let (e1, b1) = checkTypeGo bound cur env t
+  (e1 ++ checkAuthorityName b1 cur n, b1)
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -508,37 +528,28 @@ checkTypeIn bound cur env (TyQual t n) =
 -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
 -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
 -- location>` to the signature it was written in.
-checkTypeIn bound cur env (TyConstrained cs t) =
-  flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-    ++ checkTypeIn bound cur env t
+checkTypeGo bound cur env (TyConstrained cs t) =
+  let errs = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
+  let (e2, b2) = checkTypeGo bound cur env t
+  (errs ++ e2, b2)
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
-checkTypeIn bound cur env (TyRow labels _ _) =
-  checkEffAtoms bound cur env labels
+checkTypeGo bound cur env (TyRow labels _ _) =
+  (checkEffAtoms bound cur env labels, bound)
+-- A written authority term names nothing.
+checkTypeGo bound _ _ (TyAuth _ _) = ([], bound)
 
 -- Tuple components bind left to right, as arrow domains do.
-checkTypesLeftToRight : List String ->
+checkTypesGo : List String ->
   Option Loc ->
   Env ->
   List Ty ->
-  List ResError
-checkTypesLeftToRight _ _ _ [] = []
-checkTypesLeftToRight bound cur env (t :: ts) =
-  checkTypeIn bound cur env t
-    ++ checkTypesLeftToRight (tyVarsWritten t ++ bound) cur env ts
-
--- The bare names a type writes, in source order — the candidates a name to
--- the right may refer to as an authority.
-tyVarsWritten : Ty -> List String
-tyVarsWritten (TyVar n) = [n]
-tyVarsWritten (TyApp a b) = tyVarsWritten a ++ tyVarsWritten b
-tyVarsWritten (TyFun a b) = tyVarsWritten a ++ tyVarsWritten b
-tyVarsWritten (TyTuple ts) = flatMap tyVarsWritten ts
-tyVarsWritten (TyEffect _ _ t) = tyVarsWritten t
-tyVarsWritten (TyConstrained _ t) = tyVarsWritten t
-tyVarsWritten (TyNamed _ t) = tyVarsWritten t
-tyVarsWritten (TyQual t _) = tyVarsWritten t
-tyVarsWritten _ = []
+  (List ResError, List String)
+checkTypesGo bound _ _ [] = ([], bound)
+checkTypesGo bound cur env (t :: ts) =
+  let (e1, b1) = checkTypeGo bound cur env t
+  let (e2, b2) = checkTypesGo b1 cur env ts
+  (e1 ++ e2, b2)
 
 -- The names a declaration head binds as authorities: its `Authority`-kinded
 -- parameters (positional with the name list, as the kinds are stored).

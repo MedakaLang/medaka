@@ -89,8 +89,9 @@ checkStmt : Option Loc -> Env -> Scope -> DoStmt -> (List ResError, Scope)
 checkStmts : Option Loc -> Env -> Scope -> List DoStmt -> List ResError
 checkSuper : Env -> Super -> List ResError
 checkType : Option Loc -> Env -> Ty -> List ResError
+checkTypeGo : List String -> Option Loc -> Env -> Ty -> (List ResError, List String)
 checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
-checkTypesLeftToRight : List String -> Option Loc -> Env -> List Ty -> List ResError
+checkTypesGo : List String -> Option Loc -> Env -> List Ty -> (List ResError, List String)
 checkVar : Option Loc -> Env -> Scope -> String -> List ResError
 checkVariant : Env -> List String -> Variant -> List ResError
 checkVariants : Env -> List String -> List Variant -> List (List (String, KindAnn)) -> List ResError
@@ -409,7 +410,6 @@ takeOriginTrace : Unit -> List (String, List Decl)
 topBinderNames : List Decl -> List String
 tupleCtorTyNames : List String
 tyOriginScope : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> Map String TyConOrigin
-tyVarsWritten : Ty -> List String
 typeAmbigMods : Env -> String -> List String
 typeAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 typeCtorsAllOf : List Decl -> List (String, List String)

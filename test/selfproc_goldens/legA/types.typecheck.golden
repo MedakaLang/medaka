@@ -197,9 +197,7 @@ attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List 
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 authArgBindersIn : Ty -> List (String, Param)
-authArgNames : Ty -> List String
 authArgOf : SigVars -> List (String, Mono) -> EffLabel -> Ty -> Authority
-authBindersOf : Ty -> List (String, Param)
 authCellsIn : Mono -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authRoots : Mono -> Map Int Unit -> Map Int Unit
 authRowCells : EffRow -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
@@ -207,7 +205,7 @@ authRowRoots : EffRow -> Map Int Unit -> Map Int Unit
 authTermCells : Authority -> Map Int (Ref Authvar) -> Map Int (Ref Authvar)
 authTermIds : Authority -> Map Int Unit -> Map Int Unit
 authorityAsTypeMsg : String -> String
-authorityBinderBound : Ty -> String -> Bool
+authorityBinderBound : List (String, Ty) -> List String -> String -> Bool
 authorityFailureMsg : String -> Authority -> Authority -> Option Authority -> String
 authorityNamesWritten : Ty -> List String
 authorityParamAsRowMsg : String -> String -> String
@@ -1554,6 +1552,7 @@ isShadowStandalone : TcEnv -> String -> Bool
 isStringTy : Ty -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
+isTyAuth : Ty -> Bool
 isUnboundTvar : Mono -> Bool
 joinAnd : List String -> String
 joinCellOf : List (Ref Effvar) -> Ref Effvar
@@ -2504,9 +2503,10 @@ sigTooGeneralMsg : String -> Ty -> String
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvarIds : List Mono -> List Int
 sigTvarNamedIds : List (String, Mono) -> List (String, Int)
-sigTyVarNames : Ty -> List String -> List String
+sigTyVarNames : Ty -> List String -> List String -> List String
 sigVarFixedBy : List (Int, String) -> List (String, Mono) -> Option (String, String)
 sigVarsFor : Ty -> List String -> SigVars
+sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
 sigVarsUnion : SigVars -> SigVars -> SigVars
 sigVarsWithAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars

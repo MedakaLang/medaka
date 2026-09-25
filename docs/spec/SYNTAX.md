@@ -218,6 +218,9 @@ constructor that does not is a proof source only in its declaring module, which
 exports the type abstractly (`export data`).
 
 ```medaka
+effect Store Prefix
+load : (path : String) -> <Store path> Int
+load _ = 1
 data Handle (p : Authority Store) = Handle (String @p)  -- the field is qualified
 data AnyHandle = AnyHandle (p : Authority Store) (Handle p)  -- an existential binder
 data Conf (p : Authority Store) = Conf { path : String @p, retries : Int }

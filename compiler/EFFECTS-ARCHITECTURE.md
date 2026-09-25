@@ -1,8 +1,8 @@
 # Effects within the typechecker
 
-**Status:** delivered through delivery item 6 (the data-half checkpoint);
-item 7 (stdlib migration of precision-dependent signatures to handles) and the
-review leftovers listed in the handoff remain. The delivery checklist below
+**Status:** DELIVERED THROUGH ITEM 6 — the data-half checkpoint is on the
+branch; item 7 (stdlib migration of precision-dependent signatures to handles)
+and the handoff's owed items remain. The delivery checklist below
 distinguishes the destination from code that has actually migrated. This is
 one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
