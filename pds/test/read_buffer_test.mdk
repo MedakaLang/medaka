@@ -116,7 +116,7 @@ liveCount = chunkCount * chunkSize
 -- value mismatch rather than only as a length mismatch.
 chunkAt : Int -> Array Int
 chunkAt k = fromList [
-  (chunkSize * k) % 256,
+  chunkSize * k % 256,
   (chunkSize * k + 1) % 256,
   (chunkSize * k + 2) % 256,
 ]

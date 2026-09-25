@@ -71,7 +71,7 @@ recordKey recordCount i =
     panic
       "load_client: recordCount \{intToString recordCount} leaves no bulk-collection records"
   else
-    let idx = reservedIndices + (i * keyStride) % span
+    let idx = reservedIndices + i * keyStride % span
     "r\{padLeft 7 '0' (intToString idx)}"
 
 -- The seed `pds/nightly/load_harness.sh` builds its corpus under. Repeated
@@ -182,7 +182,7 @@ identityBlockOf routes i =
 
 identityFor : Int -> Int -> Int -> String
 identityFor blockSize clientId i =
-  let block = (i / blockSize) % 256
+  let block = i / blockSize % 256
   "10.\{intToString (clientId % 256)}.\{intToString block}.1"
 
 -- The sampler's own client id, fixed because exactly one sampler runs. It
