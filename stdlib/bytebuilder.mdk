@@ -61,7 +61,7 @@ buildBytes (Builder backing len) = fromByteBlockPrefix !len !backing
 export
 emitU8 : U8 -> Builder -> Unit
 emitU8 v (Builder backing len) =
-  let b = u8ToInt v
+  let b = U8.toInt v
   if !len < byteBlockLength !backing then
     byteBlockSetUnsafe !len b !backing
     len := !len + 1

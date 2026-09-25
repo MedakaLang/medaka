@@ -345,13 +345,19 @@ stays accurate. A "wraps" report is not an S0 bug; it points at #3377.
 | **N5 (unboxed and lowered)** | #353, `i32` lowering, #2360, field/scalar on 64-bit limbs |
 | **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opens when a customer is named |
 
-N2's measurement (2026-09-25, shared box, interleaved): SHA-256 on `U32` runs
-about 3% fewer instructions per block than the `Int`-and-mask version, and
-the wall-time difference is inside the noise. The round is about a fifth of
+N2's measurement (2026-09-25, shared box, interleaved, both arms built by
+one binary): SHA-256 on `U32` runs about 3% fewer instructions per block
+(13.4 G against 13.85 G for the workload) than the `Int`-and-mask version,
+and the wall-time difference is inside the noise: 2.07–2.98 µs per block
+against 2.26–2.75 µs at the minimum across two load levels and two
+workloads, where #3377 gives 1.63–1.89 µs for the flat-state variant and
+1.24–1.35 µs for hand-written `i32` IR. The round is about a fifth of
 the profile; the rest is the per-round state tuple allocation (#3369) and
 the collector. `U32` lowers today as the tagged 64-bit operation plus a mask,
 with each bit operation a helper that ThinLTO inlines: no `i32` arithmetic and
-no rotate instruction. That gap is N5's budget.
+no rotate instruction. That gap is N5's budget. Two folds #3431 lists stay
+on `Int`: `hmac`'s `ctEqAccum` and `pbkdf2`'s xor fold combine bytes with
+`bitOr`/`bitXor`, never leave `0` to `255`, and so never wrap or trap.
 
 N1 precedes N2 because the family's conversion names must be fixed before
 `U8` ships (#3415, point 1). N2 precedes N3 so the tagged mechanism is
@@ -368,6 +374,13 @@ read byte) are loud and mechanical, so N2 absorbs that pass.
 - `emitU8 300`, `setInPlace 0 256 mb`, and a computed `fromInt 300 : U8`
   are each refused, at compile time or at runtime, and never stored. Every
   N1 and N2 packet carries the probe.
+- The guarantee covers the CROSSING into a U type, not arithmetic inside
+  one. `emitU8 (200 + 100)` adds two in-range `U8` literals, wraps by §2.1,
+  and stores `44`; before N2 the same call panicked, because `emitU8` took an
+  `Int`. Likewise `Bytes.fold (+) 0 b` now sums in `U8`. This is the wrap
+  ruling applied to bytes, and no tree code relies on it (N2's review traced
+  every fixed-width `+ - *` site). Whether byte arithmetic needs a guard, a
+  lint, or only this statement is open for Val.
 - A new AST constructor (the wide literal) is audited across every
   wildcard arm as a set, and the fixture asserts about code that never
   touches it (`[T-GLOBAL-TABLE]`).

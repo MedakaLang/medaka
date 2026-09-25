@@ -2,8 +2,9 @@
 
    A `ByteParser a` reads an `Array Int` of bytes, each `0` to `255`, from a
    position and produces a value or a positioned error. The single-byte
-   primitives hand out a `U8`, and an element outside `0` to `255` is a
-   parse error there rather than a byte. Build a parser from the
+   primitives hand out a `U8`. An input element outside `0` to `255` is not a
+   byte at all, so reading one panics, as `takeBytes` does, rather than
+   failing the parse. Build a parser from the
    primitives (`byte`, `satisfy`, `takeBytes`, the integer and float
    readers) and the combinators (`many`, `orElse`, `choice`, `between`),
    sequence parsers with `defer` notation, and run the result with
@@ -117,15 +118,12 @@ failWith msg = ByteParserE (_ pos => BErr msg pos)
 
 {- | One byte that satisfies `pred`.
 
-   Fails without consuming anything when the element at the position is
-   outside `0` to `255`, whatever `pred` would say.
+   Panics when the element at the position is outside `0` to `255`.
 
    > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
    Ok 65
    > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
-   Err "unexpected byte at byte 0"
-   > runByteParser (satisfy (_ => True)) (arrayFromList [300])
-   Err "not a byte at byte 0" -}
+   Err "unexpected byte at byte 0" -}
 export
 satisfy : (U8 -> Bool) -> ByteParser U8
 satisfy pred = ByteParserE (satisfyStep pred)
@@ -133,9 +131,18 @@ satisfy pred = ByteParserE (satisfyStep pred)
 satisfyStep : (U8 -> Bool) -> Array Int -> Int -> BResult U8
 satisfyStep pred input pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = match U8.tryFromInt input[pos]
-    None => BErr "not a byte" pos
-    Some b => if pred b then BOk b (pos + 1) else BErr "unexpected byte" pos
+  | otherwise =
+    let b = elementByte input pos
+    if pred b then BOk b (pos + 1) else BErr "unexpected byte" pos
+
+-- The element at `pos` as a byte. An element outside 0..255 breaks the
+-- input's contract rather than the grammar, so it panics: a parse failure
+-- there would let `many` or `orElse` stop at it and succeed on a prefix.
+elementByte : Array Int -> Int -> U8
+elementByte input pos = match U8.tryFromInt input[pos]
+  Some b => b
+  None =>
+    panic "byteparser: element \{input[pos]} at \{pos} is not a byte in 0..255"
 
 {- | Any one byte.
 
@@ -171,15 +178,14 @@ eofStep input pos
   | otherwise = BErr "expected end of input" pos
 
 -- | The byte at the current position, without consuming it. Fails at the
--- end of the input, and on an element outside `0` to `255`.
+-- end of the input, and panics on an element outside `0` to `255`.
 export
 peek : ByteParser U8
 peek = ByteParserE (input pos =>
   if pos >= arrayLength input then
     BErr "unexpected end of input" pos
-  else match U8.tryFromInt input[pos]
-    None => BErr "not a byte" pos
-    Some b => BOk b pos)
+  else
+    BOk (elementByte input pos) pos)
 
 -- # Combinators
 

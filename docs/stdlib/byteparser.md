@@ -4,8 +4,9 @@ Parser combinators over byte arrays.
 
 A `ByteParser a` reads an `Array Int` of bytes, each `0` to `255`, from a
 position and produces a value or a positioned error. The single-byte
-primitives hand out a `U8`, and an element outside `0` to `255` is a
-parse error there rather than a byte. Build a parser from the
+primitives hand out a `U8`. An input element outside `0` to `255` is not a
+byte at all, so reading one panics, as `takeBytes` does, rather than
+failing the parse. Build a parser from the
 primitives (`byte`, `satisfy`, `takeBytes`, the integer and float
 readers) and the combinators (`many`, `orElse`, `choice`, `between`),
 sequence parsers with `defer` notation, and run the result with
@@ -127,16 +128,13 @@ satisfy pred
 
 One byte that satisfies `pred`.
 
-Fails without consuming anything when the element at the position is
-outside `0` to `255`, whatever `pred` would say.
+Panics when the element at the position is outside `0` to `255`.
 
 ```medaka
 > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
 Ok 65
 > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
 Err "unexpected byte at byte 0"
-> runByteParser (satisfy (_ => True)) (arrayFromList [300])
-Err "not a byte at byte 0"
 ```
 
 ### `anyByte`
@@ -190,7 +188,7 @@ peek : ByteParser U8
 ```
 
 The byte at the current position, without consuming it. Fails at the
-end of the input, and on an element outside `0` to `255`.
+end of the input, and panics on an element outside `0` to `255`.
 
 ## Combinators
 

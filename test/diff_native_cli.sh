@@ -426,7 +426,8 @@ else
   # text and exit code for each so a change to any of the seven messages, or a
   # regression that drops the guard entirely, is caught. A byte VALUE out of
   # range is no longer a panic here: the byte is a `U8`, so it is refused at
-  # compile time or by `fromInt` (test/fixed_width_refusal_fixtures). The two blit bounds fixtures pass an offset of Int's
+  # compile time or by `fromInt` (test/fixed_width_refusal_fixtures).
+  # The two blit bounds fixtures pass an offset of Int's
   # maximum: a guard written as `off + len > length` wraps negative, passes,
   # and reaches an unchecked memmove, so the failure is a segfault rather than
   # a panic.
