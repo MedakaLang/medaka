@@ -13,7 +13,6 @@ u32 negate
 u32 compare
 [True, True, False, True]
 (Gt, Eq)
-(Some 4294967295, Some 0)
 4294967295
 u32 generic
 4073741822

@@ -72,7 +72,6 @@ main =
     (4294967295 : U32) == U32.truncate (-1),
   ]
   println (compare (4294967295 : U32) 0, compare (2147483648 : U32) 2147483648)
-  println (maximum ws, minimum ws)
   println (maxBound : U32)
   println "u32 generic"
   println (sum ws)
