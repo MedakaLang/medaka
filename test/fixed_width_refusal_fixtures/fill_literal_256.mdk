@@ -1,0 +1,7 @@
+-- #3415: filling with an out-of-range literal byte is refused at compile
+-- time on every verb, never stored as 0.
+import mut_bytes.{make, fill}
+
+main =
+  let mb = make 4
+  fill 256 mb

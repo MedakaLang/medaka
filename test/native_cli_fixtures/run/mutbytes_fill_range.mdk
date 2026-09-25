@@ -1,5 +1,0 @@
-import mut_bytes.{make, fill}
-
-main =
-  let mb = make 4
-  fill 256 mb

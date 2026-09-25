@@ -1,0 +1,7 @@
+-- #3415: a positional MutBytes write of an out-of-range literal byte is
+-- refused at compile time on every verb, never stored as 0.
+import mut_bytes.{make, setInPlace}
+
+main =
+  let mb = make 4
+  setInPlace 0 256 mb

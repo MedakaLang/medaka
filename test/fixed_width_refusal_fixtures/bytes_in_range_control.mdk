@@ -1,0 +1,16 @@
+-- #3415: the in-range half of the byte probe, literal and computed, on the
+-- builder and on MutBytes.  Without it, a check "fixed" into refusing every
+-- byte would leave the refusal rows green.
+import bytebuilder.{newBuilder, emitU8, buildArray}
+import bytes as B
+import mut_bytes as MB
+
+main =
+  let buf = newBuilder ()
+  emitU8 255 buf
+  emitU8 (fromInt (length [1..=200])) buf
+  println (buildArray buf)
+  let mb = MB.make 2
+  MB.setInPlace 0 255 mb
+  MB.setInPlace 1 (fromInt (length [1..=7])) mb
+  println (B.toArray (MB.freeze mb))

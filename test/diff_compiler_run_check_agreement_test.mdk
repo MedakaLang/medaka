@@ -224,9 +224,10 @@ test "check, run and build agree with every fixture's pinned verdict and value" 
 
 -- # Fixed-width integers: out of range is refused, never stored
 
-{- | The W-QUIETER probe for `U8`/`U16`/`U32` (epic #3417, #3420, #3421;
-   `docs/design/INTEGER-TYPES-DESIGN.md` §10) over
-   `test/fixed_width_refusal_fixtures`.
+{- | The W-QUIETER probe for `U8`/`U16`/`U32` (epic #3417, #3420, #3421,
+   #3415; `docs/design/INTEGER-TYPES-DESIGN.md` §10) over
+   `test/fixed_width_refusal_fixtures`, including the byte APIs that take a
+   `U8`: `emitU8 300`, `setInPlace 0 256` and `fill 256`.
 
    A fixed-width value outside its range has exactly two legal fates: a
    ground literal is refused at compile time by `check`, `run` and `build`
@@ -278,6 +279,22 @@ compileRefusals = [
     "pattern_u8_arm_256",
     literalRefused "pattern_u8_arm_256.mdk:" "256" "U8 (0..255)",
   ),
+  (
+    "emitu8_literal_300",
+    literalRefused "emitu8_literal_300.mdk:7:" "300" "U8 (0..255)",
+  ),
+  (
+    "emitu8_literal_negative",
+    literalRefused "emitu8_literal_negative.mdk:7:" "-1" "U8 (0..255)",
+  ),
+  (
+    "setinplace_literal_256",
+    literalRefused "setinplace_literal_256.mdk:7:" "256" "U8 (0..255)",
+  ),
+  (
+    "fill_literal_256",
+    literalRefused "fill_literal_256.mdk:7:" "256" "U8 (0..255)",
+  ),
 ]
 
 fromIntRefused : String -> String -> RuntimeOutcome
@@ -291,6 +308,9 @@ runtimeRefusals = [
   ("fromint_u8_negative", fromIntRefused "-2" "U8 (0..255)"),
   ("fromint_u32_2p32", fromIntRefused "4294967296" "U32 (0..4294967295)"),
   ("generic_literal_u8_300", fromIntRefused "300" "U8 (0..255)"),
+  ("emitu8_computed_300", fromIntRefused "300" "U8 (0..255)"),
+  ("setinplace_computed_256", fromIntRefused "256" "U8 (0..255)"),
+  ("bytes_in_range_control", Prints "[|255, 200|]\n[|255, 7|]"),
   (
     "in_range_control",
     Prints

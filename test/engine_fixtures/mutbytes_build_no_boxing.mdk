@@ -10,12 +10,13 @@
 import bytes as B
 import bytes.{Bytes}
 import mut_bytes.{MutBytes, freeze, make, setInPlace}
+import u8 as U8
 
 buildGo : MutBytes -> Int -> Int -> Unit
 buildGo mb i n
   | i >= n = ()
   | otherwise =
-    let _ = setInPlace i (i * 3) mb
+    let _ = setInPlace i (fromInt (i * 3)) mb
     buildGo mb (i + 1) n
 
 buildBytes : Int -> Bytes
@@ -27,7 +28,7 @@ buildBytes n =
 sumGo : Bytes -> Int -> Int -> Int
 sumGo b i n
   | i >= n = 0
-  | otherwise = b[i] + sumGo b (i + 1) n
+  | otherwise = U8.toInt b[i] + sumGo b (i + 1) n
 
 main =
   let b = buildBytes 16

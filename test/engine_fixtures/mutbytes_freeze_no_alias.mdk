@@ -14,10 +14,11 @@ import bytes as B
 import bytes.{Bytes}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
+import u8 as U8
 
 byteAt : Int -> MutBytes -> Int
 byteAt i mb = match MB.get i mb
-  Some v => v
+  Some v => U8.toInt v
   None => -1
 
 main =

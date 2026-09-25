@@ -1,0 +1,7 @@
+-- #3415: a negative literal byte is refused at compile time on every verb,
+-- never stored as 255.
+import bytebuilder.{newBuilder, emitU8}
+
+main =
+  let buf = newBuilder ()
+  emitU8 (-1) buf

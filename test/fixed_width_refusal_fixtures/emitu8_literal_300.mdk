@@ -1,0 +1,7 @@
+-- #3415: a byte is a U8, so an out-of-range literal byte is refused at
+-- compile time on every verb.  The builder never holds 300 as 44.
+import bytebuilder.{newBuilder, emitU8}
+
+main =
+  let buf = newBuilder ()
+  emitU8 300 buf
