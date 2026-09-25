@@ -301,7 +301,7 @@ runtimeRefusals = [
 -- Why one verb's handling of a compile-time row is wrong, or `None`.
 verbRefusalFailure : List String ->
   (String, List String) ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 verbRefusalFailure needles (verb, args) = match boundedVerb medakaBin args
   Err e => Some "\{verb}: could not spawn: \{e}"
   Ok (code, out, err) =>
@@ -315,7 +315,7 @@ verbRefusalFailure needles (verb, args) = match boundedVerb medakaBin args
 
 compileRefusalFailure : String ->
   (String, List String) ->
-  <Exec "_", IO> Option String
+  <Exec, IO> Option String
 compileRefusalFailure scratch (name, needles) =
   let entry = "\{refusalCorpus}/\{name}.mdk"
   let verbs = [
@@ -340,8 +340,8 @@ test "every fixed-width refusal fixture has a row, and every row a fixture" =
    `test_process.scratchDir` is a top-level nullary, evaluated once per
    process, and every sweep removes it when it finishes, so each sweep after
    the module's first would be handed a path that no longer exists. -}
-afterRemadeScratch : (Unit -> <Exec "_", FileRead "_", IO> Expectation) ->
-  <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+afterRemadeScratch : (Unit -> <Exec, FileRead, IO> Expectation) ->
+  <Exec, FileRead, FileWrite, IO> Expectation
 afterRemadeScratch sweep = match scratchDir
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match mkdirAll dir
