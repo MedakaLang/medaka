@@ -224,7 +224,9 @@ fromBytesBE fromBytesLE : Bytes -> Option U32
 toHex        : U32 -> String
 ```
 
-with impls `Eq`, `Ord`, `Num`, `Bounded`, `Hashable`, `Display`, `Debug`.
+with impls `Eq`, `Ord`, `Num`, `Bounded`, `Hashable`, `Display`, `Debug`. `fromInt`
+is the `Num` method rather than a module function, so it is written `fromInt n`
+(checked at the type the context gives it), never `U32.fromInt n`.
 
 ### 5.1 `U64`'s asymmetry
 

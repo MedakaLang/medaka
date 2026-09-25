@@ -260,11 +260,15 @@ compileRefusals = [
   ),
   (
     "literal_u8_negative",
-    literalRefused "literal_u8_negative.mdk:5:" "-2" "U8 (0..255)",
+    literalRefused "literal_u8_negative.mdk:6:" "-2" "U8 (0..255)",
   ),
   (
     "literal_u32_2p32",
     literalRefused "literal_u32_2p32.mdk:5:" "4294967296" "U32 (0..4294967295)",
+  ),
+  (
+    "local_helper_literal_u8_300",
+    literalRefused "local_helper_literal_u8_300.mdk:7:" "300" "U8 (0..255)",
   ),
   (
     "pattern_u8_clause_300",

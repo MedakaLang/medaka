@@ -10089,6 +10089,7 @@ data PerRun = PerRun {
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
   patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
+  matchChecksDeferred : Ref (List (Mono, List Arm, Option Loc)),  -- matches whose scrutinee type was unknown after their arms (`checkDeferredMatches`)
   numlitRanges : Ref (List (Mono, Int, Option Loc)),  -- every source integer literal's (var, value, loc), for the fixed-width range check (`checkFixedWidthLiterals`)
   numlitUntainted : Ref (List (Mono, Loc)),
   numlitOpLocs : Ref (List Loc),
@@ -10194,6 +10195,7 @@ freshPerRun _ = PerRun {
   numlitRanges = Ref [],
   patLitPending = Ref [],
   patLitDeferred = Ref [],
+  matchChecksDeferred = Ref [],
   numlitUntainted = Ref [],
   numlitOpLocs = Ref [],
   numlitCtxTags = Ref [],
@@ -14991,9 +14993,16 @@ inferUnopE env op e dref =
 -- argument and the 2^62 minimum), so the fixed-width range check would see only the
 -- in-range `2`.  A negated literal is checked as the negative value it spells: its
 -- var is the result's var, so `-2 : U8` is `L-INT-OVERFLOW` like any other literal.
+-- The negated value REPLACES the literal's own entry (the one `infer` just pushed),
+-- so `-300 : U8` is one error, not a second one for `300`.  The catch-all arm is
+-- deliberate: any operand other than a (located) literal is ordinary arithmetic.
 recordNegatedLitRange : Mono -> Expr -> Unit
 recordNegatedLitRange t (ELoc _ e) = recordNegatedLitRange t e
-recordNegatedLitRange t (ENumLit n _ _ _) = recordNumlitRange t (negate n)
+recordNegatedLitRange t (ENumLit n _ _ _) =
+  match perRun.value.numlitRanges.value
+    (_, m, loc) :: rest if m == n =>
+      perRun.value.numlitRanges := (t, negate n, loc) :: rest
+    _ => recordNumlitRange t (negate n)
 recordNegatedLitRange _ _ = ()
 
 inferBinop : String -> Mono -> Mono -> Mono
@@ -15417,9 +15426,9 @@ recordNumlitRange a n =
 -- INTEGER-TYPES-DESIGN §3.2 item 2: a literal whose type grounded to a fixed-width
 -- head must lie in that head's range, or it is `L-INT-OVERFLOW` naming the type and
 -- the range.  Runs once per module after inference, on every driver, so `check`,
--- `run` and `build` all refuse `x : U8 = 300`.  A negative literal is one fused
--- `ENumLit`, so `-2 : U8` is caught here too.  Each literal reports at its own
--- location (no message dedup: two `300`s are two errors).
+-- `run` and `build` all refuse `(300 : U8)`.  `-2 : U8` is caught here too, as the
+-- negative value `recordNegatedLitRange` records for it.  Each literal reports at its
+-- own location (no message dedup: two `300`s are two errors).
 checkFixedWidthLiterals : List (Mono, Int, Option Loc) -> Unit
 checkFixedWidthLiterals [] = ()
 checkFixedWidthLiterals ((m, n, loc) :: rest) =
@@ -19029,9 +19038,30 @@ inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =
   let result = freshVar ()
   let _ = inferArms env scrutTy result arms
-  let _ = checkMatchExhaustive scrutTy arms
-  let _ = checkMatchRedundant scrutTy arms
+  let _ = match normalize scrutTy
+    TVar _ =>
+      perRun.value.matchChecksDeferred :=
+        (scrutTy, arms, !currentLoc) :: perRun.value.matchChecksDeferred.value
+    _ => checkMatchChecks scrutTy arms
   result
+
+-- A scrutinee whose type is still unknown after its arms (only literal, variable
+-- and wildcard patterns, e.g. a lambda's parameter matched against integer
+-- literals) is checked at the module's end instead, once `settleDeferredPatLits`
+-- has given it its type, so the warning names it (`non-exhaustive match of 'U8'`).
+checkMatchChecks : Mono -> List Arm -> Unit
+checkMatchChecks scrutTy arms =
+  let _ = checkMatchExhaustive scrutTy arms
+  checkMatchRedundant scrutTy arms
+
+checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
+checkDeferredMatches [] = ()
+checkDeferredMatches ((scrutTy, arms, loc) :: rest) =
+  let saved = !currentLoc
+  currentLoc := loc
+  let _ = checkMatchChecks scrutTy arms
+  currentLoc := saved
+  checkDeferredMatches rest
 -- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
 -- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
 
@@ -20566,11 +20596,15 @@ monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 -- instance.  `(++)` and `(==)` desugar to the same lambda shape as a hand-written
 -- `x y => x ++ y`, so one channel covers the section and the lambda together.
 --
--- SKOp SITES ONLY, which is what confines this to the seam's own methods
--- (`eq`/`lt`/`gt`/`lte`/`gte`/`append`/`negate`).  Arithmetic shares the GKBinopSite
--- kind but records SKPredicateOp, carrying a fixed prelude `Num` predicate that
--- numeric defaulting grounds on its own schedule; pinning those operands would put
--- this channel in front of that machinery for no gap it closes.
+-- Arithmetic and numeric literals too.  Arithmetic shares the GKBinopSite kind but
+-- records SKPredicateOp, and a literal records an SKNumReturn `fromInt` site; both
+-- carry the prelude `Num` predicate, and both have the same gap: over a generalized
+-- operand var the operator lowers to the untyped `Int`/`Float` builtin and the
+-- literal routes to `Num Int`.  For a user `impl Num` that is a crash, and for a
+-- fixed-width head (`U8`/`U16`/`U32`, which share Int's word) it is a silent
+-- out-of-range value: `where go x y = x * 31 + y` applied at `U32` stored 124000000007.
+-- So a local binding whose arithmetic or literal var is still head-unknown is pinned
+-- like any other constrained local, and its uses ground it.
 --
 -- HEAD-UNKNOWN ONLY.  An operand that already has a head tycon needs no pin: a
 -- builtin head routes to the structural primitive (binopBuiltinHead), a concrete user
@@ -20582,11 +20616,18 @@ opSitePairs : Int -> List (Int, String)
 opSitePairs dictN0 =
   flatMap opSiteIdPairs (siteGoals GKBinopSite dictN0)
     ++ flatMap opSiteIdPairs (siteGoals GKUnopSite dictN0)
+    ++ flatMap opSiteIdPairs (siteGoals GKReturnSite dictN0)
 
 opSiteIdPairs : PendingEntry -> List (Int, String)
 opSiteIdPairs (PendingEntry method _ m _ (SKOp _) _ _ _)
   | isSome (headTyconNameMono m) = []
   | otherwise = monoIdsWithIface (m, optionOr "" (ifaceOfMethodName method))
+opSiteIdPairs (PendingEntry _ _ m _ (SKPredicateOp _ _) _ _ _)
+  | isSome (headTyconNameMono m) = []
+  | otherwise = monoIdsWithIface (m, "Num")
+opSiteIdPairs (PendingEntry _ _ m _ (SKNumReturn _ _) _ _ _)
+  | isSome (headTyconNameMono m) = []
+  | otherwise = monoIdsWithIface (m, "Num")
 opSiteIdPairs _ = []
 
 -- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
@@ -30332,6 +30373,8 @@ checkBodyImpl seed mid implDecls prog0 =
     let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
     let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
     let _ = settleDeferredPatLits ()
+    let _ =
+      checkDeferredMatches (reverseL perRun.value.matchChecksDeferred.value)
     let _ = checkFixedWidthLiterals perRun.value.numlitRanges.value
     let _ = checkAdmittedOccObls ()
     ()

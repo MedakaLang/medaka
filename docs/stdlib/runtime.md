@@ -1018,8 +1018,6 @@ arrayFromList : List a -> Array a
 
 A new array holding the elements of a list.
 
-## Fixed-width integers
-
 ## Byte blocks
 
 ### `byteBlockLength`

@@ -604,9 +604,8 @@ extern arrayFill : a -> Array a -> Unit
 -- | A new array holding the elements of a list.
 extern arrayFromList : List a -> Array a
 
--- # Fixed-width integers
-
--- `U8`, `U16` and `U32` share `Int`'s tagged word; only the static type
+-- Fixed-width integers.  Every extern in this group is internal, so the group
+-- has no section of its own in the reference.  `U8`, `U16` and `U32` share `Int`'s tagged word; only the static type
 -- differs, and a value is always held in `0 .. 2^n - 1`.  These are the
 -- kernel conversions the `u8`/`u16`/`u32` modules build their surface on.
 -- The truncating forms keep the low `n` bits; the `ToInt` forms are the
@@ -636,22 +635,25 @@ extern u32ToInt : U32 -> Int
 -- `u32` modules do).  Each is the primitive above it in this file, exactly.
 -- Restricted like the conversions.
 
--- | `bitAnd`, under a name a module's own `bitAnd` does not shadow.
+-- | The bitwise and, reachable from a module whose own `bitAnd` shadows the prelude's.
 extern intBitAnd : Int -> Int -> Int
 
--- | `bitOr`, under a name a module's own `bitOr` does not shadow.
+-- | The bitwise or, reachable from a module whose own `bitOr` shadows the prelude's.
 extern intBitOr : Int -> Int -> Int
 
--- | `bitXor`, under a name a module's own `bitXor` does not shadow.
+-- | The bitwise exclusive or, reachable from a module whose own `bitXor` shadows the prelude's.
 extern intBitXor : Int -> Int -> Int
 
--- | `bitNot`, under a name a module's own `bitNot` does not shadow.
+-- | The bitwise complement, reachable from a module whose own `bitNot` shadows
+-- the prelude's.
 extern intBitNot : Int -> Int
 
--- | `shiftLeft`, under a name a module's own `shiftLeft` does not shadow.
+-- | A left shift, reachable from a module whose own `shiftLeft` shadows the
+-- prelude's.
 extern intShiftLeft : Int -> Int -> Int
 
--- | `shiftRight`, under a name a module's own `shiftRight` does not shadow.
+-- | A logical right shift, reachable from a module whose own `shiftRight`
+-- shadows the prelude's.
 extern intShiftRight : Int -> Int -> Int
 
 -- # Byte blocks

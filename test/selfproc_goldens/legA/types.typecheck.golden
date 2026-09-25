@@ -318,6 +318,7 @@ checkDeclaredKinds : List Decl -> Unit
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsGo : List Decl -> List Decl -> Unit
 checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
+checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffectAtoms : List (String, Option String) -> Unit
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
@@ -350,6 +351,7 @@ checkLetBinds : List LetBind -> Unit
 checkLetGroupBindsGo : List LetBind -> Unit
 checkLetGroupBindsLocated : List LetBind -> Unit
 checkLetRecDecls : List Decl -> Unit
+checkMatchChecks : Mono -> List Arm -> Unit
 checkMatchExhaustive : Mono -> List Arm -> Unit
 checkMatchRedundant : Mono -> List Arm -> Unit
 checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind), List String) -> Option Loc -> Unit
