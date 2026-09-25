@@ -1,7 +1,10 @@
 # The integer stack
 
 Status: N1 BUILT (the tagged tier: `U8`/`U16`/`U32`, their modules, the literal
-range check and literal patterns); N2–N6 are design. Epic #3417; milestones N1–N6.
+range check and literal patterns). N2 BUILT (a byte is a `U8` in `bytes`,
+`mut_bytes`, `bytebuilder` and `byteparser`; SHA-256, HMAC, the PBKDF2 block
+index, CRC-32 and the property runner's `fmix32` on `U32`). N3–N6 are design.
+Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
 
@@ -341,6 +344,14 @@ stays accurate. A "wraps" report is not an S0 bug; it points at #3377.
 | **N4 (Int traps)** | every wrap dependent moved (the `Hashable` folds, field/scalar), the census repeated over the emitter child and `pdsd`, the cost measured, `Int` overflow panics on all three engines, `checkedAdd` family shipped, spec updated |
 | **N5 (unboxed and lowered)** | #353, `i32` lowering, #2360, field/scalar on 64-bit limbs |
 | **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opens when a customer is named |
+
+N2's measurement (2026-09-25, shared box, interleaved): SHA-256 on `U32` runs
+about 3% fewer instructions per block than the `Int`-and-mask version, and
+the wall-time difference is inside the noise. The round is about a fifth of
+the profile; the rest is the per-round state tuple allocation (#3369) and
+the collector. `U32` lowers today as the tagged 64-bit operation plus a mask,
+with each bit operation a helper that ThinLTO inlines: no `i32` arithmetic and
+no rotate instruction. That gap is N5's budget.
 
 N1 precedes N2 because the family's conversion names must be fixed before
 `U8` ships (#3415, point 1). N2 precedes N3 so the tagged mechanism is
