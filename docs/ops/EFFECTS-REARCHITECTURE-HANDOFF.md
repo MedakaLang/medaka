@@ -294,7 +294,7 @@ is owed, not the design.
 - `docs-links`, `agent-doc-symbols` (one ledger row for the archived census's
   retired `Known`), comment-register census, shout-diff and the registry
   keying ratchet: green.
-- CI on the final head `bbb98f13c` (run 36090508390): every job green except `compiler-soundness`, whose must-fail step reports the three drained pins and skips the whole-source typecheck and fixpoint behind them; both were run locally on that head and pass.
+- CI on `bbb98f13c` (run 36090508390) was green except the must-fail step's drained pins; with the pins removed, the full dispatched run on `35654f79f` (run 36105896609, `workflow_dispatch`, unnarrowed) is green on every job, `compiler-soundness` included (must-fail 25 reproduce, whole-source typecheck and fixpoint both ran in CI).
 
 **Owed after this session:**
 
