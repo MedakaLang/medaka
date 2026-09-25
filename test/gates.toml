@@ -2419,7 +2419,7 @@ migration = "done"
 run = "test/diff_compiler_run_check_agreement_test.mdk"
 oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
-corpus = ["test/run_check_agreement_fixtures"]
+corpus = ["test/fixed_width_refusal_fixtures", "test/run_check_agreement_fixtures"]
 toolchain = []
 
 [[gate]]

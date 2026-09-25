@@ -156,6 +156,9 @@ What's in the standard library, what's planned, module-by-module status.
 | [`test_process.md`](stdlib/test_process.md) | test_process | — |
 | [`time.md`](stdlib/time.md) | time | — |
 | [`toml.md`](stdlib/toml.md) | toml | — |
+| [`u16.md`](stdlib/u16.md) | u16 | — |
+| [`u32.md`](stdlib/u32.md) | u32 | — |
+| [`u8.md`](stdlib/u8.md) | u8 | — |
 | [`validation.md`](stdlib/validation.md) | validation | — |
 | [`vector.md`](stdlib/vector.md) | vector | — |
 

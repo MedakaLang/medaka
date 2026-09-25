@@ -1,0 +1,5 @@
+-- #3420: a computed negative Int is out of U8's range too; `fromInt` refuses
+-- it rather than taking it in two's complement (that is `truncate`'s job).
+import u8
+
+main = println (fromInt (0 - 2) : U8)

@@ -1104,6 +1104,80 @@ A reader for a subset of TOML.
 - [`tableCount`](toml.md#tablecount)
 - [`tableEntry`](toml.md#tableentry)
 
+## [`u16`](u16.md)
+
+Unsigned 16-bit integers, the `U16` type.
+
+- [`tryFromInt`](u16.md#tryfromint)
+- [`truncate`](u16.md#truncate)
+- [`toInt`](u16.md#toint)
+- [`fromU8`](u16.md#fromu8)
+- [`truncateU32`](u16.md#truncateu32)
+- [`bitAnd`](u16.md#bitand)
+- [`bitOr`](u16.md#bitor)
+- [`bitXor`](u16.md#bitxor)
+- [`bitNot`](u16.md#bitnot)
+- [`shiftLeft`](u16.md#shiftleft)
+- [`shiftRight`](u16.md#shiftright)
+- [`rotateLeft`](u16.md#rotateleft)
+- [`rotateRight`](u16.md#rotateright)
+- [`popCount`](u16.md#popcount)
+- [`leadingZeros`](u16.md#leadingzeros)
+- [`trailingZeros`](u16.md#trailingzeros)
+- [`toBytesBE`](u16.md#tobytesbe)
+- [`toBytesLE`](u16.md#tobytesle)
+- [`fromBytesBE`](u16.md#frombytesbe)
+- [`fromBytesLE`](u16.md#frombytesle)
+- [`toHex`](u16.md#tohex)
+
+## [`u32`](u32.md)
+
+Unsigned 32-bit integers, the `U32` type.
+
+- [`tryFromInt`](u32.md#tryfromint)
+- [`truncate`](u32.md#truncate)
+- [`toInt`](u32.md#toint)
+- [`fromU8`](u32.md#fromu8)
+- [`fromU16`](u32.md#fromu16)
+- [`bitAnd`](u32.md#bitand)
+- [`bitOr`](u32.md#bitor)
+- [`bitXor`](u32.md#bitxor)
+- [`bitNot`](u32.md#bitnot)
+- [`shiftLeft`](u32.md#shiftleft)
+- [`shiftRight`](u32.md#shiftright)
+- [`rotateLeft`](u32.md#rotateleft)
+- [`rotateRight`](u32.md#rotateright)
+- [`popCount`](u32.md#popcount)
+- [`leadingZeros`](u32.md#leadingzeros)
+- [`trailingZeros`](u32.md#trailingzeros)
+- [`toBytesBE`](u32.md#tobytesbe)
+- [`toBytesLE`](u32.md#tobytesle)
+- [`fromBytesBE`](u32.md#frombytesbe)
+- [`fromBytesLE`](u32.md#frombytesle)
+- [`toHex`](u32.md#tohex)
+
+## [`u8`](u8.md)
+
+Unsigned 8-bit integers, the `U8` type.
+
+- [`tryFromInt`](u8.md#tryfromint)
+- [`truncate`](u8.md#truncate)
+- [`toInt`](u8.md#toint)
+- [`truncateU16`](u8.md#truncateu16)
+- [`truncateU32`](u8.md#truncateu32)
+- [`bitAnd`](u8.md#bitand)
+- [`bitOr`](u8.md#bitor)
+- [`bitXor`](u8.md#bitxor)
+- [`bitNot`](u8.md#bitnot)
+- [`shiftLeft`](u8.md#shiftleft)
+- [`shiftRight`](u8.md#shiftright)
+- [`rotateLeft`](u8.md#rotateleft)
+- [`rotateRight`](u8.md#rotateright)
+- [`popCount`](u8.md#popcount)
+- [`leadingZeros`](u8.md#leadingzeros)
+- [`trailingZeros`](u8.md#trailingzeros)
+- [`toHex`](u8.md#tohex)
+
 ## [`validation`](validation.md)
 
 A result type that collects every error instead of stopping at the first.

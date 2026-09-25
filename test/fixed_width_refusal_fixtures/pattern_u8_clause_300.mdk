@@ -1,0 +1,10 @@
+-- #3421: a literal pattern takes the scrutinee's type, so a clause pattern of
+-- 300 on a U8 parameter is a compile error, not a dead clause and not an arm
+-- that matches 44.
+import u8
+
+classify : U8 -> String
+classify 300 = "big"
+classify _ = "other"
+
+main = println (classify 44)

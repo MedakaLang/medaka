@@ -1,0 +1,5 @@
+-- #3420: U32's checked narrowing at 2^32, a value past the 32-bit range that
+-- still fits an Int.
+import u32
+
+main = println (fromInt (65536 * 65536) : U32)

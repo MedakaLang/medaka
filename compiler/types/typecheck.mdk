@@ -47,6 +47,8 @@
 
 import frontend.ast.{
   Lit(..),
+  isFixedWidthHead,
+  fixedWidthMask,
   -- A-3.2b residual (#1512): named ONLY by `aliasFixtureAttribCore`, the doctest
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
@@ -10085,6 +10087,10 @@ data PerRun = PerRun {
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
+  patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
+  patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
+  matchChecksDeferred : Ref (List (Mono, List Arm, Option Loc)),  -- matches whose scrutinee type was unknown after their arms (`checkDeferredMatches`)
+  numlitRanges : Ref (List (Mono, Int, Option Loc)),  -- every source integer literal's (var, value, loc), for the fixed-width range check (`checkFixedWidthLiterals`)
   numlitUntainted : Ref (List (Mono, Loc)),
   numlitOpLocs : Ref (List Loc),
   numlitCtxTags : Ref (List (Loc, String)),
@@ -10186,6 +10192,10 @@ freshPerRun _ = PerRun {
   deferrableVarIds = Ref [],
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
+  numlitRanges = Ref [],
+  patLitPending = Ref [],
+  patLitDeferred = Ref [],
+  matchChecksDeferred = Ref [],
   numlitUntainted = Ref [],
   numlitOpLocs = Ref [],
   numlitCtxTags = Ref [],
@@ -10732,6 +10742,7 @@ bindOutsideDoMsg =
 -- ── generalization & instantiation ────────────────────────────────────────
 generalize : Mono -> Scheme
 generalize t =
+  let _ = defaultDeferredPatLitsIn perRun.value.currentLevel.value t
   Forall
     (dedupI (freeGenVars perRun.value.currentLevel.value t))
     (dedupI (freeEffvars t))
@@ -11969,6 +11980,7 @@ inferPat _ (PVar x xloc) =
   let _ = recordLocalBind x (Some xloc) v
   (v, [(x, monoScheme v)])
 inferPat _ PWild = (freshVar (), [])
+inferPat _ (PLit (LInt n)) = inferIntLitPat n
 inferPat _ (PLit l) = (litType l, [])
 inferPat env (PCon name pats) = inferPatCon env name pats
 inferPat env (PTuple pats) = inferPatTuple env pats
@@ -12057,6 +12069,82 @@ inferRecPatFieldWith env ft _ (Some p) =
   let pr = inferPat env p
   let _ = unify (fst pr) ft
   snd pr
+
+-- INTEGER-TYPES-DESIGN §3.2 item 5: an integer literal PATTERN takes its type from
+-- the scrutinee when that is a builtin integer head, and is `Int` otherwise.  It is
+-- inferred as a fresh var and parked on `patLitPending`; the pattern site that
+-- unifies the pattern with its scrutinee (or a signature's domain) then settles it
+-- with `settlePatLits`, or defers it to `generalize` when the scrutinee's type is
+-- not known yet.  Either way the var is settled before anything can quantify it,
+-- so a literal pattern never makes a binding polymorphic.
+inferIntLitPat : Int -> (Mono, List (String, Scheme))
+inferIntLitPat n =
+  let a = freshVar ()
+  perRun.value.patLitPending :=
+    (a, n, !currentLoc) :: perRun.value.patLitPending.value
+  (a, [])
+
+-- Open a pattern site: park the literals of any enclosing site and start empty.
+takePatLits : Unit -> List (Mono, Int, Option Loc)
+takePatLits _ =
+  let saved = perRun.value.patLitPending.value
+  perRun.value.patLitPending := []
+  saved
+
+-- Close a pattern site, after its pattern met its scrutinee.  A literal whose var
+-- is now a fixed-width head keeps that type and joins the literal range check; one
+-- whose var is any other type is `Int`, exactly as a literal pattern always was (a
+-- non-integer scrutinee is the same `Int vs T` mismatch).  A var still unknown here
+-- (a lambda's parameter, typed only by a later argument) is deferred: `generalize`
+-- defaults it to `Int` before it could be quantified, and the module's end settles
+-- whatever remains (`settleDeferredPatLits`).
+settlePatLits : List (Mono, Int, Option Loc) -> Unit
+settlePatLits saved =
+  let _ = settlePatLitsGo False perRun.value.patLitPending.value
+  perRun.value.patLitPending := saved
+
+-- [final]: the module is done, so an unknown var defaults instead of deferring.
+settlePatLitsGo : Bool -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsGo _ [] = ()
+settlePatLitsGo final ((a, n, loc) :: rest) =
+  let _ = match normalize a
+    TCon tag _ if isFixedWidthHead tag =>
+      perRun.value.numlitRanges :=
+        (a, n, loc) :: perRun.value.numlitRanges.value
+    TVar _ if not final =>
+      perRun.value.patLitDeferred :=
+        (a, n, loc) :: perRun.value.patLitDeferred.value
+    _ =>
+      let saved = !currentLoc
+      currentLoc := orElseLoc loc saved
+      let _ = unify (tconBuiltin "Int") a
+      currentLoc := saved
+  settlePatLitsGo final rest
+
+-- The module's inference is complete: every deferred literal pattern takes the
+-- type its scrutinee finally got, or `Int`.
+settleDeferredPatLits : Unit -> Unit
+settleDeferredPatLits _ =
+  let deferred = perRun.value.patLitDeferred.value
+  perRun.value.patLitDeferred := []
+  settlePatLitsGo True deferred
+
+-- Called by `generalize` before it quantifies [t]: a deferred literal-pattern var
+-- that is about to become a scheme variable is `Int` instead, so a literal pattern
+-- never makes a binding polymorphic.
+defaultDeferredPatLitsIn : Int -> Mono -> Unit
+defaultDeferredPatLitsIn lvl t = match perRun.value.patLitDeferred.value
+  [] => ()
+  deferred => defaultPatLitVarsIn (freeGenVars lvl t) deferred
+
+defaultPatLitVarsIn : List Int -> List (Mono, Int, Option Loc) -> Unit
+defaultPatLitVarsIn _ [] = ()
+defaultPatLitVarsIn quantified ((a, _, _) :: rest) =
+  let _ = match normalize a
+    TVar cell =>
+      if containsI (tyvarId cell) quantified then unify (tconBuiltin "Int") a
+    _ => ()
+  defaultPatLitVarsIn quantified rest
 
 litType : Lit -> Mono
 litType (LInt _) = tconBuiltin "Int"
@@ -13514,8 +13602,10 @@ inferStmt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 inferStmt env (DoBind pat e) =
   let t = infer env e
   let _ = pushTypeError "T-BIND-OUTSIDE-DO" bindOutsideDoMsg
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t
+  let _ = settlePatLits lits
   extendLocalVars env (snd pr)
 inferStmt _ _ = panic "typecheck: unsupported block statement"
 
@@ -13665,8 +13755,10 @@ blockLet env (PVar x xloc) e =
   seedAlphaLets (extendLocalVar env x sch) x e
 blockLet env pat e =
   let t = infer env e
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t
+  let _ = settlePatLits lits
   extendLocalVars env (snd pr)
 
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
@@ -14894,7 +14986,24 @@ inferUnopE : TcEnv -> String -> Expr -> Ref Route -> Mono
 inferUnopE env op e dref =
   let t = infer env e
   let _ = recordUnopSite op dref t
+  let _ = if op == "-" then recordNegatedLitRange t e
   inferUnop op t
+
+-- `-2` is usually `negate 2`, not one fused literal (the parser fuses only a tight
+-- argument and the 2^62 minimum), so the fixed-width range check would see only the
+-- in-range `2`.  A negated literal is checked as the negative value it spells: its
+-- var is the result's var, so `-2 : U8` is `L-INT-OVERFLOW` like any other literal.
+-- The negated value REPLACES the literal's own entry (the one `infer` just pushed),
+-- so `-300 : U8` is one error, not a second one for `300`.  The catch-all arm is
+-- deliberate: any operand other than a (located) literal is ordinary arithmetic.
+recordNegatedLitRange : Mono -> Expr -> Unit
+recordNegatedLitRange t (ELoc _ e) = recordNegatedLitRange t e
+recordNegatedLitRange t (ENumLit n _ _ _) =
+  match perRun.value.numlitRanges.value
+    (_, m, loc) :: rest if m == n =>
+      perRun.value.numlitRanges := (t, negate n, loc) :: rest
+    _ => recordNumlitRange t (negate n)
+recordNegatedLitRange _ _ = ()
 
 inferBinop : String -> Mono -> Mono -> Mono
 inferBinop "+" lt rt = numArithOp lt rt
@@ -15229,6 +15338,7 @@ inferNumLit env n fref dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       let _ = pushNumlit (a, fref, n, dref)
+      let _ = recordNumlitRange a n
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
@@ -15301,12 +15411,43 @@ inferNumLitBare n fref =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
   let _ = pushNumLitObl predicate a origin scope
   let _ = pushNumlit (a, fref, n, Ref RNone)
+  let _ = recordNumlitRange a n
   let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
   a
 
 -- ── Chunk D: Num mis-framing provenance (error-path only) ──────────────────
 -- Record a literal's (var, loc) so a later Num-obligation reframe can tell a bare
 -- literal from an arithmetic-operator operand.  [currentLoc] is the ENumLit span.
+recordNumlitRange : Mono -> Int -> Unit
+recordNumlitRange a n =
+  perRun.value.numlitRanges :=
+    (a, n, !currentLoc) :: perRun.value.numlitRanges.value
+
+-- INTEGER-TYPES-DESIGN §3.2 item 2: a literal whose type grounded to a fixed-width
+-- head must lie in that head's range, or it is `L-INT-OVERFLOW` naming the type and
+-- the range.  Runs once per module after inference, on every driver, so `check`,
+-- `run` and `build` all refuse `(300 : U8)`.  `-2 : U8` is caught here too, as the
+-- negative value `recordNegatedLitRange` records for it.  Each literal reports at its
+-- own location (no message dedup: two `300`s are two errors).
+checkFixedWidthLiterals : List (Mono, Int, Option Loc) -> Unit
+checkFixedWidthLiterals [] = ()
+checkFixedWidthLiterals ((m, n, loc) :: rest) =
+  let _ = match normalize m
+    TCon tag _ => match fixedWidthMask tag
+      Some mask =>
+        if n < 0 || n > mask then
+          recordTypeError
+            (TcDiag
+              "L-INT-OVERFLOW"
+              1
+              (orElseLoc loc !currentLoc)
+              "integer literal \{n} does not fit \{tag} (0..\{mask})"
+              None
+              None)
+      None => ()
+    _ => ()
+  checkFixedWidthLiterals rest
+
 recordNumlitLoc : Mono -> Unit
 recordNumlitLoc a = match !currentLoc
   Some l =>
@@ -18256,8 +18397,10 @@ expectedParamTypes _ _ = []
 -- and the hover side-channel see the expected type, not a bare fresh var.
 inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> Mono
 inferLamChecked env expected pats body =
+  let lits = takePatLits ()
   let pr = inferPats env pats
   let _ = unifyParamsExpected (fst pr) expected
+  let _ = settlePatLits lits
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := openRow ()
   let bodyTy = infer (extendLocalVars env (snd pr)) body
@@ -18675,7 +18818,9 @@ inferLam env pats body =
   let _ = match exprLoc body
     Some l => currentLoc := Some l
     None => ()
+  let lits = takePatLits ()
   let pr = inferPats env pats
+  let _ = settlePatLits lits
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := openRow ()
   let bodyTy = infer (extendLocalVars env (snd pr)) body
@@ -18797,8 +18942,10 @@ inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 inferLetBody env pat t1 _ e2 _ _ _ =
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t1
+  let _ = settlePatLits lits
   infer (extendLocalVars env (snd pr)) e2
 
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
@@ -18891,9 +19038,30 @@ inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =
   let result = freshVar ()
   let _ = inferArms env scrutTy result arms
-  let _ = checkMatchExhaustive scrutTy arms
-  let _ = checkMatchRedundant scrutTy arms
+  let _ = match normalize scrutTy
+    TVar _ =>
+      perRun.value.matchChecksDeferred :=
+        (scrutTy, arms, !currentLoc) :: perRun.value.matchChecksDeferred.value
+    _ => checkMatchChecks scrutTy arms
   result
+
+-- A scrutinee whose type is still unknown after its arms (only literal, variable
+-- and wildcard patterns, e.g. a lambda's parameter matched against integer
+-- literals) is checked at the module's end instead, once `settleDeferredPatLits`
+-- has given it its type, so the warning names it (`non-exhaustive match of 'U8'`).
+checkMatchChecks : Mono -> List Arm -> Unit
+checkMatchChecks scrutTy arms =
+  let _ = checkMatchExhaustive scrutTy arms
+  checkMatchRedundant scrutTy arms
+
+checkDeferredMatches : List (Mono, List Arm, Option Loc) -> Unit
+checkDeferredMatches [] = ()
+checkDeferredMatches ((scrutTy, arms, loc) :: rest) =
+  let saved = !currentLoc
+  currentLoc := loc
+  let _ = checkMatchChecks scrutTy arms
+  currentLoc := saved
+  checkDeferredMatches rest
 -- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
 -- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
 
@@ -19098,8 +19266,10 @@ inferArms env scrutTy result ((Arm pat gs body) :: rest) =
 
 inferArm : TcEnv -> Mono -> Mono -> Pat -> List Guard -> Expr -> Unit
 inferArm env scrutTy result pat gs body =
+  let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) scrutTy
+  let _ = settlePatLits lits
   let envBody = inferArmGuards (extendLocalVars env (snd pr)) gs
   unify result (infer envBody body)
 
@@ -19113,8 +19283,10 @@ inferArmGuards env ((GBool g) :: rest) =
   inferArmGuards env rest
 inferArmGuards env ((GBind p e) :: rest) =
   let te = infer env e
+  let lits = takePatLits ()
   let pr = inferPat env p
   let _ = unify (fst pr) te
+  let _ = settlePatLits lits
   inferArmGuards (extendLocalVars env (snd pr)) rest
 
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
@@ -20424,11 +20596,15 @@ monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 -- instance.  `(++)` and `(==)` desugar to the same lambda shape as a hand-written
 -- `x y => x ++ y`, so one channel covers the section and the lambda together.
 --
--- SKOp SITES ONLY, which is what confines this to the seam's own methods
--- (`eq`/`lt`/`gt`/`lte`/`gte`/`append`/`negate`).  Arithmetic shares the GKBinopSite
--- kind but records SKPredicateOp, carrying a fixed prelude `Num` predicate that
--- numeric defaulting grounds on its own schedule; pinning those operands would put
--- this channel in front of that machinery for no gap it closes.
+-- Arithmetic and numeric literals too.  Arithmetic shares the GKBinopSite kind but
+-- records SKPredicateOp, and a literal records an SKNumReturn `fromInt` site; both
+-- carry the prelude `Num` predicate, and both have the same gap: over a generalized
+-- operand var the operator lowers to the untyped `Int`/`Float` builtin and the
+-- literal routes to `Num Int`.  For a user `impl Num` that is a crash, and for a
+-- fixed-width head (`U8`/`U16`/`U32`, which share Int's word) it is a silent
+-- out-of-range value: `where go x y = x * 31 + y` applied at `U32` stored 124000000007.
+-- So a local binding whose arithmetic or literal var is still head-unknown is pinned
+-- like any other constrained local, and its uses ground it.
 --
 -- HEAD-UNKNOWN ONLY.  An operand that already has a head tycon needs no pin: a
 -- builtin head routes to the structural primitive (binopBuiltinHead), a concrete user
@@ -20440,11 +20616,18 @@ opSitePairs : Int -> List (Int, String)
 opSitePairs dictN0 =
   flatMap opSiteIdPairs (siteGoals GKBinopSite dictN0)
     ++ flatMap opSiteIdPairs (siteGoals GKUnopSite dictN0)
+    ++ flatMap opSiteIdPairs (siteGoals GKReturnSite dictN0)
 
 opSiteIdPairs : PendingEntry -> List (Int, String)
 opSiteIdPairs (PendingEntry method _ m _ (SKOp _) _ _ _)
   | isSome (headTyconNameMono m) = []
   | otherwise = monoIdsWithIface (m, optionOr "" (ifaceOfMethodName method))
+opSiteIdPairs (PendingEntry _ _ m _ (SKPredicateOp _ _) _ _ _)
+  | isSome (headTyconNameMono m) = []
+  | otherwise = monoIdsWithIface (m, "Num")
+opSiteIdPairs (PendingEntry _ _ m _ (SKNumReturn _ _) _ _ _)
+  | isSome (headTyconNameMono m) = []
+  | otherwise = monoIdsWithIface (m, "Num")
 opSiteIdPairs _ = []
 
 -- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
@@ -22892,9 +23075,17 @@ binopPrimitiveHead h = contains h ["Int", "Float", "String", "Bool", "Char"]
 -- — so routing a List/String `++` to `append` would make those bodies call
 -- themselves unboundedly.  Every OTHER head still routes, which is precisely what
 -- makes a user `impl Semigroup MyRope` reachable from `a ++ b`.
+--
+-- The fixed-width heads (`U8`/`U16`/`U32`) are builtin for the COMPARISON methods
+-- only: their values share `Int`'s tagged word and are held in `0 .. 2^n - 1`, so
+-- the signed word compare is the unsigned compare.  They are deliberately NOT in
+-- `binopPrimitiveHead`, which the unary-minus path also reads: a builtin `-x` on a
+-- `U8` would be `Int` negation and leave a negative word, so `negate` routes to
+-- the type's own `Num` impl instead.
 binopBuiltinHead : String -> String -> Bool
 binopBuiltinHead "append" tag = binopPrimitiveHead tag || tag == "List"
-binopBuiltinHead _ tag = binopPrimitiveHead tag
+binopBuiltinHead method tag =
+  binopPrimitiveHead tag || isFixedWidthHead tag && isCompareMethod method
 
 -- SHARED-FLOAT-RESIDUAL §3(C): after the module is inferred, zonk each recorded
 -- arithmetic operand mono; when it grounds to concrete Float, stamp RScalar
@@ -22903,12 +23094,13 @@ binopBuiltinHead _ tag = binopPrimitiveHead tag
 -- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
 -- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
--- channel stamps only Float (Int is the arithmetic primitive default already;
--- leaving Int operands RNone avoids perturbing every integer binop's emitted IR)
--- — `RScalar "Int"` is stampOpRouteVal's, on comparison sites.  Never overwrites a
--- route another pass already set (a comparison op has a different node/ref; an
--- arithmetic route starts RNone) — the guard is: stamp only if the site is still
--- RNone AND grounds to Float.
+-- channel stamps Float and the fixed-width heads with their own tag (Int is the
+-- arithmetic primitive default already; leaving Int operands RNone avoids
+-- perturbing every integer binop's emitted IR) — `RScalar "Int"` is
+-- stampOpRouteVal's, on comparison sites.  Never overwrites a route another pass
+-- already set (a comparison op has a different node/ref; an arithmetic route
+-- starts RNone) — the guard is: stamp only if the site is still RNone AND grounds
+-- to Float or a fixed-width head.
 resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveArithSites [] = ()
 resolveArithSites ((dref, m) :: rest) =
@@ -22919,6 +23111,7 @@ resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSite dref m = match !dref
   RNone => match headTyconNameMono m
     Some "Float" => dref := RScalar "Float"
+    Some tag => if isFixedWidthHead tag then dref := RScalar tag
     _ => ()
   _ => ()
 
@@ -23118,7 +23311,10 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
   -- (Float/String/Bool/Char) and every ungrounded operand stay RNone, i.e. on the
   -- runtime-discriminated path they are on today.
   if isBuiltin then
-    if isBinop && tag == "Int" && isCompareMethod method then
+    -- a fixed-width comparison is the `Int` word compare (see binopBuiltinHead).
+    if isBinop
+      && (tag == "Int" || isFixedWidthHead tag)
+      && isCompareMethod method then
       RScalar "Int"
     else
       RNone
@@ -23156,8 +23352,9 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
--- Int/Float heads bypass method dispatch; a user Num impl for any other head,
--- including String/Bool/Char, is selected through the exact interface identity.
+-- Int/Float and fixed-width U8/U16/U32 heads bypass method dispatch; a user Num
+-- impl for any other head, including String/Bool/Char, is selected through the
+-- exact interface identity.
 stampPredicateOpRouteVal : String ->
   ScopeId ->
   String ->
@@ -23178,8 +23375,10 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
         (Some route)
         []
     route
-  else if tag == "Float" then
-    let route = RScalar "Float"
+  else if tag == "Float" || isFixedWidthHead tag then
+    -- a fixed-width head's arithmetic is a builtin too, stamped with its own tag
+    -- so every engine wraps the result at that width.
+    let route = RScalar tag
     let _ =
       noteNumericPredicateTrace
         NPTArithmetic
@@ -28946,6 +29145,7 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
   Some f => ELit (LFloat f)
   None => match !dref
     RNone => ELit (LInt n)
+    route if fixedWidthLiteralFits route n => ELit (LInt n)
     route =>
       let split = binopRouteSplit route
       EApp
@@ -28961,6 +29161,16 @@ rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
   RNone => EUnOp op e routeRef
   _ => unopMethodApp op e routeRef
 rewriteBinopExpr e = e
+
+-- A literal routed to a fixed-width head's `fromInt` is that head's word already
+-- when it is in range (the heads share Int's tagged word), so it needs no call.  The
+-- range is checked HERE, on the value, not assumed from the module check: an
+-- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
+fixedWidthLiteralFits : Route -> Int -> Bool
+fixedWidthLiteralFits (RKey tag _) n = match fixedWidthMask tag
+  Some mask => n >= 0 && n <= mask
+  None => False
+fixedWidthLiteralFits _ _ = False
 
 -- split the stamped RKey route into a bare-tag route (reqs dropped) + the element
 -- dict routes, so the dicts ride on the EMethodAt impl-dict ref (where emitMethod /
@@ -30162,6 +30372,10 @@ checkBodyImpl seed mid implDecls prog0 =
     -- first step of the graph-end drain every Module-arm driver now runs.
     let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
     let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
+    let _ = settleDeferredPatLits ()
+    let _ =
+      checkDeferredMatches (reverseL perRun.value.matchChecksDeferred.value)
+    let _ = checkFixedWidthLiterals perRun.value.numlitRanges.value
     let _ = checkAdmittedOccObls ()
     ()
   perRun.value.localSchemesOut :=
@@ -36763,8 +36977,10 @@ inferClauseEff env peel (pats, body) =
   let _ = match exprLoc body
     Some l => currentLoc := Some l
     None => ()
+  let lits = takePatLits ()
   let pr = inferPats env pats
   let _ = peelOntoParams peel (fst pr) pats
+  let _ = settlePatLits lits
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := openRow ()
   -- #2109: a signed clause's body is inferred AGAINST the signature's result

@@ -93,6 +93,7 @@ dropShadowedExp : List String -> List Decl -> List Decl
 eval : EvalEnv (Value a) -> Expr -> Value a
 evalAnd : EvalEnv (Value a) -> Value a -> Expr -> Value a
 evalArith : String -> Value a -> Value a -> Value a
+evalArithAt : String -> String -> Value a -> Value a -> Value a
 evalBinop : EvalEnv (Value a) -> String -> Expr -> Expr -> Value a
 evalBlock : EvalEnv (Value a) -> List DoStmt -> Value a
 evalDepthLimit : Int
@@ -324,6 +325,7 @@ pExit : Value a -> <Stderr> Value a
 pExp : Value a -> Value a
 pFileExists : Value a -> <FileRead> Value a
 pFileMode : Value a -> <FileRead> Value a
+pFixedToInt : Value a -> Value a
 pFloatRem : Value a -> Value a -> Value a
 pFloatToBytes64 : Value a -> Value a
 pFloatToInt : Value a -> Value a
@@ -396,6 +398,7 @@ pStringToUtf8Bytes : Value a -> Value a
 pTan : Value a -> Value a
 pTanh : Value a -> Value a
 pTrunc : Value a -> Value a
+pTruncateBits : Int -> Value a -> Value a
 pWallTimeSec : Value a -> Value a
 pWallTimeSecIO : Value a -> <Clock> Value a
 pWriteFile : Value a -> Value a -> <FileWrite> Value a

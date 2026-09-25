@@ -1,0 +1,5 @@
+-- #3420: the first literal past U32's range, 2^32, is refused rather than
+-- wrapping to 0.
+import u32
+
+main = println (4294967296 : U32)

@@ -1,5 +1,5 @@
 # META
-source_lines=2101
+source_lines=2121
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -906,11 +906,14 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- can carry that type into CBinPrim's tag field and the native emitter picks the
 -- scalar instruction without re-deriving the operand LTy structurally — the
 -- emitter's LTInt is its default-for-unrecoverable, so an `icmp` keyed on LTy
--- alone would compare boxed String/Float POINTERS as integers.  Two stampers,
--- two tags: `RScalar "Float"` on an ARITHMETIC operand (resolveArithSite,
--- SHARED-FLOAT-RESIDUAL-DESIGN §3(C)) and `RScalar "Int"` on a COMPARISON
--- operand (stampOpRouteVal).  Every other head, and every operand that stays
--- polymorphic, keeps RNone → the structural/dict path.
+-- alone would compare boxed String/Float POINTERS as integers.  An ARITHMETIC
+-- operand is stamped with its own head, `RScalar "Float"` or a fixed-width
+-- `RScalar "U8"`/`"U16"`/`"U32"` (stampPredicateOpRouteVal, resolveArithSite;
+-- SHARED-FLOAT-RESIDUAL-DESIGN §3(C)); a COMPARISON operand grounding to `Int` or
+-- a fixed-width head is stamped `RScalar "Int"`, the word compare
+-- (stampOpRouteVal).  Every other head, and every operand that stays polymorphic,
+-- keeps RNone → the structural/dict path; an `Int` arithmetic operand stays RNone
+-- too, since the Int primitive is the default.
 public export data Route =
   | RNone
   | RKey String (List Route)
@@ -918,6 +921,23 @@ public export data Route =
   | RDictFwd String
   | RLocal String (List Route)
   | RScalar String
+
+-- The fixed-width integer heads (`docs/design/INTEGER-TYPES-DESIGN.md` §2).  Each
+-- shares `Int`'s tagged word and holds a value in `0 .. 2^n - 1`; the static type
+-- is the only difference.  An arithmetic `RScalar` carrying one of these names is
+-- what tells every engine to reduce the result modulo 2^n.
+-- `fixedWidthMask` is the one list of them: the value mask (`2^n - 1`) of each
+-- head, `None` for every other name.
+export
+fixedWidthMask : String -> Option Int
+fixedWidthMask "U8" = Some 255
+fixedWidthMask "U16" = Some 65535
+fixedWidthMask "U32" = Some 4294967295
+fixedWidthMask _ = None
+
+export
+isFixedWidthHead : String -> Bool
+isFixedWidthHead h = isSome (fixedWidthMask h)
 
 -- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
 -- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
@@ -2199,6 +2219,13 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
+(DTypeSig true "fixedWidthMask" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "fixedWidthMask" ((PLit (LString "U8"))) (EApp (EVar "Some") (ELit (LInt 255))))
+(DFunDef false "fixedWidthMask" ((PLit (LString "U16"))) (EApp (EVar "Some") (ELit (LInt 65535))))
+(DFunDef false "fixedWidthMask" ((PLit (LString "U32"))) (EApp (EVar "Some") (ELit (LInt 4294967295))))
+(DFunDef false "fixedWidthMask" (PWild) (EVar "None"))
+(DTypeSig true "isFixedWidthHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isFixedWidthHead" ((PVar "h")) (EApp (EVar "isSome") (EApp (EVar "fixedWidthMask") (EVar "h"))))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
@@ -2489,6 +2516,13 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
+(DTypeSig true "fixedWidthMask" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "fixedWidthMask" ((PLit (LString "U8"))) (EApp (EVar "Some") (ELit (LInt 255))))
+(DFunDef false "fixedWidthMask" ((PLit (LString "U16"))) (EApp (EVar "Some") (ELit (LInt 65535))))
+(DFunDef false "fixedWidthMask" ((PLit (LString "U32"))) (EApp (EVar "Some") (ELit (LInt 4294967295))))
+(DFunDef false "fixedWidthMask" (PWild) (EVar "None"))
+(DTypeSig true "isFixedWidthHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isFixedWidthHead" ((PVar "h")) (EApp (EVar "isSome") (EApp (EVar "fixedWidthMask") (EVar "h"))))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())

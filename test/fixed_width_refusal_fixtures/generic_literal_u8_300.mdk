@@ -1,0 +1,9 @@
+-- #3420: a literal in a generic `Num a =>` body cannot be range-checked at
+-- compile time, so it reaches the type through `fromInt` at runtime.  Here the
+-- 300 in `bump` is instantiated at U8 and must panic, not add 44.
+import u8
+
+bump : Num a => a -> a
+bump x = x + 300
+
+main = println (bump (1 : U8))

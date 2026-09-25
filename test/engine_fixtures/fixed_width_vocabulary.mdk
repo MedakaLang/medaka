@@ -1,0 +1,123 @@
+-- The u8/u16/u32 module vocabulary (#3419, epic #3417) on every engine: the checked,
+-- partial and truncating conversions, widening within the family, the bit operations
+-- (a shift of the width or more gives 0; a rotate takes its amount modulo the width),
+-- the bit counts, hex rendering, the byte codecs round-tripping a value with its top
+-- bit set, and a U32 used as a hash-map key (Eq and Hashable together).
+--
+-- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): the modules are imported
+-- qualified, so a bare `shiftLeft`/`bitAnd`/`bitNot` is still the prelude's `Int`
+-- operation, with no 8/16/32-bit truncation.
+--
+-- Expected values were computed independently of every engine (Python); the pin is
+-- test/engine_value_pins/engine/fixed_width_vocabulary.pin.
+
+import u8 as U8
+import u16 as U16
+import u32 as U32
+import bytes as B
+import hash_map.{fromList, findWithDefault}
+
+main =
+  println "conversions"
+  println (map (n => U8.tryFromInt n |> map U8.toInt) [255, 256, -1])
+  println
+    (map (n => U32.tryFromInt n |> map U32.toInt) [4294967295, 4294967296])
+  println [
+    U8.toInt (U8.truncate 300),
+    U8.toInt (U8.truncate (-1)),
+    U16.toInt (U16.truncate 65537),
+  ]
+  println [U32.toInt (U32.truncate (-1)), U32.toInt (U32.truncate 8589934593)]
+  println [
+    U32.toInt (U32.fromU8 255),
+    U32.toInt (U32.fromU16 65535),
+    U16.toInt (U16.fromU8 200),
+  ]
+  println [
+    U8.toInt (U8.truncateU32 3735928559),
+    U16.toInt (U16.truncateU32 3735928559),
+    U8.toInt (U8.truncateU16 4660),
+  ]
+  println "u32 bits"
+  println [
+    U32.shiftLeft 1 31,
+    U32.shiftLeft 1 32,
+    U32.shiftLeft 4294967295 4,
+    U32.shiftLeft 3 40,
+  ]
+  println [
+    U32.shiftRight 4294967295 28,
+    U32.shiftRight 2147483648 31,
+    U32.shiftRight 4294967295 32,
+  ]
+  println [
+    U32.rotateLeft 2147483649 1,
+    U32.rotateRight 1 1,
+    U32.rotateLeft 305419896 8,
+    U32.rotateLeft 305419896 40,
+    U32.rotateRight 305419896 (-8),
+  ]
+  println [
+    U32.bitAnd 4294967295 2863311530,
+    U32.bitOr 2147483648 1,
+    U32.bitXor 4294967295 2863311530,
+    U32.bitNot 2863311530,
+    U32.bitNot 0,
+  ]
+  println [
+    U32.popCount 4294967295,
+    U32.popCount 0,
+    U32.popCount 2863311530,
+    U32.leadingZeros 1,
+    U32.leadingZeros 2147483648,
+    U32.trailingZeros 2147483648,
+    U32.trailingZeros 0,
+  ]
+  println "u8 u16 bits"
+  println [
+    U8.bitNot 0,
+    U8.shiftLeft 255 1,
+    U8.shiftLeft 1 8,
+    U8.rotateLeft 129 1,
+    U8.rotateRight 1 1,
+    U8.bitXor 255 170,
+  ]
+  println [
+    U16.shiftLeft 1 15,
+    U16.shiftLeft 1 16,
+    U16.rotateLeft 32769 1,
+    U16.bitNot 0,
+  ]
+  println [
+    U8.popCount 255,
+    U8.leadingZeros 1,
+    U16.trailingZeros 32768,
+    U16.popCount 43690,
+  ]
+  println "hex"
+  println [U32.toHex 3735928559, U32.toHex 255, U16.toHex 4660, U8.toHex 10]
+  println "bytes"
+  println (B.toArray (U32.toBytesBE 3735928559))
+  println (B.toArray (U32.toBytesLE 3735928559))
+  println (B.toArray (U16.toBytesBE 65280))
+  println (U32.fromBytesBE (U32.toBytesBE 3735928559) |> map U32.toInt)
+  println (U32.fromBytesLE (U32.toBytesLE 2147483648) |> map U32.toInt)
+  println (U16.fromBytesLE (U16.toBytesLE 65535) |> map U16.toInt)
+  println
+    (U32.fromBytesBE (U32.toBytesBE 1 ++ U32.toBytesBE 1) |> map U32.toInt)
+  println "hash key"
+  let m =
+    fromList [(4294967295 : U32, "max"), (2147483648, "2^31"), (0, "zero")]
+  println [
+    findWithDefault "absent" 4294967295 m,
+    findWithDefault "absent" (U32.truncate (-1)) m,
+    findWithDefault "absent" 2147483648 m,
+    findWithDefault "absent" 1 m,
+  ]
+  println "int bystander"
+  println [
+    shiftLeft 1 40,
+    bitAnd 4294967295 1099511627775,
+    bitNot 0,
+    shiftRight 1099511627776 8,
+  ]

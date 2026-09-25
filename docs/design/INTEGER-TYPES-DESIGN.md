@@ -1,6 +1,7 @@
 # The integer stack
 
-Status: DESIGN, 2026-09-24. Nothing built. Epic #3417; milestones N1–N6.
+Status: N1 BUILT (the tagged tier: `U8`/`U16`/`U32`, their modules, the literal
+range check and literal patterns); N2–N6 are design. Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
 
@@ -223,7 +224,9 @@ fromBytesBE fromBytesLE : Bytes -> Option U32
 toHex        : U32 -> String
 ```
 
-with impls `Eq`, `Ord`, `Num`, `Bounded`, `Hashable`, `Display`, `Debug`.
+with impls `Eq`, `Ord`, `Num`, `Bounded`, `Hashable`, `Display`, `Debug`. `fromInt`
+is the `Num` method rather than a module function, so it is written `fromInt n`
+(checked at the type the context gives it), never `U32.fromInt n`.
 
 ### 5.1 `U64`'s asymmetry
 

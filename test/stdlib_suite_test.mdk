@@ -197,6 +197,12 @@ suites = [
   ("test_process", (21, NativeCapability)),
   ("time", (36, EvalAndNative)),
   ("toml", (56, EvalAndNative)),
+  -- The fixed-width types' wrapping, conversions and bit operations. Native
+  -- matters here: the arithmetic wraps by a width-stamped builtin that each
+  -- engine lowers on its own.
+  ("u16", (35, EvalAndNative)),
+  ("u32", (36, EvalAndNative)),
+  ("u8", (29, EvalAndNative)),
   ("validation", (20, EvalAndNative)),
   ("vector", (32, EvalAndNative)),
 ]
@@ -408,6 +414,12 @@ test "stdlib/test_process.mdk executed >= 21 assertions" =
 test "stdlib/time.mdk executed >= 36 assertions" = floorExpectation "time"
 
 test "stdlib/toml.mdk executed >= 56 assertions" = floorExpectation "toml"
+
+test "stdlib/u16.mdk executed >= 35 assertions" = floorExpectation "u16"
+
+test "stdlib/u32.mdk executed >= 36 assertions" = floorExpectation "u32"
+
+test "stdlib/u8.mdk executed >= 29 assertions" = floorExpectation "u8"
 
 test "stdlib/validation.mdk executed >= 20 assertions" =
   floorExpectation "validation"

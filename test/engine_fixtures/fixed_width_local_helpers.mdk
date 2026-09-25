@@ -1,0 +1,30 @@
+-- Local `where`/`let` helpers over the fixed-width types.  A local binding is
+-- not dict-abstracted, so its arithmetic and literals are grounded by its uses
+-- rather than generalized over `Num`; used at U8/U32 they must wrap at that
+-- width on every engine instead of running as plain Int.
+import u8 as U8
+import u32 as U32
+
+mix : U32 -> U32 -> U32
+mix a b = go a b
+  where
+    go x y = x * 31 + y
+
+hashAll : List U32 -> U32
+hashAll ws = fold step 2166136261 ws
+  where
+    step h w = h * 16777619 + w
+
+main =
+  println (mix 4000000000 7)
+  println (hashAll [4000000000, 1, 4294967295])
+  let byte = 200 : U8
+  let dbl = v => v + v
+  println (dbl byte)
+  let sub1 = v => v - 1
+  println (sub1 (0 : U8))
+  let inc = x => x + 3
+  println (U8.toInt (inc (254 : U8)))
+  -- an Int bystander: the same helper shape at Int is not narrowed
+  let dblI = v => v + v
+  println (dblI 4000000000)

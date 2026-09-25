@@ -1,0 +1,98 @@
+-- U8 and U16 (#3418, epic #3417): `+ - *` wrap modulo 2^n, `/ %` are unsigned, `negate`
+-- is two's complement, and a generic `Num a =>` function or `sum` instantiated at the
+-- type keeps the wrap.  Literal patterns take the scrutinee's type (#3421).  Every value
+-- is rendered through the type's own `Display`, so the list lines also exercise it.
+--
+-- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): plain `Int` code in the
+-- same program, touching no U type, must behave exactly as it did before the family
+-- existed — a 300 literal and a `-1` are ordinary Ints, an Int literal pattern still
+-- matches, and `Int` arithmetic still wraps at 63 bits.
+--
+-- Expected values were computed independently of every engine (Python, `% 2**n`); the
+-- pin is test/engine_value_pins/engine/fixed_width_u8_u16.pin.
+
+import u8 as U8
+import u16 as U16
+
+double : Num a => a -> a
+double x = x + x
+
+sumSquares : Num a => List a -> a
+sumSquares xs = sum (map (x => x * x) xs)
+
+byteKind : U8 -> String
+byteKind 0 = "nul"
+byteKind 10 = "newline"
+byteKind 255 = "max"
+byteKind _ = "other"
+
+wordKind : U16 -> String
+wordKind w = match w
+  65535 => "max"
+  256 => "256"
+  _ => "other"
+
+intKind : Int -> String
+intKind n = match n
+  300 => "three hundred"
+  0 => "zero"
+  _ => "other"
+
+u8s : List U8
+u8s = [0, 1, 127, 128, 200, 255]
+
+u16s : List U16
+u16s = [0, 255, 256, 32768, 65535]
+
+main =
+  println "u8 +"
+  println [(200 : U8) + 100, (255 : U8) + 1, (128 : U8) + 128]
+  println "u8 -"
+  println [(0 : U8) - 1, (3 : U8) - 5, (200 : U8) - 100]
+  println "u8 *"
+  println [(16 : U8) * 16, (200 : U8) * 3, (255 : U8) * 255]
+  println "u8 / %"
+  println [(200 : U8) / 7, (200 : U8) % 7, (255 : U8) / 255, (7 : U8) % 255]
+  println "u8 negate"
+  println [negate (1 : U8), negate (0 : U8), negate (200 : U8)]
+  println "u8 compare"
+  println [
+    (200 : U8) > 100,
+    (255 : U8) < 0,
+    (128 : U8) >= 127,
+    (5 : U8) == U8.truncate 261,
+  ]
+  println (compare (128 : U8) 127)
+  println "u8 generic"
+  println (double (200 : U8))
+  println (sum u8s)
+  println (sumSquares [16 : U8, 20])
+  println (maxBound : U8, minBound : U8)
+  println "u8 display debug"
+  println u8s
+  println (debug u8s)
+  println "u8 patterns"
+  println (map byteKind [0, 10, 255, 11])
+  println (byteKind (U8.truncate 266))
+  println "u16"
+  println [
+    (65535 : U16) + 1,
+    (0 : U16) - 1,
+    (300 : U16) * 300,
+    (65535 : U16) * 65535,
+  ]
+  println [(60000 : U16) / 7, (60000 : U16) % 7, negate (1 : U16)]
+  println [(40000 : U16) > 30000, (65535 : U16) > 32768]
+  println (sum u16s)
+  println (double (40000 : U16))
+  println (debug u16s)
+  println (map wordKind [65535, 256, 0])
+  println "int bystander"
+  let big = 300
+  println (big + 0)
+  println (-1)
+  println (map intKind [300, 0, 7, 44])
+  println (4611686018427387903 + 1)
+  println (4294967295 * 4294967295)
+  println (sum [100, 200, 300])
+  println (double 200)
