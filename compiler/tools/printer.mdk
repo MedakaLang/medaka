@@ -1167,6 +1167,7 @@ binopPrec op
   | op == "-" = precAdd
   | op == "*" = precMul
   | op == "/" = precMul
+  | op == "%" = precMul
   | otherwise = precInfix
 
 isRightAssoc : String -> Bool

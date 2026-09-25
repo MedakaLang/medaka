@@ -1,0 +1,13 @@
+-- #3449: `%` binds at the level of `*` and `/`, so a `%` on the right of either
+-- keeps its parentheses, and one on the left needs none.
+mulMod : Int -> Int -> Int -> Int
+mulMod x y z = x * (y % z)
+
+divMod : Int -> Int -> Int -> Int
+divMod x y z = x / (y % z)
+
+modLeft : Int -> Int -> Int -> Int
+modLeft x y z = x % y * z
+
+modMod : Int -> Int -> Int -> Int
+modMod x y z = x % (y % z)
