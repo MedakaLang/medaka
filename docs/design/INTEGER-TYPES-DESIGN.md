@@ -3,7 +3,10 @@
 Status: N1 BUILT (the tagged tier: `U8`/`U16`/`U32`, their modules, the literal
 range check and literal patterns). N2 BUILT (a byte is a `U8` in `bytes`,
 `mut_bytes`, `bytebuilder` and `byteparser`; SHA-256, HMAC, the PBKDF2 block
-index, CRC-32 and the property runner's `fmix32` on `U32`). N3–N6 are design.
+index, CRC-32 and the property runner's `fmix32` on `U32`). N3 BUILT (boxed
+`U64` on all three engines, wide literals, the `u64` module with `mulWide`,
+`addCarry` and `subBorrow`, `bits64` retired, the multi-byte codecs typed).
+N4–N6 are design.
 Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
@@ -21,8 +24,8 @@ hit that wall in the same month:
   byte is a `U8` (#3415), a member of a fixed-width family this document
   defines.
 - **Crypto.** `stdlib/crypto/sha256.mdk` simulates 32-bit words with a mask
-  after every operation; `stdlib/bits64.mdk` simulates a 64-bit word with
-  four 16-bit limbs in a heap cell; `pds/lib/scalar.mdk` multiplies 16
+  after every operation; the `bits64` stdlib module (retired in N3)
+  simulated a 64-bit word with four 16-bit limbs in a heap cell; `pds/lib/scalar.mdk` multiplies 16
   limbs of 16 bits because a 63-bit `Int` has no widening multiply. The
   KDF work (#3373) measured what real 32-bit lowering buys: about 1.3× on
   the SHA-256 round, with larger wins expected from 64-bit limbs.
@@ -141,6 +144,17 @@ interface's doc comment). That is a call per operation.
    constructor, so every `_ =>` arm over literals is audited as a set
    (`AGENTS.md`, `[T-GLOBAL-TABLE]`).
 
+   As built: the lexer mints a wide token for a magnitude from `2^62 + 1` to
+   `2^64 - 1` and refuses anything larger; the parser builds `EWideLit` (the
+   value's two 32-bit halves and the lexeme), and a positive `2^62` in an
+   expression, which the lexer admits as an `Int` so that `-2^62` stays
+   writable, becomes the wide literal it spells. The typechecker infers a
+   wide literal exactly as an ordinary one and accepts it only where its type
+   grounded to `U64` (`checkWideLiterals`); every other ground type, a type
+   still polymorphic at the module's end, and a negated wide literal are
+   `L-INT-OVERFLOW`. A literal grounded to `U64`, wide or not, is rewritten
+   to the constant `LU64 hi lo`, which is all the engines see.
+
 5. **Pattern literals** become typed by the scrutinee among the *builtin*
    integer heads only (`Int`, `U8`, `U16`, `U32`, `U64`). A literal
    pattern on a builtin integer is a constant compare and needs no `Eq`
@@ -149,6 +163,11 @@ interface's doc comment). That is a call per operation.
    not a dead arm. Exhaustiveness treats a fixed-width literal as it treats
    an `Int` literal today. User `Num` newtypes still do not get literal
    patterns; that is a separate feature with a different mechanism.
+
+   As built, `U64` is the exception: no engine's matcher compares a boxed
+   cell against a constant, so a literal pattern whose scrutinee is a `U64`
+   is refused at compile time (`a literal pattern cannot match a U64`, with
+   a guard as the fix) rather than compiled to an arm that never matches.
 
 6. **The operators join the builtin set** for the U types. The typechecker
    already records which builtin operation an operator resolved to (`Int`
@@ -234,9 +253,11 @@ is the `Num` method rather than a module function, so it is written `fromInt n`
 ### 5.1 `U64`'s asymmetry
 
 `U64 -> Int` is a narrowing, since `Int` holds 63 bits. `U64.toInt` is
-therefore `U64 -> Option Int`, and the masking form is `U64.truncateToInt`.
-The name of that masking form is the one conversion name this document
-leaves for the N3 packet to confirm against the rest of the table.
+therefore `U64 -> Option Int`, and the masking form is `U64.toIntTruncating`,
+which keeps the low 63 bits (bit 62 becomes the sign). This was the one
+conversion name this document left for the N3 packet to confirm; the earlier
+draft's `truncateToInt` has the `xToY` shape that stdlib rule 8 reserves for
+`runtime.mdk` primitives, and Val confirmed `toIntTruncating` on 2026-09-25.
 
 `U64` also carries the limb vocabulary, which is what lets
 `pds/lib/scalar.mdk` go from 16 limbs to 4:
@@ -297,7 +318,16 @@ The interpreter, `compiler/eval/eval.mdk`, is a Medaka program compiled
 with a 63-bit `Int`, so it cannot hold a native `U64` until the emitter
 that compiles it supports one. It carries a `U64` as two `Int` halves
 until then, and can do so indefinitely; interpreter speed is not this
-epic's goal. The compiler's own source adopts `U64` only after emitter
+epic's goal.
+
+As built: the native cell is `{ header, payload }` with the reserved
+composite header `MDK_TAG(5, 0)` (the byte block's is slot 4), so the
+runtime's type-lost equality and ordering tell it from a `Float`; the
+interpreter's value is `VU64 hi lo` with its arithmetic in
+`compiler/eval/u64_halves.mdk`. Arithmetic and comparisons at `U64` are
+builtin operators stamped `RScalar "U64"`; the rest of the `u64` module is
+Medaka over eight kernel externs (`u64Truncate`, `u64TruncateToInt`, the
+three bitwise operations, the two shifts and `u64MulHigh`). The compiler's own source adopts `U64` only after emitter
 support has landed and the seed has been re-minted twice, the ratchet B2
 used for `ByteBlock` (`docs/design/BYTES-DESIGN.md`).
 
@@ -340,7 +370,7 @@ stays accurate. A "wraps" report is not an S0 bug; it points at #3377.
 |---|---|
 | **N1 (the tagged tier)** | `U8`/`U16`/`U32` exist on all three engines; the literal range check, builtin operators, pattern literals and the three modules ship; the W-QUIETER probe (`emitU8 300`, `setInPlace 0 256`, computed `fromInt 300`) is a gated test |
 | **N2 (the first consumers)** | `U8` is the element type of `Bytes`/`MutBytes`/`bytebuilder`/`byteparser` (#3415); `U32` carries sha256/hmac/pbkdf2/crc32 and the property-runner RNG; the round is re-measured against the figures on #3377 |
-| **N3 (U64)** | boxed `U64`, wide literals, `mulWide`/`addCarry`/`subBorrow`, the multi-byte codecs typed, `stdlib/bits64.mdk` deleted with #2311 and #432 closed, SplitMix/FNV moved, the seed re-minted twice |
+| **N3 (U64)** | boxed `U64`, wide literals, `mulWide`/`addCarry`/`subBorrow`, the multi-byte codecs typed, the `bits64` module deleted with #2311 and #432 closed, SplitMix/FNV moved, the seed re-minted twice |
 | **N4 (Int traps)** | every wrap dependent moved (the `Hashable` folds, field/scalar), the census repeated over the emitter child and `pdsd`, the cost measured, `Int` overflow panics on all three engines, `checkedAdd` family shipped, spec updated |
 | **N5 (unboxed and lowered)** | #353, `i32` lowering, #2360, field/scalar on 64-bit limbs |
 | **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opens when a customer is named |

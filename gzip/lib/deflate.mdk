@@ -724,7 +724,7 @@ test "inflate (deflate (1000 repeated bytes)) recovers the original exactly (dis
 -- under `medaka test` well before 70000 positions. Large-input coverage
 -- belongs to the shell oracle, which builds and runs the NATIVE binary.
 lcgNext : Int -> Int
-lcgNext state = (state * 48271) % 2147483647
+lcgNext state = state * 48271 % 2147483647
 
 genPseudoRandom : Int -> Int -> List Int -> List Int
 genPseudoRandom state count acc

@@ -87,6 +87,32 @@ export
 fromU16 : U16 -> U32
 fromU16 x = u32Truncate (u16ToInt x)
 
+{- | The low 32 bits of a `U64`, as a `U32`.
+
+   > toInt (truncateU64 (u64Truncate 0x123456789))
+   591751049 -}
+export
+truncateU64 : U64 -> U32
+truncateU64 x = u32Truncate (u64TruncateToInt x)
+
+{- | The full product of two values, as a `U64`: it never wraps.
+
+   > u64TruncateToInt (mulWide 4294967295 65537)
+   281479271612415 -}
+export
+mulWide : U32 -> U32 -> U64
+mulWide a b =
+  -- `x * y` can reach 2^64, past `Int`, so `y` is split in 16-bit halves and
+  -- the product assembled as its high and low 32-bit words.
+  let x = u32ToInt a
+  let yLow = u32ToInt b % 65536
+  let yHigh = u32ToInt b / 65536
+  let lower = x * yLow
+  let upper = x * yHigh
+  let low = lower % 4294967296 + upper % 65536 * 65536
+  let high = lower / 4294967296 + upper / 65536 + low / 4294967296
+  u64BitOr (u64ShiftLeft (u64Truncate high) 32) (u64Truncate (low % 4294967296))
+
 -- # Bit operations
 
 {- | The bitwise and of two values.

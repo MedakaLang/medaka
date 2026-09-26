@@ -16,6 +16,7 @@
 -- (`sqVarint`): a round-trip `sqVarintBytes → sqVarint` reproduces the value.
 
 import byteparser.{ByteParser, ByteParserE, BResult(..), runByteParser}
+import u64 as U64
 
 -- ---------------------------------------------------------------------------
 -- Named constants (STYLE §12 — name the meaning, fold makes shifts free)
@@ -47,6 +48,10 @@ groupMask = 127
 -- Ok 128
 -- > runByteParser sqVarint (arrayFromList [0x81, 0x80, 0x01])
 -- Ok 16385
+-- > runByteParser sqVarint (arrayFromList [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+-- Ok -1
+-- > runByteParser sqVarint (arrayFromList [0xA0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00])
+-- Err "varint: value does not fit Int at byte 8"
 export
 sqVarint : ByteParser Int
 sqVarint = ByteParserE sqVarintGo
@@ -58,7 +63,7 @@ sqVarintGo input pos = sqVarintLoop input pos 0 1
 -- Process one byte of a varint.  `b` is the byte value, already fetched.
 sqVarintStep : Array Int -> Int -> Int -> Int -> Int -> BResult Int
 sqVarintStep input pos acc byteNum b
-  | byteNum == 9 = BOk (acc * 256 + b) (pos + 1)
+  | byteNum == 9 = ninthByte acc b pos
   | b >= contBit =
     sqVarintLoop
       input
@@ -66,6 +71,17 @@ sqVarintStep input pos acc byteNum b
       (shiftLeft acc 7 + bitAnd b groupMask)
       (byteNum + 1)
   | otherwise = BOk (shiftLeft acc 7 + bitAnd b groupMask) (pos + 1)
+
+-- The ninth byte completes a 64-bit two's-complement value, the top 56 bits in
+-- `acc` and the low 8 in `b`. It is an `Int` when bits 63 and 62 agree, and is
+-- then exactly the low 63 bits; any other value is refused rather than wrapped.
+ninthByte : Int -> Int -> Int -> BResult Int
+ninthByte acc b pos =
+  let x = U64.bitOr (U64.shiftLeft (U64.truncate acc) 8) (U64.truncate b)
+  if x < 0x4000000000000000 || x >= 0xC000000000000000 then
+    BOk (U64.toIntTruncating x) (pos + 1)
+  else
+    BErr "varint: value does not fit Int" pos
 
 sqVarintLoop : Array Int -> Int -> Int -> Int -> BResult Int
 sqVarintLoop input pos acc byteNum
@@ -101,26 +117,28 @@ addContBits [] = []
 addContBits [last] = [last]
 addContBits (x :: rest) = x + contBit :: addContBits rest
 
--- Append a single byte to the END of a list (used only for the 9-byte form).
-appendEnd : List Int -> Int -> List Int
-appendEnd [] b = [b]
-appendEnd (x :: r) b = x :: appendEnd r b
-
 -- | The on-wire byte sequence for a SQLite varint (full 1..9-byte range).
 --   Exact inverse of `sqVarint`.
 --
--- For v < 2^56: 1..8 groups of 7 bits, continuation bit on all but the last.
--- For v ≥ 2^56: first 8 bytes carry 7 bits each (56 bits, with continuation
--- bits); the 9th byte carries the low 8 bits (all 8, no continuation bit).
+-- For 0 <= v < 2^56: 1..8 groups of 7 bits, continuation bit on all but the
+-- last. Otherwise (v ≥ 2^56, or negative, whose 64-bit two's-complement pattern
+-- has its top bit set): exactly 8 bytes of 7 bits each, every one with the
+-- continuation bit, then a 9th byte carrying the low 8 bits whole.
 export
 sqVarintBytes : Int -> List Int
 sqVarintBytes v =
-  if v >= sqVarint9Threshold then
-    let low8 = bitAnd v 255
-    let high = v / 256
-    appendEnd (addContBits (sqVarintGroups high [])) low8
+  if v < 0 || v >= sqVarint9Threshold then
+    let x = U64.truncate v
+    map (k => ninthFormGroup x k) [7, 6, 5, 4, 3, 2, 1, 0]
+      ++ [U64.toIntTruncating (U64.bitAnd x 255)]
   else
     addContBits (sqVarintGroups v [])
+
+-- Group [k] (0 = lowest) of the top 56 bits of the 9-byte form, with its
+-- continuation bit.
+ninthFormGroup : U64 -> Int -> Int
+ninthFormGroup x k =
+  contBit + U64.toIntTruncating (U64.bitAnd (U64.shiftRight x (8 + 7 * k)) 127)
 
 -- ---------------------------------------------------------------------------
 -- Round-trip doctests (moved from byteparser/bytebuilder)
@@ -129,6 +147,16 @@ sqVarintBytes v =
 -- | Decode a freshly-encoded value: sqVarintBytes → sqVarint == value.
 roundTrip : Int -> Result String Int
 roundTrip v = runByteParser sqVarint (arrayFromList (sqVarintBytes v))
+
+-- 9-byte: at and past 2^56, Int's largest value, and negative values
+-- > roundTrip 72057594037927936
+-- Ok 72057594037927936
+-- > roundTrip 4611686018427387903
+-- Ok 4611686018427387903
+-- > roundTrip (-1)
+-- Ok -1
+-- > roundTrip (-4611686018427387904)
+-- Ok -4611686018427387904
 
 -- 1-byte (0..127)
 -- > roundTrip 0

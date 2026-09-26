@@ -65,6 +65,7 @@ litSexp (LString s) = node "LString" [escStr s]
 litSexp (LChar s) = node "LChar" [escStr s]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
+litSexp (LU64 hi lo) = node "LU64" [intToString hi, intToString lo]
 
 export
 patSexp : Pat -> String
@@ -152,6 +153,7 @@ exprSexp (ELit l) = node "ELit" [litSexp l]
 -- sexp/astdump stays byte-identical to the OCaml side (whose astdump does the
 -- same) and the parse-fixture / OCaml↔compiler sexp diff gates keep passing.
 exprSexp (ENumLit n _ _ _) = node "ELit" [node "LInt" [intToString n]]
+exprSexp (EWideLit hi lo _ _) = node "ELit" [litSexp (LU64 hi lo)]
 exprSexp (EVar x) = node "EVar" [escStr x]
 -- #837: EVarId renders as a bare EVar so every sexp/snapshot dump stays byte-identical.
 exprSexp (EVarId x _) = node "EVar" [escStr x]

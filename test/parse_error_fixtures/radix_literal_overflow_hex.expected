@@ -1,1 +1,1 @@
-integer literal too large for Int (max magnitude 2^62)
+integer literal too large for U64 (max 2^64 - 1)

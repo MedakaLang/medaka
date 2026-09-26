@@ -610,7 +610,7 @@ VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp T
 [ -n "$VALUECMP_WRITER_LINE" ] &&
   [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrSearch True' ] &&
   [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrLeaf True' ] &&
-  has_wasm_pin 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []' &&
+  has_wasm_pin 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines u64 else []' &&
   ! grep -E 'setRef (emit|\(progEmit prog\))\.useValueCmp False|setRef useValueCmpRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-VALUECMP-ROUTES: writer, cofactors, reader, or reset changed"
     exit 1

@@ -3206,6 +3206,7 @@ isLiteralExpr : Expr -> Bool
 isLiteralExpr e = match unwrapLoc e
   ELit _ => True
   ENumLit _ _ _ _ => True
+  EWideLit _ _ _ _ => True
   _ => False
 
 -- does `EIf cond t el` match the idiom?  Returns the prelude fn name plus the
@@ -6031,6 +6032,7 @@ isPureDataExpr e =
   match e2
     ELit _ => True
     ENumLit _ _ _ _ => True
+    EWideLit _ _ _ _ => True
     EVar _ => True
     ETuple es => allList isPureDataExpr es
     EListLit es => allList isPureDataExpr es

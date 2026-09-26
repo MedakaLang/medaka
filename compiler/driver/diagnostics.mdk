@@ -15,7 +15,9 @@
 --   "error: <message>"   or   "warning: <message>"
 -- one per line, sorted by the harness.
 
-import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, Ty}
+import frontend.ast.{
+  Decl(..), Expr(..), Loc(..), Pat, Ty, intMinLiteralMsg, intMinLiteralHelp
+}
 import frontend.parser.{
   parse,
   parseLocated,
@@ -404,13 +406,7 @@ parseErrHelpFix msg (Loc f sl sc el ec)
     Some "replace '!=' with '/=' for not-equal",
     Some (Fix (Loc f sl sc sl (sc + 2)) "/="),
   )
-  | startsWith
-    "integer literal too large for Int (max 4611686018427387903)"
-    msg = (
-    Some
-      "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`",
-    None,
-  )
+  | startsWith intMinLiteralMsg msg = (Some intMinLiteralHelp, None)
   -- Malformed radix/float literals (#677): the lexer already embeds BOTH the
   -- offending spelling and its suggested fix in backticks (`` `bad` … `good` ``),
   -- so the fix span is `[sc, sc + len(bad))` — the malformed literal itself,

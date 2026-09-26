@@ -57,13 +57,18 @@ write_source_manifest() {
   done < "$claimed"
 }
 
+# Re-blessed for N3 (#3424, #3425): stdlib/u32.mdk gained truncateU64 and
+# mulWide, neither of which the signing closure calls (SHA-256 uses only the
+# N2 word operations), and pds/lib/field.mdk's one change is a comment that
+# stopped citing the retired bits64 module by path. Neither moves emitted
+# code; every closure and branch check below passes unchanged.
 expected_internal_source_manifest() {
   cat <<'EOF'
-2128618670 25697  pds/lib/field.mdk
+3196114623 25705  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
-2973717346 9537  stdlib/u32.mdk
+3074298774 10394  stdlib/u32.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
@@ -72,11 +77,11 @@ EOF
 
 expected_public_source_manifest() {
   cat <<'EOF'
-2128618670 25697  pds/lib/field.mdk
+3196114623 25705  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
-2973717346 9537  stdlib/u32.mdk
+3074298774 10394  stdlib/u32.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk

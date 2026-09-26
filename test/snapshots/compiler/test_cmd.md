@@ -241,8 +241,8 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- REJECTS: the doctest driver ELABORATES the module (dict-passing) but never
 -- surfaces the accumulated type errors, so a module with type errors — even ones
 -- in functions no doctest exercises — passes `test` while `check` fails
--- (test-green / check-dies, the repo's #1 bug class INVERTED, reproduced building
--- stdlib/bits64).  So type-check the whole module FIRST — exactly the way `medaka
+-- (test-green / check-dies, the repo's #1 bug class inverted).  So type-check the
+-- whole module FIRST — exactly the way `medaka
 -- check` does — and fail the run (before running any example) if it doesn't check.
 --
 -- ⚠️ The EXEMPTION is `test "…"` / `prop "…"`-BEARING modules, NOT "everything

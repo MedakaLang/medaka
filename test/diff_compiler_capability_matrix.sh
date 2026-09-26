@@ -170,7 +170,7 @@ for fam in isStrExtern isNumExtern isMathUnary isMathBinary isIoExtern isAbortEx
            isArrIntrinsic isArrLeafExtern isByteBlockExtern isCharExtern \
            isStrCharExtern isUnicodeExtern \
            isAdtExtern isEnvExtern isFileExtern isNetExtern isRngExtern isPerfExtern \
-           isBitExtern isFixedWidthExtern isHashExtern isDebugLitExtern; do
+           isBitExtern isFixedWidthExtern isU64Extern isHashExtern isDebugLitExtern; do
   extract_family "$LLVMMDK" "$fam" | quoted_names >> "$WORK/llvm_impl.txt"
 done
 # Hardcoded bypasses of the isXxxExtern ladder — see PARSING NOTES above.

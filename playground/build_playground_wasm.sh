@@ -72,7 +72,7 @@ cp "$CORE"    "$DIST/core.mdk"
 #   math (libm), fs (file IO), net (sockets), time (<Clock>), io (file/stdin),
 #   test (runExpectation).  Keep this list in sync with EXTRA_MODULES in main.js.
 EXTRA_MODULES="args array async base64 bytebuilder byteparser bytes hash_map hash_set hex \
-json list map nonempty path set string toml u8 validation vector"
+json list map nonempty path set string toml u16 u32 u64 u8 validation vector"
 for m in $EXTRA_MODULES; do
   cp "$ROOT/stdlib/$m.mdk" "$DIST/$m.mdk"
 done

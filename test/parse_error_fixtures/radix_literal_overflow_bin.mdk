@@ -1,5 +1,6 @@
--- #556: the BINARY spelling of the same overflow (2^62+1).  Pinned separately
--- from the hex fixture because the bound is per-base (binary's admissible digit
--- count is 63, hex's is 16) — a fix validated only on hex would not prove this.
--- Self-hosted reference: integer literal too large for Int (max magnitude 2^62)
-x = 0b100000000000000000000000000000000000000000000000000000000000001
+-- #556: the BINARY spelling of the lexer's cap (2^64, one past U64's largest
+-- value).  Pinned separately from the hex fixture because the bound is per-base
+-- (the high half passes 32 bits after a different number of digits in each
+-- radix) — a fix validated only on hex would not prove this.
+-- Self-hosted reference: integer literal too large for U64 (max 2^64 - 1)
+x = 0b10000000000000000000000000000000000000000000000000000000000000000

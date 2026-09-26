@@ -103,12 +103,12 @@ before emitting again. `buildBytes` is the copying form.
 ### `emitU16BE`
 
 ```
-emitU16BE : Int -> Builder -> Unit
+emitU16BE : U16 -> Builder -> Unit
 emitU16BE v buf
 ```
 
-Appends a two-byte unsigned integer, most significant byte first. The
-inverse of `beUint 2`.
+Appends a `U16` as two bytes, most significant byte first. The inverse
+of `byteparser.beU16`.
 
 ### `emitU24BE`
 
@@ -123,22 +123,32 @@ The inverse of `beUint 3`.
 ### `emitU32BE`
 
 ```
-emitU32BE : Int -> Builder -> Unit
+emitU32BE : U32 -> Builder -> Unit
 emitU32BE v buf
 ```
 
-Appends a four-byte unsigned integer, most significant byte first. The
-inverse of `beUint 4`.
+Appends a `U32` as four bytes, most significant byte first. The inverse
+of `byteparser.beU32`.
+
+### `emitU64BE`
+
+```
+emitU64BE : U64 -> Builder -> Unit
+emitU64BE v buf
+```
+
+Appends a `U64` as eight bytes, most significant byte first. The inverse
+of `byteparser.beU64`.
 
 ### `emitU16LE`
 
 ```
-emitU16LE : Int -> Builder -> Unit
+emitU16LE : U16 -> Builder -> Unit
 emitU16LE v buf
 ```
 
-Appends a two-byte unsigned integer, least significant byte first. The
-inverse of `leUint 2`.
+Appends a `U16` as two bytes, least significant byte first. The inverse
+of `byteparser.leU16`.
 
 ### `emitU24LE`
 
@@ -153,12 +163,22 @@ The inverse of `leUint 3`.
 ### `emitU32LE`
 
 ```
-emitU32LE : Int -> Builder -> Unit
+emitU32LE : U32 -> Builder -> Unit
 emitU32LE v buf
 ```
 
-Appends a four-byte unsigned integer, least significant byte first. The
-inverse of `leUint 4`.
+Appends a `U32` as four bytes, least significant byte first. The inverse
+of `byteparser.leU32`.
+
+### `emitU64LE`
+
+```
+emitU64LE : U64 -> Builder -> Unit
+emitU64LE v buf
+```
+
+Appends a `U64` as eight bytes, least significant byte first. The inverse
+of `byteparser.leU64`.
 
 ### `emitBeSint`
 

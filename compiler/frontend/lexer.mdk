@@ -39,7 +39,7 @@ import support.char.{
   isAlnum,
   isHexDigit,
 }
-import support.util.{joinWith, compareDecMag, listLen, anyList}
+import support.util.{joinWith, compareDecMag, listLen, anyList, u64HalvesHex}
 
 public export data Token =
   -- TInt carries the parsed value AND the original source lexeme (#458): the raw
@@ -47,6 +47,10 @@ public export data Token =
   -- radix-faithful `ENumLit`.  `tokenToString`/token-dump goldens render only the
   -- value, so the lexer diff goldens are unaffected.
   | TInt Int String
+  -- An integer literal above 2^62, up to 2^64 - 1: the value's high and low 32-bit
+  -- halves and the source lexeme.  `Int` cannot hold it, so only a `U64` can
+  -- accept it; the parser builds an `EWideLit` and the typechecker decides.
+  | TWideInt Int Int String
   | TFloat Float
   | TString String
   | TChar String
@@ -147,6 +151,7 @@ public export data Token =
 export
 tokenToString : Token -> String
 tokenToString (TInt n _) = "INT " ++ intToString n
+tokenToString (TWideInt hi lo _) = "INT 0x" ++ u64HalvesHex hi lo
 tokenToString (TFloat f) = "FLOAT " ++ floatToString f
 tokenToString (TString s) = "STRING " ++ debugStringLit s
 tokenToString (TChar s) = "CHAR " ++ debugStringLit s
@@ -251,6 +256,7 @@ tokenToString (TLexError s) = "LEX_ERROR " ++ debugStringLit s
 export
 describeToken : Token -> String
 describeToken (TInt _ _) = "a number"
+describeToken (TWideInt _ _ _) = "a number"
 describeToken (TFloat _) = "a number"
 describeToken (TString _) = "a string"
 describeToken (TChar _) = "a character literal"
@@ -420,6 +426,48 @@ parseIntFrom src p endp acc
 intLitOverflows : Array Char -> Int -> Int -> Bool
 intLitOverflows src start endp =
   compareDecMag (substrNoUs src start endp) "4611686018427387904" == Gt
+
+-- A literal past the `Int` bound is still a `U64` literal when it fits 64 bits
+-- (INTEGER-TYPES-DESIGN §3.2 item 4).  Its value is accumulated as two 32-bit
+-- halves, so no step exceeds the compiler's own 63-bit `Int`: `lo * base + d` and
+-- `hi * base + carry` stay below 2^37 for any base up to 16.  `None` once the high
+-- half passes 32 bits, i.e. the value passes 2^64 - 1.
+wideHalves : Int -> List Char -> Option (Int, Int)
+wideHalves base digits = wideHalvesGo base digits 0 0
+
+wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)
+wideHalvesGo _ [] hi lo = Some (hi, lo)
+wideHalvesGo base (d :: rest) hi lo =
+  let lo2 = lo * base + digitVal d
+  let hi2 = hi * base + lo2 / 4294967296
+  if hi2 > 4294967295 then
+    None
+  else
+    wideHalvesGo base rest hi2 (lo2 % 4294967296)
+
+-- The token for a literal that overflowed `Int`: a `TWideInt` up to 2^64 - 1, the
+-- lexer error beyond.  The message keeps the "integer literal too large" prefix
+-- `parseErrCode` keys `L-INT-OVERFLOW` on.
+wideIntTok : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List Char ->
+  List RawTok
+wideIntTok src len pos e depth id digits =
+  match wideHalves (wideBase src pos) digits
+    Some (hi, lo) =>
+      RTok (TWideInt hi lo (substr src pos e)) pos e :: scan src len e depth id
+    None => lexErrorTok pos "integer literal too large for U64 (max 2^64 - 1)"
+
+wideBase : Array Char -> Int -> Int
+wideBase src pos
+  | at src pos == '0'
+    && pos + 1 < arrayLength src
+    && radixKind (at src (pos + 1)) = radixBase (at src (pos + 1))
+  | otherwise = 10
 
 -- ── Keyword table ───────────────────────────────────────────────────────
 -- True/False are NOT here: they start uppercase, so the OCaml lexer emits them
@@ -705,7 +753,7 @@ scanRadix src len pos depth id =
 radixTok : Array Char -> Int -> Int -> Int -> Char -> Int -> Int -> List RawTok
 radixTok src len pos e k depth id
   | radixLitOverflows src (pos + 2) e k =
-    lexErrorTok pos "integer literal too large for Int (max magnitude 2^62)"
+    wideIntTok src len pos e depth id (sigRadixDigits src (pos + 2) e)
   | otherwise =
     RTok
         (TInt (parseRadix src (pos + 2) e (radixBase k) 0) (substr src pos e))
@@ -793,7 +841,7 @@ numFinish src len pos e1 depth id
   | isMalformedExpDot src len e1 = malformedExpDotTok src len pos e1
   | isMalformedTrailingDot src len e1 = malformedTrailingDotTok src pos e1
   | intLitOverflows src pos e1 =
-    lexErrorTok pos "integer literal too large for Int (max magnitude 2^62)"
+    wideIntTok src len pos e1 depth id (collectNoUs src pos e1)
   | otherwise =
     RTok (TInt (parseIntFrom src pos e1 0) (substr src pos e1)) pos e1
       :: scan src len e1 depth id
@@ -2084,6 +2132,7 @@ canEndExpr : Token -> Bool
 canEndExpr (TIdent _) = True
 canEndExpr (TUpper _) = True
 canEndExpr (TInt _ _) = True
+canEndExpr (TWideInt _ _ _) = True
 canEndExpr (TFloat _) = True
 canEndExpr (TString _) = True
 canEndExpr (TChar _) = True
@@ -2160,6 +2209,7 @@ armsHerald opener _ = opener
 -- decision — which has no head to gate on — would risk disturbing that rule.
 canStartAtom : Token -> Bool
 canStartAtom (TInt _ _) = True
+canStartAtom (TWideInt _ _ _) = True
 canStartAtom (TFloat _) = True
 canStartAtom (TString _) = True
 canStartAtom (TChar _) = True

@@ -1,0 +1,5 @@
+-- #3422: U64 has no negative values, so -1 in U64 position is refused rather
+-- than becoming `negate 1`, the largest U64.
+import u64
+
+main = println (-1 : U64)

@@ -24,6 +24,7 @@ import base64.{decode, encode}
 import list.{reverse}
 import string.{toUtf8}
 import lib.sha1.{sha1FixedBytes}
+import u64 as U64
 
 -- ── The opening handshake ────────────────────────────────────────────
 
@@ -161,13 +162,28 @@ isControl Binary = False
 
 -- ── Decoding ─────────────────────────────────────────────────────────
 
--- A big-endian unsigned integer of `n` bytes starting at `off`.
+-- A big-endian unsigned integer of `n` bytes starting at `off`, for a width
+-- whose largest value fits `Int` (the 2-byte length, the close code).
 readBigEndian : Array Int -> Int -> Int -> Int -> Int
 readBigEndian bytes off n acc =
   if n <= 0 then
     acc
   else
     readBigEndian bytes (off + 1) (n - 1) (acc * 256 + byteAt bytes off)
+
+-- The 8-byte extended payload length (RFC 6455 §5.2), or `None` when it is
+-- larger than `Int` holds. Read as a `U64`, so a declared length between 2^62
+-- and 2^63 is reported as the oversized length it is rather than wrapping to a
+-- value that reads as some other malformation (#2905).
+readLength64 : Array Int -> Int -> Option Int
+readLength64 bytes off = U64.toInt (readU64 bytes off 8 0)
+
+readU64 : Array Int -> Int -> Int -> U64 -> U64
+readU64 bytes off n acc =
+  if n <= 0 then
+    acc
+  else
+    readU64 bytes (off + 1) (n - 1) (acc * 256 + fromInt (byteAt bytes off))
 
 -- The payload, copied out of the read buffer and unmasked in place. Reached
 -- only after the declared length has been checked against both the caller's
@@ -278,30 +294,64 @@ decodeChecked fin opcode masked lenField maxPayload bytes offset available =
       protocolErrorCode
       "64-bit payload length has its most significant bit set (RFC 6455 §5.2)"
   else
-    let payloadLen =
+    let declared =
       if extLenBytes == 0 then
-        lenField
+        Some lenField
+      else if extLenBytes == 2 then
+        Some (readBigEndian bytes (offset + 2) 2 0)
       else
-        readBigEndian bytes (offset + 2) extLenBytes 0
-    let headerLen = 2 + extLenBytes + (if masked then 4 else 0)
-    if extLenBytes /= 0 && not (minimalLengthOk lenField payloadLen) then
-      Rejected
-        protocolErrorCode
-        "payload length \{intToString payloadLen} is not minimally encoded (RFC 6455 §5.2)"
-    else if payloadLen > maxPayload then
-      Rejected
-        messageTooBigCode
-        "declared payload of \{intToString payloadLen} bytes exceeds the \{intToString maxPayload}-byte maximum"
-    else if available < headerLen + payloadLen then
-      NeedMore
-    else
-      let maskKey =
-        if masked then
-          Some (copyPayload bytes (offset + headerLen - 4) 4 None)
-        else
-          None
-      let payload = copyPayload bytes (offset + headerLen) payloadLen maskKey
-      Decoded (Frame fin opcode payload) (headerLen + payloadLen)
+        readLength64 bytes (offset + 2)
+    match declared
+      None =>
+        Rejected
+          messageTooBigCode
+          "declared payload length exceeds the \{intToString maxPayload}-byte maximum"
+      Some payloadLen =>
+        decodeDeclared
+          fin
+          opcode
+          masked
+          lenField
+          maxPayload
+          bytes
+          offset
+          available
+          extLenBytes
+          payloadLen
+
+-- The rest of `decodeChecked`, once the declared payload length is known to
+-- fit `Int`.
+decodeDeclared : Bool ->
+  Opcode ->
+  Bool ->
+  Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  DecodeResult
+decodeDeclared fin opcode masked lenField maxPayload bytes offset available extLenBytes payloadLen =
+  let headerLen = 2 + extLenBytes + (if masked then 4 else 0)
+  if extLenBytes /= 0 && not (minimalLengthOk lenField payloadLen) then
+    Rejected
+      protocolErrorCode
+      "payload length \{intToString payloadLen} is not minimally encoded (RFC 6455 §5.2)"
+  else if payloadLen > maxPayload then
+    Rejected
+      messageTooBigCode
+      "declared payload of \{intToString payloadLen} bytes exceeds the \{intToString maxPayload}-byte maximum"
+  else if available < headerLen + payloadLen then
+    NeedMore
+  else
+    let maskKey =
+      if masked then
+        Some (copyPayload bytes (offset + headerLen - 4) 4 None)
+      else
+        None
+    let payload = copyPayload bytes (offset + headerLen) payloadLen maskKey
+    Decoded (Frame fin opcode payload) (headerLen + payloadLen)
 
 -- ── Encoding ─────────────────────────────────────────────────────────
 

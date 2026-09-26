@@ -1,0 +1,8 @@
+-- #3423: in a generic `Num a =>` body a literal is a `fromInt` call, which takes
+-- an Int, so a wide literal there has no representation at all and is refused.
+import u64
+
+widen : Num a => a -> a
+widen x = x + 0xFFFFFFFFFFFFFFFF
+
+main = println (widen (1 : U64))

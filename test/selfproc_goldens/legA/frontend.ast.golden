@@ -24,7 +24,11 @@ identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginOf : TyConOrigin -> Option IdentOrigin
 ifaceIdMatches : String -> String -> Bool
 ifaceIdentity : TyConOrigin -> String -> String
+intMinLiteralHelp : String
+intMinLiteralMsg : String
 isFixedWidthHead : String -> Bool
+isU64Head : String -> Bool
+isUnsignedHead : String -> Bool
 kindAnnArg : KindAnn -> String
 kindAnnSource : KindAnn -> String
 kindAuthorityUnstamped : String -> KindAnn

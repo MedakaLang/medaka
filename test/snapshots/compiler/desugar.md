@@ -1,5 +1,5 @@
 # META
-source_lines=1215
+source_lines=1216
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1071,6 +1071,7 @@ freshenNodeCells : Expr -> Expr
 freshenNodeCells (EBinOp op a b r) = EBinOp op a b (Ref !r)
 freshenNodeCells (EUnOp op a r) = EUnOp op a (Ref !r)
 freshenNodeCells (ENumLit n fr rr lx) = ENumLit n (Ref !fr) (Ref !rr) lx
+freshenNodeCells (EWideLit hi lo rr lx) = EWideLit hi lo (Ref !rr) lx
 freshenNodeCells (EFieldAccess e0 n r) = EFieldAccess e0 n (Ref !r)
 freshenNodeCells (EIndex e0 i r) = EIndex e0 i (Ref !r)
 freshenNodeCells (ESlice e0 lo hi incl r) = ESlice e0 lo hi incl (Ref !r)
@@ -1605,6 +1606,7 @@ desugar prog =
 (DFunDef false "freshenNodeCells" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "a")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "ENumLit" (PVar "n") (PVar "fr") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "fr")))) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
+(DFunDef false "freshenNodeCells" ((PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
 (DFunDef false "freshenNodeCells" ((PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "e0")) (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EVar "e0")) (EVar "i")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
@@ -2054,6 +2056,7 @@ desugar prog =
 (DFunDef false "freshenNodeCells" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "EUnOp" (PVar "op") (PVar "a") (PVar "r"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "a")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "ENumLit" (PVar "n") (PVar "fr") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "fr")))) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
+(DFunDef false "freshenNodeCells" ((PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "rr") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EUnOp "!" (EVar "rr")))) (EVar "lx")))
 (DFunDef false "freshenNodeCells" ((PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EVar "e0")) (EVar "n")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EVar "e0")) (EVar "i")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))
 (DFunDef false "freshenNodeCells" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (EUnOp "!" (EVar "r")))))

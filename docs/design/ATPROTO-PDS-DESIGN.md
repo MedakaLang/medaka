@@ -65,7 +65,7 @@ Better than a from-scratch estimate would suggest. Nothing below needs to be wri
 |---|---|
 | TCP sockets — listen/accept/send/recv/timeouts | `stdlib/net.mdk` over 10 externs in `stdlib/runtime.mdk` |
 | Binary decode / encode combinators | `stdlib/byteparser.mdk` + `stdlib/bytebuilder.mdk` — a symmetric pair, exactly the shape DAG-CBOR and CAR want |
-| Multi-precision arithmetic *pattern* | `stdlib/bits64.mdk` — limbs over the wrapping 63-bit fixnum, with the overflow-headroom argument stated explicitly in its own header. `compiler/eval/eval.mdk` hand-rolled this representation first and now imports the module instead (#223), which is what makes it battle-tested. The **method** carries over; the 256-bit field uses its own layout (P10), not this module, and its bound must be re-derived — `bits64`'s is computed for a 4-limb column |
+| Multi-precision arithmetic *pattern* | the `bits64` module (retired in N3 of #3417, when `U64` became a builtin) — limbs over the wrapping 63-bit fixnum, with the overflow-headroom argument stated explicitly in its own header. `compiler/eval/eval.mdk` hand-rolled this representation first and then imported the module (#223), which is what made it battle-tested. The **method** carries over; the 256-bit field uses its own layout (P10), not this module, and its bound must be re-derived — `bits64`'s is computed for a 4-limb column |
 | JSON | `stdlib/json.mdk` |
 | base64, hex, deflate | `stdlib/base64.mdk`, `stdlib/hex.mdk`, `gzip/lib/deflate.mdk` |
 | Time, ISO-8601, epoch, monotonic | `stdlib/time.mdk` |
@@ -182,7 +182,7 @@ gated, before anything depends on it.
 
 **Substrate.** `Int` is a signed 63-bit fixnum that wraps, so the usable non-negative
 ceiling is **2^62**, and every intermediate must be kept provably under it by
-construction. `stdlib/bits64.mdk` establishes the pattern and the style of argument
+construction. The `bits64` module (retired in N3) established the pattern and the style of argument
 for 64 bits — four 16-bit limbs, least-significant first, with the headroom stated
 explicitly in its header: a limb < 2^16, a 16×16 partial product < 2^32, a column sum
 of *four* such plus carry < 2^35. The style transfers; that particular bound does not,
@@ -219,7 +219,7 @@ follow are ours to derive and to state, and they are not in the reference:
   so ≈ 2^40) and do not disturb that bound;
 - with carry propagation the worst case is ≈ 2^56, leaving **~6 bits under 2^62**.
 
-**State this argument in the module header**, in `stdlib/bits64.mdk`'s style, and derive
+**State this argument in the module header**, in `bits64`'s style, and derive
 it against the implementation rather than copying it from here.
 
 **Modules.**
@@ -1278,7 +1278,7 @@ uses on 32-bit platforms, so the subtlest code in the project can be **cross-che
 element-by-element against a widely-audited implementation of the identical layout**
 instead of being written and hoped at. On a project whose whole risk profile is silent
 numerical wrongness, having something to diff against outranks both provenance with
-`bits64.mdk` and a 2.5× constant factor §4 shows this workload never notices.
+`bits64` and a 2.5× constant factor §4 shows this workload never notices.
 
 ⚠️ **What that does *not* buy is the reference's overflow proof** — it assumes magnitude
 ≤ 8 and a full 64-bit accumulator we do not have. §4 sets out why eager normalization is

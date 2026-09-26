@@ -1,0 +1,5 @@
+-- #3423: a negated wide literal fits no type: U64 has no negative values and
+-- Int cannot reach the magnitude.
+import u64
+
+main = println (-(0xFFFFFFFFFFFFFFFF) : U64)

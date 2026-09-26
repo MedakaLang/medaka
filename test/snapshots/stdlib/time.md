@@ -189,7 +189,7 @@ fromEpochSeconds secs =
       month = m,
       day = d,
       hour = sod / 3600,
-      minute = (sod / 60) % 60,
+      minute = sod / 60 % 60,
       second = sod % 60,
     }
 

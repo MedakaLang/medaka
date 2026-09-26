@@ -1,4 +1,4 @@
--- #556: the OCTAL spelling of the same overflow.  Pinned separately for the same
--- reason as the binary fixture: octal's admissible digit count is 21.
--- Self-hosted reference: integer literal too large for Int (max magnitude 2^62)
-x = 0o1777777777777777777777
+-- #556: the OCTAL spelling of the lexer's cap (2^64).  Pinned separately for the
+-- same reason as the binary fixture.
+-- Self-hosted reference: integer literal too large for U64 (max 2^64 - 1)
+x = 0o2000000000000000000000

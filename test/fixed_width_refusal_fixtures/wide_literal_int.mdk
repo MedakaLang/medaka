@@ -1,0 +1,6 @@
+-- #3423: a literal above 2^62 does not fit Int, so at an Int ground type it is
+-- refused exactly as the lexer's cap refused it before wide literals existed.
+x : Int
+x = 0xFFFFFFFFFFFFFFFF
+
+main = println x

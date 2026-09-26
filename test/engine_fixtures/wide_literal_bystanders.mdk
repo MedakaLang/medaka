@@ -1,0 +1,36 @@
+-- [T-GLOBAL-TABLE] for the wide literal (#3423), a new AST constructor
+-- (`EWideLit`, and `LU64` after typechecking): this program HAS a wide literal,
+-- and every assertion below is about code that never touches it.  Integer
+-- literals, literal patterns, ranges, the Int minimum, generic `fromInt` at Int
+-- and Float, Float literals, and literal-bearing string interpolation must
+-- behave exactly as they do in a program with no wide literal at all.
+--
+-- Expected values were computed by hand; the pin is
+-- test/engine_value_pins/engine/wide_literal_bystanders.pin.
+
+import u64 as U64
+
+-- The only wide literal in the program.
+wide : U64
+wide = 0xFFFFFFFFFFFFFFFF
+
+classify : Int -> String
+classify n = match n
+  0 => "zero"
+  4611686018427387903 => "max"
+  -4611686018427387904..=-1 => "negative"
+  1..=9 => "digit"
+  _ => "other"
+
+twice : Num a => a -> a
+twice x = x + x + 0
+
+main =
+  println (map classify [0, 4611686018427387903, -4611686018427387904, 7, 42])
+  println (4611686018427387903 + 1)
+  println (twice 21, twice 1.5)
+  println (sum [1, 2, 3], sum [0.5, 0.25])
+  println [1..=5]
+  println "n=\{40 + 2} f=\{2.5 * 2.0}"
+  println (0x7FFF_FFFF, 0b1010, 0o17, 1_000_000)
+  println (U64.popCount wide)

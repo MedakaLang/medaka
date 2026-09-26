@@ -211,6 +211,7 @@ toLit (SList ((SAtom "LString") :: [s])) = LString (toStr s)
 toLit (SList ((SAtom "LChar") :: [c])) = LChar (toStr c)
 toLit (SList ((SAtom "LBool") :: [b])) = LBool (toBool b)
 toLit (SAtom "LUnit") = LUnit
+toLit (SList ((SAtom "LU64") :: [hi, lo])) = LU64 (toInt hi) (toInt lo)
 toLit other = panic ("core_ir_sexp_parse: bad Lit: " ++ sexprToStr other)
 
 toRecPatField : SExp -> RecPatField

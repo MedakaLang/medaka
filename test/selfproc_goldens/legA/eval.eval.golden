@@ -33,6 +33,7 @@ buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
+bytesBEGo : Array Int -> Int -> U64 -> U64
 bytesBEToU64 : Array Int -> U64
 candIface : Value a -> String
 candIfaceKey : Value a -> (String, String)
@@ -94,6 +95,7 @@ eval : EvalEnv (Value a) -> Expr -> <a> Value a
 evalAnd : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
 evalArith : String -> Value a -> Value a -> Value a
 evalArithAt : String -> String -> Value a -> Value a -> Value a
+evalArithU64 : String -> (Int, Int) -> (Int, Int) -> Value a
 evalBinop : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
 evalBlock : EvalEnv (Value a) -> List DoStmt -> <a> Value a
 evalDepthLimit : Int
@@ -399,6 +401,10 @@ pTan : Value a -> <a> Value a
 pTanh : Value a -> <a> Value a
 pTrunc : Value a -> <a> Value a
 pTruncateBits : Int -> Value a -> <a> Value a
+pU64Bin : ((Int, Int) -> (Int, Int) -> (Int, Int)) -> Value a -> Value a -> <a> Value a
+pU64Shift : ((Int, Int) -> Int -> (Int, Int)) -> Value a -> Value a -> <a> Value a
+pU64Truncate : Value a -> <a> Value a
+pU64TruncateToInt : Value a -> <a> Value a
 pWallTimeSec : Value a -> <a> Value a
 pWallTimeSecIO : Value a -> <Clock | a> Value a
 pWriteFile : Value a -> Value a -> <FileWrite | a> Value a
@@ -476,17 +482,12 @@ tupleHeadTag : Int -> String
 twoDistinctKeys : List (Value a) -> List (String, String) -> Bool
 tyMentions : Ty -> List String -> Bool
 tyvarsInArgs : List Ty -> Int
-u64Bit63 : U64 -> Int
-u64Const1 : U64
-u64Const2 : U64
 u64Finalize : U64 -> U64
-u64FnvBasis : U64
-u64FnvPrime : U64
 u64Golden : U64
 u64Low30 : U64 -> Int
 u64Mix : U64 -> U64
-u64ToInt : U64 -> Int
-u64ToSignedInt : U64 -> Int
+u64ShapeMismatch : Unit -> a
+u64Value : (Int, Int) -> Value a
 unChar : Value a -> Char
 unInt : Value a -> Int
 unIntArray : Value a -> Array Int

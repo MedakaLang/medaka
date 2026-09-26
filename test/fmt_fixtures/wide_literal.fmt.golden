@@ -1,0 +1,15 @@
+-- A literal above 2^62 is a U64 literal (#3423): the formatter keeps its source
+-- spelling, radix and separators included, exactly as it does an Int literal's.
+import u64
+
+golden : U64
+golden = 0x9E37_79B9_7F4A_7C15
+
+top : U64
+top = 18446744073709551615
+
+bits : U64
+bits = 0b1000000000000000000000000000000000000000000000000000000000000000
+
+pow62 : U64
+pow62 = 4611686018427387904

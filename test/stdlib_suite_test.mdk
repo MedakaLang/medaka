@@ -163,7 +163,6 @@ suites = [
   -- row nothing would run them.
   ("base32", (28, EvalAndNative)),
   ("base64", (21, EvalAndNative)),
-  ("bits64", (31, EvalAndNative)),
   ("bytebuilder", (69, EvalAndNative)),
   ("byteparser", (33, EvalAndNative)),
   -- The `Bytes` surface, including the out-of-range pairing (`get` answers
@@ -202,6 +201,7 @@ suites = [
   -- engine lowers on its own.
   ("u16", (35, EvalAndNative)),
   ("u32", (36, EvalAndNative)),
+  ("u64", (33, EvalAndNative)),
   ("u8", (29, EvalAndNative)),
   ("validation", (20, EvalAndNative)),
   ("vector", (32, EvalAndNative)),
@@ -357,8 +357,6 @@ test "stdlib/base32.mdk executed >= 28 assertions" = floorExpectation "base32"
 
 test "stdlib/base64.mdk executed >= 21 assertions" = floorExpectation "base64"
 
-test "stdlib/bits64.mdk executed >= 31 assertions" = floorExpectation "bits64"
-
 test "stdlib/bytebuilder.mdk executed >= 69 assertions" =
   floorExpectation "bytebuilder"
 
@@ -418,6 +416,8 @@ test "stdlib/toml.mdk executed >= 56 assertions" = floorExpectation "toml"
 test "stdlib/u16.mdk executed >= 35 assertions" = floorExpectation "u16"
 
 test "stdlib/u32.mdk executed >= 36 assertions" = floorExpectation "u32"
+
+test "stdlib/u64.mdk executed >= 33 assertions" = floorExpectation "u64"
 
 test "stdlib/u8.mdk executed >= 29 assertions" = floorExpectation "u8"
 

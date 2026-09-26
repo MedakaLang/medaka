@@ -14,12 +14,19 @@
    `orElse p q` runs `q` from the position where `p` started. The integer
    readers name their byte order and width, as in `beUint 4` for a four-byte
    big-endian unsigned integer and `leSint 2` for a two-byte little-endian
-   signed one. `bytebuilder`'s emit functions write the same encodings. -}
+   signed one. An `Int` reader fails rather than wrap when the value does not
+   fit `Int`, which only an eight-byte value can do. `beU16`, `beU32`,
+   `beU64`, `leU16`, `leU32` and `leU64` read a fixed-width unsigned value as
+   its own type, `U64` included. `bytebuilder`'s emit functions write the same
+   encodings. -}
 
 import array.{reverse as arrayReverse}
 import bytes.{Bytes, fromArray, toArray}
 import list.{reverse}
 import u8 as U8
+import u16 as U16
+import u32 as U32
+import u64 as U64
 
 -- # Results and parsers
 
@@ -318,23 +325,37 @@ takeSlice n = deferMap toArray (takeBytes n)
 
 {- | An unsigned integer of `n` bytes, most significant byte first.
 
-   Fails when fewer than `n` bytes remain.
+   Fails when fewer than `n` bytes remain, and when the value is larger than
+   `Int` holds, which needs eight bytes or more; `beU64` reads any eight.
 
    > runByteParser (beUint 2) (arrayFromList [1, 2])
    Ok 258
    > runByteParser (beUint 1) (arrayFromList [255])
    Ok 255
    > runByteParser (beUint 4) (arrayFromList [0, 0, 1, 0])
-   Ok 256 -}
+   Ok 256
+   > runByteParser (beUint 8) (arrayFromList [64, 0, 0, 0, 0, 0, 0, 0])
+   Err "integer does not fit Int (read a U64 with beU64 or leU64) at byte 7" -}
 export
 beUint : Int -> ByteParser Int
 beUint n = ByteParserE (beUintGo n 0)
 
+-- Before each step the value so far must be below 2^54, or the next byte would
+-- carry it past `Int`'s largest value, 2^62 - 1.
 beUintGo : Int -> Int -> Array Int -> Int -> BResult Int
 beUintGo n acc input pos
   | n <= 0 = BOk acc pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = beUintGo (n - 1) (acc * 256 + input[pos]) input (pos + 1)
+  | acc >= 18014398509481984 = BErr intRangeMessage pos
+  | otherwise =
+    beUintGo
+      (n - 1)
+      (acc * 256 + U8.toInt (elementByte input pos))
+      input
+      (pos + 1)
+
+intRangeMessage : String
+intRangeMessage = "integer does not fit Int (read a U64 with beU64 or leU64)"
 
 {- | A signed two's-complement integer of `n` bytes, most significant byte
    first.
@@ -346,13 +367,35 @@ beUintGo n acc input pos
    > runByteParser (beSint 2) (arrayFromList [255, 255])
    Ok -1
    > runByteParser (beSint 2) (arrayFromList [0, 1])
-   Ok 1 -}
+   Ok 1
+   > runByteParser (beSint 9) (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255, 254])
+   Ok -2 -}
 export
 beSint : Int -> ByteParser Int
-beSint n = defer
-  u <- beUint n
-  let threshold = pow2 (8 * n - 1)
-  deferPure (if u >= threshold then u - threshold * 2 else u)
+beSint n
+  | n >= 8 = defer
+    fill <- takeBytes (n - 8)
+    x <- beU64
+    signedFrom64 fill x
+  | otherwise = defer
+    u <- beUint n
+    let threshold = pow2 (8 * n - 1)
+    deferPure (if u >= threshold then u - threshold * 2 else u)
+
+-- A two's-complement value of eight bytes or more, as its low eight bytes read
+-- as a `U64` and the bytes above them. It fits `Int` when bits 63 and 62 agree
+-- and every byte above repeats the sign, and is then exactly the low 63 bits.
+signedFrom64 : Bytes -> U64 -> ByteParser Int
+signedFrom64 fill x =
+  let signByte = if x >= 0x8000000000000000 then 255 else 0
+  if (x < 0x4000000000000000 || x >= 0xC000000000000000)
+    && allEqual signByte (toArray fill) 0 then
+    deferPure (U64.toIntTruncating x)
+  else
+    failWith intRangeMessage
+
+allEqual : Int -> Array Int -> Int -> Bool
+allEqual b arr i = i >= arrayLength arr || arr[i] == b && allEqual b arr (i + 1)
 
 -- 2^n by left shift; valid for n in 0..62 on a 63-bit Int.
 pow2 : Int -> Int
@@ -372,7 +415,8 @@ beFloat64 = defer
 
 {- | An unsigned integer of `n` bytes, least significant byte first.
 
-   Fails when fewer than `n` bytes remain.
+   Fails when fewer than `n` bytes remain, and when the value is larger than
+   `Int` holds, which needs eight bytes or more; `leU64` reads any eight.
 
    > runByteParser (leUint 2) (arrayFromList [2, 1])
    Ok 258
@@ -384,12 +428,20 @@ export
 leUint : Int -> ByteParser Int
 leUint n = ByteParserE (leUintGo n 0 0)
 
+-- The byte at bit [shift] fits `Int` when it is below 2^(62 - shift): any byte
+-- below bit 56, a byte under 64 at bit 56, and only a zero byte from bit 64 on.
 leUintGo : Int -> Int -> Int -> Array Int -> Int -> BResult Int
 leUintGo n shift acc input pos
   | n <= 0 = BOk acc pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
   | otherwise =
-    leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
+    let b = U8.toInt (elementByte input pos)
+    if shift < 56 || shift == 56 && b < 64 then
+      leUintGo (n - 1) (shift + 8) (acc + b * pow2 shift) input (pos + 1)
+    else if b == 0 then
+      leUintGo (n - 1) (shift + 8) acc input (pos + 1)
+    else
+      BErr intRangeMessage pos
 
 {- | A signed two's-complement integer of `n` bytes, least significant byte
    first.
@@ -404,10 +456,15 @@ leUintGo n shift acc input pos
    Ok 1 -}
 export
 leSint : Int -> ByteParser Int
-leSint n = defer
-  u <- leUint n
-  let threshold = pow2 (8 * n - 1)
-  deferPure (if u >= threshold then u - threshold * 2 else u)
+leSint n
+  | n >= 8 = defer
+    x <- leU64
+    fill <- takeBytes (n - 8)
+    signedFrom64 fill x
+  | otherwise = defer
+    u <- leUint n
+    let threshold = pow2 (8 * n - 1)
+    deferPure (if u >= threshold then u - threshold * 2 else u)
 
 {- | A 64-bit IEEE 754 float from eight bytes, least significant byte first.
 
@@ -420,6 +477,95 @@ leFloat64 : ByteParser Float
 leFloat64 = defer
   bytes <- takeBytes 8
   deferPure (bytesToFloat64 (arrayReverse (toArray bytes)) 0)
+
+-- # Fixed-width unsigned readers
+
+{- | A `U16` from two bytes, most significant byte first. The inverse of
+   `bytebuilder.emitU16BE`.
+
+   > runByteParser beU16 (arrayFromList [1, 2])
+   Ok 258 -}
+export
+beU16 : ByteParser U16
+beU16 = defer
+  n <- beUint 2
+  deferPure (U16.truncate n)
+
+{- | A `U32` from four bytes, most significant byte first. The inverse of
+   `bytebuilder.emitU32BE`.
+
+   > runByteParser beU32 (arrayFromList [255, 255, 255, 255])
+   Ok 4294967295 -}
+export
+beU32 : ByteParser U32
+beU32 = defer
+  n <- beUint 4
+  deferPure (U32.truncate n)
+
+{- | A `U64` from eight bytes, most significant byte first. The inverse of
+   `bytebuilder.emitU64BE`. Every eight-byte value fits, so this never
+   fails for want of range.
+
+   > runByteParser beU64 (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255])
+   Ok 18446744073709551615 -}
+export
+beU64 : ByteParser U64
+beU64 = ByteParserE (beU64Go 8 0)
+
+beU64Go : Int -> U64 -> Array Int -> Int -> BResult U64
+beU64Go n acc input pos
+  | n <= 0 = BOk acc pos
+  | pos >= arrayLength input = BErr "unexpected end of input" pos
+  | otherwise =
+    beU64Go
+      (n - 1)
+      (acc * 256 + U64.fromU8 (elementByte input pos))
+      input
+      (pos + 1)
+
+{- | A `U16` from two bytes, least significant byte first. The inverse of
+   `bytebuilder.emitU16LE`.
+
+   > runByteParser leU16 (arrayFromList [2, 1])
+   Ok 258 -}
+export
+leU16 : ByteParser U16
+leU16 = defer
+  n <- leUint 2
+  deferPure (U16.truncate n)
+
+{- | A `U32` from four bytes, least significant byte first. The inverse of
+   `bytebuilder.emitU32LE`.
+
+   > runByteParser leU32 (arrayFromList [4, 3, 2, 1])
+   Ok 16909060 -}
+export
+leU32 : ByteParser U32
+leU32 = defer
+  n <- leUint 4
+  deferPure (U32.truncate n)
+
+{- | A `U64` from eight bytes, least significant byte first. The inverse of
+   `bytebuilder.emitU64LE`.
+
+   > runByteParser leU64 (arrayFromList [21, 124, 74, 127, 185, 121, 55, 158])
+   Ok 11400714819323198485 -}
+export
+leU64 : ByteParser U64
+leU64 = ByteParserE (leU64Go 8 0 0)
+
+leU64Go : Int -> Int -> U64 -> Array Int -> Int -> BResult U64
+leU64Go n shift acc input pos
+  | n <= 0 = BOk acc pos
+  | pos >= arrayLength input = BErr "unexpected end of input" pos
+  | otherwise =
+    let b = U64.fromU8 (elementByte input pos)
+    leU64Go
+      (n - 1)
+      (shift + 8)
+      (U64.bitOr acc (U64.shiftLeft b shift))
+      input
+      (pos + 1)
 
 -- # Running a parser
 

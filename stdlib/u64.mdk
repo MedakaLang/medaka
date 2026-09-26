@@ -1,0 +1,423 @@
+{- | Unsigned 64-bit integers, the `U64` type.
+
+   A `U64` holds a value from `0` to `18446744073709551615`. Its arithmetic
+   wraps: `+`, `-` and `*` give the result modulo 2^64, so
+   `18446744073709551615 + 1` is `0` and `0 - 1` is `18446744073709551615`.
+   `/` and `%` are unsigned division and remainder, and a zero divisor panics
+   as it does for `Int`.
+
+   An integer literal in `U64` position may be as large as the type holds,
+   including above `Int`'s range, as in `0x9E3779B97F4A7C15`; a negative one
+   is a compile-time error. Converting a computed `Int` never wraps silently:
+   `fromInt` panics on a negative value, `tryFromInt` answers `None`, and
+   `truncate` takes a negative value in two's complement and is the only
+   conversion into `U64` that discards anything.
+
+   `Int` holds 63 bits, so the way back narrows: `toInt` answers `None` for a
+   value above `4611686018427387903`, and `toIntTruncating` keeps the low 63
+   bits.
+
+   Within the family, `fromU8`, `fromU16` and `fromU32` widen a narrower
+   value.
+
+   `mulWide`, `addCarry` and `subBorrow` are the operations multi-word
+   arithmetic is built from: the full 128-bit product, and addition and
+   subtraction with a carry or borrow in and out.
+
+   `bitAnd`, `bitOr`, `bitXor`, `bitNot`, `shiftLeft` and `shiftRight` have
+   the same names as the prelude's `Int` operations. Import the module
+   qualified, as `import u64 as U64`, and write `U64.shiftLeft`.
+
+   `toBytesBE` and `toBytesLE` write a value as 8 bytes, most or least
+   significant first, and `fromBytesBE` and `fromBytesLE` read one back.
+
+   `U64` values compare, hash, and render in decimal like `Int`. `toHex`
+   renders the 16-digit hexadecimal form. -}
+
+-- A `U64` is a boxed 64-bit cell, not a tagged word.  Its operators are builtin;
+-- the kernels (`u64Truncate`, `u64TruncateToInt`, the bit operations and
+-- `u64MulHigh`) are internal externs (stdlib/runtime.mdk), and everything else
+-- here is built on those and on the `u32` halves.
+
+import u8
+import u16
+import u32 as U32
+import bytes.{Bytes}
+import bytes as B
+
+-- # Conversions
+
+{- | The value as a `U64`, or `None` when it is negative.
+
+   > tryFromInt 200 |> map toIntTruncating
+   Some 200
+
+   > tryFromInt (-1) |> map toIntTruncating
+   None -}
+export
+tryFromInt : Int -> Option U64
+tryFromInt n = if n < 0 then None else Some (u64Truncate n)
+
+{- | The value modulo 2^64, as a `U64`.
+
+   This is the one conversion from `Int` that can change the number: a
+   negative value is taken in two's complement.
+
+   > truncate (-1) == maxBound
+   True
+
+   > toIntTruncating (truncate 42)
+   42 -}
+export
+truncate : Int -> U64
+truncate n = u64Truncate n
+
+{- | The value as an `Int`, or `None` when it is above `4611686018427387903`,
+   the largest `Int`.
+
+   > toInt 42
+   Some 42
+
+   > toInt 0x4000000000000000
+   None -}
+export
+toInt : U64 -> Option Int
+toInt x = if x < 0x4000000000000000 then Some (u64TruncateToInt x) else None
+
+{- | The low 63 bits of the value, as an `Int`.
+
+   This is the one conversion to `Int` that can change the number: bit 63 is
+   discarded, and bit 62 becomes the sign.
+
+   > toIntTruncating 42
+   42
+
+   > toIntTruncating maxBound
+   -1 -}
+export
+toIntTruncating : U64 -> Int
+toIntTruncating x = u64TruncateToInt x
+
+{- | A `U8` as a `U64`, the same number.
+
+   > toIntTruncating (fromU8 (255 : U8))
+   255 -}
+export
+fromU8 : U8 -> U64
+fromU8 x = u64Truncate (u8ToInt x)
+
+{- | A `U16` as a `U64`, the same number.
+
+   > toIntTruncating (fromU16 (65535 : U16))
+   65535 -}
+export
+fromU16 : U16 -> U64
+fromU16 x = u64Truncate (u16ToInt x)
+
+{- | A `U32` as a `U64`, the same number.
+
+   > toIntTruncating (fromU32 (4294967295 : U32))
+   4294967295 -}
+export
+fromU32 : U32 -> U64
+fromU32 x = u64Truncate (u32ToInt x)
+
+-- # Bit operations
+
+{- | The bitwise and of two values.
+
+   > toIntTruncating (bitAnd 12 10)
+   8 -}
+export
+bitAnd : U64 -> U64 -> U64
+bitAnd a b = u64BitAnd a b
+
+{- | The bitwise or of two values.
+
+   > toIntTruncating (bitOr 12 10)
+   14 -}
+export
+bitOr : U64 -> U64 -> U64
+bitOr a b = u64BitOr a b
+
+{- | The bitwise exclusive or of two values.
+
+   > toIntTruncating (bitXor 12 10)
+   6 -}
+export
+bitXor : U64 -> U64 -> U64
+bitXor a b = u64BitXor a b
+
+{- | Every bit of the value inverted.
+
+   > bitNot 0 == maxBound
+   True -}
+export
+bitNot : U64 -> U64
+bitNot x = u64BitXor x 0xFFFFFFFFFFFFFFFF
+
+{- | The value shifted left by a number of bits, the vacated bits zero.
+
+   Bits shifted past bit 63 are discarded, and a shift of 64 or more gives
+   `0`. A negative shift panics.
+
+   > toIntTruncating (shiftLeft 1 40)
+   1099511627776
+
+   > shiftLeft 1 64 == 0
+   True -}
+export
+shiftLeft : U64 -> Int -> U64
+shiftLeft x k
+  | k < 0 = panic "u64.shiftLeft: negative shift \{k}"
+  | otherwise = u64ShiftLeft x k
+
+{- | The value shifted right by a number of bits, the vacated bits zero.
+
+   A shift of 64 or more gives `0`. A negative shift panics.
+
+   > toIntTruncating (shiftRight maxBound 60)
+   15 -}
+export
+shiftRight : U64 -> Int -> U64
+shiftRight x k
+  | k < 0 = panic "u64.shiftRight: negative shift \{k}"
+  | otherwise = u64ShiftRight x k
+
+rotateAmount : Int -> Int
+rotateAmount k = (k % 64 + 64) % 64
+
+{- | The value rotated left by a number of bits: the bits shifted out at the
+   top come back in at the bottom.
+
+   The amount is taken modulo 64, so a negative amount rotates right.
+
+   > toIntTruncating (rotateLeft 0x8000000000000000 1)
+   1 -}
+export
+rotateLeft : U64 -> Int -> U64
+rotateLeft x k =
+  let r = rotateAmount k
+  if r == 0 then x else u64BitOr (u64ShiftLeft x r) (u64ShiftRight x (64 - r))
+
+{- | The value rotated right by a number of bits: the bits shifted out at
+   the bottom come back in at the top.
+
+   The amount is taken modulo 64, so a negative amount rotates left.
+
+   > rotateRight 1 1 == 0x8000000000000000
+   True -}
+export
+rotateRight : U64 -> Int -> U64
+rotateRight x k = rotateLeft x (64 - rotateAmount k)
+
+highHalf : U64 -> U32
+highHalf x = U32.truncateU64 (u64ShiftRight x 32)
+
+lowHalf : U64 -> U32
+lowHalf x = U32.truncateU64 x
+
+fromHalves : U32 -> U32 -> U64
+fromHalves hi lo = u64BitOr (u64ShiftLeft (fromU32 hi) 32) (fromU32 lo)
+
+{- | The number of one bits.
+
+   > popCount maxBound
+   64 -}
+export
+popCount : U64 -> Int
+popCount x = U32.popCount (highHalf x) + U32.popCount (lowHalf x)
+
+{- | The number of zero bits above the highest one bit, 64 for `0`.
+
+   > leadingZeros 1
+   63 -}
+export
+leadingZeros : U64 -> Int
+leadingZeros x =
+  let hi = highHalf x
+  if u32ToInt hi == 0 then
+    32 + U32.leadingZeros (lowHalf x)
+  else
+    U32.leadingZeros hi
+
+{- | The number of zero bits below the lowest one bit, 64 for `0`.
+
+   > trailingZeros 0x100000000
+   32 -}
+export
+trailingZeros : U64 -> Int
+trailingZeros x =
+  let lo = lowHalf x
+  if u32ToInt lo == 0 then
+    32 + U32.trailingZeros (highHalf x)
+  else
+    U32.trailingZeros lo
+
+-- # Multi-word arithmetic
+
+{- | The full product of two values, as its high and low 64 bits.
+
+   > mulWide maxBound maxBound == (0xFFFFFFFFFFFFFFFE, 1)
+   True -}
+export
+mulWide : U64 -> U64 -> (U64, U64)
+mulWide a b = (u64MulHigh a b, a * b)
+
+{- | The sum of two values and a carry in, as the low 64 bits and the carry
+   out.
+
+   > addCarry maxBound 1 False == (0, True)
+   True
+
+   > addCarry 2 3 True == (6, False)
+   True -}
+export
+addCarry : U64 -> U64 -> Bool -> (U64, Bool)
+addCarry a b carry =
+  let s = a + b
+  let s2 = s + bit carry
+  (s2, s < a || s2 < s)
+
+{- | The difference of two values less a borrow in, as the low 64 bits and
+   the borrow out.
+
+   > subBorrow 0 1 False == (maxBound, True)
+   True
+
+   > subBorrow 5 3 True == (1, False)
+   True -}
+export
+subBorrow : U64 -> U64 -> Bool -> (U64, Bool)
+subBorrow a b borrow =
+  let d = a - b
+  let d2 = d - bit borrow
+  (d2, a < b || d < bit borrow)
+
+bit : Bool -> U64
+bit True = 1
+bit False = 0
+
+-- # Bytes
+
+{- | The value as 8 bytes, most significant first.
+
+   > B.toArray (toBytesBE 0x0102030405060708)
+   [|1, 2, 3, 4, 5, 6, 7, 8|] -}
+export
+toBytesBE : U64 -> Bytes
+toBytesBE x = U32.toBytesBE (highHalf x) ++ U32.toBytesBE (lowHalf x)
+
+{- | The value as 8 bytes, least significant first.
+
+   > B.toArray (toBytesLE 0x0102030405060708)
+   [|8, 7, 6, 5, 4, 3, 2, 1|] -}
+export
+toBytesLE : U64 -> Bytes
+toBytesLE x = U32.toBytesLE (lowHalf x) ++ U32.toBytesLE (highHalf x)
+
+readHalves : Option U32 -> Option U32 -> Option U64
+readHalves (Some hi) (Some lo) = Some (fromHalves hi lo)
+readHalves _ _ = None
+
+{- | The value written as exactly 8 bytes, most significant first, or `None`
+   when the byte string has any other length.
+
+   > fromBytesBE (toBytesBE 0x0102030405060708) == Some 0x0102030405060708
+   True -}
+export
+fromBytesBE : Bytes -> Option U64
+fromBytesBE b =
+  if B.length b == 8 then
+    readHalves (U32.fromBytesBE (B.take 4 b)) (U32.fromBytesBE (B.drop 4 b))
+  else
+    None
+
+{- | The value written as exactly 8 bytes, least significant first, or
+   `None` when the byte string has any other length.
+
+   > fromBytesLE (toBytesLE 0x0102030405060708) == Some 0x0102030405060708
+   True -}
+export
+fromBytesLE : Bytes -> Option U64
+fromBytesLE b =
+  if B.length b == 8 then
+    readHalves (U32.fromBytesLE (B.drop 4 b)) (U32.fromBytesLE (B.take 4 b))
+  else
+    None
+
+-- # Rendering
+
+{- | The value in hexadecimal: 16 lowercase digits, zero-padded, with no
+   prefix.
+
+   > toHex 255
+   "00000000000000ff" -}
+export
+toHex : U64 -> String
+toHex x = U32.toHex (highHalf x) ++ U32.toHex (lowHalf x)
+
+-- A value below 2^62 is an `Int` already; above, a tenth of it is.
+decimal : U64 -> String
+decimal x =
+  if x < 0x4000000000000000 then
+    intToString (u64TruncateToInt x)
+  else
+    intToString (u64TruncateToInt (x / 10))
+      ++ intToString (u64TruncateToInt (x % 10))
+
+-- # Impls
+
+export impl Eq U64 where
+  eq a b = a == b
+
+-- Every method is defined, not only `compare`, so each one is a single builtin
+-- comparison and a generic caller never falls back to an interface default.
+-- `min` and `max` are the methods being defined, so they are written out.
+-- lint-disable-next-line rule-if-max-min
+export impl Ord U64 where
+  compare a b = if a < b then Lt else if a > b then Gt else Eq
+  lt a b = a < b
+  gt a b = a > b
+  lte a b = a <= b
+  gte a b = a >= b
+  min a b = if a <= b then a else b
+  max a b = if a >= b then a else b
+
+{- | Arithmetic modulo 2^64. `fromInt` panics on a negative `Int`; it is what
+   a literal in a generic `Num a =>` position becomes, and `tryFromInt` and
+   `truncate` are the non-panicking conversions. -}
+export impl Num U64 where
+  add a b = a + b
+  sub a b = a - b
+  mul a b = a * b
+  div a b = a / b
+  negate a = 0 - a
+  abs a = a
+  signum a = if a == 0 then 0 else 1
+  fromInt n =
+    if n < 0 then
+      panic "fromInt: \{n} does not fit U64 (0..18446744073709551615)"
+    else
+      u64Truncate n
+  rem a b = a % b
+
+export impl Bounded U64 where
+  minBound = 0
+  maxBound = 0xFFFFFFFFFFFFFFFF
+
+-- SplitMix64's finalizer over the value plus the golden-ratio increment, masked
+-- to 30 bits: the same hash `hashInt` gives an `Int`, so a `U64` below 2^62
+-- hashes as that `Int` does.
+export impl Hashable U64 where
+  hash x =
+    let z0 = x + 0x9E3779B97F4A7C15
+    let z1 = u64BitXor z0 (u64ShiftRight z0 30) * 0xBF58476D1CE4E5B9
+    let z2 = u64BitXor z1 (u64ShiftRight z1 27) * 0x94D049BB133111EB
+    u64TruncateToInt (u64BitAnd (u64BitXor z2 (u64ShiftRight z2 31)) 1073741823)
+
+export impl Display U64 where
+  display x = decimal x
+
+export impl Debug U64 where
+  debug x = decimal x

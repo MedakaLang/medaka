@@ -126,7 +126,6 @@ What's in the standard library, what's planned, module-by-module status.
 | [`async.md`](stdlib/async.md) | async | — |
 | [`base32.md`](stdlib/base32.md) | base32 | — |
 | [`base64.md`](stdlib/base64.md) | base64 | — |
-| [`bits64.md`](stdlib/bits64.md) | bits64 | — |
 | [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
 | [`byteparser.md`](stdlib/byteparser.md) | byteparser | — |
 | [`bytes.md`](stdlib/bytes.md) | bytes | — |
@@ -159,6 +158,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`toml.md`](stdlib/toml.md) | toml | — |
 | [`u16.md`](stdlib/u16.md) | u16 | — |
 | [`u32.md`](stdlib/u32.md) | u32 | — |
+| [`u64.md`](stdlib/u64.md) | u64 | — |
 | [`u8.md`](stdlib/u8.md) | u8 | — |
 | [`validation.md`](stdlib/validation.md) | validation | — |
 | [`vector.md`](stdlib/vector.md) | vector | — |

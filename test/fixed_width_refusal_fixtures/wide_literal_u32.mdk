@@ -1,0 +1,5 @@
+-- #3423: a wide literal at a narrower fixed-width type is refused, not masked
+-- to its low 32 bits.
+import u32
+
+main = println (0xFFFFFFFFFFFFFFFF : U32)

@@ -16,7 +16,11 @@ Parsers backtrack: a failed parser never advances the position, and
 `orElse p q` runs `q` from the position where `p` started. The integer
 readers name their byte order and width, as in `beUint 4` for a four-byte
 big-endian unsigned integer and `leSint 2` for a two-byte little-endian
-signed one. `bytebuilder`'s emit functions write the same encodings.
+signed one. An `Int` reader fails rather than wrap when the value does not
+fit `Int`, which only an eight-byte value can do. `beU16`, `beU32`,
+`beU64`, `leU16`, `leU32` and `leU64` read a fixed-width unsigned value as
+its own type, `U64` included. `bytebuilder`'s emit functions write the same
+encodings.
 
 ## Results and parsers
 
@@ -325,7 +329,8 @@ beUint n
 
 An unsigned integer of `n` bytes, most significant byte first.
 
-Fails when fewer than `n` bytes remain.
+Fails when fewer than `n` bytes remain, and when the value is larger than
+`Int` holds, which needs eight bytes or more; `beU64` reads any eight.
 
 ```medaka
 > runByteParser (beUint 2) (arrayFromList [1, 2])
@@ -334,6 +339,8 @@ Ok 258
 Ok 255
 > runByteParser (beUint 4) (arrayFromList [0, 0, 1, 0])
 Ok 256
+> runByteParser (beUint 8) (arrayFromList [64, 0, 0, 0, 0, 0, 0, 0])
+Err "integer does not fit Int (read a U64 with beU64 or leU64) at byte 7"
 ```
 
 ### `beSint`
@@ -355,6 +362,8 @@ Ok 127
 Ok -1
 > runByteParser (beSint 2) (arrayFromList [0, 1])
 Ok 1
+> runByteParser (beSint 9) (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255, 254])
+Ok -2
 ```
 
 ### `beFloat64`
@@ -381,7 +390,8 @@ leUint n
 
 An unsigned integer of `n` bytes, least significant byte first.
 
-Fails when fewer than `n` bytes remain.
+Fails when fewer than `n` bytes remain, and when the value is larger than
+`Int` holds, which needs eight bytes or more; `leU64` reads any eight.
 
 ```medaka
 > runByteParser (leUint 2) (arrayFromList [2, 1])
@@ -426,6 +436,93 @@ A 64-bit IEEE 754 float from eight bytes, least significant byte first.
 Ok 1.5
 > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 192])
 Ok -2.0
+```
+
+## Fixed-width unsigned readers
+
+### `beU16`
+
+```
+beU16 : ByteParser U16
+```
+
+A `U16` from two bytes, most significant byte first. The inverse of
+`bytebuilder.emitU16BE`.
+
+```medaka
+> runByteParser beU16 (arrayFromList [1, 2])
+Ok 258
+```
+
+### `beU32`
+
+```
+beU32 : ByteParser U32
+```
+
+A `U32` from four bytes, most significant byte first. The inverse of
+`bytebuilder.emitU32BE`.
+
+```medaka
+> runByteParser beU32 (arrayFromList [255, 255, 255, 255])
+Ok 4294967295
+```
+
+### `beU64`
+
+```
+beU64 : ByteParser U64
+```
+
+A `U64` from eight bytes, most significant byte first. The inverse of
+`bytebuilder.emitU64BE`. Every eight-byte value fits, so this never
+fails for want of range.
+
+```medaka
+> runByteParser beU64 (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255])
+Ok 18446744073709551615
+```
+
+### `leU16`
+
+```
+leU16 : ByteParser U16
+```
+
+A `U16` from two bytes, least significant byte first. The inverse of
+`bytebuilder.emitU16LE`.
+
+```medaka
+> runByteParser leU16 (arrayFromList [2, 1])
+Ok 258
+```
+
+### `leU32`
+
+```
+leU32 : ByteParser U32
+```
+
+A `U32` from four bytes, least significant byte first. The inverse of
+`bytebuilder.emitU32LE`.
+
+```medaka
+> runByteParser leU32 (arrayFromList [4, 3, 2, 1])
+Ok 16909060
+```
+
+### `leU64`
+
+```
+leU64 : ByteParser U64
+```
+
+A `U64` from eight bytes, least significant byte first. The inverse of
+`bytebuilder.emitU64LE`.
+
+```medaka
+> runByteParser leU64 (arrayFromList [21, 124, 74, 127, 185, 121, 55, 158])
+Ok 11400714819323198485
 ```
 
 ## Running a parser

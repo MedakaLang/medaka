@@ -1067,6 +1067,7 @@ freshenNodeCells : Expr -> Expr
 freshenNodeCells (EBinOp op a b r) = EBinOp op a b (Ref !r)
 freshenNodeCells (EUnOp op a r) = EUnOp op a (Ref !r)
 freshenNodeCells (ENumLit n fr rr lx) = ENumLit n (Ref !fr) (Ref !rr) lx
+freshenNodeCells (EWideLit hi lo rr lx) = EWideLit hi lo (Ref !rr) lx
 freshenNodeCells (EFieldAccess e0 n r) = EFieldAccess e0 n (Ref !r)
 freshenNodeCells (EIndex e0 i r) = EIndex e0 i (Ref !r)
 freshenNodeCells (ESlice e0 lo hi incl r) = ESlice e0 lo hi incl (Ref !r)

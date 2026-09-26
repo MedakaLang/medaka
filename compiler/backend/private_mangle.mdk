@@ -1680,6 +1680,7 @@ renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
 -- `EVarAt` is handled above, not here: it carries a renameable NAME (see its arm).
 renameScoped _ _ (e@(ELit _)) = e
 renameScoped _ _ (e@(ENumLit _ _ _ _)) = e
+renameScoped _ _ (e@(EWideLit _ _ _ _)) = e
 renameScoped _ _ (e@(EMethodRef _)) = e
 renameScoped _ _ (e@(EDictApp _)) = e
 renameScoped _ _ (e@(ESection (SecBare _))) = e

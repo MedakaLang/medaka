@@ -18,6 +18,7 @@
 -- forms, and the rest of the operator ladder come in later slices.
 
 import frontend.ast.{
+  intMinLiteralMsg,
   DeriveRef(..),
   Lit(..),
   Ty(..),
@@ -542,6 +543,7 @@ exprToPat (ELit l) = PLit l
 -- PLAN.md #11 §0.4: an integer in pattern (binding-LHS) position stays a
 -- monomorphic `Int` pattern; only EXPRESSION-position integers go polymorphic.
 exprToPat (ENumLit n _ _ _) = PLit (LInt n)
+exprToPat (EWideLit hi lo _ _) = PLit (LU64 hi lo)
 exprToPat (ETuple es) = PTuple (map exprToPat es)
 exprToPat (EListLit es) = PList (map exprToPat es)
 exprToPat (EBinOp "::" a b _) = PCons (exprToPat a) (exprToPat b)
@@ -679,12 +681,14 @@ parseMul =
 --
 -- A `TInt` carrying exactly `intMinBound` can ONLY have come from the digit
 -- string 2^62 (every admissible smaller magnitude parses non-negative), so the
--- value is an exact discriminator and needs no extra token.  Every site that
--- consumes a `TInt` in POSITIVE position rejects it (`intLitTooBigMsg`); the
--- negation sites consume the token themselves and keep the value as-is —
--- `negate intMinBound` wraps back to `intMinBound`, which is the wanted number.
--- Rejection is FATAL: an enclosing `many (appArg …)` would otherwise swallow a
--- recoverable failure and the user would get "unexpected INT" instead.
+-- value is an exact discriminator and needs no extra token.  In a PATTERN the
+-- positive 2^62 is rejected (`intLitTooBigMsg`); in an EXPRESSION it is the wide
+-- literal it spells (`intMinAsWide`), which only a `U64` accepts, so at `Int` the
+-- typechecker rejects it with the same text.  The negation sites consume the token
+-- themselves and keep the value as-is — `negate intMinBound` wraps back to
+-- `intMinBound`, which is the wanted number.  Rejection is FATAL: an enclosing
+-- `many (appArg …)` would otherwise swallow a recoverable failure and the user
+-- would get "unexpected INT" instead.
 --
 -- Written as arithmetic rather than as the literal `-4611686018427387904` so
 -- that the constant does not depend on the very rule it defines.
@@ -710,7 +714,26 @@ isIntMinLit n = n == intMinLit
 --     "(max magnitude 2^62)" and must NOT get this help: for a literal that far
 --     out of range the `-` advice is useless, since no sign makes it fit.
 intLitTooBigMsg : String
-intLitTooBigMsg = "integer literal too large for Int (max 4611686018427387903)"
+intLitTooBigMsg = intMinLiteralMsg
+
+-- A literal above 2^62 (`TWideInt`) is a `U64` literal or nothing: no sign makes
+-- it fit `Int`, and a literal PATTERN is typed `Int`/`U8`/`U16`/`U32` only
+-- (INTEGER-TYPES-DESIGN §3.2 item 5; `U64` patterns are not built).  Both
+-- messages keep the "integer literal too large" prefix `parseErrCode` keys
+-- `L-INT-OVERFLOW` on.
+wideNegMsg : String -> String
+wideNegMsg lx =
+  "integer literal too large for Int (-\{lx} is below Int's minimum, -4611686018427387904, and a U64 is never negative)"
+
+widePatMsg : String -> String
+widePatMsg lx =
+  "integer literal too large for a pattern (\{lx}): a literal pattern is an Int, U8, U16 or U32; match a U64 in a guard, `x if x == \{lx}`"
+
+-- 2^62 written without a sign is the one `TInt` that is really a wide literal:
+-- the lexer admits it for `-4611686018427387904`'s sake and it has wrapped to
+-- `intMinLit`, so the positive position rebuilds it as the halves of 2^62.
+intMinAsWide : String -> Expr
+intMinAsWide lx = EWideLit 1073741824 0 (Ref RNone) lx
 
 -- unary minus, tighter than `*` (a leading `-` in operand position)
 parseUnary : Parser Expr
@@ -744,6 +767,7 @@ negUnaryFor (TInt n lx)
     advance
     advance
     deferPure (ENumLit n (Ref None) (Ref RNone) ("-" ++ lx)))
+negUnaryFor (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
 negUnaryFor _ = defer
   advance
   e <- parseUnary
@@ -808,6 +832,7 @@ negLitArgFor TMinusTight (TInt n lx) = defer
   advance
   advance
   deferPure (ENumLit (negate n) (Ref None) (Ref RNone) ("-" ++ lx))
+negLitArgFor TMinusTight (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
 negLitArgFor TMinusTight (TFloat f) = defer
   advance
   advance
@@ -819,6 +844,7 @@ negLitArgFor _ _ = failP "not a tight negative literal argument"
 headIsNumeric : Expr -> Bool
 headIsNumeric (ELoc _ e) = headIsNumeric e
 headIsNumeric (ENumLit _ _ _ _) = True
+headIsNumeric (EWideLit _ _ _ _) = True
 headIsNumeric (ELit (LInt _)) = True
 headIsNumeric (ELit (LFloat _)) = True
 headIsNumeric _ = False
@@ -971,8 +997,9 @@ parseAtomRaw : Parser Expr
 parseAtomRaw = defer
   t <- peekP
   match t
-    TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
+    TInt n lx if isIntMinLit n => emit (intMinAsWide lx)
     TInt n lx => emit (ENumLit n (Ref None) (Ref RNone) lx)
+    TWideInt hi lo lx => emit (EWideLit hi lo (Ref RNone) lx)
     TFloat f => emit (ELit (LFloat f))
     TString s => emit (ELit (LString s))
     TChar s => emit (ELit (LChar s))
@@ -1871,6 +1898,7 @@ parsePatAtomRaw = defer
     TUnderscore => emit PWild
     TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
     TInt n _ => intPatRest (LInt n)
+    TWideInt _ _ lx => fatalP (widePatMsg lx)
     TMinus => negIntPat
     TMinusTight => negIntPat
     TFloat f => emit (PLit (LFloat f))
@@ -1968,6 +1996,7 @@ intBoundFor : Token -> Parser Lit
 intBoundFor (TInt n _)
   | isIntMinLit n = fatalP intLitTooBigMsg
 intBoundFor (TInt n _) = emit (LInt n)
+intBoundFor (TWideInt _ _ lx) = fatalP (widePatMsg lx)
 intBoundFor TMinus = defer
   advance
   t <- peekP

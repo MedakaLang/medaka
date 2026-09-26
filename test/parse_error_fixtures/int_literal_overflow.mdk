@@ -1,5 +1,6 @@
--- Lexer error: an integer literal whose magnitude exceeds 2^62 is rejected
--- (the 63-bit tagged-Int range is [-2^62, 2^62-1]; the lexer admits magnitude
--- 2^62 for the negative minimum -2^62 and rejects 2^62+1 = 4611686018427387905).
--- Self-hosted reference: integer literal too large for Int (max magnitude 2^62)
-x = 4611686018427387905
+-- Lexer error: an integer literal whose magnitude reaches 2^64 fits no integer
+-- type and is rejected by the lexer.  A magnitude from 2^62 + 1 up to 2^64 - 1
+-- is a wide literal: it lexes, and the typechecker accepts it only at `U64`
+-- (INTEGER-TYPES-DESIGN §3.2 item 4), so the lexer's cap is now 2^64.
+-- Self-hosted reference: integer literal too large for U64 (max 2^64 - 1)
+x = 18446744073709551616

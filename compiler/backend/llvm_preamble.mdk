@@ -44,6 +44,7 @@ preambleLines = [
   "declare i64 @mdk_num_div(i64, i64)",
   "declare i64 @mdk_num_mod(i64, i64)",
   "declare void @mdk_print_num(i64)",
+  "declare void @mdk_print_u64(i64)",
   "declare i64 @mdk_str_lit(ptr, i64)",
   "declare void @mdk_print_str(i64)",
   "declare i64 @mdk_int_to_string(i64)",

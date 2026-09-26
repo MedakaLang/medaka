@@ -1247,25 +1247,15 @@ that folded Module 22; the one-file `result` module is deleted and there is no
 It sits with `Result`/`isOk`/`isErr`/`resultOr`/`mapErr` (`resultOr` was
 `fromResultOr` until #2306 D-1).
 
-## Module 24 — `bits64` ✅ implemented (2026-07-15, issue #223)
+## Module 24 — `bits64` — retired (2026-09-25, N3 of epic #3417)
 
-`stdlib/bits64.mdk` — 64-bit-**unsigned** arithmetic emulated over the 63-bit
-`Int` fixnum (which wraps and cannot hold a `uint64`). A `U64` is a 4-tuple of
-16-bit limbs `(Int, Int, Int, Int)`, least-significant first — so tuple
-instances already live in `core` and the import is near-free (no new `data`
-type / instance surface). Mirrors the limb algorithms the compiler hand-rolled
-in `compiler/eval/eval.mdk` for SplitMix64 / FNV-1a (issue #98). Pure, no
-externs (uses the `bitAnd`/`bitOr`/`bitXor`/`shiftLeft`/`shiftRight` prelude
-primitives). Not auto-prelude — `import bits64`.
-
-**Exports:** `U64` (type alias), `zero`/`one`/`ofInt` (construction; it is
-`ofInt` and not `fromInt` because the latter is the `Num` interface method and a
-top-level binding of that name poisons module inference),
-`isZero`/`cmp64` (predicates; `cmp64` → `Ordering`), `add64`/`sub64`/`mulLow64`
-(arithmetic mod 2^64, wrapping), `and64`/`or64`/`xor64` (bitwise),
-`shl64`/`shr64` (logical shifts by `n ∈ [0,63]`), `mod64` (exact modulo for any
-nonzero divisor up to 2^64−1, via schoolbook bit-by-bit long division). 29
-doctests (incl. wraparound + long-division cases).
+The `bits64` module emulated a 64-bit unsigned word as four 16-bit limbs over
+the 63-bit `Int` (issue #223). The builtin `U64` and the `u64` module
+(`docs/design/INTEGER-TYPES-DESIGN.md` §5, §6.2) replace it, and the module is
+deleted; its type's generic tuple `Ord` (#2311) and its missing operations
+(#432) went with it. The interpreter's own SplitMix64 and FNV-1a, its only
+importer, moved to the interpreter's two-halves `U64` arithmetic
+(`compiler/eval/u64_halves.mdk`).
 
 ## Module 25 — `args` ✅ implemented (2026-08-31, issue #2355)
 

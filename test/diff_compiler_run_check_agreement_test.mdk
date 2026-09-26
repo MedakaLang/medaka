@@ -227,7 +227,9 @@ test "check, run and build agree with every fixture's pinned verdict and value" 
 {- | The W-QUIETER probe for `U8`/`U16`/`U32` (epic #3417, #3420, #3421,
    #3415; `docs/design/INTEGER-TYPES-DESIGN.md` §10) over
    `test/fixed_width_refusal_fixtures`, including the byte APIs that take a
-   `U8`: `emitU8 300`, `setInPlace 0 256` and `fill 256`.
+   `U8`: `emitU8 300`, `setInPlace 0 256` and `fill 256`. `U64` (#3422,
+   #3423) adds a negative literal at `U64`, a wide literal (above 2^62) at
+   every type other than `U64`, and a literal pattern on a `U64`.
 
    A fixed-width value outside its range has exactly two legal fates: a
    ground literal is refused at compile time by `check`, `run` and `build`
@@ -299,7 +301,48 @@ compileRefusals = [
     "fromu8array_literal_300",
     literalRefused "fromu8array_literal_300.mdk:6:" "300" "U8 (0..255)",
   ),
+  (
+    "literal_u64_negative",
+    literalRefused "literal_u64_negative.mdk:5:" "-1" u64Range,
+  ),
+  (
+    "wide_literal_int",
+    literalRefused "wide_literal_int.mdk:4:" "0xFFFFFFFFFFFFFFFF" "Int",
+  ),
+  (
+    "wide_literal_defaulted",
+    literalRefused "wide_literal_defaulted.mdk:3:" "0x8000000000000000" "Int",
+  ),
+  (
+    "wide_literal_u32",
+    literalRefused "wide_literal_u32.mdk:5:" "0xFFFFFFFFFFFFFFFF" "U32",
+  ),
+  (
+    "wide_literal_generic",
+    literalRefused
+      "wide_literal_generic.mdk:6:"
+      "0xFFFFFFFFFFFFFFFF"
+      "a type that is not known to be U64",
+  ),
+  (
+    "wide_literal_negated",
+    literalRefused "wide_literal_negated.mdk:5:" "-0xFFFFFFFFFFFFFFFF" u64Range,
+  ),
+  (
+    "wide_literal_too_large",
+    [
+      "wide_literal_too_large.mdk:4:",
+      "integer literal too large for U64 (max 2^64 - 1)",
+    ],
+  ),
+  (
+    "pattern_u64_literal",
+    ["pattern_u64_literal.mdk:", "a literal pattern cannot match a U64"],
+  ),
 ]
+
+u64Range : String
+u64Range = "U64 (0..18446744073709551615)"
 
 fromIntRefused : String -> String -> RuntimeOutcome
 fromIntRefused n range = Aborts "E-PANIC" "fromInt: \{n} does not fit \{range}"
@@ -311,6 +354,7 @@ runtimeRefusals = [
   ("fromint_u8_computed_300", fromIntRefused "300" "U8 (0..255)"),
   ("fromint_u8_negative", fromIntRefused "-2" "U8 (0..255)"),
   ("fromint_u32_2p32", fromIntRefused "4294967296" "U32 (0..4294967295)"),
+  ("fromint_u64_negative", fromIntRefused "-1" u64Range),
   ("generic_literal_u8_300", fromIntRefused "300" "U8 (0..255)"),
   ("emitu8_computed_300", fromIntRefused "300" "U8 (0..255)"),
   ("setinplace_computed_256", fromIntRefused "256" "U8 (0..255)"),
@@ -321,6 +365,11 @@ runtimeRefusals = [
   (
     "bytes_in_range_control",
     Prints "[|255, 200|]\n[|255, 7|]\nBytes \"1fff\"",
+  ),
+  (
+    "u64_in_range_control",
+    Prints
+      "[18446744073709551615, 4611686018427387904, 0]\n4611686018427387903\n(Some 4611686018427387903, None)\nNone\n-4611686018427387904\n-4611686018427387904",
   ),
   (
     "in_range_control",
