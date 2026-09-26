@@ -56,7 +56,7 @@ main = driveModules runEmit
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let (coreE, modulesE, _, _, _) =
+  let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls coreDecls modules
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let allDecls0 = coreD ++ flatMap snd modules2

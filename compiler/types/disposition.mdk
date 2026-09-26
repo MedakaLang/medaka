@@ -1,0 +1,161 @@
+-- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
+-- input): for every accepted instance, whether each method of its interface is
+-- SUPPLIED by the impl or INHERITED from the interface's default body.  No
+-- method-less slot is ever represented here — an impl that omits a required
+-- method with no default is rejected upstream (M1), never given an `Absent` row.
+--
+-- Depends only on `types.repr`'s identity types, so `compiler/ir/*`,
+-- `compiler/eval/*` and `compiler/backend/*` can import this module without
+-- reaching `types.typecheck` — the producer (`buildDispositions`) lives there;
+-- this module is the shared carrier plus the installed lookup, mirroring
+-- `types/route_key.mdk`'s `evidenceRef`/`installEvidence`.
+import types.repr.{IfaceRef(..)}
+import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
+
+-- An instance's within-compile identity: the declaring module id and a
+-- whole-graph-unique ordinal.  Mirrors `types.typecheck`'s `InstRef` (`mid`,
+-- `seq` — see that type's own header for the uniqueness argument) as a
+-- separate, minimal carrier rather than an import of it: `InstRef` is
+-- typecheck-private, and importing it here would be the exact import cycle
+-- this module exists to avoid.
+public export data InstId = InstId String Int
+
+export
+instIdMid : InstId -> String
+instIdMid (InstId m _) = m
+
+export
+instIdSeq : InstId -> Int
+instIdSeq (InstId _ s) = s
+
+-- One method slot of one accepted instance.  `iface` is carried on both arms so
+-- a reader never has to re-derive which interface's default filled a slot from
+-- context — two differently-named interfaces sharing a method spelling on one
+-- instance must stay two distinct rows (#1265).
+public export data MethodDisposition =
+  | Supplied {
+    instance : InstId,
+    iface : IfaceRef,
+    method : String,
+  }
+  | InheritedDefault { instance : InstId, iface : IfaceRef, method : String }
+
+export
+dispositionInstance : MethodDisposition -> InstId
+dispositionInstance (Supplied { instance = i }) = i
+dispositionInstance (InheritedDefault { instance = i }) = i
+
+export
+dispositionIface : MethodDisposition -> IfaceRef
+dispositionIface (Supplied { iface = ir }) = ir
+dispositionIface (InheritedDefault { iface = ir }) = ir
+
+export
+dispositionMethod : MethodDisposition -> String
+dispositionMethod (Supplied { method = m }) = m
+dispositionMethod (InheritedDefault { method = m }) = m
+
+-- The index key: instance identity + method name.  `seq` alone is already
+-- whole-graph-unique; `mid` rides along only so a rendered key stays legible
+-- without a second lookup.
+--
+-- > dispositionKey (InstId "dog" 3) "speak"
+-- "dog#3@speak"
+export
+dispositionKey : InstId -> String -> String
+dispositionKey inst method =
+  "\{instIdMid inst}#\{intToString (instIdSeq inst)}@\{method}"
+
+export data DispositionTable = DispositionTable {
+  dtRows : List MethodDisposition,
+  dtIndex : OrdMap MethodDisposition,
+}
+
+export
+emptyDispositionTable : DispositionTable
+emptyDispositionTable = DispositionTable { dtRows = [], dtIndex = omEmpty }
+
+export
+dispositionRows : DispositionTable -> List MethodDisposition
+dispositionRows table = table.dtRows
+
+-- Fold [rows] into the table's map index, panicking on the first duplicate
+-- (instance, method) key — two rows publishing the same slot is a producer
+-- bug, never a case with a policy: `dispositionLookup` below must answer with
+-- exactly one row or none.
+export
+buildDispositionTable : List MethodDisposition -> DispositionTable
+buildDispositionTable rows =
+  DispositionTable { dtRows = rows, dtIndex = insertDispositions rows omEmpty }
+
+insertDispositions : List MethodDisposition ->
+  OrdMap MethodDisposition ->
+  OrdMap MethodDisposition
+insertDispositions [] acc = acc
+insertDispositions (d :: rest) acc =
+  let key = dispositionKey (dispositionInstance d) (dispositionMethod d)
+  match omLookup key acc
+    Some _ => panic "disposition table: two rows published for \{key}"
+    None => insertDispositions rest (omInsert key d acc)
+
+-- A map lookup, never a List scan.  (`MethodDisposition` derives no `Debug`,
+-- so this is exercised as a `test` in `disposition_test.mdk` rather than a
+-- doctest that would print one.)
+export
+dispositionLookup : InstId ->
+  String ->
+  DispositionTable ->
+  Option MethodDisposition
+dispositionLookup inst method table =
+  omLookup (dispositionKey inst method) table.dtIndex
+
+-- Bare-name comparison only: this module carries no ordinal-scoped visibility
+-- of its own (unlike `types.typecheck`'s `ceLookupAt`), so it cannot
+-- discriminate two same-spelled interfaces the way the producer can. Used only
+-- to confirm a lookup answered with the SAME interface the caller expected, not
+-- to select among candidates.
+ifaceRefSameSpelling : IfaceRef -> IfaceRef -> Bool
+ifaceRefSameSpelling a b = a.irName == b.irName
+
+-- Assert every one of [expected] (instance, iface, method) triples has exactly
+-- one row in [table], of the same interface. The production producer can never
+-- omit a slot it just built by construction, so this exists for the negative
+-- case: a test exercising this validator on a hand-built table (one row
+-- deliberately dropped) must see it panic, not silently pass.
+export
+validateDispositionTable : List (InstId, IfaceRef, String) ->
+  DispositionTable ->
+  Unit
+validateDispositionTable [] _ = ()
+validateDispositionTable ((inst, iface, method) :: rest) table =
+  let key = dispositionKey inst method
+  let _ = match dispositionLookup inst method table
+    None => panic "disposition table: missing disposition for \{key}"
+    Some row =>
+      if ifaceRefSameSpelling iface (dispositionIface row) then
+        ()
+      else
+        panic "disposition table: \{key} answered by a different interface"
+  validateDispositionTable rest table
+
+-- ── the installed table ────────────────────────────────────────────────────
+-- No production reader exists yet (X-E, #1403, is the first). `elaborateModules`
+-- installs one every elaboration so a future reader need not thread the table
+-- through every call site by hand, exactly as `installEvidence` does today.
+dispositionsRef : Ref (Option DispositionTable)
+dispositionsRef = Ref None
+
+-- Replace the installed table with this elaboration's. Called once per
+-- elaboration, so the table never outlives the program it describes.
+export
+installDispositions : DispositionTable -> Unit
+installDispositions table = dispositionsRef := Some table
+
+-- A miss means no elaboration has published one — loud, mirroring
+-- `route_key.mdk`'s `evDictRoutes` `None` arm at `evidenceRef`, never a silent
+-- empty table.
+export
+installedDispositions : Unit -> DispositionTable
+installedDispositions _ = match !dispositionsRef
+  None => panic "disposition table: no elaboration has published one"
+  Some table => table
