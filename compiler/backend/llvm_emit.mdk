@@ -4979,15 +4979,78 @@ emitArithW e env op l r =
         let res = freshReg e
         let _ = emit e "  \{res} = call i64 @\{numOp op}(i64 \{lv}, i64 \{rv})"
         (res, LTNum)
-      _ =>
+      _ => emitIntArithChecked e op lv rv
+
+-- `Int` arithmetic traps: a result outside -2^62 .. 2^62 - 1 calls
+-- @mdk_int_overflow (E-INT-OVERFLOW) instead of wrapping.  `+` and `-` work on
+-- the tagged words: (2a+1) + 2b = 2(a+b)+1, so the 64-bit add overflows exactly
+-- when the 63-bit sum does and its result is already tagged; `*` multiplies the
+-- untagged a by 2b and sets the tag bit.  `/` overflows only at intMinBound / -1,
+-- caught by retagging the quotient with an overflow-checked add; `%` never does.
+emitIntArithChecked : Emit -> String -> String -> String -> (String, LTy)
+emitIntArithChecked e op lv rv =
+  if op == "/" || op == "%" then
+    let li = untagInt e lv
+    let ri = untagInt e rv
+    let _ = emitDivZeroGuard e op ri
+    let q = freshReg e
+    let _ = emit e "  \{q} = \{intOp op} i64 \{li}, \{ri}"
+    if op == "%" then
+      (tagInt e q, LTInt)
+    else
+      (setTagBit e (emitOverflowChecked e "sadd" q q "3" lv rv), LTInt)
+  else
+    let r2 = freshReg e
+    let _ = emit e "  \{r2} = sub i64 \{rv}, 1"
+    match op
+      "*" =>
         let li = untagInt e lv
-        let ri = untagInt e rv
-        if op == "/" || op == "%" then
-          emitIntDivZeroChecked e op li ri
-        else
-          let res = freshReg e
-          let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
-          (tagInt e res, LTInt)
+        (setTagBit e (emitOverflowChecked e "smul" li r2 "2" lv rv), LTInt)
+      "+" => (emitOverflowChecked e "sadd" lv r2 "0" lv rv, LTInt)
+      _ => (emitOverflowChecked e "ssub" lv r2 "1" lv rv, LTInt)
+
+-- an even word with the Int tag bit set: the product 2ab, or the doubled
+-- quotient, becomes the tagged 2ab+1.
+setTagBit : Emit -> String -> String
+setTagBit e w =
+  let res = freshReg e
+  let _ = emit e "  \{res} = or i64 \{w}, 1"
+  res
+
+-- `a <op> b` through llvm.<intrinsic>.with.overflow.i64, yielding the result on
+-- the ok label.  On overflow the cold block calls @mdk_int_overflow with the
+-- operator code (0 `+`, 1 `-`, 2 `*`, 3 `/`, 4 negation) and the operands,
+-- untagged there from the TAGGED words `ta`/`tb` so the hot path pays nothing.
+emitOverflowChecked : Emit ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String
+emitOverflowChecked e intrinsic a b code ta tb =
+  let pair = freshReg e
+  let _ =
+    emit
+      e
+      "  \{pair} = call { i64, i1 } @llvm.\{intrinsic}.with.overflow.i64(i64 \{a}, i64 \{b})"
+  let v = freshReg e
+  let _ = emit e "  \{v} = extractvalue { i64, i1 } \{pair}, 0"
+  let o = freshReg e
+  let _ = emit e "  \{o} = extractvalue { i64, i1 } \{pair}, 1"
+  let n = intToString (freshLocal e)
+  let ovfL = "intovf" ++ n
+  let okL = "intok" ++ n
+  let _ = emit e "  br i1 \{o}, label %\{ovfL}, label %\{okL}"
+  let _ = emit e (ovfL ++ ":")
+  let ua = untagInt e ta
+  let ub = untagInt e tb
+  let _ =
+    emit e "  call void @mdk_int_overflow(i64 \{code}, i64 \{ua}, i64 \{ub})"
+  let _ = emit e "  unreachable"
+  let _ = emit e (okL ++ ":")
+  v
 
 -- Integer `/` or `%`: guard the divisor against zero before the hardware
 -- sdiv/srem.  A zero divisor is UB in LLVM (the div is elided / yields garbage
@@ -4997,7 +5060,8 @@ emitArithW e env op l r =
 -- guard.  No source location is baked in — Core IR carries none, so the native
 -- trap is the interpreter's message MINUS `file:L:C:` (a located trap is a
 -- follow-on).  On a nonzero divisor the ok-branch runs the original sdiv/srem
--- unchanged, so valid-division output is byte-identical.
+-- unchanged, so valid-division output is byte-identical.  The fixed-width types'
+-- `/` and `%` use it as is: two non-negative in-range operands never overflow.
 emitIntDivZeroChecked : Emit -> String -> String -> String -> (String, LTy)
 emitIntDivZeroChecked e op li ri =
   let _ = emitDivZeroGuard e op ri
@@ -5284,11 +5348,9 @@ emitUn e env "-" x =
       let r = freshReg e
       let _ = emit e "  \{r} = sub i64 0, \{x}"
       (boxU64 e r, LTU64)
-    _ =>
-      let i = untagInt e v
-      let r = freshReg e
-      let _ = emit e "  \{r} = sub i64 0, \{i}"
-      (tagInt e r, LTInt)
+    -- Int negation traps at intMinBound, whose negation is 2^62.  On the tagged
+    -- word, 2 - (2a+1) = 2(-a)+1, which overflows exactly there.
+    _ => (emitOverflowChecked e "ssub" "2" v "4" v "1", LTInt)
 emitUn e _ op _ = gapE e ("unsupported unary op " ++ op)
 
 -- `if`: lower via an alloca slot (memory, not phi) so a branch's own internal

@@ -1112,6 +1112,13 @@ export
 isFixedWidthHead : String -> Bool
 isFixedWidthHead h = isSome (fixedWidthMask h)
 
+-- A literal's value negated, for the parser's and typechecker's `-N` forms.  The
+-- lexer spells the magnitude 2^62 as `intMinBound` (it has no positive `Int`), and
+-- `-2^62` is that same value, so it negates to itself; `Int` negation of it traps.
+export
+negateLiteral : Int -> Int
+negateLiteral n = if n == intMinBound then n else 0 - n
+
 -- `U64` (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2) is NOT a fixed-width head in
 -- the sense above: a 64-bit value does not fit `Int`'s tagged word, so it is a boxed
 -- cell on every engine, and nothing that `fixedWidthMask` licenses (mask after the

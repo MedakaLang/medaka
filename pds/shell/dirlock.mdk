@@ -186,9 +186,9 @@ beatMoves dir n seen remaining =
 -- that does not parse says so rather than reporting a number derived from
 -- nothing.
 beatAge : String -> Int -> String
-beatAge text nowMs = match toInt (trim text)
+beatAge text nowMs = match andThen (toInt (trim text)) (checkedSub nowMs)
   None => "at a time this file does not record"
-  Some beatMs => "\{intToString ((nowMs - beatMs) / 1000)}s ago"
+  Some ageMs => "\{intToString (ageMs / 1000)}s ago"
 
 {- | The lock directory, made to exist.
 

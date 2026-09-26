@@ -48,6 +48,7 @@
 import frontend.ast.{
   Lit(..),
   isFixedWidthHead,
+  negateLiteral,
   fixedWidthMask,
   isU64Head,
   isUnsignedHead,
@@ -16460,8 +16461,8 @@ recordNegatedLitRange t (ELoc _ e) = recordNegatedLitRange t e
 recordNegatedLitRange t (ENumLit n _ _ _) =
   match perRun.value.numlitRanges.value
     (_, m, loc) :: rest if m == n =>
-      perRun.value.numlitRanges := (t, negate n, loc) :: rest
-    _ => recordNumlitRange t (negate n)
+      perRun.value.numlitRanges := (t, negateLiteral n, loc) :: rest
+    _ => recordNumlitRange t (negateLiteral n)
 recordNegatedLitRange t (EWideLit _ _ _ lx) =
   match perRun.value.wideLitRanges.value
     (_, l, pow62, _, loc) :: rest if l == lx =>

@@ -127,6 +127,7 @@ import frontend.ast.{
   EvId(..),
 }
 import types.route_key.{remapEvidence}
+import u64 as U64
 import support.util.{
   lookupAssoc,
   contains,
@@ -1376,14 +1377,21 @@ hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
 -- non-injectivity has nothing to do with the tag alphabet being small, and
 -- nothing to do with the mask width.
 -- `core_ir_lower.dictWitnessTagGuard` is what makes it loud; keep the two together.
+--
+-- The fold runs in `U64` so it wraps by definition, and the result is its low 63
+-- bits: the value the tags have always had, when `Int` itself wrapped.
 export
 hashName : String -> Int
-hashName s = hashChars (stringToChars s) 0 5381
+hashName s = U64.toIntTruncating (hashChars (stringToChars s) 0 5381)
 
-hashChars : Array Char -> Int -> Int -> Int
+hashChars : Array Char -> Int -> U64 -> U64
 hashChars cs i acc
   | i >= arrayLength cs = acc
-  | otherwise = hashChars cs (i + 1) (acc * 33 + charCode (arrayGetUnsafe i cs))
+  | otherwise =
+    hashChars
+      cs
+      (i + 1)
+      (acc * 33 + U64.truncate (charCode (arrayGetUnsafe i cs)))
 
 -- the i31-safe dict-witness tag: `hashName` masked into the low 30 bits (positive
 -- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
