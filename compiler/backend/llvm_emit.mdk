@@ -1027,6 +1027,9 @@ data Emit = Emit {
   -- the functions with a raw worker (`rawWorkerOf`), by name; built once per
   -- program, since a call site can precede its callee's define.
   rawWorkers : Ref (OrdMap RawWorker),
+  -- the top-level value bindings whose body is a literal, by name
+  -- (`collectConstGlobals`).
+  constGlobals : Ref (OrdMap Lit),
   -- how many `u32Inline` inlinings are open at the current emission point.
   inlineOpen : Ref Int,
 }
@@ -3861,7 +3864,10 @@ emitU64Raw e env (CBinPrim op l r tag)
   | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag)))
 emitU64Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU64U) => reg
-  _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
+  Some _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
+  None => match omLookup x !e.constGlobals
+    Some (LU64 hi lo) => emitU64Raw e env (CLit (LU64 hi lo))
+    _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
 emitU64Raw e env (CIf c t f) = emitU64RawIf e env c t f
 emitU64Raw e env (CBlock stmts) = emitU64RawBlock e env stmts
 emitU64Raw e env (CLet False (PVar x a) e1 e2) = match e1
@@ -4105,7 +4111,10 @@ emitU32Raw e env (CBinPrim op l r tag)
   | otherwise = untagU32 e (fst (emitExpr e env (CBinPrim op l r tag)))
 emitU32Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU32U) => reg
-  _ => untagU32 e (fst (emitExpr e env (CVar x a)))
+  Some _ => untagU32 e (fst (emitExpr e env (CVar x a)))
+  None => match omLookup x !e.constGlobals
+    Some (LInt n) => u32Const n
+    _ => untagU32 e (fst (emitExpr e env (CVar x a)))
 emitU32Raw e env (CIf c t f) = emitU32RawIf e env c t f
 emitU32Raw e env (CBlock stmts) = emitU32RawBlock e env stmts
 emitU32Raw e env (CLet False (PVar x a) e1 e2) = match e1
@@ -14123,6 +14132,16 @@ rawWorkerOf _ _ _ = None
 -- more passes re-derive each worker against the previous pass's.  Any map is
 -- sound, since every call site reads the final one; the passes only decide how
 -- many boxes are left.
+-- A top-level value binding whose body is a literal (`limbMask : U64 =
+-- 0x3ffffff`).  Read where a raw U64 or U32 is wanted, it is that literal,
+-- which LLVM folds, rather than a load of the global's word and, for a U64,
+-- of its cell's payload.
+collectConstGlobals : List CBind -> OrdMap Lit
+collectConstGlobals [] = omEmpty
+collectConstGlobals ((CBind name [CClause [] (CLit l)]) :: rest) =
+  omInsert name l (collectConstGlobals rest)
+collectConstGlobals (_ :: rest) = collectConstGlobals rest
+
 collectRawWorkers : Emit -> List CBind -> OrdMap RawWorker
 collectRawWorkers e binds =
   e.rawWorkers := collectRawWorkersPass e False binds
@@ -16355,6 +16374,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     floatFwSet = Ref [],
     floatClosureFns = Ref [],
     rawWorkers = Ref omEmpty,
+    constGlobals = Ref omEmpty,
     inlineOpen = Ref 0,
   }
   e.dictConstCache := []
@@ -16398,6 +16418,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
       implEntries
   e.floatClosureFns := collectFloatClosureFns e (fnBinds groups)
   e.rawWorkers := collectRawWorkers e (fnBinds groups)
+  e.constGlobals := collectConstGlobals (valBinds groups)
   e
 
 emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)

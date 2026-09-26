@@ -252,8 +252,13 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # that the link inlines it into reduceCarry, which survives. Its shape is
 # pinned where its definition always exists, by constant_time_reductions.sh.
 # reduceCarry gave way to canonicalizeLimbs__rw when the field moved to 5x52
-# limbs (N5): the fold/carry round and the tail call into the subtract-and-
-# select are that raw worker, which every field producer calls.
+# limbs (N5), and that raw worker gave way to feMul once a top-level U64
+# constant read in U64 code became its literal (N5): the worker is then small
+# enough that the link inlines it, and subPSelect__rw with it, into every field
+# producer. feMul is the producer the ladder calls most and survives as a
+# symbol carrying the inlined round and subtract-and-select; both workers stay
+# in the emitted-symbol list above, and constant_time_reductions.sh pins their
+# shape where their definitions always exist.
 #
 # publicPointForSecret left this list when the scalar moved to 8 x 32 limbs
 # (N5). Measured on the linked probe: -O2 now inlines it into the surviving
@@ -262,7 +267,7 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # operations it reaches still survive. It is in the emitted-symbol list above,
 # where its definition always exists.
 for symbol in \
-  mdk_lib_scalar__scSecretCandidate mdk_lib_field__canonicalizeLimbs__rw \
+  mdk_lib_scalar__scSecretCandidate mdk_lib_field__feMul \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__pointCompressed
 do require_native_symbol "$symbol"; done
