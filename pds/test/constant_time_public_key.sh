@@ -35,7 +35,11 @@ source_closure_ok() {
   # narrows through U64.toIntTruncating, the secret byte scan's validity and
   # aggregate bits combine through bitAnd, no source branch was added, and the
   # IR checks below pass. constant_time_reductions.sh pins the helper shape.
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '2182991326 35966' ] || return 1
+  # Re-audited when the scalar moved to 8 x 32 limbs (N5): every secret-path
+  # scalar helper is straight-line U64 code with literal limb indices and no
+  # branch; the secret-ingress lines pinned below are unchanged, and the IR
+  # checks below were re-derived for the straight-line helpers.
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '1303044162 44815' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '1538248655 30240' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
@@ -215,8 +219,8 @@ pass 'native secret ingress composes to the expected compressed public key'
 for symbol in \
   mdk_lib_sign__secretKeyFromBytes mdk_lib_sign__publicKeyForSecret mdk_lib_sign__publicKeyCompressed \
   mdk_lib_scalar__scSecretCandidate mdk_lib_scalar__scanSecretBytes \
-  mdk_lib_scalar__secretBelowNBorrow mdk_lib_scalar__secretNonzeroBorrow \
-  mdk_lib_scalar__reduceFixed mdk_lib_scalar__selectNCandidate \
+  mdk_lib_scalar__secretBelowNBit mdk_lib_scalar__secretNonzeroBit \
+  mdk_lib_scalar__reduce256 mdk_lib_scalar__subNSelect__rw \
   mdk_lib_field__reduceCarry mdk_lib_field__feZeroBorrow mdk_lib_field__feSelectGo \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__secretAffine \
@@ -227,13 +231,13 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # At -O2 the three public sign wrappers are intentionally inlined into main;
 # their emitted bodies remain closed above.  These non-inlined leaves prove the
 # final linked topology still contains ingress and the ladder's complete path.
-# secretNonzeroBorrow, reduceFixed and secretAffine are deliberately NOT in this
+# secretNonzeroBit, reduce256 and secretAffine are deliberately NOT in this
 # list.  All three are branch-free or public-index-bounded, so -O2 is free to
 # unroll and inline them, and whether it does is a cost-threshold artifact
 # rather than anything about secrets.  Their shapes are pinned structurally in
 # the IR below, where the definitions always exist.
-# scanSecretBytes and secretBelowNBorrow left this list when `medaka build`
-# linked the runtime through ThinLTO (#3374), which inlines both into
+# scanSecretBytes and secretBelowNBit are not in it either: `medaka build`
+# links the runtime through ThinLTO (#3374), which inlines both into
 # scSecretCandidate. What is lost is only the claim that each is a distinct
 # function in the linked binary. Their shape is still caught where the
 # definitions always exist: both are in the emitted-symbol list above, the
@@ -244,38 +248,43 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # to U64 expressions over Int storage (#3427): the round is now small enough
 # that the link inlines it into reduceCarry, which survives. Its shape is
 # pinned where its definition always exists, by constant_time_reductions.sh.
+#
+# publicPointForSecret left this list when the scalar moved to 8 x 32 limbs
+# (N5). Measured on the linked probe: -O2 now inlines it into the surviving
+# sign wrapper publicKeyForSecret and keeps secretAffine as a symbol instead,
+# the reverse of the split before; the ladder and both complete point
+# operations it reaches still survive. It is in the emitted-symbol list above,
+# where its definition always exists.
 for symbol in \
   mdk_lib_scalar__scSecretCandidate mdk_lib_field__reduceCarry \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
-  mdk_lib_secp256k1__pointDoubleComplete \
-  mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
+  mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__pointCompressed
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains ingress and complete-ladder helper topology'
 check_ir_closure
 
-# secretNonzeroBorrow walks the limbs to fold a nonzero test.  What must hold is
-# that every branch it takes is on the public limb index and every secret limb
-# flows through straight-line arithmetic; whether the linker keeps it as a call
-# is the optimizer's business.  Pin that shape in the emitted IR, where the
-# helper always exists.
-extract_ir_function secretNonzeroBorrow "$IR" "$WORK/secretNonzeroBorrow.ll"
-# Two branches since Int traps (#3377): the loop test and the overflow check
-# of `i + 1`. branches_public proves both test only the limb index.
-[ "$(grep -c 'br i1' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 2 ] || fail 'secret nonzero fold branches exactly twice'
-grep -q '^  %t0 = icmp sge i64 %arg1, ' "$WORK/secretNonzeroBorrow.ll" || fail 'secret nonzero fold branches on its public limb index'
-branches_public "$WORK/secretNonzeroBorrow.ll" 1 || fail 'every secret nonzero fold branch tests only its public limb index'
-[ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 0 ] || fail 'secret nonzero fold makes no value comparisons'
-[ "$(grep -F -c 'call i64 @mdk_lib_scalar__secretNonzeroBorrow(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold recurses exactly once per limb'
-pass 'emitted secret nonzero fold branches only on its public limb index'
-
-# reduceFixed is an unconditional fixed schedule: the reduction must run the same
-# carry/fold rounds regardless of the value being reduced.  That is the property,
-# not its survival as a distinct linked symbol.
-extract_ir_function reduceFixed "$IR" "$WORK/reduceFixed.ll"
-[ "$(grep -c 'br i1' "$WORK/reduceFixed.ll" || true)" -eq 0 ] || fail 'fixed reduction is unconditional'
-[ "$(grep -F -c '@mdk_lib_scalar__carryAllUnchecked(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
-[ "$(grep -F -c '@mdk_lib_scalar__foldOnce(' "$WORK/reduceFixed.ll" || true)" -eq 4 ] || fail 'fixed reduction runs four folds'
-pass 'emitted fixed reduction runs its schedule unconditionally'
+# The scalar's secret-ingress bits and its reduction are straight-line since
+# the scalar moved to 8 x 32 limbs (N5): secretBelowNBit is one fixed borrow
+# chain, secretNonzeroBit folds the limbs through zeroLimbsBit, reduce256 hands
+# the eight limbs to subNSelect, and subNSelect subtracts n and blends every
+# limb arithmetically. What must hold is that none of them branches at all and
+# every limb is read at a literal index; whether the linker keeps them as calls
+# is the optimizer's business, so the shape is pinned in the emitted IR, where
+# the helpers always exist. subNSelect is audited as its raw worker, the body
+# every caller reaches.
+for helper in secretBelowNBit secretNonzeroBit zeroLimbsBit reduce256 subNSelect__rw; do
+  extract_ir_function "$helper" "$IR" "$WORK/$helper.ll"
+  [ "$(grep -c 'br i1' "$WORK/$helper.ll" || true)" -eq 0 ] || fail "$helper is straight-line"
+  [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/$helper.ll" || true)" -eq 0 ] || fail "$helper makes no value comparisons"
+  if grep -F 'call i64 @mdk_impl_Array_index(' "$WORK/$helper.ll" |
+    grep -v -E -q 'call i64 @mdk_impl_Array_index\(i64 %[A-Za-z0-9_.]+, i64 -?[0-9]+\)'; then
+    fail "$helper reads limbs only at literal indices"
+  fi
+done
+[ "$(grep -E -c 'call i64 @mdk_impl_Array_index\(i64 %[A-Za-z0-9_.]+, i64 -?[0-9]+\)' "$WORK/zeroLimbsBit.ll" || true)" -eq 8 ] || fail 'secret nonzero fold reads each of the eight limbs at a literal index'
+[ "$(grep -F -c 'call i64 @mdk_lib_scalar__zeroLimbsBit(' "$WORK/secretNonzeroBit.ll" || true)" -eq 1 ] || fail 'secret nonzero bit folds the limbs once'
+[ "$(grep -F -c 'call i64 @mdk_lib_scalar__subNSelect__rw(' "$WORK/reduce256.ll" || true)" -eq 1 ] || fail 'secret reduction runs one subtract-and-select'
+pass 'emitted secret ingress bits and reduction are straight-line over literal limb reads'
 
 # secretAffine converts the ladder's Jacobian result to affine.  Its caller has
 # already established the point is non-infinity, so the property is that it runs
@@ -283,9 +292,11 @@ pass 'emitted fixed reduction runs its schedule unconditionally'
 # linker keeps it as a distinct symbol.  It moved out of the linked-survival list
 # above when its emitted body lost the generic immediate-vs-boxed discriminant
 # split (the JPoint roster is always boxed, so that arm was dead), which took the
-# body under -O2's inline threshold at its sole call site, publicPointForSecret --
-# still linked, as are scalarLadder and both complete point operations, so the
-# ladder topology the list exists to prove is unaffected.  Nothing emitter-side
+# body under -O2's inline threshold at its sole call site, publicPointForSecret.
+# (Since the 8 x 32 scalar the split is the reverse: secretAffine links and its
+# caller inlines; see the list above.)  scalarLadder and both complete point
+# operations stay linked, so the ladder topology the list exists to prove is
+# unaffected.  Nothing emitter-side
 # steers that decision: the emitted IR carries no inline attributes at all.  Pin
 # the shape here instead, where the definition always exists.
 #
