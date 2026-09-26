@@ -29,14 +29,14 @@ source_closure_ok() {
   # secret condition bits combine through bitAnd/bitOr/bitXor instead of
   # `+ - *`, and the RFC 6979 byte blend runs on U64, so no Int overflow
   # check in it tests a secret operand.
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '2219660738 25419' ] || return 1
-  # Re-audited when both modules' limbs moved from Int to U64 (#3427): every
-  # limb operation is a builtin U64 op or a u64 bit helper, the secret byte
-  # scan and the *Bit predicates cross Int/U64 only through the masking
-  # truncate/toIntTruncating, no branch was added, and the IR checks below
-  # pass unchanged. constant_time_reductions.sh pins the helper-level shape.
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '3318702853 33856' ] || return 1
-  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '3367372070 26913' ] || return 1
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1706692293 25394' ] || return 1
+  # Re-audited when both modules' limb arithmetic moved to U64 expressions
+  # over Int storage (#3427): every limb step widens through U64.truncate and
+  # narrows through U64.toIntTruncating, the secret byte scan's validity and
+  # aggregate bits combine through bitAnd, no source branch was added, and the
+  # IR checks below pass. constant_time_reductions.sh pins the helper shape.
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '2182991326 35966' ] || return 1
+  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '1538248655 30240' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
   grep -F -q 'let added = pointAddComplete r0 r1' "$tree/pds/lib/secp256k1.mdk" || return 1
@@ -45,8 +45,8 @@ source_closure_ok() {
   grep -F -q 'let next0 = pointSelect bit doubled0 added' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'let next1 = pointSelect bit added doubled1' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'let bytesBit = scanSecretBytes bs safeBytes 0 1' "$tree/pds/lib/scalar.mdk" || return 1
-  grep -F -q '(U64.toIntTruncating (bytesBit * rangeBit * nonzeroBit), candidate)' "$tree/pds/lib/scalar.mdk" || return 1
-  grep -F -q 'scanSecretBytes bs safeBytes (i + 1) (validBit * byteBit)' "$tree/pds/lib/scalar.mdk" || return 1
+  grep -F -q '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' "$tree/pds/lib/scalar.mdk" || return 1
+  grep -F -q 'scanSecretBytes bs safeBytes (i + 1) (bitAnd validBit byteBit)' "$tree/pds/lib/scalar.mdk" || return 1
   grep -F -q 'fieldSubCt a b = feAdd a (feNegateCt b)' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'pointSelect opposite afterEqual pointInfinity' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))' "$tree/pds/lib/sign.mdk" || return 1
@@ -143,6 +143,15 @@ check_ir_closure() {
   pass 'emitted secret-path local callee graph is closed'
 }
 
+disassemble() {
+  symbol=$1 output=$2
+  case $(uname -s) in
+    Darwin) otool -tvV "$BIN" | awk -v label="_$symbol:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$output" ;;
+    *) objdump -d --disassemble="$symbol" "$BIN" > "$output" ;;
+  esac
+  [ -s "$output" ] || fail "native disassembly exists for $symbol"
+}
+
 conditional_jumps() {
   case $(uname -m) in
     x86_64|amd64) grep -E -c '[[:space:]]j[a-z]+[[:space:]]' "$1" || true ;;
@@ -169,7 +178,7 @@ expect_source_red 'M03 secret-derived byte index'
 apply_mutation 'M04' "$WORK/pds/lib/secp256k1.mdk" 'let afterOpposite = pointSelect opposite afterEqual pointInfinity' 's/let afterOpposite = pointSelect opposite afterEqual pointInfinity/let afterOpposite = afterEqual/'
 expect_source_red 'M04 omitted exceptional opposite selection'
 
-apply_mutation 'M05' "$WORK/pds/lib/field.mdk" 'feZeroBit a = U64.toIntTruncating (feZeroBorrow (rawFe a) 0 1)' 's/feZeroBit a = U64\.toIntTruncating \(feZeroBorrow \(rawFe a\) 0 1\)/feZeroBit a = hashBool (feEqual a feZero)/'
+apply_mutation 'M05' "$WORK/pds/lib/field.mdk" 'feZeroBit a = feZeroBorrow (rawFe a) 0 1' 's/feZeroBit a = feZeroBorrow \(rawFe a\) 0 1/feZeroBit a = hashBool (feEqual a feZero)/'
 expect_source_red 'M05 Bool/sentinel zero conversion'
 
 apply_mutation 'M06' "$WORK/pds/lib/secp256k1.mdk" 'secretAffine (JPoint x y z) =' 's/secretAffine \(JPoint x y z\) =/secretAffine (JPoint x y z) = if feZeroBit z == 1 then AffinePoint feZero feZero else/'
@@ -178,13 +187,13 @@ expect_source_red 'M06 secret infinity early return'
 apply_mutation 'M14' "$WORK/pds/lib/secp256k1.mdk" 'fieldSubCt a b = feAdd a (feNegateCt b)' 's/fieldSubCt a b = feAdd a \(feNegateCt b\)/fieldSubCt a b = feAdd a b/'
 expect_source_red 'M14 omitted transitive constant-time wrapper'
 
-apply_mutation 'M15-byte' "$WORK/pds/lib/scalar.mdk" '(bytesBit * rangeBit * nonzeroBit), candidate)' 's/\(bytesBit \* rangeBit \* nonzeroBit\), candidate\)/(rangeBit * nonzeroBit), candidate)/'
+apply_mutation 'M15-byte' "$WORK/pds/lib/scalar.mdk" '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' 's/\(bitAnd bytesBit \(bitAnd rangeBit nonzeroBit\), candidate\)/(bitAnd rangeBit nonzeroBit, candidate)/'
 expect_source_red 'M15 byte-domain aggregate omission'
 
-apply_mutation 'M15-range' "$WORK/pds/lib/scalar.mdk" '(bytesBit * rangeBit * nonzeroBit), candidate)' 's/\(bytesBit \* rangeBit \* nonzeroBit\), candidate\)/(bytesBit * nonzeroBit), candidate)/'
+apply_mutation 'M15-range' "$WORK/pds/lib/scalar.mdk" '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' 's/\(bitAnd bytesBit \(bitAnd rangeBit nonzeroBit\), candidate\)/(bitAnd bytesBit nonzeroBit, candidate)/'
 expect_source_red 'M15 range aggregate omission'
 
-apply_mutation 'M15-zero' "$WORK/pds/lib/scalar.mdk" '(bytesBit * rangeBit * nonzeroBit), candidate)' 's/\(bytesBit \* rangeBit \* nonzeroBit\), candidate\)/(bytesBit * rangeBit), candidate)/'
+apply_mutation 'M15-zero' "$WORK/pds/lib/scalar.mdk" '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' 's/\(bitAnd bytesBit \(bitAnd rangeBit nonzeroBit\), candidate\)/(bitAnd bytesBit rangeBit, candidate)/'
 expect_source_red 'M15 zero aggregate omission'
 
 apply_mutation 'M15-early' "$WORK/pds/lib/scalar.mdk" 'let byteBit = secretByteBit b' 's/let byteBit = secretByteBit b/if b < 0 then validBit else\n    let byteBit = secretByteBit b/'
@@ -231,26 +240,17 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # closed source manifest pins scalar.mdk byte for byte, and M15 reds every
 # aggregate omission and a per-element early return in scanSecretBytes.
 #
-# scSecretCandidate, scalarLadder, pointAddComplete, publicPointForSecret and
-# pointCompressed left this list when the field and scalar limbs moved to U64
-# (#3427). A U64 constant is static data, so the lazy-constant forces those
-# paths called (pointInfinity, scZero, scOne, feZero, feOne and the limb
-# constants) are gone, each wrapper shrank, and in this probe the link now
-# inlines the ingress and the whole ladder into the program's main. Measured
-# on the #3427 tree: of the named secret-path functions only carryFoldRound,
-# pointDoubleComplete and pointSelect survive as symbols. What is lost is the
-# claim that the ladder and its complete addition are distinct functions in
-# this binary, and with it the disassembly check of the linked ladder that
-# stood below. Their shape is still pinned where the definitions always
-# exist: the emitted-symbol list above, the emitted scalarLadder topology
-# check below (256 rounds, one complete addition, two doublings, two
-# selections per round), and the closed source manifest. The signing gate's
-# internal carrier still links scalarLadder and pointAddComplete as symbols.
+# carryFoldRound left this list for reduceCarry when the limb arithmetic moved
+# to U64 expressions over Int storage (#3427): the round is now small enough
+# that the link inlines it into reduceCarry, which survives. Its shape is
+# pinned where its definition always exists, by constant_time_reductions.sh.
 for symbol in \
-  mdk_lib_field__carryFoldRound \
-  mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__pointSelect
+  mdk_lib_scalar__scSecretCandidate mdk_lib_field__reduceCarry \
+  mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
+  mdk_lib_secp256k1__pointDoubleComplete \
+  mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
 do require_native_symbol "$symbol"; done
-pass 'linked native code retains the field reducer, complete doubling and arithmetic-selection leaves'
+pass 'linked native code retains ingress and complete-ladder helper topology'
 check_ir_closure
 
 # secretNonzeroBorrow walks the limbs to fold a nonzero test.  What must hold is
@@ -329,10 +329,12 @@ fi
 [ "$(grep -F -c '__pointSelect' "$WORK/scalarLadder.ll" || true)" -eq 2 ] || fail 'scalar ladder makes two arithmetic selections per round'
 pass 'emitted scalar ladder preserves 256-round add/two-double/select topology'
 
-# The linked-ladder disassembly check that stood here retired with the ladder's
-# symbol (#3427; see the native-symbol list above). The link inlines the ladder
-# into main, whose body is not the ladder alone, so pinning its call counts
-# would pin an inlining decision rather than the ladder's topology.
+ladder_symbol=$(nm "$BIN" | awk '$3 ~ /mdk_lib_secp256k1__scalarLadder$/ { print $3; exit }')
+[ -n "$ladder_symbol" ] || fail 'linked scalar ladder symbol exists'
+disassemble "$ladder_symbol" "$WORK/scalar-ladder.asm"
+[ "$(grep -F -c '__pointAddComplete' "$WORK/scalar-ladder.asm" || true)" -eq 1 ] || fail 'linked scalar ladder retains complete addition call'
+[ "$(grep -F -c '__pointDoubleComplete' "$WORK/scalar-ladder.asm" || true)" -eq 2 ] || fail 'linked scalar ladder retains both complete doubling calls'
+pass 'linked native ladder retains complete candidate topology'
 
 # The runtime bit helpers are C, below every generated Medaka helper, and a
 # helper that grew a conditional jump would invalidate the arithmetic proof.

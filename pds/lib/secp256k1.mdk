@@ -12,7 +12,7 @@
    Secret-derived condition bits are `Int` 0 or 1 and are combined only with
    `bitAnd`, `bitOr` and `bitXor` (`bitXor b 1` is `1 - b`), never `+`, `-`
    or `*`: an `Int` `+ - *` checks for overflow, and that check is a branch
-   on its operands. Secret bytes that need arithmetic move to `U64` first
+   on its operands. Arithmetic on secret bytes is one `U64` expression
    (`docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §5.1). -}
 
 import lib.field.{
@@ -137,23 +137,25 @@ injectedCandidate bytes validBit =
   let () = rfc6979Require32 "rfc6979InjectedNonceProbeForTest" bytes
   Rfc6979Candidate validBit (scFromBytesReduce bytes) bytes
 
--- The candidate bytes are secret, so the blend runs on their `U64` images:
--- `b - a` may wrap, and the wrapped sum is the exact byte, which leaves `U64`
--- through the masking `U64.toIntTruncating`.
-selectBytes : U64 -> Array Int -> Array Int -> Array Int
+-- The candidate bytes are secret, so the blend is one `U64` expression:
+-- `b - a` may wrap, and the narrowed sum is the exact byte.
+selectBytes : Int -> Array Int -> Array Int -> Array Int
 selectBytes bit a b =
   let out = arrayMake rfc6979ByteCount 0
   let () = selectBytesGo bit a b out 0
   out
 
-selectBytesGo : U64 -> Array Int -> Array Int -> Array Int -> Int -> Unit
+selectBytesGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
 selectBytesGo bit a b out i =
   if i >= rfc6979ByteCount then
     ()
   else
-    let x = U64.truncate a[i]
-    let y = U64.truncate b[i]
-    let () = setInPlace i (U64.toIntTruncating (x + bit * (y - x))) out
+    let x = a[i]
+    let blended =
+      U64.toIntTruncating
+        (U64.truncate x
+          + U64.truncate bit * (U64.truncate b[i] - U64.truncate x))
+    let () = setInPlace i blended out
     selectBytesGo bit a b out (i + 1)
 
 firstValidCandidate : Rfc6979Schedule -> (Int, Sc, Array Int)
@@ -163,7 +165,7 @@ firstValidCandidate (Rfc6979Schedule (Rfc6979Candidate valid0 scalar0 bytes0) (R
   (
     validBit,
     scSelect select1 scalar0 scalar1,
-    selectBytes (U64.truncate select1) bytes0 bytes1,
+    selectBytes select1 bytes0 bytes1,
   )
 
 -- | Gate observation of both candidates from the production schedule.

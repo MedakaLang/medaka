@@ -33,7 +33,7 @@ Native is the security boundary because it is the PDS deployment engine. Eval
 and Wasm remain required value-parity arms, but this contract does not claim
 constant-time execution for them. Wasm's ordinary `Int` carrier selects between
 `i31ref` and boxed `i64` representations according to the value; boxing can
-branch and allocate below any PDS helper. The limbs themselves are `U64`
+branch and allocate below any PDS helper. The limb arithmetic is `U64`
 (§5.1), whose Wasm carrier is equally outside this claim. A Wasm constant-time claim therefore
 requires a separately accepted uniform integer/crypto carrier or backend
 representation design. It cannot be established by scanning the PDS helper,
@@ -101,8 +101,8 @@ second folded value is below `2^54 + c < M`. The third carry pass therefore
 returns zero. All three rounds execute even for already canonical input.
 
 The implementation must retain the module's non-negative intermediates and
-its ceiling argument, now against the `U64` limb carrier's `2^64 - 1`
-(§5.1). A `3 -> 2` mutation must be rejected by
+existing `2^62 - 1` ceiling argument, which bounds every stored limb (§5.1).
+A `3 -> 2` mutation must be rejected by
 the permanent pass-count control and by the conservative-bound witness with
 limbs 0 through 8 equal to `2^26 - 1` and limb 9 equal to `2^43 - 1`. That
 witness is private test access to the reduction precondition, not a fabricated
@@ -177,15 +177,28 @@ control instruction; neither is a constant-time select guarantee.
 
 ### 5.1 The limb carrier, narrowing, and shift amounts
 
-Every limb, partial product, column, carry, borrow and selection bit inside
-both modules is a `U64`. `U64` `+`, `-` and `*` wrap modulo 2^64 and lower to
-one LLVM arithmetic instruction on the operands' payloads plus the result
-cell's allocation, with no branch on either operand. `Int` is moving
-to trap on overflow (#3377), and a trapping add is an add plus a branch on
-the overflow flag: on a secret operand that is a secret-dependent jump even
-where the headroom proofs above show it is never taken. The proofs in §3
-through §5 bound every intermediate below `2^62`, so they hold unchanged
-against `U64`'s `2^64 - 1`.
+Limbs, columns and carries are stored as non-negative `Int`s, in `Array Int`.
+Every arithmetic step on them is one `U64` expression: its operands widen
+through `U64.truncate`, the expression computes modulo 2^64, and its result
+narrows through `U64.toIntTruncating` before it is stored or bound. `U64`
+`+`, `-` and `*` wrap and have no branch; with a literal shift amount, the
+conversions, the bit operations and the shifts are inline kernels fused with
+that arithmetic, so the whole expression is straight-line code that neither
+calls nor allocates. `Int` traps on overflow (#3377): an `Int` `+`, `-` or
+`*` is the operation plus a branch on the overflow flag, and on a secret
+operand that is a secret-dependent jump even where the headroom proofs above
+show it is never taken. So no secret value meets `Int` arithmetic; the only
+`Int` `+ - *` on these paths is on public counters and indexes, which
+`pds/test/constant_time_reductions.sh` proves operand by operand in the
+emitted IR. The narrowing keeps 63 bits and is exact below `2^62`; the proofs
+in §3 through §5 bound every stored value below that, and inside one
+expression an intermediate may exceed it or wrap (as `diff[i] - original`
+does) with the narrowed result still exact.
+
+Secret condition bits are `Int` 0 or 1 and combine only through `bitAnd`,
+`bitOr` and `bitXor` (`bitXor b 1` for `1 - b`), which cannot overflow and
+do not branch. The `*Bit` predicates cross the module boundary this way, and
+`pds/lib/secp256k1.mdk` combines them the same way.
 
 Two rules follow, and hold for every secret-bearing value in `pds/`:
 
@@ -200,20 +213,15 @@ Two rules follow, and hold for every secret-bearing value in `pds/`:
    `U64.shiftRight` give 0 for an amount of 64 or more through a select, and
    panic on a negative amount through a branch on the amount; with a public
    amount both are fixed. Every shift in the reduction helpers passes a
-   literal, and `pds/test/constant_time_reductions.sh` checks that in the
-   emitted IR.
+   literal, so none of them is a call, and
+   `pds/test/constant_time_reductions.sh` checks that in the emitted IR. The
+   byte codecs shift by a public bit counter, which calls the `u64` wrapper;
+   its branches test only that counter.
 
-`U64` is a boxed cell (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), so each
-limb operation allocates one 16-byte pointer-free cell. The number of cells a
-helper allocates per call is fixed by its straight-line body, so the
-reduction's allocation schedule is input-independent; the reductions gate pins
-each helper's count. The limb arrays the collector scans now hold cell
-addresses rather than limb values, and the key-derived payloads sit in cells
-it does not scan. This narrows, but does not close, the collector caveat
-recorded for #3361: byte arrays holding key material are still `Array Int`.
-
-The `*Bit` predicates still cross the module boundary as `Int` 0 or 1. Any
-`Int` arithmetic a caller performs on them is subject to the trap in #3377.
+A `U64` bound by `let`, passed as an argument, returned, or stored in an
+array is a boxed cell (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), so the
+helpers bind only the narrowed `Int`. The reductions gate pins every audited
+helper's cell allocation count at 0.
 
 ## 6. Verification mechanism
 
