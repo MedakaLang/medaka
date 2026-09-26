@@ -46,6 +46,7 @@ import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
   effAtomSurface,
+  authTermSurface,
   effAtomBare,
   effAtomWith,
   Route,
@@ -344,6 +345,7 @@ rkTy (TyTuple ts) = "(" ++ joinWith ", " (map rkTy ts) ++ ")"
 rkTy (TyEffect effs tail t) = "<\{rkRowBody effs tail}> \{rkTy t}"
 -- A bare row atom (#997) wraps no type, so there is nothing to fall back to.
 rkTy (TyRow effs tail _) = "<\{rkRowBody effs tail}>"
+rkTy (TyAuth p _) = authTermSurface escStr p
 rkTy (TyConstrained cs t) = "\{rkConstraints cs} => \{rkTy t}"
 -- A binder's name is lexical to its signature and is not part of the word;
 -- the qualifier IS (it changes what the argument means), so it is kept.

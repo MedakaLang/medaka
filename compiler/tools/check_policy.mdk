@@ -1,6 +1,9 @@
 import types.effect_domain.{canonParam, drender, Param(..)}
 import types.effect_authority.{Authority(..), authSub}
 import types.effect_rows.{
+  effLabelOrigin,
+  atomLabelOf,
+  atomKey,
   atomLabel,
   atomAuth,
   atomConst,
@@ -42,6 +45,7 @@ import types.effect_rows.{
 -- OCaml's log-then-result ordering byte-for-byte.
 
 import frontend.ast.{
+  TyConOrigin(..),
   Decl(..),
   Expr(..),
   Pat(..),
@@ -72,8 +76,10 @@ import types.typecheck.{
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
-  sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains
+  sortUniqS, joinWith, reverseL, escStr, lookupAssoc, contains, filterList,
+  listLen
 }
+import string.{toLower}
 
 -- ── policy args ──────────────────────────────────────────────────────────
 public export data PolicyArgs = PolicyArgs (Option String) String String
@@ -390,9 +396,21 @@ filterForbidden (a :: rest) policy =
 -- provably within the policy's: an authority still symbolic at the manifest
 -- boundary is not proven and is not permitted.
 atomPermitted : Atom -> List (String, Param) -> Bool
-atomPermitted a policy = match lookupParam (atomLabel a) policy
-  None => False
-  Some pp => authSub (atomAuth a) (AConst pp)
+atomPermitted a policy =
+  match lookupParam (policySpelling (qualifiedKey a)) policy
+    Some pp => authSub (atomAuth a) (AConst pp)
+    None => match lookupParam (atomLabel a) policy
+      None => False
+      Some pp => authSub (atomAuth a) (AConst pp)
+
+-- A policy token spells a qualified key without the TOML quotes.
+policySpelling : String -> String
+policySpelling k =
+  let n = stringLength k
+  if n >= 2 && stringSlice 0 1 k == "\"" && stringSlice (n - 1) n k == "\"" then
+    stringSlice 1 (n - 1) k
+  else
+    k
 
 -- ── 7. accept: run the plugin on a sample request with stub capabilities ─────
 -- Synthetic stub funDefs that shadow the user-declared platform externs.  Parsed
@@ -571,9 +589,9 @@ listIsEmpty _ = False
 -- PUnit / PPrefix None → 'Label = true'
 -- An authority left symbolic at the host boundary is reported conservatively
 -- as the bare grant (`Label = true`), never omitted.
-atomToToml : Atom -> String
-atomToToml a =
-  let label = atomLabel a
+atomToToml : (Atom -> String) -> Atom -> String
+atomToToml keyOf a =
+  let label = keyOf a
   match atomConst a
     Some p => match canonParam p
       PPrefix (Some s) => "\{label} = \"\{s}\""
@@ -601,14 +619,7 @@ quoteTok s = "\"" ++ s ++ "\""
 lowerFirst : String -> String
 lowerFirst s =
   let n = stringLength s
-  if n == 0 then s else lowerChar (stringSlice 0 1 s) ++ stringSlice 1 n s
-
-lowerChar : String -> String
-lowerChar "H" = "h"
-lowerChar "M" = "m"
-lowerChar "S" = "s"
-lowerChar "P" = "p"
-lowerChar c = c
+  if n == 0 then s else toLower (stringSlice 0 1 s) ++ stringSlice 1 n s
 
 -- Render the whole capability row as TOML.
 -- Returns the full TOML block (bare header if no effects).
@@ -616,8 +627,32 @@ export
 manifestToml : List Atom -> String
 manifestToml [] = "[package.capabilities]\n"
 manifestToml atoms =
-  let lines = map atomToToml atoms
+  let lines = map (atomToToml (manifestKey atoms)) atoms
   "[package.capabilities]\n" ++ joinTomlLines lines
+
+-- The TOML key an atom is written under: its bare spelling, unless another
+-- atom of the row spells the same label from a different declaring origin
+-- (identity is `(origin, name)`), in which case every atom of that spelling
+-- is keyed by its origin, `"mod.Name"` (a builtin keeps the bare name).  A row
+-- with no such collision is byte-identical to the bare-keyed manifest; the
+-- policy side accepts both spellings (`atomPermitted`).
+export
+manifestKey : List Atom -> Atom -> String
+manifestKey atoms a =
+  if labelCollides atoms (atomLabel a) then qualifiedKey a else atomLabel a
+
+labelCollides : List Atom -> String -> Bool
+labelCollides atoms name =
+  listLen
+      (sortUniqS (map atomKey (filterList (b => atomLabel b == name) atoms)))
+    > 1
+
+-- `"mod.Name"` for a module-declared label, the bare name for a builtin.
+export
+qualifiedKey : Atom -> String
+qualifiedKey a = match effLabelOrigin (atomLabelOf a)
+  OriginModule m => "\"\{m}.\{atomLabel a}\""
+  _ => atomLabel a
 
 joinTomlLines : List String -> String
 joinTomlLines [] = ""

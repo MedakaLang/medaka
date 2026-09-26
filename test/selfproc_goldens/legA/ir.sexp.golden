@@ -1,5 +1,6 @@
 armSexp : Arm -> String
 attrSexp : Attr -> String
+axisSexp : (String, String) -> String
 boolStr : Bool -> String
 constraintSexp : Constraint -> String
 declSexp : Decl -> String

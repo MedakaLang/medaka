@@ -2162,6 +2162,7 @@ TIME_STAGES="parse desugar resolve mark typecheck elaborate dce mangle fmt lint 
 # (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_TIME="
 manydefs:lint
+modules:typecheck
 nestedparens:parse
 nestedparens:fmt
 nestedparens:lint
@@ -3151,12 +3152,18 @@ clause_of() {
 # #1879's, not yours.
 #   modules:typecheck (TIME) — PROMOTED OUT 2026-09-25 (PR #3393): the ledger's own
 #     under-2.00 branch fired on CI (r2=1.97 at N=100->200->400, run 36121365015)
-#     after the named-authority typechecker landed. The row is deleted; the stage is
-#     graded like any other (threshold 3.0 per doubling; a quiet box reads 2.5-2.8).
-#     The DETERMINISTIC arm of record for #1879 is unchanged:
+#     after the named-authority typechecker landed, and the row was deleted.
+#     RE-LEDGERED the same day (the data-half PR): with the row gone the stage was
+#     graded by the plain climbing clause (r2 > r1 x 1.15 AND r2 > 2.45), which the
+#     unfixed #154/#150 quadratic trips on its own band — CI read r1 < 2.2, r2 = 2.53
+#     on the data-half head, and this box read r1 = 2.32, r2 = 2.72 while it also
+#     carried a per-declaration table scan the data half had added (removed:
+#     `recordParamKinds` is a constant-time prepend again), then r1 = 2.50,
+#     r2 = 2.34 quiet with that scan gone. The 1.97 that drained the row was the
+#     false-PROMOTE the row's own note predicts for a quiet runner. The constants
+#     stand (ceiling 4.2 catches worsening; TFIXED 2.00 is under the observed
+#     floor); the DETERMINISTIC arm of record for #1879 is unchanged:
 #     test/diff_compiler_stage_ir_scaling.sh's `modules:typecheck` KNOWN_SLOW row.
-#     If this TIME arm flaps above 3.0 on a loud box, re-ledger it with a ceiling
-#     rather than reading it as a regression of that fix.
 _cc_t="$(clause_of threshold 3.0)"; _cc_c="$(clause_of climbing)"
 case "$_cc_t" in
   *'r2 > 3.0x'*) ;;

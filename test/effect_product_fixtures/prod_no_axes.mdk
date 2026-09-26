@@ -1,0 +1,7 @@
+-- A Product label must declare its axes: without a schema there is no
+-- primary axis for a bare literal to lift into and no axis a written product
+-- could name.  REJECT at the declaration.
+effect Db Product
+
+main : <IO> Unit
+main = println "unreachable"

@@ -1,2 +1,2 @@
+TYPE ERROR: Authority 'p' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label
 TYPE ERROR: Named argument 'n' has type `Int`, but an effect atom names it as an authority: only a `String` argument can determine an effect's parameter. Give 'n' the type `String`, or write the label bare for any authority
-TYPE ERROR: Named argument 'p' is used as the authority of labels from different domains (a path prefix and a name set are different kinds of authority). One argument determines one domain: name a second argument for the other label

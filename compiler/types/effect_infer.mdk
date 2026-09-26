@@ -1,7 +1,9 @@
 -- Scoped effect collection. A capture observes performed rows without solving
 -- them; inference allowances and signature constraints belong to the checker.
 import types.effect_rows.{EffRow(..), Effvar, collectRows}
-import types.effect_domain.{Param(..), canonParam, productNorm, subTopOf}
+import types.effect_domain.{
+  Param(..), canonParam, productNorm, subTopOf, productPrimaryLift
+}
 import types.effect_authority.{Authority(..), authJoin, authTop}
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -128,8 +130,7 @@ letBindName (LetBind n _) = [n]
 literalAuthority : Param -> String -> Authority
 literalAuthority (PPrefix _) s = AConst (canonParam (PPrefix (Some s)))
 literalAuthority (PSet _) s = AConst (PSet (Some [s]))
-literalAuthority (PProduct _) s =
-  AConst (productNorm [("Host", canonParam (PPrefix (Some s)))])
+literalAuthority (PProduct schema) s = AConst (productPrimaryLift schema s)
 literalAuthority top _ = authTop top
 
 -- In a prefix-shaped domain a justified left prefix bounds the whole; in the

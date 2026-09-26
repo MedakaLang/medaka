@@ -1,5 +1,5 @@
 # META
-source_lines=5104
+source_lines=5086
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -75,8 +75,6 @@ import support.util.{
   startsWith,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
-import eval.u64_halves as H
-import u64 as U64
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
 -- program-global `ctorToTypeRef`.  `backend/private_mangle.mdk` imports only
@@ -92,6 +90,24 @@ import driver.diagnostics.{
   cjAllToJsonWith,
   flushRunEnvelope,
   runEnvelopeFields,
+}
+-- The uint64 limb library the RNG/hash externs are built on lives in stdlib
+-- (`bits64`) now — the compiler is a first-class consumer of it (issue #223).
+-- `U64` is a nullary-constructor newtype (#2311), so the import brings its own
+-- `Eq`/`Ord`/`Debug`/`Display`/`Hashable` into dispatch scope; DCE still trims
+-- to the fns used here.  `and`/`or` are NOT imported — nothing here needs them,
+-- and they would shadow the prelude's boolean pair.
+import bits64.{
+  U64(..),
+  add,
+  sub,
+  mulLow,
+  xor,
+  shr,
+  mod,
+  fromIntBits,
+  isZero,
+  limbAt,
 }
 
 -- ── values & environment (mutually recursive) ─────────────────────────────
@@ -120,10 +136,6 @@ public export data Value (e : Effect) =
   -- have to agree on is the 0..255 domain -- every write masks, exactly as the
   -- native store truncates.
   | VByteBlock (Array Int)
-  -- a `U64` as its high and low 32-bit halves, each `0 .. 2^32 - 1`: this program
-  -- is compiled with a 63-bit `Int`, so it cannot hold the value in one word
-  -- (INTEGER-TYPES-DESIGN §6.2).  Its arithmetic is `eval/u64_halves.mdk`'s.
-  | VU64 Int Int
   | VCon String (List (Value e))
   | VRecord String (List (String, Value e))
   | VRef (Ref (Value e))
@@ -180,7 +192,6 @@ ppValue (VArray vs) =
 -- native backend cannot print a cell at all (emitPrint panics on LTCon).  A
 -- caller that wants bytes rendered goes through byteBlockToIntArray.
 ppValue (VByteBlock b) = "<byteblock:\{intToString (arrayLength b)}>"
-ppValue (VU64 hi lo) = H.toDecimal (hi, lo)
 ppValue (VCon name []) = displayCtorName name
 ppValue (VCon name vs) =
   "\{displayCtorName name} \{joinSp (map ppValueAtom vs)}"
@@ -621,7 +632,6 @@ runtimeTypeTag VUnit = Some "Unit"
 runtimeTypeTag (VList _) = Some "List"
 runtimeTypeTag (VArray _) = Some "Array"
 runtimeTypeTag (VByteBlock _) = Some "ByteBlock"
-runtimeTypeTag (VU64 _ _) = Some "U64"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
 runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
 -- #1292: a record value's head tag is its CONSTRUCTOR name, so the collision
@@ -642,6 +652,7 @@ countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
 countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
+countTyvars (TyAuth _ _) = 0
 countTyvars (TyNamed _ t) = countTyvars t
 countTyvars (TyQual t _) = countTyvars t
 
@@ -771,6 +782,7 @@ tyMentions (TyQual t _) params = tyMentions t params
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
 tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentions (TyAuth _ _) _ = False
 
 -- ── environment ───────────────────────────────────────────────────────────
 export
@@ -954,15 +966,9 @@ valueEq (VArray a) (VArray b) = valueListEq (arrayToListG a) (arrayToListG b)
 -- By CONTENT, not by cell identity -- the native peer is mdk_value_eq's
 -- byte-block arm (runtime/medaka_rt.c), which must give the same answer.
 valueEq (VByteBlock a) (VByteBlock b) = arrayToListG a == arrayToListG b
-valueEq (VU64 ah al) (VU64 bh bl) = ah == bh && al == bl
 valueEq (VCon n1 a1) (VCon n2 a2) = n1 == n2 && valueListEq a1 a2
 valueEq (VRecord n1 f1) (VRecord n2 f2) = n1 == n2 && fieldListEq f1 f2
 valueEq (VRef a) (VRef b) = valueEq !a !b
--- A `U64` meets only a `U64` in a typechecked program; anywhere else the
--- program was run without its types (an untyped eval path), and ordering the
--- two by `valueTag` would be a silent wrong answer, so it is refused.
-valueEq (VU64 _ _) _ = u64ShapeMismatch ()
-valueEq _ (VU64 _ _) = u64ShapeMismatch ()
 valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
@@ -999,7 +1005,6 @@ valueTag (VCon _ _) = 9
 valueTag (VRecord _ _) = 10
 valueTag (VRef _) = 11
 valueTag (VByteBlock _) = 12
-valueTag (VU64 _ _) = 13
 valueTag _ = 99
 
 valueCompare : Value e -> Value e -> Ordering
@@ -1017,18 +1022,10 @@ valueCompare (VArray a) (VArray b) =
 valueCompare (VByteBlock a) (VByteBlock b) =
   compare (arrayToListG a) (arrayToListG b)
 valueCompare (VTuple a) (VTuple b) = compareValueLists a b
-valueCompare (VU64 ah al) (VU64 bh bl) = H.compareU64 (ah, al) (bh, bl)
 valueCompare (VCon n1 a1) (VCon n2 a2) = match compare n1 n2
   Eq => compareValueLists a1 a2
   o => o
-valueCompare (VU64 _ _) _ = u64ShapeMismatch ()
-valueCompare _ (VU64 _ _) = u64ShapeMismatch ()
 valueCompare a b = compare (valueTag a) (valueTag b)
-
-u64ShapeMismatch : Unit -> a
-u64ShapeMismatch _ =
-  panic
-    "a U64 compared with a value of another type: the program was not typechecked"
 
 compareValueLists : List (Value e) -> List (Value e) -> Ordering
 compareValueLists [] [] = Eq
@@ -1751,8 +1748,6 @@ eval _ (ENumLit n r _ _) = match !r
   Some f => VFloat f
   None => VInt n
 eval _ (ELit (LFloat f)) = VFloat f
-eval _ (ELit (LU64 hi lo)) = VU64 hi lo
-eval _ (EWideLit hi lo _ _) = VU64 hi lo
 eval _ (ELit (LString s)) = VString s
 eval _ (ELit (LChar c)) = VChar c
 eval _ (ELit (LBool b)) = VBool b
@@ -2392,7 +2387,6 @@ export
 evalUnop : String -> Value e -> Value e
 evalUnop "-" (VInt n) = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (negFloatIEEE f)
-evalUnop "-" (VU64 hi lo) = u64Value (H.sub (0, 0) (hi, lo))
 evalUnop "-" _ = panic "unary minus on non-number"
 -- #1739 half A: `!x` DEREFERENCES a Ref (it was boolean-not).  Routed to the very
 -- function `x.value` uses, because the two spellings are the same operation — a
@@ -2460,9 +2454,6 @@ evalArith "-" (VFloat a) (VFloat b) = VFloat (a - b)
 evalArith "*" (VFloat a) (VFloat b) = VFloat (a * b)
 evalArith "/" (VFloat a) (VFloat b) = VFloat (a / b)
 evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
-evalArith op (VU64 ah al) (VU64 bh bl) = evalArithU64 op (ah, al) (bh, bl)
-evalArith _ (VU64 _ _) _ = u64ShapeMismatch ()
-evalArith _ _ (VU64 _ _) = u64ShapeMismatch ()
 evalArith "==" a b = VBool (valueEq a b)
 evalArith "/=" a b = VBool (not (valueEq a b))
 -- Float comparisons use IEEE ordered semantics directly (these compile to native
@@ -2479,29 +2470,6 @@ evalArith ">" a b = VBool (ordGt (valueCompare a b))
 evalArith "<=" a b = VBool (not (ordGt (valueCompare a b)))
 evalArith ">=" a b = VBool (not (ordLt (valueCompare a b)))
 evalArith op _ _ = panic ("unknown op '" ++ op ++ "'")
-
--- `U64` arithmetic and comparison, modulo 2^64 and unsigned.  The value shape
--- alone selects it, so an unstamped operator on two `U64` values is right too.
-evalArithU64 : String -> (Int, Int) -> (Int, Int) -> Value e
-evalArithU64 "+" a b = u64Value (H.add a b)
-evalArithU64 "-" a b = u64Value (H.sub a b)
-evalArithU64 "*" a b = u64Value (H.mul a b)
-evalArithU64 "/" a b
-  | H.isZero b = runtimePanic "E-DIV-ZERO" "division by zero"
-  | otherwise = u64Value (fst (H.divMod a b))
-evalArithU64 "%" a b
-  | H.isZero b = runtimePanic "E-MOD-ZERO" "modulo by zero"
-  | otherwise = u64Value (snd (H.divMod a b))
-evalArithU64 "==" a b = VBool (H.compareU64 a b == Eq)
-evalArithU64 "/=" a b = VBool (H.compareU64 a b /= Eq)
-evalArithU64 "<" a b = VBool (H.compareU64 a b == Lt)
-evalArithU64 ">" a b = VBool (H.compareU64 a b == Gt)
-evalArithU64 "<=" a b = VBool (H.compareU64 a b /= Gt)
-evalArithU64 ">=" a b = VBool (H.compareU64 a b /= Lt)
-evalArithU64 op _ _ = panic ("unknown op '" ++ op ++ "' on U64")
-
-u64Value : (Int, Int) -> Value e
-u64Value (hi, lo) = VU64 hi lo
 
 -- An arithmetic operator whose operands typecheck grounded to the scalar head
 -- [tag].  At a fixed-width head (`U8`/`U16`/`U32`) the `Int` result is reduced
@@ -3195,32 +3163,81 @@ optionToValue : Option (Value e) -> Value e
 optionToValue None = VCon "None" []
 optionToValue (Some v) = VCon "Some" [v]
 
--- ── SplitMix64 and FNV-1a on U64 ──────────────────────────────────────────
--- The SplitMix64 RNG and the SplitMix64/FNV-1a hashers in runtime/medaka_rt.c
--- are pure uint64 arithmetic, and run here on the builtin `U64`, whose `+` and
--- `*` wrap modulo 2^64 exactly as C's `unsigned long long` does.  The results
--- are byte-identical to the C runtime (mix64(42)&mask == 803958421; the first
--- SplitMix64 draw from state 42 gives `%6+1 == 2`), which is what keeps the
--- eval-vs-native RNG/hash streams equal (issue #98).  The interpreted program's
--- own `U64` values are a separate matter: `VU64` carries two halves.
+-- ── uint64 emulation over four 16-bit limbs ────────────────────────────────
+-- Medaka's Int is a 63-bit fixnum, so the SplitMix64 RNG and the SplitMix64/
+-- FNV-1a hashers in runtime/medaka_rt.c — which are pure uint64 arithmetic —
+-- cannot be reproduced with native `*`/`shiftRight` (their products and left
+-- shifts overflow 64 bits, and Medaka has no wider integer). We instead emulate
+-- a uint64 as a 4-tuple of 16-bit limbs `(l0, l1, l2, l3)`, least-significant
+-- first, and hand-roll add / multiply-low / xor / shift-right over that rep.
+-- Every intermediate stays well under the 63-bit range: a limb < 2^16, a 16×16
+-- partial product < 2^32, and a column sum of four such products plus a carry
+-- < 2^35 — so no native op ever overflows. The results are byte-identical to
+-- the C runtime (self-checked: mix64(42)&mask == 803958421, first SplitMix64
+-- draw from state 42 gives `%6+1 == 2`), which is exactly what closes the
+-- eval-vs-native RNG/hash divergence (issue #98).
 
+-- Golden ratio increment 0x9E3779B97F4A7C15 as limbs.
 u64Golden : U64
-u64Golden = 0x9E3779B97F4A7C15
+u64Golden = U64 31765 32586 31161 40503  -- 7C15 7F4A 79B9 9E37
 
--- SplitMix64 finalizer, then `mix64 x = finalize (x + golden)`, identical to
+-- SplitMix64 finalizer multipliers.
+u64Const1 : U64
+u64Const1 = U64 58809 7396 18285 48984  -- 0xBF58476D1CE4E5B9: E5B9 1CE4 476D BF58
+
+u64Const2 : U64
+u64Const2 = U64 4587 4913 18875 38096  -- 0x94D049BB133111EB: 11EB 1331 49BB 94D0
+
+-- FNV-1a 64-bit offset basis 0xCBF29CE484222325 and prime 0x100000001B3.
+u64FnvBasis : U64
+u64FnvBasis = U64 8997 33826 40164 52210  -- 2325 8422 9CE4 CBF2
+
+u64FnvPrime : U64
+u64FnvPrime = U64 435 0 256 0  -- 01B3 0000 0100 0000
+
+-- `fromIntBits`/`add`/`mulLow`/`xor`/`limbAt`/`shr` (plus the `shiftWords`
+-- helper `shr` needs) are imported from stdlib `bits64` above — the compiler
+-- shares the one proven limb library rather than re-deriving it here (#223).
+
+-- SplitMix64 finalizer, then `mix64 x = finalize (x + golden)` — identical to
 -- mdk_hash_mix64, and one SplitMix64 step (state += golden; finalize).
 u64Finalize : U64 -> U64
 u64Finalize z =
-  let z1 = U64.bitXor z (U64.shiftRight z 30) * 0xBF58476D1CE4E5B9
-  let z2 = U64.bitXor z1 (U64.shiftRight z1 27) * 0x94D049BB133111EB
-  U64.bitXor z2 (U64.shiftRight z2 31)
+  let z1 = mulLow (xor z (shr 30 z)) u64Const1
+  let z2 = mulLow (xor z1 (shr 27 z1)) u64Const2
+  xor z2 (shr 31 z2)
 
 u64Mix : U64 -> U64
-u64Mix x = u64Finalize (x + u64Golden)
+u64Mix x = u64Finalize (add x u64Golden)
 
 -- Low 30 bits (the native MDK_HASH_MASK = 2^30 - 1) as a non-negative Int.
 u64Low30 : U64 -> Int
-u64Low30 x = U64.toIntTruncating (U64.bitAnd x 0x3FFFFFFF)
+u64Low30 (U64 a0 a1 _ _) = bitAnd (bitOr a0 (shiftLeft a1 16)) 1073741823
+
+-- uint64 -> Int, for a value known to fit in a positive Medaka Int (< 2^62):
+-- the randomFloat mantissa (53 bits) and any `next % range` remainder (< range
+-- <= 2^62 - 1) both qualify, so `shiftLeft a3 48` never reaches the sign bit.
+u64ToInt : U64 -> Int
+u64ToInt (U64 a0 a1 a2 a3) =
+  bitOr (bitOr a0 (shiftLeft a1 16)) (bitOr (shiftLeft a2 32) (shiftLeft a3 48))
+
+-- `sub` (borrow-propagating subtraction) and `mod` (exact long division —
+-- eval's old `u64Mod`/`u64ModExactGo`/`u64BitAt`/`cmp64` collapse into it, the
+-- zero-divisor guard being a harmless superset the RNG never triggers) and
+-- `isZero` are imported from stdlib `bits64` above (#223).
+
+-- Bit 63 — the sign bit under a two's-complement (signed long long) reading.
+u64Bit63 : U64 -> Int
+u64Bit63 (U64 _ _ _ a3) = bitAnd (shiftRight a3 15) 1
+
+-- uint64 -> signed Medaka Int, interpreting the top bit as a two's-complement
+-- sign. Used only where the value is known to land in [-2^62, 2^62 - 1] (a
+-- randomInt result is always in [lo, hi]); the sign-extended `hi16 << 48` then
+-- has magnitude <= 2^62, so it fits the Int without overflow.
+u64ToSignedInt : U64 -> Int
+u64ToSignedInt (U64 a0 a1 a2 a3) =
+  let hi16 = if bitAnd a3 32768 == 0 then a3 else a3 - 65536
+  bitOr (bitOr a0 (shiftLeft a1 16)) (shiftLeft a2 32) + shiftLeft hi16 48
 
 -- ── deterministic SplitMix64 RNG — byte-identical to runtime/medaka_rt.c ─────
 -- State is a uint64 (limb tuple), default 0; `setSeed n` sets state = n. Each
@@ -3236,12 +3253,12 @@ rngStateRef : Ref Int
 rngStateRef = Ref 123456789
 
 rngU64Ref : Ref U64
-rngU64Ref = Ref 0
+rngU64Ref = Ref (U64 0 0 0 0)
 
 -- One SplitMix64 step: advance the global state and return the finalized draw.
 rngDraw : Unit -> U64
 rngDraw _ =
-  let s = !rngU64Ref + u64Golden
+  let s = add !rngU64Ref u64Golden
   rngU64Ref := s
   u64Finalize s
 
@@ -3254,32 +3271,30 @@ rngDraw _ =
 -- so no bare 63-bit Int op is ever asked to hold a value it cannot (issue #98).
 pRandomInt : Value e -> Value e -> <e> Value e
 pRandomInt (VInt lo) (VInt hi) =
-  let loU = U64.truncate lo
-  let rangeU = U64.truncate hi - loU + 1
-  if rangeU == 0 || rangeU >= 0x8000000000000000 then
+  let loU = fromIntBits lo
+  let rangeU = add (sub (fromIntBits hi) loU) (fromIntBits 1)
+  if isZero rangeU || u64Bit63 rangeU == 1 then
     VInt lo
   else
-    let rem = rngDraw () % rangeU
-    -- `lo + rem` lies in [lo, hi], so its signed 64-bit reading fits `Int` and
-    -- bits 63 and 62 agree: the low 63 bits are the number.
-    VInt (U64.toIntTruncating (loU + rem))
+    let rem = mod (rngDraw ()) rangeU
+    VInt (u64ToSignedInt (add loU rem))
 pRandomInt _ _ = panic "randomInt: expected Int Int"
 
 pRandomBool : Value e -> <e> Value e
-pRandomBool _ = VBool (U64.bitAnd (rngDraw ()) 1 == 1)
+pRandomBool _ = VBool (bitAnd (limbAt 0 (rngDraw ())) 1 == 1)
 
 pRandomFloat : Value e -> <e> Value e
 pRandomFloat _ =
   -- `intToFloat 9007199254740992` is the double 2^53 (the mantissa scale); written
   -- via an Int literal because `medaka fmt` corrupts a >= 1e15 float literal (#51).
-  let bits = U64.toIntTruncating (U64.shiftRight (rngDraw ()) 11)
+  let bits = u64ToInt (shr 11 (rngDraw ()))
   VFloat (intToFloat bits * (1.0 / intToFloat 9007199254740992) * 2.0 - 1.0)
 
 pRandomChar : Value e -> <e> Value e
 pRandomChar _ =
   VChar
     (charToStr
-      (charFromCodeUnsafe (32 + U64.toIntTruncating (rngDraw () % 95))))
+      (charFromCodeUnsafe (32 + u64ToInt (mod (rngDraw ()) (fromIntBits 95)))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -3290,7 +3305,7 @@ charFromCodeUnsafe n = match charFromCode n
 
 pSetSeed : Value e -> <e> Value e
 pSetSeed (VInt seed) =
-  rngU64Ref := U64.truncate seed
+  rngU64Ref := fromIntBits seed
   VUnit
 pSetSeed _ = panic "setSeed: expected Int"
 
@@ -3355,14 +3370,6 @@ externBindings _ = [
   ("u16ToInt", prim1 pFixedToInt),
   ("u32Truncate", prim1 (pTruncateBits 4294967295)),
   ("u32ToInt", prim1 pFixedToInt),
-  ("u64Truncate", prim1 pU64Truncate),
-  ("u64TruncateToInt", prim1 pU64TruncateToInt),
-  ("u64BitAnd", prim2 (pU64Bin H.bitAndU64)),
-  ("u64BitOr", prim2 (pU64Bin H.bitOrU64)),
-  ("u64BitXor", prim2 (pU64Bin H.bitXorU64)),
-  ("u64ShiftLeft", prim2 (pU64Shift H.shiftLeft64)),
-  ("u64ShiftRight", prim2 (pU64Shift H.shiftRight64)),
-  ("u64MulHigh", prim2 (pU64Bin H.mulHigh)),
   ("intBitAnd", prim2 pBitAnd),
   ("intBitOr", prim2 pBitOr),
   ("intBitXor", prim2 pBitXor),
@@ -3518,28 +3525,6 @@ pTruncateBits : Int -> Value e -> <e> Value e
 pTruncateBits mask (VInt a) = VInt (bitAnd a mask)
 pTruncateBits _ _ = panic "truncate: not an Int"
 
-pU64Truncate : Value e -> <e> Value e
-pU64Truncate (VInt n) = u64Value (H.fromInt n)
-pU64Truncate _ = panic "u64Truncate: not an Int"
-
-pU64TruncateToInt : Value e -> <e> Value e
-pU64TruncateToInt (VU64 hi lo) = VInt (H.truncateToInt (hi, lo))
-pU64TruncateToInt _ = panic "u64TruncateToInt: not a U64"
-
-pU64Bin : ((Int, Int) -> (Int, Int) -> (Int, Int)) ->
-  Value e ->
-  Value e ->
-  <e> Value e
-pU64Bin f (VU64 ah al) (VU64 bh bl) = u64Value (f (ah, al) (bh, bl))
-pU64Bin _ _ _ = panic "U64 bit operation: not a U64"
-
-pU64Shift : ((Int, Int) -> Int -> (Int, Int)) ->
-  Value e ->
-  Value e ->
-  <e> Value e
-pU64Shift f (VU64 hi lo) (VInt k) = u64Value (f (hi, lo) k)
-pU64Shift _ _ _ = panic "U64 shift: expected a U64 and an Int"
-
 pFixedToInt : Value e -> <e> Value e
 pFixedToInt (VInt a) = VInt a
 pFixedToInt _ = panic "toInt: not a fixed-width integer"
@@ -3581,41 +3566,40 @@ pFloatToBytes64 _ = panic "floatToBytes64: not a Float"
 
 -- ── Interpreter Hashable hashers — byte-identical to runtime/medaka_rt.c ─────
 -- The native mdk_hash_* are a SplitMix64/FNV-1a spec over uint64. We reproduce
--- them faithfully on `U64` above (issue #98: an approximate
+-- them faithfully on the 4-limb uint64 emulation above (issue #98: an approximate
 -- mixer made `medaka run` and `medaka build` disagree on hash values, both silent).
 -- hashInt/hashChar/hashFloat = mix64 then mask to [0, 2^30); hashString = 64-bit
 -- FNV-1a; hashBool = 0/1. `n`/codepoint arrive as the untagged native Int, so a
 -- negative Int's two's-complement 64-bit value flows straight into
--- `U64.truncate`.
+-- `fromIntBits`.
 
 -- One 64-bit FNV-1a step: h = (h XOR byte) * prime (low 64 bits).
 fnvStep64 : U64 -> Int -> U64
-fnvStep64 h byte = U64.bitXor h (U64.truncate byte) * 0x100000001B3
+fnvStep64 (U64 h0 h1 h2 h3) byte =
+  mulLow (U64 (bitXor h0 byte) h1 h2 h3) u64FnvPrime
 
 fnvFold64 : List Int -> U64 -> U64
 fnvFold64 [] h = h
 fnvFold64 (x :: xs) h = fnvFold64 xs (fnvStep64 h x)
 
--- 8 big-endian bytes (bs[0] = MSB, as floatToBytes64 emits) -> uint64.
+-- 8 big-endian bytes (bs[0] = MSB, as floatToBytes64 emits) -> uint64 limbs.
 bytesBEToU64 : Array Int -> U64
-bytesBEToU64 bs = bytesBEGo bs 0 0
-
-bytesBEGo : Array Int -> Int -> U64 -> U64
-bytesBEGo bs i acc =
-  if i >= 8 then
-    acc
-  else
-    bytesBEGo bs (i + 1) (acc * 256 + U64.truncate (arrayGetUnsafe i bs))
+bytesBEToU64 bs =
+  U64
+    (bitOr (arrayGetUnsafe 7 bs) (shiftLeft (arrayGetUnsafe 6 bs) 8))
+    (bitOr (arrayGetUnsafe 5 bs) (shiftLeft (arrayGetUnsafe 4 bs) 8))
+    (bitOr (arrayGetUnsafe 3 bs) (shiftLeft (arrayGetUnsafe 2 bs) 8))
+    (bitOr (arrayGetUnsafe 1 bs) (shiftLeft (arrayGetUnsafe 0 bs) 8))
 
 pHashInt : Value e -> <e> Value e
-pHashInt (VInt n) = VInt (u64Low30 (u64Mix (U64.truncate n)))
+pHashInt (VInt n) = VInt (u64Low30 (u64Mix (fromIntBits n)))
 pHashInt _ = panic "hashInt: not an Int"
 
 pHashChar : Value e -> <e> Value e
 pHashChar (VChar s) =
   VInt
     (u64Low30
-      (u64Mix (U64.truncate (charCode (arrayGetUnsafe 0 (stringToChars s))))))
+      (u64Mix (fromIntBits (charCode (arrayGetUnsafe 0 (stringToChars s))))))
 pHashChar _ = panic "hashChar: not a Char"
 
 pHashBool : Value e -> <e> Value e
@@ -3644,9 +3628,7 @@ pHashFloat _ = panic "hashFloat: not a Float"
 
 pHashString : Value e -> <e> Value e
 pHashString (VString s) =
-  VInt
-    (u64Low30
-      (fnvFold64 (arrayToListG (stringToUtf8Bytes s)) 0xCBF29CE484222325))
+  VInt (u64Low30 (fnvFold64 (arrayToListG (stringToUtf8Bytes s)) u64FnvBasis))
 pHashString _ = panic "hashString: not a String"
 
 pFloatToString : Value e -> <e> Value e
@@ -5111,12 +5093,11 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
-(DUse false (UseAlias ("eval" "u64_halves") "H"))
-(DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
-(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
+(DUse false (UseGroup ("bits64") ((mem "U64" true) (mem "add" false) (mem "sub" false) (mem "mulLow" false) (mem "xor" false) (mem "shr" false) (mem "mod" false) (mem "fromIntBits" false) (mem "isZero" false) (mem "limbAt" false))))
+(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))))) ())
 (DTypeSig true "ppValue" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
 (DFunDef false "ppValue" ((PCon "VInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
@@ -5130,7 +5111,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValue" ((PCon "VList" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString "]"))))
 (DFunDef false "ppValue" ((PCon "VArray" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppValue")) (EApp (EVar "arrayToListG") (EVar "vs"))))) (ELit (LString "|]"))))
 (DFunDef false "ppValue" ((PCon "VByteBlock" (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<byteblock:")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "b"))))) (ELit (LString ">"))))
-(DFunDef false "ppValue" ((PCon "VU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "H.toDecimal") (ETuple (EVar "hi") (EVar "lo"))))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PList))) (EApp (EVar "displayCtorName") (EVar "name")))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PVar "vs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSp") (EApp (EApp (EVar "map") (EVar "ppValueAtom")) (EVar "vs"))))) (ELit (LString ""))))
 (DFunDef false "ppValue" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " { "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppField")) (EVar "fields"))))) (ELit (LString " }"))))
@@ -5272,7 +5252,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "runtimeTypeTag" ((PCon "VList" PWild)) (EApp (EVar "Some") (ELit (LString "List"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VArray" PWild)) (EApp (EVar "Some") (ELit (LString "Array"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VByteBlock" PWild)) (EApp (EVar "Some") (ELit (LString "ByteBlock"))))
-(DFunDef false "runtimeTypeTag" ((PCon "VU64" PWild PWild)) (EApp (EVar "Some") (ELit (LString "U64"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VTuple" (PVar "vs"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "vs")))))
 (DFunDef false "runtimeTypeTag" ((PCon "VCon" (PVar "cname") PWild)) (EApp (EApp (EVar "lookupAssoc") (EVar "cname")) (EUnOp "!" (EVar "ctorToTypeRef"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VRecord" (PVar "name") PWild)) (EApp (EVar "Some") (EApp (EVar "displayCtorName") (EVar "name"))))
@@ -5287,6 +5266,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PCon "TyAuth" PWild PWild)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -5327,6 +5307,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentions" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -5391,12 +5372,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "valueEq" ((PCon "VList" (PVar "a")) (PCon "VList" (PVar "b"))) (EApp (EApp (EVar "valueListEq") (EVar "a")) (EVar "b")))
 (DFunDef false "valueEq" ((PCon "VArray" (PVar "a")) (PCon "VArray" (PVar "b"))) (EApp (EApp (EVar "valueListEq") (EApp (EVar "arrayToListG") (EVar "a"))) (EApp (EVar "arrayToListG") (EVar "b"))))
 (DFunDef false "valueEq" ((PCon "VByteBlock" (PVar "a")) (PCon "VByteBlock" (PVar "b"))) (EBinOp "==" (EApp (EVar "arrayToListG") (EVar "a")) (EApp (EVar "arrayToListG") (EVar "b"))))
-(DFunDef false "valueEq" ((PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
 (DFunDef false "valueEq" ((PCon "VCon" (PVar "n1") (PVar "a1")) (PCon "VCon" (PVar "n2") (PVar "a2"))) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EApp (EVar "valueListEq") (EVar "a1")) (EVar "a2"))))
 (DFunDef false "valueEq" ((PCon "VRecord" (PVar "n1") (PVar "f1")) (PCon "VRecord" (PVar "n2") (PVar "f2"))) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EApp (EVar "fieldListEq") (EVar "f1")) (EVar "f2"))))
 (DFunDef false "valueEq" ((PCon "VRef" (PVar "a")) (PCon "VRef" (PVar "b"))) (EApp (EApp (EVar "valueEq") (EUnOp "!" (EVar "a"))) (EUnOp "!" (EVar "b"))))
-(DFunDef false "valueEq" ((PCon "VU64" PWild PWild) PWild) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
-(DFunDef false "valueEq" (PWild (PCon "VU64" PWild PWild)) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
 (DFunDef false "valueEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "valueListEq" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Bool"))))
 (DFunDef false "valueListEq" ((PList) (PList)) (EVar "True"))
@@ -5427,7 +5405,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "valueTag" ((PCon "VRecord" PWild PWild)) (ELit (LInt 10)))
 (DFunDef false "valueTag" ((PCon "VRef" PWild)) (ELit (LInt 11)))
 (DFunDef false "valueTag" ((PCon "VByteBlock" PWild)) (ELit (LInt 12)))
-(DFunDef false "valueTag" ((PCon "VU64" PWild PWild)) (ELit (LInt 13)))
 (DFunDef false "valueTag" (PWild) (ELit (LInt 99)))
 (DTypeSig false "valueCompare" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Ordering"))))
 (DFunDef false "valueCompare" ((PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b")))
@@ -5440,13 +5417,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "valueCompare" ((PCon "VArray" (PVar "a")) (PCon "VArray" (PVar "b"))) (EApp (EApp (EVar "compareValueLists") (EApp (EVar "arrayToListG") (EVar "a"))) (EApp (EVar "arrayToListG") (EVar "b"))))
 (DFunDef false "valueCompare" ((PCon "VByteBlock" (PVar "a")) (PCon "VByteBlock" (PVar "b"))) (EApp (EApp (EVar "compare") (EApp (EVar "arrayToListG") (EVar "a"))) (EApp (EVar "arrayToListG") (EVar "b"))))
 (DFunDef false "valueCompare" ((PCon "VTuple" (PVar "a")) (PCon "VTuple" (PVar "b"))) (EApp (EApp (EVar "compareValueLists") (EVar "a")) (EVar "b")))
-(DFunDef false "valueCompare" ((PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EApp (EApp (EVar "H.compareU64") (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl"))))
 (DFunDef false "valueCompare" ((PCon "VCon" (PVar "n1") (PVar "a1")) (PCon "VCon" (PVar "n2") (PVar "a2"))) (EMatch (EApp (EApp (EVar "compare") (EVar "n1")) (EVar "n2")) (arm (PCon "Eq") () (EApp (EApp (EVar "compareValueLists") (EVar "a1")) (EVar "a2"))) (arm (PVar "o") () (EVar "o"))))
-(DFunDef false "valueCompare" ((PCon "VU64" PWild PWild) PWild) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
-(DFunDef false "valueCompare" (PWild (PCon "VU64" PWild PWild)) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
 (DFunDef false "valueCompare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "valueTag") (EVar "a"))) (EApp (EVar "valueTag") (EVar "b"))))
-(DTypeSig false "u64ShapeMismatch" (TyFun (TyCon "Unit") (TyVar "a")))
-(DFunDef false "u64ShapeMismatch" (PWild) (EApp (EVar "panic") (ELit (LString "a U64 compared with a value of another type: the program was not typechecked"))))
 (DTypeSig false "compareValueLists" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Ordering"))))
 (DFunDef false "compareValueLists" ((PList) (PList)) (EVar "Eq"))
 (DFunDef false "compareValueLists" ((PList) (PCons PWild PWild)) (EVar "Lt"))
@@ -5677,8 +5649,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LInt" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "VFloat") (EVar "f"))) (arm (PCon "None") () (EApp (EVar "VInt") (EVar "n")))))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "VFloat") (EVar "f")))
-(DFunDef false "eval" (PWild (PCon "ELit" (PCon "LU64" (PVar "hi") (PVar "lo")))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
-(DFunDef false "eval" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "VChar") (EVar "c")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LBool" (PVar "b")))) (EApp (EVar "VBool") (EVar "b")))
@@ -5859,7 +5829,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalUnop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EBinOp "-" (ELit (LInt 0)) (EVar "n"))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VFloat" (PVar "f"))) (EApp (EVar "VFloat") (EApp (EVar "negFloatIEEE") (EVar "f"))))
-(DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.sub") (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (EVar "hi") (EVar "lo")))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) PWild) (EApp (EVar "panic") (ELit (LString "unary minus on non-number"))))
 (DFunDef false "evalUnop" ((PLit (LString "!")) (PVar "v")) (EApp (EVar "evalValueField") (EVar "v")))
 (DFunDef false "evalUnop" ((PLit (LString "not")) (PCon "VBool" (PVar "b"))) (EApp (EVar "VBool") (EApp (EVar "not") (EVar "b"))))
@@ -5908,9 +5877,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "*")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EBinOp "*" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "/")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArith" ((PVar "op") (PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EApp (EApp (EApp (EVar "evalArithU64") (EVar "op")) (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl"))))
-(DFunDef false "evalArith" (PWild (PCon "VU64" PWild PWild) PWild) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
-(DFunDef false "evalArith" (PWild PWild (PCon "VU64" PWild PWild)) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
 (DFunDef false "evalArith" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "/=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString "<")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<" (EVar "a") (EVar "b"))))
@@ -5922,21 +5888,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "<=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EVar "ordGt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b"))))))
 (DFunDef false "evalArith" ((PLit (LString ">=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EVar "ordLt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b"))))))
 (DFunDef false "evalArith" ((PVar "op") PWild PWild) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown op '")) (EVar "op")) (ELit (LString "'")))))
-(DTypeSig false "evalArithU64" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "evalArithU64" ((PLit (LString "+")) (PVar "a") (PVar "b")) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.add") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArithU64" ((PLit (LString "-")) (PVar "a") (PVar "b")) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.sub") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArithU64" ((PLit (LString "*")) (PVar "a") (PVar "b")) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.mul") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArithU64" ((PLit (LString "/")) (PVar "a") (PVar "b")) (EIf (EApp (EVar "H.isZero") (EVar "b")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-DIV-ZERO"))) (ELit (LString "division by zero"))) (EIf (EVar "otherwise") (EApp (EVar "u64Value") (EApp (EVar "fst") (EApp (EApp (EVar "H.divMod") (EVar "a")) (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "evalArithU64" ((PLit (LString "%")) (PVar "a") (PVar "b")) (EIf (EApp (EVar "H.isZero") (EVar "b")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-MOD-ZERO"))) (ELit (LString "modulo by zero"))) (EIf (EVar "otherwise") (EApp (EVar "u64Value") (EApp (EVar "snd") (EApp (EApp (EVar "H.divMod") (EVar "a")) (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "evalArithU64" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Eq"))))
-(DFunDef false "evalArithU64" ((PLit (LString "/=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "/=" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Eq"))))
-(DFunDef false "evalArithU64" ((PLit (LString "<")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Lt"))))
-(DFunDef false "evalArithU64" ((PLit (LString ">")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Gt"))))
-(DFunDef false "evalArithU64" ((PLit (LString "<=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "/=" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Gt"))))
-(DFunDef false "evalArithU64" ((PLit (LString ">=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "/=" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Lt"))))
-(DFunDef false "evalArithU64" ((PVar "op") PWild PWild) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown op '")) (EVar "op")) (ELit (LString "' on U64")))))
-(DTypeSig false "u64Value" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "u64Value" ((PTuple (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DTypeSig true "evalArithAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalArithAt" ((PVar "tag") (PVar "op") (PVar "l") (PVar "r")) (EMatch (ETuple (EApp (EVar "fixedWidthMask") (EVar "tag")) (EApp (EApp (EApp (EVar "evalArith") (EVar "op")) (EVar "l")) (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "mask")) (PCon "VInt" (PVar "n"))) () (EApp (EVar "VInt") (EApp (EApp (EVar "bitAnd") (EVar "n")) (EVar "mask")))) (arm (PTuple PWild (PVar "v")) () (EVar "v"))))
 (DTypeSig true "collectCtors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
@@ -6130,32 +6081,46 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "optionToValue" ((PCon "None")) (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)))
 (DFunDef false "optionToValue" ((PCon "Some" (PVar "v"))) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EVar "v"))))
 (DTypeSig false "u64Golden" (TyCon "U64"))
-(DFunDef false "u64Golden" () (ELit (LU64 2654435769 2135587861)))
+(DFunDef false "u64Golden" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 31765))) (ELit (LInt 32586))) (ELit (LInt 31161))) (ELit (LInt 40503))))
+(DTypeSig false "u64Const1" (TyCon "U64"))
+(DFunDef false "u64Const1" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 58809))) (ELit (LInt 7396))) (ELit (LInt 18285))) (ELit (LInt 48984))))
+(DTypeSig false "u64Const2" (TyCon "U64"))
+(DFunDef false "u64Const2" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 4587))) (ELit (LInt 4913))) (ELit (LInt 18875))) (ELit (LInt 38096))))
+(DTypeSig false "u64FnvBasis" (TyCon "U64"))
+(DFunDef false "u64FnvBasis" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 8997))) (ELit (LInt 33826))) (ELit (LInt 40164))) (ELit (LInt 52210))))
+(DTypeSig false "u64FnvPrime" (TyCon "U64"))
+(DFunDef false "u64FnvPrime" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 435))) (ELit (LInt 0))) (ELit (LInt 256))) (ELit (LInt 0))))
 (DTypeSig false "u64Finalize" (TyFun (TyCon "U64") (TyCon "U64")))
-(DFunDef false "u64Finalize" ((PVar "z")) (EBlock (DoLet false false (PVar "z1") (EBinOp "*" (EApp (EApp (EVar "U64.bitXor") (EVar "z")) (EApp (EApp (EVar "U64.shiftRight") (EVar "z")) (ELit (LInt 30)))) (ELit (LU64 3210233709 484763065)))) (DoLet false false (PVar "z2") (EBinOp "*" (EApp (EApp (EVar "U64.bitXor") (EVar "z1")) (EApp (EApp (EVar "U64.shiftRight") (EVar "z1")) (ELit (LInt 27)))) (ELit (LU64 2496678331 321982955)))) (DoExpr (EApp (EApp (EVar "U64.bitXor") (EVar "z2")) (EApp (EApp (EVar "U64.shiftRight") (EVar "z2")) (ELit (LInt 31)))))))
+(DFunDef false "u64Finalize" ((PVar "z")) (EBlock (DoLet false false (PVar "z1") (EApp (EApp (EVar "mulLow") (EApp (EApp (EVar "xor") (EVar "z")) (EApp (EApp (EVar "shr") (ELit (LInt 30))) (EVar "z")))) (EVar "u64Const1"))) (DoLet false false (PVar "z2") (EApp (EApp (EVar "mulLow") (EApp (EApp (EVar "xor") (EVar "z1")) (EApp (EApp (EVar "shr") (ELit (LInt 27))) (EVar "z1")))) (EVar "u64Const2"))) (DoExpr (EApp (EApp (EVar "xor") (EVar "z2")) (EApp (EApp (EVar "shr") (ELit (LInt 31))) (EVar "z2"))))))
 (DTypeSig false "u64Mix" (TyFun (TyCon "U64") (TyCon "U64")))
-(DFunDef false "u64Mix" ((PVar "x")) (EApp (EVar "u64Finalize") (EBinOp "+" (EVar "x") (EVar "u64Golden"))))
+(DFunDef false "u64Mix" ((PVar "x")) (EApp (EVar "u64Finalize") (EApp (EApp (EVar "add") (EVar "x")) (EVar "u64Golden"))))
 (DTypeSig false "u64Low30" (TyFun (TyCon "U64") (TyCon "Int")))
-(DFunDef false "u64Low30" ((PVar "x")) (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.bitAnd") (EVar "x")) (ELit (LInt 1073741823)))))
+(DFunDef false "u64Low30" ((PCon "U64" (PVar "a0") (PVar "a1") PWild PWild)) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "bitOr") (EVar "a0")) (EApp (EApp (EVar "shiftLeft") (EVar "a1")) (ELit (LInt 16))))) (ELit (LInt 1073741823))))
+(DTypeSig false "u64ToInt" (TyFun (TyCon "U64") (TyCon "Int")))
+(DFunDef false "u64ToInt" ((PCon "U64" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "bitOr") (EVar "a0")) (EApp (EApp (EVar "shiftLeft") (EVar "a1")) (ELit (LInt 16))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a2")) (ELit (LInt 32)))) (EApp (EApp (EVar "shiftLeft") (EVar "a3")) (ELit (LInt 48))))))
+(DTypeSig false "u64Bit63" (TyFun (TyCon "U64") (TyCon "Int")))
+(DFunDef false "u64Bit63" ((PCon "U64" PWild PWild PWild (PVar "a3"))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "a3")) (ELit (LInt 15)))) (ELit (LInt 1))))
+(DTypeSig false "u64ToSignedInt" (TyFun (TyCon "U64") (TyCon "Int")))
+(DFunDef false "u64ToSignedInt" ((PCon "U64" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EBlock (DoLet false false (PVar "hi16") (EIf (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EVar "a3")) (ELit (LInt 32768))) (ELit (LInt 0))) (EVar "a3") (EBinOp "-" (EVar "a3") (ELit (LInt 65536))))) (DoExpr (EBinOp "+" (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "bitOr") (EVar "a0")) (EApp (EApp (EVar "shiftLeft") (EVar "a1")) (ELit (LInt 16))))) (EApp (EApp (EVar "shiftLeft") (EVar "a2")) (ELit (LInt 32)))) (EApp (EApp (EVar "shiftLeft") (EVar "hi16")) (ELit (LInt 48)))))))
 (DTypeSig true "rngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "rngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig false "rngU64Ref" (TyApp (TyCon "Ref") (TyCon "U64")))
-(DFunDef false "rngU64Ref" () (EApp (EVar "Ref") (ELit (LInt 0))))
+(DFunDef false "rngU64Ref" () (EApp (EVar "Ref") (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "rngDraw" (TyFun (TyCon "Unit") (TyCon "U64")))
-(DFunDef false "rngDraw" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EUnOp "!" (EVar "rngU64Ref")) (EVar "u64Golden"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EVar "s"))) (DoExpr (EApp (EVar "u64Finalize") (EVar "s")))))
+(DFunDef false "rngDraw" (PWild) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "add") (EUnOp "!" (EVar "rngU64Ref"))) (EVar "u64Golden"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EVar "s"))) (DoExpr (EApp (EVar "u64Finalize") (EVar "s")))))
 (DTypeSig false "pRandomInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "U64.truncate") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EBinOp "+" (EBinOp "-" (EApp (EVar "U64.truncate") (EVar "hi")) (EVar "loU")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "rangeU") (ELit (LInt 0))) (EBinOp ">=" (EVar "rangeU") (ELit (LU64 2147483648 0)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "U64.toIntTruncating") (EBinOp "+" (EVar "loU") (EVar "rem"))))))))))
+(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "fromIntBits") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EApp (EApp (EVar "add") (EApp (EApp (EVar "sub") (EApp (EVar "fromIntBits") (EVar "hi"))) (EVar "loU"))) (EApp (EVar "fromIntBits") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isZero") (EVar "rangeU")) (EBinOp "==" (EApp (EVar "u64Bit63") (EVar "rangeU")) (ELit (LInt 1)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EApp (EApp (EVar "mod") (EApp (EVar "rngDraw") (ELit LUnit))) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "u64ToSignedInt") (EApp (EApp (EVar "add") (EVar "loU")) (EVar "rem"))))))))))
 (DFunDef false "pRandomInt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "randomInt: expected Int Int"))))
 (DTypeSig false "pRandomBool" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomBool" (PWild) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "U64.bitAnd") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 1))) (ELit (LInt 1)))))
+(DFunDef false "pRandomBool" (PWild) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "limbAt") (ELit (LInt 0))) (EApp (EVar "rngDraw") (ELit LUnit)))) (ELit (LInt 1))) (ELit (LInt 1)))))
 (DTypeSig false "pRandomFloat" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.shiftRight") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 11))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
+(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "u64ToInt") (EApp (EApp (EVar "shr") (ELit (LInt 11))) (EApp (EVar "rngDraw") (ELit LUnit))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
 (DTypeSig false "pRandomChar" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.toIntTruncating") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (ELit (LInt 95)))))))))
+(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "u64ToInt") (EApp (EApp (EVar "mod") (EApp (EVar "rngDraw") (ELit LUnit))) (EApp (EVar "fromIntBits") (ELit (LInt 95))))))))))
 (DTypeSig false "charFromCodeUnsafe" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
 (DTypeSig false "pSetSeed" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pSetSeed" ((PCon "VInt" (PVar "seed"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EApp (EVar "U64.truncate") (EVar "seed")))) (DoExpr (EVar "VUnit"))))
+(DFunDef false "pSetSeed" ((PCon "VInt" (PVar "seed"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EApp (EVar "fromIntBits") (EVar "seed")))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pSetSeed" (PWild) (EApp (EVar "panic") (ELit (LString "setSeed: expected Int"))))
 (DTypeSig false "pWallTimeSec" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pWallTimeSec" (PWild) (EApp (EVar "VFloat") (ELit (LFloat 1700000000.0))))
@@ -6170,7 +6135,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pFlushStdout" ((PCon "VUnit")) (EVar "VUnit"))
 (DFunDef false "pFlushStdout" (PWild) (EApp (EVar "panic") (ELit (LString "flushStdout: expected Unit"))))
 (DTypeSig true "externBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "externBindings" (PWild) (EListLit (ETuple (ELit (LString "randomInt")) (EApp (EVar "prim2M") (EVar "pRandomInt"))) (ETuple (ELit (LString "randomBool")) (EApp (EVar "prim1M") (EVar "pRandomBool"))) (ETuple (ELit (LString "randomFloat")) (EApp (EVar "prim1M") (EVar "pRandomFloat"))) (ETuple (ELit (LString "randomChar")) (EApp (EVar "prim1M") (EVar "pRandomChar"))) (ETuple (ELit (LString "setSeed")) (EApp (EVar "prim1M") (EVar "pSetSeed"))) (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSec"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSec"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMs"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytes"))) (ETuple (ELit (LString "flushStdout")) (EApp (EVar "prim1M") (EVar "pFlushStdout"))) (ETuple (ELit (LString "intToString")) (EApp (EVar "prim1") (EVar "pIntToString"))) (ETuple (ELit (LString "bitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "bitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "bitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "shiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "shiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "bitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "u8Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 255))))) (ETuple (ELit (LString "u8ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u16Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 65535))))) (ETuple (ELit (LString "u16ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u32Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 4294967295))))) (ETuple (ELit (LString "u32ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u64Truncate")) (EApp (EVar "prim1") (EVar "pU64Truncate"))) (ETuple (ELit (LString "u64TruncateToInt")) (EApp (EVar "prim1") (EVar "pU64TruncateToInt"))) (ETuple (ELit (LString "u64BitAnd")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.bitAndU64")))) (ETuple (ELit (LString "u64BitOr")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.bitOrU64")))) (ETuple (ELit (LString "u64BitXor")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.bitXorU64")))) (ETuple (ELit (LString "u64ShiftLeft")) (EApp (EVar "prim2") (EApp (EVar "pU64Shift") (EVar "H.shiftLeft64")))) (ETuple (ELit (LString "u64ShiftRight")) (EApp (EVar "prim2") (EApp (EVar "pU64Shift") (EVar "H.shiftRight64")))) (ETuple (ELit (LString "u64MulHigh")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.mulHigh")))) (ETuple (ELit (LString "intBitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "intBitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "intBitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "intBitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "intShiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "intShiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "intToFloat")) (EApp (EVar "prim1") (EVar "pIntToFloat"))) (ETuple (ELit (LString "floatToInt")) (EApp (EVar "prim1") (EVar "pFloatToInt"))) (ETuple (ELit (LString "floatToString")) (EApp (EVar "prim1") (EVar "pFloatToString"))) (ETuple (ELit (LString "charToStr")) (EApp (EVar "prim1") (EVar "pCharToStr"))) (ETuple (ELit (LString "charCode")) (EApp (EVar "prim1") (EVar "pCharCode"))) (ETuple (ELit (LString "charFromCode")) (EApp (EVar "prim1") (EVar "pCharFromCode"))) (ETuple (ELit (LString "charToUpper")) (EApp (EVar "prim1") (EVar "pCharToUpper"))) (ETuple (ELit (LString "charToLower")) (EApp (EVar "prim1") (EVar "pCharToLower"))) (ETuple (ELit (LString "stringLength")) (EApp (EVar "prim1") (EVar "pStringLength"))) (ETuple (ELit (LString "stringConcat")) (EApp (EVar "prim1") (EVar "pStringConcat"))) (ETuple (ELit (LString "stringToChars")) (EApp (EVar "prim1") (EVar "pStringToChars"))) (ETuple (ELit (LString "stringFromChars")) (EApp (EVar "prim1") (EVar "pStringFromChars"))) (ETuple (ELit (LString "stringToUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringToUtf8Bytes"))) (ETuple (ELit (LString "stringFromUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringFromUtf8Bytes"))) (ETuple (ELit (LString "floatRem")) (EApp (EVar "prim2") (EVar "pFloatRem"))) (ETuple (ELit (LString "sqrt")) (EApp (EVar "prim1") (EVar "pSqrt"))) (ETuple (ELit (LString "cbrt")) (EApp (EVar "prim1") (EVar "pCbrt"))) (ETuple (ELit (LString "exp")) (EApp (EVar "prim1") (EVar "pExp"))) (ETuple (ELit (LString "log")) (EApp (EVar "prim1") (EVar "pLog"))) (ETuple (ELit (LString "log2")) (EApp (EVar "prim1") (EVar "pLog2"))) (ETuple (ELit (LString "log10")) (EApp (EVar "prim1") (EVar "pLog10"))) (ETuple (ELit (LString "sin")) (EApp (EVar "prim1") (EVar "pSin"))) (ETuple (ELit (LString "cos")) (EApp (EVar "prim1") (EVar "pCos"))) (ETuple (ELit (LString "tan")) (EApp (EVar "prim1") (EVar "pTan"))) (ETuple (ELit (LString "asin")) (EApp (EVar "prim1") (EVar "pAsin"))) (ETuple (ELit (LString "acos")) (EApp (EVar "prim1") (EVar "pAcos"))) (ETuple (ELit (LString "atan")) (EApp (EVar "prim1") (EVar "pAtan"))) (ETuple (ELit (LString "sinh")) (EApp (EVar "prim1") (EVar "pSinh"))) (ETuple (ELit (LString "cosh")) (EApp (EVar "prim1") (EVar "pCosh"))) (ETuple (ELit (LString "tanh")) (EApp (EVar "prim1") (EVar "pTanh"))) (ETuple (ELit (LString "floor")) (EApp (EVar "prim1") (EVar "pFloor"))) (ETuple (ELit (LString "ceil")) (EApp (EVar "prim1") (EVar "pCeil"))) (ETuple (ELit (LString "round")) (EApp (EVar "prim1") (EVar "pRound"))) (ETuple (ELit (LString "trunc")) (EApp (EVar "prim1") (EVar "pTrunc"))) (ETuple (ELit (LString "pow")) (EApp (EVar "prim2") (EVar "pPow"))) (ETuple (ELit (LString "atan2")) (EApp (EVar "prim2") (EVar "pAtan2"))) (ETuple (ELit (LString "hypot")) (EApp (EVar "prim2") (EVar "pHypot"))) (ETuple (ELit (LString "stringToUpper")) (EApp (EVar "prim1") (EVar "pStringToUpper"))) (ETuple (ELit (LString "stringToLower")) (EApp (EVar "prim1") (EVar "pStringToLower"))) (ETuple (ELit (LString "stringCompare")) (EApp (EVar "prim2") (EVar "pStringCompare"))) (ETuple (ELit (LString "stringIndexOf")) (EApp (EVar "prim2") (EVar "pStringIndexOf"))) (ETuple (ELit (LString "stringSlice")) (EApp (EVar "prim3") (EVar "pStringSlice"))) (ETuple (ELit (LString "arrayLength")) (EApp (EVar "prim1") (EVar "pArrayLength"))) (ETuple (ELit (LString "arrayFromList")) (EApp (EVar "prim1") (EVar "pArrayFromList"))) (ETuple (ELit (LString "arrayGetUnsafe")) (EApp (EVar "prim2") (EVar "pArrayGetUnsafe"))) (ETuple (ELit (LString "arrayMake")) (EApp (EVar "prim2") (EVar "pArrayMake"))) (ETuple (ELit (LString "arrayMakeWith")) (EApp (EVar "prim2M") (EVar "pArrayMakeWith"))) (ETuple (ELit (LString "arrayCopy")) (EApp (EVar "prim1") (EVar "pArrayCopy"))) (ETuple (ELit (LString "arraySetUnsafe")) (EApp (EVar "prim3M") (EVar "pArraySetUnsafe"))) (ETuple (ELit (LString "arrayBlit")) (EApp (EVar "prim5M") (EVar "pArrayBlit"))) (ETuple (ELit (LString "arrayFill")) (EApp (EVar "prim2M") (EVar "pArrayFill"))) (ETuple (ELit (LString "byteBlockMake")) (EApp (EVar "prim1") (EVar "pByteBlockMake"))) (ETuple (ELit (LString "byteBlockLength")) (EApp (EVar "prim1") (EVar "pByteBlockLength"))) (ETuple (ELit (LString "byteBlockGetUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockGetUnsafe"))) (ETuple (ELit (LString "byteBlockSetUnsafe")) (EApp (EVar "prim3M") (EVar "pByteBlockSetUnsafe"))) (ETuple (ELit (LString "byteBlockCopyUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockCopyUnsafe"))) (ETuple (ELit (LString "byteBlockBlit")) (EApp (EVar "prim5M") (EVar "pByteBlockBlit"))) (ETuple (ELit (LString "byteBlockFromIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockFromIntArray"))) (ETuple (ELit (LString "byteBlockToIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockToIntArray"))) (ETuple (ELit (LString "byteBlockFromString")) (EApp (EVar "prim1") (EVar "pByteBlockFromString"))) (ETuple (ELit (LString "byteBlockToString")) (EApp (EVar "prim1") (EVar "pByteBlockToString"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdout"))) (ETuple (ELit (LString "Ref")) (EApp (EVar "prim1") (EVar "pRef"))) (ETuple (ELit (LString "setRef")) (EApp (EVar "prim2M") (EVar "pSetRef"))) (ETuple (ELit (LString "putStr")) (EApp (EVar "prim1M") (EVar "pPutStr"))) (ETuple (ELit (LString "putStrLn")) (EApp (EVar "prim1M") (EVar "pPutStrLn"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "stashRunStdout")) (EApp (EVar "prim1M") (EVar "pStashRunStdout"))) (ETuple (ELit (LString "enableRunStdoutFlush")) (EApp (EVar "prim1M") (EVar "pEnableRunStdoutFlush"))) (ETuple (ELit (LString "panic")) (EApp (EVar "prim1") (EVar "pPanic"))) (ETuple (ELit (LString "indexError")) (EApp (EVar "prim1") (ELam ((PVar "s")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-INDEX-OOB"))) (EApp (EVar "unString") (EVar "s")))))) (ETuple (ELit (LString "indexErrorAt")) (EApp (EVar "prim1") (EVar "pIndexErrorAt"))) (ETuple (ELit (LString "sliceError")) (EApp (EVar "prim2") (EVar "pSliceError"))) (ETuple (ELit (LString "debugStringLit")) (EApp (EVar "prim1") (EVar "pDebugStringLit"))) (ETuple (ELit (LString "debugCharLit")) (EApp (EVar "prim1") (EVar "pDebugCharLit"))) (ETuple (ELit (LString "stringToFloat")) (EApp (EVar "prim1") (EVar "pStringToFloat"))) (ETuple (ELit (LString "charIsAlpha")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsAlpha")))) (ETuple (ELit (LString "charIsSpace")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsSpace")))) (ETuple (ELit (LString "charIsUpper")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsUpper")))) (ETuple (ELit (LString "charIsLower")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsLower")))) (ETuple (ELit (LString "charIsPunct")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsPunct")))) (ETuple (ELit (LString "intMinBound")) (EApp (EVar "VInt") (EVar "intMinBound"))) (ETuple (ELit (LString "intMaxBound")) (EApp (EVar "VInt") (EVar "intMaxBound"))) (ETuple (ELit (LString "charMinBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMinBound")))) (ETuple (ELit (LString "charMaxBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMaxBound")))) (ETuple (ELit (LString "pi")) (EApp (EVar "VFloat") (EVar "pi"))) (ETuple (ELit (LString "e")) (EApp (EVar "VFloat") (EVar "e"))) (ETuple (ELit (LString "intBitsToFloat")) (EApp (EVar "prim1") (EVar "pIntBitsToFloat"))) (ETuple (ELit (LString "bytesToFloat64")) (EApp (EVar "prim2") (EVar "pBytesToFloat64"))) (ETuple (ELit (LString "floatToBytes64")) (EApp (EVar "prim1") (EVar "pFloatToBytes64"))) (ETuple (ELit (LString "hashInt")) (EApp (EVar "prim1") (EVar "pHashInt"))) (ETuple (ELit (LString "hashFloat")) (EApp (EVar "prim1") (EVar "pHashFloat"))) (ETuple (ELit (LString "hashString")) (EApp (EVar "prim1") (EVar "pHashString"))) (ETuple (ELit (LString "hashChar")) (EApp (EVar "prim1") (EVar "pHashChar"))) (ETuple (ELit (LString "hashBool")) (EApp (EVar "prim1") (EVar "pHashBool"))) (ETuple (EVar "fallthroughName") (EApp (EVar "prim1") (ELam (PWild) (EVar "VFallthrough"))))))
+(DFunDef false "externBindings" (PWild) (EListLit (ETuple (ELit (LString "randomInt")) (EApp (EVar "prim2M") (EVar "pRandomInt"))) (ETuple (ELit (LString "randomBool")) (EApp (EVar "prim1M") (EVar "pRandomBool"))) (ETuple (ELit (LString "randomFloat")) (EApp (EVar "prim1M") (EVar "pRandomFloat"))) (ETuple (ELit (LString "randomChar")) (EApp (EVar "prim1M") (EVar "pRandomChar"))) (ETuple (ELit (LString "setSeed")) (EApp (EVar "prim1M") (EVar "pSetSeed"))) (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSec"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSec"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMs"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytes"))) (ETuple (ELit (LString "flushStdout")) (EApp (EVar "prim1M") (EVar "pFlushStdout"))) (ETuple (ELit (LString "intToString")) (EApp (EVar "prim1") (EVar "pIntToString"))) (ETuple (ELit (LString "bitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "bitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "bitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "shiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "shiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "bitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "u8Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 255))))) (ETuple (ELit (LString "u8ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u16Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 65535))))) (ETuple (ELit (LString "u16ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u32Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 4294967295))))) (ETuple (ELit (LString "u32ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "intBitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "intBitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "intBitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "intBitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "intShiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "intShiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "intToFloat")) (EApp (EVar "prim1") (EVar "pIntToFloat"))) (ETuple (ELit (LString "floatToInt")) (EApp (EVar "prim1") (EVar "pFloatToInt"))) (ETuple (ELit (LString "floatToString")) (EApp (EVar "prim1") (EVar "pFloatToString"))) (ETuple (ELit (LString "charToStr")) (EApp (EVar "prim1") (EVar "pCharToStr"))) (ETuple (ELit (LString "charCode")) (EApp (EVar "prim1") (EVar "pCharCode"))) (ETuple (ELit (LString "charFromCode")) (EApp (EVar "prim1") (EVar "pCharFromCode"))) (ETuple (ELit (LString "charToUpper")) (EApp (EVar "prim1") (EVar "pCharToUpper"))) (ETuple (ELit (LString "charToLower")) (EApp (EVar "prim1") (EVar "pCharToLower"))) (ETuple (ELit (LString "stringLength")) (EApp (EVar "prim1") (EVar "pStringLength"))) (ETuple (ELit (LString "stringConcat")) (EApp (EVar "prim1") (EVar "pStringConcat"))) (ETuple (ELit (LString "stringToChars")) (EApp (EVar "prim1") (EVar "pStringToChars"))) (ETuple (ELit (LString "stringFromChars")) (EApp (EVar "prim1") (EVar "pStringFromChars"))) (ETuple (ELit (LString "stringToUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringToUtf8Bytes"))) (ETuple (ELit (LString "stringFromUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringFromUtf8Bytes"))) (ETuple (ELit (LString "floatRem")) (EApp (EVar "prim2") (EVar "pFloatRem"))) (ETuple (ELit (LString "sqrt")) (EApp (EVar "prim1") (EVar "pSqrt"))) (ETuple (ELit (LString "cbrt")) (EApp (EVar "prim1") (EVar "pCbrt"))) (ETuple (ELit (LString "exp")) (EApp (EVar "prim1") (EVar "pExp"))) (ETuple (ELit (LString "log")) (EApp (EVar "prim1") (EVar "pLog"))) (ETuple (ELit (LString "log2")) (EApp (EVar "prim1") (EVar "pLog2"))) (ETuple (ELit (LString "log10")) (EApp (EVar "prim1") (EVar "pLog10"))) (ETuple (ELit (LString "sin")) (EApp (EVar "prim1") (EVar "pSin"))) (ETuple (ELit (LString "cos")) (EApp (EVar "prim1") (EVar "pCos"))) (ETuple (ELit (LString "tan")) (EApp (EVar "prim1") (EVar "pTan"))) (ETuple (ELit (LString "asin")) (EApp (EVar "prim1") (EVar "pAsin"))) (ETuple (ELit (LString "acos")) (EApp (EVar "prim1") (EVar "pAcos"))) (ETuple (ELit (LString "atan")) (EApp (EVar "prim1") (EVar "pAtan"))) (ETuple (ELit (LString "sinh")) (EApp (EVar "prim1") (EVar "pSinh"))) (ETuple (ELit (LString "cosh")) (EApp (EVar "prim1") (EVar "pCosh"))) (ETuple (ELit (LString "tanh")) (EApp (EVar "prim1") (EVar "pTanh"))) (ETuple (ELit (LString "floor")) (EApp (EVar "prim1") (EVar "pFloor"))) (ETuple (ELit (LString "ceil")) (EApp (EVar "prim1") (EVar "pCeil"))) (ETuple (ELit (LString "round")) (EApp (EVar "prim1") (EVar "pRound"))) (ETuple (ELit (LString "trunc")) (EApp (EVar "prim1") (EVar "pTrunc"))) (ETuple (ELit (LString "pow")) (EApp (EVar "prim2") (EVar "pPow"))) (ETuple (ELit (LString "atan2")) (EApp (EVar "prim2") (EVar "pAtan2"))) (ETuple (ELit (LString "hypot")) (EApp (EVar "prim2") (EVar "pHypot"))) (ETuple (ELit (LString "stringToUpper")) (EApp (EVar "prim1") (EVar "pStringToUpper"))) (ETuple (ELit (LString "stringToLower")) (EApp (EVar "prim1") (EVar "pStringToLower"))) (ETuple (ELit (LString "stringCompare")) (EApp (EVar "prim2") (EVar "pStringCompare"))) (ETuple (ELit (LString "stringIndexOf")) (EApp (EVar "prim2") (EVar "pStringIndexOf"))) (ETuple (ELit (LString "stringSlice")) (EApp (EVar "prim3") (EVar "pStringSlice"))) (ETuple (ELit (LString "arrayLength")) (EApp (EVar "prim1") (EVar "pArrayLength"))) (ETuple (ELit (LString "arrayFromList")) (EApp (EVar "prim1") (EVar "pArrayFromList"))) (ETuple (ELit (LString "arrayGetUnsafe")) (EApp (EVar "prim2") (EVar "pArrayGetUnsafe"))) (ETuple (ELit (LString "arrayMake")) (EApp (EVar "prim2") (EVar "pArrayMake"))) (ETuple (ELit (LString "arrayMakeWith")) (EApp (EVar "prim2M") (EVar "pArrayMakeWith"))) (ETuple (ELit (LString "arrayCopy")) (EApp (EVar "prim1") (EVar "pArrayCopy"))) (ETuple (ELit (LString "arraySetUnsafe")) (EApp (EVar "prim3M") (EVar "pArraySetUnsafe"))) (ETuple (ELit (LString "arrayBlit")) (EApp (EVar "prim5M") (EVar "pArrayBlit"))) (ETuple (ELit (LString "arrayFill")) (EApp (EVar "prim2M") (EVar "pArrayFill"))) (ETuple (ELit (LString "byteBlockMake")) (EApp (EVar "prim1") (EVar "pByteBlockMake"))) (ETuple (ELit (LString "byteBlockLength")) (EApp (EVar "prim1") (EVar "pByteBlockLength"))) (ETuple (ELit (LString "byteBlockGetUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockGetUnsafe"))) (ETuple (ELit (LString "byteBlockSetUnsafe")) (EApp (EVar "prim3M") (EVar "pByteBlockSetUnsafe"))) (ETuple (ELit (LString "byteBlockCopyUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockCopyUnsafe"))) (ETuple (ELit (LString "byteBlockBlit")) (EApp (EVar "prim5M") (EVar "pByteBlockBlit"))) (ETuple (ELit (LString "byteBlockFromIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockFromIntArray"))) (ETuple (ELit (LString "byteBlockToIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockToIntArray"))) (ETuple (ELit (LString "byteBlockFromString")) (EApp (EVar "prim1") (EVar "pByteBlockFromString"))) (ETuple (ELit (LString "byteBlockToString")) (EApp (EVar "prim1") (EVar "pByteBlockToString"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdout"))) (ETuple (ELit (LString "Ref")) (EApp (EVar "prim1") (EVar "pRef"))) (ETuple (ELit (LString "setRef")) (EApp (EVar "prim2M") (EVar "pSetRef"))) (ETuple (ELit (LString "putStr")) (EApp (EVar "prim1M") (EVar "pPutStr"))) (ETuple (ELit (LString "putStrLn")) (EApp (EVar "prim1M") (EVar "pPutStrLn"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "stashRunStdout")) (EApp (EVar "prim1M") (EVar "pStashRunStdout"))) (ETuple (ELit (LString "enableRunStdoutFlush")) (EApp (EVar "prim1M") (EVar "pEnableRunStdoutFlush"))) (ETuple (ELit (LString "panic")) (EApp (EVar "prim1") (EVar "pPanic"))) (ETuple (ELit (LString "indexError")) (EApp (EVar "prim1") (ELam ((PVar "s")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-INDEX-OOB"))) (EApp (EVar "unString") (EVar "s")))))) (ETuple (ELit (LString "indexErrorAt")) (EApp (EVar "prim1") (EVar "pIndexErrorAt"))) (ETuple (ELit (LString "sliceError")) (EApp (EVar "prim2") (EVar "pSliceError"))) (ETuple (ELit (LString "debugStringLit")) (EApp (EVar "prim1") (EVar "pDebugStringLit"))) (ETuple (ELit (LString "debugCharLit")) (EApp (EVar "prim1") (EVar "pDebugCharLit"))) (ETuple (ELit (LString "stringToFloat")) (EApp (EVar "prim1") (EVar "pStringToFloat"))) (ETuple (ELit (LString "charIsAlpha")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsAlpha")))) (ETuple (ELit (LString "charIsSpace")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsSpace")))) (ETuple (ELit (LString "charIsUpper")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsUpper")))) (ETuple (ELit (LString "charIsLower")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsLower")))) (ETuple (ELit (LString "charIsPunct")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsPunct")))) (ETuple (ELit (LString "intMinBound")) (EApp (EVar "VInt") (EVar "intMinBound"))) (ETuple (ELit (LString "intMaxBound")) (EApp (EVar "VInt") (EVar "intMaxBound"))) (ETuple (ELit (LString "charMinBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMinBound")))) (ETuple (ELit (LString "charMaxBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMaxBound")))) (ETuple (ELit (LString "pi")) (EApp (EVar "VFloat") (EVar "pi"))) (ETuple (ELit (LString "e")) (EApp (EVar "VFloat") (EVar "e"))) (ETuple (ELit (LString "intBitsToFloat")) (EApp (EVar "prim1") (EVar "pIntBitsToFloat"))) (ETuple (ELit (LString "bytesToFloat64")) (EApp (EVar "prim2") (EVar "pBytesToFloat64"))) (ETuple (ELit (LString "floatToBytes64")) (EApp (EVar "prim1") (EVar "pFloatToBytes64"))) (ETuple (ELit (LString "hashInt")) (EApp (EVar "prim1") (EVar "pHashInt"))) (ETuple (ELit (LString "hashFloat")) (EApp (EVar "prim1") (EVar "pHashFloat"))) (ETuple (ELit (LString "hashString")) (EApp (EVar "prim1") (EVar "pHashString"))) (ETuple (ELit (LString "hashChar")) (EApp (EVar "prim1") (EVar "pHashChar"))) (ETuple (ELit (LString "hashBool")) (EApp (EVar "prim1") (EVar "pHashBool"))) (ETuple (EVar "fallthroughName") (EApp (EVar "prim1") (ELam (PWild) (EVar "VFallthrough"))))))
 (DTypeSig false "pDebugStringLit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pDebugStringLit" ((PCon "VString" (PVar "s"))) (EApp (EVar "VString") (EApp (EVar "debugStringLit") (EVar "s"))))
 (DFunDef false "pDebugStringLit" (PWild) (EApp (EVar "panic") (ELit (LString "debugStringLit: not a String"))))
@@ -6207,18 +6172,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pTruncateBits" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pTruncateBits" ((PVar "mask") (PCon "VInt" (PVar "a"))) (EApp (EVar "VInt") (EApp (EApp (EVar "bitAnd") (EVar "a")) (EVar "mask"))))
 (DFunDef false "pTruncateBits" (PWild PWild) (EApp (EVar "panic") (ELit (LString "truncate: not an Int"))))
-(DTypeSig false "pU64Truncate" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pU64Truncate" ((PCon "VInt" (PVar "n"))) (EApp (EVar "u64Value") (EApp (EVar "H.fromInt") (EVar "n"))))
-(DFunDef false "pU64Truncate" (PWild) (EApp (EVar "panic") (ELit (LString "u64Truncate: not an Int"))))
-(DTypeSig false "pU64TruncateToInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pU64TruncateToInt" ((PCon "VU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "VInt") (EApp (EVar "H.truncateToInt") (ETuple (EVar "hi") (EVar "lo")))))
-(DFunDef false "pU64TruncateToInt" (PWild) (EApp (EVar "panic") (ELit (LString "u64TruncateToInt: not a U64"))))
-(DTypeSig false "pU64Bin" (TyFun (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "pU64Bin" ((PVar "f") (PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EApp (EVar "u64Value") (EApp (EApp (EVar "f") (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl")))))
-(DFunDef false "pU64Bin" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "U64 bit operation: not a U64"))))
-(DTypeSig false "pU64Shift" (TyFun (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "pU64Shift" ((PVar "f") (PCon "VU64" (PVar "hi") (PVar "lo")) (PCon "VInt" (PVar "k"))) (EApp (EVar "u64Value") (EApp (EApp (EVar "f") (ETuple (EVar "hi") (EVar "lo"))) (EVar "k"))))
-(DFunDef false "pU64Shift" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "U64 shift: expected a U64 and an Int"))))
 (DTypeSig false "pFixedToInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFixedToInt" ((PCon "VInt" (PVar "a"))) (EApp (EVar "VInt") (EVar "a")))
 (DFunDef false "pFixedToInt" (PWild) (EApp (EVar "panic") (ELit (LString "toInt: not a fixed-width integer"))))
@@ -6241,19 +6194,17 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pFloatToBytes64" ((PCon "VFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "floatToBytes64") (EVar "f"))) (DoExpr (EApp (EVar "VArray") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 8))) (ELam ((PVar "i")) (EApp (EVar "VInt") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))))))))
 (DFunDef false "pFloatToBytes64" (PWild) (EApp (EVar "panic") (ELit (LString "floatToBytes64: not a Float"))))
 (DTypeSig false "fnvStep64" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "U64"))))
-(DFunDef false "fnvStep64" ((PVar "h") (PVar "byte")) (EBinOp "*" (EApp (EApp (EVar "U64.bitXor") (EVar "h")) (EApp (EVar "U64.truncate") (EVar "byte"))) (ELit (LInt 1099511628211))))
+(DFunDef false "fnvStep64" ((PCon "U64" (PVar "h0") (PVar "h1") (PVar "h2") (PVar "h3")) (PVar "byte")) (EApp (EApp (EVar "mulLow") (EApp (EApp (EApp (EApp (EVar "U64") (EApp (EApp (EVar "bitXor") (EVar "h0")) (EVar "byte"))) (EVar "h1")) (EVar "h2")) (EVar "h3"))) (EVar "u64FnvPrime")))
 (DTypeSig false "fnvFold64" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "U64") (TyCon "U64"))))
 (DFunDef false "fnvFold64" ((PList) (PVar "h")) (EVar "h"))
 (DFunDef false "fnvFold64" ((PCons (PVar "x") (PVar "xs")) (PVar "h")) (EApp (EApp (EVar "fnvFold64") (EVar "xs")) (EApp (EApp (EVar "fnvStep64") (EVar "h")) (EVar "x"))))
 (DTypeSig false "bytesBEToU64" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "U64")))
-(DFunDef false "bytesBEToU64" ((PVar "bs")) (EApp (EApp (EApp (EVar "bytesBEGo") (EVar "bs")) (ELit (LInt 0))) (ELit (LInt 0))))
-(DTypeSig false "bytesBEGo" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "U64") (TyCon "U64")))))
-(DFunDef false "bytesBEGo" ((PVar "bs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (ELit (LInt 8))) (EVar "acc") (EApp (EApp (EApp (EVar "bytesBEGo") (EVar "bs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 256))) (EApp (EVar "U64.truncate") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))))))
+(DFunDef false "bytesBEToU64" ((PVar "bs")) (EApp (EApp (EApp (EApp (EVar "U64") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 7))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 6))) (EVar "bs"))) (ELit (LInt 8))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 5))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 4))) (EVar "bs"))) (ELit (LInt 8))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 3))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 2))) (EVar "bs"))) (ELit (LInt 8))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "bs"))) (ELit (LInt 8))))))
 (DTypeSig false "pHashInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pHashInt" ((PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "U64.truncate") (EVar "n"))))))
+(DFunDef false "pHashInt" ((PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "fromIntBits") (EVar "n"))))))
 (DFunDef false "pHashInt" (PWild) (EApp (EVar "panic") (ELit (LString "hashInt: not an Int"))))
 (DTypeSig false "pHashChar" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pHashChar" ((PCon "VChar" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "U64.truncate") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))))))))
+(DFunDef false "pHashChar" ((PCon "VChar" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "fromIntBits") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))))))))
 (DFunDef false "pHashChar" (PWild) (EApp (EVar "panic") (ELit (LString "hashChar: not a Char"))))
 (DTypeSig false "pHashBool" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pHashBool" ((PCon "VBool" (PVar "b"))) (EApp (EVar "VInt") (EApp (EVar "boolToInt") (EVar "b"))))
@@ -6266,7 +6217,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pHashFloat" ((PCon "VFloat" (PVar "f"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "bytesBEToU64") (EApp (EVar "floatToBytes64") (EApp (EVar "canonHashFloat") (EVar "f"))))))))
 (DFunDef false "pHashFloat" (PWild) (EApp (EVar "panic") (ELit (LString "hashFloat: not a Float"))))
 (DTypeSig false "pHashString" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pHashString" ((PCon "VString" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EApp (EVar "fnvFold64") (EApp (EVar "arrayToListG") (EApp (EVar "stringToUtf8Bytes") (EVar "s")))) (ELit (LU64 3421674724 2216829733))))))
+(DFunDef false "pHashString" ((PCon "VString" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EApp (EVar "fnvFold64") (EApp (EVar "arrayToListG") (EApp (EVar "stringToUtf8Bytes") (EVar "s")))) (EVar "u64FnvBasis")))))
 (DFunDef false "pHashString" (PWild) (EApp (EVar "panic") (ELit (LString "hashString: not a String"))))
 (DTypeSig false "pFloatToString" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFloatToString" ((PCon "VFloat" (PVar "f"))) (EApp (EVar "VString") (EApp (EVar "floatToString") (EVar "f"))))
@@ -6738,12 +6689,11 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
-(DUse false (UseAlias ("eval" "u64_halves") "H"))
-(DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
-(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
+(DUse false (UseGroup ("bits64") ((mem "U64" true) (mem "add" false) (mem "sub" false) (mem "mulLow" false) (mem "xor" false) (mem "shr" false) (mem "mod" false) (mem "fromIntBits" false) (mem "isZero" false) (mem "limbAt" false))))
+(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))))) ())
 (DTypeSig true "ppValue" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
 (DFunDef false "ppValue" ((PCon "VInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
@@ -6757,7 +6707,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValue" ((PCon "VList" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EVar "vs")))) (ELit (LString "]"))))
 (DFunDef false "ppValue" ((PCon "VArray" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppValue")) (EApp (EVar "arrayToListG") (EVar "vs"))))) (ELit (LString "|]"))))
 (DFunDef false "ppValue" ((PCon "VByteBlock" (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<byteblock:")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "b"))))) (ELit (LString ">"))))
-(DFunDef false "ppValue" ((PCon "VU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "H.toDecimal") (ETuple (EVar "hi") (EVar "lo"))))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PList))) (EApp (EVar "displayCtorName") (EVar "name")))
 (DFunDef false "ppValue" ((PCon "VCon" (PVar "name") (PVar "vs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinSp") (EApp (EApp (EMethodRef "map") (EVar "ppValueAtom")) (EVar "vs"))))) (ELit (LString ""))))
 (DFunDef false "ppValue" ((PCon "VRecord" (PVar "name") (PVar "fields"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "displayCtorName") (EVar "name")))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppField")) (EVar "fields"))))) (ELit (LString " }"))))
@@ -6899,7 +6848,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "runtimeTypeTag" ((PCon "VList" PWild)) (EApp (EVar "Some") (ELit (LString "List"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VArray" PWild)) (EApp (EVar "Some") (ELit (LString "Array"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VByteBlock" PWild)) (EApp (EVar "Some") (ELit (LString "ByteBlock"))))
-(DFunDef false "runtimeTypeTag" ((PCon "VU64" PWild PWild)) (EApp (EVar "Some") (ELit (LString "U64"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VTuple" (PVar "vs"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "vs")))))
 (DFunDef false "runtimeTypeTag" ((PCon "VCon" (PVar "cname") PWild)) (EApp (EApp (EVar "lookupAssoc") (EVar "cname")) (EUnOp "!" (EVar "ctorToTypeRef"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VRecord" (PVar "name") PWild)) (EApp (EVar "Some") (EApp (EVar "displayCtorName") (EVar "name"))))
@@ -6914,6 +6862,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PCon "TyAuth" PWild PWild)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -6954,6 +6903,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentions" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -7018,12 +6968,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "valueEq" ((PCon "VList" (PVar "a")) (PCon "VList" (PVar "b"))) (EApp (EApp (EVar "valueListEq") (EVar "a")) (EVar "b")))
 (DFunDef false "valueEq" ((PCon "VArray" (PVar "a")) (PCon "VArray" (PVar "b"))) (EApp (EApp (EVar "valueListEq") (EApp (EVar "arrayToListG") (EVar "a"))) (EApp (EVar "arrayToListG") (EVar "b"))))
 (DFunDef false "valueEq" ((PCon "VByteBlock" (PVar "a")) (PCon "VByteBlock" (PVar "b"))) (EBinOp "==" (EApp (EVar "arrayToListG") (EVar "a")) (EApp (EVar "arrayToListG") (EVar "b"))))
-(DFunDef false "valueEq" ((PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
 (DFunDef false "valueEq" ((PCon "VCon" (PVar "n1") (PVar "a1")) (PCon "VCon" (PVar "n2") (PVar "a2"))) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EApp (EVar "valueListEq") (EVar "a1")) (EVar "a2"))))
 (DFunDef false "valueEq" ((PCon "VRecord" (PVar "n1") (PVar "f1")) (PCon "VRecord" (PVar "n2") (PVar "f2"))) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EApp (EVar "fieldListEq") (EVar "f1")) (EVar "f2"))))
 (DFunDef false "valueEq" ((PCon "VRef" (PVar "a")) (PCon "VRef" (PVar "b"))) (EApp (EApp (EVar "valueEq") (EUnOp "!" (EVar "a"))) (EUnOp "!" (EVar "b"))))
-(DFunDef false "valueEq" ((PCon "VU64" PWild PWild) PWild) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
-(DFunDef false "valueEq" (PWild (PCon "VU64" PWild PWild)) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
 (DFunDef false "valueEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "valueListEq" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Bool"))))
 (DFunDef false "valueListEq" ((PList) (PList)) (EVar "True"))
@@ -7054,7 +7001,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "valueTag" ((PCon "VRecord" PWild PWild)) (ELit (LInt 10)))
 (DFunDef false "valueTag" ((PCon "VRef" PWild)) (ELit (LInt 11)))
 (DFunDef false "valueTag" ((PCon "VByteBlock" PWild)) (ELit (LInt 12)))
-(DFunDef false "valueTag" ((PCon "VU64" PWild PWild)) (ELit (LInt 13)))
 (DFunDef false "valueTag" (PWild) (ELit (LInt 99)))
 (DTypeSig false "valueCompare" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Ordering"))))
 (DFunDef false "valueCompare" ((PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b")))
@@ -7067,13 +7013,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "valueCompare" ((PCon "VArray" (PVar "a")) (PCon "VArray" (PVar "b"))) (EApp (EApp (EVar "compareValueLists") (EApp (EVar "arrayToListG") (EVar "a"))) (EApp (EVar "arrayToListG") (EVar "b"))))
 (DFunDef false "valueCompare" ((PCon "VByteBlock" (PVar "a")) (PCon "VByteBlock" (PVar "b"))) (EApp (EApp (EMethodRef "compare") (EApp (EVar "arrayToListG") (EVar "a"))) (EApp (EVar "arrayToListG") (EVar "b"))))
 (DFunDef false "valueCompare" ((PCon "VTuple" (PVar "a")) (PCon "VTuple" (PVar "b"))) (EApp (EApp (EVar "compareValueLists") (EVar "a")) (EVar "b")))
-(DFunDef false "valueCompare" ((PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EApp (EApp (EVar "H.compareU64") (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl"))))
 (DFunDef false "valueCompare" ((PCon "VCon" (PVar "n1") (PVar "a1")) (PCon "VCon" (PVar "n2") (PVar "a2"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "n1")) (EVar "n2")) (arm (PCon "Eq") () (EApp (EApp (EVar "compareValueLists") (EVar "a1")) (EVar "a2"))) (arm (PVar "o") () (EVar "o"))))
-(DFunDef false "valueCompare" ((PCon "VU64" PWild PWild) PWild) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
-(DFunDef false "valueCompare" (PWild (PCon "VU64" PWild PWild)) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
 (DFunDef false "valueCompare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "valueTag") (EVar "a"))) (EApp (EVar "valueTag") (EVar "b"))))
-(DTypeSig false "u64ShapeMismatch" (TyFun (TyCon "Unit") (TyVar "a")))
-(DFunDef false "u64ShapeMismatch" (PWild) (EApp (EVar "panic") (ELit (LString "a U64 compared with a value of another type: the program was not typechecked"))))
 (DTypeSig false "compareValueLists" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Ordering"))))
 (DFunDef false "compareValueLists" ((PList) (PList)) (EVar "Eq"))
 (DFunDef false "compareValueLists" ((PList) (PCons PWild PWild)) (EVar "Lt"))
@@ -7304,8 +7245,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LInt" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "VFloat") (EVar "f"))) (arm (PCon "None") () (EApp (EVar "VInt") (EVar "n")))))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "VFloat") (EVar "f")))
-(DFunDef false "eval" (PWild (PCon "ELit" (PCon "LU64" (PVar "hi") (PVar "lo")))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
-(DFunDef false "eval" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "VString") (EVar "s")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LChar" (PVar "c")))) (EApp (EVar "VChar") (EVar "c")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LBool" (PVar "b")))) (EApp (EVar "VBool") (EVar "b")))
@@ -7486,7 +7425,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalUnop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EBinOp "-" (ELit (LInt 0)) (EVar "n"))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VFloat" (PVar "f"))) (EApp (EVar "VFloat") (EApp (EVar "negFloatIEEE") (EVar "f"))))
-(DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.sub") (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (EVar "hi") (EVar "lo")))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) PWild) (EApp (EVar "panic") (ELit (LString "unary minus on non-number"))))
 (DFunDef false "evalUnop" ((PLit (LString "!")) (PVar "v")) (EApp (EVar "evalValueField") (EVar "v")))
 (DFunDef false "evalUnop" ((PLit (LString "not")) (PCon "VBool" (PVar "b"))) (EApp (EVar "VBool") (EApp (EVar "not") (EVar "b"))))
@@ -7535,9 +7473,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "*")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EBinOp "*" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "/")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArith" ((PVar "op") (PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EApp (EApp (EApp (EVar "evalArithU64") (EVar "op")) (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl"))))
-(DFunDef false "evalArith" (PWild (PCon "VU64" PWild PWild) PWild) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
-(DFunDef false "evalArith" (PWild PWild (PCon "VU64" PWild PWild)) (EApp (EVar "u64ShapeMismatch") (ELit LUnit)))
 (DFunDef false "evalArith" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "/=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString "<")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<" (EVar "a") (EVar "b"))))
@@ -7549,21 +7484,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "<=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EVar "ordGt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b"))))))
 (DFunDef false "evalArith" ((PLit (LString ">=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EVar "ordLt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b"))))))
 (DFunDef false "evalArith" ((PVar "op") PWild PWild) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown op '")) (EVar "op")) (ELit (LString "'")))))
-(DTypeSig false "evalArithU64" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "evalArithU64" ((PLit (LString "+")) (PVar "a") (PVar "b")) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.add") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArithU64" ((PLit (LString "-")) (PVar "a") (PVar "b")) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.sub") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArithU64" ((PLit (LString "*")) (PVar "a") (PVar "b")) (EApp (EVar "u64Value") (EApp (EApp (EVar "H.mul") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArithU64" ((PLit (LString "/")) (PVar "a") (PVar "b")) (EIf (EApp (EVar "H.isZero") (EVar "b")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-DIV-ZERO"))) (ELit (LString "division by zero"))) (EIf (EVar "otherwise") (EApp (EVar "u64Value") (EApp (EVar "fst") (EApp (EApp (EVar "H.divMod") (EVar "a")) (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "evalArithU64" ((PLit (LString "%")) (PVar "a") (PVar "b")) (EIf (EApp (EVar "H.isZero") (EVar "b")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-MOD-ZERO"))) (ELit (LString "modulo by zero"))) (EIf (EVar "otherwise") (EApp (EVar "u64Value") (EApp (EVar "snd") (EApp (EApp (EVar "H.divMod") (EVar "a")) (EVar "b")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "evalArithU64" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Eq"))))
-(DFunDef false "evalArithU64" ((PLit (LString "/=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "/=" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Eq"))))
-(DFunDef false "evalArithU64" ((PLit (LString "<")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Lt"))))
-(DFunDef false "evalArithU64" ((PLit (LString ">")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Gt"))))
-(DFunDef false "evalArithU64" ((PLit (LString "<=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "/=" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Gt"))))
-(DFunDef false "evalArithU64" ((PLit (LString ">=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EBinOp "/=" (EApp (EApp (EVar "H.compareU64") (EVar "a")) (EVar "b")) (EVar "Lt"))))
-(DFunDef false "evalArithU64" ((PVar "op") PWild PWild) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown op '")) (EVar "op")) (ELit (LString "' on U64")))))
-(DTypeSig false "u64Value" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "u64Value" ((PTuple (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DTypeSig true "evalArithAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalArithAt" ((PVar "tag") (PVar "op") (PVar "l") (PVar "r")) (EMatch (ETuple (EApp (EVar "fixedWidthMask") (EVar "tag")) (EApp (EApp (EApp (EVar "evalArith") (EVar "op")) (EVar "l")) (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "mask")) (PCon "VInt" (PVar "n"))) () (EApp (EVar "VInt") (EApp (EApp (EVar "bitAnd") (EVar "n")) (EVar "mask")))) (arm (PTuple PWild (PVar "v")) () (EVar "v"))))
 (DTypeSig true "collectCtors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
@@ -7757,32 +7677,46 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "optionToValue" ((PCon "None")) (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)))
 (DFunDef false "optionToValue" ((PCon "Some" (PVar "v"))) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EVar "v"))))
 (DTypeSig false "u64Golden" (TyCon "U64"))
-(DFunDef false "u64Golden" () (ELit (LU64 2654435769 2135587861)))
+(DFunDef false "u64Golden" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 31765))) (ELit (LInt 32586))) (ELit (LInt 31161))) (ELit (LInt 40503))))
+(DTypeSig false "u64Const1" (TyCon "U64"))
+(DFunDef false "u64Const1" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 58809))) (ELit (LInt 7396))) (ELit (LInt 18285))) (ELit (LInt 48984))))
+(DTypeSig false "u64Const2" (TyCon "U64"))
+(DFunDef false "u64Const2" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 4587))) (ELit (LInt 4913))) (ELit (LInt 18875))) (ELit (LInt 38096))))
+(DTypeSig false "u64FnvBasis" (TyCon "U64"))
+(DFunDef false "u64FnvBasis" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 8997))) (ELit (LInt 33826))) (ELit (LInt 40164))) (ELit (LInt 52210))))
+(DTypeSig false "u64FnvPrime" (TyCon "U64"))
+(DFunDef false "u64FnvPrime" () (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 435))) (ELit (LInt 0))) (ELit (LInt 256))) (ELit (LInt 0))))
 (DTypeSig false "u64Finalize" (TyFun (TyCon "U64") (TyCon "U64")))
-(DFunDef false "u64Finalize" ((PVar "z")) (EBlock (DoLet false false (PVar "z1") (EBinOp "*" (EApp (EApp (EVar "U64.bitXor") (EVar "z")) (EApp (EApp (EVar "U64.shiftRight") (EVar "z")) (ELit (LInt 30)))) (ELit (LU64 3210233709 484763065)))) (DoLet false false (PVar "z2") (EBinOp "*" (EApp (EApp (EVar "U64.bitXor") (EVar "z1")) (EApp (EApp (EVar "U64.shiftRight") (EVar "z1")) (ELit (LInt 27)))) (ELit (LU64 2496678331 321982955)))) (DoExpr (EApp (EApp (EVar "U64.bitXor") (EVar "z2")) (EApp (EApp (EVar "U64.shiftRight") (EVar "z2")) (ELit (LInt 31)))))))
+(DFunDef false "u64Finalize" ((PVar "z")) (EBlock (DoLet false false (PVar "z1") (EApp (EApp (EVar "mulLow") (EApp (EApp (EVar "xor") (EVar "z")) (EApp (EApp (EVar "shr") (ELit (LInt 30))) (EVar "z")))) (EVar "u64Const1"))) (DoLet false false (PVar "z2") (EApp (EApp (EVar "mulLow") (EApp (EApp (EVar "xor") (EVar "z1")) (EApp (EApp (EVar "shr") (ELit (LInt 27))) (EVar "z1")))) (EVar "u64Const2"))) (DoExpr (EApp (EApp (EVar "xor") (EVar "z2")) (EApp (EApp (EVar "shr") (ELit (LInt 31))) (EVar "z2"))))))
 (DTypeSig false "u64Mix" (TyFun (TyCon "U64") (TyCon "U64")))
-(DFunDef false "u64Mix" ((PVar "x")) (EApp (EVar "u64Finalize") (EBinOp "+" (EVar "x") (EVar "u64Golden"))))
+(DFunDef false "u64Mix" ((PVar "x")) (EApp (EVar "u64Finalize") (EApp (EApp (EMethodRef "add") (EVar "x")) (EVar "u64Golden"))))
 (DTypeSig false "u64Low30" (TyFun (TyCon "U64") (TyCon "Int")))
-(DFunDef false "u64Low30" ((PVar "x")) (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.bitAnd") (EVar "x")) (ELit (LInt 1073741823)))))
+(DFunDef false "u64Low30" ((PCon "U64" (PVar "a0") (PVar "a1") PWild PWild)) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "bitOr") (EVar "a0")) (EApp (EApp (EVar "shiftLeft") (EVar "a1")) (ELit (LInt 16))))) (ELit (LInt 1073741823))))
+(DTypeSig false "u64ToInt" (TyFun (TyCon "U64") (TyCon "Int")))
+(DFunDef false "u64ToInt" ((PCon "U64" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "bitOr") (EVar "a0")) (EApp (EApp (EVar "shiftLeft") (EVar "a1")) (ELit (LInt 16))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a2")) (ELit (LInt 32)))) (EApp (EApp (EVar "shiftLeft") (EVar "a3")) (ELit (LInt 48))))))
+(DTypeSig false "u64Bit63" (TyFun (TyCon "U64") (TyCon "Int")))
+(DFunDef false "u64Bit63" ((PCon "U64" PWild PWild PWild (PVar "a3"))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "a3")) (ELit (LInt 15)))) (ELit (LInt 1))))
+(DTypeSig false "u64ToSignedInt" (TyFun (TyCon "U64") (TyCon "Int")))
+(DFunDef false "u64ToSignedInt" ((PCon "U64" (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EBlock (DoLet false false (PVar "hi16") (EIf (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EVar "a3")) (ELit (LInt 32768))) (ELit (LInt 0))) (EVar "a3") (EBinOp "-" (EVar "a3") (ELit (LInt 65536))))) (DoExpr (EBinOp "+" (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "bitOr") (EVar "a0")) (EApp (EApp (EVar "shiftLeft") (EVar "a1")) (ELit (LInt 16))))) (EApp (EApp (EVar "shiftLeft") (EVar "a2")) (ELit (LInt 32)))) (EApp (EApp (EVar "shiftLeft") (EVar "hi16")) (ELit (LInt 48)))))))
 (DTypeSig true "rngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "rngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig false "rngU64Ref" (TyApp (TyCon "Ref") (TyCon "U64")))
-(DFunDef false "rngU64Ref" () (EApp (EVar "Ref") (ELit (LInt 0))))
+(DFunDef false "rngU64Ref" () (EApp (EVar "Ref") (EApp (EApp (EApp (EApp (EVar "U64") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "rngDraw" (TyFun (TyCon "Unit") (TyCon "U64")))
-(DFunDef false "rngDraw" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EUnOp "!" (EVar "rngU64Ref")) (EVar "u64Golden"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EVar "s"))) (DoExpr (EApp (EVar "u64Finalize") (EVar "s")))))
+(DFunDef false "rngDraw" (PWild) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EMethodRef "add") (EUnOp "!" (EVar "rngU64Ref"))) (EVar "u64Golden"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EVar "s"))) (DoExpr (EApp (EVar "u64Finalize") (EVar "s")))))
 (DTypeSig false "pRandomInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "U64.truncate") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EBinOp "+" (EBinOp "-" (EApp (EVar "U64.truncate") (EVar "hi")) (EVar "loU")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "rangeU") (ELit (LInt 0))) (EBinOp ">=" (EVar "rangeU") (ELit (LU64 2147483648 0)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "U64.toIntTruncating") (EBinOp "+" (EVar "loU") (EMethodRef "rem"))))))))))
+(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "fromIntBits") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EApp (EApp (EMethodRef "add") (EApp (EApp (EMethodRef "sub") (EApp (EVar "fromIntBits") (EVar "hi"))) (EVar "loU"))) (EApp (EVar "fromIntBits") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isZero") (EVar "rangeU")) (EBinOp "==" (EApp (EVar "u64Bit63") (EVar "rangeU")) (ELit (LInt 1)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EApp (EApp (EVar "mod") (EApp (EVar "rngDraw") (ELit LUnit))) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "u64ToSignedInt") (EApp (EApp (EMethodRef "add") (EVar "loU")) (EMethodRef "rem"))))))))))
 (DFunDef false "pRandomInt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "randomInt: expected Int Int"))))
 (DTypeSig false "pRandomBool" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomBool" (PWild) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "U64.bitAnd") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 1))) (ELit (LInt 1)))))
+(DFunDef false "pRandomBool" (PWild) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "limbAt") (ELit (LInt 0))) (EApp (EVar "rngDraw") (ELit LUnit)))) (ELit (LInt 1))) (ELit (LInt 1)))))
 (DTypeSig false "pRandomFloat" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.shiftRight") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 11))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
+(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "u64ToInt") (EApp (EApp (EVar "shr") (ELit (LInt 11))) (EApp (EVar "rngDraw") (ELit LUnit))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
 (DTypeSig false "pRandomChar" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.toIntTruncating") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (ELit (LInt 95)))))))))
+(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "u64ToInt") (EApp (EApp (EVar "mod") (EApp (EVar "rngDraw") (ELit LUnit))) (EApp (EVar "fromIntBits") (ELit (LInt 95))))))))))
 (DTypeSig false "charFromCodeUnsafe" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
 (DTypeSig false "pSetSeed" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pSetSeed" ((PCon "VInt" (PVar "seed"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EApp (EVar "U64.truncate") (EVar "seed")))) (DoExpr (EVar "VUnit"))))
+(DFunDef false "pSetSeed" ((PCon "VInt" (PVar "seed"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EApp (EVar "fromIntBits") (EVar "seed")))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pSetSeed" (PWild) (EApp (EVar "panic") (ELit (LString "setSeed: expected Int"))))
 (DTypeSig false "pWallTimeSec" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pWallTimeSec" (PWild) (EApp (EVar "VFloat") (ELit (LFloat 1700000000.0))))
@@ -7797,7 +7731,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pFlushStdout" ((PCon "VUnit")) (EVar "VUnit"))
 (DFunDef false "pFlushStdout" (PWild) (EApp (EVar "panic") (ELit (LString "flushStdout: expected Unit"))))
 (DTypeSig true "externBindings" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "externBindings" (PWild) (EListLit (ETuple (ELit (LString "randomInt")) (EApp (EVar "prim2M") (EVar "pRandomInt"))) (ETuple (ELit (LString "randomBool")) (EApp (EVar "prim1M") (EVar "pRandomBool"))) (ETuple (ELit (LString "randomFloat")) (EApp (EVar "prim1M") (EVar "pRandomFloat"))) (ETuple (ELit (LString "randomChar")) (EApp (EVar "prim1M") (EVar "pRandomChar"))) (ETuple (ELit (LString "setSeed")) (EApp (EVar "prim1M") (EVar "pSetSeed"))) (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSec"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSec"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMs"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytes"))) (ETuple (ELit (LString "flushStdout")) (EApp (EVar "prim1M") (EVar "pFlushStdout"))) (ETuple (ELit (LString "intToString")) (EApp (EVar "prim1") (EVar "pIntToString"))) (ETuple (ELit (LString "bitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "bitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "bitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "shiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "shiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "bitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "u8Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 255))))) (ETuple (ELit (LString "u8ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u16Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 65535))))) (ETuple (ELit (LString "u16ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u32Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 4294967295))))) (ETuple (ELit (LString "u32ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u64Truncate")) (EApp (EVar "prim1") (EVar "pU64Truncate"))) (ETuple (ELit (LString "u64TruncateToInt")) (EApp (EVar "prim1") (EVar "pU64TruncateToInt"))) (ETuple (ELit (LString "u64BitAnd")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.bitAndU64")))) (ETuple (ELit (LString "u64BitOr")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.bitOrU64")))) (ETuple (ELit (LString "u64BitXor")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.bitXorU64")))) (ETuple (ELit (LString "u64ShiftLeft")) (EApp (EVar "prim2") (EApp (EVar "pU64Shift") (EVar "H.shiftLeft64")))) (ETuple (ELit (LString "u64ShiftRight")) (EApp (EVar "prim2") (EApp (EVar "pU64Shift") (EVar "H.shiftRight64")))) (ETuple (ELit (LString "u64MulHigh")) (EApp (EVar "prim2") (EApp (EVar "pU64Bin") (EVar "H.mulHigh")))) (ETuple (ELit (LString "intBitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "intBitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "intBitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "intBitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "intShiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "intShiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "intToFloat")) (EApp (EVar "prim1") (EVar "pIntToFloat"))) (ETuple (ELit (LString "floatToInt")) (EApp (EVar "prim1") (EVar "pFloatToInt"))) (ETuple (ELit (LString "floatToString")) (EApp (EVar "prim1") (EVar "pFloatToString"))) (ETuple (ELit (LString "charToStr")) (EApp (EVar "prim1") (EVar "pCharToStr"))) (ETuple (ELit (LString "charCode")) (EApp (EVar "prim1") (EVar "pCharCode"))) (ETuple (ELit (LString "charFromCode")) (EApp (EVar "prim1") (EVar "pCharFromCode"))) (ETuple (ELit (LString "charToUpper")) (EApp (EVar "prim1") (EVar "pCharToUpper"))) (ETuple (ELit (LString "charToLower")) (EApp (EVar "prim1") (EVar "pCharToLower"))) (ETuple (ELit (LString "stringLength")) (EApp (EVar "prim1") (EVar "pStringLength"))) (ETuple (ELit (LString "stringConcat")) (EApp (EVar "prim1") (EVar "pStringConcat"))) (ETuple (ELit (LString "stringToChars")) (EApp (EVar "prim1") (EVar "pStringToChars"))) (ETuple (ELit (LString "stringFromChars")) (EApp (EVar "prim1") (EVar "pStringFromChars"))) (ETuple (ELit (LString "stringToUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringToUtf8Bytes"))) (ETuple (ELit (LString "stringFromUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringFromUtf8Bytes"))) (ETuple (ELit (LString "floatRem")) (EApp (EVar "prim2") (EVar "pFloatRem"))) (ETuple (ELit (LString "sqrt")) (EApp (EVar "prim1") (EVar "pSqrt"))) (ETuple (ELit (LString "cbrt")) (EApp (EVar "prim1") (EVar "pCbrt"))) (ETuple (ELit (LString "exp")) (EApp (EVar "prim1") (EVar "pExp"))) (ETuple (ELit (LString "log")) (EApp (EVar "prim1") (EVar "pLog"))) (ETuple (ELit (LString "log2")) (EApp (EVar "prim1") (EVar "pLog2"))) (ETuple (ELit (LString "log10")) (EApp (EVar "prim1") (EVar "pLog10"))) (ETuple (ELit (LString "sin")) (EApp (EVar "prim1") (EVar "pSin"))) (ETuple (ELit (LString "cos")) (EApp (EVar "prim1") (EVar "pCos"))) (ETuple (ELit (LString "tan")) (EApp (EVar "prim1") (EVar "pTan"))) (ETuple (ELit (LString "asin")) (EApp (EVar "prim1") (EVar "pAsin"))) (ETuple (ELit (LString "acos")) (EApp (EVar "prim1") (EVar "pAcos"))) (ETuple (ELit (LString "atan")) (EApp (EVar "prim1") (EVar "pAtan"))) (ETuple (ELit (LString "sinh")) (EApp (EVar "prim1") (EVar "pSinh"))) (ETuple (ELit (LString "cosh")) (EApp (EVar "prim1") (EVar "pCosh"))) (ETuple (ELit (LString "tanh")) (EApp (EVar "prim1") (EVar "pTanh"))) (ETuple (ELit (LString "floor")) (EApp (EVar "prim1") (EVar "pFloor"))) (ETuple (ELit (LString "ceil")) (EApp (EVar "prim1") (EVar "pCeil"))) (ETuple (ELit (LString "round")) (EApp (EVar "prim1") (EVar "pRound"))) (ETuple (ELit (LString "trunc")) (EApp (EVar "prim1") (EVar "pTrunc"))) (ETuple (ELit (LString "pow")) (EApp (EVar "prim2") (EVar "pPow"))) (ETuple (ELit (LString "atan2")) (EApp (EVar "prim2") (EVar "pAtan2"))) (ETuple (ELit (LString "hypot")) (EApp (EVar "prim2") (EVar "pHypot"))) (ETuple (ELit (LString "stringToUpper")) (EApp (EVar "prim1") (EVar "pStringToUpper"))) (ETuple (ELit (LString "stringToLower")) (EApp (EVar "prim1") (EVar "pStringToLower"))) (ETuple (ELit (LString "stringCompare")) (EApp (EVar "prim2") (EVar "pStringCompare"))) (ETuple (ELit (LString "stringIndexOf")) (EApp (EVar "prim2") (EVar "pStringIndexOf"))) (ETuple (ELit (LString "stringSlice")) (EApp (EVar "prim3") (EVar "pStringSlice"))) (ETuple (ELit (LString "arrayLength")) (EApp (EVar "prim1") (EVar "pArrayLength"))) (ETuple (ELit (LString "arrayFromList")) (EApp (EVar "prim1") (EVar "pArrayFromList"))) (ETuple (ELit (LString "arrayGetUnsafe")) (EApp (EVar "prim2") (EVar "pArrayGetUnsafe"))) (ETuple (ELit (LString "arrayMake")) (EApp (EVar "prim2") (EVar "pArrayMake"))) (ETuple (ELit (LString "arrayMakeWith")) (EApp (EVar "prim2M") (EVar "pArrayMakeWith"))) (ETuple (ELit (LString "arrayCopy")) (EApp (EVar "prim1") (EVar "pArrayCopy"))) (ETuple (ELit (LString "arraySetUnsafe")) (EApp (EVar "prim3M") (EVar "pArraySetUnsafe"))) (ETuple (ELit (LString "arrayBlit")) (EApp (EVar "prim5M") (EVar "pArrayBlit"))) (ETuple (ELit (LString "arrayFill")) (EApp (EVar "prim2M") (EVar "pArrayFill"))) (ETuple (ELit (LString "byteBlockMake")) (EApp (EVar "prim1") (EVar "pByteBlockMake"))) (ETuple (ELit (LString "byteBlockLength")) (EApp (EVar "prim1") (EVar "pByteBlockLength"))) (ETuple (ELit (LString "byteBlockGetUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockGetUnsafe"))) (ETuple (ELit (LString "byteBlockSetUnsafe")) (EApp (EVar "prim3M") (EVar "pByteBlockSetUnsafe"))) (ETuple (ELit (LString "byteBlockCopyUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockCopyUnsafe"))) (ETuple (ELit (LString "byteBlockBlit")) (EApp (EVar "prim5M") (EVar "pByteBlockBlit"))) (ETuple (ELit (LString "byteBlockFromIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockFromIntArray"))) (ETuple (ELit (LString "byteBlockToIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockToIntArray"))) (ETuple (ELit (LString "byteBlockFromString")) (EApp (EVar "prim1") (EVar "pByteBlockFromString"))) (ETuple (ELit (LString "byteBlockToString")) (EApp (EVar "prim1") (EVar "pByteBlockToString"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdout"))) (ETuple (ELit (LString "Ref")) (EApp (EVar "prim1") (EVar "pRef"))) (ETuple (ELit (LString "setRef")) (EApp (EVar "prim2M") (EVar "pSetRef"))) (ETuple (ELit (LString "putStr")) (EApp (EVar "prim1M") (EVar "pPutStr"))) (ETuple (ELit (LString "putStrLn")) (EApp (EVar "prim1M") (EVar "pPutStrLn"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "stashRunStdout")) (EApp (EVar "prim1M") (EVar "pStashRunStdout"))) (ETuple (ELit (LString "enableRunStdoutFlush")) (EApp (EVar "prim1M") (EVar "pEnableRunStdoutFlush"))) (ETuple (ELit (LString "panic")) (EApp (EVar "prim1") (EVar "pPanic"))) (ETuple (ELit (LString "indexError")) (EApp (EVar "prim1") (ELam ((PVar "s")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-INDEX-OOB"))) (EApp (EVar "unString") (EVar "s")))))) (ETuple (ELit (LString "indexErrorAt")) (EApp (EVar "prim1") (EVar "pIndexErrorAt"))) (ETuple (ELit (LString "sliceError")) (EApp (EVar "prim2") (EVar "pSliceError"))) (ETuple (ELit (LString "debugStringLit")) (EApp (EVar "prim1") (EVar "pDebugStringLit"))) (ETuple (ELit (LString "debugCharLit")) (EApp (EVar "prim1") (EVar "pDebugCharLit"))) (ETuple (ELit (LString "stringToFloat")) (EApp (EVar "prim1") (EVar "pStringToFloat"))) (ETuple (ELit (LString "charIsAlpha")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsAlpha")))) (ETuple (ELit (LString "charIsSpace")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsSpace")))) (ETuple (ELit (LString "charIsUpper")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsUpper")))) (ETuple (ELit (LString "charIsLower")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsLower")))) (ETuple (ELit (LString "charIsPunct")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsPunct")))) (ETuple (ELit (LString "intMinBound")) (EApp (EVar "VInt") (EVar "intMinBound"))) (ETuple (ELit (LString "intMaxBound")) (EApp (EVar "VInt") (EVar "intMaxBound"))) (ETuple (ELit (LString "charMinBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMinBound")))) (ETuple (ELit (LString "charMaxBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMaxBound")))) (ETuple (ELit (LString "pi")) (EApp (EVar "VFloat") (EVar "pi"))) (ETuple (ELit (LString "e")) (EApp (EVar "VFloat") (EVar "e"))) (ETuple (ELit (LString "intBitsToFloat")) (EApp (EVar "prim1") (EVar "pIntBitsToFloat"))) (ETuple (ELit (LString "bytesToFloat64")) (EApp (EVar "prim2") (EVar "pBytesToFloat64"))) (ETuple (ELit (LString "floatToBytes64")) (EApp (EVar "prim1") (EVar "pFloatToBytes64"))) (ETuple (ELit (LString "hashInt")) (EApp (EVar "prim1") (EVar "pHashInt"))) (ETuple (ELit (LString "hashFloat")) (EApp (EVar "prim1") (EVar "pHashFloat"))) (ETuple (ELit (LString "hashString")) (EApp (EVar "prim1") (EVar "pHashString"))) (ETuple (ELit (LString "hashChar")) (EApp (EVar "prim1") (EVar "pHashChar"))) (ETuple (ELit (LString "hashBool")) (EApp (EVar "prim1") (EVar "pHashBool"))) (ETuple (EVar "fallthroughName") (EApp (EVar "prim1") (ELam (PWild) (EVar "VFallthrough"))))))
+(DFunDef false "externBindings" (PWild) (EListLit (ETuple (ELit (LString "randomInt")) (EApp (EVar "prim2M") (EVar "pRandomInt"))) (ETuple (ELit (LString "randomBool")) (EApp (EVar "prim1M") (EVar "pRandomBool"))) (ETuple (ELit (LString "randomFloat")) (EApp (EVar "prim1M") (EVar "pRandomFloat"))) (ETuple (ELit (LString "randomChar")) (EApp (EVar "prim1M") (EVar "pRandomChar"))) (ETuple (ELit (LString "setSeed")) (EApp (EVar "prim1M") (EVar "pSetSeed"))) (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSec"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSec"))) (ETuple (ELit (LString "sleepMs")) (EApp (EVar "prim1M") (EVar "pSleepMs"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytes"))) (ETuple (ELit (LString "flushStdout")) (EApp (EVar "prim1M") (EVar "pFlushStdout"))) (ETuple (ELit (LString "intToString")) (EApp (EVar "prim1") (EVar "pIntToString"))) (ETuple (ELit (LString "bitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "bitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "bitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "shiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "shiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "bitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "u8Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 255))))) (ETuple (ELit (LString "u8ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u16Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 65535))))) (ETuple (ELit (LString "u16ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "u32Truncate")) (EApp (EVar "prim1") (EApp (EVar "pTruncateBits") (ELit (LInt 4294967295))))) (ETuple (ELit (LString "u32ToInt")) (EApp (EVar "prim1") (EVar "pFixedToInt"))) (ETuple (ELit (LString "intBitAnd")) (EApp (EVar "prim2") (EVar "pBitAnd"))) (ETuple (ELit (LString "intBitOr")) (EApp (EVar "prim2") (EVar "pBitOr"))) (ETuple (ELit (LString "intBitXor")) (EApp (EVar "prim2") (EVar "pBitXor"))) (ETuple (ELit (LString "intBitNot")) (EApp (EVar "prim1") (EVar "pBitNot"))) (ETuple (ELit (LString "intShiftLeft")) (EApp (EVar "prim2") (EVar "pShiftLeft"))) (ETuple (ELit (LString "intShiftRight")) (EApp (EVar "prim2") (EVar "pShiftRight"))) (ETuple (ELit (LString "intToFloat")) (EApp (EVar "prim1") (EVar "pIntToFloat"))) (ETuple (ELit (LString "floatToInt")) (EApp (EVar "prim1") (EVar "pFloatToInt"))) (ETuple (ELit (LString "floatToString")) (EApp (EVar "prim1") (EVar "pFloatToString"))) (ETuple (ELit (LString "charToStr")) (EApp (EVar "prim1") (EVar "pCharToStr"))) (ETuple (ELit (LString "charCode")) (EApp (EVar "prim1") (EVar "pCharCode"))) (ETuple (ELit (LString "charFromCode")) (EApp (EVar "prim1") (EVar "pCharFromCode"))) (ETuple (ELit (LString "charToUpper")) (EApp (EVar "prim1") (EVar "pCharToUpper"))) (ETuple (ELit (LString "charToLower")) (EApp (EVar "prim1") (EVar "pCharToLower"))) (ETuple (ELit (LString "stringLength")) (EApp (EVar "prim1") (EVar "pStringLength"))) (ETuple (ELit (LString "stringConcat")) (EApp (EVar "prim1") (EVar "pStringConcat"))) (ETuple (ELit (LString "stringToChars")) (EApp (EVar "prim1") (EVar "pStringToChars"))) (ETuple (ELit (LString "stringFromChars")) (EApp (EVar "prim1") (EVar "pStringFromChars"))) (ETuple (ELit (LString "stringToUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringToUtf8Bytes"))) (ETuple (ELit (LString "stringFromUtf8Bytes")) (EApp (EVar "prim1") (EVar "pStringFromUtf8Bytes"))) (ETuple (ELit (LString "floatRem")) (EApp (EVar "prim2") (EVar "pFloatRem"))) (ETuple (ELit (LString "sqrt")) (EApp (EVar "prim1") (EVar "pSqrt"))) (ETuple (ELit (LString "cbrt")) (EApp (EVar "prim1") (EVar "pCbrt"))) (ETuple (ELit (LString "exp")) (EApp (EVar "prim1") (EVar "pExp"))) (ETuple (ELit (LString "log")) (EApp (EVar "prim1") (EVar "pLog"))) (ETuple (ELit (LString "log2")) (EApp (EVar "prim1") (EVar "pLog2"))) (ETuple (ELit (LString "log10")) (EApp (EVar "prim1") (EVar "pLog10"))) (ETuple (ELit (LString "sin")) (EApp (EVar "prim1") (EVar "pSin"))) (ETuple (ELit (LString "cos")) (EApp (EVar "prim1") (EVar "pCos"))) (ETuple (ELit (LString "tan")) (EApp (EVar "prim1") (EVar "pTan"))) (ETuple (ELit (LString "asin")) (EApp (EVar "prim1") (EVar "pAsin"))) (ETuple (ELit (LString "acos")) (EApp (EVar "prim1") (EVar "pAcos"))) (ETuple (ELit (LString "atan")) (EApp (EVar "prim1") (EVar "pAtan"))) (ETuple (ELit (LString "sinh")) (EApp (EVar "prim1") (EVar "pSinh"))) (ETuple (ELit (LString "cosh")) (EApp (EVar "prim1") (EVar "pCosh"))) (ETuple (ELit (LString "tanh")) (EApp (EVar "prim1") (EVar "pTanh"))) (ETuple (ELit (LString "floor")) (EApp (EVar "prim1") (EVar "pFloor"))) (ETuple (ELit (LString "ceil")) (EApp (EVar "prim1") (EVar "pCeil"))) (ETuple (ELit (LString "round")) (EApp (EVar "prim1") (EVar "pRound"))) (ETuple (ELit (LString "trunc")) (EApp (EVar "prim1") (EVar "pTrunc"))) (ETuple (ELit (LString "pow")) (EApp (EVar "prim2") (EVar "pPow"))) (ETuple (ELit (LString "atan2")) (EApp (EVar "prim2") (EVar "pAtan2"))) (ETuple (ELit (LString "hypot")) (EApp (EVar "prim2") (EVar "pHypot"))) (ETuple (ELit (LString "stringToUpper")) (EApp (EVar "prim1") (EVar "pStringToUpper"))) (ETuple (ELit (LString "stringToLower")) (EApp (EVar "prim1") (EVar "pStringToLower"))) (ETuple (ELit (LString "stringCompare")) (EApp (EVar "prim2") (EVar "pStringCompare"))) (ETuple (ELit (LString "stringIndexOf")) (EApp (EVar "prim2") (EVar "pStringIndexOf"))) (ETuple (ELit (LString "stringSlice")) (EApp (EVar "prim3") (EVar "pStringSlice"))) (ETuple (ELit (LString "arrayLength")) (EApp (EVar "prim1") (EVar "pArrayLength"))) (ETuple (ELit (LString "arrayFromList")) (EApp (EVar "prim1") (EVar "pArrayFromList"))) (ETuple (ELit (LString "arrayGetUnsafe")) (EApp (EVar "prim2") (EVar "pArrayGetUnsafe"))) (ETuple (ELit (LString "arrayMake")) (EApp (EVar "prim2") (EVar "pArrayMake"))) (ETuple (ELit (LString "arrayMakeWith")) (EApp (EVar "prim2M") (EVar "pArrayMakeWith"))) (ETuple (ELit (LString "arrayCopy")) (EApp (EVar "prim1") (EVar "pArrayCopy"))) (ETuple (ELit (LString "arraySetUnsafe")) (EApp (EVar "prim3M") (EVar "pArraySetUnsafe"))) (ETuple (ELit (LString "arrayBlit")) (EApp (EVar "prim5M") (EVar "pArrayBlit"))) (ETuple (ELit (LString "arrayFill")) (EApp (EVar "prim2M") (EVar "pArrayFill"))) (ETuple (ELit (LString "byteBlockMake")) (EApp (EVar "prim1") (EVar "pByteBlockMake"))) (ETuple (ELit (LString "byteBlockLength")) (EApp (EVar "prim1") (EVar "pByteBlockLength"))) (ETuple (ELit (LString "byteBlockGetUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockGetUnsafe"))) (ETuple (ELit (LString "byteBlockSetUnsafe")) (EApp (EVar "prim3M") (EVar "pByteBlockSetUnsafe"))) (ETuple (ELit (LString "byteBlockCopyUnsafe")) (EApp (EVar "prim2") (EVar "pByteBlockCopyUnsafe"))) (ETuple (ELit (LString "byteBlockBlit")) (EApp (EVar "prim5M") (EVar "pByteBlockBlit"))) (ETuple (ELit (LString "byteBlockFromIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockFromIntArray"))) (ETuple (ELit (LString "byteBlockToIntArray")) (EApp (EVar "prim1") (EVar "pByteBlockToIntArray"))) (ETuple (ELit (LString "byteBlockFromString")) (EApp (EVar "prim1") (EVar "pByteBlockFromString"))) (ETuple (ELit (LString "byteBlockToString")) (EApp (EVar "prim1") (EVar "pByteBlockToString"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EApp (EVar "prim1M") (EVar "pByteBlockWriteStdout"))) (ETuple (ELit (LString "Ref")) (EApp (EVar "prim1") (EVar "pRef"))) (ETuple (ELit (LString "setRef")) (EApp (EVar "prim2M") (EVar "pSetRef"))) (ETuple (ELit (LString "putStr")) (EApp (EVar "prim1M") (EVar "pPutStr"))) (ETuple (ELit (LString "putStrLn")) (EApp (EVar "prim1M") (EVar "pPutStrLn"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pDiscard"))) (ETuple (ELit (LString "stashRunStdout")) (EApp (EVar "prim1M") (EVar "pStashRunStdout"))) (ETuple (ELit (LString "enableRunStdoutFlush")) (EApp (EVar "prim1M") (EVar "pEnableRunStdoutFlush"))) (ETuple (ELit (LString "panic")) (EApp (EVar "prim1") (EVar "pPanic"))) (ETuple (ELit (LString "indexError")) (EApp (EVar "prim1") (ELam ((PVar "s")) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-INDEX-OOB"))) (EApp (EVar "unString") (EVar "s")))))) (ETuple (ELit (LString "indexErrorAt")) (EApp (EVar "prim1") (EVar "pIndexErrorAt"))) (ETuple (ELit (LString "sliceError")) (EApp (EVar "prim2") (EVar "pSliceError"))) (ETuple (ELit (LString "debugStringLit")) (EApp (EVar "prim1") (EVar "pDebugStringLit"))) (ETuple (ELit (LString "debugCharLit")) (EApp (EVar "prim1") (EVar "pDebugCharLit"))) (ETuple (ELit (LString "stringToFloat")) (EApp (EVar "prim1") (EVar "pStringToFloat"))) (ETuple (ELit (LString "charIsAlpha")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsAlpha")))) (ETuple (ELit (LString "charIsSpace")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsSpace")))) (ETuple (ELit (LString "charIsUpper")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsUpper")))) (ETuple (ELit (LString "charIsLower")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsLower")))) (ETuple (ELit (LString "charIsPunct")) (EApp (EVar "prim1") (EApp (EVar "charPred") (EVar "charIsPunct")))) (ETuple (ELit (LString "intMinBound")) (EApp (EVar "VInt") (EVar "intMinBound"))) (ETuple (ELit (LString "intMaxBound")) (EApp (EVar "VInt") (EVar "intMaxBound"))) (ETuple (ELit (LString "charMinBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMinBound")))) (ETuple (ELit (LString "charMaxBound")) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EVar "charMaxBound")))) (ETuple (ELit (LString "pi")) (EApp (EVar "VFloat") (EVar "pi"))) (ETuple (ELit (LString "e")) (EApp (EVar "VFloat") (EVar "e"))) (ETuple (ELit (LString "intBitsToFloat")) (EApp (EVar "prim1") (EVar "pIntBitsToFloat"))) (ETuple (ELit (LString "bytesToFloat64")) (EApp (EVar "prim2") (EVar "pBytesToFloat64"))) (ETuple (ELit (LString "floatToBytes64")) (EApp (EVar "prim1") (EVar "pFloatToBytes64"))) (ETuple (ELit (LString "hashInt")) (EApp (EVar "prim1") (EVar "pHashInt"))) (ETuple (ELit (LString "hashFloat")) (EApp (EVar "prim1") (EVar "pHashFloat"))) (ETuple (ELit (LString "hashString")) (EApp (EVar "prim1") (EVar "pHashString"))) (ETuple (ELit (LString "hashChar")) (EApp (EVar "prim1") (EVar "pHashChar"))) (ETuple (ELit (LString "hashBool")) (EApp (EVar "prim1") (EVar "pHashBool"))) (ETuple (EVar "fallthroughName") (EApp (EVar "prim1") (ELam (PWild) (EVar "VFallthrough"))))))
 (DTypeSig false "pDebugStringLit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pDebugStringLit" ((PCon "VString" (PVar "s"))) (EApp (EVar "VString") (EApp (EVar "debugStringLit") (EVar "s"))))
 (DFunDef false "pDebugStringLit" (PWild) (EApp (EVar "panic") (ELit (LString "debugStringLit: not a String"))))
@@ -7834,18 +7768,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pTruncateBits" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "pTruncateBits" ((PVar "mask") (PCon "VInt" (PVar "a"))) (EApp (EVar "VInt") (EApp (EApp (EVar "bitAnd") (EVar "a")) (EVar "mask"))))
 (DFunDef false "pTruncateBits" (PWild PWild) (EApp (EVar "panic") (ELit (LString "truncate: not an Int"))))
-(DTypeSig false "pU64Truncate" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pU64Truncate" ((PCon "VInt" (PVar "n"))) (EApp (EVar "u64Value") (EApp (EVar "H.fromInt") (EVar "n"))))
-(DFunDef false "pU64Truncate" (PWild) (EApp (EVar "panic") (ELit (LString "u64Truncate: not an Int"))))
-(DTypeSig false "pU64TruncateToInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pU64TruncateToInt" ((PCon "VU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "VInt") (EApp (EVar "H.truncateToInt") (ETuple (EVar "hi") (EVar "lo")))))
-(DFunDef false "pU64TruncateToInt" (PWild) (EApp (EVar "panic") (ELit (LString "u64TruncateToInt: not a U64"))))
-(DTypeSig false "pU64Bin" (TyFun (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "pU64Bin" ((PVar "f") (PCon "VU64" (PVar "ah") (PVar "al")) (PCon "VU64" (PVar "bh") (PVar "bl"))) (EApp (EVar "u64Value") (EApp (EApp (EVar "f") (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl")))))
-(DFunDef false "pU64Bin" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "U64 bit operation: not a U64"))))
-(DTypeSig false "pU64Shift" (TyFun (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "pU64Shift" ((PVar "f") (PCon "VU64" (PVar "hi") (PVar "lo")) (PCon "VInt" (PVar "k"))) (EApp (EVar "u64Value") (EApp (EApp (EVar "f") (ETuple (EVar "hi") (EVar "lo"))) (EVar "k"))))
-(DFunDef false "pU64Shift" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "U64 shift: expected a U64 and an Int"))))
 (DTypeSig false "pFixedToInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFixedToInt" ((PCon "VInt" (PVar "a"))) (EApp (EVar "VInt") (EVar "a")))
 (DFunDef false "pFixedToInt" (PWild) (EApp (EVar "panic") (ELit (LString "toInt: not a fixed-width integer"))))
@@ -7868,19 +7790,17 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pFloatToBytes64" ((PCon "VFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "floatToBytes64") (EVar "f"))) (DoExpr (EApp (EVar "VArray") (EApp (EApp (EVar "arrayMakeWith") (ELit (LInt 8))) (ELam ((PVar "i")) (EApp (EVar "VInt") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))))))))
 (DFunDef false "pFloatToBytes64" (PWild) (EApp (EVar "panic") (ELit (LString "floatToBytes64: not a Float"))))
 (DTypeSig false "fnvStep64" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "U64"))))
-(DFunDef false "fnvStep64" ((PVar "h") (PVar "byte")) (EBinOp "*" (EApp (EApp (EVar "U64.bitXor") (EVar "h")) (EApp (EVar "U64.truncate") (EVar "byte"))) (ELit (LInt 1099511628211))))
+(DFunDef false "fnvStep64" ((PCon "U64" (PVar "h0") (PVar "h1") (PVar "h2") (PVar "h3")) (PVar "byte")) (EApp (EApp (EVar "mulLow") (EApp (EApp (EApp (EApp (EVar "U64") (EApp (EApp (EVar "bitXor") (EVar "h0")) (EVar "byte"))) (EVar "h1")) (EVar "h2")) (EVar "h3"))) (EVar "u64FnvPrime")))
 (DTypeSig false "fnvFold64" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "U64") (TyCon "U64"))))
 (DFunDef false "fnvFold64" ((PList) (PVar "h")) (EVar "h"))
 (DFunDef false "fnvFold64" ((PCons (PVar "x") (PVar "xs")) (PVar "h")) (EApp (EApp (EVar "fnvFold64") (EVar "xs")) (EApp (EApp (EVar "fnvStep64") (EVar "h")) (EVar "x"))))
 (DTypeSig false "bytesBEToU64" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "U64")))
-(DFunDef false "bytesBEToU64" ((PVar "bs")) (EApp (EApp (EApp (EVar "bytesBEGo") (EVar "bs")) (ELit (LInt 0))) (ELit (LInt 0))))
-(DTypeSig false "bytesBEGo" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "U64") (TyCon "U64")))))
-(DFunDef false "bytesBEGo" ((PVar "bs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (ELit (LInt 8))) (EVar "acc") (EApp (EApp (EApp (EVar "bytesBEGo") (EVar "bs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 256))) (EApp (EVar "U64.truncate") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))))))
+(DFunDef false "bytesBEToU64" ((PVar "bs")) (EApp (EApp (EApp (EApp (EVar "U64") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 7))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 6))) (EVar "bs"))) (ELit (LInt 8))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 5))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 4))) (EVar "bs"))) (ELit (LInt 8))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 3))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 2))) (EVar "bs"))) (ELit (LInt 8))))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "bs"))) (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "bs"))) (ELit (LInt 8))))))
 (DTypeSig false "pHashInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pHashInt" ((PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "U64.truncate") (EVar "n"))))))
+(DFunDef false "pHashInt" ((PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "fromIntBits") (EVar "n"))))))
 (DFunDef false "pHashInt" (PWild) (EApp (EVar "panic") (ELit (LString "hashInt: not an Int"))))
 (DTypeSig false "pHashChar" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pHashChar" ((PCon "VChar" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "U64.truncate") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))))))))
+(DFunDef false "pHashChar" ((PCon "VChar" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "fromIntBits") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))))))))
 (DFunDef false "pHashChar" (PWild) (EApp (EVar "panic") (ELit (LString "hashChar: not a Char"))))
 (DTypeSig false "pHashBool" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pHashBool" ((PCon "VBool" (PVar "b"))) (EApp (EVar "VInt") (EApp (EVar "boolToInt") (EVar "b"))))
@@ -7893,7 +7813,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pHashFloat" ((PCon "VFloat" (PVar "f"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "bytesBEToU64") (EApp (EVar "floatToBytes64") (EApp (EVar "canonHashFloat") (EVar "f"))))))))
 (DFunDef false "pHashFloat" (PWild) (EApp (EVar "panic") (ELit (LString "hashFloat: not a Float"))))
 (DTypeSig false "pHashString" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pHashString" ((PCon "VString" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EApp (EVar "fnvFold64") (EApp (EVar "arrayToListG") (EApp (EVar "stringToUtf8Bytes") (EVar "s")))) (ELit (LU64 3421674724 2216829733))))))
+(DFunDef false "pHashString" ((PCon "VString" (PVar "s"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EApp (EVar "fnvFold64") (EApp (EVar "arrayToListG") (EApp (EVar "stringToUtf8Bytes") (EVar "s")))) (EVar "u64FnvBasis")))))
 (DFunDef false "pHashString" (PWild) (EApp (EVar "panic") (ELit (LString "hashString: not a String"))))
 (DTypeSig false "pFloatToString" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pFloatToString" ((PCon "VFloat" (PVar "f"))) (EApp (EVar "VString") (EApp (EVar "floatToString") (EVar "f"))))

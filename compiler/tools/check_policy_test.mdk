@@ -1,7 +1,11 @@
 import test.{expectAll, expectEqual}
-import tools.check_policy.{schemeEffects}
+import tools.check_policy.{schemeEffects, manifestToml, qualifiedKey}
+import types.effect_authority.{Authority(..)}
+import frontend.ast.{TyConOrigin(..)}
 import types.effect_domain.{Param(..)}
-import types.effect_rows.{EffRow(..), atomBuiltin, renderAtoms}
+import types.effect_rows.{
+  EffRow(..), Atom(..), EffLabel(..), atomBuiltin, renderAtoms
+}
 import types.repr.{Scheme(..), Mono(..)}
 
 net : String -> EffRow
@@ -35,3 +39,21 @@ test "forcing authority participates in the same domain join" =
   expectEqual
     "Net"
     (summary (net "other/path/") (net "host/a/") (net "host/b/"))
+
+-- Two modules' same-spelled labels are two identities; a manifest keys them
+-- apart only when both appear in one row (qualify only on collision), so an
+-- unqualified row is byte-identical to before.
+storeAt : String -> String -> Atom
+storeAt m path =
+  Atom (EffLabel "Store" (OriginModule m)) (AConst (PPrefix (Some path)))
+
+test "manifest keys qualify a label only when two origins spell it" = expectAll
+  [
+    expectEqual
+      "[package.capabilities]\nStore = \"a/*\"\n"
+      (manifestToml [storeAt "m" "a/*"]),
+    expectEqual
+      "[package.capabilities]\n\"m.Store\" = \"a/*\"\n\"n.Store\" = \"b/*\"\n"
+      (manifestToml [storeAt "m" "a/*", storeAt "n" "b/*"]),
+    expectEqual "\"m.Store\"" (qualifiedKey (storeAt "m" "a/*")),
+  ]

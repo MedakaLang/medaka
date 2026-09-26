@@ -1,0 +1,7 @@
+-- A written product may name only the declared axes.  REJECT.
+effect Db Product (Table : Prefix, Op : Set)
+
+extern query : String -> <FFI, Db Host="users/*"> String
+
+main : <IO> Unit
+main = println "unreachable"

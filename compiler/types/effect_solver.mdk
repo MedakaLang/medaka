@@ -5,8 +5,8 @@
 import map as M
 import map.{Map(..)}
 import types.effect_authority.{
-  Authority(..), Authvar(..), authvarId, authNorm, authSub, authVars,
-  authJoinAll, linkAuthvar
+  renderAuthority, Authority(..), Authvar(..), authvarId, authNorm, authSub,
+  authVars, authJoinAll, linkAuthvar
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -41,6 +41,10 @@ public export data AuthWanted c = AuthWanted {
   awLower : Authority,
   awUpper : Authority,
   awContext : c,
+  -- the atom key when the obligation came from a row check (`authorityEscapes`),
+  -- so a report can locate the site that performed the label; `None` for a
+  -- value flowing into a qualified slot, whose context is already the argument
+  awLabel : Option String,
 }
 
 data SummaryNode = SummaryNode {
@@ -64,6 +68,11 @@ public export data SummaryFailure c = SummaryFailure {
   -- an authority obligation `lower ⊑ upper` this scope could neither prove
   -- nor hand outward; the rows are then empty
   esfAuthority : Option (Authority, Authority),
+  -- the obligation's upper term AS RECORDED, before normalisation: a report
+  -- can tell a written bound from a variable the scope solved
+  esfWrittenUpper : Option Authority,
+  -- the atom key an obligation or escape is about, when it came from a row
+  esfLabel : Option String,
 }
 
 export
@@ -168,7 +177,12 @@ recordAuthority : SummarySolver c -> c -> Authority -> Authority -> Unit
 recordAuthority solver context lower upper =
   let scope = currentScope solver
   scope.essAuthorities :=
-    AuthWanted { awLower = lower, awUpper = upper, awContext = context }
+    AuthWanted {
+        awLower = lower,
+        awUpper = upper,
+        awContext = context,
+        awLabel = None,
+      }
       :: scope.essAuthorities.value
 
 data SolveEdge = SolveEdge {
@@ -454,6 +468,8 @@ validateRelations solver protected escape (rel :: rest) =
           esfExact = rel.esrExact,
           esfContext = rel.esrContext,
           esfAuthority = None,
+          esfWrittenUpper = None,
+          esfLabel = None,
         }
         :: validateRelations solver protected escape rest
   else
@@ -474,10 +490,26 @@ validateRelations solver protected escape (rel :: rest) =
           esfExact = rel.esrExact,
           esfContext = rel.esrContext,
           esfAuthority = None,
+          esfWrittenUpper = None,
+          esfLabel =
+            firstEscapingKey escaping lowerAtoms upperAtoms escape rel.esrExact,
         }
         :: failures
     else
       failures
+
+-- The key of the first atom left escaping, for the report's location.
+firstEscapingKey : List Atom ->
+  List Atom ->
+  List Atom ->
+  (Bool -> List Atom -> List Atom -> List Atom) ->
+  Bool ->
+  Option String
+firstEscapingKey (x :: _) _ _ _ _ = Some (atomKey x)
+firstEscapingKey [] lowerAtoms upperAtoms escape exact =
+  match escape exact lowerAtoms upperAtoms
+    x :: _ => Some (atomKey x)
+    [] => None
 
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
@@ -494,6 +526,7 @@ authorityEscapes scope context upper (x :: rest) =
               awLower = atomAuth x,
               awUpper = atomAuth y,
               awContext = context,
+              awLabel = Some (atomKey x),
             }
             :: scope.essAuthorities.value
         others
@@ -762,43 +795,66 @@ checkAuthorities : SummarySolver c ->
   Map Int Unit ->
   List (SummaryFailure c)
 checkAuthorities solver scope rigid =
-  flatMap
-    (w =>
-      let lo = authNorm w.awLower
-      let hi = authNorm w.awUpper
-      if authSub lo hi then
-        []
-      else
-        let cells = authVars lo ++ authVars hi
-        let transferable =
-          anyList (outerFlexibleAuth scope rigid) cells
-            && not (anyList (localRigidAuth scope rigid) cells)
-        match solver.essStack.value
-          _ :: parent :: _ =>
-            if transferable then
-              parent.essAuthorities :=
-                AuthWanted {
-                    awLower = lo,
-                    awUpper = hi,
-                    awContext = w.awContext,
-                  }
-                  :: parent.essAuthorities.value
-              []
-            else
-              [authorityFailure w.awContext lo hi]
-          _ =>
-            if transferable then
-              solver.essRoot :=
-                AuthWanted {
-                    awLower = lo,
-                    awUpper = hi,
-                    awContext = w.awContext,
-                  }
-                  :: solver.essRoot.value
-              []
-            else
-              [authorityFailure w.awContext lo hi])
-    (reverseL scope.essAuthorities.value)
+  distinctFailures
+    (flatMap
+      (w =>
+        let lo = authNorm w.awLower
+        let hi = authNorm w.awUpper
+        if authSub lo hi then
+          []
+        else
+          let cells = authVars lo ++ authVars hi
+          let transferable =
+            anyList (outerFlexibleAuth scope rigid) cells
+              && not (anyList (localRigidAuth scope rigid) cells)
+          match solver.essStack.value
+            _ :: parent :: _ =>
+              if transferable then
+                parent.essAuthorities :=
+                  AuthWanted {
+                      awLower = lo,
+                      awUpper = w.awUpper,
+                      awContext = w.awContext,
+                      awLabel = w.awLabel,
+                    }
+                    :: parent.essAuthorities.value
+                []
+              else
+                [authorityFailure w lo hi]
+            _ =>
+              if transferable then
+                solver.essRoot :=
+                  AuthWanted {
+                      awLower = lo,
+                      awUpper = w.awUpper,
+                      awContext = w.awContext,
+                      awLabel = w.awLabel,
+                    }
+                    :: solver.essRoot.value
+                []
+              else
+                [authorityFailure w lo hi])
+      (reverseL scope.essAuthorities.value))
+
+-- One obligation, one report: the same `lower ⊑ upper` pair recorded from two
+-- sites (an invariant index meeting a declared one, then the result flowing
+-- into the same declaration) is one defect, reported where it was first
+-- recorded.
+distinctFailures : List (SummaryFailure c) -> List (SummaryFailure c)
+distinctFailures failures = distinctFailuresGo failures []
+
+distinctFailuresGo : List (SummaryFailure c) ->
+  List String ->
+  List (SummaryFailure c)
+distinctFailuresGo [] _ = []
+distinctFailuresGo (f :: rest) seen = match f.esfAuthority
+  Some (lo, hi) =>
+    let key = "\{renderAuthority lo}\t\{renderAuthority hi}"
+    if elem key seen then
+      distinctFailuresGo rest seen
+    else
+      f :: distinctFailuresGo rest (key :: seen)
+  None => f :: distinctFailuresGo rest seen
 
 -- Once every binding of the module is inferred, the variables no binding
 -- owned take their least solution over every use, and each obligation over
@@ -811,20 +867,23 @@ closeRootAuthorities solver rigid =
   let wanteds = reverseL solver.essRoot.value
   let _ = solveAuthorities (cell => not (M.has (authvarId cell) rigid)) wanteds
   solver.essRoot := []
-  flatMap
-    (w =>
-      let lo = authNorm w.awLower
-      let hi = authNorm w.awUpper
-      if authSub lo hi then [] else [authorityFailure w.awContext lo hi])
-    wanteds
+  distinctFailures
+    (flatMap
+      (w =>
+        let lo = authNorm w.awLower
+        let hi = authNorm w.awUpper
+        if authSub lo hi then [] else [authorityFailure w lo hi])
+      wanteds)
 
-authorityFailure : c -> Authority -> Authority -> SummaryFailure c
-authorityFailure context lo hi = SummaryFailure {
+authorityFailure : AuthWanted c -> Authority -> Authority -> SummaryFailure c
+authorityFailure w lo hi = SummaryFailure {
   esfLower = EffRow [] None,
   esfUpper = EffRow [] None,
   esfExact = False,
-  esfContext = context,
+  esfContext = w.awContext,
   esfAuthority = Some (lo, hi),
+  esfWrittenUpper = Some w.awUpper,
+  esfLabel = w.awLabel,
 }
 
 -- A flexible leaf created before this scope opened, or at an enclosing level,

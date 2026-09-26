@@ -8,7 +8,7 @@
 -- method" would pass a "GET only" bound).  The correct dsubN looks a missing
 -- axis up against the bound axis's sub-domain TOP (PSet None) and finds TOP is
 -- NOT subset of {"GET"} => REJECT.  This fixture MUST reject.
-effect Net Product
+effect Net Product (Host : Prefix, Method : Set)
 
 -- bare host-only product (Method = TOP)
 extern fetch : String -> <FFI, Net Host="idp.example.com/api"> String

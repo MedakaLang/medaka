@@ -2123,6 +2123,7 @@ tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
 tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentionsParams (TyAuth _ _) _ = False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 tyMentionsParams (TyNamed _ t) params = tyMentionsParams t params
 tyMentionsParams (TyQual t _) params = tyMentionsParams t params
@@ -2296,6 +2297,7 @@ tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
 -- Mirror of the `tyMentionsParams` arm above.
 tyMentionsNonParam (TyRow _ tail _) params =
   anyList (v => not (contains v params)) tail
+tyMentionsNonParam (TyAuth _ _) _ = False
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyNamed _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyQual t _) params = tyMentionsNonParam t params

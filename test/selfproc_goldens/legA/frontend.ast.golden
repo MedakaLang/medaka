@@ -1,17 +1,21 @@
+authTermSurface : (String -> String) -> EffParamTy -> String
 constraintUnresolved : String -> List Ty -> Constraint
-dDataUnresolved : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List DeriveRef -> Decl
+ctorBindersSource : List (String, KindAnn) -> String
+ctorBindersSurface : List (String, KindAnn) -> String
+dDataUnresolved : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List (List (String, KindAnn)) -> List DeriveRef -> Decl
 dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
 dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List (Option KindAnn) -> List Super -> List IfaceMethod -> Decl
-dNewtypeUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> String -> Ty -> List DeriveRef -> Decl
+dNewtypeUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> String -> List (String, KindAnn) -> Ty -> List DeriveRef -> Decl
 dTypeAliasUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Ty -> Decl
 deriveRefName : DeriveRef -> String
+effAtomAt : String -> EffParamTy -> Loc -> EffAtomTy
 effAtomBare : String -> EffAtomTy
 effAtomSurface : (String -> String) -> EffAtomTy -> String
 effAtomWith : String -> EffParamTy -> EffAtomTy
 effAxisSurface : (String -> String) -> EffParamTy -> String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
-effectDeclUnstamped : Bool -> String -> Option String -> Decl
+effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Decl
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
@@ -27,6 +31,7 @@ isU64Head : String -> Bool
 isUnsignedHead : String -> Bool
 kindAnnArg : KindAnn -> String
 kindAnnSource : KindAnn -> String
+kindAuthorityUnstamped : String -> KindAnn
 lookupTab : TabKey -> List (TabKey, a) -> Option a
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)

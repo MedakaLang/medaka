@@ -20,6 +20,7 @@ import frontend.ast.{
   TyConOrigin(..),
   EffAtomTy(..),
   EffParamTy(..),
+  KindAnn(..),
   mapTyInDecl,
   firstTyLoc,
   firstTyLocList,
@@ -459,20 +460,38 @@ patGroupDupErrors loc kind ps =
 checkType : Option Loc -> Env -> Ty -> List ResError
 checkType cur env t = checkTypeIn [] cur env t
 
--- [bound] is the authority binders in scope: every `(p : T)` arrow domain to
--- the left in this signature.  A row atom's named parameter and a `@p`
--- qualifier must name one of them.
+-- [bound] is the authority binders in scope: every `(p : T)` arrow domain and
+-- every bare name (`Handle p`) written to the LEFT in this signature, plus the
+-- enclosing declaration's `Authority`-kinded parameters and a constructor's
+-- existential binders.  A row atom's named parameter and a `@p` qualifier
+-- must name one of them.  Whether a bare name to the left is an authority or
+-- a type variable is the elaborator's question (`Handle`'s declared kind);
+-- this pass only knows what was written where.
 checkTypeIn : List String -> Option Loc -> Env -> Ty -> List ResError
-checkTypeIn _ cur env (TyCon { tyConName = n, tyConLoc = loc }) =
-  if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
-    -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
-    -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
-    -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
-    -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
-    ambiguousTypeErrors env n (orElseLoc loc cur)
-  else
-    [UnknownType n (orElseLoc loc cur) (suggestType env n)]
-checkTypeIn _ _ _ (TyVar _) = []
+checkTypeIn bound cur env t = fst (checkTypeGo bound cur env t)
+
+-- One left-to-right pass: every bare name and every named argument the walk
+-- passes joins the scope the names to its right may refer to, so the whole
+-- signature is walked once (a re-walk of the left operand at every node was
+-- quadratic in the type's size).
+checkTypeGo : List String ->
+  Option Loc ->
+  Env ->
+  Ty ->
+  (List ResError, List String)
+checkTypeGo bound cur env (TyCon { tyConName = n, tyConLoc = loc }) =
+  let errs =
+    if omHasKey n env.types
+      || omHasKey n env.imported
+      || isTupleCtorTyName n then
+      -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
+      -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
+      -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
+      -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
+      ambiguousTypeErrors env n (orElseLoc loc cur)
+    else
+      [UnknownType n (orElseLoc loc cur) (suggestType env n)]
+  (errs, bound)
 -- (helper below `checkType`) — accept the bare tuple type constructors
 -- `(,)`…`(,,,,)` (which the parser lowers to `TyCon "__tupleN__"`, arities 2–5)
 -- as known type names WITHOUT adding them to `env.types`/`primitiveTypes`: those
@@ -480,18 +499,29 @@ checkTypeIn _ _ _ (TyVar _) = []
 -- `__tupleN__` head there makes it try to emit a `Bimappable` default at a tuple
 -- with no `bimap` impl.  Kept in sync with the parser's `tupleCtorTyName` and
 -- typecheck's `tupleHeadTagTc`.
-checkTypeIn bound cur env (TyApp a b) =
-  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
-checkTypeIn bound cur env (TyFun (TyNamed n a) b) =
-  checkTypeIn bound cur env a ++ checkTypeIn (n :: bound) cur env b
-checkTypeIn bound cur env (TyFun a b) =
-  checkTypeIn bound cur env a ++ checkTypeIn bound cur env b
-checkTypeIn bound cur env (TyTuple ts) = flatMap (checkTypeIn bound cur env) ts
-checkTypeIn bound cur env (TyEffect labels _ t) =
-  checkEffAtoms bound cur env labels ++ checkTypeIn bound cur env t
-checkTypeIn _ cur _ (TyNamed n _) = [MisplacedAuthorityBinder n cur]
-checkTypeIn bound cur env (TyQual t n) =
-  checkTypeIn bound cur env t ++ checkAuthorityName bound cur n
+checkTypeGo bound _ _ (TyVar n) = ([], n :: bound)
+checkTypeGo bound cur env (TyApp a b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo b1 cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyFun (TyNamed n a) b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo (n :: b1) cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyFun a b) =
+  let (e1, b1) = checkTypeGo bound cur env a
+  let (e2, b2) = checkTypeGo b1 cur env b
+  (e1 ++ e2, b2)
+checkTypeGo bound cur env (TyTuple ts) = checkTypesGo bound cur env ts
+checkTypeGo bound cur env (TyEffect labels _ t) =
+  let errs = checkEffAtoms bound cur env labels
+  let (e2, b2) = checkTypeGo bound cur env t
+  (errs ++ e2, b2)
+checkTypeGo bound cur _ (TyNamed n _) =
+  ([MisplacedAuthorityBinder n cur], bound)
+checkTypeGo bound cur env (TyQual t n) =
+  let (e1, b1) = checkTypeGo bound cur env t
+  (e1 ++ checkAuthorityName b1 cur n, b1)
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -500,25 +530,63 @@ checkTypeIn bound cur env (TyQual t n) =
 -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
 -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
 -- location>` to the signature it was written in.
-checkTypeIn bound cur env (TyConstrained cs t) =
-  flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-    ++ checkTypeIn bound cur env t
+checkTypeGo bound cur env (TyConstrained cs t) =
+  let errs = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
+  let (e2, b2) = checkTypeGo bound cur env t
+  (errs ++ e2, b2)
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
-checkTypeIn bound cur env (TyRow labels _ _) =
-  checkEffAtoms bound cur env labels
+checkTypeGo bound cur env (TyRow labels _ _) =
+  (checkEffAtoms bound cur env labels, bound)
+-- A written authority term names nothing.
+checkTypeGo bound _ _ (TyAuth _ _) = ([], bound)
+
+-- Tuple components bind left to right, as arrow domains do.
+checkTypesGo : List String ->
+  Option Loc ->
+  Env ->
+  List Ty ->
+  (List ResError, List String)
+checkTypesGo bound _ _ [] = ([], bound)
+checkTypesGo bound cur env (t :: ts) =
+  let (e1, b1) = checkTypeGo bound cur env t
+  let (e2, b2) = checkTypesGo b1 cur env ts
+  (e1 ++ e2, b2)
+
+-- The names a declaration head binds as authorities: its `Authority`-kinded
+-- parameters (positional with the name list, as the kinds are stored).
+authorityParams : List String -> List (Option KindAnn) -> List String
+authorityParams (p :: ps) ((Some (KindAuthority _ _)) :: ks) =
+  p :: authorityParams ps ks
+authorityParams (_ :: ps) (_ :: ks) = authorityParams ps ks
+authorityParams _ _ = []
+
+-- The effect labels a head's kinds and a constructor's binders name, each
+-- checked like a label written in a row: unknown or ambiguous is an error.
+checkKindLabels : Env -> List (Option KindAnn) -> List ResError
+checkKindLabels env kinds = flatMap (checkKindLabel env) kinds
+
+checkKindLabel : Env -> Option KindAnn -> List ResError
+checkKindLabel env (Some (KindAuthority l _)) = checkEffect None env l
+checkKindLabel _ _ = []
+
+checkBinderLabels : Env -> List (String, KindAnn) -> List ResError
+checkBinderLabels env binders =
+  flatMap (b => checkKindLabel env (Some (snd b))) binders
 
 checkEffAtoms : List String ->
   Option Loc ->
   Env ->
   List EffAtomTy ->
   List ResError
+-- An atom's own span locates its diagnostics; the enclosing expression's is
+-- the fallback for an atom a tool synthesised without one.
 checkEffAtoms bound cur env atoms =
   flatMap
     (a =>
-      checkEffect cur env a.eatLabel
+      checkEffect (orElseLoc a.eatLoc cur) env a.eatLabel
         ++ (match a.eatParam
-          EPName n => checkAuthorityName bound cur n
+          EPName n => checkAuthorityName bound (orElseLoc a.eatLoc cur) n
           _ => []))
     atoms
 
@@ -1676,24 +1744,74 @@ checkDecl env (DLetGroup _ binds) =
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
-checkDecl env (DData { dataCtors = vs }) = flatMap (checkVariant env) vs
+checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
+  checkKindLabels env ks
+    ++ checkVariants env (authorityParams ps ks) vs (padBinders vs bs)
 checkDecl env (DProp _ _ params body) = checkProp env params body
 checkDecl env (DTest _ _ body) = checkExpr None env emptyScope body
 checkDecl env (DInterface { supers, methods, ... }) =
   checkInterfaceDecl env supers methods
 checkDecl env (DImpl { iface, tys, reqs, methods, ... }) =
   checkImplDecl env iface tys reqs methods
-checkDecl env (DTypeAlias { tyAliasRhs = rhs }) = checkType None env rhs
-checkDecl env (DNewtype { newtypeFieldTy = fty }) = checkType None env fty
+checkDecl env (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
+  checkKindLabels env ks ++ checkTypeIn (authorityParams ps ks) None env rhs
+checkDecl env (DNewtype { newtypeParams = ps, newtypeParamKinds = ks, newtypeCtorBinders = bs, newtypeFieldTy = fty }) =
+  checkKindLabels env ks
+    ++ checkBinderLabels env bs
+    ++ duplicateCtorBinders (authorityParams ps ks) bs (firstTyLoc fty)
+    ++ checkTypeIn (map fst bs ++ authorityParams ps ks) None env fty
 checkDecl env (DAttrib _ inner) = checkDecl env inner
 checkDecl _ _ = []
 
-checkVariant : Env -> Variant -> List ResError
-checkVariant env (Variant _ (ConPos tys)) = flatMap (checkType None env) tys
-checkVariant env (Variant _ (ConNamed fs _)) = flatMap (checkFieldType env) fs
+-- The binder list is positional with the variants; a short list (a decl
+-- synthesised without one) reads as "no binders" rather than truncating.
+padBinders : List Variant ->
+  List (List (String, KindAnn)) ->
+  List (List (String, KindAnn))
+padBinders [] _ = []
+padBinders (_ :: vs) (b :: bs) = b :: padBinders vs bs
+padBinders (_ :: vs) [] = [] :: padBinders vs []
 
-checkFieldType : Env -> Field -> List ResError
-checkFieldType env (Field _ t) = checkType None env t
+checkVariants : Env ->
+  List String ->
+  List Variant ->
+  List (List (String, KindAnn)) ->
+  List ResError
+checkVariants env bound (v :: vs) (bs :: rest) =
+  checkBinderLabels env bs
+    ++ duplicateCtorBinders bound bs (firstTyLocList (variantFieldTys v))
+    ++ checkVariant env (map fst bs ++ bound) v
+    ++ checkVariants env bound vs rest
+checkVariants _ _ _ _ = []
+
+-- A constructor's binders are one binding group with the head's authority
+-- parameters: a binder spelled like a parameter would shadow the parameter
+-- every field's `@p` was written against, so it is a duplicate, as a binder
+-- repeated in the same list is.
+duplicateCtorBinders : List String ->
+  List (String, KindAnn) ->
+  Option Loc ->
+  List ResError
+duplicateCtorBinders bound binders loc =
+  map
+    (n => DuplicateBinder "constructor" n loc)
+    (findDups bound (map fst binders))
+
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
+
+checkVariant : Env -> List String -> Variant -> List ResError
+checkVariant env bound (Variant _ (ConPos tys)) =
+  flatMap (checkTypeIn bound None env) tys
+checkVariant env bound (Variant _ (ConNamed fs _)) =
+  flatMap (checkFieldType env bound) fs
+
+checkFieldType : Env -> List String -> Field -> List ResError
+checkFieldType env bound (Field _ t) = checkTypeIn bound None env t
 
 checkProp : Env -> List PropParam -> Expr -> List ResError
 checkProp env params body =
@@ -1825,7 +1943,7 @@ dataRecordNames (_ :: rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _ _) :: rest) = n :: effectNames rest
+effectNames ((DEffect _ n _ _ _) :: rest) = n :: effectNames rest
 effectNames ((DAttrib _ d) :: rest) = effectNames (d :: rest)
 effectNames (_ :: rest) = effectNames rest
 
@@ -2701,7 +2819,7 @@ ppResError (AmbiguousType n mods _) =
 -- `import m.{Foo as Bar}` is rejected — so the message offers the two fixes that
 -- exist and not that one.
 ppResError (UnboundAuthority n _) =
-  "Unknown authority '\{n}': an authority name refers to an argument named to its left in the same signature. Bind it by naming the argument, `(\{n} : String) -> <FileRead \{n}> …`, or write the label bare for any authority"
+  "Unknown authority '\{n}': an authority name refers to a binder written to its left in the same signature — a named argument `(\{n} : String) -> <FileRead \{n}> …`, an `Authority`-kinded type argument such as `Handle \{n}` — or to an `Authority` parameter of the enclosing data declaration. Bind it there, or write the label bare for any authority"
 ppResError (MisplacedAuthorityBinder n _) =
   "A named argument `(\{n} : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"
 ppResError (AmbiguousEffect n mods _) =
@@ -4124,7 +4242,7 @@ nsEffects = ExpNs {
   nsGet = exp => exp.expEffects,
   nsDirectOf =
     d => match d
-      DEffect True n _ _ => [n]
+      DEffect True n _ _ _ => [n]
       _ => [],
   nsCarry =
     path src => match path
@@ -5305,7 +5423,52 @@ stampDeclTyOrigins aliases scope d =
   unqualAliasDecl
     aliases
     scope
-    (mapOriginsInDecl (stampTyHead aliases scope) (fillIfaceOccOrigin scope) d)
+    (stampDeclKinds
+      scope
+      (mapOriginsInDecl
+        (stampTyHead aliases scope)
+        (fillIfaceOccOrigin scope)
+        d))
+
+-- An `Authority L` kind names an effect label exactly as a row atom does, and
+-- acquires `L`'s declaring identity the same way (`stampEffAtoms`): on the
+-- head's parameter kinds and on every constructor's existential binders.
+stampDeclKinds : OrdMap TyConOrigin -> Decl -> Decl
+stampDeclKinds scope (d@(DData { dataParamKinds, dataCtorBinders })) = DData { d |
+  dataParamKinds = map (stampKindOpt scope) dataParamKinds,
+  dataCtorBinders = map (stampBinders scope) dataCtorBinders,
+}
+stampDeclKinds scope (d@(DNewtype { newtypeParamKinds, newtypeCtorBinders })) = DNewtype { d |
+  newtypeParamKinds = map (stampKindOpt scope) newtypeParamKinds,
+  newtypeCtorBinders = stampBinders scope newtypeCtorBinders,
+}
+stampDeclKinds scope (d@(DTypeAlias { tyAliasParamKinds })) = DTypeAlias { d |
+  tyAliasParamKinds = map (stampKindOpt scope) tyAliasParamKinds,
+}
+stampDeclKinds scope (d@(DInterface { typaramKinds, ... })) = DInterface { d |
+  typaramKinds = map (stampKindOpt scope) typaramKinds,
+}
+stampDeclKinds scope (DAttrib attrs inner) =
+  DAttrib attrs (stampDeclKinds scope inner)
+stampDeclKinds _ d = d
+
+stampBinders : OrdMap TyConOrigin ->
+  List (String, KindAnn) ->
+  List (String, KindAnn)
+stampBinders scope binders = map (b => (fst b, stampKind scope (snd b))) binders
+
+stampKindOpt : OrdMap TyConOrigin -> Option KindAnn -> Option KindAnn
+stampKindOpt scope (Some k) = Some (stampKind scope k)
+stampKindOpt _ None = None
+
+stampKind : OrdMap TyConOrigin -> KindAnn -> KindAnn
+stampKind scope (KindAuthority l OriginUnresolved) =
+  match omLookup (effectKey l) scope
+    Some o => KindAuthority l o
+    None => KindAuthority l OriginUnresolved
+stampKind scope (KindArrow a b) =
+  KindArrow (stampKind scope a) (stampKind scope b)
+stampKind _ k = k
 
 -- ⚠️ The three arms are enumerated rather than wildcarded ON PURPOSE: a fourth
 -- `TyConOrigin` inhabitant should be MADE TO SHOW UP here rather than falling
@@ -5698,8 +5861,8 @@ stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
   DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
 stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
   DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
-stampDeclOrigin mid (DEffect pub n dom o) =
-  DEffect pub n dom (fillDeclOrigin mid o)
+stampDeclOrigin mid (DEffect pub n dom axes o) =
+  DEffect pub n dom axes (fillDeclOrigin mid o)
 stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
 stampDeclOrigin _ d = d
 

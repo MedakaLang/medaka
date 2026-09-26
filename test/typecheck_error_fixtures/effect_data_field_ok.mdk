@@ -1,0 +1,129 @@
+-- The honest controls for effect_data_field_launder (EFFECTS-SEMANTICS §4.1,
+-- the data half): a qualified field is a proof source at construction, a
+-- named arrow produces a handle at its argument's authority, matching
+-- recovers exactly the declared qualifier, an index in a signature
+-- quantifies like a type variable, a record's create/read/pattern/update
+-- follow the field's qualifier, and `*` is the whole domain.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data Conf (p : Authority FileRead) = Conf { path : String @p, retries : Int }
+
+-- construction proves the field against a literal within the bound
+cfg : Unit -> Handle "config/*"
+cfg _ = Handle "config/app.toml"
+
+-- a named arrow produces a handle at its argument's authority, forwarded or
+-- narrowed
+open : (path : String) -> Handle path
+open path = Handle path
+
+openSub : (path : String) -> Handle path
+openSub path = Handle (path ++ "/x")
+
+-- matching recovers the declared qualifier, so the field may be read at it
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle s) = readFile s
+
+-- an index name in a signature is a quantified authority, usable to its right
+via : Handle p -> <FileRead p> Result String String
+via h = readIt h
+
+viaTop : Handle p -> <FileRead> Result String String
+viaTop h = readIt h
+
+-- a phantom-indexed constructor is trusted in its declaring module
+data Raw (p : Authority FileRead) = Raw Int
+
+rawAt : (path : String) -> Raw path
+rawAt _ = Raw 3
+
+-- a public type whose constructor carries the parameter may be exported
+public export data Named (p : Authority FileRead) = Named (String @p)
+
+-- record forms
+mkConf : Unit -> Conf "config/*"
+mkConf _ = Conf { path = "config/app.toml", retries = 3 }
+
+readConf : Conf p -> <FileRead p> Result String String
+readConf c = readFile c.path
+
+readConfPat : Conf p -> <FileRead p> Result String String
+readConfPat (Conf { path }) = readFile path
+
+bump : Conf p -> Conf p
+bump c = { c | retries = 4 }
+
+-- mutable storage keeps the stored index: a write at the same authority
+keep : (path : String) -> Ref (Handle path) -> Unit
+keep path r = r := Handle path
+
+-- the whole domain, written `*`, admits any value and permits any read
+anyHandle : String -> Handle *
+anyHandle s = Handle s
+
+readAny : Handle * -> <FileRead> Result String String
+readAny (Handle s) = readFile s
+
+-- an alias over an indexed head substitutes its parameter
+type Cfg (q : Authority FileRead) = Handle q
+
+viaAlias : Cfg p -> Handle p
+viaAlias h = h
+
+mkCfg : Unit -> Cfg "config/*"
+mkCfg _ = Handle "config/app.toml"
+
+-- a derived instance elaborates its head under the declared kind
+data Tagged (p : Authority FileRead) = Tagged (String @p) Int deriving (Eq)
+
+-- a field may name a head declared later in the file
+data Wrapped (p : Authority FileRead) = Wrapped Int (Later p)
+
+data Later (p : Authority FileRead) = Later (String @p)
+
+-- a record read outside a pattern cannot open an existential: it recovers
+-- the top
+data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
+
+unseal : Sealed -> Handle *
+unseal s = Handle s.path
+
+count : Sealed -> Int
+count s = s.n
+
+-- an unsigned forwarder of a phantom constructor publishes the top
+mkRaw = Raw
+
+-- a signature's index publishes as written
+none : Unit -> List (Handle p)
+none _ = []
+
+useNone : Unit -> List (Handle "config/*")
+useNone _ = none ()
+
+-- a return-position method and a two-parameter interface at an indexed head
+interface Make a where
+  make : Int -> a
+
+impl Make (Raw p) where
+  make n = Raw n
+
+madeRaw : Unit -> Raw "config/*"
+madeRaw _ = make 3
+
+interface Conv a b where
+  conv : a -> b
+
+impl Conv (Raw p) Int where
+  conv _ = 1
+
+convRaw : Raw "config/a" -> Int
+convRaw r = conv r
+
+-- an existential record update repacks the binder whole
+data Two = Two (p : Authority FileRead) { a : Handle p, b : Handle p }
+
+repackTwo : Two -> Two
+repackTwo t = { t | a = Handle "/etc/x", b = Handle "/etc/x" }
+
+main = println 1

@@ -34,3 +34,28 @@ data Effect = Effect Int
 
 -- no annotation anywhere: the pre-existing shape, unchanged
 data Wrap f a = W (f a)
+
+-- `Authority L` kinds (EFFECTS-SEMANTICS §4.1, §6.1): a head parameter, its
+-- field qualifier, an index argument spelled by a name, a literal and `*`,
+-- and a constructor's existential binder — every spelling the formatter
+-- must hand back unchanged.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+
+data Conf (p : Authority FileRead) = Conf { path : String @p, retries : Int }
+
+newtype Boxed (p : Authority FileRead) = MkBoxed (Handle p)
+
+type Cfg = Handle "config/*"
+
+type AnyH = Handle *
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle s) = readFile s
+
+-- a constructor's existential binder leading a record's fields
+data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }

@@ -1,5 +1,5 @@
 # META
-source_lines=1136
+source_lines=1195
 stages=DESUGAR,MARK
 # SOURCE
 -- Binding-owned effect equations. Operational lower bounds and compatibility
@@ -9,8 +9,8 @@ stages=DESUGAR,MARK
 import map as M
 import map.{Map(..)}
 import types.effect_authority.{
-  Authority(..), Authvar(..), authvarId, authNorm, authSub, authVars,
-  authJoinAll, linkAuthvar
+  renderAuthority, Authority(..), Authvar(..), authvarId, authNorm, authSub,
+  authVars, authJoinAll, linkAuthvar
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -45,6 +45,10 @@ public export data AuthWanted c = AuthWanted {
   awLower : Authority,
   awUpper : Authority,
   awContext : c,
+  -- the atom key when the obligation came from a row check (`authorityEscapes`),
+  -- so a report can locate the site that performed the label; `None` for a
+  -- value flowing into a qualified slot, whose context is already the argument
+  awLabel : Option String,
 }
 
 data SummaryNode = SummaryNode {
@@ -68,6 +72,11 @@ public export data SummaryFailure c = SummaryFailure {
   -- an authority obligation `lower ⊑ upper` this scope could neither prove
   -- nor hand outward; the rows are then empty
   esfAuthority : Option (Authority, Authority),
+  -- the obligation's upper term AS RECORDED, before normalisation: a report
+  -- can tell a written bound from a variable the scope solved
+  esfWrittenUpper : Option Authority,
+  -- the atom key an obligation or escape is about, when it came from a row
+  esfLabel : Option String,
 }
 
 export
@@ -172,7 +181,12 @@ recordAuthority : SummarySolver c -> c -> Authority -> Authority -> Unit
 recordAuthority solver context lower upper =
   let scope = currentScope solver
   scope.essAuthorities :=
-    AuthWanted { awLower = lower, awUpper = upper, awContext = context }
+    AuthWanted {
+        awLower = lower,
+        awUpper = upper,
+        awContext = context,
+        awLabel = None,
+      }
       :: scope.essAuthorities.value
 
 data SolveEdge = SolveEdge {
@@ -458,6 +472,8 @@ validateRelations solver protected escape (rel :: rest) =
           esfExact = rel.esrExact,
           esfContext = rel.esrContext,
           esfAuthority = None,
+          esfWrittenUpper = None,
+          esfLabel = None,
         }
         :: validateRelations solver protected escape rest
   else
@@ -478,10 +494,26 @@ validateRelations solver protected escape (rel :: rest) =
           esfExact = rel.esrExact,
           esfContext = rel.esrContext,
           esfAuthority = None,
+          esfWrittenUpper = None,
+          esfLabel =
+            firstEscapingKey escaping lowerAtoms upperAtoms escape rel.esrExact,
         }
         :: failures
     else
       failures
+
+-- The key of the first atom left escaping, for the report's location.
+firstEscapingKey : List Atom ->
+  List Atom ->
+  List Atom ->
+  (Bool -> List Atom -> List Atom -> List Atom) ->
+  Bool ->
+  Option String
+firstEscapingKey (x :: _) _ _ _ _ = Some (atomKey x)
+firstEscapingKey [] lowerAtoms upperAtoms escape exact =
+  match escape exact lowerAtoms upperAtoms
+    x :: _ => Some (atomKey x)
+    [] => None
 
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
@@ -498,6 +530,7 @@ authorityEscapes scope context upper (x :: rest) =
               awLower = atomAuth x,
               awUpper = atomAuth y,
               awContext = context,
+              awLabel = Some (atomKey x),
             }
             :: scope.essAuthorities.value
         others
@@ -766,43 +799,66 @@ checkAuthorities : SummarySolver c ->
   Map Int Unit ->
   List (SummaryFailure c)
 checkAuthorities solver scope rigid =
-  flatMap
-    (w =>
-      let lo = authNorm w.awLower
-      let hi = authNorm w.awUpper
-      if authSub lo hi then
-        []
-      else
-        let cells = authVars lo ++ authVars hi
-        let transferable =
-          anyList (outerFlexibleAuth scope rigid) cells
-            && not (anyList (localRigidAuth scope rigid) cells)
-        match solver.essStack.value
-          _ :: parent :: _ =>
-            if transferable then
-              parent.essAuthorities :=
-                AuthWanted {
-                    awLower = lo,
-                    awUpper = hi,
-                    awContext = w.awContext,
-                  }
-                  :: parent.essAuthorities.value
-              []
-            else
-              [authorityFailure w.awContext lo hi]
-          _ =>
-            if transferable then
-              solver.essRoot :=
-                AuthWanted {
-                    awLower = lo,
-                    awUpper = hi,
-                    awContext = w.awContext,
-                  }
-                  :: solver.essRoot.value
-              []
-            else
-              [authorityFailure w.awContext lo hi])
-    (reverseL scope.essAuthorities.value)
+  distinctFailures
+    (flatMap
+      (w =>
+        let lo = authNorm w.awLower
+        let hi = authNorm w.awUpper
+        if authSub lo hi then
+          []
+        else
+          let cells = authVars lo ++ authVars hi
+          let transferable =
+            anyList (outerFlexibleAuth scope rigid) cells
+              && not (anyList (localRigidAuth scope rigid) cells)
+          match solver.essStack.value
+            _ :: parent :: _ =>
+              if transferable then
+                parent.essAuthorities :=
+                  AuthWanted {
+                      awLower = lo,
+                      awUpper = w.awUpper,
+                      awContext = w.awContext,
+                      awLabel = w.awLabel,
+                    }
+                    :: parent.essAuthorities.value
+                []
+              else
+                [authorityFailure w lo hi]
+            _ =>
+              if transferable then
+                solver.essRoot :=
+                  AuthWanted {
+                      awLower = lo,
+                      awUpper = w.awUpper,
+                      awContext = w.awContext,
+                      awLabel = w.awLabel,
+                    }
+                    :: solver.essRoot.value
+                []
+              else
+                [authorityFailure w lo hi])
+      (reverseL scope.essAuthorities.value))
+
+-- One obligation, one report: the same `lower ⊑ upper` pair recorded from two
+-- sites (an invariant index meeting a declared one, then the result flowing
+-- into the same declaration) is one defect, reported where it was first
+-- recorded.
+distinctFailures : List (SummaryFailure c) -> List (SummaryFailure c)
+distinctFailures failures = distinctFailuresGo failures []
+
+distinctFailuresGo : List (SummaryFailure c) ->
+  List String ->
+  List (SummaryFailure c)
+distinctFailuresGo [] _ = []
+distinctFailuresGo (f :: rest) seen = match f.esfAuthority
+  Some (lo, hi) =>
+    let key = "\{renderAuthority lo}\t\{renderAuthority hi}"
+    if elem key seen then
+      distinctFailuresGo rest seen
+    else
+      f :: distinctFailuresGo rest (key :: seen)
+  None => f :: distinctFailuresGo rest seen
 
 -- Once every binding of the module is inferred, the variables no binding
 -- owned take their least solution over every use, and each obligation over
@@ -815,20 +871,23 @@ closeRootAuthorities solver rigid =
   let wanteds = reverseL solver.essRoot.value
   let _ = solveAuthorities (cell => not (M.has (authvarId cell) rigid)) wanteds
   solver.essRoot := []
-  flatMap
-    (w =>
-      let lo = authNorm w.awLower
-      let hi = authNorm w.awUpper
-      if authSub lo hi then [] else [authorityFailure w.awContext lo hi])
-    wanteds
+  distinctFailures
+    (flatMap
+      (w =>
+        let lo = authNorm w.awLower
+        let hi = authNorm w.awUpper
+        if authSub lo hi then [] else [authorityFailure w lo hi])
+      wanteds)
 
-authorityFailure : c -> Authority -> Authority -> SummaryFailure c
-authorityFailure context lo hi = SummaryFailure {
+authorityFailure : AuthWanted c -> Authority -> Authority -> SummaryFailure c
+authorityFailure w lo hi = SummaryFailure {
   esfLower = EffRow [] None,
   esfUpper = EffRow [] None,
   esfExact = False,
-  esfContext = context,
+  esfContext = w.awContext,
   esfAuthority = Some (lo, hi),
+  esfWrittenUpper = Some w.awUpper,
+  esfLabel = w.awLabel,
 }
 
 -- A flexible leaf created before this scope opened, or at an enclosing level,
@@ -1141,16 +1200,16 @@ relationProven escape rel =
 # DESUGAR
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "renderAuthority" false) (mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "findAtom" false) (mem "EffRow" true) (mem "Effvar" true) (mem "effvarId" false) (mem "rowFlat" false) (mem "rowFlatMembers" false) (mem "rowHasSummary" false) (mem "linkRow" false) (mem "solveSummaryCell" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DData Abstract "SummarySolver" ("c") ((variant "SummarySolver" (ConNamed (field "essStack" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "SummaryScope") (TyVar "c"))))) (field "essRoot" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "AuthWanted") (TyVar "c")))))))) ())
 (DData Private "SummaryScope" ("c") ((variant "SummaryScope" (ConNamed (field "essOwner" (TyCon "Int")) (field "essEffvarFloor" (TyCon "Int")) (field "essLevel" (TyCon "Int")) (field "essNodes" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "SummaryNode")))) (field "essExistentials" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "essAllowances" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "essRelations" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))))) (field "essAuthorities" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "AuthWanted") (TyVar "c")))))))) ())
-(DData Public "AuthWanted" ("c") ((variant "AuthWanted" (ConNamed (field "awLower" (TyCon "Authority")) (field "awUpper" (TyCon "Authority")) (field "awContext" (TyVar "c"))))) ())
+(DData Public "AuthWanted" ("c") ((variant "AuthWanted" (ConNamed (field "awLower" (TyCon "Authority")) (field "awUpper" (TyCon "Authority")) (field "awContext" (TyVar "c")) (field "awLabel" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DData Private "SummaryNode" () ((variant "SummaryNode" (ConNamed (field "esnCell" (TyApp (TyCon "Ref") (TyCon "Effvar"))) (field "esnLowers" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))))))) ())
 (DData Private "RowRelation" ("c") ((variant "RowRelation" (ConNamed (field "esrLower" (TyCon "EffRow")) (field "esrUpper" (TyCon "EffRow")) (field "esrExact" (TyCon "Bool")) (field "esrContext" (TyVar "c")) (field "esrProtected" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))) ())
-(DData Public "SummaryFailure" ("c") ((variant "SummaryFailure" (ConNamed (field "esfLower" (TyCon "EffRow")) (field "esfUpper" (TyCon "EffRow")) (field "esfExact" (TyCon "Bool")) (field "esfContext" (TyVar "c")) (field "esfAuthority" (TyApp (TyCon "Option") (TyTuple (TyCon "Authority") (TyCon "Authority"))))))) ())
+(DData Public "SummaryFailure" ("c") ((variant "SummaryFailure" (ConNamed (field "esfLower" (TyCon "EffRow")) (field "esfUpper" (TyCon "EffRow")) (field "esfExact" (TyCon "Bool")) (field "esfContext" (TyVar "c")) (field "esfAuthority" (TyApp (TyCon "Option") (TyTuple (TyCon "Authority") (TyCon "Authority")))) (field "esfWrittenUpper" (TyApp (TyCon "Option") (TyCon "Authority"))) (field "esfLabel" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig true "newSolver" (TyFun (TyCon "Unit") (TyApp (TyCon "SummarySolver") (TyVar "c"))))
 (DFunDef false "newSolver" (PWild) (ERecordCreate "SummarySolver" ((fa "essStack" (EApp (EVar "Ref") (EListLit))) (fa "essRoot" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "hasSummaryScope" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyCon "Bool")))
@@ -1174,7 +1233,7 @@ relationProven escape rel =
 (DTypeSig true "recordRelation" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyCon "Bool") (TyFun (TyVar "c") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))))
 (DFunDef false "recordRelation" ((PVar "solver") (PVar "exact") (PVar "context") (PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "scope") (EApp (EVar "currentScope") (EVar "solver"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EVar "lower")) (fa "esrUpper" (EVar "upper")) (fa "esrExact" (EVar "exact")) (fa "esrContext" (EVar "context")) (fa "esrProtected" (EVar "Tip")))) (EFieldAccess (EFieldAccess (EVar "scope") "essRelations") "value"))))))
 (DTypeSig true "recordAuthority" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit"))))))
-(DFunDef false "recordAuthority" ((PVar "solver") (PVar "context") (PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "scope") (EApp (EVar "currentScope") (EVar "solver"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lower")) (fa "awUpper" (EVar "upper")) (fa "awContext" (EVar "context")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))))
+(DFunDef false "recordAuthority" ((PVar "solver") (PVar "context") (PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "scope") (EApp (EVar "currentScope") (EVar "solver"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lower")) (fa "awUpper" (EVar "upper")) (fa "awContext" (EVar "context")) (fa "awLabel" (EVar "None")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))))
 (DData Private "SolveEdge" () ((variant "SolveEdge" (ConNamed (field "eseTarget" (TyCon "Int")) (field "eseCoverAtoms" (TyApp (TyCon "List") (TyCon "Atom"))) (field "eseCoverLeaves" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (field "eseExact" (TyCon "Bool"))))) ())
 (DData Private "WorkNode" () ((variant "WorkNode" (ConNamed (field "ewnCell" (TyApp (TyCon "Ref") (TyCon "Effvar"))) (field "ewnAtoms" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Atom")))) (field "ewnLeaves" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "ewnPendingAtoms" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Atom")))) (field "ewnPendingLeaves" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "ewnEdges" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "SolveEdge"))))))) ())
 (DData Private "SolveWork" () ((variant "SolveWork" (ConNamed (field "eswNodes" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "WorkNode"))) (field "eswQueue" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "eswQueued" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "eswOrdinaryTargets" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "eswExactTargets" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "eswEscape" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))))) ())
@@ -1221,10 +1280,13 @@ relationProven escape rel =
 (DFunDef false "missingLeaves" ((PCons (PVar "cell") (PVar "rest")) (PVar "upper")) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "effvarId") (EVar "cell"))) (EVar "upper"))) (EApp (EApp (EVar "missingLeaves") (EVar "rest")) (EVar "upper"))))
 (DTypeSig false "validateRelations" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))))
 (DFunDef false "validateRelations" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")))) (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")))) (EVar "failures")) (EVar "failures"))))))
+(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EVar "None")))) (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EApp (EApp (EApp (EApp (EApp (EVar "firstEscapingKey") (EVar "escaping")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (EVar "escape")) (EFieldAccess (EVar "rel") "esrExact"))))) (EVar "failures")) (EVar "failures"))))))
+(DTypeSig false "firstEscapingKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "firstEscapingKey" ((PCons (PVar "x") PWild) PWild PWild PWild PWild) (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x"))))
+(DFunDef false "firstEscapingKey" ((PList) (PVar "lowerAtoms") (PVar "upperAtoms") (PVar "escape") (PVar "exact")) (EMatch (EApp (EApp (EApp (EVar "escape") (EVar "exact")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (arm (PCons (PVar "x") PWild) () (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "authorityEscapes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "authorityEscapes" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "atomAuth") (EVar "x"))) (fa "awUpper" (EApp (EVar "atomAuth") (EVar "y"))) (fa "awContext" (EVar "context")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
+(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "atomAuth") (EVar "x"))) (fa "awUpper" (EApp (EVar "atomAuth") (EVar "y"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
 (DTypeSig false "isSymbolic" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "isSymbolic" ((PVar "q")) (EMatch (EApp (EVar "authVars") (EVar "q")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "retainRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
@@ -1261,11 +1323,16 @@ relationProven escape rel =
 (DFunDef false "isVar" ((PVar "id") (PCon "AVar" (PVar "cell"))) (EBinOp "==" (EApp (EVar "authvarId") (EVar "cell")) (EVar "id")))
 (DFunDef false "isVar" (PWild PWild) (EVar "False"))
 (DTypeSig false "checkAuthorities" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c")))))))
-(DFunDef false "checkAuthorities" ((PVar "solver") (PVar "scope") (PVar "rigid")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EBlock (DoLet false false (PVar "cells") (EBinOp "++" (EApp (EVar "authVars") (EVar "lo")) (EApp (EVar "authVars") (EVar "hi")))) (DoLet false false (PVar "transferable") (EBinOp "&&" (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "outerFlexibleAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "localRigidAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells"))))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EVar "hi")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")))) (EFieldAccess (EFieldAccess (EVar "parent") "essAuthorities") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EFieldAccess (EVar "w") "awContext")) (EVar "lo")) (EVar "hi"))))) (arm PWild () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EVar "hi")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")))) (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EFieldAccess (EVar "w") "awContext")) (EVar "lo")) (EVar "hi"))))))))))))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))
+(DFunDef false "checkAuthorities" ((PVar "solver") (PVar "scope") (PVar "rigid")) (EApp (EVar "distinctFailures") (EApp (EApp (EVar "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EBlock (DoLet false false (PVar "cells") (EBinOp "++" (EApp (EVar "authVars") (EVar "lo")) (EApp (EVar "authVars") (EVar "hi")))) (DoLet false false (PVar "transferable") (EBinOp "&&" (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "outerFlexibleAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "localRigidAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells"))))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")) (fa "awLabel" (EFieldAccess (EVar "w") "awLabel")))) (EFieldAccess (EFieldAccess (EVar "parent") "essAuthorities") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EVar "w")) (EVar "lo")) (EVar "hi"))))) (arm PWild () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")) (fa "awLabel" (EFieldAccess (EVar "w") "awLabel")))) (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EVar "w")) (EVar "lo")) (EVar "hi"))))))))))))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))))
+(DTypeSig false "distinctFailures" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c")))))
+(DFunDef false "distinctFailures" ((PVar "failures")) (EApp (EApp (EVar "distinctFailuresGo") (EVar "failures")) (EListLit)))
+(DTypeSig false "distinctFailuresGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
+(DFunDef false "distinctFailuresGo" ((PList) PWild) (EListLit))
+(DFunDef false "distinctFailuresGo" ((PCons (PVar "f") (PVar "rest")) (PVar "seen")) (EMatch (EFieldAccess (EVar "f") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EBlock (DoLet false false (PVar "key") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderAuthority") (EVar "lo")))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "renderAuthority") (EVar "hi")))) (ELit (LString "")))) (DoExpr (EIf (EApp (EApp (EVar "elem") (EVar "key")) (EVar "seen")) (EApp (EApp (EVar "distinctFailuresGo") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "f") (EApp (EApp (EVar "distinctFailuresGo") (EVar "rest")) (EBinOp "::" (EVar "key") (EVar "seen")))))))) (arm (PCon "None") () (EBinOp "::" (EVar "f") (EApp (EApp (EVar "distinctFailuresGo") (EVar "rest")) (EVar "seen"))))))
 (DTypeSig true "closeRootAuthorities" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
-(DFunDef false "closeRootAuthorities" ((PVar "solver") (PVar "rigid")) (EBlock (DoLet false false (PVar "wanteds") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value"))) (DoLet false false PWild (EApp (EApp (EVar "solveAuthorities") (ELam ((PVar "cell")) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "rigid"))))) (EVar "wanteds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EListLit))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EFieldAccess (EVar "w") "awContext")) (EVar "lo")) (EVar "hi")))))))) (EVar "wanteds")))))
-(DTypeSig false "authorityFailure" (TyFun (TyVar "c") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
-(DFunDef false "authorityFailure" ((PVar "context") (PVar "lo") (PVar "hi")) (ERecordCreate "SummaryFailure" ((fa "esfLower" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfUpper" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfExact" (EVar "False")) (fa "esfContext" (EVar "context")) (fa "esfAuthority" (EApp (EVar "Some") (ETuple (EVar "lo") (EVar "hi")))))))
+(DFunDef false "closeRootAuthorities" ((PVar "solver") (PVar "rigid")) (EBlock (DoLet false false (PVar "wanteds") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value"))) (DoLet false false PWild (EApp (EApp (EVar "solveAuthorities") (ELam ((PVar "cell")) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "rigid"))))) (EVar "wanteds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EListLit))) (DoExpr (EApp (EVar "distinctFailures") (EApp (EApp (EVar "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EVar "w")) (EVar "lo")) (EVar "hi")))))))) (EVar "wanteds"))))))
+(DTypeSig false "authorityFailure" (TyFun (TyApp (TyCon "AuthWanted") (TyVar "c")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
+(DFunDef false "authorityFailure" ((PVar "w") (PVar "lo") (PVar "hi")) (ERecordCreate "SummaryFailure" ((fa "esfLower" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfUpper" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfExact" (EVar "False")) (fa "esfContext" (EFieldAccess (EVar "w") "awContext")) (fa "esfAuthority" (EApp (EVar "Some") (ETuple (EVar "lo") (EVar "hi")))) (fa "esfWrittenUpper" (EApp (EVar "Some") (EFieldAccess (EVar "w") "awUpper"))) (fa "esfLabel" (EFieldAccess (EVar "w") "awLabel")))))
 (DTypeSig false "outerLeaf" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Bool"))))
 (DFunDef false "outerLeaf" ((PVar "scope") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") (PVar "level")) () (EBinOp "||" (EBinOp "<" (EVar "level") (EFieldAccess (EVar "scope") "essLevel")) (EBinOp "<=" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "outerRelationLeaves" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
@@ -1314,16 +1381,16 @@ relationProven escape rel =
 # MARK
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("map") ((mem "Map" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "renderAuthority" false) (mem "Authority" true) (mem "Authvar" true) (mem "authvarId" false) (mem "authNorm" false) (mem "authSub" false) (mem "authVars" false) (mem "authJoinAll" false) (mem "linkAuthvar" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "findAtom" false) (mem "EffRow" true) (mem "Effvar" true) (mem "effvarId" false) (mem "rowFlat" false) (mem "rowFlatMembers" false) (mem "rowHasSummary" false) (mem "linkRow" false) (mem "solveSummaryCell" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DData Abstract "SummarySolver" ("c") ((variant "SummarySolver" (ConNamed (field "essStack" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "SummaryScope") (TyVar "c"))))) (field "essRoot" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "AuthWanted") (TyVar "c")))))))) ())
 (DData Private "SummaryScope" ("c") ((variant "SummaryScope" (ConNamed (field "essOwner" (TyCon "Int")) (field "essEffvarFloor" (TyCon "Int")) (field "essLevel" (TyCon "Int")) (field "essNodes" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "SummaryNode")))) (field "essExistentials" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "essAllowances" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "essRelations" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))))) (field "essAuthorities" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "AuthWanted") (TyVar "c")))))))) ())
-(DData Public "AuthWanted" ("c") ((variant "AuthWanted" (ConNamed (field "awLower" (TyCon "Authority")) (field "awUpper" (TyCon "Authority")) (field "awContext" (TyVar "c"))))) ())
+(DData Public "AuthWanted" ("c") ((variant "AuthWanted" (ConNamed (field "awLower" (TyCon "Authority")) (field "awUpper" (TyCon "Authority")) (field "awContext" (TyVar "c")) (field "awLabel" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DData Private "SummaryNode" () ((variant "SummaryNode" (ConNamed (field "esnCell" (TyApp (TyCon "Ref") (TyCon "Effvar"))) (field "esnLowers" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))))))) ())
 (DData Private "RowRelation" ("c") ((variant "RowRelation" (ConNamed (field "esrLower" (TyCon "EffRow")) (field "esrUpper" (TyCon "EffRow")) (field "esrExact" (TyCon "Bool")) (field "esrContext" (TyVar "c")) (field "esrProtected" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))) ())
-(DData Public "SummaryFailure" ("c") ((variant "SummaryFailure" (ConNamed (field "esfLower" (TyCon "EffRow")) (field "esfUpper" (TyCon "EffRow")) (field "esfExact" (TyCon "Bool")) (field "esfContext" (TyVar "c")) (field "esfAuthority" (TyApp (TyCon "Option") (TyTuple (TyCon "Authority") (TyCon "Authority"))))))) ())
+(DData Public "SummaryFailure" ("c") ((variant "SummaryFailure" (ConNamed (field "esfLower" (TyCon "EffRow")) (field "esfUpper" (TyCon "EffRow")) (field "esfExact" (TyCon "Bool")) (field "esfContext" (TyVar "c")) (field "esfAuthority" (TyApp (TyCon "Option") (TyTuple (TyCon "Authority") (TyCon "Authority")))) (field "esfWrittenUpper" (TyApp (TyCon "Option") (TyCon "Authority"))) (field "esfLabel" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig true "newSolver" (TyFun (TyCon "Unit") (TyApp (TyCon "SummarySolver") (TyVar "c"))))
 (DFunDef false "newSolver" (PWild) (ERecordCreate "SummarySolver" ((fa "essStack" (EApp (EVar "Ref") (EListLit))) (fa "essRoot" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "hasSummaryScope" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyCon "Bool")))
@@ -1347,7 +1414,7 @@ relationProven escape rel =
 (DTypeSig true "recordRelation" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyCon "Bool") (TyFun (TyVar "c") (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit")))))))
 (DFunDef false "recordRelation" ((PVar "solver") (PVar "exact") (PVar "context") (PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "scope") (EApp (EVar "currentScope") (EVar "solver"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EVar "lower")) (fa "esrUpper" (EVar "upper")) (fa "esrExact" (EVar "exact")) (fa "esrContext" (EVar "context")) (fa "esrProtected" (EVar "Tip")))) (EFieldAccess (EFieldAccess (EVar "scope") "essRelations") "value"))))))
 (DTypeSig true "recordAuthority" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit"))))))
-(DFunDef false "recordAuthority" ((PVar "solver") (PVar "context") (PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "scope") (EApp (EVar "currentScope") (EVar "solver"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lower")) (fa "awUpper" (EVar "upper")) (fa "awContext" (EVar "context")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))))
+(DFunDef false "recordAuthority" ((PVar "solver") (PVar "context") (PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "scope") (EApp (EVar "currentScope") (EVar "solver"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lower")) (fa "awUpper" (EVar "upper")) (fa "awContext" (EVar "context")) (fa "awLabel" (EVar "None")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))))
 (DData Private "SolveEdge" () ((variant "SolveEdge" (ConNamed (field "eseTarget" (TyCon "Int")) (field "eseCoverAtoms" (TyApp (TyCon "List") (TyCon "Atom"))) (field "eseCoverLeaves" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (field "eseExact" (TyCon "Bool"))))) ())
 (DData Private "WorkNode" () ((variant "WorkNode" (ConNamed (field "ewnCell" (TyApp (TyCon "Ref") (TyCon "Effvar"))) (field "ewnAtoms" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Atom")))) (field "ewnLeaves" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "ewnPendingAtoms" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Atom")))) (field "ewnPendingLeaves" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (field "ewnEdges" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "SolveEdge"))))))) ())
 (DData Private "SolveWork" () ((variant "SolveWork" (ConNamed (field "eswNodes" (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "WorkNode"))) (field "eswQueue" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "eswQueued" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "eswOrdinaryTargets" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "eswExactTargets" (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))) (field "eswEscape" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))))) ())
@@ -1394,10 +1461,13 @@ relationProven escape rel =
 (DFunDef false "missingLeaves" ((PCons (PVar "cell") (PVar "rest")) (PVar "upper")) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "effvarId") (EVar "cell"))) (EVar "upper"))) (EApp (EApp (EVar "missingLeaves") (EVar "rest")) (EVar "upper"))))
 (DTypeSig false "validateRelations" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))))
 (DFunDef false "validateRelations" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")))) (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")))) (EVar "failures")) (EVar "failures"))))))
+(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false PWild (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EVar "None")))) (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EApp (EApp (EApp (EApp (EApp (EVar "firstEscapingKey") (EVar "escaping")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (EVar "escape")) (EFieldAccess (EVar "rel") "esrExact"))))) (EVar "failures")) (EVar "failures"))))))
+(DTypeSig false "firstEscapingKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "firstEscapingKey" ((PCons (PVar "x") PWild) PWild PWild PWild PWild) (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x"))))
+(DFunDef false "firstEscapingKey" ((PList) (PVar "lowerAtoms") (PVar "upperAtoms") (PVar "escape") (PVar "exact")) (EMatch (EApp (EApp (EApp (EVar "escape") (EVar "exact")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (arm (PCons (PVar "x") PWild) () (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "authorityEscapes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "authorityEscapes" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "atomAuth") (EVar "x"))) (fa "awUpper" (EApp (EVar "atomAuth") (EVar "y"))) (fa "awContext" (EVar "context")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
+(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "atomAuth") (EVar "x"))) (fa "awUpper" (EApp (EVar "atomAuth") (EVar "y"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
 (DTypeSig false "isSymbolic" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "isSymbolic" ((PVar "q")) (EMatch (EApp (EVar "authVars") (EVar "q")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "retainRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
@@ -1434,11 +1504,16 @@ relationProven escape rel =
 (DFunDef false "isVar" ((PVar "id") (PCon "AVar" (PVar "cell"))) (EBinOp "==" (EApp (EVar "authvarId") (EVar "cell")) (EVar "id")))
 (DFunDef false "isVar" (PWild PWild) (EVar "False"))
 (DTypeSig false "checkAuthorities" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c")))))))
-(DFunDef false "checkAuthorities" ((PVar "solver") (PVar "scope") (PVar "rigid")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EBlock (DoLet false false (PVar "cells") (EBinOp "++" (EApp (EVar "authVars") (EVar "lo")) (EApp (EVar "authVars") (EVar "hi")))) (DoLet false false (PVar "transferable") (EBinOp "&&" (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "outerFlexibleAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "localRigidAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells"))))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EVar "hi")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")))) (EFieldAccess (EFieldAccess (EVar "parent") "essAuthorities") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EFieldAccess (EVar "w") "awContext")) (EVar "lo")) (EVar "hi"))))) (arm PWild () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EVar "hi")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")))) (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EFieldAccess (EVar "w") "awContext")) (EVar "lo")) (EVar "hi"))))))))))))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value"))))
+(DFunDef false "checkAuthorities" ((PVar "solver") (PVar "scope") (PVar "rigid")) (EApp (EVar "distinctFailures") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EBlock (DoLet false false (PVar "cells") (EBinOp "++" (EApp (EVar "authVars") (EVar "lo")) (EApp (EVar "authVars") (EVar "hi")))) (DoLet false false (PVar "transferable") (EBinOp "&&" (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "outerFlexibleAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "localRigidAuth") (EVar "scope")) (EVar "rigid"))) (EVar "cells"))))) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essAuthorities")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")) (fa "awLabel" (EFieldAccess (EVar "w") "awLabel")))) (EFieldAccess (EFieldAccess (EVar "parent") "essAuthorities") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EVar "w")) (EVar "lo")) (EVar "hi"))))) (arm PWild () (EIf (EVar "transferable") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EBinOp "::" (ERecordCreate "AuthWanted" ((fa "awLower" (EVar "lo")) (fa "awUpper" (EFieldAccess (EVar "w") "awUpper")) (fa "awContext" (EFieldAccess (EVar "w") "awContext")) (fa "awLabel" (EFieldAccess (EVar "w") "awLabel")))) (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value")))) (DoExpr (EListLit))) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EVar "w")) (EVar "lo")) (EVar "hi"))))))))))))) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))))
+(DTypeSig false "distinctFailures" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c")))))
+(DFunDef false "distinctFailures" ((PVar "failures")) (EApp (EApp (EVar "distinctFailuresGo") (EVar "failures")) (EListLit)))
+(DTypeSig false "distinctFailuresGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
+(DFunDef false "distinctFailuresGo" ((PList) PWild) (EListLit))
+(DFunDef false "distinctFailuresGo" ((PCons (PVar "f") (PVar "rest")) (PVar "seen")) (EMatch (EFieldAccess (EVar "f") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EBlock (DoLet false false (PVar "key") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderAuthority") (EVar "lo")))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "renderAuthority") (EVar "hi")))) (ELit (LString "")))) (DoExpr (EIf (EApp (EApp (EDictApp "elem") (EVar "key")) (EVar "seen")) (EApp (EApp (EVar "distinctFailuresGo") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "f") (EApp (EApp (EVar "distinctFailuresGo") (EVar "rest")) (EBinOp "::" (EVar "key") (EVar "seen")))))))) (arm (PCon "None") () (EBinOp "::" (EVar "f") (EApp (EApp (EVar "distinctFailuresGo") (EVar "rest")) (EVar "seen"))))))
 (DTypeSig true "closeRootAuthorities" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
-(DFunDef false "closeRootAuthorities" ((PVar "solver") (PVar "rigid")) (EBlock (DoLet false false (PVar "wanteds") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value"))) (DoLet false false PWild (EApp (EApp (EVar "solveAuthorities") (ELam ((PVar "cell")) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "rigid"))))) (EVar "wanteds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EListLit))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EFieldAccess (EVar "w") "awContext")) (EVar "lo")) (EVar "hi")))))))) (EVar "wanteds")))))
-(DTypeSig false "authorityFailure" (TyFun (TyVar "c") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
-(DFunDef false "authorityFailure" ((PVar "context") (PVar "lo") (PVar "hi")) (ERecordCreate "SummaryFailure" ((fa "esfLower" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfUpper" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfExact" (EVar "False")) (fa "esfContext" (EVar "context")) (fa "esfAuthority" (EApp (EVar "Some") (ETuple (EVar "lo") (EVar "hi")))))))
+(DFunDef false "closeRootAuthorities" ((PVar "solver") (PVar "rigid")) (EBlock (DoLet false false (PVar "wanteds") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EVar "solver") "essRoot") "value"))) (DoLet false false PWild (EApp (EApp (EVar "solveAuthorities") (ELam ((PVar "cell")) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "rigid"))))) (EVar "wanteds"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "solver") "essRoot")) (EListLit))) (DoExpr (EApp (EVar "distinctFailures") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "w")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awLower"))) (DoLet false false (PVar "hi") (EApp (EVar "authNorm") (EFieldAccess (EVar "w") "awUpper"))) (DoExpr (EIf (EApp (EApp (EVar "authSub") (EVar "lo")) (EVar "hi")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "authorityFailure") (EVar "w")) (EVar "lo")) (EVar "hi")))))))) (EVar "wanteds"))))))
+(DTypeSig false "authorityFailure" (TyFun (TyApp (TyCon "AuthWanted") (TyVar "c")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))
+(DFunDef false "authorityFailure" ((PVar "w") (PVar "lo") (PVar "hi")) (ERecordCreate "SummaryFailure" ((fa "esfLower" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfUpper" (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None"))) (fa "esfExact" (EVar "False")) (fa "esfContext" (EFieldAccess (EVar "w") "awContext")) (fa "esfAuthority" (EApp (EVar "Some") (ETuple (EVar "lo") (EVar "hi")))) (fa "esfWrittenUpper" (EApp (EVar "Some") (EFieldAccess (EVar "w") "awUpper"))) (fa "esfLabel" (EFieldAccess (EVar "w") "awLabel")))))
 (DTypeSig false "outerLeaf" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Bool"))))
 (DFunDef false "outerLeaf" ((PVar "scope") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") (PVar "level")) () (EBinOp "||" (EBinOp "<" (EVar "level") (EFieldAccess (EVar "scope") "essLevel")) (EBinOp "<=" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "outerRelationLeaves" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))

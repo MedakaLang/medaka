@@ -1164,6 +1164,8 @@ test "a caller may choose pure for an output-only quantified effect" =
     expectEqual 0 (forcingTailCount source "value"),
   ]
 
+-- The scoped solver reports the caller-chosen row once (`T-EFFECT-LAUNDER`);
+-- the retained post-hoc walk's `T-EFFECT-LEAK` twin yields to it.
 test "invoking a declared callback cannot solve its caller-chosen row" = expectAll
   [
     expectEqual
@@ -1171,12 +1173,12 @@ test "invoking a declared callback cannot solve its caller-chosen row" = expectA
       (errorsFor "call : (Unit -> <e> Unit) -> <e> Unit\ncall f = f ()\n"),
     expectTrue
       (contains
-        "T-EFFECT-LEAK"
+        "T-EFFECT-LAUNDER"
         (errorsFor
           "bad : (Unit -> <e> Unit) -> <e> Unit\nbad f =\n  let _ = f ()\n  emitAudit ()\n")),
     expectTrue
       (contains
-        "T-EFFECT-LEAK"
+        "T-EFFECT-LAUNDER"
         (errorsFor
           "bad : (Unit -> <e> Unit) -> <e> Unit\nbad f =\n  let _ = emitAudit ()\n  f ()\n")),
   ]

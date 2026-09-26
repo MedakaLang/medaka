@@ -1,0 +1,21 @@
+-- An authority-indexed handle exported ABSTRACTLY (EFFECTS-SEMANTICS §4.1):
+-- `Raw` carries the parameter in no field, so its constructor is a proof
+-- source only here, in the declaring module, exactly as an extern's row is
+-- trusted where it is written.  Importers get the type, its declared kind and
+-- the named-arrow constructor `open`; they can neither apply `Raw` nor learn
+-- the descriptor.  `Named` is the carrying shape and may be public.
+export data Raw (p : Authority FileRead) = Raw Int
+
+public export data Named (p : Authority FileRead) = Named (String @p)
+
+export
+open : (path : String) -> Raw path
+open _ = Raw 3
+
+export
+descriptor : Raw p -> Int
+descriptor (Raw fd) = fd
+
+export
+readNamed : Named p -> <FileRead p> Result String String
+readNamed (Named s) = readFile s

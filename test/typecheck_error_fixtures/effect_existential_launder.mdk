@@ -1,0 +1,45 @@
+-- The existential's launders (EFFECTS-SEMANTICS §4.1), each beside its
+-- honest twin in effect_existential_ok: an unrelated literal where the
+-- opened authority is the only one admitted, an opened authority reaching a
+-- declared bound, the opened value escaping in the arm's result, and a let
+-- pattern trying to open an existential with no arm to scope it.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle s) = readFile s
+
+sameAs : Handle p -> String @p -> Result String String
+sameAs _ s = Ok s
+
+-- the opened authority is rigid: a literal does not lie within it
+forge : AnyHandle -> Result String String
+forge a = match a
+  AnyHandle h => sameAs h "/etc/passwd"
+
+-- an opened authority is not within a declared bound
+readBounded : AnyHandle -> <FileRead "config/*"> Result String String
+readBounded a = match a
+  AnyHandle h => readIt h
+
+-- the arm's value carries the opened authority out of its scope
+escape : AnyHandle -> Handle *
+escape a = match a
+  AnyHandle h => h
+
+-- a clause's value carries the opened authority out of its scope
+escapeClause : AnyHandle -> Handle *
+escapeClause (AnyHandle h) = h
+
+-- an unsigned clause cannot publish the opened authority through a
+-- parameter it wrote into either
+leak (AnyHandle h) r = r := h
+
+-- only a match arm or a function clause can scope an existential
+letOpen : AnyHandle -> <FileRead> Result String String
+letOpen a =
+  let (AnyHandle h) = a
+  readIt h
+
+main = println 1

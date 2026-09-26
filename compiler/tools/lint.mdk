@@ -31,6 +31,7 @@ import frontend.ast.{
   Ty(..),
   EffAtomTy(..),
   effAtomSurface,
+  authTermSurface,
   Constraint(..),
   -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, and every EBinOp carries
   -- a `Ref Route` the parser seeds as `Ref RNone` — so unlike every other rule
@@ -2004,7 +2005,7 @@ localTyNamesL (DData { dataName = n }) = [n]
 localTyNamesL (DNewtype { newtypeName = n }) = [n]
 localTyNamesL (DTypeAlias { tyAliasName = n }) = [n]
 localTyNamesL (DInterface { name = n }) = [n]
-localTyNamesL (DEffect _ n _ _) = [n]
+localTyNamesL (DEffect _ n _ _ _) = [n]
 localTyNamesL (DAttrib _ d) = localTyNamesL d
 localTyNamesL _ = []
 
@@ -2020,6 +2021,7 @@ tyNamesOf (TyFun a b) = tyNamesOf a ++ tyNamesOf b
 tyNamesOf (TyTuple ts) = flatMap tyNamesOf ts
 tyNamesOf (TyEffect es _ t) = map effAtomLabel es ++ tyNamesOf t
 tyNamesOf (TyRow es _ _) = map effAtomLabel es
+tyNamesOf (TyAuth _ _) = []
 tyNamesOf (TyConstrained cs t) = flatMap constrTyNames cs ++ tyNamesOf t
 tyNamesOf (TyNamed _ t) = tyNamesOf t
 tyNamesOf (TyQual t _) = tyNamesOf t
@@ -2333,6 +2335,7 @@ tyVarsOf (TyTuple ts) = flatMap tyVarsOf ts
 tyVarsOf (TyEffect _ _ t) = tyVarsOf t
 tyVarsOf (TyConstrained cs t) = flatMap constrTyVars cs ++ tyVarsOf t
 tyVarsOf (TyRow _ _ _) = []
+tyVarsOf (TyAuth _ _) = []
 tyVarsOf (TyNamed _ t) = tyVarsOf t
 tyVarsOf (TyQual t _) = tyVarsOf t
 
@@ -2351,6 +2354,7 @@ rowVarsOf (TyTuple ts) = flatMap rowVarsOf ts
 rowVarsOf (TyEffect _ tl t) = tl ++ rowVarsOf t
 rowVarsOf (TyConstrained cs t) = flatMap constrRowVars cs ++ rowVarsOf t
 rowVarsOf (TyRow _ tl _) = tl
+rowVarsOf (TyAuth _ _) = []
 rowVarsOf (TyNamed _ t) = rowVarsOf t
 rowVarsOf (TyQual t _) = rowVarsOf t
 
@@ -2369,6 +2373,7 @@ tyCanonIn tvs rvs (TyTuple ts) =
 tyCanonIn tvs rvs (TyEffect es tl t) =
   "(eff \{rowCanon rvs es tl} \{tyCanonIn tvs rvs t})"
 tyCanonIn _ rvs (TyRow es tl _) = "(row " ++ rowCanon rvs es tl ++ ")"
+tyCanonIn _ _ (TyAuth p _) = "(auth " ++ authTermSurface escStr p ++ ")"
 -- An authority binder and a qualifier are part of what a declared type
 -- means: two signatures differing only in them are different signatures.
 tyCanonIn tvs rvs (TyNamed n t) = "(named \{n} \{tyCanonIn tvs rvs t})"
@@ -5736,7 +5741,7 @@ nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
-nonDefRefL (DEffect _ _ _ _) = []
+nonDefRefL (DEffect _ _ _ _ _) = []
 nonDefRefL (DTypeAlias { tyAliasOrigin = _ }) = []
 nonDefRefL (DNewtype { newtypeOrigin = _ }) = []
 nonDefRefL d = bodyIdents d

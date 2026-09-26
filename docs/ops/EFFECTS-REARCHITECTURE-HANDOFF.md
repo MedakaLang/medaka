@@ -1,18 +1,19 @@
 # Effects rearchitecture session handoff
 
-**Status:** INCOMPLETE — draft PR. The named-authority work (#3385's arrow
-half, #3382, #3383, #3391) landed in the session of 2026-09-24/25 (see
-"Named-authority session"); the data half of #3385 and the final CI run on
-that head are still owed. CI was last green on head `fbe6d455b` (run
-36064803849, every job). Handoff first recorded 2026-09-24.
+**Status:** MERGED. [PR #3393](https://github.com/MedakaLang/medaka/pull/3393)
+landed on `main` as `f81ff1d9d` on 2026-09-25 through the merge queue (run
+36163162966, every job green); #3382, #3383, #3391 and #825 closed with it. The
+named-authority work (#3385's arrow half) is on `main`; the data half of #3385
+and the review leftovers listed under "Owed after this session" are the open
+work. Handoff first recorded 2026-09-24.
 
 ## Resume here
 
-Continue [PR #3393](https://github.com/MedakaLang/medaka/pull/3393), branch
-`effects-architecture-one-shot`. The source checkpoint is the branch head; the
-named-authority session below is its last commits. `main` is merged in as of
-`9d7fd98ac`. Do not enqueue the PR until a fresh CI run on the head is read to
-terminal; Val decides the merge.
+The effects rearchitecture is on `main`. Start the next piece of work from
+`main` on a topic branch; there is no effects branch to continue. Read, in
+order, the same documents as before: this handoff (the named-authority session
+and its "Owed after this session"), the architecture, the semantics, the
+typechecker contracts. The reading order below still applies.
 
 Read, in order:
 
@@ -354,20 +355,239 @@ position without evidence (every attempt was caught at a later application).
   keying ratchet: green.
 - CI on `bbb98f13c` (run 36090508390) was green except the must-fail step's drained pins; with the pins removed, the full dispatched run on `35654f79f` (run 36105896609, `workflow_dispatch`, unnarrowed) was green on every job, `compiler-soundness` included. The review fixes landed as `d5bcbca70`; its dispatched run (36121365015) was green on every job but the perf gate, whose two-sided `modules:typecheck` TIME row fired its own under-2.00 promotion branch (r2=1.97), so that row is drained from `KNOWN_SLOW_TIME` (the Ir row in `stage_ir_scaling` stays the arm of record for #1879); the full dispatched run on the drained head `0fc8d0bfe` (36123654759) was green on every job. The PR had meanwhile become CONFLICTING with `main` (N1's fixed-width integers rewired match inference in the same functions), which is why GitHub had stopped creating `pull_request` runs; `main` is merged in as `403e1fdee` with the typechecker merged by hand (produced-value join, `bindFrom` and `captureEffects` kept; N1's literal-pattern bookkeeping and deferred match checks threaded through) and every derived golden re-derived from the merged compiler, LEG A additive-only against the branch tip (GitHub stopped creating `pull_request` runs for this branch's pushes after 353b4e21a, so the branch's runs are dispatched by hand). Locally on `d5bcbca70`: strict closure clean, whole-source typecheck PASS, C3a/C3b yes, matrix 14/14, every sibling and domain suite green, `named_authority` on all three engines, perf 0 regressed, 29 gates green plus the census after its re-derivation.
 
-**Owed after this session:**
+**Owed after this session** (the named-authority session's list, as the
+data-half session left it):
 
-1. Close #3382, #3383, #3391 when the PR merges (the PR body carries the
-   closing keywords; their regressions live under
-   `test/typecheck_error_fixtures/effect_*`).
-2. The data half of #3385 (delivery item 6 in the architecture).
-3. A located `R-AMBIGUOUS-EFFECT` (an `EffAtomTy` carries no `Loc`).
-4. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
+1. #3382, #3383, #3391 closed with the merge. The data half (item 2) and the
+   leftovers (items 3 and 5) landed in the data-half session, and its
+   whole-diff review's findings are answered there; what remains is listed
+   under "Owed after the data-half session".
+2. A destructured qualified value (`Some x` from `Option (String @κ)`) and a
    lambda parameter without a directed flow lose the qualifier: conservative,
    documented in the architecture, not a launder.
-5. The review's S2/S3 leftovers listed above: error locations, the
-   solved-bound wording, the symbolic-join render, one defect reporting
-   twice, the manifest's bare-name keys (a format decision for Val), the
-   hard-coded Product `Host` axis.
+3. Delivery item 7: migrating precision-dependent stdlib signatures to
+   handles, and the declaration-kind/re-export gaps (#3327/#3304) the new
+   surface depends on.
+
+## Data-half session (2026-09-25)
+
+What landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Data-half checkpoint" and stated normatively in
+[Effects semantics](../spec/EFFECTS-SEMANTICS.md) §4.1; the codes are in
+`compiler/DIAGNOSTIC-CODES-DESIGN.md`; the surface is in `docs/spec/SYNTAX.md`.
+This section records the decisions, the traps and what is owed.
+
+**Ratified by Val before coding (AskUserQuestion, 2026-09-25), each the
+recommended option of a short proposal:**
+
+1. *Syntax.* `data Handle (p : Authority FileRead) = Handle (String @p)`, the
+   spec's §6.1 kind. An `Authority`-kinded index slot is kind-directed like an
+   `Effect` slot: a named argument's name, an implicitly quantified lowercase
+   name binding to its right as a type variable does (`read : Handle p ->
+   <FileRead p> String`), or a domain literal. `@` stays name-only.
+2. *Top in an index slot is `*`.*
+3. *Construction.* A constructor whose fields carry the binder is a proof
+   source anywhere it is visible; one that carries it in no field is trusted
+   only at home, so `public export data` requires every constructor to carry it.
+4. *Existential* = a kinded binder leading a constructor's fields, built last.
+5. *Patterns* recover the declared field types under the index, directed, and
+   never refine the index.
+6. *Manifest keys qualify only on collision* (the leftover's format).
+
+**Design decisions made while implementing, each a general rule:**
+
+- *A name is a binder only where something binds it.* The arrow half minted an
+  authority from any atom that named a binder, because the resolver had
+  refused every unbound name. With index slots admitting a bare name to the
+  left, the resolver's rule became "written to the left" and the kind moved
+  to the typechecker: `sigVarsFor` binds a name only as a `String` named
+  argument or an index-slot occupant (`authorityBinderBound`), and a name
+  nothing binds is `T-AUTHORITY-KIND`, never a silent top.
+- *An existential's scope is a match arm or a function clause, not a `let`.*
+  Both have an end; the check at the end reads the ordinary level
+  discipline (the scope runs one level deeper, the opened cells are raised to
+  it, anything older that received them lowers them) plus the scope's own
+  value type. The first cut minted the opened cells at the outer level and
+  every arm reported a false escape. The clause form was added after lint's
+  own `rule-destructure-in-param` steered a fixture toward it. No solver scope
+  is opened for the arm: the enclosing scope decides the obligations (rigid,
+  so a literal never satisfies one) and publication defaults a sourceless
+  opened cell to top, which is §4's widening. An arm-owned solver scope was
+  rejected as order-dependent across arms.
+- *Record construction is an argument flow.* `unifyFieldAssignIdx` ran no `α`,
+  so a literal into a qualified field hit `top ⊑ q`. It now goes through
+  `argumentIntoOrd`, the same route as a call, with the value-first wording
+  the record path always had; an explicit record sub-pattern binds through
+  `bindFrom` so the punned and explicit forms agree.
+- *`RecordInfo` carries authorities.* The record table was kind-blind (a
+  `KRow` parameter was a plain type variable there); it now mints the same
+  reprs as `registerVariants` and instantiates them together
+  (`RecordSubst`).
+- *`deriving` requires instances only of `Type`-kinded parameters.* The
+  deriver asked `Eq e` of an `Effect` parameter; the kind list now reaches
+  `paramRequires` and the doc generator's mirror of it.
+
+**The review leftovers, in the order the prompt listed them:**
+
+- *A located `R-AMBIGUOUS-EFFECT`.* `EffAtomTy` carries `eatLoc`, the atom's
+  span from the parser; resolve locates the ambiguous-, unknown-label and
+  unbound-authority diagnostics of an atom there. A qualifier's `TyQual`
+  still has no span (an `Option Loc` on it fans out to some thirty-five
+  sites), so `String @p` with an unbound `p` at declaration level stays
+  unlocated: owed.
+- *Locations on a body or a last arm.* The cause is that `infer`'s `ELoc` arm
+  sets `currentLoc` and never restores it, so a check that runs after a body
+  reads the body's last leaf. The general fix (restore after each `ELoc`)
+  moves pinned locations across the JSON and LSP corpora and was not taken in
+  this pass; instead an effect failure derived from a row check is located by
+  effect provenance: `performEffect` records, per binding and label, the
+  first site that performed the label (`effectSitesRef`), and
+  `reportEffectSummaryFailures` reports there (`esfLabel` on the solver's
+  failure). A value-flow obligation already carried the argument's span. The
+  `ELoc` restore remains owed.
+- *"declared row admits only X" for a solved bound.* The solver's failure now
+  carries the upper term as recorded (`esfWrittenUpper`); a variable since
+  solved gets its own wording ("not a written bound but what this binding's
+  other uses … determined together"), and a written bound says "declared
+  bound", since an index is not a row.
+- *`(src | dst)`.* A joined atom renders as one atom per operand
+  (`renderAtomWith`), the spelling the parser folds back; the `@(a | b)`
+  qualifier form is unchanged and still unspellable (rare: a value whose
+  authority is a join of two binders).
+- *One defect twice.* Three mechanisms, each general: identical
+  `lower ⊑ upper` failures from one scope report once (`distinctFailures`),
+  an identical (code, span, message) is recorded once (`pushTypeErrorAt`,
+  which also folds a default body's generic check and its per-instance copy),
+  and the retained post-hoc escape walk skips a member the solver already
+  reported (`rowFailureReportedRef`).
+- *`literalAuthority`'s `Host`.* A Product label declares its axis schema,
+  `effect L Product (Host : Prefix, Method : Set)`, carried on `DEffect` and
+  registered as the label's top (`PProduct` of the axes at their tops, in
+  declaration order; `subTopOf`/`isSubTop`/`canonParam` treat it as the top);
+  the literal lifts into the first axis (`productPrimaryLift`), a written
+  product is checked against the declared axes, and no axis name is spelled in
+  the compiler. The six product fixtures declare their schema; a custom-axis
+  fixture, a no-axes negative and an unknown-axis negative pin the rule.
+- *Manifest keys.* Val's format: qualify only on collision. `manifestKey`
+  writes a label bare unless two origins spell it in one row, then each as a
+  quoted `"mod.Name"` key; `atomPermitted` accepts either spelling.
+
+**The whole-diff adversarial review (2026-09-25), reproduced and answered:**
+
+- *S0: an existential record field read published `RecEx -> Handle a`.*
+  `instantiateRecordShared` freshened the existential flexible. A read cannot
+  open the binder; it recovers the domain's top (`sharedAuthority`).
+- *S0: the phantom check is syntactic.* `Tok Int (List (Handle p))` and
+  `Cb Int (Unit -> <FileRead p> Unit)` pass `T-AUTHORITY-PHANTOM-EXPORT`, and an
+  importer built `Tok 1 []` and `Cb 1 (u => ())` at `"config/*"`. The first
+  answer was a dynamic rule — a construction's index as a claim bounded by its
+  arguments' evidence, decided at the scope's close — and the second review
+  round showed it order-dependent (`Tok 1 (hsOf t)` published `Tok *` where
+  `hsOf t |> Tok 1` published `Tok p`; a claim in a `let` was decided before
+  its evidence; grounding accepted `[] : List (Handle "cfg/*")`). The rule that
+  stands is static: the export check decides *carrying* by the field's type
+  (architecture item 8, semantics §4.1), so `Tok` is refused at its
+  declaration and the claim machinery is gone. The S2 forwarder (`export
+  mkRaw = Raw` republished `Int -> Raw p`) is closed by publication counting
+  only argument-position occurrences as sources (`qualifierAuthIds`), so the
+  forwarder is `Int -> Raw *`; a written signature's binders are never
+  defaulted.
+- *S0: a constructor binder spelled like the head's parameter defeated the
+  check.* Resolve reports it as `R-DUP-BINDER` (`duplicateCtorBinders`).
+- *S0: `fmt` corrupted an existential record constructor* (binders printed
+  before the name). `recordVariantDoc` takes the binders.
+- *S1: `impl Eq (D p)` failed `T-AUTHORITY-KIND`;* the head elaborated its
+  variables as types. `implHeadMonos` is the one seam (inference and
+  coherence). *An alias `type H (q : Authority L) = Handle q` was unusable;*
+  its parameter recorded two obligations against itself and is now a link.
+  *A field naming a later head was rejected;* kinds are recorded for every
+  head before any field elaborates.
+- *S2, each reproduced first:* an index binder at a Set label beside a Prefix
+  one was silently one variable (`reportBinderDomains`, whatever binds it;
+  two Prefix labels stay one shape, as for a named argument); a failure
+  located at the first site performing the label rather than the offending
+  one (`effectSiteOf` picks the first site outside the bound); a Product
+  label accepted a repeated axis name; a bare literal into a Set first axis
+  was checked as a prefix pattern (one lift, `productPrimaryLift`); a
+  signature's unlocated kind error landed on the previous declaration
+  (`sigToSchemeTvsIn` sets the location). Not reproduced, so not acted on: a
+  `doc` rendering of a qualified arrow domain (it parenthesises), and an index
+  name reused as a named argument (the named argument binds, the slot refers
+  to it — coherent, kept).
+- *Found while fixing:* the LSP hover fallback's `generalize` ran the
+  sourceless default over locals whose cells are shared with published
+  schemes, so the domain-only source rule rewrote every signature binder to
+  the top after the fact. `generalize` now quantifies without defaulting
+  (`quantifyFree`); the matrix row "a wrapper publishes its argument's
+  authority" is the regression. Second: recording every head's kinds ahead
+  of the declarations was first written with a per-head table scan, and the
+  kinds table grows with every imported module, so the `modules` perf unit's
+  typecheck time climbed (r2 2.72 on this box); `recordParamKinds` is a
+  constant-time prepend again (r2 2.34 quiet). The unit's TIME row is
+  re-ledgered in `test/diff_compiler_perf_scaling.sh` (`KNOWN_SLOW_TIME`): the
+  drain that removed it on PR #3393 was the false promotion the row's own
+  note predicts, and the plain climbing clause trips on the unfixed
+  #154/#150 quadratic's own band (CI read r2 2.53 on the data-half head
+  before any of this).
+
+**The second review round (2026-09-25, on `04b66839b`), reproduced and answered:**
+
+- *S0:* an imported existential record's field read published `SealedR ->
+  Handle a` (the existential id table was per module; it lives with the id
+  counter now); the claim rule was grounded by positions that prove nothing
+  (replaced, above).
+- *S1:* the claim decision was order-dependent and scope-dependent
+  (replaced); a written signature with a result-only index was republished at
+  `*` (declared binders are never defaulted); a return-position method at an
+  authority-indexed impl head panicked (`monoSameGiven` is index-blind, as
+  coherence is); a two-parameter interface over an indexed head hung in an
+  improvement loop (a flexible index substitutes, `unifyIndex`); an impl at a
+  literal index never dispatched (refused: an impl head takes a name).
+- *S2/S3:* a binder-domain report once per module (once per signature now);
+  `fmt` moved a comment out of an existential record constructor
+  (`printNamedFieldData` renders the binders); a top qualifier printed as
+  `String @` (bare type); a partial update of an existential record (refused
+  unless every field under the binder is replaced); the duplicate-binder
+  report was unlocated (at the constructor's fields); a record-pattern
+  existential escape named `'?'` (the binder's cells are collected from the
+  fields). The claim fixpoint's superlinearity went with the claims.
+
+**Owed after the data-half session:**
+
+- A span on `TyQual`, the `ELoc` restore, the `@(a | b)` qualifier form
+  (above).
+- Delivery item 7 (stdlib migration to handles).
+- An unlocated `effect` declaration (`DEffect` carries no `Loc`): the axis
+  and kind-label diagnostics report at the file's first span.
+- An index mismatch between two written indices still reads as a row failure
+  ("reaches X where its declared bound admits only Y"); a dedicated wording
+  for index equality is wording work.
+- `check_policy`'s bare Product token lifts through the same first-axis
+  rule; a manifest row naming two same-spelled labels from two origins is
+  keyed qualified (above) but the policy's `Method=true` decode of a written
+  product atom was reported by the review and not reproduced.
+- `test/check_module_fixtures` is a frozen corpus (hand-derived oracles), so
+  the cross-module claim rows live in the matrix sibling through
+  `checkModulesDiagsChain` rather than there.
+
+**Traps paid for in this session:**
+
+- `medaka check` on a probe that declares externs refuses them without `<FFI>`
+  (`T-FFI-UNLABELLED`), while the matrix sibling's `checkOneDiags` does not:
+  a probe replayed from a matrix row must use a prelude wrapper, not an
+  extern. Likewise the sibling runs without the prelude, so a row that needs
+  `:=`/`setRef` belongs in `test/typecheck_error_fixtures`, and a plain
+  `String` field that leaks reports `T-EFFECT-LEAK`, which the sibling's
+  `rejects` (`T-AUTHORITY` only) does not count — use `expectFalse (accepts …)`.
+- The worktree guard refuses compound shells and `sed -n "$(…)p"`; every
+  multi-step check went into a scratchpad script.
+- `checkDeclaredKinds`'s exhaustiveness warnings are printed only for the
+  entry file of a `check`; scanning each edited module with its own `medaka
+  check` found seven `Ty` walkers still missing a `TyAuth` arm that the
+  whole-closure check had not surfaced.
+- The engine gate's eval and wasm arms are ORACLES: a fixture using new syntax
+  reads as "eval printed nothing" and "wasm emitter: unexpected `(`" until
+  `build_oracles.sh --for 'diff_compiler_engines*'` has run on the new source.
 
 ## Delivered code and invariants to preserve
 
@@ -431,22 +651,21 @@ grade, conceptually `forall e. a -> f e a`; it does **not** coerce an existing
 `f <> a` into `f e a`. `deferWhen`/`deferUnless` preserve the grade instead of
 claiming purity. Keep inference, signatures, docs and snapshots consistent.
 
-## Remaining merge blockers
+## What remains after the merge
 
-These are tracked by the draft PR and its architecture delivery checklist; this
-list is not a claim that an independent full-head review found nothing else.
+The adversarial review and the CI run on the final head are done (see the
+named-authority session). What the architecture's delivery checklist still
+lists as open:
 
-1. An exact-head, whole-diff adversarial review, and the CI run on the final
-   head read to terminal (CI was last green on `fbe6d455b`, run 36064803849).
-2. Qualified data fields, constructor proof sources and existentials (#3385's
+1. Qualified data fields, constructor proof sources and existentials (#3385's
    data half). Named authorities on arrows, the underscore's retirement, label
    identity and the prefix-join canonical form are delivered.
-3. General qualified directed residual constraints in schemes, plus fully
+2. General qualified directed residual constraints in schemes, plus fully
    delayed unknown-shape produced-value joins.
-4. Shared invocation-protocol summaries for policy/manifest consumers rather
+3. Shared invocation-protocol summaries for policy/manifest consumers rather
    than re-deriving semantics by structural traversal.
-5. Final performance, cross-engine, self-hosting and CI verification after all
-   semantic changes. Earlier successful subsets do not discharge this.
+4. The review's S2/S3 leftovers and the manifest's bare-name label keys, listed
+   under "Owed after this session".
 
 The branch also changed `819-impl-head-tyvar-pinned`; recheck its current contract.
 The #825 drain above is new evidence. #830/#2111 remain relevant semantic history.
@@ -622,6 +841,18 @@ Every negative needs an honest control. #3382 and #3383 must become ordinary
 regressions asserting rejection, not disappear by changing their expected output.
 
 ## Verification receipts and their limits
+
+Data-half head `783d966bf` (PR #3445, 2026-09-25, the carrying rework after the
+second review round): the `pull_request` run 36207649443 completed green on
+every job, as did run 36200182399 on the first-round head `04b66839b` — the eight gate shards each ran
+their planned gates (the shard step and the timing upload both succeeded),
+`compiler-soundness` ran the must-fail suite, the whole-source typecheck and
+the emitter fixpoint, `soundness`, `wasm`, `inlang`, `seed-health`,
+`ci-gen-drift`, `gate-balance`, `gate-budget` and `gate-cost` all succeeded.
+Locally on the same head: strict closure clean, whole-source typecheck PASS,
+C3a/C3b yes, matrix 28/28, 52 gates green (perf, Ir-scaling and llvm
+included). A PR run is narrowed by the change→gate map; the merge queue runs the
+whole suite.
 
 Before the recursive carrier additions: 69 binding, 26 solver, 5 value and 3 repr
 native tests passed (103 total); CHECK CLI plus 71 entries and ELABORATE CLI;

@@ -1,0 +1,27 @@
+anyHandle : String -> Handle *
+bump : Conf p -> Conf p
+cfg : Unit -> Handle "config/*"
+conv : a -> b
+convRaw : Raw "config/a" -> Int
+count : Sealed -> Int
+keep : (path : String) -> Ref (Handle path) -> Unit
+madeRaw : Unit -> Raw "config/*"
+main : <IO> Unit
+make : Int -> a
+mkCfg : Unit -> Handle "config/*"
+mkConf : Unit -> Conf "config/*"
+mkRaw : Int -> Raw *
+none : Unit -> List (Handle p)
+open : (path : String) -> Handle path
+openSub : (path : String) -> Handle path
+rawAt : (path : String) -> Raw path
+readAny : Handle * -> <FileRead> Result String String
+readConf : Conf p -> <FileRead p> Result String String
+readConfPat : Conf p -> <FileRead p> Result String String
+readIt : Handle p -> <FileRead p> Result String String
+repackTwo : Two -> Two
+unseal : Sealed -> Handle *
+useNone : Unit -> List (Handle "config/*")
+viaAlias : Handle p -> Handle p
+via : Handle p -> <FileRead p> Result String String
+viaTop : Handle p -> <FileRead> Result String String

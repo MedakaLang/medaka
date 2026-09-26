@@ -90,8 +90,8 @@ NEWLINE
 NEWLINE
 EOF
 # DESUGAR
-(DEffect false "KV" None)
-(DEffect false "Log" None)
+(DEffect false "KV" None ())
+(DEffect false "Log" None ())
 (DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("FFI" "KV") None (TyCon "String"))))
 (DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
@@ -100,8 +100,8 @@ EOF
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect labels ok"))))
 # MARK
-(DEffect false "KV" None)
-(DEffect false "Log" None)
+(DEffect false "KV" None ())
+(DEffect false "Log" None ())
 (DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("FFI" "KV") None (TyCon "String"))))
 (DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))

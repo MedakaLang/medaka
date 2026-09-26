@@ -285,7 +285,7 @@ rows = [
         pairedWith = None,
         golden = InFixtureDir "oracle.tcmod",
         grade = SortedEqual,
-        fixtures = 15,
+        fixtures = 16,
       },
     ],
     batched = False,

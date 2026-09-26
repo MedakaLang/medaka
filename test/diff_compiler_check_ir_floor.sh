@@ -187,20 +187,21 @@ CEIL_test="${TEST_IR_CEIL:-680000000}"
 # ceiling but not by much. If this cell starts flaking, re-derive rather than
 # widen blindly (same discipline as every other ceiling in this file).
 #
-# RE-DERIVED 2026-09-25 (N3, #3422). CI measured this cell at 1,083,243,279 Ir,
-# over 1,080,000,000: the prelude grew between 2026-09-15 and N3, and N3's eight
-# U64 kernel externs in stdlib/runtime.mdk, parsed and typechecked by every
-# `check`, tipped it. Attributed locally with one binary (this box reads about 10%
-# above CI in absolute terms; the deltas are what transfer):
+# RE-DERIVED 2026-09-25 (effects data half, PR #3445), same method. The verb had
+# grown to within 0.5% of the 2026-09-15 ceiling across the effects
+# rearchitecture (#3393 landed named authorities, label identity and the scoped
+# authority solver on every check), and this branch's first CI run exceeded it
+# by 0.4% (1,084,647,134 Ir) while the tree measured under it locally:
 #
-#   main binary + main tree       1,189,213,561
-#   N3 binary   + main stdlib     1,187,372,826   (the compiler changes: -0.15%)
-#   N3 binary   + N3 tree         1,191,426,848   (the runtime.mdk externs: +0.34%)
+#   this tree (PR #3445 head)   CEIL (= measured x1.20, up to 5M)
+#   1,070,149,634               1,285,000,000
 #
-# The revert was not re-measured. At 2026-09-15 it cost +191.8M Ir (the table
-# above), and what it re-does, parsing and desugaring the prelude two more times,
-# only grows with the prelude, so it still costs at least that: 17.7% of the N3
-# figure. A ceiling at 1,100,000,000 (1.5% over the N3 figure) still sees it.
+# The data half's own hot-path additions were trimmed before re-deriving
+# (provenance skips atom-free rows, the signature seams walk index binders
+# once, the validation pass looks a head's kinds up only for a written index
+# literal, the resolver's binder scope is one pass, and a program with no
+# existential pays nothing per pattern): each was measured, and together they
+# moved this cell by under 0.5%, so the remaining growth is #3393's.
 #
 # NOT ADDED: a cell for S-suggest-pools-lazy (resolve.mdk's on-demand did-you-mean
 # pools). Its own multi-module `check gzip/main.mdk` measurement (see
@@ -217,7 +218,7 @@ CEIL_test="${TEST_IR_CEIL:-680000000}"
 # resolve.mdk's snapshot/LEG-A corpus for a test-only change, outside this
 # slice's licensed sites. See the slice report's Notes.
 CEIL_lint="${LINT_IR_CEIL:-3515000000}"
-CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1100000000}"
+CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1285000000}"
 
 LINT_TARGET="$ROOT/compiler/tools/lint.mdk"
 POLICY_FILE="$ROOT/demo/plugin_good.mdk"

@@ -1,0 +1,31 @@
+-- Authority-indexed data erases (EFFECTS-SEMANTICS §4.1, §8): a qualified
+-- field, an index argument and an existential binder change no constructor
+-- layout, no arity and no dictionary, so every engine prints the same four
+-- lines.  The label is declared here so the fixture needs no host extern.
+effect Audit Prefix
+
+data Handle (p : Authority Audit) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority Audit) (Handle p)
+
+data Conf (p : Authority Audit) = Conf { path : String @p, retries : Int }
+
+open : (path : String) -> Handle path
+open path = Handle path
+
+name : Handle p -> <Audit p> String
+name (Handle s) = s ++ "!"
+
+nameAny : AnyHandle -> <Audit> String
+nameAny a = match a
+  AnyHandle h => name h
+
+confPath : Conf p -> <Audit p> String
+confPath (Conf { path, retries }) = path ++ "#" ++ intToString retries
+
+main : <Audit, IO> Unit
+main =
+  println (name (open "cfg/app"))
+  println (nameAny (AnyHandle (open "cfg/b")))
+  println (confPath Conf { path = "cfg/c", retries = 2 })
+  println (name (Handle "cfg/d"))
