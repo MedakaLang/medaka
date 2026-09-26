@@ -1,5 +1,5 @@
 # META
-source_lines=13041
+source_lines=13045
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -5742,7 +5742,8 @@ implSymTagW prog method tag =
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
--- the bare head (existing symbols unchanged); a genuine C7 collision (≥2 distinct
+-- the head tag through `injectiveIdent` (the identity on a prelude or builtin
+-- head; a module-qualified head is escaped, #1397); a genuine C7 collision (≥2 distinct
 -- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
 -- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
 -- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
@@ -5751,7 +5752,10 @@ implSymTagW prog method tag =
 -- guard agree on the emitted symbol.
 implFnSymTagW : List CImplEntry -> String -> String -> String -> String
 implFnSymTagW entries method tag key =
-  if headTagUniqueW entries method tag then tag else injectiveIdent key
+  if headTagUniqueW entries method tag then
+    injectiveIdent tag
+  else
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct ones
 -- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl
@@ -13998,7 +14002,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "implSymTagW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "implSymTagW" ((PVar "prog") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (arm (PCon "Some" (PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) () (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (EVar "method")) (EVar "t")) (EVar "k"))) (arm PWild () (EApp (EVar "injectiveIdent") (EVar "tag")))))
 (DTypeSig false "implFnSymTagW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
+(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig false "headTagUniqueW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "headTagUniqueW" ((PVar "entries") (PVar "method") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "distinctKeysAtHeadW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -16402,7 +16406,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "implSymTagW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "implSymTagW" ((PVar "prog") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (arm (PCon "Some" (PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) () (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (EVar "method")) (EVar "t")) (EVar "k"))) (arm PWild () (EApp (EVar "injectiveIdent") (EVar "tag")))))
 (DTypeSig false "implFnSymTagW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
+(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig false "headTagUniqueW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "headTagUniqueW" ((PVar "entries") (PVar "method") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "distinctKeysAtHeadW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))

@@ -50,7 +50,7 @@ import frontend.ast.{
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
 import types.route_key.{
-  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes
+  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes, typeTagOf
 }
 import support.util.{
   contains,
@@ -306,11 +306,14 @@ export
 buildCtorToType : List Decl -> List (String, String)
 buildCtorToType prog = flatMap ctorTypeEntries prog
 
+-- A constructor's type is recorded by its dispatch word (`typeTagOf`), the
+-- word its impls are filed under, so two modules' same-spelled types are two
+-- runtime types (#1397).
 ctorTypeEntries : Decl -> List (String, String)
-ctorTypeEntries (DData { dataName = tyname, dataCtors = variants }) =
-  map (v => (variantName v, tyname)) variants
-ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
-  [(con, tyname)]
+ctorTypeEntries (DData { dataName = tyname, dataCtors = variants, dataOrigin = o }) =
+  map (v => (variantName v, typeTagOf o tyname)) variants
+ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con, newtypeOrigin = o }) =
+  [(con, typeTagOf o tyname)]
 ctorTypeEntries (DAttrib _ d) = ctorTypeEntries d
 ctorTypeEntries _ = []
 
@@ -627,11 +630,11 @@ runtimeTypeTag (VByteBlock _) = Some "ByteBlock"
 runtimeTypeTag (VU64 _ _) = Some "U64"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
 runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
--- #1292: a record value's head tag is its CONSTRUCTOR name, so the collision
--- rename would spell it `<mid>__<Ctor>` and stop it matching an impl's bare target
--- type name.  Demangling restores the pre-rename tag exactly — record head tags are
--- the separate TYPE-name bareness residual of #1292, deliberately not changed here.
-runtimeTypeTag (VRecord name _) = Some (displayCtorName name)
+-- A record value's type is its constructor's, from the same table (#1397); a
+-- record the table does not hold keeps its constructor's display name (#1292).
+runtimeTypeTag (VRecord name _) = match lookupAssoc name !ctorToTypeRef
+  Some t => Some t
+  None => Some (displayCtorName name)
 runtimeTypeTag (VTypedImpl t _ _ _ _) = Some t
 runtimeTypeTag _ = None
 
@@ -730,7 +733,7 @@ tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 -- side; `TyTuple`'s tag is still mirrored rather than shared (`tupleHeadTag` vs
 -- `tupleHeadTagTc`) and is the one place that can still drift.
 headTycon : Ty -> Option String
-headTycon (TyCon { tyConName = n }) = Some n
+headTycon (TyCon { tyConName = n, tyConOrigin = o }) = Some (typeTagOf o n)
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t

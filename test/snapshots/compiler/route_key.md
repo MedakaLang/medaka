@@ -1,5 +1,5 @@
 # META
-source_lines=568
+source_lines=592
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -332,17 +332,41 @@ routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
 routeWordFor headIsUnique tag o iface tys =
   if headIsUnique then tag else implRouteKeyWord o iface tys None
 
+-- ── the type-head word (#1397) ───────────────────────────────────────────
+-- The word a type head contributes to every impl tag, route word, dictionary
+-- word and runtime type tag: the prelude's and the language's types by their
+-- name, every other type by its declaring module's id, a dot, and its name.
+-- Impl dispatch keys a type by this word in every engine, so two modules'
+-- same-spelled types never share an impl, and a program's own type spelled
+-- like a prelude type (`Result`) is not the prelude's.
+--
+-- The word must be INJECTIVE over type identities: a type name has no dot, so
+-- the last dot separates the module id from the name, and a word with no dot
+-- is a prelude or builtin type.  It is not an identifier; a backend spells it
+-- into a symbol through `private_mangle.injectiveIdent`, never `sanitizeId`,
+-- whose many-to-one mapping would merge `a.b.T` with `a_b.T` (#1950's lesson).
+--
+-- >>> typeTagOf (OriginModule "core") "Result"
+-- "Result"
+-- >>> typeTagOf OriginBuiltin "Int"
+-- "Int"
+-- >>> typeTagOf (OriginModule "app.dirs") "T"
+-- "app.dirs.T"
+export
+typeTagOf : TyConOrigin -> String -> String
+typeTagOf (OriginModule "core") name = name
+typeTagOf (OriginModule m) name = "\{m}.\{name}"
+typeTagOf _ name = name
+
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn
 -- mirrors the retired OCaml `pp_ty_prec`): `rkTy` is prec 0, `rkTyFunArg`
 -- prec 1 (wraps arrows), `rkTyAtom` prec 2 (wraps arrows AND applications).
 --
--- `tyConOrigin` is deliberately NOT rendered: the identity that this bite
--- threads into a route word is the INTERFACE's (see `ifaceWordOf`), and a type
--- ARGUMENT's origin is a separate question with its own consumers. Rendering
--- it here would change every word for every program at once.
+-- A type constructor renders through `typeTagOf`, so two modules' same-spelled
+-- types are two words (#1397).
 rkTy : Ty -> String
-rkTy (TyCon { tyConName = n }) = n
+rkTy (TyCon { tyConName = n, tyConOrigin = o }) = typeTagOf o n
 rkTy (TyVar n) = n
 rkTy (TyApp a b) = "\{rkTy a} \{rkTyAtom b}"
 rkTy (TyFun a b) = "\{rkTyFunArg a} -> \{rkTy b}"
@@ -606,8 +630,12 @@ rkTyList =
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
 (DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
+(DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
+(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "rkTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "rkTyAtom") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "rkTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkTyFunArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "b")))) (ELit (LString ""))))
@@ -681,8 +709,12 @@ rkTyList =
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
 (DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
+(DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
+(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "rkTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "a")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "rkTyAtom") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "rkTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkTyFunArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "b")))) (ELit (LString ""))))

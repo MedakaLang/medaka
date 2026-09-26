@@ -5738,7 +5738,8 @@ implSymTagW prog method tag =
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
--- the bare head (existing symbols unchanged); a genuine C7 collision (≥2 distinct
+-- the head tag through `injectiveIdent` (the identity on a prelude or builtin
+-- head; a module-qualified head is escaped, #1397); a genuine C7 collision (≥2 distinct
 -- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
 -- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
 -- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
@@ -5747,7 +5748,10 @@ implSymTagW prog method tag =
 -- guard agree on the emitted symbol.
 implFnSymTagW : List CImplEntry -> String -> String -> String -> String
 implFnSymTagW entries method tag key =
-  if headTagUniqueW entries method tag then tag else injectiveIdent key
+  if headTagUniqueW entries method tag then
+    injectiveIdent tag
+  else
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct ones
 -- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl

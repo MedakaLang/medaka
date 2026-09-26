@@ -1,5 +1,5 @@
 # META
-source_lines=2566
+source_lines=2569
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1132,9 +1132,9 @@ data LowerState = LowerState {
 -- collide with a user/prelude binding; it flows verbatim into `@mdk_g_<name>`.  The
 -- selector is encoded with `private_mangle.injectiveIdent`, the shared emitted-
 -- identifier encoding: a C7 key carries `|`/`(`/`)`/spaces, none legal in that
--- global symbol.  A bare head tag is alphanumeric, and `injectiveIdent` is the
--- identity on such strings — every pre-#731 CAF name (all unique-head) stays
--- byte-identical, keeping the fixpoint fixed.
+-- global symbol, and a module-qualified head tag (`app.T`) carries a dot.  A
+-- prelude or builtin head tag is alphanumeric, and `injectiveIdent` is the
+-- identity on such strings.
 --
 -- ⚠️ It was `sanitizeId` until #1950, and that is a SECOND, independent instance of
 -- that bug, one symbol family over: `sanitizeId` is MANY-TO-ONE, so two impls whose
@@ -1564,10 +1564,10 @@ ifaceImplHeadEntries _ = []
 --     are NOT checked here.
 --   * it is a check on DISTINCT PRE-IMAGES.  Rows are deduplicated by
 --     (method, head tag, canonical key) FIRST, so two impls that are already
---     IDENTICAL in that triple pass through silently — that is #1397's shape (two
---     modules each declaring a same-spelled type, whose head identity is discarded
---     upstream at `route_key.rkTy`), and no discriminator for it exists in anything
---     lowering can see.  #1397 is NOT covered and is not made safe by this guard.
+--     IDENTICAL in that triple pass through here.  Two modules' same-spelled
+--     types never are (#1397): a head tag and a route word carry the type's
+--     module (`route_key.typeTagOf`, injective by construction), and the symbol
+--     spells that tag through `injectiveIdent`.
 --   * it is likewise NOT a duplicate-clause check: a legitimate multi-clause impl
 --     contributes several rows sharing ONE key, and the joint prelude+module decl
 --     list duplicates each prelude impl.  Both collapse in the dedup and can never
@@ -1658,14 +1658,17 @@ checkImplSymbolsInjective collide ((m, tag, key) :: rest) seen =
       panic
         "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
 
--- the SYMBOL tag this row is emitted under — the bare head when it is the sole impl
--- of (method, head), else the injectively encoded canonical key.  Mirror of
+-- the SYMBOL tag this row is emitted under — the injectively encoded head tag when
+-- it is the sole impl of (method, head), else the injectively encoded canonical key.  Mirror of
 -- `llvm_emit.implFnSymTag` / `wasm_emit.implFnSymTagW`, over declaration rows: it
 -- MUST call the same `injectiveIdent` they do, or the guard and the backends
 -- disagree about what symbol was actually emitted.
 implSymTagOf : OrdMap Unit -> String -> String -> String -> String
 implSymTagOf collide method tag key =
-  if omHasKey (implHeadKey method tag) collide then injectiveIdent key else tag
+  if omHasKey (implHeadKey method tag) collide then
+    injectiveIdent key
+  else
+    injectiveIdent tag
 
 -- ── dict-witness TAG injectivity — #348 (native i64), #377 (wasm 30-bit) ──────
 --
@@ -3071,7 +3074,7 @@ nodeTag _ = "?"
 (DFunDef false "checkImplSymbolsInjective" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkImplSymbolsInjective" ((PVar "collide") (PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "implSymTagOf") (EVar "collide")) (EVar "m")) (EVar "tag")) (EVar "key")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "collide")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above.")))))))))
 (DTypeSig false "implSymTagOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "injectiveIdent") (EVar "key")) (EVar "tag")))
+(DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "injectiveIdent") (EVar "key")) (EApp (EVar "injectiveIdent") (EVar "tag"))))
 (DTypeSig false "dictWitnessTagGuard" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "dictWitnessTagGuard" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false (PVar "implRows") (EApp (EApp (EVar "flatMap") (EVar "dictRouteWordsOf")) (EVar "prog"))) (DoLet false false (PVar "sentinelRows") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EVar "noneHeadTag") (EVar "noneHeadTag")))) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "implRows")) (EVar "omEmpty")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupRouteWords") (EBinOp "++" (EVar "sentinelRows") (EVar "implRows"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty"))) (DoExpr (EMatch (EVar "target") (arm (PCon "TargetNative") () (ELit LUnit)) (arm PWild () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))
 (DTypeSig false "distinctMethodNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -3810,7 +3813,7 @@ nodeTag _ = "?"
 (DFunDef false "checkImplSymbolsInjective" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkImplSymbolsInjective" ((PVar "collide") (PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "implSymTagOf") (EVar "collide")) (EVar "m")) (EVar "tag")) (EVar "key")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "collide")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above.")))))))))
 (DTypeSig false "implSymTagOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "injectiveIdent") (EVar "key")) (EVar "tag")))
+(DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "injectiveIdent") (EVar "key")) (EApp (EVar "injectiveIdent") (EVar "tag"))))
 (DTypeSig false "dictWitnessTagGuard" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "dictWitnessTagGuard" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false (PVar "implRows") (EApp (EApp (EDictApp "flatMap") (EVar "dictRouteWordsOf")) (EVar "prog"))) (DoLet false false (PVar "sentinelRows") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EVar "noneHeadTag") (EVar "noneHeadTag")))) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "implRows")) (EVar "omEmpty")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupRouteWords") (EBinOp "++" (EVar "sentinelRows") (EVar "implRows"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty"))) (DoExpr (EMatch (EVar "target") (arm (PCon "TargetNative") () (ELit LUnit)) (arm PWild () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))
 (DTypeSig false "distinctMethodNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))

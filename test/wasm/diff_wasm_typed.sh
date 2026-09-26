@@ -2254,9 +2254,10 @@ P1_WAT="$INPUT_WORK/p1.wat"
 U_WAT="$INPUT_WORK/u.wat"
 # Every top-level binding and every non-reserved constructor below carries the
 # `<mid>__<name>` qualifier mangleUnitsEv stamps on, with `__user__` the synthetic
-# unit id this entry elaborates its single source under; interface/impl method
-# names and data type names are their own naming and stay unqualified, which is
-# why $mdk_impl_PSubject_mark and $T_PSubject appear bare. The qualifier is
+# unit id this entry elaborates its single source under.  A data type is named
+# by its dispatch tag `<mid>.<name>` (#1397): `$T___user__.PSubject`, and the
+# impl symbol spells that tag through `injectiveIdent`
+# (`$mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark`). The qualifier is
 # identical on both halves, so it can neither create nor erase a P/U distinction:
 # each name below still differs between the two only where its source name does.
 require_wat fn-names "$P1_WAT" 'call $__user____pOnlyFn'
@@ -2271,10 +2272,10 @@ require_fn_arity fn-arity __user____sharedArity 1 "$P1_WAT"
 require_wat fn-arity "$P1_WAT" 'call $__user____sharedArity'
 require_fn_arity fn-arity __user____sharedArity 2 "$U_WAT"
 require_wat fn-arity "$U_WAT" 'call $__user____sharedArity'
-require_wat impl-buckets "$P1_WAT" '(func $mdk_impl_PSubject_mark'
-require_wat impl-buckets "$P1_WAT" 'call $mdk_impl_PSubject_mark'
-require_wat impl-buckets "$U_WAT" '(func $mdk_impl_USubject_mark'
-require_wat impl-buckets "$U_WAT" 'call $mdk_impl_USubject_mark'
+require_wat impl-buckets "$P1_WAT" '(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark'
+require_wat impl-buckets "$P1_WAT" 'call $mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark'
+require_wat impl-buckets "$U_WAT" '(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_USubject_mark'
+require_wat impl-buckets "$U_WAT" 'call $mdk_impl_zZ_5f__5f_user_5f__5f__2e_USubject_mark'
 require_wat lazy-globals "$P1_WAT" '(global $gs___user____pLazy'
 require_wat lazy-globals "$P1_WAT" '(func $force___user____pLazy'
 require_wat lazy-globals "$P1_WAT" 'call $force___user____pLazy'
@@ -2295,18 +2296,18 @@ require_ctor_fields ctor-arity 2 "$P1_WAT"
 require_wat ctor-arity "$P1_WAT" 'struct.new $C___user____SharedCtor'
 require_ctor_fields ctor-arity 3 "$U_WAT"
 require_wat ctor-arity "$U_WAT" 'struct.new $C___user____SharedCtor'
-require_wat ctor-owner-type "$P1_WAT" '(type $C___user____SharedCtor (sub $T_PSubject'
-require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T_PSubject)'
-require_wat ctor-owner-type "$U_WAT" '(type $C___user____SharedCtor (sub $T_USubject'
-require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T_USubject)'
+require_wat ctor-owner-type "$P1_WAT" '(type $C___user____SharedCtor (sub $T___user__.PSubject'
+require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T___user__.PSubject)'
+require_wat ctor-owner-type "$U_WAT" '(type $C___user____SharedCtor (sub $T___user__.USubject'
+require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T___user__.USubject)'
 require_ctor_ordinal ctor-ordinal 1 "$P1_WAT"
 require_ctor_ordinal ctor-ordinal 0 "$U_WAT"
-require_wat type-to-ctors "$P1_WAT" '(type $T_PSubject (sub (struct (field i32)))'
-forbid_wat type-to-ctors "$P1_WAT" '(type $T_USubject (sub (struct (field i32)))'
-require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $T_PSubject)'
-require_wat type-to-ctors "$U_WAT" '(type $T_USubject (sub (struct (field i32)))'
-forbid_wat type-to-ctors "$U_WAT" '(type $T_PSubject (sub (struct (field i32)))'
-require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_USubject)'
+require_wat type-to-ctors "$P1_WAT" '(type $T___user__.PSubject (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$P1_WAT" '(type $T___user__.USubject (sub (struct (field i32)))'
+require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $T___user__.PSubject)'
+require_wat type-to-ctors "$U_WAT" '(type $T___user__.USubject (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$U_WAT" '(type $T___user__.PSubject (sub (struct (field i32)))'
+require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T___user__.USubject)'
 
 run_impl_self_check
 run_trmc_state_check

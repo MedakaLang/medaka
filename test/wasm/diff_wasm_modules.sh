@@ -126,9 +126,9 @@ RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
     # fixture keeps same-spelled IA/IB implementations live and proves IA never
     # tail-calls IB just because both methods are named `walk`.
     if [ "$st" = 0 ] && [ "$name" = "w_selftail_dict.mdk" ]; then
-      walkbody="$(awk '/func \$mdk_impl_Counter_walk /{f=1} f&&/^  \(func /&&!/mdk_impl_Counter_walk /{f=0} f' "$wat")"
-      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$mdk_impl_Counter_walk')"
-      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $mdk_impl_Counter_walk')"
+      walkbody="$(awk '/func \$mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk /{f=1} f&&/^  \(func /&&!/mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk /{f=0} f' "$wat")"
+      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk')"
+      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk')"
       if [ "$rc" -eq 1 ] && [ "$plain" -eq 0 ]; then
         msg="$msg
 SELFKEY-ASSERT ok   $name: exactly 1 self return_call, 0 plain self call"
