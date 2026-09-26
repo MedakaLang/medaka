@@ -136,7 +136,7 @@ charIsSpace	TOTAL	total predicate over Char
 charToLower	TOTAL	total case map (identity where no mapping exists)
 charToUpper	TOTAL	total case map (identity where no mapping exists)
 charToStr	TOTAL	total: singleton string of the Char
-# Int / bit ops: total (Int wraps by design — decided_int_wraps_by_design).
+# Int bitwise ops: total on every Int (bits in, bits out; nothing to overflow).
 bitAnd	TOTAL	total bitwise op
 bitOr	TOTAL	total bitwise op
 bitXor	TOTAL	total bitwise op

@@ -148,10 +148,26 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # switches; S-known-rep-discriminant, testing the cheapest discriminant a ctor roster
 # proves) shrink emitted-IR volume, and the prelude every hello-world pays is part of
 # that same graph. The 20% convention is re-applied to the fresh local measurement.
-CEIL_check="${CHECK_IR_CEIL:-1075000000}"
+# RE-DERIVED (N4, `Int` traps, branch `integer-n4-int-traps`), same method, this box:
+#
+#   verb    this tree       CEIL (= measured x1.20, up to 5M)
+#   check   1,113,040,407   1,340,000,000
+#   run       772,233,072     930,000,000
+#   test      696,730,907     840,000,000
+#   (build unchanged: 313,149,578 under its 695,000,000 ceiling)
+#
+# What regrew, split by cross-loading (same binary, each tree's stdlib; the
+# fingerprinted compiler/ held equal): on `check`, about two thirds is the prelude
+# growing by what N4 moved into it (the `Eq`/`Ord`/`Num U64` impls an operator at
+# `U64` needs in scope, the `U64` hash fold and its step, `checkedAdd`/`checkedSub`/
+# `checkedMul`), which every program typechecks; the rest is the binary itself
+# (overflow-checked `Int` arithmetic throughout the compiler, about +1% on a
+# whole-compiler `check`).  On `run` the prelude accounts for all of it: the N4
+# binary alone is slightly cheaper than main's.
+CEIL_check="${CHECK_IR_CEIL:-1340000000}"
 CEIL_build="${BUILD_IR_CEIL:-695000000}"
-CEIL_run="${RUN_IR_CEIL:-760000000}"
-CEIL_test="${TEST_IR_CEIL:-680000000}"
+CEIL_run="${RUN_IR_CEIL:-930000000}"
+CEIL_test="${TEST_IR_CEIL:-840000000}"
 
 # ── S-pin-the-wins (#2332, this-sprint slice) — two WORKLOAD cells, not hello-world ──
 # The four ceilings above are hello-world only (by this gate's own stated scope).

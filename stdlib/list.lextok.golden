@@ -94,19 +94,7 @@ AND
 IDENT "lo"
 LT
 IDENT "hi"
-EQUAL
-IDENT "lo"
-CONS
-IDENT "rangeStep"
-LPAREN
-IDENT "lo"
-PLUS
-IDENT "step"
-RPAREN
-IDENT "hi"
-IDENT "step"
-NEWLINE
-PIPE
+OR
 IDENT "step"
 LT
 INT 0
@@ -117,18 +105,50 @@ IDENT "hi"
 EQUAL
 IDENT "lo"
 CONS
-IDENT "rangeStep"
-LPAREN
+IDENT "rangeStepFrom"
 IDENT "lo"
-PLUS
-IDENT "step"
-RPAREN
 IDENT "hi"
 IDENT "step"
 NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "rangeStepFrom"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Int"
+NEWLINE
+IDENT "rangeStepFrom"
+IDENT "lo"
+IDENT "hi"
+IDENT "step"
+EQUAL
+MATCH
+IDENT "checkedAdd"
+IDENT "lo"
+IDENT "step"
+INDENT
+UPPER "Some"
+IDENT "next"
+FAT_ARROW
+IDENT "rangeStep"
+IDENT "next"
+IDENT "hi"
+IDENT "step"
+NEWLINE
+UPPER "None"
+FAT_ARROW
 LBRACKET
 RBRACKET
 NEWLINE

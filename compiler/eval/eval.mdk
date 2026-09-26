@@ -1096,7 +1096,7 @@ matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c)
 matchPat _ _ = None
 
 inIntRange : Int -> Int -> Int -> Bool -> Bool
-inIntRange v lo hi incl = v >= lo && v <= (if incl then hi else hi - 1)
+inIntRange v lo hi incl = v >= lo && (if incl then v <= hi else v < hi)
 
 inCharRange : String -> String -> String -> Bool -> Bool
 inCharRange c lo hi incl =
@@ -3601,7 +3601,7 @@ getByte64 off arr i = match arrayGetUnsafe (off + i) arr
 
 pBytesToFloat64 : Value e -> Value e -> <e> Value e
 pBytesToFloat64 (VArray arr) (VInt off)
-  | off < 0 || off + 8 > arrayLength arr =
+  | off < 0 || off > arrayLength arr - 8 =
     runtimePanic "E-INDEX-OOB" ("index " ++ intToString off ++ " out of bounds")
 pBytesToFloat64 (VArray arr) (VInt off) =
   -- Build a host Array Int of 8 bytes, then delegate to the C bytesToFloat64.

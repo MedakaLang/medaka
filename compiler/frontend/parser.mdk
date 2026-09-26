@@ -675,7 +675,7 @@ parseMul =
 -- `Int` is 63-bit (`word = (n << 1) | 1`), spanning [-2^62, 2^62-1].  The lexer
 -- sees only unsigned digits — the `-` is a separate token — so its magnitude
 -- guard (`intLitOverflows`) must admit 2^62 to keep the minimum -2^62 writable,
--- and `parseIntFrom` wraps that magnitude to `intMinBound` on the spot.  The
+-- and `parseIntFrom` spells that magnitude as `intMinBound` on the spot.  The
 -- SIGN only exists here, in the parser, so this is the only place the remaining
 -- asymmetry can be resolved: 2^62 is in range as a negative and out of range as
 -- a positive.  C, Rust and Haskell all carry the same INT_MIN literal asymmetry.
@@ -686,8 +686,8 @@ parseMul =
 -- positive 2^62 is rejected (`intLitTooBigMsg`); in an EXPRESSION it is the wide
 -- literal it spells (`intMinAsWide`), which only a `U64` accepts, so at `Int` the
 -- typechecker rejects it with the same text.  The negation sites consume the token
--- themselves and keep the value as-is — `negate intMinBound` wraps back to
--- `intMinBound`, which is the wanted number.  Rejection is FATAL: an enclosing
+-- themselves and keep the value as-is (`negateLiteral` leaves `intMinBound`
+-- fixed), which is the wanted number.  Rejection is FATAL: an enclosing
 -- `many (appArg …)` would otherwise swallow a recoverable failure and the user
 -- would get "unexpected INT" instead.
 --

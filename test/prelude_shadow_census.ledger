@@ -74,6 +74,9 @@ any|PASS
 apply|PASS
 arbitraryList|PASS
 arbitraryString|PASS
+checkedAdd|PASS
+checkedMul|PASS
+checkedSub|PASS
 clamp|PASS
 compose|PASS
 const|PASS

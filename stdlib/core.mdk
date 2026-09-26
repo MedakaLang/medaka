@@ -1387,13 +1387,12 @@ export interface Slice c where
    [|20, 30|] -}
 export impl Slice (Array a) where
   slice arr lo hi =
-    -- The emptiness test is `hi < lo`, not `hi - lo < 0`: the difference wraps
-    -- once `lo` and `hi` are far enough apart, so the subtracting form admits
-    -- the very ranges the guard exists to reject and lets `arrayGetUnsafe`
-    -- read off the end. The two `Slice` impls below and `Slice Bytes` in
-    -- `stdlib/bytes.mdk` carry the same test for the same reason.
+    -- The emptiness test is `hi < lo`, not `hi - lo < 0`: the difference
+    -- overflows once `lo` and `hi` are far enough apart. The two `Slice` impls
+    -- below and `Slice Bytes` in `stdlib/bytes.mdk` carry the same test for the
+    -- same reason.
     if lo < 0 || hi > arrayLength arr || hi < lo then
-      sliceError lo (hi - 1)
+      sliceError lo (sliceLastIndex hi)
     else
       arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) arr)
 
@@ -1407,7 +1406,7 @@ export impl Slice (Array a) where
 export impl Slice String where
   slice s lo hi =
     if lo < 0 || hi > stringLength s || hi < lo then
-      sliceError lo (hi - 1)
+      sliceError lo (sliceLastIndex hi)
     else
       stringSlice lo hi s
 
@@ -1420,7 +1419,24 @@ export impl Slice String where
    [20, 30] -}
 export impl Slice (List a) where
   slice xs lo hi =
-    if lo < 0 || hi < lo then sliceError lo (hi - 1) else sliceListGo xs 0 lo hi
+    if lo < 0 || hi < lo then
+      sliceError lo (sliceLastIndex hi)
+    else
+      sliceListGo xs 0 lo hi
+
+-- The inclusive last index a slice error reports for the half-open end `hi`.
+-- `hi - 1` has no `Int` when `hi` is `intMinBound`; that refusal reports
+-- `intMinBound` itself rather than overflowing before it can refuse.
+sliceLastIndex : Int -> Int
+sliceLastIndex hi = if hi == intMinBound then hi else hi - 1
+
+-- The half-open end of `a.[lo..=hi]` (desugar.mdk).  `hi + 1` has no `Int` when
+-- `hi` is `intMaxBound`, and no container reaches that index, so the end stays
+-- `intMaxBound` and the slice refuses as out of range.  Called only from the
+-- code desugar generates, which the dead-code rule cannot see.
+sliceInclusiveEnd : Int -> Int
+-- lint-disable-next-line rule-dead-code
+sliceInclusiveEnd hi = if hi == intMaxBound then hi else hi + 1
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
 -- `[lo, hi)`, stop at `hi`.  Reaching the end of the chain while the running
@@ -1429,7 +1445,7 @@ export impl Slice (List a) where
 sliceListGo : List a -> Int -> Int -> Int -> List a
 sliceListGo [] i lo hi
   | i >= hi = []
-  | otherwise = sliceError lo (hi - 1)
+  | otherwise = sliceError lo (sliceLastIndex hi)
 sliceListGo (x :: xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi

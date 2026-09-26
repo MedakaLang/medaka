@@ -211,14 +211,16 @@ rewriteSugar (EBinOp ":=" lhs rhs _) = callBin "setRef" lhs rhs
 rewriteSugar (EIndex a i _) = callBin "index" a i
 -- `a.[lo..hi]` / `a.[lo..=hi]` (slice) → `slice a lo hi'` (Slice interface
 -- dispatch, #670), half-open: the inclusive `..=` form normalizes here to
--- `slice a lo (hi + 1)` so the method itself stays a plain 3-arg `[lo, hi)`
--- (parallels `index`).  Routing through a constrained method makes a non-container
+-- `slice a lo (sliceInclusiveEnd hi)` (the prelude's `hi + 1`, which stops at
+-- `intMaxBound` rather than overflowing) so the method itself stays a plain
+-- 3-arg `[lo, hi)` (parallels `index`).  Routing through a constrained method
+-- makes a non-container
 -- receiver a check-time "no impl of Slice" error, where the old static-tag
 -- lowering read a String/Int/[] through the Array rep (an S0 run≠build memory
 -- fault).  Pure surface sugar: no dedicated typecheck/eval/lower arm survives
 -- (they become dead — a stray post-desugar ESlice is a loud guard).
 rewriteSugar (ESlice a lo hi incl _) =
-  let hiEx = if incl then binOp "+" hi (intLit 1) else hi
+  let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
   EApp (EApp (EApp (EVar "slice") a) lo) hiEx
 rewriteSugar e = e
 
