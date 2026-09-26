@@ -2453,8 +2453,14 @@ appendVal _ _ =
 
 export
 evalArith : String -> Value e -> Value e -> Value e
-evalArith "+" (VInt a) (VInt b) = checkedInt "+" a b (checkedAdd a b)
-evalArith "-" (VInt a) (VInt b) = checkedInt "-" a b (checkedSub a b)
+evalArith "+" (VInt a) (VInt b)
+  | b > 0 && a > intMaxBound - b || b < 0 && a < intMinBound - b =
+    intOverflow (overflowOperands "+" a b)
+  | otherwise = VInt (a + b)
+evalArith "-" (VInt a) (VInt b)
+  | b < 0 && a > intMaxBound + b || b > 0 && a < intMinBound + b =
+    intOverflow (overflowOperands "-" a b)
+  | otherwise = VInt (a - b)
 evalArith "*" (VInt a) (VInt b) = checkedInt "*" a b (checkedMul a b)
 evalArith "/" (VInt a) (VInt b)
   | b == 0 = runtimePanic "E-DIV-ZERO" "division by zero"
@@ -2514,8 +2520,11 @@ u64Value (hi, lo) = VU64 hi lo
 -- `Int` arithmetic traps: a result outside `intMinBound .. intMaxBound` is the
 -- located E-INT-OVERFLOW runtime error, never a wrapped value.  The check comes
 -- first because the interpreter's own `Int` arithmetic traps too, and that
--- would be the host's unlocated panic.  The message is the native runtime's
--- (mdk_int_overflow): the operation, with a negative operand parenthesized.
+-- would be the host's unlocated panic.  `+` and `-` compare against the bounds
+-- in place (the prelude's `checkedAdd` test, without its `Option`), since they
+-- run on every interpreted loop step; `*` goes through `checkedMul`.  The
+-- message is the native runtime's (mdk_int_overflow): the operation, with a
+-- negative operand parenthesized.
 checkedInt : String -> Int -> Int -> Option Int -> Value e
 checkedInt _ _ _ (Some n) = VInt n
 checkedInt op a b None = intOverflow (overflowOperands op a b)
