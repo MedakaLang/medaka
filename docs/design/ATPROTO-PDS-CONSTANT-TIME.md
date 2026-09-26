@@ -33,7 +33,8 @@ Native is the security boundary because it is the PDS deployment engine. Eval
 and Wasm remain required value-parity arms, but this contract does not claim
 constant-time execution for them. Wasm's ordinary `Int` carrier selects between
 `i31ref` and boxed `i64` representations according to the value; boxing can
-branch and allocate below any PDS helper. A Wasm constant-time claim therefore
+branch and allocate below any PDS helper. The limbs themselves are `U64`
+(§5.1), whose Wasm carrier is equally outside this claim. A Wasm constant-time claim therefore
 requires a separately accepted uniform integer/crypto carrier or backend
 representation design. It cannot be established by scanning the PDS helper,
 and the absence of host entropy already independently prevents Wasm key
@@ -100,7 +101,8 @@ second folded value is below `2^54 + c < M`. The third carry pass therefore
 returns zero. All three rounds execute even for already canonical input.
 
 The implementation must retain the module's non-negative intermediates and
-existing `2^62 - 1` ceiling argument. A `3 -> 2` mutation must be rejected by
+its ceiling argument, now against the `U64` limb carrier's `2^64 - 1`
+(§5.1). A `3 -> 2` mutation must be rejected by
 the permanent pass-count control and by the conservative-bound witness with
 limbs 0 through 8 equal to `2^26 - 1` and limb 9 equal to `2^43 - 1`. That
 witness is private test access to the reduction precondition, not a fabricated
@@ -164,13 +166,53 @@ limb index.
 
 The formula intentionally avoids negative masks and comparison booleans.
 Field `t` stays below `2^27` (below `2^23` at the top limb), scalar `t` stays
-below `2^17`, and the blend remains within one limb. These are within Medaka's
-non-negative bit-operation contract and far below its fixnum ceiling.
+below `2^17`, and the blend remains within one limb. `diff[i] - original`
+wraps modulo 2^64 when negative, and multiplied by `keepDiff` and added back
+it gives the exact limb.
 
 An implementation using `if gte...`, an early-return compare, a branch on
 `d < 0`, or `hashBool`/another Bool-to-Int conversion does not satisfy this
 contract. Native `if` lowers to an LLVM branch and Wasm `if` remains a Wasm
 control instruction; neither is a constant-time select guarantee.
+
+### 5.1 The limb carrier, narrowing, and shift amounts
+
+Every limb, partial product, column, carry, borrow and selection bit inside
+both modules is a `U64`. `U64` `+`, `-` and `*` wrap modulo 2^64 and lower to
+one LLVM arithmetic instruction on the operands' payloads plus the result
+cell's allocation, with no branch on either operand. `Int` is moving
+to trap on overflow (#3377), and a trapping add is an add plus a branch on
+the overflow flag: on a secret operand that is a secret-dependent jump even
+where the headroom proofs above show it is never taken. The proofs in §3
+through §5 bound every intermediate below `2^62`, so they hold unchanged
+against `U64`'s `2^64 - 1`.
+
+Two rules follow, and hold for every secret-bearing value in `pds/`:
+
+1. A secret-derived value narrows only through a masking conversion:
+   `U64.toIntTruncating`, `truncate`, or `truncateU64`. The checked doors,
+   `fromInt`, `tryFromInt` and `toInt`, test their argument and are
+   therefore branches; they never take a secret-derived operand. A byte held
+   as an `Int` enters `U64` through the masking `U64.truncate`; a `U8`
+   through the total `U64.fromU8`.
+2. A shift amount is never secret-derived. `U64.shiftLeft` and
+   `U64.shiftRight` give 0 for an amount of 64 or more through a select, and
+   panic on a negative amount through a branch on the amount; with a public
+   amount both are fixed. Every shift in the reduction helpers passes a
+   literal, and `pds/test/constant_time_reductions.sh` checks that in the
+   emitted IR.
+
+`U64` is a boxed cell (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), so each
+limb operation allocates one 16-byte pointer-free cell. The number of cells a
+helper allocates per call is fixed by its straight-line body, so the
+reduction's allocation schedule is input-independent; the reductions gate pins
+each helper's count. The limb arrays the collector scans now hold cell
+addresses rather than limb values, and the key-derived payloads sit in cells
+it does not scan. This narrows, but does not close, the collector caveat
+recorded for #3361: byte arrays holding key material are still `Array Int`.
+
+The `*Bit` predicates still cross the module boundary as `Int` 0 or 1. Any
+`Int` arithmetic a caller performs on them is subject to the trap in #3377.
 
 ## 6. Verification mechanism
 

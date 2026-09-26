@@ -26,6 +26,7 @@ write_internal_claimed_source_files() {
     stdlib/crypto/sha256.mdk \
     stdlib/crypto/hmac.mdk \
     stdlib/u32.mdk \
+    stdlib/u64.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/test/constant_time_signing_main.mdk
@@ -41,6 +42,7 @@ write_public_claimed_source_files() {
     stdlib/crypto/sha256.mdk \
     stdlib/crypto/hmac.mdk \
     stdlib/u32.mdk \
+    stdlib/u64.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/lib/sign.mdk \
@@ -62,13 +64,19 @@ write_source_manifest() {
 # N2 word operations), and pds/lib/field.mdk's one change is a comment that
 # stopped citing the retired bits64 module by path. Neither moves emitted
 # code; every closure and branch check below passes unchanged.
+# Re-blessed for N4 (#3427): field.mdk and scalar.mdk moved their limbs from
+# Int to U64, which brings stdlib/u64.mdk into the claim (both import it as
+# `U64`). The new stdlib row is the file as N3 left it, unchanged here; the
+# emitted-closure and control grades below were re-derived for the move and
+# say what entered.
 expected_internal_source_manifest() {
   cat <<'EOF'
-3196114623 25705  pds/lib/field.mdk
-75163897 32282  pds/lib/scalar.mdk
+3367372070 26913  pds/lib/field.mdk
+3318702853 33856  pds/lib/scalar.mdk
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
+2984053246 11457  stdlib/u64.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
@@ -77,11 +85,12 @@ EOF
 
 expected_public_source_manifest() {
   cat <<'EOF'
-3196114623 25705  pds/lib/field.mdk
-75163897 32282  pds/lib/scalar.mdk
+3367372070 26913  pds/lib/field.mdk
+3318702853 33856  pds/lib/scalar.mdk
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
+2984053246 11457  stdlib/u64.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
@@ -92,17 +101,18 @@ EOF
 # The signing closure's SHA-256 and HMAC live in stdlib/crypto/, reached by
 # `import crypto.sha256` / `import crypto.hmac` rather than `import lib.<mod>`,
 # and SHA-256's word arithmetic is stdlib/u32.mdk, reached by `import u32`.
+# The field and scalar limbs are stdlib/u64.mdk, reached by `import u64 as U64`.
 # Following only the `lib.` form would silently shrink the audited closure to
 # the pds half, which is the one failure this whole function exists to
 # prevent, so the second arm below follows those stdlib imports too. It is
 # restricted to the stdlib modules whose code the signing path actually
 # carries: a blanket `^import <anything>` arm would drag in `array`, `string`
-# and every transitive leaf (u32.mdk's own u8/u16/bytes imports among them,
-# none of which reach the emitted closure), and the manifest is a
+# and every transitive leaf (u32.mdk's and u64.mdk's own u8/u16/bytes imports
+# among them, none of which reach the emitted closure), and the manifest is a
 # hand-maintained claim about the SIGNING source, not about the stdlib.
 # Entries are paths under stdlib/ without the extension; the import form is
 # the path with `/` spelled `.`.
-SIGNING_STDLIB_MODULES='crypto/sha256 crypto/hmac u32'
+SIGNING_STDLIB_MODULES='crypto/sha256 crypto/hmac u32 u64'
 
 derive_stdlib_imports() {
   file=$1
@@ -225,6 +235,7 @@ restore_source_tree() {
     stdlib/crypto/sha256.mdk \
     stdlib/crypto/hmac.mdk \
     stdlib/u32.mdk \
+    stdlib/u64.mdk \
     pds/lib/hmac_sha256.mdk \
     pds/lib/secp256k1.mdk \
     pds/test/constant_time_signing_main.mdk
@@ -355,11 +366,11 @@ conditional_jumps() {
 }
 
 cp -R "$ROOT/pds" "$WORK/pds"
-# Three of the claimed signing sources live in stdlib/, and the scratch tree
+# Four of the claimed signing sources live in stdlib/, and the scratch tree
 # is what every source-shape control runs against, so it needs them too.
 mkdir -p "$WORK/stdlib/crypto"
 cp "$ROOT/stdlib/crypto/sha256.mdk" "$ROOT/stdlib/crypto/hmac.mdk" "$WORK/stdlib/crypto/"
-cp "$ROOT/stdlib/u32.mdk" "$WORK/stdlib/"
+cp "$ROOT/stdlib/u32.mdk" "$ROOT/stdlib/u64.mdk" "$WORK/stdlib/"
 write_internal_claimed_source_files > "$WORK/internal-source.claimed"
 write_public_claimed_source_files > "$WORK/public-source.claimed"
 internal_source_closure_ok "$ROOT" "$WORK/internal-source.claimed" || fail 'baseline internal signing source matches the exact manifest and independently derived closure'
@@ -525,7 +536,9 @@ sed '/stdlib\/crypto\/hmac.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mu
 if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib HMAC omission unexpectedly green'; fi
 sed '/stdlib\/u32.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
 if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib U32 omission unexpectedly green'; fi
-pass 'M15 claimed stdlib SHA-256/HMAC/U32 omission is rejected by independently derived source closure'
+sed '/stdlib\/u64.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
+if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M15 stdlib U64 omission unexpectedly green'; fi
+pass 'M15 claimed stdlib SHA-256/HMAC/U32/U64 omission is rejected by independently derived source closure'
 cmp "$WORK/manifest.baseline" "$WORK/internal-source.claimed" >/dev/null || fail 'M15 claimed source manifest restores byte-exactly'
 
 apply_mutation M16 "$WORK/pds/lib/secp256k1.mdk" \
@@ -573,11 +586,21 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # `bitXor`, `bitNot`, `shiftLeft`, `shiftRight`, `rotateLeft`, `rotateRight`,
 # `rotateAmount`, `truncate`, `toInt`), plus `mdk_impl_Int_display`, which only
 # the shift helpers' negative-amount panic message calls. 180 definitions.
-[ "$closure_grade" = '280489640 5172' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when the field and scalar limbs moved from Int to U64 (#3427),
+# symbol by symbol against the previous closure. Sixteen lazy-constant
+# thunks left, because a U64 constant, and a constructor applied only to
+# them, is emitted as static data: `mdk_force_lib_field__{feOne,feZero,foldHi,
+# foldLow,limbMask,pLimbs,r0,r1,topMask}`, `mdk_force_lib_scalar__{cLimbs,
+# limbMask,nHalfPlusOneLimbs,nLimbs,scOne,scZero}` and
+# `mdk_force_lib_secp256k1__pointInfinity`. Five u64 helpers entered:
+# `mdk_u64__{bitAnd,shiftLeft,shiftRight,toIntTruncating,truncate}`.
+# `mdk_impl_Int_display`, which the shifts' negative-amount panic calls, was
+# already present. 169 definitions.
+[ "$closure_grade" = '2702301243 4798' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
-for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_crypto_sha256__ mdk_crypto_hmac__ \
+for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_crypto_sha256__ mdk_crypto_hmac__ mdk_u64__ \
   mdk_u32__ mdk_lib_hmac_sha256__ mdk_lib_secp256k1__
 do
   grep -F -q "$prefix" "$WORK/full-closure.lst" || fail "emitted closure reaches $prefix"
@@ -612,7 +635,21 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # rotateAmount 2 (the constant 32 divisor's zero checks), rotateLeft 1
 # (amount 0). Every SHA-256 call site passes a literal amount. The bit helpers,
 # truncate and toInt have no branch, and Int_display has none either.
-[ "$control_grade" = '3001358583 7705' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived for the U64 limb move (#3427), row by row. No existing row moved
+# in the branch, comparison, index, write, make or copy column; only call
+# totals moved. Int bit helpers became u64 ones one for one, and each read of
+# a module constant lost its thunk force (carryPassGo 13 -> 11, subPCandidate
+# 17 -> 11, feNegateCtGo 16 -> 10, and so on down the limb helpers);
+# the *Bit predicates gained a toIntTruncating and feSelect/scSelect a
+# truncate; the byte codecs gained the U64.truncate/toIntTruncating on each
+# byte (limbsOfBytesGo, toBytesGo, scanSecretBytes). The new u64 rows:
+# bitAnd, toIntTruncating and truncate have no branch; shiftLeft and
+# shiftRight have two each, on the amount (below 0 panics, then the guard
+# chain's closing `otherwise`), and every limb-path call site passes a literal
+# or the public byte-codec counter. U64 arithmetic allocates its result cell
+# inline (`call ptr @mdk_alloc_atomic`, outside these call columns); the
+# count per call is fixed by the straight-line bodies these rows pin.
+[ "$control_grade" = '4184582546 7176' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -653,6 +690,12 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 # exact control grade over the emitted closure, which counts its branches,
 # comparisons and indexing. Its caller mdk_crypto_hmac__hmacSha256FixedBytes still
 # survives below, so the HMAC/SHA schedule is still in the link.
+#
+# mdk_lib_scalar__scInverse left this list when the limbs moved to U64 (#3427).
+# `scOne` became static data, so scInverse is now a single call to its
+# exponent ladder, and the link inlines both into signCandidate. Its row in the
+# emitted control grade above still pins the ladder's shape, and mdk_lib_scalar__scMul,
+# which every ladder step calls, is required here in its place.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
@@ -660,7 +703,7 @@ for symbol in \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
-  mdk_lib_scalar__scInverse \
+  mdk_lib_scalar__scMul \
   mdk_lib_scalar__scSelect
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains the audited HMAC/SHA, two-signature, point, inverse, and arithmetic-selection topology'
@@ -801,7 +844,7 @@ grep -F -x -q 'mdk_lib_sign__publicKeyForSecret' "$WORK/full-closure.lst" || fai
 if grep -F -q 'ForTest' "$WORK/full-closure.lst"; then
   fail 'public consumer closure reaches a ForTest symbol'
 fi
-for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_crypto_sha256__ mdk_crypto_hmac__ \
+for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_crypto_sha256__ mdk_crypto_hmac__ mdk_u64__ \
   mdk_u32__ mdk_lib_hmac_sha256__ mdk_lib_secp256k1__ mdk_lib_sign__
 do
   grep -F -q "$prefix" "$WORK/full-closure.lst" || fail "public union reaches $prefix"
@@ -849,7 +892,12 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # internal-carrier grades above and no others: four SHA-256 definitions leave,
 # the eleven `mdk_u32__` helpers and `mdk_impl_Int_display` enter (191 -> 199),
 # and every new branch tests a public shift or rotate amount.
-if [ "$public_closure_grade" != '809436099 5707' ] || [ "$public_control_grade" != '3931792192 8508' ]; then
+# Re-derived for the U64 limb move (#3427), the same changes as the internal
+# grades above plus `mdk_u64__bitXor` (no branch; feEqualBorrow, reached by
+# verification) among the entering u64 helpers: sixteen thunks leave and six
+# u64 helpers enter (199 -> 189). No existing row moved outside the call
+# column.
+if [ "$public_closure_grade" != '4166836887 5349' ] || [ "$public_control_grade" != '1436203063 8008' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
@@ -861,14 +909,15 @@ pass "public-root LLVM union excludes ForTest and retains the audited signing/ke
 # in this linked binary. All three stay in the public union above, whose exact
 # control grade pins their branches, comparisons and indexing; scNegateCt's
 # low-S route is pinned in source (red under M09); and rfc6979NonceSchedule is
-# still required as a linked symbol of the internal carrier.
+# still required as a linked symbol of the internal carrier. scInverse gave way
+# to scMul here for the same reason as in the internal list (#3427).
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_crypto_hmac__hmacSha256FixedBytes \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
-  mdk_lib_scalar__scInverse \
+  mdk_lib_scalar__scMul \
   mdk_lib_scalar__scSelect
 do require_native_symbol "$symbol"; done
 pass 'linked public consumer retains the audited HMAC/SHA, signing, point, inverse, and arithmetic-selection leaves'
