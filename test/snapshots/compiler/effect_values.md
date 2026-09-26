@@ -1,5 +1,5 @@
 # META
-source_lines=251
+source_lines=269
 stages=DESUGAR,MARK
 # SOURCE
 -- Produced values join at positive positions. This is neither type equality
@@ -21,6 +21,10 @@ public export data ValueJoinOps c = ValueJoinOps {
   -- alternative's authority, the authority peer of a row allowance.
   vjoFreshAuth : Param -> Authority,
   vjoCollectAuth : List Authority -> Authority,
+  -- Alternatives none of which has a shape yet: the checker may record the
+  -- join to decide once shapes are known (EFFECTS-SEMANTICS §6.8), returning
+  -- the variable that stands for its result, rather than equate them now.
+  vjoDefer : List (c, Mono) -> Option Mono,
 }
 
 export
@@ -104,34 +108,48 @@ matchingValues ops witness ((value@(context, t)) :: rest) =
 
 joinNonempty : ValueJoinOps c -> List (c, Mono) -> Mono
 joinNonempty ops values = match concreteWitness values
-  None => equalValues ops values
-  Some witness => match witness
-    TFun _ _ _ =>
-      let alternatives =
-        matchingValues ops witness (map (shapeUnknown ops witness) values)
-      let domain = equalValues ops (map arrowDomain alternatives)
-      let rows = map arrowRow alternatives
-      let result = joinNonempty ops (map arrowResult alternatives)
-      TFun domain (ops.vjoCollectRows rows) result
-    TApp _ _ =>
-      let alternatives =
-        matchingValues ops witness (map (shapeUnknown ops witness) values)
-      joinApplications ops alternatives
-    -- Qualified alternatives join their value types and take one allowance
-    -- above every authority.  A plain alternative beside them is a value the
-    -- domain cannot bound, so the join forgets the qualifier: only the
-    -- expression-directed abstraction can recover more, and it does.
-    TQual _ _ =>
-      let shaped = map (shapeUnknown ops witness) values
-      if anyList (v => not (isQualified (snd v))) shaped then
-        joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
-      else
-        let inner =
-          joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
-        TQual inner (ops.vjoCollectAuth (map (v => qualAuth (snd v)) shaped))
-    _ =>
-      -- Concrete heads and effect indices have no covariant join rule.
-      equalValues ops values
+  None => match ops.vjoDefer values
+    Some result => result
+    None => equalValues ops values
+  Some witness => joinWithWitness ops witness values
+
+-- Decide a recorded join: the alternatives' own shapes where any has one;
+-- else the shape the join's result has taken since (an application, an
+-- annotation), each alternative shaped afresh from it; else equality, as for
+-- values that never take a shape.  [ops] must not defer again.
+export
+resolveDeferredJoin : ValueJoinOps c -> Mono -> List (c, Mono) -> Mono
+resolveDeferredJoin ops result values = match concreteWitness values
+  Some witness => joinWithWitness ops witness values
+  None => match normalize result
+    TVar _ => equalValues ops values
+    shaped => joinWithWitness ops shaped values
+
+joinWithWitness : ValueJoinOps c -> Mono -> List (c, Mono) -> Mono
+joinWithWitness ops (witness@(TFun _ _ _)) values =
+  let alternatives =
+    matchingValues ops witness (map (shapeUnknown ops witness) values)
+  let domain = equalValues ops (map arrowDomain alternatives)
+  let rows = map arrowRow alternatives
+  let result = joinNonempty ops (map arrowResult alternatives)
+  TFun domain (ops.vjoCollectRows rows) result
+joinWithWitness ops (witness@(TApp _ _)) values =
+  let alternatives =
+    matchingValues ops witness (map (shapeUnknown ops witness) values)
+  joinApplications ops alternatives
+-- Qualified alternatives join their value types and take one allowance
+-- above every authority.  A plain alternative beside them is a value the
+-- domain cannot bound, so the join forgets the qualifier: only the
+-- expression-directed abstraction can recover more, and it does.
+joinWithWitness ops (witness@(TQual _ _)) values =
+  let shaped = map (shapeUnknown ops witness) values
+  if anyList (v => not (isQualified (snd v))) shaped then
+    joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
+  else
+    let inner = joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
+    TQual inner (ops.vjoCollectAuth (map (v => qualAuth (snd v)) shaped))
+-- Concrete heads and effect indices have no covariant join rule.
+joinWithWitness ops _ values = equalValues ops values
 
 equalValues : ValueJoinOps c -> List (c, Mono) -> Mono
 equalValues _ [] = panic "empty produced-value equality"
@@ -259,7 +277,7 @@ qualAuth value = match normalize value
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" false) (mem "authDomainTop" false))))
 (DUse false (UseGroup ("support" "util") ((mem "minI" false) (mem "anyList" false))))
-(DData Public "ValueJoinOps" ("c") ((variant "ValueJoinOps" (ConNamed (field "vjoEqual" (TyFun (TyVar "c") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))) (field "vjoCovariants" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool")))) (field "vjoFreshType" (TyFun (TyCon "Unit") (TyCon "Mono"))) (field "vjoFreshRow" (TyFun (TyCon "Unit") (TyCon "EffRow"))) (field "vjoCollectRows" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))) (field "vjoFreshAuth" (TyFun (TyCon "Param") (TyCon "Authority"))) (field "vjoCollectAuth" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority")))))) ())
+(DData Public "ValueJoinOps" ("c") ((variant "ValueJoinOps" (ConNamed (field "vjoEqual" (TyFun (TyVar "c") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))) (field "vjoCovariants" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool")))) (field "vjoFreshType" (TyFun (TyCon "Unit") (TyCon "Mono"))) (field "vjoFreshRow" (TyFun (TyCon "Unit") (TyCon "EffRow"))) (field "vjoCollectRows" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))) (field "vjoFreshAuth" (TyFun (TyCon "Param") (TyCon "Authority"))) (field "vjoCollectAuth" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority"))) (field "vjoDefer" (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))))) ())
 (DTypeSig true "joinProduced" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "joinProduced" (PWild (PList)) (EVar "None"))
 (DFunDef false "joinProduced" (PWild (PList (PTuple PWild (PVar "value")))) (EApp (EVar "Some") (EVar "value")))
@@ -292,7 +310,14 @@ qualAuth value = match normalize value
 (DFunDef false "matchingValues" (PWild PWild (PList)) (EListLit))
 (DFunDef false "matchingValues" ((PVar "ops") (PVar "witness") (PCons (PAs "value" (PTuple (PVar "context") (PVar "t"))) (PVar "rest"))) (EIf (EApp (EApp (EVar "sameShape") (EVar "witness")) (EVar "t")) (EBinOp "::" (EVar "value") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EFieldAccess (EVar "ops") "vjoEqual") (EVar "context")) (EVar "witness")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EVar "rest"))))))
 (DTypeSig false "joinNonempty" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono"))))
-(DFunDef false "joinNonempty" ((PVar "ops") (PVar "values")) (EMatch (EApp (EVar "concreteWitness") (EVar "values")) (arm (PCon "None") () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values"))) (arm (PCon "Some" (PVar "witness")) () (EMatch (EVar "witness") (arm (PCon "TFun" PWild PWild PWild) () (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoLet false false (PVar "domain") (EApp (EApp (EVar "equalValues") (EVar "ops")) (EApp (EApp (EVar "map") (EVar "arrowDomain")) (EVar "alternatives")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (EVar "arrowRow")) (EVar "alternatives"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EVar "map") (EVar "arrowResult")) (EVar "alternatives")))) (DoExpr (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EApp (EFieldAccess (EVar "ops") "vjoCollectRows") (EVar "rows"))) (EVar "result"))))) (arm (PCon "TApp" PWild PWild) () (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoExpr (EApp (EApp (EVar "joinApplications") (EVar "ops")) (EVar "alternatives"))))) (arm (PCon "TQual" PWild PWild) () (EBlock (DoLet false false (PVar "shaped") (EApp (EApp (EVar "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EVar "isQualified") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")) (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")))) (DoExpr (EApp (EApp (EVar "TQual") (EVar "inner")) (EApp (EFieldAccess (EVar "ops") "vjoCollectAuth") (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EVar "qualAuth") (EApp (EVar "snd") (EVar "v"))))) (EVar "shaped")))))))))) (arm PWild () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values")))))))
+(DFunDef false "joinNonempty" ((PVar "ops") (PVar "values")) (EMatch (EApp (EVar "concreteWitness") (EVar "values")) (arm (PCon "None") () (EMatch (EApp (EFieldAccess (EVar "ops") "vjoDefer") (EVar "values")) (arm (PCon "Some" (PVar "result")) () (EVar "result")) (arm (PCon "None") () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values"))))) (arm (PCon "Some" (PVar "witness")) () (EApp (EApp (EApp (EVar "joinWithWitness") (EVar "ops")) (EVar "witness")) (EVar "values")))))
+(DTypeSig true "resolveDeferredJoin" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono")))))
+(DFunDef false "resolveDeferredJoin" ((PVar "ops") (PVar "result") (PVar "values")) (EMatch (EApp (EVar "concreteWitness") (EVar "values")) (arm (PCon "Some" (PVar "witness")) () (EApp (EApp (EApp (EVar "joinWithWitness") (EVar "ops")) (EVar "witness")) (EVar "values"))) (arm (PCon "None") () (EMatch (EApp (EVar "normalize") (EVar "result")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values"))) (arm (PVar "shaped") () (EApp (EApp (EApp (EVar "joinWithWitness") (EVar "ops")) (EVar "shaped")) (EVar "values")))))))
+(DTypeSig false "joinWithWitness" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono")))))
+(DFunDef false "joinWithWitness" ((PVar "ops") (PAs "witness" (PCon "TFun" PWild PWild PWild)) (PVar "values")) (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoLet false false (PVar "domain") (EApp (EApp (EVar "equalValues") (EVar "ops")) (EApp (EApp (EVar "map") (EVar "arrowDomain")) (EVar "alternatives")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (EVar "arrowRow")) (EVar "alternatives"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EVar "map") (EVar "arrowResult")) (EVar "alternatives")))) (DoExpr (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EApp (EFieldAccess (EVar "ops") "vjoCollectRows") (EVar "rows"))) (EVar "result")))))
+(DFunDef false "joinWithWitness" ((PVar "ops") (PAs "witness" (PCon "TApp" PWild PWild)) (PVar "values")) (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoExpr (EApp (EApp (EVar "joinApplications") (EVar "ops")) (EVar "alternatives")))))
+(DFunDef false "joinWithWitness" ((PVar "ops") (PAs "witness" (PCon "TQual" PWild PWild)) (PVar "values")) (EBlock (DoLet false false (PVar "shaped") (EApp (EApp (EVar "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EVar "isQualified") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")) (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")))) (DoExpr (EApp (EApp (EVar "TQual") (EVar "inner")) (EApp (EFieldAccess (EVar "ops") "vjoCollectAuth") (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EVar "qualAuth") (EApp (EVar "snd") (EVar "v"))))) (EVar "shaped"))))))))))
+(DFunDef false "joinWithWitness" ((PVar "ops") PWild (PVar "values")) (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values")))
 (DTypeSig false "equalValues" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono"))))
 (DFunDef false "equalValues" (PWild (PList)) (EApp (EVar "panic") (ELit (LString "empty produced-value equality"))))
 (DFunDef false "equalValues" ((PVar "ops") (PCons (PTuple PWild (PVar "first")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "equalRest") (EVar "ops")) (EVar "first")) (EVar "rest"))) (DoExpr (EVar "first"))))
@@ -348,7 +373,7 @@ qualAuth value = match normalize value
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" false) (mem "authDomainTop" false))))
 (DUse false (UseGroup ("support" "util") ((mem "minI" false) (mem "anyList" false))))
-(DData Public "ValueJoinOps" ("c") ((variant "ValueJoinOps" (ConNamed (field "vjoEqual" (TyFun (TyVar "c") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))) (field "vjoCovariants" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool")))) (field "vjoFreshType" (TyFun (TyCon "Unit") (TyCon "Mono"))) (field "vjoFreshRow" (TyFun (TyCon "Unit") (TyCon "EffRow"))) (field "vjoCollectRows" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))) (field "vjoFreshAuth" (TyFun (TyCon "Param") (TyCon "Authority"))) (field "vjoCollectAuth" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority")))))) ())
+(DData Public "ValueJoinOps" ("c") ((variant "ValueJoinOps" (ConNamed (field "vjoEqual" (TyFun (TyVar "c") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))) (field "vjoCovariants" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Bool")))) (field "vjoFreshType" (TyFun (TyCon "Unit") (TyCon "Mono"))) (field "vjoFreshRow" (TyFun (TyCon "Unit") (TyCon "EffRow"))) (field "vjoCollectRows" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "EffRow"))) (field "vjoFreshAuth" (TyFun (TyCon "Param") (TyCon "Authority"))) (field "vjoCollectAuth" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyCon "Authority"))) (field "vjoDefer" (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono"))))))) ())
 (DTypeSig true "joinProduced" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "joinProduced" (PWild (PList)) (EVar "None"))
 (DFunDef false "joinProduced" (PWild (PList (PTuple PWild (PVar "value")))) (EApp (EVar "Some") (EVar "value")))
@@ -381,7 +406,14 @@ qualAuth value = match normalize value
 (DFunDef false "matchingValues" (PWild PWild (PList)) (EListLit))
 (DFunDef false "matchingValues" ((PVar "ops") (PVar "witness") (PCons (PAs "value" (PTuple (PVar "context") (PVar "t"))) (PVar "rest"))) (EIf (EApp (EApp (EVar "sameShape") (EVar "witness")) (EVar "t")) (EBinOp "::" (EVar "value") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EFieldAccess (EVar "ops") "vjoEqual") (EVar "context")) (EVar "witness")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EVar "rest"))))))
 (DTypeSig false "joinNonempty" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono"))))
-(DFunDef false "joinNonempty" ((PVar "ops") (PVar "values")) (EMatch (EApp (EVar "concreteWitness") (EVar "values")) (arm (PCon "None") () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values"))) (arm (PCon "Some" (PVar "witness")) () (EMatch (EVar "witness") (arm (PCon "TFun" PWild PWild PWild) () (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoLet false false (PVar "domain") (EApp (EApp (EVar "equalValues") (EVar "ops")) (EApp (EApp (EMethodRef "map") (EVar "arrowDomain")) (EVar "alternatives")))) (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (EVar "arrowRow")) (EVar "alternatives"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EMethodRef "map") (EVar "arrowResult")) (EVar "alternatives")))) (DoExpr (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EApp (EFieldAccess (EVar "ops") "vjoCollectRows") (EVar "rows"))) (EVar "result"))))) (arm (PCon "TApp" PWild PWild) () (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoExpr (EApp (EApp (EVar "joinApplications") (EVar "ops")) (EVar "alternatives"))))) (arm (PCon "TQual" PWild PWild) () (EBlock (DoLet false false (PVar "shaped") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EVar "isQualified") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")) (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")))) (DoExpr (EApp (EApp (EVar "TQual") (EVar "inner")) (EApp (EFieldAccess (EVar "ops") "vjoCollectAuth") (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EVar "qualAuth") (EApp (EVar "snd") (EVar "v"))))) (EVar "shaped")))))))))) (arm PWild () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values")))))))
+(DFunDef false "joinNonempty" ((PVar "ops") (PVar "values")) (EMatch (EApp (EVar "concreteWitness") (EVar "values")) (arm (PCon "None") () (EMatch (EApp (EFieldAccess (EVar "ops") "vjoDefer") (EVar "values")) (arm (PCon "Some" (PVar "result")) () (EVar "result")) (arm (PCon "None") () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values"))))) (arm (PCon "Some" (PVar "witness")) () (EApp (EApp (EApp (EVar "joinWithWitness") (EVar "ops")) (EVar "witness")) (EVar "values")))))
+(DTypeSig true "resolveDeferredJoin" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono")))))
+(DFunDef false "resolveDeferredJoin" ((PVar "ops") (PVar "result") (PVar "values")) (EMatch (EApp (EVar "concreteWitness") (EVar "values")) (arm (PCon "Some" (PVar "witness")) () (EApp (EApp (EApp (EVar "joinWithWitness") (EVar "ops")) (EVar "witness")) (EVar "values"))) (arm (PCon "None") () (EMatch (EApp (EVar "normalize") (EVar "result")) (arm (PCon "TVar" PWild) () (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values"))) (arm (PVar "shaped") () (EApp (EApp (EApp (EVar "joinWithWitness") (EVar "ops")) (EVar "shaped")) (EVar "values")))))))
+(DTypeSig false "joinWithWitness" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono")))))
+(DFunDef false "joinWithWitness" ((PVar "ops") (PAs "witness" (PCon "TFun" PWild PWild PWild)) (PVar "values")) (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoLet false false (PVar "domain") (EApp (EApp (EVar "equalValues") (EVar "ops")) (EApp (EApp (EMethodRef "map") (EVar "arrowDomain")) (EVar "alternatives")))) (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (EVar "arrowRow")) (EVar "alternatives"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EMethodRef "map") (EVar "arrowResult")) (EVar "alternatives")))) (DoExpr (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EApp (EFieldAccess (EVar "ops") "vjoCollectRows") (EVar "rows"))) (EVar "result")))))
+(DFunDef false "joinWithWitness" ((PVar "ops") (PAs "witness" (PCon "TApp" PWild PWild)) (PVar "values")) (EBlock (DoLet false false (PVar "alternatives") (EApp (EApp (EApp (EVar "matchingValues") (EVar "ops")) (EVar "witness")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values")))) (DoExpr (EApp (EApp (EVar "joinApplications") (EVar "ops")) (EVar "alternatives")))))
+(DFunDef false "joinWithWitness" ((PVar "ops") (PAs "witness" (PCon "TQual" PWild PWild)) (PVar "values")) (EBlock (DoLet false false (PVar "shaped") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "shapeUnknown") (EVar "ops")) (EVar "witness"))) (EVar "values"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EVar "isQualified") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")) (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "joinNonempty") (EVar "ops")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "fst") (EVar "v")) (EApp (EVar "qualInner") (EApp (EVar "snd") (EVar "v")))))) (EVar "shaped")))) (DoExpr (EApp (EApp (EVar "TQual") (EVar "inner")) (EApp (EFieldAccess (EVar "ops") "vjoCollectAuth") (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EVar "qualAuth") (EApp (EVar "snd") (EVar "v"))))) (EVar "shaped"))))))))))
+(DFunDef false "joinWithWitness" ((PVar "ops") PWild (PVar "values")) (EApp (EApp (EVar "equalValues") (EVar "ops")) (EVar "values")))
 (DTypeSig false "equalValues" (TyFun (TyApp (TyCon "ValueJoinOps") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "c") (TyCon "Mono"))) (TyCon "Mono"))))
 (DFunDef false "equalValues" (PWild (PList)) (EApp (EVar "panic") (ELit (LString "empty produced-value equality"))))
 (DFunDef false "equalValues" ((PVar "ops") (PCons (PTuple PWild (PVar "first")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "equalRest") (EVar "ops")) (EVar "first")) (EVar "rest"))) (DoExpr (EVar "first"))))

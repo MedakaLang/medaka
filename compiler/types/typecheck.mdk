@@ -147,6 +147,7 @@ import frontend.ast.{
 -- NOT re-keyed and has since been retired entirely (#1569) — see
 -- `CrossRun.universeRegisteredIfacesRef`'s retirement note.
 import types.repr.{
+  AuthResidual(..),
   ppAuthority,
   normalize,
   ppScheme,
@@ -276,9 +277,10 @@ import types.effect_solver as EffectSolver
 import types.effect_bindings.{
   BindingSummary(..), newBindingSummary, bodyArrows, bodyRowAt
 }
-import types.effect_solver.{SummarySolver, SummaryFailure}
+import types.effect_solver.{SummarySolver, SummaryFailure, ScopeOutcome(..)}
 import types.effect_values.{
-  ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes
+  ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes,
+  resolveDeferredJoin
 }
 import map as IdMap
 import map.{Map(..)}
@@ -1015,18 +1017,40 @@ summaryEscape False lower upper = atomsEscape lower upper
 
 finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
 finishEffectSummaryScope retained borrowed =
-  let failures =
+  let _ = finishEffectSummaryScopeKeeping Tip retained borrowed
+  ()
+
+-- Close the scope, keeping as residuals the unproven obligations over the
+-- authorities [quantifiable] assigns to a member (see `closeSummaryScope`);
+-- each comes back with its member index.
+finishEffectSummaryScopeKeeping : Map Int Int ->
+  Map Int Unit ->
+  Map Int (Ref Effvar) ->
+  List (Int, AuthResidual)
+finishEffectSummaryScopeKeeping quantifiable retained borrowed =
+  let outcome =
     EffectSolver.closeSummaryScope
       perRun.value.effectSummaries
       perRun.value.rigidEffvarsRef.value
       perRun.value.rigidAuthvarsRef.value
+      quantifiable
       retained
       borrowed
       summaryEscape
       joinCellOf
       freshEffvarAt
       widenOpenedFor
-  reportEffectSummaryFailures failures
+  let _ = reportEffectSummaryFailures outcome.esoFailures
+  map
+    ((member, w) => (
+      member,
+      AuthResidual {
+        arLower = w.awLower,
+        arUpper = w.awUpper,
+        arExact = w.awExact,
+      },
+    ))
+    outcome.esoResiduals
 
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
 reportEffectSummaryFailures [] = ()
@@ -1047,7 +1071,12 @@ reportEffectSummaryFailures (failure :: rest) =
         pushTypeErrorAt
           "T-AUTHORITY"
           !currentLoc
-          (authorityFailureMsg fn lo hi failure.esfWrittenUpper)
+          (authorityFailureMsg
+            fn
+            failure.esfResidualOf
+            lo
+            hi
+            failure.esfWrittenUpper)
     None =>
       perRun.value.rowFailureReportedRef :=
         omInsert fn () perRun.value.rowFailureReportedRef.value
@@ -1143,9 +1172,23 @@ effectRowRoots row roots =
     roots
     (snd (rowFlat row))
 
-finishValueEffects : List Mono -> Unit
-finishValueEffects monos =
-  finishEffectSummaryScope
+-- Close a local binding scope over [members]: whether each generalizes, and
+-- its type.  Joins recorded in the scope are decided first when a member
+-- generalizes, since its type must not generalize over an undecided join;
+-- otherwise they belong to the enclosing scope, where later uses of the
+-- alternatives can still shape them.  Everything the close reads (roots,
+-- quantifiable authorities) is taken after that.
+finishValueEffectsKeeping : List (Bool, Mono) -> List (Int, AuthResidual)
+finishValueEffectsKeeping members =
+  let level = perRun.value.currentLevel.value
+  let _ =
+    if anyList fst members then
+      settlePendingJoins level
+    else
+      postponePendingJoins level
+  let monos = map snd members
+  finishEffectSummaryScopeKeeping
+    (quantifiableOf members)
     (fold (acc mono => effectRoots mono acc) Tip monos)
     (fold (acc mono => borrowedEffectCells mono acc) Tip monos)
 
@@ -1195,6 +1238,7 @@ authRowRoots row roots =
 
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectContract (saved, savedAuths) =
+  let _ = resolvePendingJoins perRun.value.currentLevel.value
   let _ = finishEffectSummaryScope Tip Tip
   perRun.value.rigidEffvarsRef := saved
   perRun.value.rigidAuthvarsRef := savedAuths
@@ -7932,7 +7976,7 @@ methodReturnRequest row occurrence subst goalEv =
   let loc = !currentLoc
   let scope = captureScope ()
   let qualifiedBody = match row.msrScheme
-    Forall _ _ _ _ body =>
+    Forall _ _ _ _ _ body =>
       substMono subst.misTypeSubst subst.misEffectSubst subst.misAuthSubst body
   MethodReturnRequest {
     mrrIface = row.msrIface,
@@ -8293,6 +8337,8 @@ data MethodInstantiationSubst = MethodInstantiationSubst {
 data MethodTrackedInstantiation = MethodTrackedInstantiation {
   mtiBody : Mono,
   mtiForce : EffRow,
+  -- the scheme's residual obligations under this occurrence's substitution
+  mtiResidual : List AuthResidual,
   mtiSubstitution : MethodInstantiationSubst,
 }
 
@@ -9622,7 +9668,7 @@ currentMethodMismatch = Ref None
 export
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
-  Some (Forall _ _ _ _ t) => match headMonoNode t
+  Some (Forall _ _ _ _ _ t) => match headMonoNode t
     TCon "Async" (OriginModule "async") => True
     _ => False
   None => False
@@ -9634,7 +9680,7 @@ mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
 export
 mainAsyncPayloadIsUnit : Unit -> Bool
 mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
-  Some (Forall _ _ _ _ t) => match normalize t
+  Some (Forall _ _ _ _ _ t) => match normalize t
     TApp _ payload => match normalize payload
       TCon "Unit" _ => True
       _ => False
@@ -9649,7 +9695,7 @@ mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
 export
 mainTypeIsUnit : Unit -> Bool
 mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
-  Some (Forall _ _ _ _ t) => match normalize t
+  Some (Forall _ _ _ _ _ t) => match normalize t
     TCon "Unit" _ => True
     _ => False
   None => False
@@ -9661,7 +9707,7 @@ mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
 export
 mainTypeIsFloat : Unit -> Bool
 mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
-  Some (Forall _ _ _ _ t) => match normalize t
+  Some (Forall _ _ _ _ _ t) => match normalize t
     TCon "Float" _ => True
     _ => False
   None => False
@@ -10673,6 +10719,16 @@ pushNumlit e =
 -- still one Ref-write, not a whole-record rebuild.)
 -- (#158 PR4 extracted shadowHeadCtxRef OUT of here into `Toggles`; its resetState clearing is
 -- preserved by freshToggles being minted in the same resetState — see resetState below.)
+-- A produced-value join recorded before any alternative had a shape: the
+-- variable standing for its result, the alternatives, the inference level it
+-- was recorded at, and the join's services.
+data PendingJoin = PendingJoin {
+  pjResult : Mono,
+  pjValues : List (Option Loc, Mono),
+  pjLevel : Int,
+  pjOps : ValueJoinOps (Option Loc),
+}
+
 data PerRun = PerRun {
   currentScope : Ref ScopeCursor,
   -- True while an IMPL or DEFAULT method body is being inferred — the scope in
@@ -10685,6 +10741,9 @@ data PerRun = PerRun {
   admittedOccObls : Ref (List (String, Mono, Option Loc)),
   curEffect : Ref (List EffRow),
   effectSummaries : SummarySolver (Option Loc, String),
+  -- joins of alternatives that had no shape yet, newest first, decided when
+  -- the binding scope they were recorded in closes (`resolvePendingJoins`)
+  pendingJoinsRef : Ref (List PendingJoin),
   rigidEffvarsRef : Ref (Map Int Unit),
   rigidAuthvarsRef : Ref (Map Int Unit),
   -- Effect provenance: for each (binding, label key), the first site in that
@@ -10823,6 +10882,7 @@ freshPerRun _ = PerRun {
   admittedOccObls = Ref [],
   curEffect = Ref [],
   effectSummaries = EffectSolver.newSolver (),
+  pendingJoinsRef = Ref [],
   rigidEffvarsRef = Ref Tip,
   rigidAuthvarsRef = Ref Tip,
   effectSitesRef = Ref omEmpty,
@@ -11130,10 +11190,16 @@ wantAuthority lower upper = wantAuthorityWith False lower upper
 -- [exact]: this obligation is one half of an index equality, so its failure
 -- is reported as an index mismatch, once for both halves.
 wantAuthorityWith : Bool -> Authority -> Authority -> Unit
-wantAuthorityWith exact lower upper
+wantAuthorityWith exact lower upper = wantAuthorityFrom None exact lower upper
+
+-- [origin]: the binding whose scheme carried this obligation as a residual,
+-- when it is one re-emitted at a use of that binding.
+wantAuthorityFrom : Option String -> Bool -> Authority -> Authority -> Unit
+wantAuthorityFrom origin exact lower upper
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
-    EffectSolver.recordAuthority
+    EffectSolver.recordAuthorityFrom
       perRun.value.effectSummaries
+      origin
       exact
       (!currentLoc, perRun.value.currentFn.value)
       (authNorm lower)
@@ -11145,7 +11211,7 @@ wantAuthorityWith exact lower upper
       if exact then
         reportIndexFailure !currentLoc lower upper
       else
-        reportAuthorityFailure !currentLoc lower upper
+        reportAuthorityFailure !currentLoc origin lower upper
 
 -- Outside a scope, a flexible upper variable takes the lower bound as its
 -- solution, widened as the scoped solver widens a solution
@@ -11202,12 +11268,21 @@ widenOpenedFor level q =
       (authVars q)
   substAuth asub q
 
-reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
-reportAuthorityFailure loc lower upper =
+reportAuthorityFailure : Option Loc ->
+  Option String ->
+  Authority ->
+  Authority ->
+  Unit
+reportAuthorityFailure loc origin lower upper =
   pushTypeErrorAt
     "T-AUTHORITY"
     loc
-    (authorityFailureMsg perRun.value.currentFn.value lower upper (Some upper))
+    (authorityFailureMsg
+      perRun.value.currentFn.value
+      origin
+      lower
+      upper
+      (Some upper))
 
 -- Both halves of one index equality render the same message (the two terms
 -- in one order), so the second is the same (code, span, message) and is
@@ -11235,17 +11310,36 @@ authorityTermText q =
 -- flexible variable that this binding's other uses determined — the remedy
 -- is to make every use lie within one bound, since nothing was written.
 authorityFailureMsg : String ->
+  Option String ->
   Authority ->
   Authority ->
   Option Authority ->
   String
-authorityFailureMsg name lower upper written =
+authorityFailureMsg name origin lower upper written =
   let lo =
     if authIsTop lower then
       "the whole domain"
     else
       ppAuthority (Ref []) (Ref 0) lower
   let hi = ppAuthority (Ref []) (Ref 0) upper
+  match origin
+    Some callee => residualFailureMsg callee lo hi
+    None => boundFailureMsg name lower lo hi upper written
+
+-- A residual of [callee]'s inferred scheme that this use does not satisfy:
+-- the relation is the callee's, so the bound is not one this binding wrote.
+residualFailureMsg : String -> String -> String -> String
+residualFailureMsg callee lo hi =
+  "'\{callee}' needs \{lo} to lie within \{hi} here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it"
+
+boundFailureMsg : String ->
+  Authority ->
+  String ->
+  String ->
+  Authority ->
+  Option Authority ->
+  String
+boundFailureMsg name lower lo hi upper written =
   if mentionsOpened upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
   else if authHasVars upper then
@@ -11633,22 +11727,28 @@ bindOutsideDoMsg =
 -- no defaulting, since the cells are shared with schemes already published
 -- and a default written here would rewrite them after the fact.
 generalize : Mono -> Scheme
-generalize t = quantifyFree pureRow t
+generalize t = quantifyFree [] pureRow t
 
 -- [declared] are the authority cells a written signature binds: rigid through
--- the body and published as written, never defaulted.
-generalizeBindingDeclared : Map Int Unit -> EffRow -> Mono -> Scheme
-generalizeBindingDeclared declared force t =
+-- the body and published as written, never defaulted.  [residual] are the
+-- obligations the binding's scope kept over its own quantified authorities.
+generalizeBindingDeclared : Map Int Unit ->
+  List AuthResidual ->
+  EffRow ->
+  Mono ->
+  Scheme
+generalizeBindingDeclared declared residual force t =
   let _ = defaultDeferredPatLitsIn perRun.value.currentLevel.value t
   let _ = defaultSourcelessAuthorities declared force t
-  quantifyFree force t
+  quantifyFree residual force t
 
-quantifyFree : EffRow -> Mono -> Scheme
-quantifyFree force t =
+quantifyFree : List AuthResidual -> EffRow -> Mono -> Scheme
+quantifyFree residual force t =
   Forall
     (dedupI (freeGenVars perRun.value.currentLevel.value t))
     (dedupI (freeEffvars t ++ rowFreeEffvars force))
     (dedupI (freeAuthvars t ++ rowFreeAuthvars force))
+    residual
     force
     t
 
@@ -11848,16 +11948,28 @@ lowerToCurrent t = match normalize t
 
 -- Generalize a value RHS; value-restrict (monomorphize, lowering free vars)
 -- otherwise.  monoScheme leaves the mono ungeneralized.
-genRestricted : Bool -> Mono -> Scheme
-genRestricted isValue t = genBindingRestricted Tip isValue pureRow t
-
-genBindingRestricted : Map Int Unit -> Bool -> EffRow -> Mono -> Scheme
-genBindingRestricted declared isValue force t
-  | isValue = generalizeBindingDeclared declared force t
+genBindingRestricted : Map Int Unit ->
+  List AuthResidual ->
+  Bool ->
+  EffRow ->
+  Mono ->
+  Scheme
+genBindingRestricted declared residual isValue force t
+  | isValue = generalizeBindingDeclared declared residual force t
   | otherwise =
     let _ = lowerToCurrent t
     let _ = lowerRowLevels perRun.value.currentLevel.value force
-    Forall [] [] [] force t
+    -- a binding that turns out monomorphic after its scope kept residuals
+    -- (a local pinned for dictionary forwarding) owes them where it lives
+    let _ =
+      fold
+        (_ r =>
+          let _ = lowerAuthLevels perRun.value.currentLevel.value r.arLower
+          let _ = lowerAuthLevels perRun.value.currentLevel.value r.arUpper
+          wantAuthorityWith r.arExact r.arLower r.arUpper)
+        ()
+        residual
+    Forall [] [] [] [] force t
 
 freeGenVars : Int -> Mono -> List Int
 freeGenVars lvl t = match normalize t
@@ -11885,7 +11997,7 @@ dedupIGo (x :: xs) seen result =
     dedupIGo xs (IdMap.set x () seen) (x :: result)
 
 instantiate : Scheme -> Mono
-instantiate (Forall ids evars avars _ t) =
+instantiate (Forall ids evars avars _ _ t) =
   substMono
     (freshSubst ids)
     (freshEffSubst evars)
@@ -11897,7 +12009,7 @@ instantiate (Forall ids evars avars _ t) =
 -- arm may relate values by and never solve — and parked for the pattern
 -- site (`takePatLits`/`settlePatLits`), which decides whether it may open one.
 instantiateCtorPattern : Scheme -> Mono
-instantiateCtorPattern (Forall ids evars avars _ t) =
+instantiateCtorPattern (Forall ids evars avars _ _ t) =
   let (asub, opened) = freshAuthSubstOpening avars t
   let _ = openExistentials opened
   substMono (freshSubst ids) (freshEffSubst evars) asub t
@@ -12403,6 +12515,7 @@ sigToSchemeTvsIn scope ty = atSignature ty (_ =>
       (map monoTyvarId (map snd tvs))
       (map effvarIdOf etbl.svRows)
       (map authvarIdOf etbl.svAuths)
+      []
       (bindingForceFromAst etbl ty)
       (fromAstTypeE etbl tvs ty),
     tvs,
@@ -13617,7 +13730,7 @@ envAlphaLets : TcEnv -> List (String, AlphaBinder)
 envAlphaLets (TcEnv _ _ al _) = al
 
 monoScheme : Mono -> Scheme
-monoScheme t = Forall [] [] [] pureRow t
+monoScheme t = Forall [] [] [] [] pureRow t
 
 -- ── pattern inference: returns the pattern's type + the bindings it adds ───
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
@@ -14147,7 +14260,7 @@ inferMethodCandidateAt env name arityRef tagRef implRef methodRef =
           let _ = recordArgSiteFn name idx occurrence
           occurrence
         None => recordSite env name s tagRef implRef methodRef occurrence subst
-      let _ = forceInstantiation inst
+      let _ = forceInstantiation name inst
       ret
 -- C5: if [name] is a standalone-shadow method, record its discriminating-arg
 -- mono cell UNGATED so resolveRLocalSites can route RLocal when the receiver
@@ -14587,7 +14700,7 @@ inferDictAt : TcEnv -> String -> EvId -> Mono
 inferDictAt env name ev = match lookupVar env name
   None => panic ("unbound constrained fn: " ++ name)
   Some scheme =>
-    let inst = instantiateValueTracked scheme
+    let inst = instantiateValueTracked name scheme
     let occurrence = (inst.mtiBody, inst.mtiSubstitution.misTypeSubst)
     match bindingDeclaredAt env name inst
       Some dc => inferDeclaredDictAt ev dc occurrence
@@ -14990,13 +15103,21 @@ instantiateTracked scheme =
   (inst.mtiBody, inst.mtiSubstitution.misTypeSubst)
 
 instantiateMethodTracked : Scheme -> MethodTrackedInstantiation
-instantiateMethodTracked (Forall ids evars avars force body) =
+instantiateMethodTracked (Forall ids evars avars residual force body) =
   let typeSubst = freshSubst ids
   let effectSubst = freshEffSubst evars
   let authSubst = freshAuthSubstFor avars body force
   MethodTrackedInstantiation {
     mtiBody = substMono typeSubst effectSubst authSubst body,
     mtiForce = substRow effectSubst authSubst force,
+    mtiResidual =
+      map
+        (r => AuthResidual {
+          arLower = substAuth authSubst r.arLower,
+          arUpper = substAuth authSubst r.arUpper,
+          arExact = r.arExact,
+        })
+        residual,
     mtiSubstitution = MethodInstantiationSubst {
       misTypeSubst = typeSubst,
       misEffectSubst = effectSubst,
@@ -15004,17 +15125,24 @@ instantiateMethodTracked (Forall ids evars avars force body) =
     },
   }
 
--- Only term occurrences incur the forcing row. Type probes, constructor
--- patterns and dictionary elaboration use effect-neutral instantiation.
-forceInstantiation : MethodTrackedInstantiation -> Mono
-forceInstantiation inst =
+-- Only term occurrences incur the forcing row and the scheme's residual
+-- obligations, which become obligations of the using scope. Type probes,
+-- constructor patterns and dictionary elaboration use effect-neutral
+-- instantiation.
+forceInstantiation : String -> MethodTrackedInstantiation -> Mono
+forceInstantiation name inst =
   let _ = performEffect perRun.value.curEffect inst.mtiForce
+  let _ =
+    fold
+      (_ r => wantAuthorityFrom (Some name) r.arExact r.arLower r.arUpper)
+      ()
+      inst.mtiResidual
   inst.mtiBody
 
-instantiateValueTracked : Scheme -> MethodTrackedInstantiation
-instantiateValueTracked scheme =
+instantiateValueTracked : String -> Scheme -> MethodTrackedInstantiation
+instantiateValueTracked name scheme =
   let inst = instantiateMethodTracked scheme
-  let _ = forceInstantiation inst
+  let _ = forceInstantiation name inst
   inst
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
@@ -15462,7 +15590,7 @@ blockRecLet env x xloc e =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
-  let t1 = inferRecursiveValue env x e
+  let (t1, residuals) = inferRecursiveValue env x e
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -15475,7 +15603,12 @@ blockRecLet env x xloc e =
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (block rec-let bypasses inferPat)
   let sch =
-    genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
+    genBindingRestricted
+      Tip
+      (residualsOf 0 residuals)
+      (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1))
+      pureRow
+      t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   seedAlphaLets (extendLocalVar env x sch) x e  -- WS-2: α scope-seed
 
@@ -15487,7 +15620,7 @@ blockLet env (PVar x xloc) e =
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let t = infer env e
-  let _ = finishValueEffects [t]
+  let residuals = finishValueEffectsKeeping [(isNonexpansive env e, t)]
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -15500,9 +15633,12 @@ blockLet env (PVar x xloc) e =
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x (Some xloc) t  -- LSP hover (block let bypasses inferPat)
   let sch =
-    genRestricted
+    genBindingRestricted
+      Tip
+      (residualsOf 0 residuals)
       (isNonexpansive env e
         && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t))
+      pureRow
       t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
@@ -17625,7 +17761,7 @@ instantiateVarTrackedWithSubst : TcEnv ->
   MethodTrackedInstantiation
 instantiateVarTrackedWithSubst env x id s = match bindingDeclared env x
   Some _ =>
-    let inst = instantiateValueTracked s
+    let inst = instantiateValueTracked x s
     let _ = match bindingDeclaredAt env x inst
       Some dc => recordDeclaredBindingCall dc inst.mtiSubstitution.misTypeSubst
       None => ()
@@ -17639,7 +17775,7 @@ instantiateLegacyVarTracked : String ->
 instantiateLegacyVarTracked x id s =
   match lookupSchemeObls x id perRun.value.schemeObligationsRef.value
     Some obs =>
-      let inst = instantiateValueTracked s
+      let inst = instantiateValueTracked x s
       let _ =
         recordSchemeCallObligations id obs inst.mtiSubstitution.misTypeSubst
       inst
@@ -17650,11 +17786,11 @@ instantiateLegacyVarTracked x id s =
     -- with no Display while `run`/`build` (dict elaboration is a separate net) rejected.
     None => match declaredCrossModuleObls x
       Some obs =>
-        let inst = instantiateValueTracked s
+        let inst = instantiateValueTracked x s
         let _ =
           recordSchemeCallObligations id obs inst.mtiSubstitution.misTypeSubst
         inst
-      None => instantiateValueTracked s
+      None => instantiateValueTracked x s
 
 -- #673: the declared call obligations of a CROSS-MODULE constrained binding [x] used as a
 -- plain EVar, in schemeObligations shape (`(iface, quantified-var-id VECTOR)` list) so the
@@ -19650,7 +19786,7 @@ instantiateStandaloneOccurrence : TcEnv ->
   SelectedValueOccurrence
 instantiateStandaloneOccurrence env name sym origin value =
   currentLoc := origin
-  let inst = instantiateValueTracked value.vsScheme
+  let inst = instantiateValueTracked name value.vsScheme
   let declared = declaredEffectsAt inst value.vsDeclared
   let _ = match declared
     Some dc => recordDeclaredBindingCall dc inst.mtiSubstitution.misTypeSubst
@@ -19924,6 +20060,7 @@ shadowVarHeadMethodScheme env name f =
     -- second lookup that could disagree.
     Some (_, _, ty, scope) =>
       forceInstantiation
+        name
         (instantiateMethodTracked (fst (sigToSchemeTvsIn scope ty)))
     None =>
       -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
@@ -20640,7 +20777,7 @@ inferRecLet env x xloc e1 e2 =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
-  let t1 = inferRecursiveValue env x e1
+  let (t1, residuals) = inferRecursiveValue env x e1
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -20653,13 +20790,23 @@ inferRecLet env x xloc e1 e2 =
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (recursive PVar let bypasses inferPat)
   let sch =
-    genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
+    genBindingRestricted
+      Tip
+      (residualsOf 0 residuals)
+      (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1))
+      pureRow
+      t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 
 -- Recursive local bindings are strict. Their initializer is charged here;
 -- recursive occurrences read only the value, never a lazy forcing descriptor.
-inferRecursiveValue : TcEnv -> String -> Expr -> Mono
+-- A recursive local is a function, so it generalizes, and its scope keeps
+-- residuals over its own quantified authorities.
+inferRecursiveValue : TcEnv ->
+  String ->
+  Expr ->
+  (Mono, List (Int, AuthResidual))
 inferRecursiveValue env name expr =
   let _ = beginEffectSummaryScope ()
   let arity = sourceBindingArity expr
@@ -20674,9 +20821,9 @@ inferRecursiveValue env name expr =
   else
     bodyRowAt arity actual)
   let _ = checkRecursiveValue owned
-  let _ = finishValueEffects [owned.bsValue]
+  let residuals = finishValueEffectsKeeping [(True, owned.bsValue)]
   let _ = performEffect perRun.value.curEffect immediate
-  owned.bsValue
+  (owned.bsValue, residuals)
 
 -- Source arity is the count of syntactic lambda parameters under the transparent
 -- wrappers; every other expression is a computation that yields its value when
@@ -20739,7 +20886,8 @@ inferLetSimple env pat e1 e2 =
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
   let t1 = infer env e1
-  let _ = finishValueEffects [t1]
+  let residuals =
+    finishValueEffectsKeeping [(patIsVar pat && isNonexpansive env e1, t1)]
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground an ambiguous Num-only var owned by this inner let
   -- before it generalizes, so `let z = 2 in y + z` (y:Float) is a clean type
@@ -20753,19 +20901,35 @@ inferLetSimple env pat e1 e2 =
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
   }
-  inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0
+  inferLetBody env pat t1 residuals e1 e2 oblN0 callN0 dictN0
 
-inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
-inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
+patIsVar : Pat -> Bool
+patIsVar (PVar _ _) = True
+patIsVar _ = False
+
+inferLetBody : TcEnv ->
+  Pat ->
+  Mono ->
+  List (Int, AuthResidual) ->
+  Expr ->
+  Expr ->
+  Int ->
+  Int ->
+  Int ->
+  Mono
+inferLetBody env (PVar x xloc) t1 residuals e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x (Some xloc) t1  -- LSP hover (PVar let bypasses inferPat)
   let sch =
-    genRestricted
+    genBindingRestricted
+      Tip
+      (residualsOf 0 residuals)
       (isNonexpansive env e1
         && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1))
+      pureRow
       t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
-inferLetBody env pat t1 _ e2 _ _ _ =
+inferLetBody env pat t1 _ _ e2 _ _ _ =
   let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t1
@@ -20787,7 +20951,14 @@ joinValueTypes context values =
     (joinProduced (valueJoinOps context (collectRows joinCellOf)) values)
 
 valueJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
-valueJoinOps context collector = ValueJoinOps {
+valueJoinOps context collector =
+  let ops = decidingJoinOps context collector
+  { ops | vjoDefer = values => deferJoin ops values }
+
+-- The join services that decide on the spot: resolving a recorded join
+-- must not record it again.
+decidingJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
+decidingJoinOps context collector = ValueJoinOps {
   vjoEqual = joinValueEqual context,
   vjoCovariants = producedSlotCovariants,
   vjoFreshType = freshVar,
@@ -20795,7 +20966,127 @@ valueJoinOps context collector = ValueJoinOps {
   vjoCollectRows = collector,
   vjoFreshAuth = top => AVar (freshAuthvar top None),
   vjoCollectAuth = collectAuthAllowance,
+  vjoDefer = _ => None,
 }
+
+-- Alternatives with no shape yet (`if c then f else g` over two parameters)
+-- are not equated: equality would give both the same latent row before a
+-- later use shapes one of them.  Inside a binding scope the join is recorded
+-- and decided when the scope closes (§6.8); outside one it is decided now.
+deferJoin : ValueJoinOps (Option Loc) -> List (Option Loc, Mono) -> Option Mono
+deferJoin ops values =
+  if EffectSolver.hasSummaryScope perRun.value.effectSummaries
+    && distinctVariables values then
+    let result = freshVar ()
+    perRun.value.pendingJoinsRef :=
+      PendingJoin {
+          pjResult = result,
+          pjValues = values,
+          pjLevel = perRun.value.currentLevel.value,
+          pjOps = ops,
+        }
+        :: perRun.value.pendingJoinsRef.value
+    Some result
+  else
+    None
+
+-- At least two different unshaped alternatives: a single alternative, or one
+-- variable met on every branch, has nothing to join.
+distinctVariables : List (Option Loc, Mono) -> Bool
+distinctVariables values =
+  let roots =
+    fold
+      (acc (_, value) => match normalize value
+        TVar cell => IdMap.set (tyvarId cell) () acc
+        _ => acc)
+      Tip
+      values
+  listLen (IdMap.keys roots) >= 2
+
+-- Decide every join recorded at this level or deeper: the ones the closing
+-- scope owns, which sit at the front of the list.  A top-level group decides
+-- all of its joins, since the routes of the methods it uses are fixed when it
+-- closes.  Newest first, so an outer join shapes its alternatives before an
+-- inner join whose result is one of them is decided from that shape.
+resolvePendingJoins : Int -> Unit
+resolvePendingJoins level = match perRun.value.pendingJoinsRef.value
+  pj :: rest =>
+    if pj.pjLevel >= level then
+      perRun.value.pendingJoinsRef := rest
+      let _ = resolvePendingJoin pj
+      resolvePendingJoins level
+  [] => ()
+
+-- Settle the joins a local binding scope recorded before the binding
+-- generalizes.  A join whose alternatives are all still unshaped variables of
+-- an enclosing level (the enclosing function's parameters) is handed to the
+-- enclosing scope, its result lowered to that level so the binding cannot
+-- generalize over it, exactly as equating it with those variables would; a
+-- later use there may still shape an alternative.  Any other join is decided
+-- now.
+settlePendingJoins : Int -> Unit
+settlePendingJoins level =
+  let postponed = settlePending level []
+  perRun.value.pendingJoinsRef :=
+    reverseL postponed ++ perRun.value.pendingJoinsRef.value
+
+settlePending : Int -> List PendingJoin -> List PendingJoin
+settlePending level postponed = match perRun.value.pendingJoinsRef.value
+  pj :: rest =>
+    if pj.pjLevel >= level then
+      perRun.value.pendingJoinsRef := rest
+      if joinOfOuterVariables level pj then
+        let _ = lowerTyvarLevel (level - 1) pj.pjResult
+        settlePending level ({ pj | pjLevel = level - 1 } :: postponed)
+      else
+        let _ = resolvePendingJoin pj
+        settlePending level postponed
+    else
+      postponed
+  [] => postponed
+
+joinOfOuterVariables : Int -> PendingJoin -> Bool
+joinOfOuterVariables level pj =
+  isOuterVariable level pj.pjResult
+    || isUnshaped pj.pjResult
+      && allList (value => isOuterVariable level (snd value)) pj.pjValues
+
+isUnshaped : Mono -> Bool
+isUnshaped t = match normalize t
+  TVar _ => True
+  _ => False
+
+isOuterVariable : Int -> Mono -> Bool
+isOuterVariable level t = match normalize t
+  TVar cell => tyvarLevel cell < level
+  _ => False
+
+lowerTyvarLevel : Int -> Mono -> Unit
+lowerTyvarLevel level t = match normalize t
+  TVar cell => match !cell
+    Unbound id old => if old > level then cell := Unbound id level
+    Link _ => ()
+  _ => ()
+
+-- A scope whose bindings do not generalize hands its recorded joins to the
+-- enclosing scope.
+postponePendingJoins : Int -> Unit
+postponePendingJoins level =
+  perRun.value.pendingJoinsRef :=
+    lowerPending level perRun.value.pendingJoinsRef.value
+
+lowerPending : Int -> List PendingJoin -> List PendingJoin
+lowerPending level (pj :: rest)
+  | pj.pjLevel >= level =
+    { pj | pjLevel = level - 1 } :: lowerPending level rest
+lowerPending _ pending = pending
+
+resolvePendingJoin : PendingJoin -> Unit
+resolvePendingJoin pj =
+  let joined = resolveDeferredJoin pj.pjOps pj.pjResult pj.pjValues
+  match normalize pj.pjResult
+    TVar _ => unify pj.pjResult joined
+    _ => unifyInto True pj.pjResult joined
 
 -- A receiving qualified slot's allowance: one flexible variable of the
 -- current scope, bounded below by every value that reaches the slot.
@@ -21205,7 +21496,7 @@ recPatFieldOpens env (RecPatField _ _ (Some p)) = patOpensExistentials env p
 recPatFieldOpens _ _ = False
 
 ctorHasExistentials : Option Scheme -> Bool
-ctorHasExistentials (Some (Forall _ _ avars _ _)) = anyExistential avars
+ctorHasExistentials (Some (Forall _ _ avars _ _ _)) = anyExistential avars
 ctorHasExistentials None = False
 
 recordHasExistentials : Option RecordInfo -> Bool
@@ -22279,6 +22570,7 @@ addVariants env tvs etbl paramTyIds rowEffvarIds authvarIds result ((Variant cna
         paramTyIds
         rowEffvarIds
         (authvarIds ++ map (c => authvarId (snd c)) opened)
+        []
         pureRow
         ctorType)
   addVariants env2 tvs etbl paramTyIds rowEffvarIds authvarIds result rest brest
@@ -22574,7 +22866,9 @@ processLetGroup env binds =
   let env2 = extendLocalVars env recursive
   let _ = inferLetBinds env2 (zipL binds summaries)
   let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
-  let _ = finishValueEffects (map (p => (snd p).bsValue) summaries)
+  let residuals =
+    finishValueEffectsKeeping
+      (map (letBindGeneralizes env) (zipL binds summaries))
   let _ = flushPendingEscapes ()
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
@@ -22605,7 +22899,8 @@ processLetGroup env binds =
   -- explanatory note cannot disagree about a binding.
   let pinned = localPinIds callN0 dictN0
   let notePairs = localPinPairs callN0 dictN0
-  let genv = generalizeGroup env pinned notePairs (zipL binds placeholders)
+  let genv =
+    generalizeGroup env pinned notePairs residuals 0 (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
   -- registered NOTHING in schemeObligationsRef — only top-level SCCs did — so a
@@ -22634,6 +22929,13 @@ processLetGroup env binds =
       (groupSchemesOf genv binds)
   genv
 
+-- Whether a where/let group member generalizes, and its type.
+letBindGeneralizes : TcEnv ->
+  (LetBind, (String, BindingSummary)) ->
+  (Bool, Mono)
+letBindGeneralizes env (LetBind _ clauses, (_, summary)) =
+  (clausesAreValue env clauses, summary.bsValue)
+
 -- the generalized (name, scheme) pairs of a just-closed local group
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
 groupSchemesOf _ [] = []
@@ -22659,7 +22961,7 @@ inferLetBinds env ((LetBind _ clauses, (_, owned)) :: rest) =
   inferLetBinds env rest
 
 schemeMono : Scheme -> Mono
-schemeMono (Forall _ _ _ _ t) = t
+schemeMono (Forall _ _ _ _ _ t) = t
 
 -- Phase / GAP-2 phase-a: the tyvar ids that some ARG-position method occurrence
 -- discriminates on (the receiver monos queued in pendingArgStamps).  A where-helper
@@ -22889,10 +23191,10 @@ opSiteIdPairs (PendingEntry _ _ m _ (SKNumReturn _ _) _ _ _)
 opSiteIdPairs _ = []
 
 -- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
--- `where`/`let`-GROUP site processLetGroup, and the four genRestricted sites via
+-- `where`/`let`-GROUP site processLetGroup, and the four genBindingRestricted sites via
 -- pinLocalIfDictForwarded) consult exactly this, so one judgment is made in one place.
 -- Before this slice the group site unioned the two METHOD channels in while the four
--- genRestricted sites saw the DICT channel alone: a semantically null `where`→`let`
+-- genBindingRestricted sites saw the DICT channel alone: a semantically null `where`→`let`
 -- respelling of the same program changed which predicate ran, and so changed the answer
 -- (#1052).  Rung 1 makes the five agree; WHAT the agreed answer should be is rung 2's
 -- question, not this predicate's.
@@ -22920,18 +23222,18 @@ opSiteIdPairs _ = []
 -- read site, and it means the pin decision and the explanatory note cannot disagree
 -- about a binding even in principle.  At the group site this is a re-view of the set
 -- that was already computed
--- there, not a widening of it; the widening is at the four genRestricted sites, which
+-- there, not a widening of it; the widening is at the four genBindingRestricted sites, which
 -- previously saw the dict channel alone.
 --
 -- ⚠️ The two method channels are UNWINDOWED module-wide reads, which is what makes them
 -- entry-point-neutral and is required (a helper's pin must see dispatch sites anywhere
 -- in the module).  At the group site that cost is paid once per GROUP; at the four
--- genRestricted sites it is once per BINDING.  See the report Notes for #1986 rung 1.
+-- genBindingRestricted sites it is once per BINDING.  See the report Notes for #1986 rung 1.
 -- #2445 S-1 — THE TEST-ONLY UNPIN HATCH, and the slice's ONE hatch-read site.
 --
 -- ARMED only by `setLocalPinDisabled True`, which only `medaka_cli`'s `main` calls, and
 -- only when `MEDAKA_ARGTAG_UNPIN` is set to a NON-EMPTY value.  Armed, every channel is
--- dropped and NO local binding is pinned, so the four `genRestricted` sites and the
+-- dropped and NO local binding is pinned, so the four `genBindingRestricted` sites and the
 -- group site all generalize exactly as they would if the pin did not exist.  That makes
 -- the region `T-LOCAL-CONSTRAINED-MONO` currently masks (`docs/KNOWN-GAPS.md`, "Known
 -- over-reject") reachable for enumeration by
@@ -23694,10 +23996,12 @@ dropFirst n (_ :: xs) = dropFirst (n - 1) xs
 generalizeGroup : TcEnv ->
   List Int ->
   List (Int, String) ->
+  List (Int, AuthResidual) ->
+  Int ->
   List (LetBind, (String, Scheme)) ->
   TcEnv
-generalizeGroup env _ _ [] = env
-generalizeGroup env constrained dictPairs ((LetBind name clauses, (_, sch)) :: rest) =
+generalizeGroup env _ _ _ _ [] = env
+generalizeGroup env constrained dictPairs residuals index ((LetBind name clauses, (_, sch)) :: rest) =
   let mono = schemeMono sch
   let free = freeGenVars perRun.value.currentLevel.value mono
   -- #866: clausesLoc is the existing idiom for "where this group member is"
@@ -23723,11 +24027,20 @@ generalizeGroup env constrained dictPairs ((LetBind name clauses, (_, sch)) :: r
   -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
   -- alphaCollectBinds rule); a multi-clause / parameterized binding is not a
   -- known prefix.
-  let env1 = extendLocalVar env name (genRestricted isVal mono)
+  let env1 =
+    extendLocalVar
+      env
+      name
+      (genBindingRestricted
+        Tip
+        (residualsOf index residuals)
+        isVal
+        pureRow
+        mono)
   let env2 = match clauses
     [FunClause [] rhs] => seedAlphaLets env1 name rhs
     _ => env1
-  generalizeGroup env2 constrained dictPairs rest
+  generalizeGroup env2 constrained dictPairs residuals (index + 1) rest
 
 -- A where-clause binding is a value (generalizable) iff every clause has params
 -- (it's a function) or its zero-arg RHS is non-expansive.
@@ -36229,7 +36542,7 @@ isUnboundTvar m = match normalize m
 -- membership arm (generalized locals) is now the ENV is-local flag
 -- (`lookupLocalFlag`, §TcEnv), which is lexically scoped and cannot go stale.
 isMonoScheme : Scheme -> Bool
-isMonoScheme (Forall [] [] [] _ _) = True
+isMonoScheme (Forall [] [] [] _ _ _) = True
 isMonoScheme _ = False
 
 -- any member of [xs] present in [ys] (tiny per-method var lists)
@@ -38861,6 +39174,7 @@ processTopGroups env sigs defs names =
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   let result = processSCCs env sigs grouped ordered
+  let _ = resolvePendingJoins 0
   let _ =
     reportEffectSummaryFailures
       (EffectSolver.closeRootAuthorities
@@ -39098,8 +39412,10 @@ processSCC env sigs grouped0 members =
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
   let _ = inferMembers env2 sigs groupedStamped scopedMembers
   let _ = fold (_ member => checkRecursiveValue member.smOwned) () scopedMembers
-  let _ =
-    finishEffectSummaryScope
+  let _ = resolvePendingJoins perRun.value.currentLevel.value
+  let residuals =
+    finishEffectSummaryScopeKeeping
+      (quantifiableAuthorities env2 sigs groupedStamped scopedMembers)
       (fold (acc member => memberEffectRoots member acc) Tip scopedMembers)
       (fold
         (acc member => borrowedEffectCells member.smOwned.bsValue acc)
@@ -39137,7 +39453,14 @@ processSCC env sigs grouped0 members =
     nbAmbiguityObls = addedObls,
   }  -- RETPOS soundness
   let schemes =
-    sccSchemes env2 sigs groupedStamped (isLetrecGroup members) scopedMembers
+    sccSchemes
+      env2
+      sigs
+      groupedStamped
+      (isLetrecGroup members)
+      residuals
+      0
+      scopedMembers
   let scopedSchemes = alignScopedSchemes scopedMembers schemes
   let _ = checkSigsOverExpansive env2 groupedStamped sigTvMaps
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
@@ -39203,7 +39526,13 @@ scopedMemberBinding member =
   let binding =
     optionOr
       (ordinaryEnvBinding
-        (Forall [] [] [] (memberForce member) member.smOwned.bsRecursiveValue))
+        (Forall
+          []
+          []
+          []
+          []
+          (memberForce member)
+          member.smOwned.bsRecursiveValue))
       member.smRecursive.value
   (
     member.smName,
@@ -39332,7 +39661,7 @@ preunifySigsEx sigs (member :: rest) =
         authRowRoots (optionOr pureRow forceBound) (authRoots signedMono Tip)
       member.smForceBound := forceBound
       let (declaredScheme, declaredTvs) = sigToSchemeTvs ty
-      let (Forall ids eids aids declaredForce declaredValue) = declaredScheme
+      let (Forall ids eids aids _ declaredForce declaredValue) = declaredScheme
       let slots =
         declaredPredicateSlots
           (constraintVarIfaceMonos (sigConstraints ty) declaredTvs)
@@ -39347,6 +39676,7 @@ preunifySigsEx sigs (member :: rest) =
               ids
               eids
               aids
+              []
               (match forceBound
                 Some _ => declaredForce
                 None => optionOr pureRow member.smForce)
@@ -39991,21 +40321,74 @@ sccSchemes : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
   Bool ->
+  List (Int, AuthResidual) ->
+  Int ->
   List ScopedMember ->
   List (String, Scheme)
-sccSchemes _ _ _ _ [] = []
-sccSchemes env sigs grouped isLetrec (member :: rest) =
+sccSchemes _ _ _ _ _ _ [] = []
+sccSchemes env sigs grouped isLetrec residuals index (member :: rest) =
   let m = member.smName
   let isVal = allList (memberClauseIsValue env) (clausesOf m grouped)
   (
       m,
       genBindingRestricted
         member.smDeclaredAuths.value
+        (residualsOf index residuals)
         isVal
         (memberForce member)
         member.smMono,
     )
-    :: sccSchemes env sigs grouped isLetrec rest
+    :: sccSchemes env sigs grouped isLetrec residuals (index + 1) rest
+
+-- The authority variables each member of a group will quantify, keyed to the
+-- member's index: the argument-position authorities of an unsigned value
+-- member (`qualifierAuthIds`, the ones publication keeps).  A variable two
+-- members' types share is a recursive group's monomorphic link and is solved
+-- as before; a signed member publishes its signature, so it keeps none.
+quantifiableAuthorities : TcEnv ->
+  List (String, Ty) ->
+  OrdMap (List (List Pat, Expr)) ->
+  List ScopedMember ->
+  Map Int Int
+quantifiableAuthorities env sigs grouped members =
+  quantifiableOf
+    (map
+      (member => (
+        isNone (lookupAssoc member.smName sigs)
+          && allList
+            (memberClauseIsValue env)
+            (clausesOf member.smName grouped),
+        member.smMono,
+      ))
+      members)
+
+-- [members] in group order: whether each generalizes, and its type.
+quantifiableOf : List (Bool, Mono) -> Map Int Int
+quantifiableOf members =
+  let owners =
+    fold
+      ((acc, index) (generalizes, mono) =>
+        let ids =
+          if generalizes then IdMap.keys (qualifierAuthIds mono Tip) else []
+        (
+          fold
+            (m id => IdMap.set id (index :: optionOr [] (IdMap.get id m)) m)
+            acc
+            ids,
+          index + 1,
+        ))
+      (Tip, 0)
+      members
+  IdMap.foldlWithKey
+    (acc id indices => match indices
+      [index] => IdMap.set id index acc
+      _ => acc)
+    Tip
+    (fst owners)
+
+residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
+residualsOf index residuals =
+  flatMap ((owner, r) => if owner == index then [r] else []) residuals
 
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
@@ -41318,7 +41701,7 @@ firstMethodRow (row :: _) = row
 firstMethodRow [] = panic "method-row observer expected a row"
 
 schemeBodyOf : Scheme -> Mono
-schemeBodyOf (Forall _ _ _ _ body) = body
+schemeBodyOf (Forall _ _ _ _ _ body) = body
 
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
 methodSlotBoundIds slots = map (slot => slot.mpsPredicate.psBoundIds) slots
@@ -42251,7 +42634,7 @@ boundTyvarIds boundIds (d :: rest) = match normalize d
   _ => None
 
 schemeIds : Scheme -> List Int
-schemeIds (Forall ids _ _ _ _) = ids
+schemeIds (Forall ids _ _ _ _ _) = ids
 
 -- shatter vector obligations into (interface declaration, id) pairs — the currency of the
 -- coverage subset test.  See checkSigConstraintCoverage's header.
@@ -44266,7 +44649,7 @@ ambiguousImportBinding _ =
   let cell =
     Ref (Unbound ambiguousImportTyvarId perRun.value.currentLevel.value)
   ExportBinding {
-    xbScheme = Forall [ambiguousImportTyvarId] [] [] pureRow (TVar cell),
+    xbScheme = Forall [ambiguousImportTyvarId] [] [] [] pureRow (TVar cell),
     xbStandalone = None,
   }
 

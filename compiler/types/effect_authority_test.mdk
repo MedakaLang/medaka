@@ -1023,3 +1023,143 @@ test "an opened authority does not escape through the solve of an older variable
         (escapeByRow
           ++ "wide : Unit -> <Store> Int\nwide _ = peek (_ => 1) (pack ())\n")),
   ]
+
+-- #3462 (a): an unsigned binding keeps the obligations between its own
+-- quantified authorities (and constants) as residuals of its scheme; every
+-- use re-emits them under that use's instantiation.  Each refusal beside the
+-- control that satisfies the same relation.
+residualHead : String
+residualHead =
+  "data Dir (d : Authority Store) = Dir (String @d)\n"
+    ++ "mk : (s : String) -> Dir s\nmk s = Dir s\n"
+    ++ "sub : Dir d -> (p : String @d) -> Dir d\nsub h _ = h\n"
+    ++ "cfg : Dir \"cfg/*\"\ncfg = mk \"cfg/*\"\n"
+    ++ "app : Dir \"cfg/app\"\napp = mk \"cfg/app\"\n"
+    ++ "etc : Dir \"/etc/x\"\netc = mk \"/etc/x\"\n"
+    ++ "subIn h (Dir p) = sub h p\n"
+    ++ "rdSub h (Dir p) =\n  let _ = sub h p\n  load p\n"
+
+residual : String -> String
+residual body = residualHead ++ body
+
+test "a residual relates two quantified authorities and is checked at each use" = expectAll
+  [
+    expectEqual
+      "(a <= d) => Dir d -> Dir a -> Dir d"
+      (schemeOf residualHead "subIn"),
+    expectEqual
+      "(a <= d) => Dir d -> Dir a -> <Store a> Int"
+      (schemeOf residualHead "rdSub"),
+    expectTrue (accepts (residual "use _ = subIn cfg app\n")),
+    expectTrue (rejects (residual "use _ = subIn cfg etc\n")),
+    expectTrue (rejects (residual "use _ = subIn app cfg\n")),
+    expectTrue
+      (accepts
+        (residual
+          "cap : Unit -> <Store \"cfg/app\"> Int\ncap _ = rdSub cfg app\n")),
+    expectFalse
+      (accepts
+        (residual
+          "cap : Unit -> <Store \"cfg/*\"> Int\ncap _ = rdSub cfg etc\n")),
+  ]
+
+test "a residual names the binding whose scheme carried it" =
+  expectTrue
+    (anyList
+      (m => S.contains "'subIn' needs" m)
+      (messagesOf (residual "use _ = subIn cfg etc\n")))
+
+test "a residual may bound a variable by a join of two others" = expectAll [
+  expectEqual
+    "(d <= (a | b)) => Dir a -> Dir b -> Dir d -> Dir a"
+    (schemeOf
+      (residual
+        "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\n")
+      "either"),
+  expectTrue
+    (accepts
+      (residual
+        "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\nuse _ = either cfg etc app\n")),
+  expectTrue
+    (rejects
+      (residual
+        "sub2 : Dir a -> Dir b -> String @(a | b) -> Dir a\nsub2 h _ _ = h\neither h1 h2 (Dir p) = sub2 h1 h2 p\nuse _ = either cfg cfg etc\n")),
+]
+
+test "a residual may relate a quantified authority to a constant" = expectAll [
+  expectEqual
+    "(\"cfg/app\" <= d) => Dir d -> Dir d"
+    (schemeOf (residual "withApp h = sub h \"cfg/app\"\n") "withApp"),
+  expectTrue
+    (accepts (residual "withApp h = sub h \"cfg/app\"\nuse _ = withApp cfg\n")),
+  expectTrue
+    (rejects (residual "withApp h = sub h \"cfg/app\"\nuse _ = withApp etc\n")),
+  expectEqual
+    "(d <= \"cfg/*\") => Dir d -> Dir \"cfg/*\""
+    (schemeOf (residual "inCfg (Dir p) = sub cfg p\n") "inCfg"),
+  expectTrue
+    (accepts (residual "inCfg (Dir p) = sub cfg p\nuse _ = inCfg app\n")),
+  expectTrue
+    (rejects (residual "inCfg (Dir p) = sub cfg p\nuse _ = inCfg etc\n")),
+]
+
+test "a local binding keeps its residuals like a top-level one" = expectAll [
+  expectTrue
+    (accepts
+      (residual
+        "outer _ =\n  let inner h (Dir p) = sub h p\n  inner cfg app\n")),
+  expectTrue
+    (rejects
+      (residual
+        "outer _ =\n  let inner h (Dir p) = sub h p\n  inner cfg etc\n")),
+  expectTrue
+    (accepts (residual "outer _ =\n  let inner = subIn\n  inner cfg app\n")),
+  expectTrue
+    (rejects (residual "outer _ =\n  let inner = subIn\n  inner cfg etc\n")),
+]
+
+test "a signature cannot yet state a residual, so it stays refused" = expectAll
+  [
+    expectTrue
+      (rejects
+        (residual
+          "subInS : Dir d -> Dir q -> Dir d\nsubInS h (Dir p) = sub h p\n")),
+    expectTrue
+      (accepts
+        (residual
+          "subInS : Dir d -> Dir d -> Dir d\nsubInS h (Dir p) = sub h p\n")),
+  ]
+
+residualModuleCodes : String -> List String
+residualModuleCodes body =
+  flatMap
+    moduleCodes
+    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+      (
+        "dirs",
+        desugar
+          (parseLocated
+            ("public export data Dir (d : Authority Store) = Dir (String @d)\n"
+              ++ "export\nmk : (s : String) -> Dir s\nmk s = Dir s\n"
+              ++ "sub : Dir d -> (p : String @d) -> Dir d\nsub h _ = h\n"
+              ++ "export\nsubIn h (Dir p) = sub h p\n")),
+      ),
+      (
+        "entry",
+        desugar (parseLocated ("import dirs.{Dir(..), mk, subIn}\n" ++ body)),
+      ),
+    ])
+
+-- The handle is pinned by a signature: `mk "cfg/*"` alone is a handle at a
+-- flexible index, which the residual would honestly raise to the join.
+test "a residual crosses a module boundary with its scheme" = expectAll [
+  expectEqual
+    []
+    (residualModuleCodes
+      "cfg : Dir \"cfg/*\"\ncfg = mk \"cfg/*\"\nuse _ = subIn cfg (mk \"cfg/app\")\n"),
+  expectTrue
+    (contains
+      "T-AUTHORITY"
+      (residualModuleCodes
+        "cfg : Dir \"cfg/*\"\ncfg = mk \"cfg/*\"\nuse _ = subIn cfg (mk \"/etc/x\")\n")),
+]

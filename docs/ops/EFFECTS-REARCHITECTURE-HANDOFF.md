@@ -3,9 +3,11 @@
 **Status:** The arrow half (PR #3393, `f81ff1d9d`) and the data half (PR
 #3445, `ea782db98`) of #3385 are on `main`. The close-out session (branch
 `effects-closeout`, § "Close-out session") answers the data half's owed list,
-fixes #3304, pins #3327 and delivers item 7 (authority-indexed sockets); the
-two remaining checklist items have proposals awaiting ratification there. Handoff first recorded
-2026-09-24.
+fixes #3304, pins #3327 and delivers item 7 (authority-indexed sockets); it
+merged as PR #3458 (`e40f4b375`) and closed #3385. The successor session (§
+"Successor session") works the four successor issues, one PR each: #3462
+residual schemes and delayed joins, #3463 the invocation summary, #3464 prefix
+sets, #3465 prelude type shadowing. Handoff first recorded 2026-09-24.
 
 ## Resume here
 
@@ -944,6 +946,77 @@ without admitting anything the host can run.
   output, so an intended wording change moves `*.tc.golden` files, which no
   capture script regenerates; regenerate from the oracle and read the diff.
 
+## Successor session (2026-09-26)
+
+Branches from `e40f4b375` (the merge of PR #3458), one per successor issue.
+Val ruled on the close-out on 2026-09-26 (§ "Close-out session", "Val's
+rulings"); the open details of each issue were brought to her as one-page
+designs, built from reproduced research, and every recommended option was
+ratified the same day:
+
+- **#3462:** a residual may relate a quantified authority to a constant as
+  well as to another quantified authority (`withApp`, `inCfg`); a residual
+  renders in the `=>` context as `(p <= d) =>`, a join as `p <= (a | b)`,
+  which is also the natural proposal for the deferred written syntax. Row
+  variables and call-site joins through a generalized function are out.
+- **#3463 (with #3468):** a polarity-directed summary in a new
+  `types/effect_invocation.mdk`; an unknown slot is invariant, so charged; a
+  positive effect index is always charged (index variance deferred);
+  monomorphic constructor fields are descended; unresolved authority renders
+  as a TOML comment in the manifest and a "not proven" line in the policy; no
+  `--json`. Charges widen on #3468's shapes, which Val accepted.
+- **#3464:** an authority keeps an antichain of constants where the domain's
+  join is inexact (Prefix, Product; two Product tuples merge only when they
+  differ in exactly one Set axis); a variable's least solution is the set of
+  its lower bounds, refining the ruling's "join when solving" example; at most
+  16 members, a written bound past that is an error; performed rows keep sets;
+  the manifest renders a TOML array and the policy collects every entry of a
+  label; `("a/*" | "b/*" | p)` is accepted where a qualifier or index is
+  written.
+- **#3465:** a program's own type shadows a prelude type; a constructor spelled
+  like a prelude constructor stays refused, located and naming the prelude,
+  and gets its own issue; an import overrides the prelude silently;
+  interfaces and builtin heads are out; type declarations gain their name's
+  location; pre-resolve exhaustiveness prefers the module's own declarations.
+
+Filed while grounding, each reproduced on `main` first: #3466 (S0, `fmt`
+rewrites an unknown attribute to `@inline`), #3467 (S0, an attribute above a
+signature discards the signature: an ill-typed program passes check, run and
+build), #3468 (S0, `manifest`/`check-policy` never charge effect-indexed
+entries, positive positions in domains, tuples, monomorphic data fields or
+host-supplied cells; #3463's PR closes it). The spurious `Text _` warnings are
+#1185.
+
+**#3462, what landed** (item by item in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Residual-scheme checkpoint"; normative text §4.1 "Residual schemes" and
+§6.8): residuals are a field of `Scheme`, kept at scope close for a constraint
+component one member quantifies, and re-emitted at every use naming the
+binding; every local binding route keeps them; pending joins are decided at
+the owning boundary. Measured on `main` and after: `subIn cfg app`, `rdSub`
+under `<FileRead "cfg/app">`, `either`, a local copy, `withApp` and `inCfg`
+were refused and are accepted, every launder variant still refused;
+`choose`/`chooseOpt`/`listBoth`/match/lambda publish what their
+statement-swapped twin published, `pickApply` became `(Unit -> <a> b) -> (Unit
+-> <c> b) -> <a | c> b`. A pre-existing S2 fixed on the way: a qualifier whose
+cell had been solved to another variable printed as a fresh binder.
+
+**Traps paid for (#3462):**
+
+- A join must be decided before the closing scope reads its roots and
+  quantifiable authorities: rows minted by a resolution done inside the close
+  looked unowned and were solved to pure (`pickApply` lost its rows).
+- A single alternative, or one variable on every branch, has nothing to join;
+  deferring it made a signature's variable bind to itself ("infinite type" in
+  the compiler's own stdlib).
+- Joins must not outlive a top-level group: method routes are fixed when it
+  closes. Postponing them to the module root built an emitter that panicked on
+  an arg-tag route with an `Int` receiver, and the seed-bootstrapped emitter
+  panicked the same way, which is what showed it was the typechecker's
+  decision and not a miscompile.
+- An emitter built by a flawed typechecker compiles the next one: after such a
+  failure, delete `./medaka` and `./medaka_emitter` so the next build
+  bootstraps from the seed.
+
 ## Delivered code and invariants to preserve
 
 | File under compiler/types | Responsibility at the checkpoint |
@@ -969,8 +1042,9 @@ row id 21), then passed after restoring the code.
 
 Positive joins keep function domains equal while joining results and latent
 effects. Only proved-covariant data positions join; unknown, mutable and invariant
-positions stay equal. Perform occurs checks before shaping variables. Fully
-delayed joins for unknown value shapes remain unfinished.
+positions stay equal. Perform occurs checks before shaping variables. A join
+whose alternatives have no shape yet is recorded and decided when its binding
+scope closes (#3462); only alternatives that never take a shape are equated.
 
 Recursive contracts now use a paired `ValueScheme` carrying `Scheme` and optional
 `CDeclared`. Primary and selected standalone bindings each retain their own

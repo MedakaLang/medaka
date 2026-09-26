@@ -3,8 +3,9 @@
 **Status:** DELIVERED THROUGH ITEM 6 — the data half merged in PR #3445
 (`ea782db98`); the close-out checkpoint below answers the handoff's owed list.
 Item 7 (stdlib migration to authority-indexed handles) is delivered on the
-same branch; residual schemes with delayed joins, and one invocation summary
-for policy and manifest, have proposals awaiting ratification in the handoff. The delivery checklist below
+same branch. Residual schemes with delayed joins (checklist item 2, #3462) are
+delivered in the residual-scheme checkpoint below; one invocation summary for
+policy and manifest (#3463) is ratified and not yet built. The delivery checklist below
 distinguishes the destination from code that has actually migrated. This is
 one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
@@ -311,9 +312,10 @@ before solving. An unconstrained retained equality class remains open. Filtered
 cycles and body summaries remain least-fixed-point equations; they do not receive
 invented polymorphic tails. Worklist propagation sends only newly discovered
 atoms and symbolic leaves across an edge, rather than rescanning each growing
-solution. More general directed residual schemes remain unfinished: the current
-solver does not publish general qualified inequalities. This is a completeness
-limitation, not permission to accept an unproved constraint.
+solution. An inferred binding publishes the authority inequalities it cannot
+prove between its own quantified authorities and constants as residuals of its
+scheme (the residual-scheme checkpoint below); a written signature cannot yet
+state one, and row relations keep their own residual tails.
 
 Scope closing has two phases. First solve owned summaries and non-published
 local choices, retaining published flexible leaves as symbolic payload. Then
@@ -359,8 +361,9 @@ The published envelope allocates owned summaries at positive returned arrows,
 including for a single producer. It never promotes an ordinary inference row to
 a summary. Source domains are checked separately, so this envelope walk starts
 after the syntactic arity and does not count source-body effects twice. Unknown
-type shapes still use HM equality: general delayed structural joins and their
-principal schemes remain outside this implemented subset.
+type shapes are joined once a later use shapes one of them (a delayed join,
+the residual-scheme checkpoint below); only alternatives that never take a shape
+are equated.
 
 Arrow rendering now preserves row tails using the same naming context as forcing
 rows and type arguments. A printed closed row must not conceal an open allowance;
@@ -456,13 +459,14 @@ foundation:
 
 Still required before this package can be called complete or laundering-free:
 
-1. Complete directed residual schemes and retirement of legacy signature
-   post-checks (#830, #2111, #825). Scoped universal checking is integrated, but
-   the remaining row equality solver is not a general inclusion solver.
-2. Complete structural constraint solving when produced alternatives initially
-   have only unknown type shapes. The dual published/recursive envelopes solve
-   explicit returned-arrow equations, but HM equality can still identify
-   unknown alternatives before their eventual arrow shapes are available.
+1. Retirement of legacy signature post-checks (#830, #2111, #825). Scoped
+   universal checking is integrated, but the remaining row equality solver is
+   not a general inclusion solver. Authority residuals of inferred schemes are
+   delivered (the residual-scheme checkpoint); a written residual syntax is not.
+2. Delayed joins cover alternatives a later use shapes within the owning
+   binding (the residual-scheme checkpoint). A join between arguments of an
+   already generalized function (`sel : a -> a -> a`) is still HM equality at
+   the call: that is a join constraint in a scheme, which is not ratified.
 3. Qualified data fields, constructor proof sources and authority-indexed
    existentials (#3385's data half). Named authorities on arrows, the retirement
    of the underscore and of first-argument hole filling, resolved effect-label
@@ -787,6 +791,63 @@ source for an `extern data` head.
 Coverage: `test/typecheck_error_fixtures/effect_socket_{ok,launder,forge}`;
 `stdlib/net.mdk`, `stdlib/net_async.mdk`, `pds/`, the net and async fixtures
 typecheck against the new catalog and run under the native engine gates.
+
+### Residual-scheme checkpoint (#3462)
+
+Checklist item 2, ratified 2026-09-26 with constants in scope and the `<=`
+rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.md)
+§4.1 ("Residual schemes") and §6.8.
+
+1. **Representation.** `Scheme` is `Forall tys rows auths residual force mono`,
+   `residual : List AuthResidual` (`types/repr.mdk`). It is part of the scheme,
+   not a side table keyed by name: it crosses modules with the scheme and is
+   instantiated by the occurrence's one substitution
+   (`instantiateMethodTracked`, `mtiResidual`).
+2. **Keeping.** `closeSummaryScope` takes the authorities the closing group
+   will quantify, each with its member (`quantifiableAuthorities`,
+   `quantifiableOf`: the `qualifierAuthIds` of an unsigned value member, a
+   variable two members share excluded). `solveOwnedStaged` solves the local
+   variables first with every quantifiable one held back, decides eligibility
+   on what remains (`residualEligible`: a constraint component quantified by
+   one member and reaching nothing else, found by one walk per component), and
+   solves any ineligible quantifiable variable as before. `checkAuthorities`
+   keeps an unproven obligation over eligible variables and constants
+   (`keptResidual`) and decides the rest. Every local binding route (`blockLet`,
+   `blockRecLet`, `inferLetSimple`, `inferRecLet`, `processLetGroup`) keeps
+   residuals the same way (`finishValueEffectsKeeping`).
+3. **Owing.** `forceInstantiation` re-emits each residual through
+   `wantAuthorityFrom`, which records the binding's name (`awResidualOf`,
+   `esfResidualOf`), so a failure reads "'subIn' needs … to lie within … here".
+   A binding that turns out monomorphic after its scope kept residuals (a local
+   pinned for dictionary forwarding) owes them where it lives
+   (`genBindingRestricted`).
+4. **Delayed joins.** `joinNonempty` with no shaped alternative asks
+   `vjoDefer`; inside a binding scope `deferJoin` records a `PendingJoin`
+   (result variable, alternatives, level, deciding services) when at least two
+   distinct variables meet. `resolvePendingJoins` decides a scope's joins before
+   the scope's roots are read and before Num defaulting and generalization
+   (`resolveDeferredJoin`: an alternative's shape, else the result's own shape
+   with the alternatives flowing into it, else equality). A local binding that
+   generalizes hands a join of enclosing-scope variables outward with its
+   result at the enclosing level (`settlePendingJoins`); one that does not
+   generalizes nothing and hands all of them outward (`postponePendingJoins`).
+   A top-level group decides every join it recorded: the routes of the methods
+   it uses are fixed when it closes, and a join postponed past that point was
+   measured to route a method on an undecided type (the build's emitter
+   panicked on an arg-tag route with an `Int` receiver).
+5. **Rendering.** `ppScheme`/`ppSchemeCon` print the context
+   (`renderResiduals`, `contextText`); `ppDomain` reads a qualifier through its
+   links, so a solved cell no longer prints as a fresh binder (`subH h = sub h`
+   printed `Dir d -> (a : String) -> Dir d`).
+
+Coverage: `types/effect_authority_test.mdk` (the residual groups: two
+variables, a join upper, constants, local bindings, a signature, a module
+boundary, each refusal beside its control); `types/effect_bindings_test.mdk`
+(the delayed-join groups: branch, covariant slot, list, match, the result's own
+use, each launder beside its accepted use);
+`test/typecheck_error_fixtures/effect_residual_{ok,launder}` and
+`effect_delayed_join_{ok,launder}`; the engine fixture
+`test/engine_fixtures/residual_delayed_join` under eval, native and wasm.
 
 ### Foundation verification
 

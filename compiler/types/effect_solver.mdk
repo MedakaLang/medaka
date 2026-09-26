@@ -13,7 +13,7 @@ import types.effect_rows.{
   Effvar(..), effvarId, rowFlat, rowFlatMembers, rowHasSummary, linkRow,
   solveSummaryCell
 }
-import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList}
+import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList, allList}
 import support.scc.{tarjanSCCs}
 
 export data SummarySolver c = SummarySolver {
@@ -49,6 +49,9 @@ public export data AuthWanted c = AuthWanted {
   -- invariant, so `F q1 ~ F q2` records `q1 ⊑ q2` and `q2 ⊑ q1`): a failure
   -- is an index mismatch, and the two halves are one defect
   awExact : Bool,
+  -- the binding whose inferred scheme carried this obligation as a residual,
+  -- re-emitted at one of its uses
+  awResidualOf : Option String,
 }
 
 data SummaryNode = SummaryNode {
@@ -77,6 +80,16 @@ public export data SummaryFailure c = SummaryFailure {
   esfWrittenUpper : Option Authority,
   -- the atom key an obligation or escape is about, when it came from a row
   esfLabel : Option String,
+  -- the binding whose residual this failed obligation is (`awResidualOf`)
+  esfResidualOf : Option String,
+}
+
+-- What closing a scope decides: the obligations it could neither prove nor
+-- hand outward, and the obligations it keeps for a scheme — each with the
+-- member index the caller gave the quantified authorities it relates.
+public export data ScopeOutcome c = ScopeOutcome {
+  esoFailures : List (SummaryFailure c),
+  esoResiduals : List (Int, AuthWanted c),
 }
 
 export
@@ -179,6 +192,19 @@ recordRelation solver exact context lower upper =
 export
 recordAuthority : SummarySolver c -> Bool -> c -> Authority -> Authority -> Unit
 recordAuthority solver exact context lower upper =
+  recordAuthorityFrom solver None exact context lower upper
+
+-- [origin] names the binding whose scheme carried the obligation as a
+-- residual, when it is one re-emitted at a use.
+export
+recordAuthorityFrom : SummarySolver c ->
+  Option String ->
+  Bool ->
+  c ->
+  Authority ->
+  Authority ->
+  Unit
+recordAuthorityFrom solver origin exact context lower upper =
   let scope = currentScope solver
   scope.essAuthorities :=
     AuthWanted {
@@ -187,6 +213,7 @@ recordAuthority solver exact context lower upper =
         awContext = context,
         awLabel = None,
         awExact = exact,
+        awResidualOf = origin,
       }
       :: scope.essAuthorities.value
 
@@ -475,6 +502,7 @@ validateRelations solver protected escape (rel :: rest) =
           esfAuthority = None,
           esfWrittenUpper = None,
           esfLabel = None,
+          esfResidualOf = None,
         }
         :: validateRelations solver protected escape rest
   else
@@ -499,6 +527,7 @@ validateRelations solver protected escape (rel :: rest) =
           esfWrittenUpper = None,
           esfLabel =
             firstEscapingKey escaping lowerAtoms upperAtoms escape rel.esrExact,
+          esfResidualOf = None,
         }
         :: failures
     else
@@ -540,6 +569,7 @@ authorityEscapes scope context exact upper (x :: rest) =
               awContext = context,
               awLabel = Some (atomKey x),
               awExact = exact,
+              awResidualOf = None,
             }
             :: scope.essAuthorities.value
         others
@@ -566,23 +596,26 @@ retainLeavesAt level (cell :: rest) =
     _ => ()
   retainLeavesAt level rest
 
+-- [quantifiable] maps each authority variable the closing binding group will
+-- quantify to the index of the member whose scheme quantifies it.
 export
 closeSummaryScope : SummarySolver c ->
   Map Int Unit ->
   Map Int Unit ->
+  Map Int Int ->
   Map Int Unit ->
   Map Int (Ref Effvar) ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   (List (Ref Effvar) -> Ref Effvar) ->
   (Int -> Ref Effvar) ->
   (Int -> Authority -> Authority) ->
-  List (SummaryFailure c)
-closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual widen =
+  ScopeOutcome c
+closeSummaryScope solver protected rigidAuths quantifiable retained borrowed escape makeJoin makeResidual widen =
   let scope = currentScope solver
   -- Authorities first: an argument's lower bounds decide a callee's flexible
   -- authority before any row is compared, so a row check sees concrete atoms
   -- wherever the body determined them.
-  let _ = solveOwnedAuthorities scope rigidAuths widen
+  let _ = solveOwnedStaged scope rigidAuths quantifiable widen
   let summaries = M.values scope.essNodes.value
   let untransferred =
     filter
@@ -659,12 +692,16 @@ closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin 
   let failures = validateRelations solver frozen escape unproven
   -- Row validation may have derived new authority obligations; solve the
   -- variables they bound, then decide every obligation this scope owns.
-  let _ = solveOwnedAuthorities scope rigidAuths widen
-  let authFailures = checkAuthorities solver scope rigidAuths
+  let eligible = solveOwnedStaged scope rigidAuths quantifiable widen
+  let (residuals, authFailures) =
+    checkAuthorities solver scope rigidAuths eligible
   solver.essStack := match solver.essStack.value
     _ :: rest => rest
     [] => panic "effect scope stack underflow"
-  failures ++ authFailures
+  ScopeOutcome {
+    esoFailures = failures ++ authFailures,
+    esoResiduals = residuals,
+  }
 
 -- ── authorities ────────────────────────────────────────────────────────────
 
@@ -699,13 +736,101 @@ localRigidAuth _ rigid cell = match !cell
 -- the variable); it is applied to every solution written.
 solveOwnedAuthorities : SummaryScope c ->
   Map Int Unit ->
+  Map Int Int ->
   (Int -> Authority -> Authority) ->
   Unit
-solveOwnedAuthorities scope rigid widen =
+solveOwnedAuthorities scope rigid eligible widen =
   solveAuthorities
-    (ownedFlexibleAuth scope rigid)
+    (cell =>
+      ownedFlexibleAuth scope rigid cell
+        && not (M.has (authvarId cell) eligible))
     widen
     (reverseL scope.essAuthorities.value)
+
+-- Solve the scope's owned variables, keeping residual-eligible ones open.
+-- Local variables go first, with every quantifiable one held back, so a local
+-- choice between two quantified authorities (a callee's instantiated binder)
+-- takes its least solution in terms of them; eligibility is then decided on
+-- what remains, and a quantifiable variable that is not eligible is solved as
+-- any owned variable is.  Returns the eligible variables.
+solveOwnedStaged : SummaryScope c ->
+  Map Int Unit ->
+  Map Int Int ->
+  (Int -> Authority -> Authority) ->
+  Map Int Int
+solveOwnedStaged scope rigid Tip widen =
+  let _ = solveOwnedAuthorities scope rigid Tip widen
+  Tip
+solveOwnedStaged scope rigid quantifiable widen =
+  let _ = solveOwnedAuthorities scope rigid quantifiable widen
+  let eligible = residualEligible quantifiable rigid scope.essAuthorities.value
+  let _ = solveOwnedAuthorities scope rigid eligible widen
+  eligible
+
+-- The quantifiable variables whose obligations become residuals rather than
+-- being solved: those whose whole constraint component (variables linked by
+-- a shared obligation) is quantified by one member.  A component that also
+-- reaches a variable the group does not quantify — an outer, rigid or local
+-- one — keeps today's decision for all of it, so a residual never relates a
+-- quantified variable to something its scheme cannot name.
+residualEligible : Map Int Int ->
+  Map Int Unit ->
+  List (AuthWanted c) ->
+  Map Int Int
+residualEligible Tip _ _ = Tip
+residualEligible quantifiable rigid wanteds =
+  let edges = fold (acc w => linkIds (wantedVarIds w) acc) Tip wanteds
+  -- every component is walked once, eligible or not
+  snd
+    (M.foldlWithKey
+      ((seen, acc) id _ =>
+        if M.has id seen then
+          (seen, acc)
+        else
+          let comp = componentOf edges [id] Tip
+          let seen2 = M.foldlWithKey (m k _ => M.set k () m) seen comp
+          match componentMember quantifiable rigid (M.keys comp)
+            Some member =>
+              (seen2, M.foldlWithKey (m k _ => M.set k member m) acc comp)
+            None => (seen2, acc))
+      (Tip, Tip)
+      edges)
+
+wantedVarIds : AuthWanted c -> List Int
+wantedVarIds w = map authvarId (authVars w.awLower ++ authVars w.awUpper)
+
+-- Chain an obligation's variables together; a lone variable is its own
+-- component.
+linkIds : List Int -> Map Int (List Int) -> Map Int (List Int)
+linkIds [] edges = edges
+linkIds [a] edges = M.set a (optionOr [] (M.get a edges)) edges
+linkIds (a :: b :: rest) edges =
+  let e1 = M.set a (b :: optionOr [] (M.get a edges)) edges
+  let e2 = M.set b (a :: optionOr [] (M.get b e1)) e1
+  linkIds (b :: rest) e2
+
+componentOf : Map Int (List Int) -> List Int -> Map Int Unit -> Map Int Unit
+componentOf _ [] seen = seen
+componentOf edges (id :: rest) seen =
+  if M.has id seen then
+    componentOf edges rest seen
+  else
+    componentOf edges (optionOr [] (M.get id edges) ++ rest) (M.set id () seen)
+
+componentMember : Map Int Int -> Map Int Unit -> List Int -> Option Int
+componentMember _ _ [] = None
+componentMember quantifiable rigid (first :: rest) =
+  match M.get first quantifiable
+    Some member =>
+      if M.has first rigid then
+        None
+      else if allList
+        (id => M.get id quantifiable == Some member && not (M.has id rigid))
+        rest then
+        Some member
+      else
+        None
+    None => None
 
 solveAuthorities : (Ref Authvar -> Bool) ->
   (Int -> Authority -> Authority) ->
@@ -828,8 +953,53 @@ isVar _ _ = False
 checkAuthorities : SummarySolver c ->
   SummaryScope c ->
   Map Int Unit ->
+  Map Int Int ->
+  (List (Int, AuthWanted c), List (SummaryFailure c))
+checkAuthorities solver scope rigid eligible =
+  let wanteds = reverseL scope.essAuthorities.value
+  let kept = flatMap (keptResidual eligible) wanteds
+  let decided = filter (w => isEmptyL (keptResidual eligible w)) wanteds
+  (kept, decideAuthorities solver scope rigid decided)
+
+-- An unproven obligation over eligible variables only (and constants) is kept
+-- for the member that quantifies them, normalised.
+keptResidual : Map Int Int -> AuthWanted c -> List (Int, AuthWanted c)
+keptResidual eligible w =
+  let lo = authNorm w.awLower
+  let hi = authNorm w.awUpper
+  match authVars lo ++ authVars hi
+    [] => []
+    first :: rest =>
+      if authSub lo hi then
+        []
+      else match M.get (authvarId first) eligible
+        Some member =>
+          if allList
+            (c => M.get (authvarId c) eligible == Some member)
+            rest then
+            [
+              (
+                member,
+                AuthWanted {
+                  awLower = lo,
+                  awUpper = hi,
+                  awContext = w.awContext,
+                  awLabel = w.awLabel,
+                  awExact = w.awExact,
+                  awResidualOf = w.awResidualOf,
+                },
+              ),
+            ]
+          else
+            []
+        None => []
+
+decideAuthorities : SummarySolver c ->
+  SummaryScope c ->
+  Map Int Unit ->
+  List (AuthWanted c) ->
   List (SummaryFailure c)
-checkAuthorities solver scope rigid =
+decideAuthorities solver scope rigid wanteds =
   distinctFailures
     (flatMap
       (w =>
@@ -852,6 +1022,7 @@ checkAuthorities solver scope rigid =
                       awContext = w.awContext,
                       awLabel = w.awLabel,
                       awExact = w.awExact,
+                      awResidualOf = w.awResidualOf,
                     }
                     :: parent.essAuthorities.value
                 []
@@ -866,12 +1037,13 @@ checkAuthorities solver scope rigid =
                       awContext = w.awContext,
                       awLabel = w.awLabel,
                       awExact = w.awExact,
+                      awResidualOf = w.awResidualOf,
                     }
                     :: solver.essRoot.value
                 []
               else
                 [authorityFailure w lo hi])
-      (reverseL scope.essAuthorities.value))
+      wanteds)
 
 -- One obligation, one report: the same `lower ⊑ upper` pair recorded from two
 -- sites (an invariant index meeting a declared one, then the result flowing
@@ -931,6 +1103,7 @@ authorityFailure w lo hi = SummaryFailure {
   esfAuthority = Some (lo, hi),
   esfWrittenUpper = Some w.awUpper,
   esfLabel = w.awLabel,
+  esfResidualOf = w.awResidualOf,
 }
 
 -- A flexible leaf created before this scope opened, or at an enclosing level,

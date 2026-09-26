@@ -1,0 +1,36 @@
+-- Residual schemes and delayed joins erase (#3462): an unsigned wrapper whose
+-- inferred type relates two authorities (`subIn : (a <= d) => …`), a join of
+-- two callbacks decided after a later use shapes one of them, and a numeric
+-- join whose result a method dispatches on.  Every engine prints the same
+-- three lines.
+effect Audit Prefix
+
+data Dir (d : Authority Audit) = Dir (String @d)
+
+mk : (s : String) -> Dir s
+mk s = Dir s
+
+sub : Dir d -> (p : String @d) -> Dir d
+sub h _ = h
+
+path : Dir d -> String
+path (Dir s) = s
+
+subIn h (Dir p) = sub h p
+
+runPure : (Unit -> Int) -> Int
+runPure k = k ()
+
+choose c f g =
+  let r = if c then f else g
+  let _ = runPure g
+  r
+
+joinNum c x =
+  let r = if c then 1 else x
+  r + 1
+
+main =
+  println (path (subIn (mk "cfg/*") (mk "cfg/app")))
+  println (intToString (choose True (_ => 7) (_ => 8) ()))
+  println (intToString (joinNum False 41))

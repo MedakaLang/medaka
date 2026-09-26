@@ -198,6 +198,7 @@ sharedScheme = QualifiedScheme {
       [101, 103]
       [202, 204]
       []
+      []
       (EffRow [] (Some oldEffectCell))
       (TFun
         (TVar oldTypeCell)
@@ -382,7 +383,7 @@ test "one type/effect substitution is shared and each instantiation is fresh" =
 
 vectorScheme : QualifiedScheme
 vectorScheme = QualifiedScheme {
-  hm = Forall [] [] [] (EffRow [] None) (TRigid "body"),
+  hm = Forall [] [] [] [] (EffRow [] None) (TRigid "body"),
   qualifiers = [
     Qualifier {
       predicate = ClassPredicate {

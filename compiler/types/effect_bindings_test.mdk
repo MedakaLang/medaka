@@ -417,7 +417,7 @@ forcingFor source name =
     desugar (parseLocated (effectPrelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some (Forall _ _ _ force _) => renderAtoms (effrowLabels force)
+    Some (Forall _ _ _ _ force _) => renderAtoms (effrowLabels force)
     None => "<missing binding>"
 
 renderedFor : String -> String -> String
@@ -437,7 +437,7 @@ forcingTailCount source name =
     desugar (parseLocated (effectPrelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some (Forall _ _ _ force _) => length (snd (rowFlat force))
+    Some (Forall _ _ _ _ force _) => length (snd (rowFlat force))
     None => -1
 
 messagesFor : String -> List String
@@ -1225,4 +1225,70 @@ test "function alternatives join through if match list array and tuple values" =
         (errorsFor
           (source
             ++ "quiet : Unit -> Unit\nquiet _ =\n  let _ = ifValue\n  let _ = matchValue\n  let _ = listValue\n  let _ = arrayValue\n  tupleValue\n"))),
+  ]
+
+-- #3462 (b): alternatives with no shape yet are joined once a later use
+-- shapes one of them, not equated where they meet, so the order of two
+-- statements no longer decides a callback's row.  Every accepted use beside
+-- its laundering twin.
+delayedJoinHead : String
+delayedJoinHead =
+  "data Box a = Box a\n"
+    ++ "runPure : (Unit -> Unit) -> Unit\nrunPure k = k ()\n"
+    ++ "runPureBox : Box (Unit -> Unit) -> Unit\nrunPureBox (Box k) = k ()\n"
+    ++ "loud : Unit -> <Audit> Unit\nloud _ = emitAudit ()\n"
+    ++ "quiet : Unit -> Unit\nquiet _ = ()\n"
+    ++ "choose c f g =\n  let r = if c then f else g\n  let _ = runPure g\n  r\n"
+    ++ "chooseKnown c f g =\n  let _ = runPure g\n  let r = if c then f else g\n  r\n"
+    ++ "chooseBox c f g =\n  let r = if c then Box f else Box g\n  let _ = runPureBox (Box g)\n  r\n"
+    ++ "listBoth f g =\n  let xs = [f, g]\n  let _ = runPure g\n  xs\n"
+    ++ "chooseMatch c f g =\n  let r = match c\n    True => f\n    False => g\n  let _ = runPure g\n  r\n"
+
+delayed : String -> String
+delayed body = delayedJoinHead ++ body
+
+test "a join of unshaped alternatives is decided once a later use shapes one" = expectAll
+  [
+    expectEqual
+      (renderedFor delayedJoinHead "chooseKnown")
+      (renderedFor delayedJoinHead "choose"),
+    expectEqual
+      "Bool -> (Unit -> <a> Unit) -> (Unit -> Unit) -> Unit -> <a> Unit"
+      (renderedFor delayedJoinHead "choose"),
+    expectEqual
+      "Bool -> (Unit -> <a> Unit) -> (Unit -> Unit) -> Box (Unit -> <a> Unit)"
+      (renderedFor delayedJoinHead "chooseBox"),
+    expectEqual
+      "(Unit -> <a> Unit) -> (Unit -> Unit) -> List (Unit -> <a> Unit)"
+      (renderedFor delayedJoinHead "listBoth"),
+    expectEqual
+      (renderedFor delayedJoinHead "choose")
+      (renderedFor delayedJoinHead "chooseMatch"),
+  ]
+
+test "a delayed join accepts the honest use and refuses its launder" = expectAll
+  [
+    expectEqual [] (errorsFor (delayed "use = choose True loud quiet\n")),
+    expectNotEqual [] (errorsFor (delayed "use = choose True quiet loud\n")),
+    expectEqual [] (errorsFor (delayed "use = chooseBox True loud quiet\n")),
+    expectNotEqual [] (errorsFor (delayed "use = chooseBox True quiet loud\n")),
+    expectEqual [] (errorsFor (delayed "use = listBoth loud quiet\n")),
+    expectNotEqual [] (errorsFor (delayed "use = listBoth quiet loud\n")),
+    expectEqual [] (errorsFor (delayed "use = chooseMatch True loud quiet\n")),
+    expectNotEqual
+      []
+      (errorsFor (delayed "use = chooseMatch True quiet loud\n")),
+  ]
+
+test "a join the result's own use shapes keeps each alternative's row" = expectAll
+  [
+    expectEqual
+      "Bool -> (Unit -> <a> b) -> (Unit -> <c> b) -> <a | c> b"
+      (renderedFor "pickApply c f g = (if c then f else g) ()\n" "pickApply"),
+    expectEqual
+      "<Audit> Unit"
+      (renderedFor
+        (delayed
+          "pickApply c f g = (if c then f else g) ()\nuse = pickApply True loud quiet\n")
+        "use"),
   ]

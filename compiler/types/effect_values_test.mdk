@@ -124,6 +124,7 @@ ops harness modes collector = ValueJoinOps {
     qs => match qs
       q :: _ => q
       [] => AConst PUnit,
+  vjoDefer = _ => None,
 }
 
 arrow : EffRow -> Mono

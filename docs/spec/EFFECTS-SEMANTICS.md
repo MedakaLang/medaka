@@ -432,6 +432,28 @@ by top. `q₁ ⊔ q₂ ⊑ q` requires both operands to be covered; `q ⊑ q` an
 must travel with a generalized scheme, sharing its substitution; no residual
 may refer to a rigid variable outside its scope.
 
+**Residual schemes.** An unsigned binding that generalizes keeps, as its
+scheme's context `C` (§6), every obligation it cannot prove between the
+authorities it quantifies and constants: `subIn h (Dir p) = sub h p`, with
+`sub : Dir d -> String @d -> Dir d`, is `(a <= d) => Dir d -> Dir a -> Dir d`,
+and `inCfg (Dir p) = sub cfg p` is `(d <= "cfg/*") => Dir d -> Dir "cfg/*"`.
+The quantified authorities are those publication keeps, the ones an argument
+supplies. Each use instantiates the context with the occurrence's one
+substitution and owes the instances as ordinary obligations of the using
+scope, which may prove them, keep them for its own scheme, or refuse them: a
+failure names the binding whose inferred type carried the relation. An
+obligation stays a residual only when its whole constraint component (the
+authorities it is linked to by shared obligations) is quantified by one
+member; one that reaches a variable the binding does not quantify, a rigid
+universal, an outer or restricted variable, or another member of a recursive
+group is decided as before. A binding the value restriction keeps
+monomorphic has no context: its obligations are owed where it is used. A
+residual renders in the context beside the class constraints, `(Num n, p <=
+d) =>`, a join as `p <= (a | b)`. There is no written syntax for a residual
+yet, so a signature cannot state one: an unsigned binding can be more general
+than any signature for it, and a signature that quantifies two authorities
+independently still refuses a body that relates them.
+
 Every authority-index introduction must have a proof source: a qualified
 argument or field, a retained constructor constraint, a generative existential,
 or an explicitly trusted FFI operation. An opaque `Handle κ` may store only a
@@ -849,6 +871,22 @@ invariant and unknown parameters require equality. Effect-kind indices remain
 invariant. A checker that cannot establish a join must report a type error, not
 erase an effect or assume unknown variance is covariant.
 
+When no alternative has a shape yet (two parameters, `if c then f else g`),
+the join is recorded and decided at the end of the binding scope that owns
+it, not by equating the alternatives: a later use may shape one of them
+(`runPure g`), and the others are then shaped afresh from it, each keeping its
+own latent row, and joined. If the join's result was shaped first (applied,
+annotated), the alternatives are shaped from it and flow into it by the
+directed judgment. A join nothing shaped is decided by equality, as for values
+that never become functions or covariant data. A binding that generalizes
+decides the joins recorded in its scope first, so it never generalizes over
+an undecided join; a join whose alternatives are all variables of the
+enclosing scope is handed to it instead, its result kept at that scope's
+level. A top-level group decides every join it recorded. The result does not
+depend on which of two statements comes first. A join of two alternatives
+reaching each other only through an already generalized function (`sel : a
+-> a -> a`) is an ordinary application, which unifies its arguments.
+
 List and array literals join their element values before construction. Cons
 joins its head value with the existing list's element type. Joining already
 constructed mutable containers is different: `Array` and `Ref` remain invariant,
@@ -1112,12 +1150,13 @@ The active migration and its explicit completed/remaining work are recorded in
 [Effects within the typechecker](../../compiler/EFFECTS-ARCHITECTURE.md).
 The named-authority checkpoint there implements §4.1's named arrows, qualified
 values, resolved label identity, the abstraction `α`, the scoped authority
-solver and publication as far as a binding's own scope: a residual obligation
-over a variable no scope owns is decided over the module, not carried in a
-generalized scheme, so "residual constraints travel with a generalized scheme"
-is not implemented. Qualified data fields, constructor proof sources,
-carrying and authority-indexed existentials are implemented (the data-half
-and close-out checkpoints there). No conformance claim may turn a pending proof into success or
+solver and publication. Residual schemes and delayed joins (§4.1, §6.8) are
+implemented for inferred bindings (the residual-scheme checkpoint there); a
+residual obligation over a variable no scope owns (a binding the value
+restriction keeps monomorphic) is still decided over the module, and a
+written signature cannot state a residual. Qualified data fields, constructor
+proof sources, carrying and authority-indexed existentials are implemented
+(the data-half and close-out checkpoints there). No conformance claim may turn a pending proof into success or
 describe the whole effects system as laundering-free while a known channel
 remains. Issue status belongs in the issue tracker; the archived observations
 explain counterexamples but are not a live backlog.

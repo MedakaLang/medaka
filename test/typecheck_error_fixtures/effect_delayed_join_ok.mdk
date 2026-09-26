@@ -1,0 +1,22 @@
+-- A branch between two callbacks whose shapes are not yet known is joined
+-- once a later use shapes one of them (#3462), not equated where they meet:
+-- `f` keeps its own row, so passing an effectful `f` is accepted and the
+-- result is charged its row.
+runPure : (Unit -> Unit) -> Unit
+runPure k = k ()
+
+choose c f g =
+  let r = if c then f else g
+  let _ = runPure g
+  r
+
+loud : Unit -> <IO> Unit
+loud _ = println "x"
+
+quiet : Unit -> Unit
+quiet _ = ()
+
+use : Unit -> <IO> Unit
+use = choose True loud quiet
+
+main = println 1
