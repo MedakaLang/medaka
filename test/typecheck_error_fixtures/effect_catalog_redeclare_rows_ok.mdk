@@ -1,0 +1,19 @@
+-- The honest controls for effect_catalog_redeclare_rows: the same
+-- redeclarations with their rows where the built-in performs them.
+
+extern Ref : (Unit -> <IO> Unit) -> Ref (Unit -> <IO> Unit)
+
+extern arrayMakeWith : Int -> (Int -> <IO> a) -> <IO> Array a
+
+extern writeFile : (path : String) -> String -> <FileWrite path> Result String Unit
+
+later : Unit -> <IO> Unit
+later u = (!(Ref (v => println "ran"))) ()
+
+numbered : Int -> <IO> Array Int
+numbered n = arrayMakeWith n (i => i)
+
+save : (path : String) -> <FileWrite path> Result String Unit
+save path = writeFile path "saved"
+
+main = println 1

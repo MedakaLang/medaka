@@ -7754,7 +7754,7 @@ data DriverState = DriverState {
   coherenceUserDecls : Ref (List Decl),
   stdlibOwnedModsRef : Ref (OrdMap Unit),
   flatEntryIsStdlibRef : Ref Bool,
-  builtinExternNamesRef : Ref (OrdMap (Ty, List EffAtomTy, List (String, Int))),
+  builtinExternNamesRef : Ref (OrdMap (Ty, List (String, Int))),
   superDeclsRef : Ref (List Decl),
   standaloneValuesRef : Ref (OrdMap Unit),
   methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -37087,27 +37087,15 @@ externSchemes scope decls =
 -- process (`medaka test` runs several engines), and a later call carrying a
 -- shorter list must not shrink the set a guard is reading.
 --
--- Each row records TWO projections of the catalog signature, as a pair:
+-- Each row records the catalog's written signature and the positions of its
+-- argument binders, which `ffiCheckExternsShadow` and
+-- `ffiCheckExternsCatalogRow` (#2163) both read: one map, so the two rules about
+-- the same declaration cannot read two tables that fell out of step.
 --
---   fst — its written SIGNATURE, so that `ffiCheckExternsShadow` can ask not
---         only "is this a catalog name" but "is this local declaration an
---         instance of the catalog's type".
---   snd — its WRITTEN TERMINAL EFFECT ROW (`ffiWrittenRow`), the labels as the
---         author spelled them, so that `ffiCheckExternsCatalogRow` can ask
---         whether a redeclaration's row still covers what the builtin performs
---         (#2163).
---
--- ONE map with a widened value rather than a sibling map keyed the same way: the
--- two projections are read by two rules about the same declaration, and two
--- tables could fall out of step (the reader-prose on `ffiIsBuiltinExternName`
--- below says the same thing about the signature).
---
--- ⚠️ The ROW is stored as WRITTEN LABELS, not as `List Atom`.  `atomsOfWritten`
+-- The signature's rows stay as written labels, not `List Atom`.  `atomsOfWritten`
 -- resolves each bare label against `driverState.effectDomains`, and this seam can
--- run BEFORE that registry is populated — so lifting the catalog row to atoms here
--- and the declared row to atoms at the check seam would compare two atom sets
--- built under different domain knowledge.  Both sides are lifted at the CHECK
--- seam instead, where the registry is the same for both.
+-- run before that registry is populated, so both sides are lifted at the check
+-- seam, where the registry is the same for both.
 --
 -- Union means a re-seed REWRITES an existing row rather than skipping it — the two
 -- seeds are the same `runtimeDecls` list, so the value is the same pair either
@@ -37119,11 +37107,11 @@ noteBuiltinExternNames ds =
     externSigsToMap ds driverState.value.builtinExternNamesRef.value
 
 externSigsToMap : List Decl ->
-  OrdMap (Ty, List EffAtomTy, List (String, Int)) ->
-  OrdMap (Ty, List EffAtomTy, List (String, Int))
+  OrdMap (Ty, List (String, Int)) ->
+  OrdMap (Ty, List (String, Int))
 externSigsToMap [] m = m
 externSigsToMap ((DExtern _ n ty) :: rest) m =
-  externSigsToMap rest (omInsert n (ty, ffiWrittenRow ty, namedArgOrder ty) m)
+  externSigsToMap rest (omInsert n (ty, namedArgOrder ty) m)
 externSigsToMap (_ :: rest) m = externSigsToMap rest m
 
 -- Each named argument with its absolute position among the arrows: the
@@ -37398,12 +37386,11 @@ ffiCheckExternsGo (_ :: rest) = ffiCheckExternsGo rest
 -- ⚠️ It is keyed on the name set the SEED was built from, recorded once by
 -- `externSchemes` — not on a hand-copied list here, which would rot the moment
 -- `stdlib/runtime.mdk` gains a row.  `builtinExternNamesRef` maps each catalog
--- name to that row's written signature, its written terminal effect row
--- (`ffiWrittenRow`) and its named-argument positions rather than to `Unit`: this
--- predicate reads only the key set, but `ffiCheckExternsShadow` below matches a
--- redeclaration against the catalog's own signature, and
--- `ffiCheckExternsCatalogRow` (#2163) needs its effect row; a second or third
--- table keyed the same way could fall out of step with this one.  (The field
+-- name to that row's written signature and its named-argument positions rather
+-- than to `Unit`: this predicate reads only the key set, but
+-- `ffiCheckExternsShadow` below matches a redeclaration against the catalog's
+-- own signature, and `ffiCheckExternsCatalogRow` (#2163) compares its rows; a
+-- second table keyed the same way could fall out of step with this one.  (The field
 -- carries no comment of its own — `DriverState`'s header forbids one, #829 /
 -- [T-PERRUN-COMMENTS] — so its prose lives here, on its reader.)
 --
@@ -37457,8 +37444,9 @@ ffiIsBuiltinExternName n =
 -- type variables and authorities (`Array Int` for `Array a`, `Socket "a.com/*"`
 -- for `Socket h`) and nothing else. A head-only comparison let `extern
 -- stringIndexOf : String -> String -> Option (Socket "a.com/*")` type any
--- number as a socket. Effect rows are the next rule's business, instantiated
--- by the same match.
+-- number as a socket. Rows are part of the type; only the row each arrow's
+-- result carries may differ, and that is the next rule's business,
+-- instantiated by the same match.
 ffiCheckExternsShadow : Bool -> List Decl -> Unit
 ffiCheckExternsShadow False _ = ()
 ffiCheckExternsShadow True ds = ffiCheckShadowGo (externDecls ds)
@@ -37467,7 +37455,7 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCheckShadowGo [] = ()
 ffiCheckShadowGo ((DExtern _ n ty) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some (cat, _, _) => match ffiSigInstance cat ty
+    Some (cat, _) => match ffiSigInstance cat ty
       Some _ => ()
       None =>
         pushTypeErrorAt
@@ -37483,17 +37471,19 @@ ffiShadowMsg n want got =
   "Foreign declaration '\{n}' redeclares a built-in runtime name at a type the built-in does not have: the built-in is '\{want}', this declaration claims '\{got}'. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says, so its callers would be typed against a signature the called code does not honour. A redeclaration may fix the built-in's type variables and authorities, and must otherwise be its type. Rename the extern to a name the runtime does not already define, or declare it at the built-in's own signature"
 
 -- The substitution under which `decl` is the catalog signature `cat` with
--- some of its type variables fixed, or `None` when it is not. A catalog
--- variable binds to whatever the declaration writes at its first occurrence
--- and must meet the same type at every later one; the declaration's own
--- variables are rigid. An argument's binder (`host` in `(host : String) ->
--- … Socket host`) is fixed by the argument's value, not by the declaration,
--- so it is bound up front to the binder the declaration writes at the same
--- position. Effect rows, constraint prefixes and the binders themselves are
--- walked through: the row rule compares rows.
+-- some of its variables fixed, or `None` when it is not. A catalog type, row
+-- or authority variable binds to whatever the declaration writes at its first
+-- occurrence and must meet the same thing at every later one; the
+-- declaration's own variables are rigid. An argument's binder (`host` in
+-- `(host : String) -> … Socket host`) is fixed by the argument's value, not by
+-- the declaration, so it is bound up front to the binder the declaration
+-- writes at the same position. Rows are part of the type: off the arrow spine
+-- they match exactly. The row each arrow's result carries is what calling the
+-- built-in performs, which a declaration may widen, so the match peels it and
+-- `ffiCheckExternsCatalogRow` compares it, arrow by arrow.
 ffiSigInstance : Ty -> Ty -> Option (List (String, Ty))
 ffiSigInstance cat decl =
-  ffiMatchTy
+  ffiMatchSpine
     perRun.value.aliasTableRef.value
     cat
     decl
@@ -37505,6 +37495,23 @@ ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
 ffiBinderSeed cat decl =
   let byPos = map (p => (snd p, fst p)) decl
   map (p => (fst p, TyVar (optionOr "" (lookupAssocI (snd p) byPos)))) cat
+
+ffiMatchSpine : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  Ty ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchSpine aliases cat decl acc = match (
+  ffiSigStrip aliases cat,
+  ffiSigStrip aliases decl,
+)
+  (TyFun a r, TyFun c d) =>
+    ffiMatchSpine
+      aliases
+      (ffiRowBody r)
+      (ffiRowBody d)
+      (ffiMatchTy aliases a c acc)
+  (c, d) => ffiMatchTy aliases c d acc
 
 ffiMatchTy : List (TabKey, (List String, Ty)) ->
   Ty ->
@@ -37519,6 +37526,13 @@ ffiMatchTy aliases cat decl (Some sub) = match (
   (TyVar v, d) => match lookupAssoc v sub
     Some bound => if ffiSameTy aliases bound d then Some sub else None
     None => Some ((v, d) :: sub)
+  (TyEffect l1 t1 a, TyEffect l2 t2 c) =>
+    ffiMatchTy aliases a c (ffiMatchRow l1 t1 l2 t2 (Some sub))
+  (TyEffect l1 t1 a, c) =>
+    ffiMatchTy aliases a c (ffiMatchRow l1 t1 [] [] (Some sub))
+  (a, TyEffect l2 t2 c) =>
+    ffiMatchTy aliases a c (ffiMatchRow [] [] l2 t2 (Some sub))
+  (TyRow l1 t1 _, TyRow l2 t2 _) => ffiMatchRow l1 t1 l2 t2 (Some sub)
   (TyApp a b, TyApp c d) =>
     ffiMatchTy aliases b d (ffiMatchTy aliases a c (Some sub))
   (TyFun a b, TyFun c d) =>
@@ -37537,10 +37551,111 @@ ffiMatchTys aliases (c :: cs) (d :: ds) acc =
   ffiMatchTys aliases cs ds (ffiMatchTy aliases c d acc)
 ffiMatchTys _ _ _ _ = None
 
+-- A catalog row against a written one, exactly: each catalog atom meets an
+-- atom of the same label whose authority it matches, and what the
+-- declaration writes beyond them is the catalog's row variable, or nothing
+-- when the catalog row is closed.
+ffiMatchRow : List EffAtomTy ->
+  List String ->
+  List EffAtomTy ->
+  List String ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchRow _ _ _ _ None = None
+ffiMatchRow l1 t1 l2 t2 (Some sub) = match ffiMatchAtoms l1 l2 sub
+  None => None
+  Some (sub2, rest) => match t1
+    [] => match (rest, t2)
+      ([], []) => Some sub2
+      _ => None
+    [v] => match lookupAssoc v sub2
+      Some (TyRow bl bt _) =>
+        if ffiSameRow bl bt rest t2 then Some sub2 else None
+      Some _ => None
+      None => Some ((v, TyRow rest t2 None) :: sub2)
+    _ => match rest
+      [] => if ffiSameNames t1 t2 then Some sub2 else None
+      _ => None
+
+ffiMatchAtoms : List EffAtomTy ->
+  List EffAtomTy ->
+  List (String, Ty) ->
+  Option (List (String, Ty), List EffAtomTy)
+ffiMatchAtoms [] rest sub = Some (sub, rest)
+ffiMatchAtoms (a :: more) ds sub = match ffiTakeAtom a ds [] sub
+  Some (sub2, ds2) => ffiMatchAtoms more ds2 sub2
+  None => None
+
+ffiTakeAtom : EffAtomTy ->
+  List EffAtomTy ->
+  List EffAtomTy ->
+  List (String, Ty) ->
+  Option (List (String, Ty), List EffAtomTy)
+ffiTakeAtom _ [] _ _ = None
+ffiTakeAtom a (d :: ds) skipped sub = match ffiMatchAtom a d sub
+  Some sub2 => Some (sub2, reverseL skipped ++ ds)
+  None => ffiTakeAtom a ds (d :: skipped) sub
+
+ffiMatchAtom : EffAtomTy ->
+  EffAtomTy ->
+  List (String, Ty) ->
+  Option (List (String, Ty))
+ffiMatchAtom a d sub =
+  if sameTyConHead
+    a.eatLabel
+    a.eatOrigin
+    d.eatLabel
+    d.eatOrigin then match a.eatParam
+    EPName v => match lookupAssoc v sub
+      Some bound => match ffiParamOf bound
+        Some p => if ffiSameParam p d.eatParam then Some sub else None
+        None => None
+      None => Some ((v, ffiParamTy d.eatParam) :: sub)
+    p => if ffiSameParam p d.eatParam then Some sub else None
+  else
+    None
+
+-- An authority as a substitution holds it: a name as a variable, anything
+-- written as the authority term.
+ffiParamTy : EffParamTy -> Ty
+ffiParamTy (EPName n) = TyVar n
+ffiParamTy p = TyAuth p None
+
+ffiParamOf : Ty -> Option EffParamTy
+ffiParamOf (TyAuth p _) = Some p
+ffiParamOf (TyVar m) = Some (EPName m)
+ffiParamOf _ = None
+
+ffiSameParam : EffParamTy -> EffParamTy -> Bool
+ffiSameParam p q = ppTy (TyAuth p None) == ppTy (TyAuth q None)
+
+-- Two written rows are the same row: the same atoms, each label by its
+-- declared identity, and the same row variables.
+ffiSameRow : List EffAtomTy ->
+  List String ->
+  List EffAtomTy ->
+  List String ->
+  Bool
+ffiSameRow l1 t1 l2 t2 =
+  listLen l1 == listLen l2
+    && allList (a => anyList (b => ffiSameAtom a b) l2) l1
+    && ffiSameNames t1 t2
+
+ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
+ffiSameAtom a b =
+  sameTyConHead a.eatLabel a.eatOrigin b.eatLabel b.eatOrigin
+    && ffiSameParam a.eatParam b.eatParam
+
+ffiSameNames : List String -> List String -> Bool
+ffiSameNames xs ys = listLen xs == listLen ys && allList (x => contains x ys) xs
+
 -- Two written types are the same type: heads by identity, variables by
--- name, authorities and bare rows by their rendering.
+-- name, rows by `ffiSameRow`, authorities by their rendering.
 ffiSameTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Bool
 ffiSameTy aliases a b = match (ffiSigStrip aliases a, ffiSigStrip aliases b)
+  (TyEffect l1 t1 x, y) => match ffiRowParts y
+    (l2, t2, y2) => ffiSameRow l1 t1 l2 t2 && ffiSameTy aliases x y2
+  (x, TyEffect l2 t2 y) => ffiSameRow [] [] l2 t2 && ffiSameTy aliases x y
   (TyCon { tyConName = n1, tyConOrigin = o1 }, TyCon { tyConName = n2, tyConOrigin = o2 }) =>
     sameTyConHead n1 o1 n2 o2
   (TyVar x, TyVar y) => x == y
@@ -37552,17 +37667,33 @@ ffiSameTy aliases a b = match (ffiSigStrip aliases a, ffiSigStrip aliases b)
     listLen xs == listLen ys
       && allList (p => ffiSameTy aliases (fst p) (snd p)) (zipL xs ys)
   (TyQual x _ _, TyQual y _ _) => ffiSameTy aliases x y
-  (TyAuth p _, TyAuth q _) => ppTy (TyAuth p None) == ppTy (TyAuth q None)
-  (TyRow l1 t1 _, TyRow l2 t2 _) =>
-    ppTy (TyRow l1 t1 None) == ppTy (TyRow l2 t2 None)
+  (TyAuth p _, TyAuth q _) => ffiSameParam p q
+  (TyRow l1 t1 _, TyRow l2 t2 _) => ffiSameRow l1 t1 l2 t2
   _ => False
+
+-- A written type with its outer row, which an unwritten row leaves empty.
+ffiRowParts : Ty -> (List EffAtomTy, List String, Ty)
+ffiRowParts (TyEffect l t inner) = (l, t, inner)
+ffiRowParts t = ([], [], t)
+
+ffiRowBody : Ty -> Ty
+ffiRowBody t = match ffiRowParts t
+  (_, _, inner) => inner
 
 ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
 ffiSigStrip aliases t = match expandAliasHeadTyWith aliases t
-  TyEffect _ _ inner => ffiSigStrip aliases inner
   TyConstrained _ inner => ffiSigStrip aliases inner
   TyNamed _ inner => ffiSigStrip aliases inner
   u => u
+
+-- The row each arrow of a signature's spine carries on its result, in order.
+ffiSpineRows : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  List (List EffAtomTy, List String)
+ffiSpineRows aliases t = match ffiSigStrip aliases t
+  TyFun _ r => match ffiRowParts r
+    (l, tl, inner) => (l, tl) :: ffiSpineRows aliases inner
+  _ => []
 
 -- The catalog row with each index binder the declaration fixed replaced by
 -- what it wrote there: `<Net h>` against `Socket "a.com/*"` is
@@ -37588,9 +37719,10 @@ ffiInstAtom sub a = match a.eatParam
 --
 -- 🚨 THE FIFTH DECLARATION RULE, AND IT IS ABOUT THE EFFECT ROW, NOT THE SHAPE.
 --
--- `ffiCheckExternsShadow` above compares types and walks through effect rows
--- on purpose, so `<>` and `<FileWrite>` are one type to it.  Without this rule,
--- R2's own escape-hatch sentence stays live for every catalog name: a local
+-- `ffiCheckExternsShadow` above leaves the row each arrow's result carries to
+-- this rule, so `<>` and `<FileWrite>` on `writeFile`'s last arrow are one type
+-- to it.  Without this rule, R2's own escape-hatch sentence stays live for every
+-- catalog name: a local
 --
 --   extern writeFile : String -> String -> <> Result String Unit
 --
@@ -37600,8 +37732,10 @@ ffiInstAtom sub a = match a.eatParam
 -- `writeFile` and the file is really written.  `medaka check` printed
 -- `innocent : String -> Unit` for a function that writes to disk, at exit 0.
 --
--- THE RULE IS SUBSUMPTION, NOT EQUALITY, AND NOT A BAN.  The declared row must
--- COVER the catalog's own row (declared ⊇ catalog); it may be wider.  Two reasons
+-- The rule is subsumption, not equality, and not a ban.  At each arrow of the
+-- spine, the declared row must cover the catalog's row at the same arrow
+-- (declared ⊇ catalog), instantiated by the shadow rule's match; it may be
+-- wider.  A row written at an earlier arrow does not cover a later one.  Two reasons
 -- it is not the blunter "refuse catalog redeclaration outright":
 --
 --   * the compatible-redeclaration idiom is load-bearing in the tree, DERIVED not
@@ -37640,15 +37774,59 @@ ffiCheckCatalogRowGo : List Decl -> Unit
 ffiCheckCatalogRowGo [] = ()
 ffiCheckCatalogRowGo ((DExtern _ n ty) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some (cat, catRow, catNames) =>
-      ffiCheckCatalogRowOne
-        n
-        ty
-        (ffiInstRow catNames (optionOr [] (ffiSigInstance cat ty)) catRow)
-        catNames
-    _ => ()
+    Some (cat, catNames) => match ffiSigInstance cat ty
+      Some sub =>
+        let aliases = perRun.value.aliasTableRef.value
+        fold
+          (_ p => ffiCheckSpineRow n ty catNames sub (fst p) (snd p))
+          ()
+          (zipL (ffiSpineRows aliases cat) (ffiSpineRows aliases ty))
+      -- the shadow rule has refused the declaration
+      None => ()
+    None => ()
   ffiCheckCatalogRowGo rest
 ffiCheckCatalogRowGo (_ :: rest) = ffiCheckCatalogRowGo rest
+
+-- One arrow of the spine: the catalog's row there, instantiated by the match
+-- (its row variable becomes the row the declaration wrote for it), against the
+-- row the declaration writes at the same arrow.
+ffiCheckSpineRow : String ->
+  Ty ->
+  List (String, Int) ->
+  List (String, Ty) ->
+  (List EffAtomTy, List String) ->
+  (List EffAtomTy, List String) ->
+  Unit
+ffiCheckSpineRow n ty catNames sub cat decl =
+  let tails = ffiExpandTails sub (snd cat)
+  let _ =
+    ffiCheckCatalogRowOne
+      n
+      ty
+      (ffiInstRow catNames sub (fst cat) ++ fst tails)
+      catNames
+      (fst decl)
+  match filterList (v => not (contains v (snd decl))) (snd tails)
+    [] => ()
+    missing =>
+      pushTypeErrorAt
+        "T-FFI-CATALOG-NARROW"
+        (firstTyLoc ty)
+        (ffiCatalogTailMsg n missing)
+
+ffiExpandTails : List (String, Ty) ->
+  List String ->
+  (List EffAtomTy, List String)
+ffiExpandTails _ [] = ([], [])
+ffiExpandTails sub (v :: vs) =
+  let rest = ffiExpandTails sub vs
+  match lookupAssoc v sub
+    Some (TyRow bl bt _) => (bl ++ fst rest, bt ++ snd rest)
+    _ => (fst rest, v :: snd rest)
+
+ffiCatalogTailMsg : String -> List String -> String
+ffiCatalogTailMsg n missing =
+  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in also performs the row variable \{joinWith ", " missing}, which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '\{n}' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"
 
 -- Both rows are lifted with the SAME authority variable per argument
 -- position, so a binder covers the catalog's binder only when it names the
@@ -37658,9 +37836,9 @@ ffiCheckCatalogRowOne : String ->
   Ty ->
   List EffAtomTy ->
   List (String, Int) ->
+  List EffAtomTy ->
   Unit
-ffiCheckCatalogRowOne n ty catRow catNames =
-  let declRow = ffiWrittenRow ty
+ffiCheckCatalogRowOne n ty catRow catNames declRow =
   let declNames = namedArgOrder ty
   let cells = positionCells (catNames ++ declNames)
   let catAtoms = atomsOfWrittenIn (positionalSigVars catNames cells) catRow
@@ -37736,21 +37914,6 @@ paramIsTopDomain (PPrefix None) = True
 paramIsTopDomain (PSet None) = True
 paramIsTopDomain (PProduct []) = True
 paramIsTopDomain _ = False
-
--- The WRITTEN terminal effect row of a signature: walk the arrow spine to the
--- result position and read the labels the author spelled there.  A mirror of
--- `ffiResultRowHasFFI`'s walk (same spine, same stopping point) rather than a new
--- one — `Int -> Int -> <> Int` puts the row on the LAST result, so the recursion
--- has to follow the spine, and a signature with no row at all is the EMPTY row,
--- which is the honest reading (`extern f : Int -> Int` performs nothing).
--- `expandAliasHeadTy` at each step for `ffiSigShapeKey`'s reason: an alias-named
--- arrow is invisible to a purely syntactic walk.
-ffiWrittenRow : Ty -> List EffAtomTy
-ffiWrittenRow ty = match expandAliasHeadTy ty
-  TyConstrained _ inner => ffiWrittenRow inner
-  TyFun _ r => ffiWrittenRow r
-  TyEffect ls _ _ => ls
-  _ => []
 
 -- ── the RESERVED-NAMESPACE rule (S0-4, review round of `ffi-lower-and-link`) ─
 --

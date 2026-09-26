@@ -1,0 +1,7 @@
+Ref : (Unit -> <IO> Unit) -> Ref (Unit -> <IO> Unit)
+arrayMakeWith : Int -> (Int -> <IO> a) -> <IO> Array a
+later : Unit -> <IO> Unit
+main : <IO> Unit
+numbered : Int -> <IO> Array Int
+save : (path : String) -> <FileWrite path> Result String Unit
+writeFile : (path : String) -> String -> <FileWrite path> Result String Unit

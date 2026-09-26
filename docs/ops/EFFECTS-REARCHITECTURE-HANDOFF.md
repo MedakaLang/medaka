@@ -836,8 +836,34 @@ reviewer on a built binary, each refusal paired with a control.
   written beside it. **Your call:** revert that line if you would rather
   find the Ir elsewhere first.
 
-Owed from this round, not acted on:
+*Second review round (on `5396fd785`).* The instance match walked through
+every effect row, so two S0s were new and two older ones stood:
 
+- a type variable instantiated with an effectful function type was read back
+  as a pure one (`extern Ref : (Unit -> <IO> Unit) -> Ref (Unit -> Unit)`),
+  laundering any effect or authority, in one module or across two;
+- a bare row compared by rendering lost label identity, so one module's
+  `Beep` passed as another's;
+- older: a callback's row was never compared, and a catalog row variable
+  read as empty (`arrayMakeWith … (Int -> <IO> a) -> <> Array a`);
+- older: a row moved to an earlier arrow escaped (`ffiWrittenRow` read only
+  the first row on the spine).
+
+Rows are now part of the instance relation. Off the arrow spine they match
+exactly, labels by identity, and a catalog row variable binds the row the
+declaration wrote for it. The row each arrow's result carries is compared
+arrow by arrow, the catalog's instantiated by the same match. Pinned by
+`effect_catalog_redeclare_rows` and its `_ok` control.
+
+Owed from the review rounds, not acted on:
+
+- A widened socket (`netTcpConnect : String -> Int -> <Net> Result String
+  (Socket *)`) is refused: an argument's binder cannot be fixed, even to the
+  top. It over-charges, which would be safe; admitting it is a design
+  choice.
+- The narrow message for an index the declaration leaves free reads the
+  catalog's `<Net h>` as `<Net>` (the top). The refusal is right, the
+  wording is not. Older: it can also over-report which atoms are missing.
 - `pdsSignalStart`/`pdsSignalRequested` still charge `<Net>` for a signal
   handler, which §7's reading of `Net` as an endpoint does not describe. It
   over-charges, which is safe; the right label is a question for you.

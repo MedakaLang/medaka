@@ -722,7 +722,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 134
+typecheckErrorFixtureCount = 136
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -736,6 +736,8 @@ typecheckPreludeDep = [
   "effect_socket_forge.mdk",
   "effect_socket_redeclare.mdk",
   "effect_socket_redeclare_ok.mdk",
+  "effect_catalog_redeclare_rows.mdk",
+  "effect_catalog_redeclare_rows_ok.mdk",
   "effect_data_field_ok.mdk",
   "effect_data_field_launder.mdk",
   "effect_existential_ok.mdk",
