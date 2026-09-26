@@ -2162,6 +2162,7 @@ TIME_STAGES="parse desugar resolve mark typecheck elaborate dce mangle fmt lint 
 # (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_TIME="
 manydefs:lint
+modules:typecheck
 nestedparens:parse
 nestedparens:fmt
 nestedparens:lint
@@ -2247,7 +2248,16 @@ KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.60"
 #
 # ⚠️ That second run is also where the 2.22 floor came from — the arm that proved the
 # PROMOTE branch works is the same one that proved 2.60 would have fired it spuriously.
-KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="2.00"
+#
+# RE-LEDGERED 2026-09-26 with TFIXED 1.80. The 2026-09-25 promotion below removed the
+# row after one CI run read r2=1.97, under the old 2.00. Unledgered, the stage fell to
+# the general verdict, whose `climbing` clause (r2 > r1 x 1.15 AND r2 > 2.45) fires
+# inside this arm's normal band: it ejected #3454 from the merge queue twice, r1=1.93
+# r2=2.50 (run 36206760216) and r1=1.96 r2=2.54 (run 36212673109). On the same pair of
+# builds the deterministic arm read identical curves (stage_ir_scaling
+# `modules:typecheck` r1=2.176, r2=2.189 against 2.190 on main). The observed floor is
+# now 1.97, so TFIXED sits under it, at 1.80; the ceiling is unchanged.
+KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="1.80"
 # nestedparens:{parse,fmt,lint} (TIME) — see the block above KNOWN_SLOW_TIME for the
 # sample band and the margin/placement rationale. TFIXED uses the file's 2.60
 # convention on all three (none straddles the 3.0 threshold the way
@@ -3157,6 +3167,9 @@ clause_of() {
 #     test/diff_compiler_stage_ir_scaling.sh's `modules:typecheck` KNOWN_SLOW row.
 #     If this TIME arm flaps above 3.0 on a loud box, re-ledger it with a ceiling
 #     rather than reading it as a regression of that fix.
+#     RE-LEDGERED 2026-09-26: unledgered, it went red on the general verdict's
+#     `climbing` clause at r2=2.50 and 2.54, inside its normal band, not above 3.0.
+#     See the KNOWN_TCEIL_modules_typecheck row.
 _cc_t="$(clause_of threshold 3.0)"; _cc_c="$(clause_of climbing)"
 case "$_cc_t" in
   *'r2 > 3.0x'*) ;;
