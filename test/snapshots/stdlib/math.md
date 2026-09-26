@@ -1,5 +1,5 @@
 # META
-source_lines=293
+source_lines=306
 stages=DESUGAR,MARK
 # SOURCE
 {- | Floating-point math and a few integer helpers.
@@ -158,7 +158,9 @@ floorDiv a b =
    2 -}
 export
 floorMod : Int -> Int -> Int
-floorMod a b = a - floorDiv a b * b
+floorMod a b =
+  let r = a % b
+  if r /= 0 && r < 0 /= (b < 0) then r + b else r
 
 -- > floorMod 7 (0 - 3)
 -- -2
@@ -175,14 +177,22 @@ floorMod a b = a - floorDiv a b * b
    6 -}
 export
 gcd : Int -> Int -> Int
-gcd a b = gcdGo (absInt a) (absInt b)
+gcd a b = 0 - gcdGo (negMagnitude a) (negMagnitude b)
 
 -- > gcd 17 5
 -- 1
+-- > gcd intMinBound 6
+-- 2
 
+-- Euclid on non-positive values: `intMinBound` has no positive `Int`, so the
+-- magnitudes are negated rather than made positive, and only a result of 2^62
+-- (the gcd of `intMinBound` with itself or with 0) cannot be returned.
 gcdGo : Int -> Int -> Int
 gcdGo a 0 = a
 gcdGo a b = gcdGo b (a % b)
+
+negMagnitude : Int -> Int
+negMagnitude n = if n > 0 then 0 - n else n
 
 {- | The least common multiple, never negative.
 
@@ -218,11 +228,14 @@ powInt b n = if n < 0 then 1 else powGo b n 1
 -- > powInt 5 3
 -- 125
 
+-- The base is squared only while bits of `n` remain, so the last square, which
+-- the result never uses, is not computed (it can pass `Int` when the result
+-- does not).
 powGo : Int -> Int -> Int -> Int
 powGo _ 0 acc = acc
 powGo b n acc =
   let acc2 = if n % 2 == 1 then acc * b else acc
-  powGo (b * b) (n / 2) acc2
+  if n / 2 == 0 then acc2 else powGo (b * b) (n / 2) acc2
 
 -- Absolute value on Int (local helper: core's `abs` is a Num method but a
 -- monomorphic helper keeps the fast integer path here self-contained).
@@ -315,12 +328,14 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EBinOp "*" (EApp (EApp (EVar "floorDiv") (EVar "a")) (EVar "b")) (EVar "b"))))
+(DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "r") (EBinOp "%" (EVar "a") (EVar "b"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "+" (EVar "r") (EVar "b")) (EVar "r")))))
 (DTypeSig true "gcd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "gcd" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EApp (EVar "absInt") (EVar "a"))) (EApp (EVar "absInt") (EVar "b"))))
+(DFunDef false "gcd" ((PVar "a") (PVar "b")) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EVar "gcdGo") (EApp (EVar "negMagnitude") (EVar "a"))) (EApp (EVar "negMagnitude") (EVar "b")))))
 (DTypeSig false "gcdGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "gcdGo" ((PVar "a") (PLit (LInt 0))) (EVar "a"))
 (DFunDef false "gcdGo" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EVar "b")) (EBinOp "%" (EVar "a") (EVar "b"))))
+(DTypeSig false "negMagnitude" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "negMagnitude" ((PVar "n")) (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")))
 (DTypeSig true "lcm" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "lcm" ((PLit (LInt 0)) PWild) (ELit (LInt 0)))
 (DFunDef false "lcm" (PWild (PLit (LInt 0))) (ELit (LInt 0)))
@@ -330,7 +345,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "powInt" ((PVar "b") (PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (ELit (LInt 1)) (EApp (EApp (EApp (EVar "powGo") (EVar "b")) (EVar "n")) (ELit (LInt 1)))))
 (DTypeSig false "powGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "powGo" (PWild (PLit (LInt 0)) (PVar "acc")) (EVar "acc"))
-(DFunDef false "powGo" ((PVar "b") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 1))) (EBinOp "*" (EVar "acc") (EVar "b")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "powGo") (EBinOp "*" (EVar "b") (EVar "b"))) (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (EVar "acc2")))))
+(DFunDef false "powGo" ((PVar "b") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 1))) (EBinOp "*" (EVar "acc") (EVar "b")) (EVar "acc"))) (DoExpr (EIf (EBinOp "==" (EBinOp "/" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))) (EVar "acc2") (EApp (EApp (EApp (EVar "powGo") (EBinOp "*" (EVar "b") (EVar "b"))) (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (EVar "acc2"))))))
 (DTypeSig false "absInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "absInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")))
 (DProp false "gcd is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "gcd") (EVar "b")) (EVar "a"))))
@@ -359,12 +374,14 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EBinOp "*" (EApp (EApp (EVar "floorDiv") (EVar "a")) (EVar "b")) (EVar "b"))))
+(DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "r") (EBinOp "%" (EVar "a") (EVar "b"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "+" (EVar "r") (EVar "b")) (EVar "r")))))
 (DTypeSig true "gcd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "gcd" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EApp (EVar "absInt") (EVar "a"))) (EApp (EVar "absInt") (EVar "b"))))
+(DFunDef false "gcd" ((PVar "a") (PVar "b")) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EVar "gcdGo") (EApp (EVar "negMagnitude") (EVar "a"))) (EApp (EVar "negMagnitude") (EVar "b")))))
 (DTypeSig false "gcdGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "gcdGo" ((PVar "a") (PLit (LInt 0))) (EVar "a"))
 (DFunDef false "gcdGo" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EVar "b")) (EBinOp "%" (EVar "a") (EVar "b"))))
+(DTypeSig false "negMagnitude" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "negMagnitude" ((PVar "n")) (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")))
 (DTypeSig true "lcm" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "lcm" ((PLit (LInt 0)) PWild) (ELit (LInt 0)))
 (DFunDef false "lcm" (PWild (PLit (LInt 0))) (ELit (LInt 0)))
@@ -374,7 +391,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "powInt" ((PVar "b") (PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (ELit (LInt 1)) (EApp (EApp (EApp (EVar "powGo") (EVar "b")) (EVar "n")) (ELit (LInt 1)))))
 (DTypeSig false "powGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "powGo" (PWild (PLit (LInt 0)) (PVar "acc")) (EVar "acc"))
-(DFunDef false "powGo" ((PVar "b") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 1))) (EBinOp "*" (EVar "acc") (EVar "b")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "powGo") (EBinOp "*" (EVar "b") (EVar "b"))) (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (EVar "acc2")))))
+(DFunDef false "powGo" ((PVar "b") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 1))) (EBinOp "*" (EVar "acc") (EVar "b")) (EVar "acc"))) (DoExpr (EIf (EBinOp "==" (EBinOp "/" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))) (EVar "acc2") (EApp (EApp (EApp (EVar "powGo") (EBinOp "*" (EVar "b") (EVar "b"))) (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (EVar "acc2"))))))
 (DTypeSig false "absInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "absInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")))
 (DProp false "gcd is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "gcd") (EVar "b")) (EVar "a"))))

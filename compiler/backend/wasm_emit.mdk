@@ -285,6 +285,7 @@ import backend.wasm_preamble.{
   stderrByteImportLines,
   stderrRuntimeLines,
   trapIntRuntimeLines,
+  intRuntimeLines,
   strLeafRuntimeLines,
   strConcatRuntimeLines,
   appendRuntimeLines,
@@ -368,6 +369,9 @@ data WasmEmit = WasmEmit {
   functionReferenceNames : Ref (OrdMap Unit),
   trapImportNeeded : Ref Bool,
   trapIntNeeded : Ref Bool,
+  -- the checked `Int` operators and `Int` shifts this emission called, by helper
+  -- name (`add`, `left`, ...), for `intRuntimeLines` (wasm_preamble.mdk).
+  intRtUsed : Ref (List String),
   useEPut : Ref Bool,
   useDivGuard : Ref Bool,
   useRecUpdate : Ref Bool,
@@ -440,6 +444,7 @@ freshWasmEmit mode = WasmEmit {
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
   trapIntNeeded = Ref False,
+  intRtUsed = Ref [],
   useEPut = Ref False,
   useDivGuard = Ref False,
   useRecUpdate = Ref False,
@@ -3070,6 +3075,7 @@ emitScalarProgram emit fnNames valNames groups =
   -- sections regardless of order, so a late `(import …)` field is fine.
   let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []
   let trapIntRt = if !emit.trapIntNeeded then trapIntRuntimeLines else []
+  let intRt = intRuntimeLines !emit.intRtUsed
   joinNl
     (header
       ++ trapImport
@@ -3077,6 +3083,7 @@ emitScalarProgram emit fnNames valNames groups =
       ++ fns
       ++ ioRuntimeLines
       ++ trapIntRt
+      ++ intRt
       ++ initLines
       ++ [")"])
 
@@ -3298,21 +3305,59 @@ emitVarI32 emit fnNames valNames env x =
         ++ x
         ++ "' (scalar mode: not a local, global value, or known function)")
 
--- N1/WP2: sign-extend the i64 on the stack from bit 62, wrapping it into the 63-bit
--- Int range — the `(x << 1) >> 1` pair that mirrors native's tag/untag shift.  Ref mode
--- gets this inside `$mdk_box_int` (it re-boxes after every arith op), but SCALAR mode
--- (`useRef == False`: a pure-Int program, no ADT/closure/string) never boxes — its
--- values live as raw i64 on the wasm stack from literal to `$mdk_print_int` — so the
--- wrap has to be emitted at each producing op or 64-bit intermediates escape.
+-- Sign-extend the i64 on the stack from bit 62 — the `(x << 1) >> 1` pair that
+-- mirrors native's tag/untag shift.  Only a fixed-width (`U8`/`U16`/`U32`) scalar
+-- site still emits it, ahead of its mask, where it cannot change the kept low bits;
+-- an `Int` site checks instead of wrapping (`intChkCall`).
 normInt64 : List String
 normInt64 = ["i64.const 1", "i64.shl", "i64.const 1", "i64.shr_s"]
 
--- Which scalar-mode i64 ops can carry a result out of the 63-bit range, given operands
--- already in it?  `+ - *` overflow; `/` only at (-2^62)/(-1) → +2^62 (which is also the
--- only i64.div_s that could engine-trap once INT64_MIN is unreachable — normalizing here
--- means the wrap happens instead, matching native).  `%` and the comparisons cannot.
-scalarNeedsNorm : String -> Bool
-scalarNeedsNorm op = contains op ["+", "-", "*", "/"]
+-- The `Int` operators whose exact result can leave the 63-bit range, given operands
+-- already in it: `+ - *`, and `/` only at intMinBound / -1.  `%` and the
+-- comparisons cannot.
+intOpCanOverflow : String -> Bool
+intOpCanOverflow op = contains op ["+", "-", "*", "/"]
+
+-- A call to the checked `Int` operator for `op` (`$mdk_int_add`… in
+-- `intRuntimeLines`): it leaves the exact result on the stack, or stops the
+-- program with E-INT-OVERFLOW.  Operands and result are raw 63-bit i64s, so the
+-- same call serves scalar and ref mode (ref mode reboxes after it).  Demands the
+-- runtime block and the stderr/decimal trap seam its trap path writes through.
+intChkCall : WasmEmit -> String -> List String
+intChkCall emit op =
+  let _ = noteIntRt emit (intChkName op)
+  ["call $mdk_int_" ++ intChkName op]
+
+-- demand the `intRuntimeLines` helper `name`, and the stderr/decimal trap seam
+-- every one of them writes through.
+noteIntRt : WasmEmit -> String -> Unit
+noteIntRt emit name =
+  let used = !emit.intRtUsed
+  let _ =
+    if contains name used then () else setRef emit.intRtUsed (name :: used)
+  let _ = setRef emit.trapImportNeeded True
+  setRef emit.trapIntNeeded True
+
+-- `Int` negation, checked the same way (`$mdk_int_neg`).
+intChkNegCall : WasmEmit -> List String
+intChkNegCall emit =
+  let _ = noteIntRt emit "neg"
+  ["call $mdk_int_neg"]
+
+-- An `Int` shift (`$mdk_shift_left`/`$mdk_shift_right`, "left"/"right"): raw i64
+-- value and amount in, raw i64 out.  Its negative-amount panic streams the amount
+-- through the decimal trap seam.
+intShiftCall : WasmEmit -> String -> List String
+intShiftCall emit dir =
+  let _ = noteIntRt emit dir
+  ["call $mdk_shift_" ++ dir]
+
+intChkName : String -> String
+intChkName "+" = "add"
+intChkName "-" = "sub"
+intChkName "*" = "mul"
+intChkName "/" = "div"
+intChkName op = panic ("wasm: no checked Int operator '" ++ op ++ "'")
 
 -- `uNTruncate x` in ref mode: unbox, keep the head's low bits, rebox.
 emitTruncateRef : Prog -> List String -> Int -> String -> CExpr -> List String
@@ -3353,7 +3398,18 @@ emitBinI32 : WasmEmit ->
 emitBinI32 emit fnNames valNames env op l r tag =
   let (li, _) = emitScalarExpr emit fnNames valNames env l
   let (ri, _) = emitScalarExpr emit fnNames valNames env r
-  let nrm = if scalarNeedsNorm op then normInt64 else []
+  -- An `Int` operator that can leave the 63-bit range calls its checked helper
+  -- (E-INT-OVERFLOW).  A fixed-width site computes the i64 op and keeps its low
+  -- bits (`fixedWidthWrapW`); the sign-extend ahead of the mask cannot change them.
+  let opInstrs =
+    if isFixedWidthHead tag then
+      [wasmBinOp64 emit op]
+        ++ (if intOpCanOverflow op then normInt64 else [])
+        ++ fixedWidthWrapW tag op
+    else if intOpCanOverflow op then
+      intChkCall emit op
+    else
+      [wasmBinOp64 emit op]
   -- layer-17 §2.1: i64 arithmetic.  A comparison yields wasm i32 0/1, so extend it
   -- back to the uniform i64 value rep.
   if isCmpOp op then
@@ -3362,20 +3418,9 @@ emitBinI32 emit fnNames valNames env op l r tag =
     -- B5: scalar-mode concrete-Int `/`/`%` get the same coded divisor-zero guard as
     -- ref mode (single function-scope $__sdivr i64 scratch; reuse across nested divs is
     -- safe — each store-then-immediately-use completes before the next).
-
-    (
-      li
-        ++ ri
-        ++ emitDivZeroGuard emit op "$__sdivr"
-        ++ [wasmBinOp64 emit op]
-        ++ nrm,
-      binOpTy op,
-    )
+    (li ++ ri ++ emitDivZeroGuard emit op "$__sdivr" ++ opInstrs, binOpTy op)
   else
-    (
-      li ++ ri ++ [wasmBinOp64 emit op] ++ nrm ++ fixedWidthWrapW tag op,
-      binOpTy op,
-    )
+    (li ++ ri ++ opInstrs, binOpTy op)
 
 emitUnI32 : WasmEmit ->
   List String ->
@@ -3386,8 +3431,8 @@ emitUnI32 : WasmEmit ->
   (List String, WTy)
 emitUnI32 emit fnNames valNames env "-" x =
   let (xi, _) = emitScalarExpr emit fnNames valNames env x
-  -- N1: negation overflows at exactly -2^62 (0 - (-2^62) = +2^62), so it wraps too.
-  (["i64.const 0"] ++ xi ++ ["i64.sub"] ++ normInt64, WInt)
+  -- negation overflows at exactly intMinBound, whose negation is 2^62.
+  (xi ++ intChkNegCall emit, WInt)
 emitUnI32 emit _ _ _ op _ =
   gapLTy emit ("scalar-mode: unsupported unary op '" ++ op ++ "'")
 
@@ -3703,6 +3748,9 @@ emitRefProgram prog groups =
   -- numbered trap is actually emitted.
   let trapIntRt =
     if (progEmit prog).trapIntNeeded.value then trapIntRuntimeLines else []
+  -- N4 (#3377): the checked `Int` operators and the `Int` shifts, each set by
+  -- emitting a site that calls them (and each forcing the two trap flags above).
+  let intRt = intRuntimeLines (progEmit prog).intRtUsed.value
   -- S-4: the capture-free closure globals (wConstClos), accumulated during fn / impl /
   -- default / init body emission.  Bound HERE, after every body-emit binding above, for
   -- the same reason `trapImport` and `dataSegs` are; their LINES are placed with the
@@ -3751,6 +3799,7 @@ emitRefProgram prog groups =
       ++ fileBytesRt
       ++ floatStrRt
       ++ trapIntRt
+      ++ intRt
       ++ dataSegs
       ++ forceFns
       ++ initLines
@@ -7185,9 +7234,9 @@ emitBinRef prog env d op l r tag =
     -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
     -- of the trapping inline int primitive.  The static Int/Float fast paths are unchanged.
     -- S2/#2359 correction of #371: only the SPECIFIC operator's helper is demanded
-    -- (setValueArithFlag below), and trapImportNeeded is forced ONLY on the div/mod
-    -- arm — $mdk_value_div/$mdk_value_mod's divisor-zero guard is the only thing in
-    -- this family referencing $mdk_write_err_byte; add/sub/mul never do.
+    -- (setValueArithFlag below).  The div/mod arm forces trapImportNeeded for its
+    -- divisor-zero guard; add/sub/mul/div get it from their Int arm's checked
+    -- operator (setValueArithFlag → noteIntRt).
 
     let _ = setValueArithFlag (progEmit prog) op
     let _ = setRef (progEmit prog).trapImportNeeded True
@@ -7218,21 +7267,27 @@ emitIntBinRef : Prog ->
 emitIntBinRef prog env d op l r tag =
   let li = emitRefExpr prog env d l ++ ["call $mdk_unbox_int"]
   let ri = emitRefExpr prog env d r ++ ["call $mdk_unbox_int"]
+  -- N4 (#3377): an `Int` `+ - * /` runs its checked operator BEFORE the rebox, so an
+  -- out-of-range result stops with E-INT-OVERFLOW rather than reaching
+  -- `$mdk_box_int`'s sign-extend.  A fixed-width site keeps the plain i64 op and
+  -- its mask (`fixedWidthWrapW`): the U types wrap.
+  let opInstrs =
+    if intOpCanOverflow op && not (isFixedWidthHead tag) then
+      intChkCall (progEmit prog) op
+    else
+      [wasmBinOp64 (progEmit prog) op]
   -- B5: concrete-Int `/`/`%` get a divisor-zero guard emitting the coded trap line
-  -- (peer of the native emitIntDivZeroChecked) before the raw i64.div_s/rem_s.
+  -- (peer of the native emitIntDivZeroChecked) before the division.
   if op == "/" || op == "%" then
     li
       ++ ri
       ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
-      ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
+      ++ opInstrs
+      ++ ["call $mdk_box_int"]
   else if isCmpOp op then
     li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "ref.i31"]
   else
-    li
-      ++ ri
-      ++ [wasmBinOp64 (progEmit prog) op]
-      ++ fixedWidthWrapW tag op
-      ++ ["call $mdk_box_int"]
+    li ++ ri ++ opInstrs ++ fixedWidthWrapW tag op ++ ["call $mdk_box_int"]
 
 -- A `U64` operator (the typechecker stamps both arithmetic and comparison sites
 -- `U64`): unbox both i64 payloads, then the unsigned i64 op.  `+ - *` wrap modulo
@@ -7325,14 +7380,21 @@ valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 
 -- S2/#2359: set ONLY the ref for the operator actually demanded, so
 -- valueArithRt (wasm_emit.mdk) splices in just that operator's helper instead
--- of the whole add/sub/mul/div/mod family.
+-- of the whole add/sub/mul/div/mod family.  The `+ - * /` helpers' Int arms call
+-- the checked operators, so they also demand those (`noteIntRt`).
 setValueArithFlag : WasmEmit -> String -> Unit
-setValueArithFlag emit "+" = setRef emit.useValueAdd True
-setValueArithFlag emit "-" = setRef emit.useValueSub True
-setValueArithFlag emit "*" = setRef emit.useValueMul True
-setValueArithFlag emit "/" = setRef emit.useValueDiv True
-setValueArithFlag emit "%" = setRef emit.useValueMod True
-setValueArithFlag _ op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
+setValueArithFlag emit op =
+  let _ = if intOpCanOverflow op then noteIntRt emit (intChkName op)
+  setValueArithFlagOnly emit op
+
+setValueArithFlagOnly : WasmEmit -> String -> Unit
+setValueArithFlagOnly emit "+" = setRef emit.useValueAdd True
+setValueArithFlagOnly emit "-" = setRef emit.useValueSub True
+setValueArithFlagOnly emit "*" = setRef emit.useValueMul True
+setValueArithFlagOnly emit "/" = setRef emit.useValueDiv True
+setValueArithFlagOnly emit "%" = setRef emit.useValueMod True
+setValueArithFlagOnly _ op =
+  panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 
 -- ── B5: coded runtime-trap helpers (RUNTIME-TRAP-UNIFY-DESIGN §3 (5), §7 forks 1-2) ──
 -- The WasmGC peer of the native traps: emit the same coded stderr line the interpreter
@@ -7626,9 +7688,10 @@ emitUnRef prog env d "-" x =
         "struct.new $float",
       ]
   else
-    -- layer-17 §2.1: integer negate over the i64 box/unbox seam.
+    -- layer-17 §2.1: integer negate over the i64 box/unbox seam, checked
+    -- (intMinBound has no negation).
     let xi = emitRefExpr prog env d x ++ ["call $mdk_unbox_int"]
-    ["i64.const 0"] ++ xi ++ ["i64.sub", "call $mdk_box_int"]
+    xi ++ intChkNegCall (progEmit prog) ++ ["call $mdk_box_int"]
 emitUnRef prog _ _ op _ =
   gapLP prog ("ref-mode: unsupported unary op '" ++ op ++ "'")
 
@@ -8007,6 +8070,7 @@ emitLeafExternRef : Prog ->
 -- `illegal cast` when lo/hi/draw fall outside i31 (e.g. `randomInt 0 1000000000000000`
 -- draws 457532755261734).  $mdk_random_int is i64→i64 (mirrors native mdk_random_int:
 -- inclusive, unsigned modulus of hi-lo+1).
+-- lo > hi answers lo; every other span, the full Int range's 2^63 included, draws.
 emitLeafExternRef prog env d "randomInt" [lo, hi] =
   emitRefExpr prog env d lo
     ++ ["call $mdk_unbox_int"]
@@ -8240,8 +8304,10 @@ emitLeafExternRef prog env d "intShiftRight" args =
   emitLeafExternRef prog env d "shiftRight" args
 -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
 -- unbox both to i64 via $mdk_unbox_int, apply the i64 op, rebox via $mdk_box_int.
--- shiftRight uses i64.shr_u (LOGICAL) — shiftRight is defined as logical in runtime/medaka_rt.c
--- (">> on the untagged non-negative 63-bit value == OCaml lsr").
+-- The shifts call `$mdk_shift_left`/`$mdk_shift_right` (intRuntimeLines), which
+-- define every amount as native's mdk_shift_left/right do: a negative amount panics,
+-- 63 or more shifts every bit out, and shiftRight is arithmetic.  shiftLeft's bits
+-- past bit 62 are dropped by $mdk_box_int's sign-extend, as native's retag drops them.
 emitLeafExternRef prog env d "bitAnd" [a, b] =
   emitRefExpr prog env d a
     ++ ["call $mdk_unbox_int"]
@@ -8255,7 +8321,8 @@ emitLeafExternRef prog env d "shiftLeft" [a, b] =
     ++ ["call $mdk_unbox_int"]
     ++ emitRefExpr prog env d b
     ++ ["call $mdk_unbox_int"]
-    ++ ["i64.shl", "call $mdk_box_int"]
+    ++ intShiftCall (progEmit prog) "left"
+    ++ ["call $mdk_box_int"]
 emitLeafExternRef prog env d "shiftLeft" _ =
   gapLP prog "wasm stage-A: shiftLeft takes exactly two arguments"
 emitLeafExternRef prog env d "shiftRight" [a, b] =
@@ -8263,7 +8330,8 @@ emitLeafExternRef prog env d "shiftRight" [a, b] =
     ++ ["call $mdk_unbox_int"]
     ++ emitRefExpr prog env d b
     ++ ["call $mdk_unbox_int"]
-    ++ ["i64.shr_u", "call $mdk_box_int"]
+    ++ intShiftCall (progEmit prog) "right"
+    ++ ["call $mdk_box_int"]
 emitLeafExternRef prog env d "shiftRight" _ =
   gapLP prog "wasm stage-A: shiftRight takes exactly two arguments"
 -- #101: bitwise completion (mirror llvm mdk_bit_or/xor/not).  bitOr/bitXor are exact
@@ -10916,15 +10984,19 @@ emitRangeListRef : Prog ->
   CExpr ->
   Bool ->
   List String
+-- The bounds unbox to i64 ($mdk_unbox_int), so a bound outside ±2^30 works, and
+-- the count is raw i64 arithmetic on two 63-bit values: `hi + 1` at intMaxBound is
+-- 2^62, which i64 holds, so `[lo..=intMaxBound]` neither traps nor comes out empty.
+-- Each element `lo + i` lies in [lo, hi] and boxes through $mdk_box_int.
 emitRangeListRef prog env d lo hi incl =
-  let loI = emitRefExpr prog env d lo ++ ["ref.cast (ref i31)", "i31.get_s"]
-  let hiI = emitRefExpr prog env d hi ++ ["ref.cast (ref i31)", "i31.get_s"]
+  let loI = emitRefExpr prog env d lo ++ ["call $mdk_unbox_int"]
+  let hiI = emitRefExpr prog env d hi ++ ["call $mdk_unbox_int"]
   let sfx = intToString d
   let accL = "$__rlacc" ++ sfx
   let iL = "$__rli" ++ sfx
   let loL = "$__rllo" ++ sfx
   -- count = (incl ? hi+1 : hi) - lo ; clamped at 0 by the loop guard.
-  let adj = if incl then ["i32.const 1", "i32.add"] else []
+  let adj = if incl then ["i64.const 1", "i64.add"] else []
   -- stash lo, init acc=Nil, i = count-1, loop i>=0: acc = Cons (lo+i) acc.
   loI
     ++ ["local.set " ++ loL]
@@ -10933,18 +11005,18 @@ emitRangeListRef prog env d lo hi incl =
     ++ adj
     ++ [
       "local.get " ++ loL,
-      "i32.sub",
-      "i32.const 1",
-      "i32.sub",
+      "i64.sub",
+      "i64.const 1",
+      "i64.sub",
       "local.set " ++ iL,
     ]
     ++ ["block $rld" ++ sfx, "loop $rll" ++ sfx]
-    ++ ["local.get " ++ iL, "i32.const 0", "i32.lt_s", "br_if $rld" ++ sfx]
+    ++ ["local.get " ++ iL, "i64.const 0", "i64.lt_s", "br_if $rld" ++ sfx]
     ++ ["i32.const 0"]
-    ++ ["local.get " ++ loL, "local.get " ++ iL, "i32.add", "ref.i31"]
+    ++ ["local.get " ++ loL, "local.get " ++ iL, "i64.add", "call $mdk_box_int"]
     ++ ["local.get " ++ accL]
     ++ ["struct.new $C_Cons", "local.set " ++ accL]
-    ++ ["local.get " ++ iL, "i32.const 1", "i32.sub", "local.set " ++ iL]
+    ++ ["local.get " ++ iL, "i64.const 1", "i64.sub", "local.set " ++ iL]
     ++ ["br $rll" ++ sfx, "end", "end"]
     ++ ["local.get " ++ accL]
 
@@ -10964,26 +11036,39 @@ emitRangeArrayRef : Prog ->
   Bool ->
   List String
 emitRangeArrayRef prog env d lo hi incl =
-  let loI = emitRefExpr prog env d lo ++ ["ref.cast (ref i31)", "i31.get_s"]
-  let hiI = emitRefExpr prog env d hi ++ ["ref.cast (ref i31)", "i31.get_s"]
+  let loI = emitRefExpr prog env d lo ++ ["call $mdk_unbox_int"]
+  let hiI = emitRefExpr prog env d hi ++ ["call $mdk_unbox_int"]
   let sfx = intToString d
   let arrL = "$__raarr" ++ sfx
   let iL = "$__rai" ++ sfx
   let loL = "$__ralo" ++ sfx
   let cntL = "$__racnt" ++ sfx
-  let adj = if incl then ["i32.const 1", "i32.add"] else []
+  -- the bound and count arithmetic is i64, as in emitRangeListRef; the slot index
+  -- stays i32, the width `array.new`/`array.set` take.
+  let adj = if incl then ["i64.const 1", "i64.add"] else []
   loI
     ++ ["local.set " ++ loL]
     ++ hiI
     ++ adj
-    ++ ["local.get " ++ loL, "i32.sub", "local.set " ++ cntL]
+    ++ ["local.get " ++ loL, "i64.sub", "local.set " ++ cntL]
     -- clamp negative count to 0
     ++ [
       "local.get " ++ cntL,
-      "i32.const 0",
-      "i32.lt_s",
+      "i64.const 0",
+      "i64.lt_s",
       "if",
-      "i32.const 0",
+      "i64.const 0",
+      "local.set " ++ cntL,
+      "end",
+    ]
+    -- a count past array.new's i32 length is clamped to the largest one, whose
+    -- allocation fails, rather than wrapped to a small array.
+    ++ [
+      "local.get " ++ cntL,
+      "i64.const 2147483647",
+      "i64.gt_s",
+      "if",
+      "i64.const 2147483647",
       "local.set " ++ cntL,
       "end",
     ]
@@ -10991,6 +11076,7 @@ emitRangeArrayRef prog env d lo hi incl =
       "i32.const 0",
       "ref.i31",
       "local.get " ++ cntL,
+      "i32.wrap_i64",
       "array.new $arr",
       "local.set " ++ arrL,
     ]
@@ -10998,12 +11084,19 @@ emitRangeArrayRef prog env d lo hi incl =
     ++ ["block $rad" ++ sfx, "loop $ral" ++ sfx]
     ++ [
       "local.get " ++ iL,
+      "i64.extend_i32_u",
       "local.get " ++ cntL,
-      "i32.ge_s",
+      "i64.ge_s",
       "br_if $rad" ++ sfx,
     ]
     ++ ["local.get " ++ arrL, "ref.as_non_null", "local.get " ++ iL]
-    ++ ["local.get " ++ loL, "local.get " ++ iL, "i32.add", "ref.i31"]
+    ++ [
+      "local.get " ++ loL,
+      "local.get " ++ iL,
+      "i64.extend_i32_u",
+      "i64.add",
+      "call $mdk_box_int",
+    ]
     ++ ["array.set $arr"]
     ++ ["local.get " ++ iL, "i32.const 1", "i32.add", "local.set " ++ iL]
     ++ ["br $ral" ++ sfx, "end", "end"]
@@ -12132,8 +12225,8 @@ w7LocalsAtDepth emit d =
     if !emit.useList then
       [
         "(local $__rlacc" ++ sfx ++ " (ref eq))",
-        "(local $__rli" ++ sfx ++ " i32)",
-        "(local $__rllo" ++ sfx ++ " i32)",
+        "(local $__rli" ++ sfx ++ " i64)",
+        "(local $__rllo" ++ sfx ++ " i64)",
       ]
     else
       []
@@ -12142,8 +12235,8 @@ w7LocalsAtDepth emit d =
       [
         "(local $__raarr" ++ sfx ++ " (ref null $arr))",
         "(local $__rai" ++ sfx ++ " i32)",
-        "(local $__ralo" ++ sfx ++ " i32)",
-        "(local $__racnt" ++ sfx ++ " i32)",
+        "(local $__ralo" ++ sfx ++ " i64)",
+        "(local $__racnt" ++ sfx ++ " i64)",
         "(local $__ixarr" ++ sfx ++ " (ref null $arr))",
         "(local $__ixi" ++ sfx ++ " i32)",
         "(local $__slsrc" ++ sfx ++ " (ref null $arr))",

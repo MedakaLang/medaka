@@ -1,0 +1,18 @@
+-- #3377: the results AT the 63-bit bounds do not trap, in SCALAR mode.  Each
+-- conjunct is one bound case; the program prints True only if every checked
+-- operator returned the exact value.  arith_int63_bounds_boxed is the ref-mode peer.
+maxB = 4611686018427387903
+
+minB = 0 - 4611686018427387903 - 1
+
+main = (maxB + 0 == maxB)
+  && (minB - 0 == minB)
+  && (maxB + minB == 0 - 1)
+  && (minB % (0 - 1) == 0)
+  && (2147483648 * (0 - 2147483648) == minB)
+  && (2147483647 * 2147483647 == 4611686014132420609)
+  && (0 * minB == 0)
+  && (minB * 1 == minB)
+  && (-maxB == minB + 1)
+  && (maxB / (0 - 1) == minB + 1)
+  && (minB / 1 == minB)

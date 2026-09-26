@@ -62,10 +62,12 @@ propRngStateRef : Ref Int
 propRngStateRef = Ref 123456789
 
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`.
+-- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
+-- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
+-- already in that range is used as given.
 export
 seedPropRng : Int -> Unit
-seedPropRng n = propRngStateRef := n
+seedPropRng n = propRngStateRef := (n % 2147483648 + 2147483648) % 2147483648
 
 rngNextLocal : Unit -> Int
 -- Odd multiplier and odd increment make bit `i` of consecutive `s` values

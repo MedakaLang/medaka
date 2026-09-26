@@ -1,5 +1,5 @@
 # META
-source_lines=839
+source_lines=843
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -444,8 +444,9 @@ extern floatToInt : Float -> Int
 -- computes it for floats.
 extern floatRem : Float -> Float -> Float
 
--- Bitwise / shift primitives (pure).  Defined on the 63-bit Int rep.
--- shiftRight is logical (unsigned): C `>>` on the untagged value.
+-- Bitwise / shift primitives (pure).  Defined on the 63-bit Int rep.  The
+-- shifts never trap: an amount of 63 or more shifts every bit out, and a
+-- negative amount panics (runtime/medaka_rt.c, mdk_shift_left/mdk_shift_right).
 
 -- | Bitwise and.
 extern bitAnd : Int -> Int -> Int
@@ -456,11 +457,14 @@ extern bitOr : Int -> Int -> Int
 -- | Bitwise exclusive or.
 extern bitXor : Int -> Int -> Int
 
--- | The first argument shifted left by the second, in bits.
+-- | The first argument shifted left by the second, in bits. The bits shifted
+-- past bit 62 are discarded, so bit 62 becomes the sign, and an amount of 63
+-- or more gives `0`. A negative amount panics.
 extern shiftLeft : Int -> Int -> Int
 
--- | The first argument shifted right by the second, in bits, filling with
--- zeros.
+-- | The first argument shifted right by the second, in bits, each vacated bit
+-- a copy of the sign. An amount of 63 or more gives `0`, or `-1` for a
+-- negative value. A negative amount panics.
 extern shiftRight : Int -> Int -> Int
 
 -- | Bitwise complement.
@@ -658,7 +662,7 @@ extern intBitNot : Int -> Int
 -- prelude's.
 extern intShiftLeft : Int -> Int -> Int
 
--- | A logical right shift, reachable from a module whose own `shiftRight`
+-- | An arithmetic right shift, reachable from a module whose own `shiftRight`
 -- shadows the prelude's.
 extern intShiftRight : Int -> Int -> Int
 

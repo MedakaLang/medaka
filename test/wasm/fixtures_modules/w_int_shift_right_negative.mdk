@@ -1,0 +1,4 @@
+-- #3377: a negative `shiftRight` amount panics with the amount in the message.
+main =
+  println "before"
+  println (shiftRight 1 (-3))

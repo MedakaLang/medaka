@@ -1,5 +1,5 @@
 # META
-source_lines=755
+source_lines=754
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `Array a`.
@@ -385,9 +385,8 @@ export
 blit : Array a -> Int -> Array a -> Int -> Int -> Unit
 blit src srcOff dst dstOff len =
   -- Each bound is `len > length - off` rather than `off + len > length`: the
-  -- sum wraps negative for an `off` near `maxBound` and admits a copy that
-  -- then runs off the end. The negative-argument arms come first so the
-  -- subtraction cannot itself overflow. `mut_bytes.blit` guards the same way.
+  -- sum overflows for an `off` near `maxBound`. The negative-argument arms
+  -- come first so the subtraction cannot itself overflow. `mut_bytes.blit` guards the same way.
   if len < 0 then
     panic "Array.blit: negative length"
   else if srcOff < 0 then

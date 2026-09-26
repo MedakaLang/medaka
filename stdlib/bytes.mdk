@@ -235,11 +235,9 @@ export impl Index Bytes Int U8 where
 export impl Slice Bytes where
   slice (Bytes bb) lo hi =
     -- `hi < lo` rather than `hi - lo < 0`, as in `Slice (Array a)`: the
-    -- difference wraps once `lo` and `hi` are far enough apart, and a range
-    -- that slips past the guard reaches `byteBlockBlit` with an out-of-range
-    -- offset.
+    -- difference overflows once `lo` and `hi` are far enough apart.
     if lo < 0 || hi > byteBlockLength bb || hi < lo then
-      sliceError lo (hi - 1)
+      sliceError lo (sliceLastIndex hi)
     else
       let dst = byteBlockMake (hi - lo)
       let _ = byteBlockBlit bb lo dst 0 (hi - lo)
@@ -711,19 +709,24 @@ export impl Ord Bytes where
   compare (Bytes a) (Bytes b) =
     compareGo a b 0 (byteBlockLength a) (byteBlockLength b)
 
+-- The prelude's compound fold, `acc * 33 + hash byte`, one `derivedHashStep`
+-- per byte.
 hashGo : Int -> ByteBlock -> Int -> Int -> Int
 hashGo acc bb i n =
   if i >= n then
     acc
   else
-    hashGo (acc * 33 + hashInt (byteBlockGetUnsafe i bb)) bb (i + 1) n
+    hashGo
+      (derivedHashStep acc (hashInt (byteBlockGetUnsafe i bb)))
+      bb
+      (i + 1)
+      n
 
-{- | A byte string hashes as the `Array Int` of its bytes does, so `Bytes`
-   can key a `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings
-   that are equal under
-   `Eq Bytes` hash alike.
+{- | Byte strings hash by their bytes, so `Bytes` can key a
+   `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings that are
+   equal under `Eq Bytes` hash alike.
 
-   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
+   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash (encodeUtf8 "\u{1}\u{2}\u{3}")
    True -}
 export impl Hashable Bytes where
   hash (Bytes bb) = hashGo 0 bb 0 (byteBlockLength bb)
@@ -951,6 +954,18 @@ decodeUtf8Lossy (Bytes bb) =
 -- can read back.
 prop "decodeUtf8 (encodeUtf8 s) == Some s" (s : String) =
   decodeUtf8 (encodeUtf8 s) == Some s
+
+-- LAW: hashing a long byte string never overflows, and two byte strings built
+-- by different routes from the same 1,000 bytes hash alike.
+prop "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" (x : Int) =
+  let block = fromArrayAssumeByteDomain (arrayFromList (propBytes x 1000))
+  hash block == hash (fromU8Array (toU8Array block))
+
+-- `n` bytes derived from `x`, for the property above.
+propBytes : Int -> Int -> List Int
+propBytes x n
+  | n <= 0 = []
+  | otherwise = bitAnd (bitXor n x) 255 :: propBytes x (n - 1)
 
 -- # Output
 

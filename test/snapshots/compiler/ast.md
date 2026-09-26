@@ -1,5 +1,5 @@
 # META
-source_lines=2358
+source_lines=2365
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1115,6 +1115,13 @@ fixedWidthMask _ = None
 export
 isFixedWidthHead : String -> Bool
 isFixedWidthHead h = isSome (fixedWidthMask h)
+
+-- A literal's value negated, for the parser's and typechecker's `-N` forms.  The
+-- lexer spells the magnitude 2^62 as `intMinBound` (it has no positive `Int`), and
+-- `-2^62` is that same value, so it negates to itself; `Int` negation of it traps.
+export
+negateLiteral : Int -> Int
+negateLiteral n = if n == intMinBound then n else 0 - n
 
 -- `U64` (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2) is NOT a fixed-width head in
 -- the sense above: a 64-bit value does not fit `Int`'s tagged word, so it is a boxed
@@ -2515,6 +2522,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "fixedWidthMask" (PWild) (EVar "None"))
 (DTypeSig true "isFixedWidthHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFixedWidthHead" ((PVar "h")) (EApp (EVar "isSome") (EApp (EVar "fixedWidthMask") (EVar "h"))))
+(DTypeSig true "negateLiteral" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "negateLiteral" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (EVar "intMinBound")) (EVar "n") (EBinOp "-" (ELit (LInt 0)) (EVar "n"))))
 (DTypeSig true "isU64Head" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isU64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "U64"))))
 (DTypeSig true "isUnsignedHead" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -2876,6 +2885,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "fixedWidthMask" (PWild) (EVar "None"))
 (DTypeSig true "isFixedWidthHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFixedWidthHead" ((PVar "h")) (EApp (EVar "isSome") (EApp (EVar "fixedWidthMask") (EVar "h"))))
+(DTypeSig true "negateLiteral" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "negateLiteral" ((PVar "n")) (EIf (EBinOp "==" (EVar "n") (EVar "intMinBound")) (EVar "n") (EBinOp "-" (ELit (LInt 0)) (EVar "n"))))
 (DTypeSig true "isU64Head" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isU64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "U64"))))
 (DTypeSig true "isUnsignedHead" (TyFun (TyCon "String") (TyCon "Bool")))

@@ -1,0 +1,9 @@
+-- #3377: the REF-mode peer of arith_int63_div_overflow_scalar: the divisor-zero
+-- guard passes, then the quotient 2^62 traps before $mdk_box_int.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) / (-1) overflows Int
+data Box = Box Int
+
+unbox b = match b
+  Box n => n
+
+main = unbox (Box ((0 - 4611686018427387903 - 1) / (0 - 1)))

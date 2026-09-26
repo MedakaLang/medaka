@@ -10,6 +10,10 @@ declare void @mdk_slice_oob(i64, i64) noreturn
 declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
+declare void @mdk_int_overflow(i64, i64, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare void @mdk_nonexhaustive_match() noreturn
 declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_dispatch_ambiguous() noreturn
@@ -201,36 +205,64 @@ entry:
   %t2 = inttoptr i64 %t1 to ptr
   %t3 = getelementptr i8, ptr %t2, i64 8
   %t4 = load i64, ptr %t3
-  %t5 = ashr i64 %t4, 1
-  %t6 = ashr i64 201, 1
-  %t7 = mul i64 %t5, %t6
-  %t8 = shl i64 %t7, 1
-  %t9 = or i64 %t8, 1
-  %t10 = load i64, ptr @mdk_g___user____agg
-  %t11 = inttoptr i64 %t10 to ptr
-  %t12 = getelementptr i8, ptr %t11, i64 16
-  %t13 = load i64, ptr %t12
-  %t14 = ashr i64 %t13, 1
-  %t15 = ashr i64 21, 1
-  %t16 = mul i64 %t14, %t15
-  %t17 = shl i64 %t16, 1
-  %t18 = or i64 %t17, 1
-  %t19 = ashr i64 %t9, 1
-  %t20 = ashr i64 %t18, 1
-  %t21 = add i64 %t19, %t20
-  %t22 = shl i64 %t21, 1
-  %t23 = or i64 %t22, 1
-  %t24 = load i64, ptr @mdk_g___user____sel
-  %t25 = inttoptr i64 %t24 to ptr
-  %t26 = getelementptr i8, ptr %t25, i64 16
-  %t27 = load i64, ptr %t26
-  %t28 = ashr i64 %t23, 1
-  %t29 = ashr i64 %t27, 1
-  %t30 = add i64 %t28, %t29
-  %t31 = shl i64 %t30, 1
-  %t32 = or i64 %t31, 1
-  %t33 = ashr i64 %t32, 1
-  call void @mdk_print_int(i64 %t33)
+  %t5 = sub i64 201, 1
+  %t6 = ashr i64 %t4, 1
+  %t7 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t6, i64 %t5)
+  %t8 = extractvalue { i64, i1 } %t7, 0
+  %t9 = extractvalue { i64, i1 } %t7, 1
+  br i1 %t9, label %intovf10, label %intok10
+intovf10:
+  %t11 = ashr i64 %t4, 1
+  %t12 = ashr i64 201, 1
+  call void @mdk_int_overflow(i64 2, i64 %t11, i64 %t12)
+  unreachable
+intok10:
+  %t13 = or i64 %t8, 1
+  %t14 = load i64, ptr @mdk_g___user____agg
+  %t15 = inttoptr i64 %t14 to ptr
+  %t16 = getelementptr i8, ptr %t15, i64 16
+  %t17 = load i64, ptr %t16
+  %t18 = sub i64 21, 1
+  %t19 = ashr i64 %t17, 1
+  %t20 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t19, i64 %t18)
+  %t21 = extractvalue { i64, i1 } %t20, 0
+  %t22 = extractvalue { i64, i1 } %t20, 1
+  br i1 %t22, label %intovf23, label %intok23
+intovf23:
+  %t24 = ashr i64 %t17, 1
+  %t25 = ashr i64 21, 1
+  call void @mdk_int_overflow(i64 2, i64 %t24, i64 %t25)
+  unreachable
+intok23:
+  %t26 = or i64 %t21, 1
+  %t27 = sub i64 %t26, 1
+  %t28 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t13, i64 %t27)
+  %t29 = extractvalue { i64, i1 } %t28, 0
+  %t30 = extractvalue { i64, i1 } %t28, 1
+  br i1 %t30, label %intovf31, label %intok31
+intovf31:
+  %t32 = ashr i64 %t13, 1
+  %t33 = ashr i64 %t26, 1
+  call void @mdk_int_overflow(i64 0, i64 %t32, i64 %t33)
+  unreachable
+intok31:
+  %t34 = load i64, ptr @mdk_g___user____sel
+  %t35 = inttoptr i64 %t34 to ptr
+  %t36 = getelementptr i8, ptr %t35, i64 16
+  %t37 = load i64, ptr %t36
+  %t38 = sub i64 %t37, 1
+  %t39 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t29, i64 %t38)
+  %t40 = extractvalue { i64, i1 } %t39, 0
+  %t41 = extractvalue { i64, i1 } %t39, 1
+  br i1 %t41, label %intovf42, label %intok42
+intovf42:
+  %t43 = ashr i64 %t29, 1
+  %t44 = ashr i64 %t37, 1
+  call void @mdk_int_overflow(i64 0, i64 %t43, i64 %t44)
+  unreachable
+intok42:
+  %t45 = ashr i64 %t40, 1
+  call void @mdk_print_int(i64 %t45)
   ret i32 0
 }
 ; mdk-module program

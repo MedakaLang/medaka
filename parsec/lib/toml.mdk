@@ -209,21 +209,32 @@ quotedString =
 -- (NOTE: doctests using runParser cannot be run here because the doctest
 -- runner cannot resolve `lib.parser` for a nested project module.
 -- See the parseToml doctest below for a working test.)
+-- A value outside `Int`'s range is a parse error, not a wrapped number.
 export
 parseInt : Parser Int
 parseInt = defer
   neg <- optional (char '-')
   ds <- some digit
-  let n = foldDigits ds 0
-  deferPure (applySign neg n)
+  match foldDigits ds 0
+    Some n => match applySign neg n
+      Some v => deferPure v
+      None => failWith "integer out of range"
+    None => failWith "integer out of range"
 
-applySign : Option Char -> Int -> Int
-applySign None n = n
-applySign (Some _) n = 0 - n
+-- The negated magnitude, which can hold `intMinBound`'s; `applySign` flips it
+-- back for a value with no `-`.
+applySign : Option Char -> Int -> Option Int
+applySign None n = checkedSub 0 n
+applySign (Some _) n = Some n
 
-foldDigits : List Char -> Int -> Int
-foldDigits [] acc = acc
-foldDigits (d :: rest) acc = foldDigits rest (acc * 10 + (charCode d - 48))
+-- The digits' value negated, or `None` when it does not fit `Int`.
+foldDigits : List Char -> Int -> Option Int
+foldDigits [] acc = Some acc
+foldDigits (d :: rest) acc = match checkedMul acc 10
+  Some m => match checkedSub m (charCode d - 48)
+    Some next => foldDigits rest next
+    None => None
+  None => None
 
 -- ---------------------------------------------------------------------------
 -- Boolean parser

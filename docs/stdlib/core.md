@@ -293,6 +293,68 @@ Whether `n` is not divisible by two.
 True
 ```
 
+### `checkedAdd`
+
+```
+checkedAdd : Int -> Int -> Option Int
+checkedAdd a b
+```
+
+The sum of two integers, or `None` when it does not fit `Int`.
+
+`+` panics on overflow. Use `checkedAdd` where an operand comes from
+outside the program, such as a length read from a file or a request, and
+an out-of-range value should be refused rather than stop the program.
+
+```medaka
+> checkedAdd 2 3
+Some 5
+> checkedAdd intMaxBound 1
+None
+> checkedAdd intMinBound (-1)
+None
+```
+
+### `checkedSub`
+
+```
+checkedSub : Int -> Int -> Option Int
+checkedSub a b
+```
+
+The difference of two integers, or `None` when it does not fit `Int`.
+See `checkedAdd`.
+
+```medaka
+> checkedSub 2 3
+Some -1
+> checkedSub intMinBound 1
+None
+> checkedSub 0 intMinBound
+None
+```
+
+### `checkedMul`
+
+```
+checkedMul : Int -> Int -> Option Int
+checkedMul a b
+```
+
+The product of two integers, or `None` when it does not fit `Int`.
+See `checkedAdd`.
+
+```medaka
+> checkedMul 6 7
+Some 42
+> checkedMul intMaxBound 2
+None
+> checkedMul intMinBound (-1)
+None
+> checkedMul (-1) intMaxBound
+Some -4611686018427387903
+```
+
 ### `Bounded`
 
 ```

@@ -63,10 +63,20 @@
    `scZero`/`scOne` sentinels or fabricate non-canonical raw limbs. The private
    `nLimbs` / `cLimbs` / `expNMinus2` remain module-owned work data.
 
+   ── Stored as Int, computed as U64 ───────────────────────────────────
+   Limbs, columns and carries are stored as non-negative `Int`s. Each
+   arithmetic step on them is one `U64` expression: its operands widen
+   through `U64.truncate`, it computes modulo 2^64 with no overflow check and
+   no branch, and its result narrows through `U64.toIntTruncating` before it
+   is stored or bound. An `Int` `+ - *` would check for overflow, and that
+   check is a branch on its operands, so no limb value ever meets one; the
+   only `Int` arithmetic on the secret paths is on public loop counters and
+   indexes. A narrowing keeps 63 bits and is exact only below 2^62, so that
+   is the ceiling every stored value is bounded against below. Inside one
+   expression an intermediate may exceed it, or wrap below zero, and the
+   narrowed result is still exact.
+
    ── The headroom chain (derived against THIS code) ───────────────────
-   `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
-   WRAPS SILENTLY: no trap, no diagnostic (`stdlib/runtime.mdk`,
-   `compiler/RUNTIME-DESIGN.md`). So every intermediate is bounded here.
 
      limb                a_i <= 2^16 - 1, uniformly (no seam limb)
      partial product     a_i * b_j < 2^32
@@ -125,7 +135,8 @@
    `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`:
    exactly four fold/carry rounds and an unconditional arithmetic
    subtract-and-select. `scInverse`'s exponent ladder is also fixed-shape;
-   its exponent is a public compile-time constant.
+   its exponent is a public compile-time constant. Every shift of a limb or
+   key byte is by a literal amount (that document, §5.1).
 
    This does NOT certify every exported helper or a future signing module.
    Equality/zero tests, `scIsHigh`, and the general negation path still
@@ -136,11 +147,12 @@
    outside this native constant-time claim. -}
 
 import array as A
+import u64 as U64
 
 -- ── Constants ────────────────────────────────────────────────────────
 
 -- 2^16 - 1: the mask for every limb (all sixteen are the same width).
-limbMask : Int
+limbMask : U64
 limbMask = 0xffff
 
 -- The number of limbs in a scalar, and in the wide multiply workspace.
@@ -220,9 +232,10 @@ carryGo w i carry =
     if carry /= 0 then
       panic "scalar.carryAll: carry out of the top limb — input was >= 2^512"
   else
-    let v = w[i] + carry
-    let () = A.setInPlace i (bitAnd v limbMask) w
-    carryGo w (i + 1) (shiftRight v 16)
+    let v = U64.toIntTruncating (U64.truncate w[i] + U64.truncate carry)
+    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate v) limbMask)
+    let () = A.setInPlace i masked w
+    carryGo w (i + 1) (U64.toIntTruncating (U64.shiftRight (U64.truncate v) 16))
 
 -- The same pass as `carryAll`, minus the top-limb check: the final carry is
 -- dropped without being inspected. Sound only under the < 2^512 workspace
@@ -240,9 +253,13 @@ carryGoUnchecked w i carry =
   if i >= nWide then
     ()
   else
-    let v = w[i] + carry
-    let () = A.setInPlace i (bitAnd v limbMask) w
-    carryGoUnchecked w (i + 1) (shiftRight v 16)
+    let v = U64.toIntTruncating (U64.truncate w[i] + U64.truncate carry)
+    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate v) limbMask)
+    let () = A.setInPlace i masked w
+    carryGoUnchecked
+      w
+      (i + 1)
+      (U64.toIntTruncating (U64.shiftRight (U64.truncate v) 16))
 
 -- One fold pass: `H * 2^256 + L` becomes `H * c + L`, IN PLACE, with the high
 -- half zeroed. Congruent mod `n` (because `2^256 = c (mod n)`) and STRICTLY
@@ -281,7 +298,10 @@ foldAccumRow w h i j =
     ()
   else
     let k = i + j
-    let () = A.setInPlace k (w[k] + h[i] * cLimbs[j]) w
+    let column =
+      U64.toIntTruncating
+        (U64.truncate w[k] + U64.truncate h[i] * U64.truncate cLimbs[j])
+    let () = A.setInPlace k column w
     foldAccumRow w h i (j + 1)
 
 -- Exactly four unconditional folds after the initial carry. The proof in
@@ -321,26 +341,44 @@ subNCandidate w diff i borrow =
   if i >= 16 then
     borrow
   else
-    let t = w[i] + limbMask + 1 - nLimbs[i] - borrow
-    let () = A.setInPlace i (bitAnd t limbMask) diff
-    subNCandidate w diff (i + 1) (1 - shiftRight t 16)
+    let t =
+      U64.toIntTruncating
+        (U64.truncate w[i]
+          + limbMask
+          + 1
+          - U64.truncate nLimbs[i]
+          - U64.truncate borrow)
+    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) limbMask)
+    let () = A.setInPlace i masked diff
+    subNCandidate
+      w
+      diff
+      (i + 1)
+      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))
 
 -- Blend the unconditional subtraction candidate into w. The loop condition is
--- the public limb index; `keepDiff` is used only arithmetically.
+-- the public limb index; `keepDiff` is used only arithmetically, and
+-- `diff[i] - original` wraps modulo 2^64 when negative, so the narrowed sum
+-- is the exact limb.
 selectNCandidate : Array Int -> Array Int -> Int -> Int -> Unit
 selectNCandidate w diff keepDiff i =
   if i >= 16 then
     ()
   else
     let original = w[i]
-    let () = A.setInPlace i (original + keepDiff * (diff[i] - original)) w
+    let blended =
+      U64.toIntTruncating
+        (U64.truncate original
+          + U64.truncate keepDiff
+            * (U64.truncate diff[i] - U64.truncate original))
+    let () = A.setInPlace i blended w
     selectNCandidate w diff keepDiff (i + 1)
 
 subNSelect : Array Int -> Unit
 subNSelect w =
   let diff = arrayMake 16 0
   let borrow = subNCandidate w diff 0 0
-  selectNCandidate w diff (1 - borrow) 0
+  selectNCandidate w diff (U64.toIntTruncating (1 - U64.truncate borrow)) 0
 
 -- Reduce a 32-limb workspace to the canonical scalar of its value mod `n`,
 -- returning a FRESH 16-limb array. The workspace is consumed (mutated), so
@@ -383,7 +421,12 @@ limbsOfBytesGo bs out i =
   if i >= 16 then
     ()
   else
-    let () = A.setInPlace i (bs[31 - 2 * i] + bs[30 - 2 * i] * 256) out
+    let low = bs[31 - 2 * i]
+    let high = bs[30 - 2 * i]
+    let limb =
+      U64.toIntTruncating
+        (U64.truncate low + U64.shiftLeft (U64.truncate high) 8)
+    let () = A.setInPlace i limb out
     limbsOfBytesGo bs out (i + 1)
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
@@ -417,15 +460,19 @@ scSecretCandidate32 bs =
   let rangeBit = secretBelowNBit limbs
   let nonzeroBit = secretNonzeroBit limbs
   let candidate = reduceWide (wideOfRaw limbs)
-  (bytesBit * rangeBit * nonzeroBit, candidate)
+  (bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)
 
--- For non-negative fixnums, `(b - 256) >> 62` is -1 exactly when b <= 255.
--- Negative values can make that subtraction wrap at the most-negative Int,
--- but their independent sign bit is 0, so the product remains a correct bit.
--- Both terms are arithmetic 0/1 values; this deliberately has no Bool branch.
+-- 1 exactly when `b` is a byte, 0 otherwise, with no Bool branch.
+-- `U64.truncate` takes a negative `b` to at least 2^64 - 2^62, so the image
+-- is below 256 exactly for `0 <= b <= 255`. Shifted right by 8 it is 0 for a
+-- byte and in 1 .. 2^56 - 1 otherwise, and subtracting 1 sets bit 63 only in
+-- the first case.
 secretByteBit : Int -> Int
-secretByteBit b = (1 + shiftRight b 62) * bitAnd (shiftRight (b - 256) 62) 1
+secretByteBit b =
+  U64.toIntTruncating
+    (U64.shiftRight (U64.shiftRight (U64.truncate b) 8 - 1) 63)
 
+-- A rejected element is written as 0: the mask is 0 or 255 by the bit.
 scanSecretBytes : Array Int -> Array Int -> Int -> Int -> Int
 scanSecretBytes bs safeBytes i validBit =
   if i >= 32 then
@@ -433,8 +480,11 @@ scanSecretBytes bs safeBytes i validBit =
   else
     let b = bs[i]
     let byteBit = secretByteBit b
-    let () = A.setInPlace i (bitAnd b 255 * byteBit) safeBytes
-    scanSecretBytes bs safeBytes (i + 1) (validBit * byteBit)
+    let safe =
+      U64.toIntTruncating
+        (U64.bitAnd (U64.truncate b) 255 * U64.truncate byteBit)
+    let () = A.setInPlace i safe safeBytes
+    scanSecretBytes bs safeBytes (i + 1) (bitAnd validBit byteBit)
 
 -- Borrow after subtracting n is 1 exactly when the raw 256-bit limbs are < n.
 secretBelowNBit : Array Int -> Int
@@ -445,20 +495,36 @@ secretBelowNBorrow limbs i borrow =
   if i >= 16 then
     borrow
   else
-    let t = limbs[i] + limbMask + 1 - nLimbs[i] - borrow
-    secretBelowNBorrow limbs (i + 1) (1 - shiftRight t 16)
+    secretBelowNBorrow
+      limbs
+      (i + 1)
+      (U64.toIntTruncating
+        (1
+          - U64.shiftRight
+            (U64.truncate limbs[i]
+              + limbMask
+              + 1
+              - U64.truncate nLimbs[i]
+              - U64.truncate borrow)
+            16))
 
 -- Borrow after subtracting one is 0 exactly when the raw limbs are nonzero.
 secretNonzeroBit : Array Int -> Int
-secretNonzeroBit limbs = 1 - secretNonzeroBorrow limbs 0 1
+secretNonzeroBit limbs = bitXor (secretNonzeroBorrow limbs 0 1) 1
 
 secretNonzeroBorrow : Array Int -> Int -> Int -> Int
 secretNonzeroBorrow limbs i borrow =
   if i >= 16 then
     borrow
   else
-    let t = limbs[i] + limbMask + 1 - borrow
-    secretNonzeroBorrow limbs (i + 1) (1 - shiftRight t 16)
+    secretNonzeroBorrow
+      limbs
+      (i + 1)
+      (U64.toIntTruncating
+        (1
+          - U64.shiftRight
+            (U64.truncate limbs[i] + limbMask + 1 - U64.truncate borrow)
+            16))
 
 -- Widen internal 16 canonical limbs into a fresh 32-limb workspace.
 wideOfRaw : Array Int -> Array Int
@@ -531,8 +597,11 @@ toBytesGo v out i =
   if i >= 16 then
     ()
   else
-    let () = A.setInPlace (31 - 2 * i) (bitAnd v[i] 255) out
-    let () = A.setInPlace (30 - 2 * i) (shiftRight v[i] 8) out
+    let limb = v[i]
+    let low = U64.toIntTruncating (U64.bitAnd (U64.truncate limb) 255)
+    let high = U64.toIntTruncating (U64.shiftRight (U64.truncate limb) 8)
+    let () = A.setInPlace (31 - 2 * i) low out
+    let () = A.setInPlace (30 - 2 * i) high out
     toBytesGo v out (i + 1)
 
 -- ── Comparison ───────────────────────────────────────────────────────
@@ -567,8 +636,14 @@ scZeroBorrow a i borrow =
   if i >= 16 then
     borrow
   else
-    let t = a[i] + limbMask + 1 - borrow
-    scZeroBorrow a (i + 1) (1 - shiftRight t 16)
+    scZeroBorrow
+      a
+      (i + 1)
+      (U64.toIntTruncating
+        (1
+          - U64.shiftRight
+            (U64.truncate a[i] + limbMask + 1 - U64.truncate borrow)
+            16))
 
 -- | Fixed-control equality predicate for secret-bearing arithmetic. Returns
 --   1 exactly when the canonical limb arrays agree and 0 otherwise.
@@ -581,8 +656,17 @@ scEqualBorrow a b i borrow =
   if i >= 16 then
     borrow
   else
-    let t = bitXor a[i] b[i] + limbMask + 1 - borrow
-    scEqualBorrow a b (i + 1) (1 - shiftRight t 16)
+    let x =
+      U64.toIntTruncating (U64.bitXor (U64.truncate a[i]) (U64.truncate b[i]))
+    scEqualBorrow
+      a
+      b
+      (i + 1)
+      (U64.toIntTruncating
+        (1
+          - U64.shiftRight
+            (U64.truncate x + limbMask + 1 - U64.truncate borrow)
+            16))
 
 -- | Fixed-control selection. `bit` must be 0 or 1; 0 selects `a` and 1
 --   selects `b`. Every limb is visited and the inputs remain unmodified.
@@ -598,7 +682,12 @@ scSelectGo bit a b out i =
   if i >= 16 then
     ()
   else
-    let () = A.setInPlace i (a[i] + bit * (b[i] - a[i])) out
+    let x = a[i]
+    let blended =
+      U64.toIntTruncating
+        (U64.truncate x
+          + U64.truncate bit * (U64.truncate b[i] - U64.truncate x))
+    let () = A.setInPlace i blended out
     scSelectGo bit a b out (i + 1)
 
 -- | The LOW-S PREDICATE: is `s` strictly greater than `floor(n/2)`?
@@ -638,23 +727,34 @@ scIsHigh s =
 --   converts a secret-derived value to Bool.
 export
 scHighBit : Sc -> Int
-scHighBit s = 1 - scHighBorrow (rawSc s) 0 0
+scHighBit s = bitXor (scHighBorrow (rawSc s) 0 0) 1
 
 scHighBorrow : Array Int -> Int -> Int -> Int
 scHighBorrow s i borrow =
   if i >= 16 then
     borrow
   else
-    let t = s[i] + limbMask + 1 - nHalfPlusOneLimbs[i] - borrow
-    scHighBorrow s (i + 1) (1 - shiftRight t 16)
+    scHighBorrow
+      s
+      (i + 1)
+      (U64.toIntTruncating
+        (1
+          - U64.shiftRight
+            (U64.truncate s[i]
+              + limbMask
+              + 1
+              - U64.truncate nHalfPlusOneLimbs[i]
+              - U64.truncate borrow)
+            16))
 
+-- The branch-bearing public path (`scIsHigh`): `Int` arithmetic.
 dblGo : Array Int -> Array Int -> Int -> Int -> Unit
 dblGo s d i carry =
   if i >= 16 then
     A.setInPlace 16 carry d
   else
     let v = 2 * s[i] + carry
-    let () = A.setInPlace i (bitAnd v limbMask) d
+    let () = A.setInPlace i (bitAnd v 0xffff) d
     dblGo s d (i + 1) (shiftRight v 16)
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
@@ -673,7 +773,8 @@ addGo a b w i =
   if i >= 16 then
     ()
   else
-    let () = A.setInPlace i (a[i] + b[i]) w
+    let sum = U64.toIntTruncating (U64.truncate a[i] + U64.truncate b[i])
+    let () = A.setInPlace i sum w
     addGo a b w (i + 1)
 
 -- | Additive inverse mod `n`, computed as `n - a` with borrow. `a` is
@@ -686,6 +787,8 @@ scNegate a =
   let () = negateGo (rawSc a) w 0 0
   reduceWide w
 
+-- The branch-bearing public path: `Int` arithmetic, adding back 2^16 on a
+-- borrow. Secret-bearing callers use `scNegateCt`.
 negateGo : Array Int -> Array Int -> Int -> Int -> Unit
 negateGo a w i borrow =
   if i >= 16 then
@@ -693,7 +796,7 @@ negateGo a w i borrow =
   else
     let d = nLimbs[i] - a[i] - borrow
     if d < 0 then
-      let () = A.setInPlace i (d + limbMask + 1) w
+      let () = A.setInPlace i (d + 0x10000) w
       negateGo a w (i + 1) 1
     else
       let () = A.setInPlace i d w
@@ -715,9 +818,20 @@ scNegateCtGo a out i borrow =
   if i >= 16 then
     ()
   else
-    let t = nLimbs[i] + limbMask + 1 - a[i] - borrow
-    let () = A.setInPlace i (bitAnd t limbMask) out
-    scNegateCtGo a out (i + 1) (1 - shiftRight t 16)
+    let t =
+      U64.toIntTruncating
+        (U64.truncate nLimbs[i]
+          + limbMask
+          + 1
+          - U64.truncate a[i]
+          - U64.truncate borrow)
+    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) limbMask)
+    let () = A.setInPlace i masked out
+    scNegateCtGo
+      a
+      out
+      (i + 1)
+      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))
 
 -- | Subtraction mod `n`. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_scalar_sub` either.
@@ -752,7 +866,10 @@ mulAccumRow a b w i j =
     ()
   else
     let k = i + j
-    let () = A.setInPlace k (w[k] + a[i] * b[j]) w
+    let column =
+      U64.toIntTruncating
+        (U64.truncate w[k] + U64.truncate a[i] * U64.truncate b[j])
+    let () = A.setInPlace k column w
     mulAccumRow a b w i (j + 1)
 
 -- | Multiplicative inverse mod `n`, by Fermat's little theorem: `a^(n-2)`,

@@ -1,0 +1,13 @@
+-- An inclusive range may end at intMaxBound: its element count is computed
+-- without forming `hi + 1` as an Int, so it neither traps (#3377) nor wraps to an
+-- empty range.  The bounds past ±2^30 also cross wasm's i31 immediate range,
+-- where its range lowering used to cast the bounds to i31 and trap.
+main =
+  println [4611686018427387901..=4611686018427387903]
+  println [|4611686018427387901..=4611686018427387903|]
+  println [4611686018427387902..intMaxBound]
+  println [-4611686018427387904..=-4611686018427387903]
+  println (length [4611686018427387902..=intMaxBound])
+  println [1073741823..=1073741825]
+  println [|-1073741825..=-1073741823|]
+  println [5..=3]

@@ -1,0 +1,6 @@
+-- #3377: a product that overflows i64 itself, not just the 63-bit range:
+-- 3037000500^2 is just past 2^63, so the wrapped i64 product is a small positive
+-- number that fits 63 bits.  Only $mdk_int_mul's second check (`p / a == b`) can
+-- see it, so this pins that check.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: 3037000500 * 3037000500 overflows Int
+main = 3037000500 * 3037000500

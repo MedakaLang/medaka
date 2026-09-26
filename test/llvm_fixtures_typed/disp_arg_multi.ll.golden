@@ -10,6 +10,10 @@ declare void @mdk_slice_oob(i64, i64) noreturn
 declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
+declare void @mdk_int_overflow(i64, i64, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare void @mdk_nonexhaustive_match() noreturn
 declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_dispatch_ambiguous() noreturn
@@ -196,13 +200,19 @@ entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_impl_Animal_code(i64 1)
   %t1 = call i64 @mdk_impl_Color_code(i64 8589934595)
-  %t2 = ashr i64 %t0, 1
-  %t3 = ashr i64 %t1, 1
-  %t4 = add i64 %t2, %t3
-  %t5 = shl i64 %t4, 1
-  %t6 = or i64 %t5, 1
-  %t7 = ashr i64 %t6, 1
-  call void @mdk_print_int(i64 %t7)
+  %t2 = sub i64 %t1, 1
+  %t3 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t0, i64 %t2)
+  %t4 = extractvalue { i64, i1 } %t3, 0
+  %t5 = extractvalue { i64, i1 } %t3, 1
+  br i1 %t5, label %intovf6, label %intok6
+intovf6:
+  %t7 = ashr i64 %t0, 1
+  %t8 = ashr i64 %t1, 1
+  call void @mdk_int_overflow(i64 0, i64 %t7, i64 %t8)
+  unreachable
+intok6:
+  %t9 = ashr i64 %t4, 1
+  call void @mdk_print_int(i64 %t9)
   ret i32 0
 }
 ; mdk-module impl:Animal_code

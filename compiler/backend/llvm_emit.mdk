@@ -3823,70 +3823,190 @@ emitU64Extern : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
-emitU64Extern e env "u64Truncate" args = match emitArgs e env args
-  [a] => (boxU64 e (untagInt e a), LTU64)
-  _ => panic "llvm: u64Truncate takes one argument"
-emitU64Extern e env "u64TruncateToInt" args = match emitArgs e env args
-  [a] => (tagInt e (unboxU64 e a), LTInt)
-  _ => panic "llvm: u64TruncateToInt takes one argument"
-emitU64Extern e env "u64BitAnd" args = emitU64Bin e env "and" args
-emitU64Extern e env "u64BitOr" args = emitU64Bin e env "or" args
-emitU64Extern e env "u64BitXor" args = emitU64Bin e env "xor" args
-emitU64Extern e env "u64ShiftLeft" args = emitU64Shift e env "shl" args
-emitU64Extern e env "u64ShiftRight" args = emitU64Shift e env "lshr" args
-emitU64Extern e env "u64MulHigh" args = match emitArgs e env args
-  [a, b] =>
-    let x = unboxU64 e a
-    let y = unboxU64 e b
-    let wa = freshReg e
-    let _ = emit e "  \{wa} = zext i64 \{x} to i128"
-    let wb = freshReg e
-    let _ = emit e "  \{wb} = zext i64 \{y} to i128"
-    let p = freshReg e
-    let _ = emit e "  \{p} = mul i128 \{wa}, \{wb}"
-    let h = freshReg e
-    let _ = emit e "  \{h} = lshr i128 \{p}, 64"
-    let r = freshReg e
-    let _ = emit e "  \{r} = trunc i128 \{h} to i64"
-    (boxU64 e r, LTU64)
-  _ => panic "llvm: u64MulHigh takes two arguments"
-emitU64Extern e _ name _ = gapE e ("unsupported U64 extern " ++ name)
+emitU64Extern e env "u64TruncateToInt" [a] =
+  (tagInt e (emitU64Raw e env a), LTInt)
+emitU64Extern _ _ "u64TruncateToInt" _ =
+  panic "llvm: u64TruncateToInt takes one argument"
+emitU64Extern e env name args =
+  (boxU64 e (emitU64Kernel e env name args), LTU64)
 
--- a bitwise U64 kernel: one instruction on the two payloads.
-emitU64Bin : Emit ->
+-- The raw 64-bit payload of a `U64`-valued expression.  Nested U64 arithmetic and
+-- the kernels below compute on payloads and are boxed once, by the outermost node
+-- that needs a cell: every intermediate cell would be a heap allocation, and the
+-- allocator was most of a boxed-U64 fold's cost (a `U64` is boxed until N5,
+-- docs/design/INTEGER-TYPES-DESIGN.md §6.2).  Anything else is emitted as usual
+-- and unboxed; a U64 literal is a static cell, so that is a load.
+emitU64Raw : Emit -> OrdMap (String, LTy) -> CExpr -> String
+emitU64Raw e env (CBinPrim op l r tag)
+  | isU64Head tag && isArithOp op = emitU64RawArith e env op l r
+  | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag)))
+emitU64Raw e env ex = emitU64RawApp e env ex (flattenApp ex [])
+
+-- a saturated call of a kernel is computed on payloads; anything else is boxed
+-- by its own emission and unboxed here.
+emitU64RawApp : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  (CExpr, List CExpr) ->
+  String
+emitU64RawApp e env ex (CVar f _, args)
+  | isU64RawKernel f (lengthS args) && not (isLocal env f) =
+    emitU64Kernel e env f args
+  | isLocal env f = unboxU64 e (fst (emitExpr e env ex))
+  | otherwise = match u64KernelAlias e f args
+    Some k => emitU64Kernel e env k args
+    None => unboxU64 e (fst (emitExpr e env ex))
+emitU64RawApp e env ex _ = unboxU64 e (fst (emitExpr e env ex))
+
+-- The kernel a saturated call of top-level `f` amounts to, when `f`'s one clause
+-- applies that kernel to its own parameters in order: the `u64` module's
+-- `truncate`, `toIntTruncating`, `bitAnd`, `bitOr` and `bitXor` are such
+-- wrappers, and code outside the stdlib can only reach the kernels through them.
+-- Inlining the kernel lets the call fuse with the U64 arithmetic around it
+-- instead of boxing its result in a call.  `shiftLeft`/`shiftRight` refuse a
+-- negative amount before applying their kernel, so they are inlined only at a
+-- non-negative literal amount, where that refusal cannot fire.
+u64KernelAlias : Emit -> String -> List CExpr -> Option String
+u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
+  Some (CBind _ [CClause pats body]) => match paramNames pats
+    Some ps =>
+      if lengthS ps == lengthS args then u64AliasBody ps body args else None
+    None => None
+  _ => None
+
+-- the parameter names of an all-variable pattern list.
+paramNames : List Pat -> Option (List String)
+paramNames [] = Some []
+paramNames ((PVar n _) :: rest) = map (n :: _) (paramNames rest)
+paramNames _ = None
+
+u64AliasBody : List String -> CExpr -> List CExpr -> Option String
+u64AliasBody ps (CIf (CBinPrim "<" (CVar k _) zero _) _ body) args = match (
+  u64KernelApplied ps (skipOtherwise body),
+  ps,
+  args,
+  intLitOf zero,
+)
+  (Some kern, [_, amount], [_, lit], Some 0) => match intLitOf lit
+    Some n =>
+      if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
+    None => None
+  _ => None
+u64AliasBody ps body _ = match u64KernelApplied ps body
+  Some kern => if isU64ShiftKernel kern then None else Some kern
+  None => None
+
+-- The value of an Int literal as the emitter receives it: bare, or still the
+-- `fromInt` application the typechecker routed to `Num Int`.
+intLitOf : CExpr -> Option Int
+intLitOf (CLit (LInt n)) = Some n
+intLitOf (CApp (CMethod "fromInt" _ (RKey "Int" _) _ _) (CLit (LInt n))) =
+  Some n
+intLitOf _ = None
+
+-- a guard's `| otherwise = e` arm, which lowers to `if otherwise then e else …`.
+skipOtherwise : CExpr -> CExpr
+skipOtherwise (CIf (CVar o _) b _)
+  | o == "otherwise" || o == "core__otherwise" = b
+skipOtherwise ex = ex
+
+-- `body` is a kernel applied to exactly the parameters `ps`, in order.
+u64KernelApplied : List String -> CExpr -> Option String
+u64KernelApplied ps body = match flattenApp body []
+  (CVar kern _, xs) =>
+    if isU64Extern kern && argsAreParams ps xs then Some kern else None
+  _ => None
+
+argsAreParams : List String -> List CExpr -> Bool
+argsAreParams [] [] = True
+argsAreParams (p :: ps) ((CVar x _) :: xs) = p == x && argsAreParams ps xs
+argsAreParams _ _ = False
+
+isU64ShiftKernel : String -> Bool
+isU64ShiftKernel k = k == "u64ShiftLeft" || k == "u64ShiftRight"
+
+-- the kernels `emitU64Raw` computes on payloads, at their full arity.
+isU64RawKernel : String -> Int -> Bool
+isU64RawKernel "u64Truncate" n = n == 1
+isU64RawKernel f n =
+  n == 2
+    && contains f [
+      "u64BitAnd", "u64BitOr", "u64BitXor", "u64ShiftLeft", "u64ShiftRight",
+      "u64MulHigh"
+    ]
+
+-- A U64 arithmetic operator on its operands' payloads: `+`, `-` and `*` are the
+-- 64-bit instructions, which wrap modulo 2^64; `/` and `%` are `udiv`/`urem`
+-- behind Int's zero-divisor abort.
+emitU64RawArith : Emit ->
   OrdMap (String, LTy) ->
   String ->
-  List CExpr ->
-  (String, LTy)
-emitU64Bin e env instr args = match emitArgs e env args
-  [a, b] =>
-    let x = unboxU64 e a
-    let y = unboxU64 e b
-    let r = freshReg e
-    let _ = emit e "  \{r} = \{instr} i64 \{x}, \{y}"
-    (boxU64 e r, LTU64)
-  _ => panic "llvm: a U64 bitwise kernel takes two arguments"
+  CExpr ->
+  CExpr ->
+  String
+emitU64RawArith e env op l r =
+  let a = emitU64Raw e env l
+  let b = emitU64Raw e env r
+  let _ = if op == "/" || op == "%" then emitDivZeroGuard e op b
+  let res = freshReg e
+  let _ = emit e "  \{res} = \{u64Op op} i64 \{a}, \{b}"
+  res
+
+-- The kernels on payloads: `u64Truncate` sign-extends the untagged Int, the
+-- bitwise kernels are one instruction, the shifts give 0 outside `0 .. 63` by a
+-- select, and `u64MulHigh` is the top half of the 128-bit product.
+emitU64Kernel : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> String
+emitU64Kernel e env "u64Truncate" [a] = untagInt e (fst (emitExpr e env a))
+emitU64Kernel e env "u64BitAnd" [a, b] = emitU64Bin e env "and" a b
+emitU64Kernel e env "u64BitOr" [a, b] = emitU64Bin e env "or" a b
+emitU64Kernel e env "u64BitXor" [a, b] = emitU64Bin e env "xor" a b
+emitU64Kernel e env "u64ShiftLeft" [a, k] = emitU64Shift e env "shl" a k
+emitU64Kernel e env "u64ShiftRight" [a, k] = emitU64Shift e env "lshr" a k
+emitU64Kernel e env "u64MulHigh" [a, b] =
+  let x = emitU64Raw e env a
+  let y = emitU64Raw e env b
+  let wa = freshReg e
+  let _ = emit e "  \{wa} = zext i64 \{x} to i128"
+  let wb = freshReg e
+  let _ = emit e "  \{wb} = zext i64 \{y} to i128"
+  let p = freshReg e
+  let _ = emit e "  \{p} = mul i128 \{wa}, \{wb}"
+  let h = freshReg e
+  let _ = emit e "  \{h} = lshr i128 \{p}, 64"
+  let r = freshReg e
+  let _ = emit e "  \{r} = trunc i128 \{h} to i64"
+  r
+emitU64Kernel _ _ name _ =
+  panic ("llvm: U64 kernel " ++ name ++ " applied to the wrong arguments")
+
+-- a bitwise U64 kernel: one instruction on the two payloads.
+emitU64Bin : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> String
+emitU64Bin e env instr a b =
+  let x = emitU64Raw e env a
+  let y = emitU64Raw e env b
+  let r = freshReg e
+  let _ = emit e "  \{r} = \{instr} i64 \{x}, \{y}"
+  r
 
 -- a logical U64 shift by a tagged Int amount; 0 outside `0 .. 63`.
 emitU64Shift : Emit ->
   OrdMap (String, LTy) ->
   String ->
-  List CExpr ->
-  (String, LTy)
-emitU64Shift e env instr args = match emitArgs e env args
-  [a, k] =>
-    let x = unboxU64 e a
-    let n = untagInt e k
-    let inRange = freshReg e
-    let _ = emit e "  \{inRange} = icmp ult i64 \{n}, 64"
-    let masked = freshReg e
-    let _ = emit e "  \{masked} = and i64 \{n}, 63"
-    let shifted = freshReg e
-    let _ = emit e "  \{shifted} = \{instr} i64 \{x}, \{masked}"
-    let r = freshReg e
-    let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
-    (boxU64 e r, LTU64)
-  _ => panic "llvm: a U64 shift takes two arguments"
+  CExpr ->
+  CExpr ->
+  String
+emitU64Shift e env instr a k =
+  let x = emitU64Raw e env a
+  let n = untagInt e (fst (emitExpr e env k))
+  let inRange = freshReg e
+  let _ = emit e "  \{inRange} = icmp ult i64 \{n}, 64"
+  let masked = freshReg e
+  let _ = emit e "  \{masked} = and i64 \{n}, 63"
+  let shifted = freshReg e
+  let _ = emit e "  \{shifted} = \{instr} i64 \{x}, \{masked}"
+  let r = freshReg e
+  let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
+  r
 
 isHashExtern : String -> Bool
 isHashExtern name =
@@ -4816,10 +4936,7 @@ emitU64Arith : Emit ->
   CExpr ->
   CExpr ->
   (String, LTy)
-emitU64Arith e env op l r =
-  let (lv, _) = emitExpr e env l
-  let (rv, _) = emitExpr e env r
-  emitU64ArithW e op lv rv
+emitU64Arith e env op l r = (boxU64 e (emitU64RawArith e env op l r), LTU64)
 
 -- the U64 operator on two already-emitted cell words.
 emitU64ArithW : Emit -> String -> String -> String -> (String, LTy)
@@ -4979,15 +5096,78 @@ emitArithW e env op l r =
         let res = freshReg e
         let _ = emit e "  \{res} = call i64 @\{numOp op}(i64 \{lv}, i64 \{rv})"
         (res, LTNum)
-      _ =>
+      _ => emitIntArithChecked e op lv rv
+
+-- `Int` arithmetic traps: a result outside -2^62 .. 2^62 - 1 calls
+-- @mdk_int_overflow (E-INT-OVERFLOW) instead of wrapping.  `+` and `-` work on
+-- the tagged words: (2a+1) + 2b = 2(a+b)+1, so the 64-bit add overflows exactly
+-- when the 63-bit sum does and its result is already tagged; `*` multiplies the
+-- untagged a by 2b and sets the tag bit.  `/` overflows only at intMinBound / -1,
+-- caught by retagging the quotient with an overflow-checked add; `%` never does.
+emitIntArithChecked : Emit -> String -> String -> String -> (String, LTy)
+emitIntArithChecked e op lv rv =
+  if op == "/" || op == "%" then
+    let li = untagInt e lv
+    let ri = untagInt e rv
+    let _ = emitDivZeroGuard e op ri
+    let q = freshReg e
+    let _ = emit e "  \{q} = \{intOp op} i64 \{li}, \{ri}"
+    if op == "%" then
+      (tagInt e q, LTInt)
+    else
+      (setTagBit e (emitOverflowChecked e "sadd" q q "3" lv rv), LTInt)
+  else
+    let r2 = freshReg e
+    let _ = emit e "  \{r2} = sub i64 \{rv}, 1"
+    match op
+      "*" =>
         let li = untagInt e lv
-        let ri = untagInt e rv
-        if op == "/" || op == "%" then
-          emitIntDivZeroChecked e op li ri
-        else
-          let res = freshReg e
-          let _ = emit e "  \{res} = \{intOp op} i64 \{li}, \{ri}"
-          (tagInt e res, LTInt)
+        (setTagBit e (emitOverflowChecked e "smul" li r2 "2" lv rv), LTInt)
+      "+" => (emitOverflowChecked e "sadd" lv r2 "0" lv rv, LTInt)
+      _ => (emitOverflowChecked e "ssub" lv r2 "1" lv rv, LTInt)
+
+-- an even word with the Int tag bit set: the product 2ab, or the doubled
+-- quotient, becomes the tagged 2ab+1.
+setTagBit : Emit -> String -> String
+setTagBit e w =
+  let res = freshReg e
+  let _ = emit e "  \{res} = or i64 \{w}, 1"
+  res
+
+-- `a <op> b` through llvm.<intrinsic>.with.overflow.i64, yielding the result on
+-- the ok label.  On overflow the cold block calls @mdk_int_overflow with the
+-- operator code (0 `+`, 1 `-`, 2 `*`, 3 `/`, 4 negation) and the operands,
+-- untagged there from the TAGGED words `ta`/`tb` so the hot path pays nothing.
+emitOverflowChecked : Emit ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String
+emitOverflowChecked e intrinsic a b code ta tb =
+  let pair = freshReg e
+  let _ =
+    emit
+      e
+      "  \{pair} = call { i64, i1 } @llvm.\{intrinsic}.with.overflow.i64(i64 \{a}, i64 \{b})"
+  let v = freshReg e
+  let _ = emit e "  \{v} = extractvalue { i64, i1 } \{pair}, 0"
+  let o = freshReg e
+  let _ = emit e "  \{o} = extractvalue { i64, i1 } \{pair}, 1"
+  let n = intToString (freshLocal e)
+  let ovfL = "intovf" ++ n
+  let okL = "intok" ++ n
+  let _ = emit e "  br i1 \{o}, label %\{ovfL}, label %\{okL}"
+  let _ = emit e (ovfL ++ ":")
+  let ua = untagInt e ta
+  let ub = untagInt e tb
+  let _ =
+    emit e "  call void @mdk_int_overflow(i64 \{code}, i64 \{ua}, i64 \{ub})"
+  let _ = emit e "  unreachable"
+  let _ = emit e (okL ++ ":")
+  v
 
 -- Integer `/` or `%`: guard the divisor against zero before the hardware
 -- sdiv/srem.  A zero divisor is UB in LLVM (the div is elided / yields garbage
@@ -4997,7 +5177,8 @@ emitArithW e env op l r =
 -- guard.  No source location is baked in — Core IR carries none, so the native
 -- trap is the interpreter's message MINUS `file:L:C:` (a located trap is a
 -- follow-on).  On a nonzero divisor the ok-branch runs the original sdiv/srem
--- unchanged, so valid-division output is byte-identical.
+-- unchanged, so valid-division output is byte-identical.  The fixed-width types'
+-- `/` and `%` use it as is: two non-negative in-range operands never overflow.
 emitIntDivZeroChecked : Emit -> String -> String -> String -> (String, LTy)
 emitIntDivZeroChecked e op li ri =
   let _ = emitDivZeroGuard e op ri
@@ -5074,9 +5255,11 @@ emitU64Cmp : Emit ->
   CExpr ->
   (String, LTy)
 emitU64Cmp e env op l r =
-  let (lv, _) = emitExpr e env l
-  let (rv, _) = emitExpr e env r
-  emitU64CmpW e op lv rv
+  let a = emitU64Raw e env l
+  let b = emitU64Raw e env r
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp \{u64Pred op} i64 \{a}, \{b}"
+  boolFromI1 e c
 
 -- the U64 comparison on two already-emitted cell words.
 emitU64CmpW : Emit -> String -> String -> String -> (String, LTy)
@@ -5284,11 +5467,9 @@ emitUn e env "-" x =
       let r = freshReg e
       let _ = emit e "  \{r} = sub i64 0, \{x}"
       (boxU64 e r, LTU64)
-    _ =>
-      let i = untagInt e v
-      let r = freshReg e
-      let _ = emit e "  \{r} = sub i64 0, \{i}"
-      (tagInt e r, LTInt)
+    -- Int negation traps at intMinBound, whose negation is 2^62.  On the tagged
+    -- word, 2 - (2a+1) = 2(-a)+1, which overflows exactly there.
+    _ => (emitOverflowChecked e "ssub" "2" v "4" v "1", LTInt)
 emitUn e _ op _ = gapE e ("unsupported unary op " ++ op)
 
 -- `if`: lower via an alloca slot (memory, not phi) so a branch's own internal
@@ -5990,6 +6171,10 @@ emitApp e env app =
         emitIndirect e env hd args
       else if isAnyExtern fname && hasArgs args then
         emitExternApplied e env fname args
+      else if isSome (u64KernelAlias e fname args) then
+        -- a `u64` wrapper around one kernel (`u64KernelAlias`): the kernel
+        -- itself, so `U64.toIntTruncating (…)` fuses with its argument
+        emitU64Extern e env (optionOr "" (u64KernelAlias e fname args)) args
       else if isFfiExtern e fname && hasArgs args then
         -- #2074: a USER-declared extern is a FOREIGN symbol, not a builtin, not a
         -- ctor, and not a compiled top-level fn — without this arm the ladder falls
@@ -13234,9 +13419,12 @@ emitFnBody e env self other =
       -- the same correct shape an application in `main`'s own body already gets.
       -- `emitArgs` is 1:1 with `args`, so `lengthS args` is the arg-word count
       -- without emitting anything (the guard must not emit args it may discard).
+      -- A `u64` kernel wrapper (`u64KernelAlias`) goes through `emitApp`, which
+      -- emits the kernel inline.
       if isKnownFn e fname
         && hasArgs args
-        && tailCallSaturated e fname (lengthS args) then
+        && tailCallSaturated e fname (lengthS args)
+        && isNone (u64KernelAlias e fname0 args) then
         let argOps = emitArgs e env args
         let r = freshReg e
         let kw = if fname == self then "musttail call" else "call"

@@ -10,6 +10,10 @@ declare void @mdk_slice_oob(i64, i64) noreturn
 declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
+declare void @mdk_int_overflow(i64, i64, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare void @mdk_nonexhaustive_match() noreturn
 declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_dispatch_ambiguous() noreturn
@@ -222,16 +226,22 @@ define i64 @mdk_impl_Bool_mk(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = call i64 @mdk_force___user____cell()
-  %t3 = ashr i64 %t2, 1
-  %t4 = ashr i64 3, 1
-  %t5 = add i64 %t3, %t4
-  %t6 = shl i64 %t5, 1
-  %t7 = or i64 %t6, 1
-  store i64 %t7, ptr %t0
+  %t3 = sub i64 3, 1
+  %t4 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t2, i64 %t3)
+  %t5 = extractvalue { i64, i1 } %t4, 0
+  %t6 = extractvalue { i64, i1 } %t4, 1
+  br i1 %t6, label %intovf7, label %intok7
+intovf7:
+  %t8 = ashr i64 %t2, 1
+  %t9 = ashr i64 3, 1
+  call void @mdk_int_overflow(i64 0, i64 %t8, i64 %t9)
+  unreachable
+intok7:
+  store i64 %t5, ptr %t0
   br label %decend1
 decend1:
-  %t8 = load i64, ptr %t0
-  ret i64 %t8
+  %t10 = load i64, ptr %t0
+  ret i64 %t10
 }
 
 ; mdk-module program

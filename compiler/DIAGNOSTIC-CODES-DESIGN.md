@@ -404,6 +404,7 @@ asserts) stay **bare** and carry no code.
 |---|---|
 | `E-DIV-ZERO` | integer division by zero |
 | `E-MOD-ZERO` | integer modulo by zero |
+| `E-INT-OVERFLOW` | `Int` `+`, `-`, `*`, negation or `/` whose result is outside `intMinBound .. intMaxBound`; the message names the operation (`4611686018427387903 + 1 overflows Int`) |
 | `E-INDEX-OOB` | list/array/string index out of bounds |
 | `E-SLICE-OOB` | slice bounds out of range |
 | `E-PANIC` | explicit user `panic` |

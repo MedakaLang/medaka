@@ -27,8 +27,8 @@
 -- narrow them explicitly with `U32.truncate` and `U8.truncate` (the one
 -- conversion into each type that keeps the low bits rather than refusing), so
 -- a header built from an
--- out-of-range field still WRAPS on emit exactly the way `Int` wraps
--- elsewhere in this codebase, rather than being rejected. `prop
+-- out-of-range field still WRAPS on emit to the field's width, the U types'
+-- rule, rather than being rejected. `prop
 -- "emitGzipHeader/parseGzipHeader round-trips (numeric fields)"` below
 -- pins that as the intended contract, not an oversight.
 

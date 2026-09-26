@@ -743,7 +743,9 @@ Bitwise exclusive or.
 shiftLeft : Int -> Int -> Int
 ```
 
-The first argument shifted left by the second, in bits.
+The first argument shifted left by the second, in bits. The bits shifted
+past bit 62 are discarded, so bit 62 becomes the sign, and an amount of 63
+or more gives `0`. A negative amount panics.
 
 ### `shiftRight`
 
@@ -751,8 +753,9 @@ The first argument shifted left by the second, in bits.
 shiftRight : Int -> Int -> Int
 ```
 
-The first argument shifted right by the second, in bits, filling with
-zeros.
+The first argument shifted right by the second, in bits, each vacated bit
+a copy of the sign. An amount of 63 or more gives `0`, or `-1` for a
+negative value. A negative amount panics.
 
 ### `bitNot`
 

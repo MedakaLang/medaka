@@ -1,5 +1,5 @@
 # META
-source_lines=1205
+source_lines=1210
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `List a`.
@@ -65,9 +65,14 @@ range lo hi = [lo..hi]
 export
 rangeStep : Int -> Int -> Int -> List Int
 rangeStep lo hi step
-  | step > 0 && lo < hi = lo :: rangeStep (lo + step) hi step
-  | step < 0 && lo > hi = lo :: rangeStep (lo + step) hi step
+  | step > 0 && lo < hi || step < 0 && lo > hi = lo :: rangeStepFrom lo hi step
   | otherwise = []
+
+-- The rest after `lo`.  A next element past `Int`'s range is past `hi` too.
+rangeStepFrom : Int -> Int -> Int -> List Int
+rangeStepFrom lo hi step = match checkedAdd lo step
+  Some next => rangeStep next hi step
+  None => []
 
 -- > rangeStep 0 10 0
 -- []
@@ -1215,7 +1220,9 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DTypeSig true "range" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "range" ((PVar "lo") (PVar "hi")) (ERangeList (EVar "lo") (EVar "hi") false))
 (DTypeSig true "rangeStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "rangeStep" ((PVar "lo") (PVar "hi") (PVar "step")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBinOp "<" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EBinOp "&&" (EBinOp "<" (EVar "step") (ELit (LInt 0))) (EBinOp ">" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "rangeStep" ((PVar "lo") (PVar "hi") (PVar "step")) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBinOp "<" (EVar "lo") (EVar "hi"))) (EBinOp "&&" (EBinOp "<" (EVar "step") (ELit (LInt 0))) (EBinOp ">" (EVar "lo") (EVar "hi")))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStepFrom") (EVar "lo")) (EVar "hi")) (EVar "step"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "rangeStepFrom" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "rangeStepFrom" ((PVar "lo") (PVar "hi") (PVar "step")) (EMatch (EApp (EApp (EVar "checkedAdd") (EVar "lo")) (EVar "step")) (arm (PCon "Some" (PVar "next")) () (EApp (EApp (EApp (EVar "rangeStep") (EVar "next")) (EVar "hi")) (EVar "step"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "replicate" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "replicate" ((PVar "n") (PVar "x")) (EApp (EApp (EVar "replicateDbl") (EVar "n")) (EVar "x")))
 (DTypeSig false "replicateDbl" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
@@ -1457,7 +1464,9 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DTypeSig true "range" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "range" ((PVar "lo") (PVar "hi")) (ERangeList (EVar "lo") (EVar "hi") false))
 (DTypeSig true "rangeStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "rangeStep" ((PVar "lo") (PVar "hi") (PVar "step")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBinOp "<" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EBinOp "&&" (EBinOp "<" (EVar "step") (ELit (LInt 0))) (EBinOp ">" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "rangeStep" ((PVar "lo") (PVar "hi") (PVar "step")) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBinOp "<" (EVar "lo") (EVar "hi"))) (EBinOp "&&" (EBinOp "<" (EVar "step") (ELit (LInt 0))) (EBinOp ">" (EVar "lo") (EVar "hi")))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStepFrom") (EVar "lo")) (EVar "hi")) (EVar "step"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "rangeStepFrom" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "rangeStepFrom" ((PVar "lo") (PVar "hi") (PVar "step")) (EMatch (EApp (EApp (EVar "checkedAdd") (EVar "lo")) (EVar "step")) (arm (PCon "Some" (PVar "next")) () (EApp (EApp (EApp (EVar "rangeStep") (EVar "next")) (EVar "hi")) (EVar "step"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "replicate" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "replicate" ((PVar "n") (PVar "x")) (EApp (EApp (EVar "replicateDbl") (EVar "n")) (EVar "x")))
 (DTypeSig false "replicateDbl" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))

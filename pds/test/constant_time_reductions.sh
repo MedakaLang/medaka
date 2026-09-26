@@ -83,43 +83,120 @@ check_emitted_helpers() {
     expected_makes=${rest%%:*}
     rest=${rest#*:}
     expected_copies=${rest%%:*}
-    expected_total=${rest##*:}
+    rest=${rest#*:}
+    expected_total=${rest%%:*}
+    rest=${rest#*:}
+    expected_allocs=${rest%%:*}
+    public_args=${rest##*:}
     body="$dir/$name.ll"
     extract_function "$name" "$ir" "$body"
-    helper_ir_ok "$body" "$expected" "$expected_comparisons" "$expected_indices" "$expected_sets" "$expected_makes" "$expected_copies" "$expected_total" || fail "$name native IR operation/control shape"
+    helper_ir_ok "$body" "$expected" "$expected_comparisons" "$expected_indices" "$expected_sets" "$expected_makes" "$expected_copies" "$expected_total" "$expected_allocs" || fail "$name native IR operation/control shape"
+    ovf_operands_public "$body" "$public_args" || fail "$name overflow checks test only its public counter arguments"
     ir_call_shape_ok "$name" "$body" || fail "$name native IR exact callee graph"
   done
 }
 
+# Re-derived when the limb arithmetic moved to U64 expressions over Int
+# storage (#3427), callee by callee against the Int-arithmetic pins. The Int
+# runtime bit calls (mdk_bit_and, mdk_shift_right) left every limb helper:
+# U64 `+ - *`, the bit operations, the conversions and literal shifts are
+# inline kernels now, not calls. The lazy-constant forces of the masks and fold
+# constants (limbMask, topMask, foldLow, foldHi, r0, r1) left too, since a U64
+# constant is static data; the forces of the Int constant arrays (pLimbs,
+# nLimbs, cLimbs, nHalfPlusOneLimbs) and of nWide stay. scHighBit gained one
+# mdk_bit_xor, for `1 - borrow` on the secret bit. feZeroBit, feEqualBit,
+# feSelect, feNegateCt and their scalar twins are main's shapes again.
 ir_call_shape_ok() {
   name=$1
   body=$2
   case "$name" in
-    canonicalize) expected='444837400 70' ;; carryFoldRound) expected='3889069194 171' ;;
-    carryAll) expected='136326906 25' ;; carryGo) expected='2951762016 157' ;;
-    carryAllUnchecked) expected='2496061766 34' ;; carryGoUnchecked) expected='1150039596 166' ;;
-    carryPass) expected='2881939388 28' ;; carryPassGo) expected='198870372 274' ;;
+    canonicalize) expected='444837400 70' ;; carryFoldRound) expected='394656806 112' ;;
+    carryAll) expected='136326906 25' ;; carryGo) expected='3069128489 97' ;;
+    carryAllUnchecked) expected='2496061766 34' ;; carryGoUnchecked) expected='688461524 106' ;;
+    carryPass) expected='2881939388 28' ;; carryPassGo) expected='3052376249 157' ;;
     copyLow) expected='2044746140 68' ;;
     foldAccum) expected='2494560624 57' ;; foldAccumRow) expected='2234620271 145' ;;
     foldOnce) expected='856892605 68' ;; reduceCarry) expected='1494584225 93' ;;
     reduceFixed) expected='2618126692 279' ;; reduceWide) expected='46832935 97' ;;
     selectNCandidate) expected='2597000302 98' ;; selectPCandidate) expected='884186827 97' ;;
-    subNCandidate) expected='2931902360 217' ;; subNSelect) expected='662374009 80' ;;
-    subPCandidate) expected='713947010 394' ;; subPSelect) expected='1367941064 78' ;;
+    subNCandidate) expected='521088620 125' ;; subNSelect) expected='662374009 80' ;;
+    subPCandidate) expected='658805364 216' ;; subPSelect) expected='1367941064 78' ;;
     takeHigh) expected='3467411543 120' ;;
-    feZeroBit) expected='74387245 51' ;; feZeroBorrow) expected='4050185111 164' ;;
-    feEqualBit) expected='252719509 74' ;; feEqualBorrow) expected='1163818310 231' ;;
-    feSelect) expected='2414876905 86' ;; feSelectGo) expected='1891909016 112' ;;
-    feNegateCt) expected='1892632465 146' ;; feNegateCtGo) expected='3285119066 377' ;;
-    scZeroBit) expected='2352652638 53' ;; scZeroBorrow) expected='2747016557 99' ;;
-    scEqualBit) expected='2926071104 77' ;; scEqualBorrow) expected='3607141582 133' ;;
-    scSelect) expected='1978030131 89' ;; scSelectGo) expected='2865420383 113' ;;
-    scHighBit) expected='3082329127 53' ;; scHighBorrow) expected='891809590 161' ;;
-    scNegateCt) expected='2408882719 151' ;; scNegateCtGo) expected='4251784365 216' ;;
+    feZeroBit) expected='74387245 51' ;; feZeroBorrow) expected='1883773744 71' ;;
+    feEqualBit) expected='252719509 74' ;; feEqualBorrow) expected='4227876790 114' ;;
+    feSelect) expected='2414876905 86' ;; feSelectGo) expected='1846801385 91' ;;
+    feNegateCt) expected='1892632465 146' ;; feNegateCtGo) expected='750834821 215' ;;
+    scZeroBit) expected='2352652638 53' ;; scZeroBorrow) expected='497208193 51' ;;
+    scEqualBit) expected='2926071104 77' ;; scEqualBorrow) expected='875766369 73' ;;
+    scSelect) expected='1978030131 89' ;; scSelectGo) expected='2088093873 92' ;;
+    scHighBit) expected='3442383438 65' ;; scHighBorrow) expected='1859518876 113' ;;
+    scNegateCt) expected='2408882719 151' ;; scNegateCtGo) expected='3864805163 124' ;;
     *) return 1 ;;
   esac
   actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
   [ "$actual" = "$expected" ]
+}
+
+# Since Int overflow traps (#3377), every Int `+ - *` lowers to an
+# llvm.s{add,sub,mul}.with.overflow call and a branch to @mdk_int_overflow. In
+# these helpers the only Int arithmetic is on the public limb counters, so each
+# such branch must test a value built only from literals and the helper's
+# counter arguments ($2, `+`-separated argument indexes). A register is public
+# when it is one of those arguments or is computed, by plain arithmetic or an
+# overflow intrinsic's extractvalue, from public registers and literals; any
+# other call result, load or cell payload is not. Every overflow intrinsic's
+# operands must be public, and the branch counts pinned in helper_ir_ok are
+# then the loop branch plus one overflow branch per counter operation.
+ovf_operands_public() {
+  awk -v pub="$2" '
+    BEGIN { n = split(pub, p, "+"); for (k = 1; k <= n; k++) public["%arg" p[k]] = 1 }
+    /^  %[A-Za-z0-9_.]+ = / {
+      dst = $1
+      rest = $0
+      sub(/^  %[A-Za-z0-9_.]+ = /, "", rest)
+      op = rest
+      sub(/ .*/, "", op)
+      ovf = (rest ~ /@llvm\.s(add|sub|mul)\.with\.overflow/)
+      ok = (op ~ /^(add|sub|mul|ashr|shl|or|and|xor|extractvalue)$/) || ovf
+      body = rest
+      sub(/^[^%]*/, "", body)
+      all = 1
+      while (match(body, /%[A-Za-z0-9_.]+/)) {
+        r = substr(body, RSTART, RLENGTH)
+        if (!(r in public)) all = 0
+        body = substr(body, RSTART + RLENGTH)
+      }
+      if (ovf) { seen++; if (!all) bad++ }
+      if (ok && all) public[dst] = 1
+    }
+    END { exit !(bad == 0) }
+  ' "$1"
+}
+
+# The limb helpers' arithmetic is U64 expressions (#3427). With a literal
+# shift amount, `U64.truncate`, `U64.toIntTruncating`, the bit operations and
+# the shifts lower as inline kernels fused with the surrounding U64
+# arithmetic: no call into stdlib/u64.mdk and no cell allocation. A shift whose
+# amount is not a literal still calls the u64 wrapper, whose `k < 0` refusal
+# is a branch on the amount. So in the audited helpers no u64 shift call may
+# remain (every shift amount is a literal, never secret-derived:
+# docs/design/ATPROTO-PDS-CONSTANT-TIME.md §5.1), and any other u64 callee
+# must be one of the straight-line helpers on the allowlist.
+u64_callees_ok() {
+  ir=$1
+  dir=$2
+  cat "$dir"/*.ll > "$dir.u64-bodies"
+  callees=$(sed -n 's/.*call i64 @\(mdk_u64__[A-Za-z0-9_]*\)(.*/\1/p' "$dir.u64-bodies" | sort -u)
+  for callee in $callees; do
+    case $callee in
+      mdk_u64__bitAnd|mdk_u64__bitXor|mdk_u64__truncate|mdk_u64__toIntTruncating) ;;
+      *) return 1 ;;
+    esac
+    awk -v s="$callee" '$0 ~ ("^define i64 @" s "\\(") { p = 1 } p { print } p && /^}/ { exit }' "$ir" > "$dir.u64-callee.ll"
+    [ -s "$dir.u64-callee.ll" ] || return 1
+    [ "$(grep -c 'br i1' "$dir.u64-callee.ll" || true)" -eq 0 ] || return 1
+  done
+  [ "$(grep -c 'call i64 @mdk_u64__shift' "$dir.u64-bodies" || true)" -eq 0 ]
 }
 
 emitted_local_closure_ok() {
@@ -152,6 +229,12 @@ emitted_comparison_present() {
 # appear at all on a secret path. These were one shared number until the emitter
 # began lowering a comparison on known-scalar operands to an inline icmp, at which
 # point "one branch" and "one comparison call" stopped being the same claim.
+#
+# The optional ninth count is the helper's U64 cell allocations
+# (`call ptr @mdk_alloc_atomic`, which the `call i64` total does not count).
+# The limbs are stored as Int and each U64 expression boxes nothing, so every
+# audited helper pins 0 (#3427); a U64 value bound, passed or stored would
+# reappear here as a nonzero count.
 helper_ir_ok() {
   body=$1
   expected=$2
@@ -161,6 +244,10 @@ helper_ir_ok() {
   expected_makes=$6
   expected_copies=$7
   expected_total=$8
+  expected_allocs=${9:-}
+  if [ -n "$expected_allocs" ]; then
+    [ "$(grep -F -c 'call ptr @mdk_alloc_atomic(' "$body" || true)" -eq "$expected_allocs" ] || return 1
+  fi
   branches=$(grep -c 'br i1' "$body" || true)
   comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)
   hashes=$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)
@@ -274,31 +361,36 @@ extract_source_function() {
   [ -s "$output" ] || return 1
 }
 
+# Re-derived for the same move (#3427). Each changed body differs from main's
+# only in computing its limb arithmetic as `U64.toIntTruncating (...)` over
+# `U64.truncate`d operands, with a result bound to an Int name before it is
+# written, and in `bitXor b 1` for `1 - b` on a secret bit; the
+# if/comparison/index/write shape checked below is unchanged for every helper.
 source_shape_ok() {
   name=$1
   body=$2
   case "$name" in
     canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
-    carryFoldRound) expected='702085150 126' ;; carryGo) expected='2159207857 267' ;;
-    carryAllUnchecked) expected='2587065717 46' ;; carryGoUnchecked) expected='3140321757 189' ;;
-    carryPass) expected='1250453555 31' ;; carryPassGo) expected='1857917920 284' ;;
+    carryFoldRound) expected='2574584363 246' ;; carryGo) expected='483232373 419' ;;
+    carryAllUnchecked) expected='2587065717 46' ;; carryGoUnchecked) expected='1452595665 359' ;;
+    carryPass) expected='1250453555 31' ;; carryPassGo) expected='249187234 525' ;;
     copyLow) expected='3444459846 115' ;;
-    foldAccum) expected='305940905 111' ;; foldAccumRow) expected='1512181526 160' ;;
+    foldAccum) expected='305940905 111' ;; foldAccumRow) expected='1427309669 257' ;;
     foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
     reduceFixed) expected='3041539658 251' ;; reduceWide) expected='1389933683 128' ;;
-    selectNCandidate) expected='1327350681 214' ;; selectPCandidate) expected='3621980786 212' ;;
-    subNCandidate) expected='196465499 230' ;; subNSelect) expected='1155645251 125' ;;
-    subPCandidate) expected='714167625 342' ;; subPSelect) expected='764393686 125' ;;
-    feZeroBit) expected='1598842918 42' ;; feZeroBorrow) expected='2456388451 212' ;;
-    feEqualBit) expected='243104385 56' ;; feEqualBorrow) expected='1904311731 242' ;;
-    feSelect) expected='564879547 108' ;; feSelectGo) expected='3969226401 161' ;;
-    feNegateCt) expected='2668735364 126' ;; feNegateCtGo) expected='2165366212 310' ;;
+    selectNCandidate) expected='3724671061 348' ;; selectPCandidate) expected='2657708060 346' ;;
+    subNCandidate) expected='77109958 473' ;; subNSelect) expected='474265099 160' ;;
+    subPCandidate) expected='554180296 804' ;; subPSelect) expected='421576326 160' ;;
+    feZeroBit) expected='1598842918 42' ;; feZeroBorrow) expected='2435450326 386' ;;
+    feEqualBit) expected='243104385 56' ;; feEqualBorrow) expected='2634103759 574' ;;
+    feSelect) expected='564879547 108' ;; feSelectGo) expected='2349716768 294' ;;
+    feNegateCt) expected='2668735364 126' ;; feNegateCtGo) expected='2168105124 709' ;;
     rawFe) expected='714619739 33' ;;
-    scZeroBit) expected='1698366246 42' ;; scZeroBorrow) expected='2943287382 160' ;;
-    scEqualBit) expected='1611320584 56' ;; scEqualBorrow) expected='2696023600 178' ;;
-    scSelect) expected='1808119660 108' ;; scSelectGo) expected='2097560298 163' ;;
-    scHighBit) expected='601342344 46' ;; scHighBorrow) expected='807202238 176' ;;
-    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='1321952515 228' ;;
+    scZeroBit) expected='1698366246 42' ;; scZeroBorrow) expected='1186682083 260' ;;
+    scEqualBit) expected='1611320584 56' ;; scEqualBorrow) expected='4283361301 360' ;;
+    scSelect) expected='1808119660 108' ;; scSelectGo) expected='3581781419 296' ;;
+    scHighBit) expected='3676886396 53' ;; scHighBorrow) expected='3020028754 345' ;;
+    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='226371103 471' ;;
     rawSc) expected='3051169895 33' ;;
     takeHigh) expected='2788456482 152' ;; *) return 1 ;;
   esac
@@ -681,15 +773,15 @@ append_field_probe() {
 
 fieldRoundsWitness : Bool
 fieldRoundsWitness =
-  let raw = arrayMake 10 limbMask
+  let raw = arrayMake 10 0x3ffffff
   let () = setInPlace 9 (shiftLeft 1 43 - 1) raw
   let () = reduceCarry raw
   fieldWitnessGo raw 0
 
 fieldWitnessGo : Array Int -> Int -> Bool
 fieldWitnessGo raw i =
-  if i >= 9 then raw[9] <= topMask
-  else if raw[i] > limbMask then False
+  if i >= 9 then raw[9] <= 0x3fffff
+  else if raw[i] > 0x3ffffff then False
   else fieldWitnessGo raw (i + 1)
 
 fieldSelectWitness : Bool
@@ -820,124 +912,108 @@ require_line_count 1 '  carryFoldRound n' "$FIELD" 'field schedule has the third
 require_line_count 4 '  let () = foldOnce w' "$SCALAR" 'scalar schedule is exactly four folds'
 require_count 0 'subPInPlace' "$FIELD" 'field retired branchy subtraction is absent'
 require_count 0 'subNInPlace' "$SCALAR" 'scalar retired branchy subtraction is absent'
-require_count 1 'original + keepDiff * (diff[i] - original)' "$FIELD" 'field arithmetic select is present'
-require_count 1 'original + keepDiff * (diff[i] - original)' "$SCALAR" 'scalar arithmetic select is present'
+require_count 1 '* (U64.truncate diff[i] - U64.truncate original))' "$FIELD" 'field arithmetic select is present'
+require_count 1 '* (U64.truncate diff[i] - U64.truncate original))' "$SCALAR" 'scalar arithmetic select is present'
 source_helpers_ok "$FIELD" "$SCALAR" "$WORK/source-current" || fail 'dedicated reduction helpers contain only public-counter source branches'
 pass 'dedicated reduction helpers contain only public-counter source branches'
 
+# Replace the one line exactly equal to $3 inside top-level declaration $2 of
+# $1 with $4 (`\n` separates lines), writing $5. Fails when the line is not
+# found in that declaration, so a mutation can never silently be a copy. The
+# limb helpers' recursive calls span several lines, and the same continuation
+# line can recur in a sibling helper, hence the declaration scope.
+mutate_line() {
+  awk -v name="$2" -v old="$3" -v new="$4" '
+    $0 ~ ("^" name " ") { inside = 1 }
+    inside && /^[^ ]/ && $0 !~ ("^" name " ") { inside = 0 }
+    inside && $0 == old && !done {
+      n = split(new, parts, "\n")
+      for (k = 1; k <= n; k++) print parts[k]
+      done = 1
+      next
+    }
+    { print }
+    END { exit !done }
+  ' "$1" > "$5"
+}
+
 # The source checker must reject secret control in either the borrow chain or
 # either modulus' blend, not merely protect the current arithmetic spelling.
-awk '
-  /subPCandidate n diff \(i \+ 1\) \(1 - shiftRight t 26\)/ {
-    print "    subPCandidate n diff (i + 1) (if shiftRight t 26 == 0 then 1 else 0)"
-    next
-  }
-  { print }
-' "$FIELD" > "$WORK/field_borrow_source_mutant.mdk"
+mutate_line "$FIELD" subPCandidate \
+  '      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 26))' \
+  '      (if U64.shiftRight (U64.truncate t) 26 == 0 then 1 else 0)' \
+  "$WORK/field_borrow_source_mutant.mdk" || fail 'field borrow secret-branch mutation was constructed'
 if source_helpers_ok "$WORK/field_borrow_source_mutant.mdk" "$SCALAR" "$WORK/source-field-mutant"; then
   fail 'field borrow secret-branch mutation is rejected by source structure'
 fi
 pass 'field borrow secret-branch mutation is rejected by source structure'
 
-awk '
-  /let \(\) = A.setInPlace i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
-    print "    let () = if keepDiff == 1 then A.setInPlace i diff[i] w else A.setInPlace i original w"
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_select_source_mutant.mdk"
+mutate_line "$SCALAR" selectNCandidate \
+  '    let () = A.setInPlace i blended w' \
+  '    let () = if keepDiff == 1 then A.setInPlace i diff[i] w else A.setInPlace i original w' \
+  "$WORK/scalar_select_source_mutant.mdk" || fail 'scalar select secret-branch mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_select_source_mutant.mdk" "$WORK/source-scalar-mutant"; then
   fail 'scalar select secret-branch mutation is rejected by source structure'
 fi
 pass 'scalar select secret-branch mutation is rejected by source structure'
 
-awk '
-  /selectNCandidate w diff keepDiff \(i \+ 1\)/ {
-    print "    let secret = hashBool (original < diff[i])"
-    print "    let () = A.setInPlace i (w[i] + 0 * secret) w"
-    print
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_hash_source_mutant.mdk"
+mutate_line "$SCALAR" selectNCandidate \
+  '    selectNCandidate w diff keepDiff (i + 1)' \
+  '    let secret = hashBool (original < diff[i])\n    let () = A.setInPlace i (w[i] + 0 * secret) w\n    selectNCandidate w diff keepDiff (i + 1)' \
+  "$WORK/scalar_hash_source_mutant.mdk" || fail 'scalar comparison/hashBool mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_hash_source_mutant.mdk" "$WORK/source-scalar-hash-mutant"; then
   fail 'scalar comparison/hashBool mutation is rejected by source structure'
 fi
 pass 'scalar comparison/hashBool mutation is rejected by source structure'
 
-awk '
-  /selectNCandidate w diff keepDiff \(i \+ 1\)/ {
-    print "    let secretIndex = bitAnd original 1"
-    print "    let sampled = w[secretIndex]"
-    print "    let () = A.setInPlace i (w[i] + 0 * sampled) w"
-    print
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_index_source_mutant.mdk"
+mutate_line "$SCALAR" selectNCandidate \
+  '    selectNCandidate w diff keepDiff (i + 1)' \
+  '    let secretIndex = bitAnd original 1\n    let sampled = w[secretIndex]\n    let () = A.setInPlace i (w[i] + 0 * sampled) w\n    selectNCandidate w diff keepDiff (i + 1)' \
+  "$WORK/scalar_index_source_mutant.mdk" || fail 'scalar secret-index mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_index_source_mutant.mdk" "$WORK/source-scalar-index-mutant"; then
   fail 'scalar secret-index mutation is rejected by source structure'
 fi
 pass 'scalar secret-index mutation is rejected by source structure'
 
-awk '
-  /let \(\) = A.setInPlace i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
-    print "    let secretIndex = bitAnd original 1"
-    print "    let scratch = arrayMake 2 0"
-    print "    let () = A.setInPlace secretIndex 0 scratch"
-    print
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_write_source_mutant.mdk"
+mutate_line "$SCALAR" selectNCandidate \
+  '    let () = A.setInPlace i blended w' \
+  '    let secretIndex = bitAnd original 1\n    let scratch = arrayMake 2 0\n    let () = A.setInPlace secretIndex 0 scratch\n    let () = A.setInPlace i blended w' \
+  "$WORK/scalar_write_source_mutant.mdk" || fail 'scalar secret-write mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_write_source_mutant.mdk" "$WORK/source-scalar-write-mutant"; then
   fail 'scalar secret-write mutation is rejected by source structure'
 fi
 pass 'scalar secret-write mutation is rejected by source structure'
 
-awk '
-  /let t = w\[i\] \+ limbMask \+ 1 - nLimbs\[i\] - borrow/ {
-    print
-    print "    let k = borrow"
-    next
-  }
-  /A.setInPlace i \(bitAnd t limbMask\) diff/ {
-    print "    let () = A.setInPlace k (bitAnd t limbMask) diff"
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_rebound_index_source_mutant.mdk"
+mutate_line "$SCALAR" subNCandidate \
+  '    let () = A.setInPlace i masked diff' \
+  '    let k = borrow\n    let () = A.setInPlace k masked diff' \
+  "$WORK/scalar_rebound_index_source_mutant.mdk" || fail 'scalar rebound secret-index mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_rebound_index_source_mutant.mdk" "$WORK/source-scalar-rebound-index-mutant"; then
   fail 'scalar rebound secret-index mutation is rejected by source structure'
 fi
 pass 'scalar rebound secret-index mutation is rejected by source structure'
 
+mutate_line "$SCALAR" subNCandidate \
+  '      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))' \
+  '      (leakyShift t 16)' \
+  "$WORK/scalar_wrapper_body.mdk" || fail 'scalar leaky-wrapper mutation was constructed'
 awk '
   /^subNCandidate :/ {
     print "leakyShift : Int -> Int -> Int"
     print "leakyShift x amount = if x == 0 then 0 else shiftRight x amount"
     print ""
   }
-  /subNCandidate w diff \(i \+ 1\) \(1 - shiftRight t 16\)/ {
-    print "    subNCandidate w diff (i + 1) (1 - leakyShift t 16)"
-    next
-  }
   { print }
-' "$SCALAR" > "$WORK/scalar_wrapper_source_mutant.mdk"
+' "$WORK/scalar_wrapper_body.mdk" > "$WORK/scalar_wrapper_source_mutant.mdk"
 if source_helpers_ok "$FIELD" "$WORK/scalar_wrapper_source_mutant.mdk" "$WORK/source-scalar-wrapper-mutant"; then
   fail 'scalar leaky-wrapper mutation is rejected by exact source graph'
 fi
 pass 'scalar leaky-wrapper mutation is rejected by exact source graph'
 
-awk '
-  /let \(\) = A.setInPlace i w\[i\] out/ {
-    print "    let value = w[i]"
-    print "    let copied = if value == 0 then shiftRight value 0 else value"
-    print "    let () = A.setInPlace i copied out"
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_copy_source_mutant.mdk"
+mutate_line "$SCALAR" copyLow \
+  '    let () = A.setInPlace i w[i] out' \
+  '    let value = w[i]\n    let copied = if value == 0 then shiftRight value 0 else value\n    let () = A.setInPlace i copied out' \
+  "$WORK/scalar_copy_source_mutant.mdk" || fail 'scalar transitive copy mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_copy_source_mutant.mdk" "$WORK/source-scalar-copy-mutant"; then
   fail 'scalar transitive copy mutation is rejected by closed source graph'
 fi
@@ -967,25 +1043,19 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_high_bool_mutant.mdk" "$WORK/source-
 fi
 pass 'scalar Bool high mutation is rejected by source structure'
 
-awk '
-  /scHighBorrow s \(i \+ 1\) \(1 - shiftRight t 16\)/ {
-    print "    scHighBorrow s (i + 1) (if shiftRight t 16 == 0 then 1 else 0)"
-    next
-  }
-  { print }
-' "$SCALAR" > "$WORK/scalar_high_branch_mutant.mdk"
+mutate_line "$SCALAR" scHighBorrow \
+  '      (i + 1)' \
+  '      (if s[i] == 0 then i + 1 else i + 1)' \
+  "$WORK/scalar_high_branch_mutant.mdk" || fail 'scalar high-bit secret-branch mutation was constructed'
 if source_helpers_ok "$FIELD" "$WORK/scalar_high_branch_mutant.mdk" "$WORK/source-scalar-high-branch-mutant"; then
   fail 'scalar high-bit secret-branch mutation is rejected by source structure'
 fi
 pass 'scalar high-bit secret-branch mutation is rejected by source structure'
 
-awk '
-  /let \(\) = setInPlace i \(a\[i\] \+ bit \* \(b\[i\] - a\[i\]\)\) out/ {
-    print "    let () = if bit == 1 then setInPlace i b[i] out else setInPlace i a[i] out"
-    next
-  }
-  { print }
-' "$FIELD" > "$WORK/field_helper_select_mutant.mdk"
+mutate_line "$FIELD" feSelectGo \
+  '    let () = setInPlace i blended out' \
+  '    let () = if bit == 1 then setInPlace i b[i] out else setInPlace i a[i] out' \
+  "$WORK/field_helper_select_mutant.mdk" || fail 'field helper conditional-select mutation was constructed'
 if source_helpers_ok "$WORK/field_helper_select_mutant.mdk" "$SCALAR" "$WORK/source-field-helper-select-mutant"; then
   fail 'field helper conditional-select mutation is rejected by source structure'
 fi
@@ -1217,25 +1287,36 @@ run_probe_red "$WORK/scalar_three_folds.mdk" 'scalar 4-to-3 mutation is rejected
 cp "$FIELD" "$WORK/field_emit.mdk"
 append_field_probe "$WORK/field_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
+# Spec: name:branches:comparisons:indices:writes:makes:copies:calls:allocs:
+# public-counter-args. Against main: the call column fell where Int bit calls
+# and constant forces became inline U64 kernels (ir_call_shape_ok), the
+# allocation column is 0 throughout, and the branch column grew only in the
+# recursive helpers, by one overflow check per `+`/`-` on the limb counter
+# since Int traps (#3377): carryPassGo 1 -> 4 for its three `i + 1`, the
+# others 1 -> 2. ovf_operands_public proves each of those tests only the
+# counter arguments named last. The straight-line schedule helpers have no
+# Int arithmetic and stay at 0.
 check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
-  carryPass:0:0:0:0:0:0:1 carryPassGo:1:0:3:3:0:0:13 carryFoldRound:0:0:2:2:0:0:7 \
-  reduceCarry:0:0:0:0:0:0:3 subPCandidate:1:0:4:2:0:0:17 \
-  selectPCandidate:1:0:2:1:0:0:4 subPSelect:0:0:0:0:1:0:3 \
-  canonicalize:0:0:0:0:0:1:3 \
-  feZeroBit:0:0:0:0:0:0:2 feZeroBorrow:1:0:2:0:0:0:7 \
-  feEqualBit:0:0:0:0:0:0:3 feEqualBorrow:1:0:4:0:0:0:11 \
-  feSelect:0:0:0:0:1:0:4 feSelectGo:1:0:3:1:0:0:5 \
-  feNegateCt:0:0:0:0:1:0:6 feNegateCtGo:1:0:4:2:0:0:16
+  carryPass:0:0:0:0:0:0:1:0:- carryPassGo:4:0:3:3:0:0:7:0:1 carryFoldRound:0:0:2:2:0:0:5:0:- \
+  reduceCarry:0:0:0:0:0:0:3:0:- subPCandidate:2:0:4:2:0:0:9:0:2 \
+  selectPCandidate:2:0:2:1:0:0:4:0:3 subPSelect:0:0:0:0:1:0:3:0:- \
+  canonicalize:0:0:0:0:0:1:3:0:- \
+  feZeroBit:0:0:0:0:0:0:2:0:- feZeroBorrow:2:0:2:0:0:0:3:0:1 \
+  feEqualBit:0:0:0:0:0:0:3:0:- feEqualBorrow:2:0:4:0:0:0:5:0:2 \
+  feSelect:0:0:0:0:1:0:4:0:- feSelectGo:2:0:2:1:0:0:4:0:4 \
+  feNegateCt:0:0:0:0:1:0:6:0:- feNegateCtGo:2:0:4:2:0:0:9:0:2
 extract_function rawFe "$WORK/field_emit.ll" "$WORK/field-ir/rawFe.ll"
 raw_accessor_ir_ok "$WORK/field-ir/rawFe.ll" || fail 'field opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/field-ir" field_emit || fail 'field emitted local call graph is closed'
 pass 'field emitted local call graph is closed, including carryPass'
+u64_callees_ok "$WORK/field_emit.ll" "$WORK/field-ir" || fail 'field limb helpers make no u64 shift call and only allowlisted straight-line u64 calls'
+pass 'field limb helpers make no u64 shift call and only allowlisted straight-line u64 calls'
 extract_function selectPCandidate "$WORK/field_emit.ll" "$WORK/select-current.ll"
 current_ir_branches=$(grep -c 'br i1' "$WORK/select-current.ll" || true)
-[ "$current_ir_branches" -eq 1 ] || fail "current native IR has one public-counter branch (got $current_ir_branches)"
+[ "$current_ir_branches" -eq 2 ] || fail "current native IR has its loop branch and one counter overflow branch (got $current_ir_branches)"
 extract_function subPCandidate "$WORK/field_emit.ll" "$WORK/borrow-current.ll"
 field_borrow_ir_branches=$(grep -c 'br i1' "$WORK/borrow-current.ll" || true)
-[ "$field_borrow_ir_branches" -eq 1 ] || fail "current field borrow IR has one public-counter branch (got $field_borrow_ir_branches)"
+[ "$field_borrow_ir_branches" -eq 2 ] || fail "current field borrow IR has its loop branch and one counter overflow branch (got $field_borrow_ir_branches)"
 if emitted_comparison_present "$WORK/select-current.ll" || emitted_comparison_present "$WORK/borrow-current.ll"; then
   fail 'current field reduction IR contains secret equality control'
 fi
@@ -1255,7 +1336,7 @@ append_field_probe "$WORK/field_helper_select_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_helper_select_emit.mdk" -o "$WORK/field_helper_select_emit" --keep-ir > "$WORK/build-field-helper-select-mutant.log" 2>&1
 extract_function feSelectGo "$WORK/field_helper_select_emit.ll" "$WORK/field-helper-select-mutant.ll"
 emitted_comparison_present "$WORK/field-helper-select-mutant.ll" || fail 'field helper conditional-select mutation reaches native IR'
-[ "$(grep -c 'br i1' "$WORK/field-helper-select-mutant.ll" || true)" -gt 1 ] || fail 'field helper conditional-select mutation adds secret IR control'
+[ "$(grep -c 'br i1' "$WORK/field-helper-select-mutant.ll" || true)" -gt 2 ] || fail 'field helper conditional-select mutation adds secret IR control'
 pass 'field helper conditional-select mutation is rejected by native IR control'
 
 cp "$WORK/field_borrow_source_mutant.mdk" "$WORK/field_borrow_branch_mutant.mdk"
@@ -1267,13 +1348,10 @@ borrow_mutant_ir_branches=$(grep -c 'br i1' "$WORK/borrow-mutant.ll" || true)
 emitted_comparison_present "$WORK/borrow-mutant.ll" || fail 'field borrow mutation exposes equality in native IR'
 pass 'field borrow mutation is rejected by native IR control'
 
-awk '
-  /let \(\) = setInPlace i \(original \+ keepDiff \* \(diff\[i\] - original\)\) n/ {
-    print "    let () = if keepDiff == 1 then setInPlace i diff[i] n else setInPlace i original n"
-    next
-  }
-  { print }
-' "$FIELD" > "$WORK/field_branch_mutant.mdk"
+mutate_line "$FIELD" selectPCandidate \
+  '    let () = setInPlace i blended n' \
+  '    let () = if keepDiff == 1 then setInPlace i diff[i] n else setInPlace i original n' \
+  "$WORK/field_branch_mutant.mdk" || fail 'field conditional-select mutation was constructed'
 append_field_probe "$WORK/field_branch_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_branch_mutant.mdk" -o "$WORK/field_branch_mutant" --keep-ir > "$WORK/build-mutant.log" 2>&1
 extract_function selectPCandidate "$WORK/field_branch_mutant.ll" "$WORK/select-mutant.ll"
@@ -1284,25 +1362,30 @@ pass 'conditional-select mutation is rejected by native IR control'
 cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
+# As for the field. Overflow checks: takeHigh 1 -> 3 (`i - 16`, `i + 1`),
+# foldAccumRow 1 -> 3 (`i + j`, `j + 1`), carryGo 2 -> 3, the other recursive
+# helpers 1 -> 2, each on a counter.
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryAll:0:0:0:0:0:0:1 carryGo:2:0:1:1:0:0:7 carryAllUnchecked:0:0:0:0:0:0:1 carryGoUnchecked:1:0:1:1:0:0:7 \
-  takeHigh:1:0:1:2:0:0:5 foldAccum:1:0:0:0:0:0:2 \
-  foldAccumRow:1:0:3:1:0:0:6 foldOnce:0:0:0:0:1:0:3 reduceFixed:0:0:0:0:0:0:9 \
-  subNCandidate:1:0:2:1:0:0:9 selectNCandidate:1:0:2:1:0:0:4 \
-  subNSelect:0:0:0:0:1:0:3 reduceWide:0:0:0:0:1:0:4 copyLow:1:0:1:1:0:0:3 \
-  scZeroBit:0:0:0:0:0:0:2 scZeroBorrow:1:0:1:0:0:0:4 \
-  scEqualBit:0:0:0:0:0:0:3 scEqualBorrow:1:0:2:0:0:0:6 \
-  scSelect:0:0:0:0:1:0:4 scSelectGo:1:0:3:1:0:0:5 \
-  scHighBit:0:0:0:0:0:0:2 scHighBorrow:1:0:2:0:0:0:6 \
-  scNegateCt:0:0:0:0:1:0:6 scNegateCtGo:1:0:2:1:0:0:9
+  carryAll:0:0:0:0:0:0:1:0:- carryGo:3:0:1:1:0:0:4:0:1 carryAllUnchecked:0:0:0:0:0:0:1:0:- carryGoUnchecked:2:0:1:1:0:0:4:0:1 \
+  takeHigh:3:0:1:2:0:0:5:0:2 foldAccum:2:0:0:0:0:0:2:0:2 \
+  foldAccumRow:3:0:3:1:0:0:6:0:2+3 foldOnce:0:0:0:0:1:0:3:0:- reduceFixed:0:0:0:0:0:0:9:0:- \
+  subNCandidate:2:0:2:1:0:0:5:0:2 selectNCandidate:2:0:2:1:0:0:4:0:3 \
+  subNSelect:0:0:0:0:1:0:3:0:- reduceWide:0:0:0:0:1:0:4:0:- copyLow:2:0:1:1:0:0:3:0:2 \
+  scZeroBit:0:0:0:0:0:0:2:0:- scZeroBorrow:2:0:1:0:0:0:2:0:1 \
+  scEqualBit:0:0:0:0:0:0:3:0:- scEqualBorrow:2:0:2:0:0:0:3:0:2 \
+  scSelect:0:0:0:0:1:0:4:0:- scSelectGo:2:0:2:1:0:0:4:0:4 \
+  scHighBit:0:0:0:0:0:0:3:0:- scHighBorrow:2:0:2:0:0:0:4:0:1 \
+  scNegateCt:0:0:0:0:1:0:6:0:- scNegateCtGo:2:0:2:1:0:0:5:0:2
 extract_function rawSc "$WORK/scalar_emit.ll" "$WORK/scalar-ir/rawSc.ll"
 raw_accessor_ir_ok "$WORK/scalar-ir/rawSc.ll" || fail 'scalar opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/scalar-ir" scalar_emit || fail 'scalar emitted local call graph is closed'
 pass 'scalar emitted local call graph is closed, including carryAll and copyLow'
+u64_callees_ok "$WORK/scalar_emit.ll" "$WORK/scalar-ir" || fail 'scalar limb helpers make no u64 shift call and only allowlisted straight-line u64 calls'
+pass 'scalar limb helpers make no u64 shift call and only allowlisted straight-line u64 calls'
 extract_function selectNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-select-current.ll"
 extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-current.ll"
-[ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 1 ] || fail 'current scalar select IR has only its public-counter branch'
-[ "$(grep -c 'br i1' "$WORK/scalar-borrow-current.ll" || true)" -eq 1 ] || fail 'current scalar borrow IR has only its public-counter branch'
+[ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 2 ] || fail 'current scalar select IR has only its loop branch and one counter overflow branch'
+[ "$(grep -c 'br i1' "$WORK/scalar-borrow-current.ll" || true)" -eq 2 ] || fail 'current scalar borrow IR has only its loop branch and one counter overflow branch'
 if emitted_comparison_present "$WORK/scalar-select-current.ll" || emitted_comparison_present "$WORK/scalar-borrow-current.ll"; then
   fail 'current scalar reduction IR contains secret equality control'
 fi
@@ -1323,7 +1406,7 @@ append_scalar_probe "$WORK/scalar_high_branch_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_high_branch_emit.mdk" -o "$WORK/scalar_high_branch_emit" --keep-ir > "$WORK/build-scalar-high-branch-mutant.log" 2>&1
 extract_function scHighBorrow "$WORK/scalar_high_branch_emit.ll" "$WORK/scalar-high-branch-mutant.ll"
 emitted_comparison_present "$WORK/scalar-high-branch-mutant.ll" || fail 'scalar high-bit secret-branch mutation reaches native IR'
-[ "$(grep -c 'br i1' "$WORK/scalar-high-branch-mutant.ll" || true)" -gt 1 ] || fail 'scalar high-bit mutation adds secret IR control'
+[ "$(grep -c 'br i1' "$WORK/scalar-high-branch-mutant.ll" || true)" -gt 2 ] || fail 'scalar high-bit mutation adds secret IR control'
 pass 'scalar high-bit secret-branch mutation is rejected by native IR control'
 
 cp "$WORK/scalar_select_source_mutant.mdk" "$WORK/scalar_branch_mutant.mdk"
@@ -1331,7 +1414,7 @@ append_scalar_probe "$WORK/scalar_branch_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_branch_mutant.mdk" -o "$WORK/scalar_branch_mutant" --keep-ir > "$WORK/build-scalar-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_branch_mutant.ll" "$WORK/scalar-select-mutant.ll"
 scalar_mutant_ir_branches=$(grep -c 'br i1' "$WORK/scalar-select-mutant.ll" || true)
-[ "$scalar_mutant_ir_branches" -gt 1 ] || fail 'scalar conditional-select mutation is rejected by native IR control'
+[ "$scalar_mutant_ir_branches" -gt 2 ] || fail 'scalar conditional-select mutation is rejected by native IR control'
 emitted_comparison_present "$WORK/scalar-select-mutant.ll" || fail 'scalar conditional-select mutation exposes equality in native IR'
 pass 'scalar conditional-select mutation is rejected by native IR control'
 
@@ -1339,7 +1422,7 @@ cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
 append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
-if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1 0 2 1 0 0 4; then
+if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 2 0 2 1 0 0 4 0; then
   fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
 fi
 grep -F -q 'mdk_hash_bool' "$WORK/scalar-hash-mutant.ll" || fail 'scalar comparison/hashBool mutation reaches native IR'
@@ -1349,7 +1432,7 @@ cp "$WORK/scalar_index_source_mutant.mdk" "$WORK/scalar_index_mutant.mdk"
 append_scalar_probe "$WORK/scalar_index_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_index_mutant.ll" "$WORK/scalar-index-mutant.ll"
-if helper_ir_ok "$WORK/scalar-index-mutant.ll" 1 0 2 1 0 0 4; then
+if helper_ir_ok "$WORK/scalar-index-mutant.ll" 2 0 2 1 0 0 4 0; then
   fail 'scalar secret-index mutation is rejected by native IR call shape'
 fi
 index_calls=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/scalar-index-mutant.ll" || true)
@@ -1360,7 +1443,7 @@ cp "$WORK/scalar_write_source_mutant.mdk" "$WORK/scalar_write_mutant.mdk"
 append_scalar_probe "$WORK/scalar_write_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_write_mutant.mdk" -o "$WORK/scalar_write_mutant" --keep-ir > "$WORK/build-scalar-write-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_write_mutant.ll" "$WORK/scalar-write-mutant.ll"
-if helper_ir_ok "$WORK/scalar-write-mutant.ll" 1 0 2 1 0 0 4; then
+if helper_ir_ok "$WORK/scalar-write-mutant.ll" 2 0 2 1 0 0 4 0; then
   fail 'scalar secret-write mutation is rejected by native IR call multiset'
 fi
 write_calls=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$WORK/scalar-write-mutant.ll" || true)
@@ -1401,11 +1484,45 @@ cp "$WORK/scalar_copy_source_mutant.mdk" "$WORK/scalar_copy_mutant.mdk"
 append_scalar_probe "$WORK/scalar_copy_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_copy_mutant.mdk" -o "$WORK/scalar_copy_mutant" --keep-ir > "$WORK/build-scalar-copy-mutant.log" 2>&1
 extract_function copyLow "$WORK/scalar_copy_mutant.ll" "$WORK/scalar-copy-mutant.ll"
-if helper_ir_ok "$WORK/scalar-copy-mutant.ll" 1 0 1 1 0 0 3 && ir_call_shape_ok copyLow "$WORK/scalar-copy-mutant.ll"; then
+if helper_ir_ok "$WORK/scalar-copy-mutant.ll" 2 0 1 1 0 0 3 0 && ir_call_shape_ok copyLow "$WORK/scalar-copy-mutant.ll"; then
   fail 'scalar transitive copy mutation is rejected by emitted helper shape'
 fi
 emitted_comparison_present "$WORK/scalar-copy-mutant.ll" || fail 'scalar transitive copy branch reaches native IR'
 pass 'scalar transitive copy mutation is rejected by emitted helper shape'
+
+# A limb-derived shift amount would reach the u64 shift's amount branch with a
+# secret operand, and a non-literal amount is exactly what keeps the shift a
+# wrapper call rather than an inline kernel. The u64 callee audit must red on
+# it, independently of the source checker (#3427).
+mutate_line "$SCALAR" subNCandidate \
+  '      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))' \
+  '      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) (16 + borrow)))' \
+  "$WORK/scalar_shift_amount_mutant.mdk" || fail 'scalar secret shift-amount mutation was constructed'
+if source_helpers_ok "$FIELD" "$WORK/scalar_shift_amount_mutant.mdk" "$WORK/source-scalar-shift-amount-mutant"; then
+  fail 'scalar secret shift-amount mutation is rejected by source structure'
+fi
+append_scalar_probe "$WORK/scalar_shift_amount_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_shift_amount_mutant.mdk" -o "$WORK/scalar_shift_amount_mutant" --keep-ir > "$WORK/build-scalar-shift-amount-mutant.log" 2>&1
+mkdir -p "$WORK/scalar-shift-amount-ir"
+extract_function subNCandidate "$WORK/scalar_shift_amount_mutant.ll" "$WORK/scalar-shift-amount-ir/subNCandidate.ll"
+if u64_callees_ok "$WORK/scalar_shift_amount_mutant.ll" "$WORK/scalar-shift-amount-ir"; then
+  fail 'scalar secret shift-amount mutation is rejected by the u64 callee audit'
+fi
+pass 'scalar secret shift-amount mutation is rejected by source structure and the u64 callee audit'
+
+# Int arithmetic on a limb-derived value puts an overflow branch on a secret
+# operand (#3377). The overflow-operand audit must red on it.
+mutate_line "$SCALAR" subNCandidate \
+  '      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))' \
+  '      (1 - U64.toIntTruncating (U64.shiftRight (U64.truncate t) 16))' \
+  "$WORK/scalar_int_arith_mutant.mdk" || fail 'scalar secret Int-arithmetic mutation was constructed'
+append_scalar_probe "$WORK/scalar_int_arith_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_int_arith_mutant.mdk" -o "$WORK/scalar_int_arith_mutant" --keep-ir > "$WORK/build-scalar-int-arith-mutant.log" 2>&1
+extract_function subNCandidate "$WORK/scalar_int_arith_mutant.ll" "$WORK/scalar-int-arith-mutant.ll"
+if ovf_operands_public "$WORK/scalar-int-arith-mutant.ll" 2; then
+  fail 'scalar secret Int-arithmetic mutation is rejected by the overflow-operand audit'
+fi
+pass 'scalar secret Int-arithmetic mutation is rejected by the overflow-operand audit'
 
 disassemble() {
   binary=$1
@@ -1542,6 +1659,13 @@ check_bit_witness() {
   pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
 }
 
+# Since #3377 the Int shift helpers branch on the AMOUNT (a negative amount
+# panics; 63 or more saturates), never on the shifted value. Every witness
+# amount here is a literal or `bitAnd b 7`, which the optimizer proves lies in
+# 0..7, so both amount tests fold away and the linked body must still be
+# straight-line. A surviving conditional jump would therefore be a branch on
+# the value, which is what this witness exists to catch. The limb and ladder
+# shift amounts are public (docs/design/ATPROTO-PDS-CONSTANT-TIME.md §5.1).
 check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
   mdk_bit_and mdk_bit_xor mdk_shift_right
 

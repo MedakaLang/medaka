@@ -1,0 +1,10 @@
+-- #3377: a poly-`Num` `+` routes through the runtime value-tag-dispatched
+-- $mdk_value_add on wasm (mdk_num_add on native); its Int arm must trap exactly as
+-- the concrete-Int path does, while its Float arm is untouched.
+polyAdd : Num a => a -> a -> a
+polyAdd a b = a + b
+
+main =
+  println (polyAdd 1.5 2.0)
+  println (polyAdd 40 2)
+  println (polyAdd intMaxBound 1)
