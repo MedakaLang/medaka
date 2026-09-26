@@ -1,0 +1,83 @@
+-- U64 across `let`, parameter and return (N5, #3428): the LLVM backend keeps a
+-- U64 local, parameter and result as its raw payload and boxes it only where
+-- it escapes.  Every function below crosses one of those seams at a value a
+-- 63-bit or signed reading gets wrong (2^63 and above), and several escape on
+-- the way: printed, stored in an array or a list, captured by a lambda, passed
+-- to a polymorphic function, returned inside a tuple.
+--
+-- The trailing `int` line is a bystander ([T-GLOBAL-TABLE]): an `Int` loop
+-- beside the U64 ones keeps `Int` semantics.
+--
+-- Expected values were computed independently of every engine (Python,
+-- `% 2**64`); the pin is test/engine_value_pins/engine/u64_raw_boundaries.pin.
+
+import u64 as U64
+
+big : U64
+big = 0xFFFFFFFFFFFFFFF1
+
+-- a U64 parameter and result, a tail loop on payloads
+sumTo : U64 -> U64 -> U64
+sumTo n acc = if n == 0 then acc else sumTo (n - 1) (acc + n * big)
+
+-- U64 between two Int parameters
+mixMid : Int -> U64 -> Int -> U64
+mixMid a x b = x * U64.truncate a + U64.truncate b
+
+-- a U64 parameter that escapes: into a list, an array, a closure
+escapes : U64 -> (List U64, Array U64, U64)
+escapes x =
+  let arr = arrayMake 2 x
+  let f = (+ x)
+  ([x, x + 1], arr, f 5)
+
+-- a U64 result through `let` and `if`
+pick : Bool -> U64 -> U64 -> U64
+pick c a b =
+  let s = a + b
+  let d = if c then s else a - b
+  d * 3
+
+-- U64 parameters, an Int result
+lowBits : U64 -> U64 -> Int
+lowBits a b = U64.toIntTruncating (U64.bitXor a b)
+
+-- non-tail self recursion
+fact : U64 -> U64
+fact n = if n <= 1 then 1 else n * fact (n - 1)
+
+-- a Unit result, the parameter printed
+say : U64 -> <IO> Unit
+say x = println x
+
+-- shadowed lets
+chain : U64 -> U64
+chain x =
+  let y = x * x
+  let y = y + x
+  let z = U64.shiftRight y 7
+  z + y
+
+-- a U64 parameter compared and matched on through `if`
+clampTop : U64 -> U64
+clampTop x = if x > 0x8000000000000000 then 0x8000000000000000 else x
+
+twice : (a -> a) -> a -> a
+twice f v = f (f v)
+
+countInt : Int -> Int -> Int
+countInt n acc = if n <= 0 then acc else countInt (n - 1) (acc + n)
+
+main =
+  println (sumTo 1000 0)
+  println (mixMid 3 0xFFFFFFFFFFFFFFFF 7)
+  println (escapes 0xFFFFFFFFFFFFFFFE)
+  println [pick True big 0x20, pick False big 0x20, pick False 1 2]
+  println (lowBits 0xF0F0F0F0F0F0F0F0 0x0F0F0F0F0F0F0F0F)
+  println (fact 25)
+  say big
+  println [chain 0x100000000, chain big, chain 0]
+  println [clampTop 0xFFFFFFFFFFFFFFFF, clampTop 7, clampTop 0x8000000000000001]
+  println (map clampTop [0x8000000000000000, 0x9000000000000000])
+  println (twice chain 3)
+  println (countInt 1000 0)

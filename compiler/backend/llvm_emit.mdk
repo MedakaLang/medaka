@@ -804,6 +804,16 @@ data LTy =
   -- arithmetic and comparison fallbacks, unary minus, the auto-print) can take the
   -- unsigned payload instead of an Int untag or a Float unbox.
   | LTU64
+  -- LTU64U: the register holds a `U64`'s raw 64-bit payload, not a cell word:
+  -- a `let` whose value is statically `U64`, or a `U64` parameter of a raw
+  -- worker (`rawWorkerOf`).  `emitU64Raw` reads it as is; every other read
+  -- goes through `lookupVarG`, which boxes it (escape coercion), as LTFloatU's do.
+  | LTU64U
+  -- LTU32U: the register is an `i32` holding a `U32`, not a tagged word: a `let`
+  -- whose value is statically `U32`, or a `U32` parameter of a raw worker
+  -- (`rawWorkerOf`) or of an inlined function (`u32Inline`).  `emitU32Raw` reads
+  -- it as is; `lookupVarG` retags it.
+  | LTU32U
 
 -- emitter state: the per-scope fresh-name counters, the output lines (accumulated in REVERSE
 -- — prepend is O(1); reverseL'd once at the end restores program order), the
@@ -1014,6 +1024,11 @@ data Emit = Emit {
   closConstCache : Ref (List (String, String)),
   floatFwSet : Ref (List (String, (Int, List Int))),
   floatClosureFns : Ref (List String),
+  -- the functions with a raw worker (`rawWorkerOf`), by name; built once per
+  -- program, since a call site can precede its callee's define.
+  rawWorkers : Ref (OrdMap RawWorker),
+  -- how many `u32Inline` inlinings are open at the current emission point.
+  inlineOpen : Ref Int,
 }
 
 -- a function's inferred signature: its parameter types (in order) and its return
@@ -2341,6 +2356,8 @@ isLocal env x = match omLookup x env
 lookupVarG : Emit -> OrdMap (String, LTy) -> String -> (String, LTy)
 lookupVarG e env x = match omLookup x env
   Some (reg, LTFloatU) => (boxFloat e reg, LTFloat)
+  Some (reg, LTU64U) => (boxU64 e reg, LTU64)
+  Some (reg, LTU32U) => (tagU32 e reg, LTInt)
   Some vt => vt
   -- #561 PR-A: a LAZY value global (dispatch-reaching or cyclic) is forced on first
   -- use — its read is `call @mdk_force_<x>()`, which memoises into @mdk_g_<x> and
@@ -3785,6 +3802,8 @@ emitFixedWidthExtern e env "u8Truncate" args =
   emitFixedWidthTruncate e env 255 args
 emitFixedWidthExtern e env "u16Truncate" args =
   emitFixedWidthTruncate e env 65535 args
+emitFixedWidthExtern e env "u32Truncate" [a] =
+  (tagU32 e (u32TruncateRaw e env a), LTInt)
 emitFixedWidthExtern e env "u32Truncate" args =
   emitFixedWidthTruncate e env 4294967295 args
 emitFixedWidthExtern e env "u8ToInt" args = emitFixedWidthToInt e env args
@@ -3840,7 +3859,50 @@ emitU64Raw : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitU64Raw e env (CBinPrim op l r tag)
   | isU64Head tag && isArithOp op = emitU64RawArith e env op l r
   | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag)))
+emitU64Raw e env (CVar x a) = match omLookup x env
+  Some (reg, LTU64U) => reg
+  _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
+emitU64Raw e env (CIf c t f) = emitU64RawIf e env c t f
+emitU64Raw e env (CBlock stmts) = emitU64RawBlock e env stmts
+emitU64Raw e env (CLet False (PVar x a) e1 e2) = match e1
+  CLam _ _ => unboxU64 e (fst (emitExpr e env (CLet False (PVar x a) e1 e2)))
+  _ => emitU64Raw e (bindLetRaw e env x e1 e2) e2
 emitU64Raw e env ex = emitU64RawApp e env ex (flattenApp ex [])
+
+emitU64RawBlock : Emit -> OrdMap (String, LTy) -> List CStmt -> String
+emitU64RawBlock e env [CSExpr ex] = emitU64Raw e env ex
+emitU64RawBlock e env (s :: rest) = match rest
+  [] => unboxU64 e (fst (emitBlockLast e env s))
+  _ => emitU64RawBlock e (emitBlockLead e env s rest) rest
+emitU64RawBlock e _ [] = unboxU64 e (fst (gapE e "empty block"))
+
+-- A `U64`-valued `if` on payloads: each arm stores its payload in the slot, so
+-- neither arm boxes (emitIf's slot holds cell words).
+emitU64RawIf : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> CExpr -> String
+emitU64RawIf e env c t f =
+  let (cv, _) = emitExpr e env c
+  let ci = untagInt e cv
+  let cb = freshReg e
+  let _ = emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+  let n = intToString (freshLocal e)
+  let thenL = "then" ++ n
+  let elseL = "else" ++ n
+  let endL = "end" ++ n
+  let slot = freshReg e
+  let _ = emit e ("  " ++ slot ++ " = alloca i64")
+  let _ = emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+  let _ = emit e (thenL ++ ":")
+  let tv = emitU64Raw e env t
+  let _ = emit e "  store i64 \{tv}, ptr \{slot}"
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (elseL ++ ":")
+  let fv = emitU64Raw e env f
+  let _ = emit e "  store i64 \{fv}, ptr \{slot}"
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (endL ++ ":")
+  let r = freshReg e
+  let _ = emit e "  \{r} = load i64, ptr \{slot}"
+  r
 
 -- a saturated call of a kernel is computed on payloads; anything else is boxed
 -- by its own emission and unboxed here.
@@ -3855,8 +3917,687 @@ emitU64RawApp e env ex (CVar f _, args)
   | isLocal env f = unboxU64 e (fst (emitExpr e env ex))
   | otherwise = match u64KernelAlias e f args
     Some k => emitU64Kernel e env k args
-    None => unboxU64 e (fst (emitExpr e env ex))
+    None => match rawWorkerReturning e f (lengthS args) RawU64
+      Some (sym, w) => emitRawWorkerCall e env sym w args
+      None => unboxU64 e (fst (emitExpr e env ex))
 emitU64RawApp e env ex _ = unboxU64 e (fst (emitExpr e env ex))
+
+-- ── Raw workers: U64 and U32 across parameter and return (N5) ───────────────
+-- An annotated single-clause function whose declared signature names `U64` or
+-- `U32` in a parameter or the result gets a raw worker `@mdk_<f>__rw`: the same
+-- body, with each such parameter held raw (a `U64` as its 64-bit payload,
+-- LTU64U; a `U32` as an `i32`, LTU32U) and such a result returned raw.
+-- `@mdk_<f>` stays the uniform-ABI entry, a wrapper that unboxes or untags,
+-- calls the worker, and boxes or retags.  A saturated direct call calls the
+-- worker, so the value crosses the call with no cell and no tag, and a tail
+-- self-call in the worker is a loop on raw registers.  The declared signature
+-- is what typecheck checked, so a position is raw only where the program says
+-- `U64` or `U32`.
+data RawKind = RawWord | RawU64 | RawU32
+
+data RawWorker = RawWorker Int (List RawKind) RawKind
+
+rawKindOfHead : String -> RawKind
+rawKindOfHead "U64" = RawU64
+rawKindOfHead "U32" = RawU32
+rawKindOfHead _ = RawWord
+
+-- the LLVM type a value of this kind travels as.
+rawKindTy : RawKind -> String
+rawKindTy RawU32 = "i32"
+rawKindTy _ = "i64"
+
+isRawWord : RawKind -> Bool
+isRawWord RawWord = True
+isRawWord _ = False
+
+sameRawKind : RawKind -> RawKind -> Bool
+sameRawKind RawWord RawWord = True
+sameRawKind RawU64 RawU64 = True
+sameRawKind RawU32 RawU32 = True
+sameRawKind _ _ = False
+
+rawWorkerRet : RawWorker -> RawKind
+rawWorkerRet (RawWorker _ _ r) = r
+
+-- the worker of top-level `f` for a call with `n` arguments, when it has one of
+-- exactly that arity: the worker symbol and its shape.
+rawWorkerCall : Emit -> String -> Int -> Option (String, RawWorker)
+rawWorkerCall e f n =
+  let name = canonFnName e f
+  match omLookup name !e.rawWorkers
+    Some (RawWorker ar ks r) =>
+      if ar == n then
+        Some ("mdk_" ++ name ++ "__rw", RawWorker ar ks r)
+      else
+        None
+    None => None
+
+-- the worker of `f`, when its result is raw of kind `k`.
+rawWorkerReturning : Emit ->
+  String ->
+  Int ->
+  RawKind ->
+  Option (String, RawWorker)
+rawWorkerReturning e f n k = match rawWorkerCall e f n
+  Some (sym, w) =>
+    if sameRawKind (rawWorkerRet w) k then Some (sym, w) else None
+  None => None
+
+-- A call of a raw worker: each argument as its position's kind (a payload, an
+-- `i32` or a word), evaluated left to right.  Returns the result register, of
+-- the worker's result kind.
+emitRawWorkerCall : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  RawWorker ->
+  List CExpr ->
+  String
+emitRawWorkerCall e env sym (RawWorker _ ks r) args =
+  let ops = emitRawArgs e env ks args
+  let res = freshReg e
+  let _ = emit e "  \{res} = call \{rawKindTy r} @\{sym}(\{rawArgDecls ops})"
+  res
+
+emitRawArgs : Emit ->
+  OrdMap (String, LTy) ->
+  List RawKind ->
+  List CExpr ->
+  List (String, String)
+emitRawArgs e env (k :: ks) (a :: rest) =
+  let op = emitRawAs e env k a
+  (rawKindTy k, op) :: emitRawArgs e env ks rest
+emitRawArgs _ _ _ _ = []
+
+-- `a` as a value of kind `k`.
+emitRawAs : Emit -> OrdMap (String, LTy) -> RawKind -> CExpr -> String
+emitRawAs e env RawU64 a = emitU64Raw e env a
+emitRawAs e env RawU32 a = emitU32Raw e env a
+emitRawAs e env RawWord a = fst (emitExpr e env a)
+
+-- typed call operands, `i32 %x, i64 %y`.
+rawArgDecls : List (String, String) -> String
+rawArgDecls [] = ""
+rawArgDecls [(t, x)] = "\{t} \{x}"
+rawArgDecls ((t, x) :: rest) = "\{t} \{x}, \{rawArgDecls rest}"
+
+-- The word result of a saturated call of a raw worker, for an ordinary (word)
+-- context: a raw `U64` result is boxed and a raw `U32` retagged, once, here.
+emitRawWorkerCallW : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  RawWorker ->
+  List CExpr ->
+  LTy ->
+  (String, LTy)
+emitRawWorkerCallW e env sym w args resTy =
+  let r = emitRawWorkerCall e env sym w args
+  match rawWorkerRet w
+    RawU64 => (boxU64 e r, LTU64)
+    RawU32 => (tagU32 e r, LTInt)
+    RawWord => (r, resTy)
+
+-- Is `ex` statically a `U64` that `emitU64Raw` computes on payloads?  Conservative:
+-- a U64 literal, a local already holding a payload or cell, U64-stamped
+-- arithmetic, a U64-valued `if`, a saturated kernel or kernel wrapper returning a
+-- U64, and a saturated call of a worker with a raw result.  A false negative only
+-- keeps the boxed path.
+staticIsU64 : Emit -> OrdMap (String, LTy) -> CExpr -> Bool
+staticIsU64 _ _ (CLit (LU64 _ _)) = True
+staticIsU64 _ env (CVar x _) = match omLookup x env
+  Some (_, LTU64U) => True
+  Some (_, LTU64) => True
+  _ => False
+staticIsU64 _ _ (CBinPrim op _ _ tag) = isU64Head tag && isArithOp op
+staticIsU64 e env (CIf _ t f) = staticIsU64 e env t && staticIsU64 e env f
+staticIsU64 e env ex = match flattenApp ex []
+  (CVar f _, args) =>
+    if isLocal env f then
+      False
+    else if isU64RawKernel f (lengthS args) then
+      True
+    else match u64KernelAlias e f args
+      Some k => isU64RawKernel k (lengthS args)
+      None => isSome (rawWorkerReturning e f (lengthS args) RawU64)
+  _ => False
+
+-- ── U32 as native i32 (N5) ──────────────────────────────────────────────────
+-- A `U32` is Int's tagged word at every boundary (argument, result, array
+-- slot, capture).  Inside an expression it is an `i32`: `emitU32Raw` computes a
+-- U32-valued expression on `i32` registers, so `+ - *` wrap modulo 2^32 by
+-- themselves and need no mask, and the word is untagged and truncated once at a
+-- leaf and zero-extended and retagged once at the root (`tagU32`).  A `let`
+-- keeps the `i32` (LTU32U).  The `u32` module's operations are Medaka over the
+-- kernels (`u32Truncate`, `u32ToInt` and the `int`-prefixed bit primitives), so
+-- a saturated call of a small `U32`-returning function is inlined here
+-- (`u32Inline`): its body computes on the `i32`s too, and a rotate by a constant
+-- amount reaches LLVM as the `shl`/`lshr`/`or` it turns into one rotate.
+
+-- an `i32` U32 register -> its tagged word.
+tagU32 : Emit -> String -> String
+tagU32 e r =
+  let z = freshReg e
+  let _ = emit e "  \{z} = zext i32 \{r} to i64"
+  tagInt e z
+
+-- a tagged U32 word -> its `i32`.  The payload is in `0 .. 2^32 - 1`, so the
+-- logical shift and the truncation are exact.
+untagU32 : Emit -> String -> String
+untagU32 e w =
+  let u = freshReg e
+  let _ = emit e "  \{u} = lshr i64 \{w}, 1"
+  let t = freshReg e
+  let _ = emit e "  \{t} = trunc i64 \{u} to i32"
+  t
+
+-- An Int literal as an `i32` constant: the value is in `0 .. 2^32 - 1`
+-- wherever a U32 is expected, spelled in `i32`'s signed range.
+u32Const : Int -> String
+u32Const n =
+  let m = bitAnd n 4294967295
+  intToString (if m >= 2147483648 then m - 4294967296 else m)
+
+-- The `i32` of a U32-valued expression.
+emitU32Raw : Emit -> OrdMap (String, LTy) -> CExpr -> String
+emitU32Raw _ _ (CLit (LInt n)) = u32Const n
+emitU32Raw e env (CBinPrim op l r tag)
+  | tag == "U32" && isArithOp op = emitU32RawArith e env op l r
+  | otherwise = untagU32 e (fst (emitExpr e env (CBinPrim op l r tag)))
+emitU32Raw e env (CVar x a) = match omLookup x env
+  Some (reg, LTU32U) => reg
+  _ => untagU32 e (fst (emitExpr e env (CVar x a)))
+emitU32Raw e env (CIf c t f) = emitU32RawIf e env c t f
+emitU32Raw e env (CBlock stmts) = emitU32RawBlock e env stmts
+emitU32Raw e env (CLet False (PVar x a) e1 e2) = match e1
+  CLam _ _ => untagU32 e (fst (emitExpr e env (CLet False (PVar x a) e1 e2)))
+  _ => emitU32Raw e (bindLetRaw e env x e1 e2) e2
+emitU32Raw e env ex = match flattenApp ex []
+  (CVar "u32Truncate" _, [a]) =>
+    if isLocal env "u32Truncate" then
+      untagU32 e (fst (emitExpr e env ex))
+    else
+      u32TruncateRaw e env a
+  (CVar f _, args) =>
+    if isLocal env f then
+      untagU32 e (fst (emitExpr e env ex))
+    else match u32Inline e env f args
+      Some (pats, body) => emitU32Inlined e env pats body args
+      None => match rawWorkerReturning e f (lengthS args) RawU32
+        Some (sym, w) => emitRawWorkerCall e env sym w args
+        None => untagU32 e (fst (emitExpr e env ex))
+  _ => untagU32 e (fst (emitExpr e env ex))
+
+-- Bind a `let` for the rest of its scope, keeping a statically Float, U64 or
+-- U32 value in its raw register.
+-- `scope` is what the binding is visible in.  Another local's name is an alias
+-- and shares that local's register, raw or not.  A U64 is kept as a payload
+-- unless it would be boxed more than once in `scope` (`u64Escapes`), where one
+-- box at the binding is cheaper.
+bindLetRaw : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  OrdMap (String, LTy)
+bindLetRaw e env x (CVar y a) _ = match omLookup y env
+  Some entry => omInsert x entry env
+  None => omInsert x (emitExpr e env (CVar y a)) env
+bindLetRaw e env x ex scope =
+  if staticIsFloat env ex then
+    omInsert x (emitFloatD e env ex, LTFloatU) env
+  else if staticIsU64 e env ex && u64Escapes e x False scope <= 1 then
+    omInsert x (emitU64Raw e env ex, LTU64U) env
+  else if staticIsU32 e env ex then
+    omInsert x (emitU32Raw e env ex, LTU32U) env
+  else
+    omInsert x (emitExpr e env ex) env
+
+emitU32RawBlock : Emit -> OrdMap (String, LTy) -> List CStmt -> String
+emitU32RawBlock e env [CSExpr ex] = emitU32Raw e env ex
+emitU32RawBlock e env (s :: rest) = match rest
+  [] => untagU32 e (fst (emitBlockLast e env s))
+  _ => emitU32RawBlock e (emitBlockLead e env s rest) rest
+emitU32RawBlock e _ [] = untagU32 e (fst (gapE e "empty block"))
+
+-- `+`, `-` and `*` are the `i32` instructions, which wrap modulo 2^32; `/` and
+-- `%` are `udiv`/`urem` behind Int's zero-divisor abort.
+emitU32RawArith : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  String
+emitU32RawArith e env op l r =
+  let a = emitU32Raw e env l
+  let b = emitU32Raw e env r
+  let _ =
+    if op == "/" || op == "%" then
+      let wide = freshReg e
+      let _ = emit e "  \{wide} = zext i32 \{b} to i64"
+      emitDivZeroGuard e op wide
+  let res = freshReg e
+  let _ = emit e "  \{res} = \{u64Op op} i32 \{a}, \{b}"
+  res
+
+-- A comparison typecheck stamped `U32`: the unsigned predicate on the `i32`s.
+emitU32Cmp : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  CExpr ->
+  (String, LTy)
+emitU32Cmp e env op l r =
+  let a = emitU32Raw e env l
+  let b = emitU32Raw e env r
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp \{u64Pred op} i32 \{a}, \{b}"
+  boolFromI1 e c
+
+emitU32RawIf : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> CExpr -> String
+emitU32RawIf e env c t f =
+  let (cv, _) = emitExpr e env c
+  let ci = untagInt e cv
+  let cb = freshReg e
+  let _ = emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+  let n = intToString (freshLocal e)
+  let thenL = "then" ++ n
+  let elseL = "else" ++ n
+  let endL = "end" ++ n
+  let slot = freshReg e
+  let _ = emit e ("  " ++ slot ++ " = alloca i32")
+  let _ = emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+  let _ = emit e (thenL ++ ":")
+  let tv = emitU32Raw e env t
+  let _ = emit e "  store i32 \{tv}, ptr \{slot}"
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (elseL ++ ":")
+  let fv = emitU32Raw e env f
+  let _ = emit e "  store i32 \{fv}, ptr \{slot}"
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (endL ++ ":")
+  let r = freshReg e
+  let _ = emit e "  \{r} = load i32, ptr \{slot}"
+  r
+
+-- `u32Truncate x`, the low 32 bits of an Int: the Int is computed untagged
+-- (`intRaw`), so a bit operation over `u32ToInt` operands becomes the `i64`
+-- operation on zero-extended `i32`s, which LLVM narrows back to `i32`.
+u32TruncateRaw : Emit -> OrdMap (String, LTy) -> CExpr -> String
+u32TruncateRaw e env x =
+  let i = intRaw e env x
+  let t = freshReg e
+  let _ = emit e "  \{t} = trunc i64 \{i} to i32"
+  t
+
+-- The untagged `i64` of an Int-valued expression, looking through `u32ToInt`
+-- of a U32 and the `int` bit primitives' and/or/xor/not, which have no overflow
+-- and no domain check.  Anything else is emitted as usual and untagged.
+intRaw : Emit -> OrdMap (String, LTy) -> CExpr -> String
+intRaw e env x = match flattenApp x []
+  (CVar f _, args) =>
+    if isLocal env f then
+      untagInt e (fst (emitExpr e env x))
+    else match (intRawBitOp f, args)
+      (Some instr, [a, b]) =>
+        let p = intRaw e env a
+        let q = intRaw e env b
+        let r = freshReg e
+        let _ = emit e "  \{r} = \{instr} i64 \{p}, \{q}"
+        r
+      _ => match (f, args)
+        ("u32ToInt", [a]) =>
+          let v = emitU32Raw e env a
+          let z = freshReg e
+          let _ = emit e "  \{z} = zext i32 \{v} to i64"
+          z
+        ("intBitNot", [a]) =>
+          let p = intRaw e env a
+          let r = freshReg e
+          let _ = emit e "  \{r} = xor i64 \{p}, -1"
+          r
+        _ => untagInt e (fst (emitExpr e env x))
+  _ => untagInt e (fst (emitExpr e env x))
+
+intRawBitOp : String -> Option String
+intRawBitOp "intBitAnd" = Some "and"
+intRawBitOp "intBitOr" = Some "or"
+intRawBitOp "intBitXor" = Some "xor"
+intRawBitOp _ = None
+
+-- Is `ex` statically a U32 that `emitU32Raw` computes on `i32`s?  U32-stamped
+-- arithmetic, a local holding an `i32`, a U32-valued `if`, `u32Truncate`, and a
+-- call `u32Inline` inlines.
+staticIsU32 : Emit -> OrdMap (String, LTy) -> CExpr -> Bool
+staticIsU32 _ env (CVar x _) = match omLookup x env
+  Some (_, LTU32U) => True
+  _ => False
+staticIsU32 _ _ (CBinPrim op _ _ tag) = tag == "U32" && isArithOp op
+staticIsU32 e env (CIf _ t f) = staticIsU32 e env t && staticIsU32 e env f
+staticIsU32 e env ex = match flattenApp ex []
+  (CVar f _, args) =>
+    if isLocal env f then
+      False
+    else if f == "u32Truncate" then
+      lengthS args == 1
+    else
+      isSome (u32Inline e env f args)
+        || isSome (rawWorkerReturning e f (lengthS args) RawU32)
+  _ => False
+
+-- The clause to inline for a saturated call of top-level `f`: a single clause of
+-- plain-variable parameters, a declared `U32` result, a body no larger than
+-- `inlineBudget` nodes that does not name `f`, and fewer than
+-- `inlineDepth` inlinings already open at this site.  Everything such a
+-- body does is still emitted by the ordinary paths; only its parameters and
+-- its U32 subexpressions stay in registers.
+u32Inline : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  Option (List Pat, CExpr)
+u32Inline e env f args =
+  if isLocal env f || !e.inlineOpen >= inlineDepth then
+    None
+  else
+    let name = canonFnName e f
+    match omLookup name !e.gDispBindMap
+      Some (CBind _ [CClause pats body]) => match declSigOf e name
+        Some (_, "U32") =>
+          if lengthS pats == lengthS args
+            && hasArgs args
+            && allPVar pats
+            && leadingDictPats pats == 0
+            && not (contains name (freeVars [] body))
+            && coreSize body <= inlineBudget then
+            Some (pats, body)
+          else
+            None
+        _ => None
+      _ => None
+
+inlineDepth : Int
+inlineDepth = 6
+
+inlineBudget : Int
+inlineBudget = 48
+
+-- Inline one call: the arguments are evaluated left to right in the caller
+-- (a U32 argument to its `i32`), bound to the parameters in an env of their own,
+-- and the body is computed on `i32`s in that env.
+emitU32Inlined : Emit ->
+  OrdMap (String, LTy) ->
+  List Pat ->
+  CExpr ->
+  List CExpr ->
+  String
+emitU32Inlined e env pats body args =
+  let penv = bindInlineArgs e env pats args omEmpty
+  e.inlineOpen := !e.inlineOpen + 1
+  let r = emitU32Raw e penv body
+  e.inlineOpen := !e.inlineOpen - 1
+  r
+
+bindInlineArgs : Emit ->
+  OrdMap (String, LTy) ->
+  List Pat ->
+  List CExpr ->
+  OrdMap (String, LTy) ->
+  OrdMap (String, LTy)
+bindInlineArgs e env ((PVar x _) :: ps) (a :: rest) acc =
+  bindInlineArgs e env ps rest (omInsert x (emitRawOrWord e env a) acc)
+bindInlineArgs _ _ _ _ acc = acc
+
+-- `a`'s value in the register its static type allows: a U64 payload, a U32
+-- `i32`, a Float `double`, or the word.
+emitRawOrWord : Emit -> OrdMap (String, LTy) -> CExpr -> (String, LTy)
+emitRawOrWord e env a =
+  if staticIsU64 e env a then
+    (emitU64Raw e env a, LTU64U)
+  else if staticIsU32 e env a then
+    (emitU32Raw e env a, LTU32U)
+  else if staticIsFloat env a then
+    (emitFloatD e env a, LTFloatU)
+  else
+    emitExpr e env a
+
+-- The number of Core IR nodes in an expression, counted up to one past the
+-- budget.  A node of any shape `coreChildren` does not list (a match, a lambda,
+-- a record) counts as over the budget, so its function is never inlined.
+coreSize : CExpr -> Int
+coreSize ex = coreSizeGo [ex] 0
+
+coreSizeGo : List CExpr -> Int -> Int
+coreSizeGo [] n = n
+coreSizeGo (x :: rest) n =
+  if n > inlineBudget then
+    n
+  else match coreChildren x
+    Some kids => coreSizeGo (kids ++ rest) (n + 1)
+    None => inlineBudget + 1
+
+coreChildren : CExpr -> Option (List CExpr)
+coreChildren (CLit _) = Some []
+coreChildren (CVar _ _) = Some []
+coreChildren (CApp f a) = Some [f, a]
+coreChildren (CBinPrim _ l r _) = Some [l, r]
+coreChildren (CUnOp _ x) = Some [x]
+coreChildren (CIf c t f) = Some [c, t, f]
+coreChildren (CLet _ _ e1 e2) = Some [e1, e2]
+coreChildren (CBlock stmts) = Some (stmtExprs stmts)
+coreChildren (CIndex a i) = Some [a, i]
+coreChildren (CTuple es) = Some es
+coreChildren (CMethod _ _ _ _ _) = Some []
+coreChildren (CDict _ _) = Some []
+coreChildren _ = None
+
+stmtExprs : List CStmt -> List CExpr
+stmtExprs [] = []
+stmtExprs ((CSExpr x) :: rest) = x :: stmtExprs rest
+stmtExprs ((CSLet _ _ x) :: rest) = x :: stmtExprs rest
+stmtExprs ((CSAssign _ x) :: rest) = x :: stmtExprs rest
+
+-- ── where a raw U64 would be boxed ──────────────────────────────────────────
+-- How many occurrences of `x` in `ex` would read a raw U64 held in `x` as a
+-- word, which boxes it: every occurrence `emitU64Raw` would not read as a
+-- payload.  `raw` says whether `ex` itself is computed as a payload.  It
+-- over-counts where it cannot tell (a match, a lambda, a constructor), which
+-- only keeps a value boxed.  A worker parameter is held raw only at zero
+-- (`rawWorkerOf`), a `let` at one or fewer (`bindLetRaw`).
+u64Escapes : Emit -> String -> Bool -> CExpr -> Int
+u64Escapes _ x raw (CVar y _) = if y == x && not raw then 1 else 0
+u64Escapes _ _ _ (CLit _) = 0
+u64Escapes e x _ (CBinPrim op l r tag) =
+  let inner = isU64Head tag && (isArithOp op || isCmpOp op)
+  u64Escapes e x inner l + u64Escapes e x inner r
+u64Escapes e x raw (CIf c t f) =
+  u64Escapes e x False c + u64Escapes e x raw t + u64Escapes e x raw f
+u64Escapes e x raw (CLet False (PVar y a) e1 e2) = match e1
+  CLam _ _ => occurrencesOf x (CLet False (PVar y a) e1 e2)
+  _ =>
+    u64Escapes e x (u64Shaped e e1) e1
+      + (if y == x then 0 else u64Escapes e x raw e2)
+u64Escapes e x raw (CLet False pat e1 e2) =
+  u64EscapesBound e x pat e1
+    + (if contains x (patVars pat) then 0 else u64Escapes e x raw e2)
+u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
+u64Escapes e x raw ex = match flattenApp ex []
+  (CVar f _, args) =>
+    if f == x then
+      occurrencesOf x ex
+    else
+      u64EscapesArgs e x (u64ArgRaw e f args) args
+  _ => occurrencesOf x ex
+
+u64EscapesBlock : Emit -> String -> Bool -> List CStmt -> Int
+u64EscapesBlock e x raw [CSExpr ex] = u64Escapes e x raw ex
+u64EscapesBlock e x _ ((CSExpr ex) :: rest) =
+  u64Escapes e x False ex + u64EscapesBlock e x False rest
+u64EscapesBlock e x raw ((CSLet _ (PVar y a) ex) :: rest) = match ex
+  CLam _ _ => occurrencesOf x (CBlock (CSLet False (PVar y a) ex :: rest))
+  _ =>
+    u64Escapes e x (u64Shaped e ex) ex
+      + (if y == x then 0 else u64EscapesBlock e x raw rest)
+u64EscapesBlock e x raw ((CSLet _ pat ex) :: rest) =
+  u64EscapesBound e x pat ex
+    + (if contains x (patVars pat) then 0 else u64EscapesBlock e x raw rest)
+u64EscapesBlock e x raw ((CSAssign y ex) :: rest) =
+  u64Escapes e x False ex + (if y == x then 0 else u64EscapesBlock e x raw rest)
+u64EscapesBlock _ _ _ [] = 0
+
+-- the right side of a destructuring `let`: a call `bindTupleInline` inlines
+-- binds each argument in its raw register, anything else is read as a word.
+u64EscapesBound : Emit -> String -> Pat -> CExpr -> Int
+u64EscapesBound e x (PTuple ps) ex = match flattenApp ex []
+  (CVar f _, args) =>
+    if allVarOrWild ps && isSome (tupleInline e f args (lengthS ps)) then
+      u64EscapesArgs e x (map (_ => True) args) args
+    else
+      u64Escapes e x False ex
+  _ => u64Escapes e x False ex
+u64EscapesBound e x _ ex = u64Escapes e x False ex
+
+u64EscapesArgs : Emit -> String -> List Bool -> List CExpr -> Int
+u64EscapesArgs e x (r :: rs) (a :: as_) =
+  u64Escapes e x r a + u64EscapesArgs e x rs as_
+u64EscapesArgs e x [] (a :: as_) =
+  u64Escapes e x False a + u64EscapesArgs e x [] as_
+u64EscapesArgs _ _ _ [] = 0
+
+-- which arguments of a call of `f` are read as payloads: a kernel's U64
+-- operands (directly or through its `u64` wrapper), and a raw worker's U64
+-- positions.
+u64ArgRaw : Emit -> String -> List CExpr -> List Bool
+u64ArgRaw e f args =
+  let n = lengthS args
+  if f == "u64TruncateToInt" && n == 1 then
+    [True]
+  else if isU64RawKernel f n then
+    u64KernelArgRaw f
+  else match u64KernelAlias e f args
+    Some k => if k == "u64TruncateToInt" then [True] else u64KernelArgRaw k
+    None => match rawWorkerCall e f n
+      Some (_, RawWorker _ ks _) => map (k => sameRawKind k RawU64) ks
+      None => []
+
+u64KernelArgRaw : String -> List Bool
+u64KernelArgRaw "u64Truncate" = [False]
+u64KernelArgRaw "u64ShiftLeft" = [True, False]
+u64KernelArgRaw "u64ShiftRight" = [True, False]
+u64KernelArgRaw _ = [True, True]
+
+-- is `ex` computed as a payload wherever it is bound (the syntactic half of
+-- `staticIsU64`, for the analysis, which has no env)?
+u64Shaped : Emit -> CExpr -> Bool
+u64Shaped _ (CLit (LU64 _ _)) = True
+u64Shaped _ (CVar _ _) = True
+u64Shaped _ (CBinPrim op _ _ tag) = isU64Head tag && isArithOp op
+u64Shaped e (CIf _ t f) = u64Shaped e t && u64Shaped e f
+u64Shaped e ex = match flattenApp ex []
+  (CVar f _, args) =>
+    if isU64RawKernel f (lengthS args) then
+      True
+    else match u64KernelAlias e f args
+      Some k => isU64RawKernel k (lengthS args)
+      None => isSome (rawWorkerReturning e f (lengthS args) RawU64)
+  _ => False
+
+-- every free occurrence of `x` in `ex`.
+occurrencesOf : String -> CExpr -> Int
+occurrencesOf x ex = lengthS (filterList (== x) (freeVars [] ex))
+
+-- ── a tuple built by a small callee, bound in place ──────────────────────────
+-- `let (p1, …, pn) = f a1 … am`, where `f` is a small single-clause function
+-- whose body ends in an n-tuple (`U64.mulWide`): the call is inlined and each
+-- component bound directly, so no tuple is allocated and a U64 or U32
+-- component stays in its raw register.  Evaluation order is the call's: the
+-- arguments, the body's leading statements, then the components in order.
+bindTupleInline : Emit ->
+  OrdMap (String, LTy) ->
+  List Pat ->
+  CExpr ->
+  Option (OrdMap (String, LTy))
+bindTupleInline e env ps ex =
+  if not (allVarOrWild ps) then
+    None
+  else match flattenApp ex []
+    (CVar f _, args) =>
+      if isLocal env f then
+        None
+      else match tupleInline e f args (lengthS ps)
+        Some (pats, lead, comps) =>
+          let penv = bindInlineArgs e env pats args omEmpty
+          e.inlineOpen := !e.inlineOpen + 1
+          let penv2 = emitBlockLeads e penv lead
+          let vals = emitRawOrWords e penv2 comps
+          e.inlineOpen := !e.inlineOpen - 1
+          Some (bindTupleVals env ps vals)
+        None => None
+    _ => None
+
+allVarOrWild : List Pat -> Bool
+allVarOrWild [] = True
+allVarOrWild ((PVar _ _) :: rest) = allVarOrWild rest
+allVarOrWild (PWild :: rest) = allVarOrWild rest
+allVarOrWild _ = False
+
+emitRawOrWords : Emit ->
+  OrdMap (String, LTy) ->
+  List CExpr ->
+  List (String, LTy)
+emitRawOrWords _ _ [] = []
+emitRawOrWords e env (c :: rest) =
+  let v = emitRawOrWord e env c
+  v :: emitRawOrWords e env rest
+
+emitBlockLeads : Emit ->
+  OrdMap (String, LTy) ->
+  List CStmt ->
+  OrdMap (String, LTy)
+emitBlockLeads _ env [] = env
+emitBlockLeads e env (s :: rest) =
+  emitBlockLeads e (emitBlockLead e env s rest) rest
+
+bindTupleVals : OrdMap (String, LTy) ->
+  List Pat ->
+  List (String, LTy) ->
+  OrdMap (String, LTy)
+bindTupleVals env ((PVar x _) :: ps) (v :: vs) =
+  bindTupleVals (omInsert x v env) ps vs
+bindTupleVals env (_ :: ps) (_ :: vs) = bindTupleVals env ps vs
+bindTupleVals env _ _ = env
+
+-- The callee to inline for a destructuring `let` of `n` names: the same limits
+-- as `u32Inline`, and a body that is an n-tuple, or a block ending in one.
+tupleInline : Emit ->
+  String ->
+  List CExpr ->
+  Int ->
+  Option (List Pat, List CStmt, List CExpr)
+tupleInline e f args n =
+  if !e.inlineOpen >= inlineDepth then
+    None
+  else
+    let name = canonFnName e f
+    match omLookup name !e.gDispBindMap
+      Some (CBind _ [CClause pats body]) =>
+        if lengthS pats == lengthS args
+          && hasArgs args
+          && allPVar pats
+          && leadingDictPats pats == 0
+          && not (contains name (freeVars [] body))
+          && coreSize body <= inlineBudget then
+          map ((lead, comps) => (pats, lead, comps)) (tupleBody body n)
+        else
+          None
+      _ => None
+
+tupleBody : CExpr -> Int -> Option (List CStmt, List CExpr)
+tupleBody (CTuple es) n = if lengthS es == n then Some ([], es) else None
+tupleBody (CBlock stmts) n = match reverseL stmts
+  (CSExpr (CTuple es)) :: lead =>
+    if lengthS es == n then Some (reverseL lead, es) else None
+  _ => None
+tupleBody _ _ = None
 
 -- The kernel a saturated call of top-level `f` amounts to, when `f`'s one clause
 -- applies that kernel to its own parameters in order: the `u64` module's
@@ -4921,6 +5662,8 @@ emitArith : Emit ->
 emitArith e env op l r tag =
   if isU64Head tag then
     emitU64Arith e env op l r
+  else if tag == "U32" then
+    (tagU32 e (emitU32RawArith e env op l r), LTInt)
   else match fixedWidthMask tag
     Some mask => emitFixedWidthArith e env op l r mask
     None => emitArithUnsized e env op l r tag
@@ -5219,6 +5962,8 @@ emitCmp : Emit ->
 emitCmp e env op l r tag =
   if isU64Head tag then
     emitU64Cmp e env op l r
+  else if tag == "U32" then
+    emitU32Cmp e env op l r
   else if scalarTagIsInt tag then
     emitIntCmp e env op l r
   else if staticIsFloat env l then
@@ -5514,20 +6259,16 @@ emitLet : Emit ->
   CExpr ->
   CExpr ->
   (String, LTy)
-emitLet e env False (PVar x _) e1 e2 =
-  if staticIsFloat env e1 then
-    let d = emitFloatD e env e1
-    emitExpr e (omInsert x (d, LTFloatU) env) e2
-  else
-    let (v, ty) = emitExpr e env e1
-    emitExpr e (omInsert x (v, ty) env) e2
+emitLet e env False (PVar x _) e1 e2 = emitExpr e (bindLetRaw e env x e1 e2) e2
 emitLet e env False PWild e1 e2 =
   let _ = emitExpr e env e1
   emitExpr e env e2
-emitLet e env False (PTuple ps) e1 e2 =
-  let (v, _) = emitExpr e env e1
-  let env2 = bindPattern e env (PTuple ps) v e2
-  emitExpr e env2 e2
+emitLet e env False (PTuple ps) e1 e2 = match bindTupleInline e env ps e1
+  Some env2 => emitExpr e env2 e2
+  None =>
+    let (v, _) = emitExpr e env e1
+    let env2 = bindPattern e env (PTuple ps) v e2
+    emitExpr e env2 e2
 -- a recursive (function-`let`) closure: `let f p… = … in e2` lowers to
 -- CLet True (PVar f) (CLam …).  The lambda's own name `f` is the
 -- closure itself, so it is EXCLUDED from the capture set at the alloc site and
@@ -5975,20 +6716,19 @@ zeroWords : Int -> List String
 zeroWords n = if n <= 0 then [] else "0" :: zeroWords (n - 1)
 
 emitBlock : Emit -> OrdMap (String, LTy) -> List CStmt -> (String, LTy)
-emitBlock e env [CSExpr ex] = emitExpr e env ex
-emitBlock e env ((CSExpr ex) :: rest) =
-  let _ = emitExpr e env ex
-  emitBlock e env rest
+emitBlock e env [s] = emitBlockLast e env s
+emitBlock e env (s :: rest) = emitBlock e (emitBlockLead e env s rest) rest
+emitBlock e _ [] = gapE e "empty block"
+
+-- The last statement of a block, which is its value.
+emitBlockLast : Emit -> OrdMap (String, LTy) -> CStmt -> (String, LTy)
+emitBlockLast e env (CSExpr ex) = emitExpr e env ex
 -- last-position block-let `[let pat = e]`: mirror cevalBlock's cBlockLetLast
 -- (core_ir_eval :265/:277) — evaluate `e` (for effect + to honour the binding),
--- destructure, and the block yields Unit.  Without this a block ending in a let
--- would recurse into `emitBlock e env2 []` and hit the "empty block" gap.  A
--- refutable pattern still gets the trap-on-miss check (P0-2c).  MUST come before
--- every `(CSLet _ ...)::rest` arm below — each of those matches a ONE-element
--- list too (`rest = []`), so a singleton-list arm placed after them is dead code
--- for every pattern shape (#1741 — that was the actual bug: this arm previously
--- sat after the `::rest` arms and never ran).
-emitBlock e env [CSLet _ pat ex] =
+-- destructure, and the block yields Unit.  A refutable pattern still gets the
+-- trap-on-miss check (P0-2c).  Every block-let shape reaches this arm when it
+-- ends the block (#1741).
+emitBlockLast e env (CSLet _ pat ex) =
   let (v, _) = emitExpr e env ex
   let _ =
     if refutableCsLet e pat then
@@ -5997,6 +6737,22 @@ emitBlock e env [CSLet _ pat ex] =
     else
       bindPattern e env pat v (CLit (LInt 0))
   ("1", LTUnit)
+-- the tail statement of a block may be a bare assignment (`x = e`): evaluate for
+-- effect, the block yields Unit.
+emitBlockLast e env (CSAssign _ ex) =
+  let _ = emitExpr e env ex
+  ("1", LTUnit)
+
+-- A statement that is not the block's last (`rest` follows it): emitted for its
+-- effect, it returns the env the rest of the block sees.
+emitBlockLead : Emit ->
+  OrdMap (String, LTy) ->
+  CStmt ->
+  List CStmt ->
+  OrdMap (String, LTy)
+emitBlockLead e env (CSExpr ex) _ =
+  let _ = emitExpr e env ex
+  env
 -- #314: a block-statement function-`let` (`let go i = … go …`) lowers to a
 -- `CSLet` whose rhs is a `CLam` and whose body may call `go` recursively (the
 -- self-ref is annotated AGlobal since the non-recursive let does not scope its own
@@ -6008,23 +6764,20 @@ emitBlock e env [CSLet _ pat ex] =
 -- the exact mirror of the expression-level `emitLet _ True (PVar f) (CLam …)` arm.
 -- A non-recursive function-`let` takes this path harmlessly (`go` never appears
 -- free, so it is simply not captured).
-emitBlock e env ((CSLet _ (PVar x _) (CLam pats body)) :: rest) =
+emitBlockLead e env (CSLet _ (PVar x _) (CLam pats body)) _ =
   let (w, ty) = emitRecLam e env x pats body
-  emitBlock e (omInsert x (w, ty) env) rest
-emitBlock e env ((CSLet _ (PVar x _) ex) :: rest) =
-  if staticIsFloat env ex then
-    let d = emitFloatD e env ex
-    emitBlock e (omInsert x (d, LTFloatU) env) rest
-  else
-    let (v, ty) = emitExpr e env ex
-    emitBlock e (omInsert x (v, ty) env) rest
-emitBlock e env ((CSLet _ PWild ex) :: rest) =
+  omInsert x (w, ty) env
+emitBlockLead e env (CSLet _ (PVar x _) ex) rest =
+  bindLetRaw e env x ex (CBlock rest)
+emitBlockLead e env (CSLet _ PWild ex) _ =
   let _ = emitExpr e env ex
-  emitBlock e env rest
-emitBlock e env ((CSLet _ (PTuple ps) ex) :: rest) =
-  let (v, _) = emitExpr e env ex
-  let env2 = bindPattern e env (PTuple ps) v (CBlock rest)
-  emitBlock e env2 rest
+  env
+emitBlockLead e env (CSLet _ (PTuple ps) ex) rest =
+  match bindTupleInline e env ps ex
+    Some env2 => env2
+    None =>
+      let (v, _) = emitExpr e env ex
+      bindPattern e env (PTuple ps) v (CBlock rest)
 -- General block-let `let pat = e` for an ARBITRARY pattern (PCon, PCons, PList,
 -- PAs, nested).  Two cases (P0-2c):
 --  • IRREFUTABLE pattern (PVar/PWild/PAs-of-irrefutable, or a PCon of a
@@ -6037,14 +6790,12 @@ emitBlock e env ((CSLet _ (PTuple ps) ex) :: rest) =
 --    emitter blindly loaded field 0 of a mismatching cell → SIGSEGV.  Now emit a
 --    head-ctor tag check that traps @mdk_let_refute on a miss (emitRefutableCsLet).
 -- Placed after the specialized PVar/PWild/PTuple arms so those stay byte-identical.
-emitBlock e env ((CSLet _ pat ex) :: rest) =
+emitBlockLead e env (CSLet _ pat ex) rest =
   let (v, _) = emitExpr e env ex
   if refutableCsLet e pat then
-    let env2 = emitRefutableCsLet e env pat v
-    emitBlock e env2 rest
+    emitRefutableCsLet e env pat v
   else
-    let env2 = bindPattern e env pat v (CBlock rest)
-    emitBlock e env2 rest
+    bindPattern e env pat v (CBlock rest)
 -- `let mut x = e` reuses the irrefutable `CSLet _ (PVar x)` arm above (the mut
 -- flag carries no extra emit work — a mutable local is just an SSA value the
 -- block's tail rebinds).  A reassignment `x = e` (CSAssign, gap B1) mirrors the
@@ -6052,16 +6803,7 @@ emitBlock e env ((CSLet _ pat ex) :: rest) =
 -- the `x` binding for the rest of the block.  Blocks are linear (no back-edge re-
 -- enters the binding), so functional rebinding is observationally identical to a
 -- real mutable slot — no Ref cell needed.
-emitBlock e env ((CSAssign x ex) :: rest) =
-  let (v, ty) = emitExpr e env ex
-  emitBlock e (omInsert x (v, ty) env) rest
--- the tail statement of a block may be a bare assignment (`x = e`): evaluate for
--- effect, the block yields Unit.
-emitBlock e env [CSAssign _ ex] =
-  let _ = emitExpr e env ex
-  ("1", LTUnit)
-emitBlock e _ [] = gapE e "empty block"
-emitBlock e _ _ = gapE e "unsupported block statement"
+emitBlockLead e env (CSAssign x ex) _ = omInsert x (emitExpr e env ex) env
 
 -- bind a list of field patterns to a parallel list of loaded field words.
 bindFieldList : Emit ->
@@ -6188,22 +6930,7 @@ emitApp e env app =
       else
         let fname2 = canonFnName e fname
         if isKnownFn e fname2 && hasArgs args then
-          let argOps = emitArgs e env args
-          let res =
-            emitKnownFnSat
-              e
-              ("mdk_" ++ fname2)
-              argOps
-              (fnArity e fname2)
-              (fnRetTy e fname2)
-          let _ =
-            recordFloatClosureResult
-              e
-              fname2
-              (lengthS argOps)
-              (fnArity e fname2)
-              res
-          res
+          emitKnownFnApp e env fname2 args
         else if isImplMethod e fname && hasArgs args then
           let argOps = emitArgs e env args
           emitMethodArgDispatch e fname (methodArityOfInput e fname) argOps
@@ -6221,6 +6948,38 @@ emitApp e env app =
       let argOps = emitArgs e env args
       emitDictApp e env name routes argOps
     _ => emitIndirect e env hd args
+-- A known top-level function applied to arguments: its raw worker when it has one
+-- of this arity, else the uniform-ABI call (which handles under- and
+-- over-application).
+emitKnownFnApp : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitKnownFnApp e env fname args = match u32Inline e env fname args
+  Some (pats, body) => (tagU32 e (emitU32Inlined e env pats body args), LTInt)
+  None => match rawWorkerCall e fname (lengthS args)
+    Some (sym, w) => emitRawWorkerCallW e env sym w args (fnRetTy e fname)
+    None => emitKnownFnCall e env fname args
+
+emitKnownFnCall : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitKnownFnCall e env fname args =
+  let argOps = emitArgs e env args
+  let res =
+    emitKnownFnSat
+      e
+      ("mdk_" ++ fname)
+      argOps
+      (fnArity e fname)
+      (fnRetTy e fname)
+  let _ =
+    recordFloatClosureResult e fname (lengthS argOps) (fnArity e fname) res
+  res
+
 -- slice 6: an applied method / constrained-fn occurrence.  The real arguments
 -- emit first (left-to-right), then the dispatch resolves to a direct impl call
 -- (RKey), a runtime impl switch (RDict/RDictFwd), or a dict-passing call (CDict).
@@ -10495,6 +11254,7 @@ capTypeOf env c = match omLookup c env
   Some (_, LTFloat) => LTFloat
   Some (_, LTFloatU) => LTFloat
   Some (_, LTU64) => LTU64
+  Some (_, LTU64U) => LTU64
   _ => LTInt
 
 -- the live operand words for a captured-name list (looked up in the emit env).
@@ -11973,14 +12733,10 @@ emitFn : Emit -> CBind -> Unit
 emitFn e (CBind name [CClause pats body]) =
   match dispGroupOf !e.gDispGroups name
     Some grp => if dispRootOf grp == name then emitGDispGroup e grp
-    None =>
-      let (pats2, body2) = etaSaturateMethodBody e name pats body
-      if trmcTryFn e name [(pats2, body2)] True then
-        ()
-      else if allPVar pats2 then
-        emitFnClause e name pats2 body2
-      else
-        emitMultiClauseFn e name [(pats2, body2)]
+    None => match omLookup name !e.rawWorkers
+      Some w => emitRawWorkerFn e name pats body w
+      None => emitFnSingle e name pats body
+
 emitFn e (CBind name (c :: rest)) = match dispGroupOf !e.gDispGroups name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp
   None =>
@@ -11990,6 +12746,17 @@ emitFn e (CBind name (c :: rest)) = match dispGroupOf !e.gDispGroups name
     else
       emitMultiClauseFn e name clauses
 emitFn e (CBind _ []) = gapU e "top-level function with no clauses"
+
+-- a single-clause function with no raw U64 worker.
+emitFnSingle : Emit -> String -> List Pat -> CExpr -> Unit
+emitFnSingle e name pats body =
+  let (pats2, body2) = etaSaturateMethodBody e name pats body
+  if trmcTryFn e name [(pats2, body2)] True then
+    ()
+  else if allPVar pats2 then
+    emitFnClause e name pats2 body2
+  else
+    emitMultiClauseFn e name [(pats2, body2)]
 
 -- TRMC branch point (TRMC-DESIGN.md §"Emitter touchpoints" #2): if `name`'s
 -- clauses are TRMC-eligible AND its leading-dict count is uniform across clauses
@@ -13300,6 +14067,219 @@ emitFloatWorkerFn e name pats ptys body =
   let _ = emit e "}"
   emit e ""
 
+-- ── the raw worker (see `RawWorker`) ────────────────────────────────────────
+-- Which functions get one: a single clause of plain-variable parameters, no
+-- dictionary parameters, a declared signature of exactly the clause's arity
+-- naming `U64` or `U32` in a parameter or the result and no `Float` (whose own
+-- worker is `__fw`), and none of the shapes emitFn routes elsewhere (a
+-- dispatch-group member, a TRMC loop, an eta-saturated method body).
+rawWorkerOf : Emit -> Bool -> CBind -> Option RawWorker
+rawWorkerOf e refine (CBind name [CClause pats body]) = match declSigOf e name
+  Some (pnames, rname) =>
+    let arity = lengthS pats
+    let rk = rawKindOfHead rname
+    let declared = map rawKindOfHead pnames
+    let ks =
+      if refine then
+        refineU64Params e (sameRawKind rk RawU64) body pats declared
+      else
+        declared
+    if arity > 0
+      && lengthS pnames == arity
+      && (any (k => not (isRawWord k)) ks || not (isRawWord rk))
+      && allPVar pats
+      && leadingDictPats pats == 0
+      && not (contains "Float" pnames)
+      && rname /= "Float"
+      && isNone (dispGroupOf !e.gDispGroups name)
+      && not
+        (trmcEligible (isCtor e) (ctorArity e) (SelfByVar name) arity [
+          (pats, body),
+        ])
+      && lengthS (fst (etaSaturateMethodBody e name pats body)) == arity then
+      Some (RawWorker arity ks rk)
+    else
+      None
+  None => None
+rawWorkerOf _ _ _ = None
+
+-- A U64 parameter stays raw only if no occurrence would box it, and that
+-- depends on which positions of the functions it is passed to are raw.  The
+-- first pass takes every declared `U64` position of every callee as raw; two
+-- more passes re-derive each worker against the previous pass's.  Any map is
+-- sound, since every call site reads the final one; the passes only decide how
+-- many boxes are left.
+collectRawWorkers : Emit -> List CBind -> OrdMap RawWorker
+collectRawWorkers e binds =
+  e.rawWorkers := collectRawWorkersPass e False binds
+  e.rawWorkers := collectRawWorkersPass e True binds
+  e.rawWorkers := collectRawWorkersPass e True binds
+  collectRawWorkersPass e True binds
+
+collectRawWorkersPass : Emit -> Bool -> List CBind -> OrdMap RawWorker
+collectRawWorkersPass _ _ [] = omEmpty
+collectRawWorkersPass e refine (b :: rest) = match rawWorkerOf e refine b
+  Some w => omInsert (bindName b) w (collectRawWorkersPass e refine rest)
+  None => collectRawWorkersPass e refine rest
+
+-- each declared `U64` parameter that some occurrence would box becomes a word.
+refineU64Params : Emit ->
+  Bool ->
+  CExpr ->
+  List Pat ->
+  List RawKind ->
+  List RawKind
+refineU64Params e retRaw body ((PVar x _) :: ps) (RawU64 :: ks) =
+  let k = if u64Escapes e x retRaw body == 0 then RawU64 else RawWord
+  k :: refineU64Params e retRaw body ps ks
+refineU64Params e retRaw body (_ :: ps) (k :: ks) =
+  k :: refineU64Params e retRaw body ps ks
+refineU64Params _ _ _ _ ks = ks
+
+-- The worker `@mdk_<name>__rw` and the uniform-ABI wrapper `@mdk_<name>`.
+emitRawWorkerFn : Emit -> String -> List Pat -> CExpr -> RawWorker -> Unit
+emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
+  let ptys = match sigLookup e name
+    Some (FnSig ts _) => ts
+    None => allInt pats
+  let worker = "mdk_" ++ name ++ "__rw"
+  let rty = rawKindTy rk
+  let wenv = paramEnvRaw pats ptys ks 0
+  let _ = beginDefine e
+  let _ = emit e "define \{rty} @\{worker}(\{rawParamDecls ks 0}) {"
+  let _ = emit e "entry:"
+  let _ =
+    emitFnBodyRaw e wenv (RawTail name worker (RawWorker arity ks rk)) body
+  let _ = emit e "}"
+  let _ = emit e ""
+  let _ = beginDefine e
+  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ = emit e "entry:"
+  let ops = rawWrapperArgs e ks 0
+  let r = freshReg e
+  let _ = emit e "  \{r} = call \{rty} @\{worker}(\{rawArgDecls ops})"
+  let out = match rk
+    RawU64 => boxU64 e r
+    RawU32 => tagU32 e r
+    RawWord => r
+  let _ = emit e "  ret i64 \{out}"
+  let _ = emit e "}"
+  emit e ""
+
+-- the worker's parameter list: `i32` for a U32 position, `i64` otherwise.
+rawParamDecls : List RawKind -> Int -> String
+rawParamDecls [] _ = ""
+rawParamDecls [k] i = "\{rawKindTy k} %arg\{intToString i}"
+rawParamDecls (k :: rest) i =
+  "\{rawKindTy k} %arg\{intToString i}, \{rawParamDecls rest (i + 1)}"
+
+-- the wrapper's worker arguments: each parameter's word unboxed or untagged to
+-- its position's kind.
+rawWrapperArgs : Emit -> List RawKind -> Int -> List (String, String)
+rawWrapperArgs _ [] _ = []
+rawWrapperArgs e (k :: rest) i =
+  let a = "%arg" ++ intToString i
+  let op = match k
+    RawU64 => unboxU64 e a
+    RawU32 => untagU32 e a
+    RawWord => a
+  (rawKindTy k, op) :: rawWrapperArgs e rest (i + 1)
+
+-- the worker's env: a raw parameter holds its payload (LTU64U) or its `i32`
+-- (LTU32U), the others their words at the signature's types.
+paramEnvRaw : List Pat ->
+  List LTy ->
+  List RawKind ->
+  Int ->
+  OrdMap (String, LTy)
+paramEnvRaw ((PVar x _) :: rest) tys (k :: ks) i =
+  let (ty, tys2) = match tys
+    t :: ts => (t, ts)
+    [] => (LTInt, [])
+  let lty = match k
+    RawU64 => LTU64U
+    RawU32 => LTU32U
+    RawWord => ty
+  omInsert x ("%arg" ++ intToString i, lty) (paramEnvRaw rest tys2 ks (i + 1))
+paramEnvRaw [] _ _ _ = omEmpty
+paramEnvRaw _ _ _ _ = panic "llvm: raw-worker params must be plain variables"
+
+-- the function a worker body belongs to: its name, its worker symbol, its shape.
+data RawTail = RawTail String String RawWorker
+
+-- A worker body in tail position.  `if`, a two-arm literal match, a block and a
+-- `let` pass tail position on; a saturated self-call is a `musttail` call of the
+-- worker on raw values (the loop); any other value is returned in the worker's
+-- result kind.
+emitFnBodyRaw : Emit -> OrdMap (String, LTy) -> RawTail -> CExpr -> Unit
+emitFnBodyRaw e env t (CIf c th el) =
+  let (cv, _) = emitExpr e env c
+  let ci = untagInt e cv
+  let cb = freshReg e
+  let _ = emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+  let n = intToString (freshLocal e)
+  let thenL = "then" ++ n
+  let elseL = "else" ++ n
+  let _ = emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+  let _ = emit e (thenL ++ ":")
+  let _ = emitFnBodyRaw e env t th
+  let _ = emit e (elseL ++ ":")
+  emitFnBodyRaw e env t el
+emitFnBodyRaw e env t (CDecision scrut arms tree) =
+  match decisionToIf scrut arms
+    Some cif => emitFnBodyRaw e env t cif
+    None => emitRawValueRet e env t (CDecision scrut arms tree)
+emitFnBodyRaw e env t (CBlock stmts) = emitFnBodyRawBlock e env t stmts
+emitFnBodyRaw e env t (CLet False (PVar x a) e1 e2) = match e1
+  CLam _ _ => emitRawValueRet e env t (CLet False (PVar x a) e1 e2)
+  _ => emitFnBodyRaw e (bindLetRaw e env x e1 e2) t e2
+emitFnBodyRaw e env (RawTail self worker w) other = match flattenApp other []
+  (CVar f _, args) =>
+    if not (isLocal env f)
+      && canonFnName e f == self
+      && lengthS args == rawWorkerArity w then
+      let ops = emitRawArgs e env (rawWorkerKinds w) args
+      let rty = rawKindTy (rawWorkerRet w)
+      let r = freshReg e
+      let _ =
+        emit e "  \{r} = musttail call \{rty} @\{worker}(\{rawArgDecls ops})"
+      emit e "  ret \{rty} \{r}"
+    else
+      emitRawValueRet e env (RawTail self worker w) other
+  _ => emitRawValueRet e env (RawTail self worker w) other
+
+emitFnBodyRawBlock : Emit ->
+  OrdMap (String, LTy) ->
+  RawTail ->
+  List CStmt ->
+  Unit
+emitFnBodyRawBlock e env t [CSExpr ex] = emitFnBodyRaw e env t ex
+emitFnBodyRawBlock e env (RawTail _ _ w) [s] =
+  let (v, _) = emitBlockLast e env s
+  emitRawWordRet e (rawWorkerRet w) v
+emitFnBodyRawBlock e env t (s :: rest) =
+  emitFnBodyRawBlock e (emitBlockLead e env s rest) t rest
+emitFnBodyRawBlock e _ _ [] = gapU e "empty block"
+
+-- return a worker body's value in the worker's result kind.
+emitRawValueRet : Emit -> OrdMap (String, LTy) -> RawTail -> CExpr -> Unit
+emitRawValueRet e env (RawTail _ _ w) ex = match rawWorkerRet w
+  RawU64 => emit e "  ret i64 \{emitU64Raw e env ex}"
+  RawU32 => emit e "  ret i32 \{emitU32Raw e env ex}"
+  RawWord => emitValueRet e env ex
+
+-- return an already-emitted word in the worker's result kind.
+emitRawWordRet : Emit -> RawKind -> String -> Unit
+emitRawWordRet e RawU64 v = emit e "  ret i64 \{unboxU64 e v}"
+emitRawWordRet e RawU32 v = emit e "  ret i32 \{untagU32 e v}"
+emitRawWordRet e RawWord v = emit e "  ret i64 \{v}"
+
+rawWorkerArity : RawWorker -> Int
+rawWorkerArity (RawWorker n _ _) = n
+
+rawWorkerKinds : RawWorker -> List RawKind
+rawWorkerKinds (RawWorker _ ks _) = ks
+
 emitFnClause : Emit -> String -> List Pat -> CExpr -> Unit
 emitFnClause e name pats body =
   let ptys = match sigLookup e name
@@ -13424,7 +14404,8 @@ emitFnBody e env self other =
       if isKnownFn e fname
         && hasArgs args
         && tailCallSaturated e fname (lengthS args)
-        && isNone (u64KernelAlias e fname0 args) then
+        && isNone (u64KernelAlias e fname0 args)
+        && isNone (rawWorkerCall e fname (lengthS args)) then
         let argOps = emitArgs e env args
         let r = freshReg e
         let kw = if fname == self then "musttail call" else "call"
@@ -15359,6 +16340,8 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     closConstCache = Ref [],
     floatFwSet = Ref [],
     floatClosureFns = Ref [],
+    rawWorkers = Ref omEmpty,
+    inlineOpen = Ref 0,
   }
   e.dictConstCache := []
   e.closConstCache := []
@@ -15400,6 +16383,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
       (fnBinds groups)
       implEntries
   e.floatClosureFns := collectFloatClosureFns e (fnBinds groups)
+  e.rawWorkers := collectRawWorkers e (fnBinds groups)
   e
 
 emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
