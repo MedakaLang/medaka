@@ -72,11 +72,20 @@ write_source_manifest() {
 # `+ - *`, and blends the secret RFC 6979 candidate bytes as one U64
 # expression (selectBytesGo), so no overflow branch tests a secret. The
 # closure and control grades below say what moved.
+# Re-blessed for N5's emitter commit (225ee0bb5), which changed
+# stdlib/crypto/sha256.mdk without moving this row: the 64 rounds carry the
+# eight working variables as parameters instead of a tuple, so the round loop
+# allocates nothing. No branch in it tests a word.
+# Re-blessed for the field's move to 5x52 limbs (N5): pds/lib/field.mdk is
+# rewritten as straight-line U64 register code (one fold/carry round, an
+# unconditional subtract-and-select, a port of libsecp256k1's
+# secp256k1_fe_mul_inner). No other claimed source changed. The closure and
+# control grades below say what moved.
 expected_internal_source_manifest() {
   cat <<'EOF'
-1538248655 30240  pds/lib/field.mdk
+1376420778 29785  pds/lib/field.mdk
 2182991326 35966  pds/lib/scalar.mdk
-1010065562 13066  stdlib/crypto/sha256.mdk
+4266693202 13314  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
@@ -88,9 +97,9 @@ EOF
 
 expected_public_source_manifest() {
   cat <<'EOF'
-1538248655 30240  pds/lib/field.mdk
+1376420778 29785  pds/lib/field.mdk
 2182991326 35966  pds/lib/scalar.mdk
-1010065562 13066  stdlib/crypto/sha256.mdk
+4266693202 13314  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
@@ -612,7 +621,19 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # a wrapper call (its only branches test the amount). Every other U64
 # operation is an inline kernel. `mdk_impl_Int_display`, which that wrapper's
 # negative-amount panic calls, was already present. 174 definitions.
-[ "$closure_grade" = '504140202 4996' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived twice at N5, each against a run of this gate. First, the N5
+# emitter commit (225ee0bb5), with the field unchanged: raw workers,
+# sha256's parameter-carried rounds; 157 definitions, grade
+# '3457611579 4628'. Then the field's move to 5x52 limbs, symbol by symbol
+# against that: 23 field definitions left (addGo, carryChain, carryFoldRound,
+# carryPass, carryPassGo, feNegateCtGo, feSelectGo, feZeroBorrow, foldCopy,
+# foldGo, foldHigh, limbsOfBytesGo, mulAccum, mulAccumRow, reduceCarry,
+# selectPCandidate, subPCandidate, subPSelect, toBytesGo, the pLimbs force,
+# and u64's shiftLeft worker, which only the old codecs' counter shift
+# reached) and 8 entered (the raw workers canonicalizeLimbs__rw,
+# subPSelect__rw, carryOut__rw, zeroBitOf__rw, wordAt__rw, putWord__rw, and
+# u64's bitNot__rw, which carryOut reaches). 143 definitions.
+[ "$closure_grade" = '4000375433 4273' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -670,7 +691,15 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # signCandidate 17 -> 24, selectSigningCandidates 5 -> 8, pointAddComplete
 # 40 -> 43, scSecretCandidate32 7 -> 9, scHighBit 2 -> 3, secretNonzeroBit
 # 1 -> 2. U64 arithmetic allocates nothing in any of these rows.
-[ "$control_grade" = '119802175 7787' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived twice at N5, as for the closure grade above: the emitter commit
+# alone gives '3018214511 7152'; the field's move to 5x52 then changes only
+# field rows (and u64's shiftLeft -> bitNot worker). Every field row now has
+# 0 in the control-branch column, where the recursive helpers had 1 to 3. The
+# index column counts literal-index limb reads (feMul, feAdd, feSelect,
+# feEqualBit 10; canonicalize, feZeroBit, feNegateCt, feToBytes 5). The only
+# field trap branches are wordAt__rw's and putWord__rw's 7 each, the `off + k`
+# offsets of the byte codecs, which are public.
+[ "$control_grade" = '1694154382 6579' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -919,7 +948,12 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # 11 -> 5) and dblGo (7 -> 6, the public scIsHigh path, three counter traps),
 # and pointIsCanonicalInfinity (5 -> 7 calls, zero traps: its bit product is
 # two bitAnd calls).
-if [ "$public_closure_grade" != '2645301472 5531' ] || [ "$public_control_grade" != '1513011610 8627' ]; then
+# Re-derived twice at N5, as for the internal grades above: the emitter
+# commit alone gives closure '450607787 5128' (175 definitions) and control
+# '2446031298 7941'; the field's move to 5x52 then makes the same field row
+# changes as the internal manifest, plus feEqualBorrow leaving and
+# feEqualBit's row becoming 0 0 10 0 0 0 13 0. 160 definitions.
+if [ "$public_closure_grade" != '2384777261 4744' ] || [ "$public_control_grade" != '1950867828 7325' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
