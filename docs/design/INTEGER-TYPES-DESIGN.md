@@ -363,7 +363,12 @@ backend-neutral runtime-type stamps #353 describes remain its scope.
   or `U32` gets a raw worker, `@mdk_<f>__rw`: those parameters and that
   result cross the call as payloads (`U32` as `i32`), and a tail self-call is
   a loop on registers.  A `U64` parameter is raw only where no occurrence in
-  the body would box it, so a value that only passes through stays a cell.
+  the body would box it, so a value that only passes through stays a cell.  A
+  result is raw only where every tail call stays one: a self-call through
+  `if`, `let`, a block or a two-arm literal `match`, or a call of a worker
+  with the same raw result.  A self-call in any other `match` arm, or a tail
+  call of an ordinary function, keeps a word result, emitted as the uniform
+  define is, so a deep recursion loops exactly where it did before.
   `@mdk_<f>` remains the uniform entry for closures and partial application,
   a wrapper around the worker.  The positions come from the declared
   signature, which the typechecker checked, never from a guess.

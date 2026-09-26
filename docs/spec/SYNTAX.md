@@ -94,7 +94,8 @@ when that is `U8`/`U16`/`U32` (`classify : U8 -> String; classify 10 = …`) and
 is range-checked the same way; otherwise it is an `Int`.
 
 **`U64`** holds `0 .. 2^64 - 1` in a boxed cell (it does not fit `Int`'s tagged
-word; the native backend keeps it in a register where its type is known); its operations live in the stdlib module `u64` (`import u64 as U64`). Its
+word; the native backend keeps it in a register where its type is known); its
+operations live in the stdlib module `u64` (`import u64 as U64`). Its
 arithmetic wraps modulo 2^64 like the rest of the family, and it compares
 unsigned. A literal in `U64` position may be a wide literal
 (`0x9E3779B97F4A7C15`, `18446744073709551615`); a negative one is refused.
