@@ -833,7 +833,8 @@ reviewer on a built binary, each refusal paired with a control.
   catalog's indexed network signatures, which every run elaborates. `main`
   itself measured 0.25% under the `check` ceiling on the runner, so the
   ceiling was re-derived by the gate's own 20% convention, with the split
-  written beside it. Val kept the re-derived ceiling (2026-09-26).
+  written beside it. Val kept the re-derived ceiling (2026-09-26); N4's
+  re-derivation on `main` superseded it at the merge.
 
 *Second review round (on `5396fd785`).* The instance match walked through
 every effect row, so two S0s were new and two older ones stood:
@@ -866,7 +867,9 @@ compared when the signature has more than one.
 
 *Val's rulings on the close-out (2026-09-26).*
 
-- The `check` Ir ceiling stays re-derived at 1,295M.
+- The `check` Ir ceiling stays re-derived at 1,295M. Superseded before merge:
+  N4 (#3460) re-derived it on `main` to 1,340M from its own 1,113M
+  measurement, and this branch adds about 6.5M, so the merge takes N4's block.
 - `pdsSignalStart`/`pdsSignalRequested` keep `<Net>`, documented in §7 and
   the catalog as a deliberate over-charge until signals have a label.
 - `Socket`/`ListenSocket` keep their names; the fix is general: a program's

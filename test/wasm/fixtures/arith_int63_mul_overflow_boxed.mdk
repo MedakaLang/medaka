@@ -1,0 +1,9 @@
+-- #3377: the REF-mode peer of arith_int63_mul_i64_overflow_scalar: a product past
+-- 2^63, whose wrapped i64 value fits 63 bits, traps before $mdk_box_int.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: 3037000500 * 3037000500 overflows Int
+data Box = Box Int
+
+unbox b = match b
+  Box n => n
+
+main = unbox (Box (3037000500 * 3037000500))

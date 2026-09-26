@@ -95,11 +95,13 @@ atan2	PENDING	#476 the (0,0) input and quadrant/sign edges
 floatRem	PENDING	#476 x rem 0 -> NaN; rem with +-inf operands
 intBitsToFloat	PENDING	#476 NaN / +-inf / -0.0 bit patterns reinterpret to fragile-render floats
 hashFloat	PENDING	#476 hashing NaN and -0.0 (must agree with +0.0) is an edge (cf #416 hash SIGSEGV class)
-# Bit shifts: shift amount >= 63/64 or negative is C-level UB (all three engines agree today, unpinned).
-shiftLeft	PENDING	#476 shift amount >= 64 or negative is the edge (UB in C; verify+pin before it drifts)
-shiftRight	PENDING	#476 shift amount >= 64 or negative is the edge (UB in C; verify+pin before it drifts)
-intShiftLeft	PENDING	#476 shiftLeft under another name: shift amount >= 64 or negative is the edge
-intShiftRight	PENDING	#476 shiftRight under another name: shift amount >= 64 or negative is the edge
+# Bit shifts: defined since N4 (#3377): an amount >= 63 shifts every bit out, a negative
+# one panics.  Pinned across all three engines by engine/int_shift_edges, a key this
+# ledger's BOUNDARY rows cannot name yet (they take llvm/ and wasm/ corpus keys).
+shiftLeft	PENDING	#476 shift amount >= 63 (gives 0) or negative (panics) is the edge; pinned by engine/int_shift_edges
+shiftRight	PENDING	#476 shift amount >= 63 (gives 0 or -1) or negative (panics) is the edge; pinned by engine/int_shift_edges
+intShiftLeft	PENDING	#476 shiftLeft under another name: amount >= 63 or negative is the edge
+intShiftRight	PENDING	#476 shiftRight under another name: amount >= 63 or negative is the edge
 # Array / string / bytes with out-of-range or invalid-input domains.
 arrayGetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
 arraySetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
@@ -134,7 +136,7 @@ charIsSpace	TOTAL	total predicate over Char
 charToLower	TOTAL	total case map (identity where no mapping exists)
 charToUpper	TOTAL	total case map (identity where no mapping exists)
 charToStr	TOTAL	total: singleton string of the Char
-# Int / bit ops: total (Int wraps by design — decided_int_wraps_by_design).
+# Int bitwise ops: total on every Int (bits in, bits out; nothing to overflow).
 bitAnd	TOTAL	total bitwise op
 bitOr	TOTAL	total bitwise op
 bitXor	TOTAL	total bitwise op

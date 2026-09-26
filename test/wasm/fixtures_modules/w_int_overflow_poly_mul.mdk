@@ -1,0 +1,8 @@
+-- #3377: the poly-`Num` `*` Int arm ($mdk_value_mul / mdk_num_mul) traps at
+-- intMinBound * -1.
+polyMul : Num a => a -> a -> a
+polyMul a b = a * b
+
+main =
+  println (polyMul 6 7)
+  println (polyMul intMinBound (-1))

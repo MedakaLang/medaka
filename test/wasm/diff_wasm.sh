@@ -14,6 +14,11 @@
 # both are OCaml-free.  (This resolves the task's "diff against `medaka run`"
 # framing, which would print nothing for these value mains.)
 #
+# A fixture that must stop with a coded runtime error (the Int overflow traps,
+# arith_int63_*) pins its exact stderr line in a `-- expect-stderr: <line>` comment;
+# both engines must exit 1 with exactly that line.  Every other fixture must exit 0
+# with empty stderr (w8_stderr_write excepted).
+#
 # Reports N/M passing; non-zero exit if any fixture diverges.  Opt-in skip (exit 2)
 # when the toolchain (wasm-tools / Node>=22 / clang) is unavailable, mirroring the
 # other native diff scripts.
@@ -43,14 +48,21 @@ if [ "${1:-}" = "--one" ]; then
   native_out="$WORKDIR/$name.native.out"; native_err="$WORKDIR/$name.native.err"
   node_out="$WORKDIR/$name.node.out"; node_err="$WORKDIR/$name.node.err"
   st=0; msg=""
+  # A fixture that is MEANT to stop with a coded runtime error declares the exact
+  # stderr line in a `-- expect-stderr: <line>` comment: both engines must then exit
+  # 1 with exactly that stderr.  Every other fixture must exit 0 with empty stderr.
+  exp_err="$(sed -n 's/^-- expect-stderr: //p' "$f")"
   if ! MEDAKA_CLANG_OPT="${WASM_ORACLE_OPT:--O2}" "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORKDIR/$name.build.err" 2>&1; then
     msg="$(printf 'FAIL %s (oracle build)\n%s' "$name" "$(cat "$WORKDIR/$name.build.err")")"; st=1
   else
-    if ! "$obin" >"$native_out" 2>"$native_err"; then
+    "$obin" >"$native_out" 2>"$native_err"; nrc=$?
+    if [ -n "$exp_err" ] && { [ "$nrc" -ne 1 ] || ! printf '%s\n' "$exp_err" | cmp -s - "$native_err"; }; then
+      msg="$(printf 'FAIL %s (native trap contract: exit %s)\n  want: %s\n  got : %s' "$name" "$nrc" "$exp_err" "$(cat "$native_err")")"; st=1
+    elif [ -z "$exp_err" ] && [ "$nrc" -ne 0 ]; then
       msg="$(printf 'FAIL %s (native oracle run)\n%s' "$name" "$(cat "$native_err")")"; st=1
-    elif [ "$name" = "w8_stderr_write.mdk" ] && ! printf 'diagnostic to stderr\n' | cmp -s - "$native_err"; then
+    elif [ -z "$exp_err" ] && [ "$name" = "w8_stderr_write.mdk" ] && ! printf 'diagnostic to stderr\n' | cmp -s - "$native_err"; then
       msg="FAIL $name (native stderr contract)"; st=1
-    elif [ "$name" != "w8_stderr_write.mdk" ] && [ -s "$native_err" ]; then
+    elif [ -z "$exp_err" ] && [ "$name" != "w8_stderr_write.mdk" ] && [ -s "$native_err" ]; then
       msg="$(printf 'FAIL %s (native oracle stderr)\n%s' "$name" "$(cat "$native_err")")"; st=1
     elif ! "$EMITBIN" "$f" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
       msg="$(printf 'FAIL %s (wasm emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
@@ -63,8 +75,17 @@ if [ "${1:-}" = "--one" ]; then
     elif ! wasm-tools validate --features=all "$wasm" 2>"$WORKDIR/$name.val.err"; then
       msg="$(printf 'FAIL %s (wasm-tools validate)\n%s' "$name" "$(cat "$WORKDIR/$name.val.err")")"; st=1
     else
-      if ! "$NODE" "$RUNJS" "$wasm" >"$node_out" 2>"$node_err"; then
+      "$NODE" "$RUNJS" "$wasm" >"$node_out" 2>"$node_err"; wrc=$?
+      if [ -n "$exp_err" ] && { [ "$wrc" -ne 1 ] || ! printf '%s\n' "$exp_err" | cmp -s - "$node_err"; }; then
+        msg="$(printf 'FAIL %s (wasm trap contract: exit %s)\n  want: %s\n  got : %s' "$name" "$wrc" "$exp_err" "$(cat "$node_err")")"; st=1
+      elif [ -z "$exp_err" ] && [ "$wrc" -ne 0 ]; then
         msg="$(printf 'FAIL %s (wasm run)\n%s' "$name" "$(cat "$node_err")")"; st=1
+      elif [ -n "$exp_err" ]; then
+        if cmp -s "$native_out" "$node_out"; then
+          msg="ok   $name"
+        else
+          msg="$(printf 'FAIL %s\n  oracle: %s\n  wasm  : %s' "$name" "$(cat "$native_out")" "$(cat "$node_out")")"; st=1
+        fi
       elif [ "$name" = "w8_stderr_write.mdk" ] && ! printf 'diagnostic to stderr\n' | cmp -s - "$node_err"; then
         msg="FAIL $name (wasm stderr contract)"; st=1
       elif [ "$name" != "w8_stderr_write.mdk" ] && [ -s "$node_err" ]; then

@@ -24,10 +24,12 @@
 -- which the driver flips ONCE at entry via `setOpCounting (perfEnabled ())`. Zero
 -- write when off — and no `getEnv` (which is <IO>) ever runs inside the hot scan.
 --
--- ACYCLIC: this module imports only prelude primitives, so `util -> opcount` adds no
--- cycle (nothing in util's dependency set imports util). NO reset (unlike refindex's
+-- ACYCLIC: this module imports only the prelude and the stdlib's `u64`, so `util ->
+-- opcount` adds no cycle (nothing in util's dependency set imports util). NO reset (unlike refindex's
 -- `opCnt := 0`) — per-stage counts are read by snapshot-subtract, so the counter is a
 -- single cumulative monotone value.
+
+import u64 as U64
 
 -- The cumulative operation counter.  Module-private: read only via `opSnap`.
 opCounter : Ref Int
@@ -49,7 +51,10 @@ setOpCounting b = opCountOn := b
 export
 opBump : Unit -> Unit
 opBump () = match !opCountOn
-  True => opCounter := !opCounter + 1
+  -- Incremented in `U64`, which wraps and needs no overflow check: `opBump` runs on
+  -- every interpreted step, and the check an `Int` `+ 1` carries kept LLVM from
+  -- inlining it there (about +12% of the interpreter's instructions per step).
+  True => opCounter := U64.toIntTruncating (U64.truncate !opCounter + 1)
   False => ()
 
 -- Read the cumulative counter.  Paired snapshots (before/after a stage) yield that

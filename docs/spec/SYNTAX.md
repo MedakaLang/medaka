@@ -63,13 +63,19 @@ refused at `Int`, and `intMinBound` is reachable only through the adjacent-sign
 form `-4611686018427387904`, where the parser fuses the `-` and the digits into
 one negative literal. A literal of `2^64` or more fits no type and is a lex
 error (`integer literal too large for U64 (max 2^64 - 1)`); a negated wide
-literal (`-0xFFFFFFFFFFFFFFFF`) is refused too. **Arithmetic** overflow wraps
-two's-complement-style **by design** — a documented footgun, not a bug (decided
-2026-07-15): `Int` is a fixed-width machine integer (as in C, Go, or Haskell's
-Int), not an arbitrary-precision bignum, so `4611686018427387903 + 1` wraps to a
-negative number with no diagnostic. Code that relies on wraparound (hashing,
-RNG) depends on this; to detect it, bounds-check the operands against
-`intMaxBound`/`intMinBound` yourself. (There is no `minInt`/`maxInt` — use
+literal (`-0xFFFFFFFFFFFFFFFF`) is refused too. **Arithmetic** overflow
+**panics**: `Int` is a fixed-width integer, not an arbitrary-precision bignum,
+and `+`, `-`, `*`, negation and `/` whose exact result falls outside the range
+stop the program with `runtime error [E-INT-OVERFLOW]: 4611686018427387903 + 1
+overflows Int` (on every engine; `medaka run` adds the source location). `/`
+overflows only at `intMinBound / -1`, and `%` never does. To refuse an
+out-of-range result instead, `checkedAdd`, `checkedSub` and `checkedMul : Int
+-> Int -> Option Int` answer `None`; for arithmetic that wraps on purpose
+(hashing, RNGs, binary formats), use a `U` type below. `shiftLeft` and
+`shiftRight` never trap: `shiftLeft` discards the bits shifted past bit 62 (so
+bit 62 becomes the sign), `shiftRight` is arithmetic (it copies the sign), an
+amount of 63 or more shifts every bit out (`0`, or `-1` for a negative
+`shiftRight`), and a negative amount panics. (There is no `minInt`/`maxInt` — use
 `intMinBound`/`intMaxBound`, or
 the polymorphic `minBound`/`maxBound : Bounded a => a` with a type annotation.)
 `Int` is neither `I64` nor `U64`.

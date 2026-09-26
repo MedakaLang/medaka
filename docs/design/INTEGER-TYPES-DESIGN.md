@@ -6,7 +6,9 @@ range check and literal patterns). N2 BUILT (a byte is a `U8` in `bytes`,
 index, CRC-32 and the property runner's `fmix32` on `U32`). N3 BUILT (boxed
 `U64` on all three engines, wide literals, the `u64` module with `mulWide`,
 `addCarry` and `subBorrow`, `bits64` retired, the multi-byte codecs typed).
-N4–N6 are design.
+N4 BUILT (the `Hashable` folds and field/scalar on `U64`, `checkedAdd`,
+`checkedSub` and `checkedMul`, and `Int` overflow trapping on all three
+engines). N5–N6 are design.
 Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
@@ -41,7 +43,7 @@ tagged types first, `U64` second, the trap last.
 
 | Type | Width | Runtime representation | Arithmetic | Milestone |
 |---|---|---|---|---|
-| `Int` | 63, signed | tagged immediate, unchanged | **traps** once N4 lands; wraps until then | N4 |
+| `Int` | 63, signed | tagged immediate, unchanged | **traps** (N4; it wrapped before) | N4 |
 | `U8` `U16` `U32` | 8 / 16 / 32, unsigned | tagged immediate, distinct static type; no runtime or GC change | **wraps** modulo 2^n | N1 |
 | `U64` | 64, unsigned | boxed cell, the `Float` shape, first; unboxed in monomorphic code later | wraps | N3, N5 |
 | `I32` `I64` | 32 / 64, signed | reserved names; built when a customer is named | wraps | N6 |
@@ -200,8 +202,12 @@ masked amount is silent wrongness (`shiftLeft x 40` on a `U32` would mean
 `shiftLeft x 8`), and the select it costs is one instruction that folds
 away on a constant amount, which is every amount a hash round uses.
 
-`Int`'s own `shiftLeft` by 63 or more is C-undefined today. N4 defines it
-when the trap lands; it is out of scope here.
+`Int`'s own shifts were C-undefined for an amount of 64 or more. N4 defines
+them: an amount of 63 or more shifts every bit out (`shiftLeft` gives `0`,
+`shiftRight` gives `0` or, for a negative value, `-1`), a negative amount
+panics as it does for the U types, `shiftLeft` discards the bits shifted past
+bit 62 rather than trapping, and `shiftRight` is arithmetic on every engine
+(Wasm's was logical, so the engines disagreed on a negative operand).
 
 ## 5. The surface
 
@@ -361,8 +367,17 @@ are closed here: unsigned first with signed reserved (2.2); shift by the
 width gives 0 (4); per-type functions rather than a `Bits` interface (5.3);
 no wrapping operations on `Int` (5.2).
 
-Until N4 lands, `Int` wraps and `docs/spec/SYNTAX.md`'s by-design wording
-stays accurate. A "wraps" report is not an S0 bug; it points at #3377.
+As built: `+`, `-`, `*`, negation and `/` (only `intMinBound / -1`) whose
+result is outside `Int`'s range stop the program with `runtime error
+[E-INT-OVERFLOW]: 4611686018427387903 + 1 overflows Int`, located on `medaka
+run`. The LLVM backend checks the tagged words with the
+`llvm.s*.with.overflow` intrinsics (the add of `2a+1` and `2b` overflows
+exactly when `a+b` does, and its result is already tagged); Wasm compares
+against the bounds; both interpreters check before the host arithmetic, which
+traps too. The prelude's polymorphic `Num Int` path traps the same way in the
+runtime (`mdk_num_*`). `%` never overflows. There is no compile-time constant
+folding of `Int` arithmetic in Core IR, so no folder can produce a wrapped
+constant.
 
 ## 9. Milestones
 

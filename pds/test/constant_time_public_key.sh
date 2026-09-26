@@ -25,10 +25,18 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 source_closure_ok() {
   tree=$1
   [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '1576054259 4921' ] || return 1
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '75163897 32282' ] || return 1
-  # N3 (#3425): field.mdk's only change is a comment naming the retired bits64.
-  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '3196114623 25705' ] || return 1
+  # Re-audited when Int began trapping on overflow (#3377): secp256k1.mdk's
+  # secret condition bits combine through bitAnd/bitOr/bitXor instead of
+  # `+ - *`, and the RFC 6979 byte blend runs on U64, so no Int overflow
+  # check in it tests a secret operand.
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1706692293 25394' ] || return 1
+  # Re-audited when both modules' limb arithmetic moved to U64 expressions
+  # over Int storage (#3427): every limb step widens through U64.truncate and
+  # narrows through U64.toIntTruncating, the secret byte scan's validity and
+  # aggregate bits combine through bitAnd, no source branch was added, and the
+  # IR checks below pass. constant_time_reductions.sh pins the helper shape.
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '2182991326 35966' ] || return 1
+  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '1538248655 30240' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
   grep -F -q 'let added = pointAddComplete r0 r1' "$tree/pds/lib/secp256k1.mdk" || return 1
@@ -37,8 +45,8 @@ source_closure_ok() {
   grep -F -q 'let next0 = pointSelect bit doubled0 added' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'let next1 = pointSelect bit added doubled1' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'let bytesBit = scanSecretBytes bs safeBytes 0 1' "$tree/pds/lib/scalar.mdk" || return 1
-  grep -F -q '(bytesBit * rangeBit * nonzeroBit, candidate)' "$tree/pds/lib/scalar.mdk" || return 1
-  grep -F -q 'scanSecretBytes bs safeBytes (i + 1) (validBit * byteBit)' "$tree/pds/lib/scalar.mdk" || return 1
+  grep -F -q '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' "$tree/pds/lib/scalar.mdk" || return 1
+  grep -F -q 'scanSecretBytes bs safeBytes (i + 1) (bitAnd validBit byteBit)' "$tree/pds/lib/scalar.mdk" || return 1
   grep -F -q 'fieldSubCt a b = feAdd a (feNegateCt b)' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'pointSelect opposite afterEqual pointInfinity' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))' "$tree/pds/lib/sign.mdk" || return 1
@@ -89,6 +97,41 @@ require_emitted_symbol() {
 require_native_symbol() {
   symbol=$1
   nm "$BIN" | awk -v symbol="$symbol" '$3 == symbol || $3 == "_" symbol { found = 1 } END { exit !found }' || fail "linked native closure contains $symbol"
+}
+
+# Every conditional branch in helper $1 tests a value computed only from
+# literals and the helper's public counter arguments ($2, `+`-separated
+# indexes). Since Int overflow traps (#3377), each Int `+ - *` and each `/` or
+# `%` adds a branch (the overflow flag, the zero divisor); this proves every
+# such branch here sits on counter arithmetic, never on a limb or a key byte.
+branches_public() {
+  awk -v pub="$2" '
+    BEGIN { n = split(pub, p, "+"); for (k = 1; k <= n; k++) public["%arg" p[k]] = 1 }
+    /^  %[A-Za-z0-9_.]+ = / {
+      dst = $1
+      rest = $0
+      sub(/^  %[A-Za-z0-9_.]+ = /, "", rest)
+      op = rest
+      sub(/ .*/, "", op)
+      ok = (op ~ /^(add|sub|mul|sdiv|srem|ashr|lshr|shl|or|and|xor|icmp|zext|sext|trunc|extractvalue|select)$/) ||
+        (rest ~ /@llvm\.s(add|sub|mul)\.with\.overflow/)
+      body = rest
+      sub(/^[^%]*/, "", body)
+      all = 1
+      while (match(body, /%[A-Za-z0-9_.]+/)) {
+        if (!(substr(body, RSTART, RLENGTH) in public)) all = 0
+        body = substr(body, RSTART + RLENGTH)
+      }
+      if (ok && all) public[dst] = 1
+    }
+    /^  br i1 / {
+      c = $3
+      sub(/,$/, "", c)
+      branches++
+      if (!(c in public)) bad++
+    }
+    END { exit !(branches > 0 && bad == 0) }
+  ' "$1"
 }
 
 check_ir_closure() {
@@ -144,13 +187,13 @@ expect_source_red 'M06 secret infinity early return'
 apply_mutation 'M14' "$WORK/pds/lib/secp256k1.mdk" 'fieldSubCt a b = feAdd a (feNegateCt b)' 's/fieldSubCt a b = feAdd a \(feNegateCt b\)/fieldSubCt a b = feAdd a b/'
 expect_source_red 'M14 omitted transitive constant-time wrapper'
 
-apply_mutation 'M15-byte' "$WORK/pds/lib/scalar.mdk" '(bytesBit * rangeBit * nonzeroBit, candidate)' 's/\(bytesBit \* rangeBit \* nonzeroBit, candidate\)/(rangeBit * nonzeroBit, candidate)/'
+apply_mutation 'M15-byte' "$WORK/pds/lib/scalar.mdk" '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' 's/\(bitAnd bytesBit \(bitAnd rangeBit nonzeroBit\), candidate\)/(bitAnd rangeBit nonzeroBit, candidate)/'
 expect_source_red 'M15 byte-domain aggregate omission'
 
-apply_mutation 'M15-range' "$WORK/pds/lib/scalar.mdk" '(bytesBit * rangeBit * nonzeroBit, candidate)' 's/\(bytesBit \* rangeBit \* nonzeroBit, candidate\)/(bytesBit * nonzeroBit, candidate)/'
+apply_mutation 'M15-range' "$WORK/pds/lib/scalar.mdk" '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' 's/\(bitAnd bytesBit \(bitAnd rangeBit nonzeroBit\), candidate\)/(bitAnd bytesBit nonzeroBit, candidate)/'
 expect_source_red 'M15 range aggregate omission'
 
-apply_mutation 'M15-zero' "$WORK/pds/lib/scalar.mdk" '(bytesBit * rangeBit * nonzeroBit, candidate)' 's/\(bytesBit \* rangeBit \* nonzeroBit, candidate\)/(bytesBit * rangeBit, candidate)/'
+apply_mutation 'M15-zero' "$WORK/pds/lib/scalar.mdk" '(bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)' 's/\(bitAnd bytesBit \(bitAnd rangeBit nonzeroBit\), candidate\)/(bitAnd bytesBit rangeBit, candidate)/'
 expect_source_red 'M15 zero aggregate omission'
 
 apply_mutation 'M15-early' "$WORK/pds/lib/scalar.mdk" 'let byteBit = secretByteBit b' 's/let byteBit = secretByteBit b/if b < 0 then validBit else\n    let byteBit = secretByteBit b/'
@@ -196,9 +239,13 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # definitions always exist: both are in the emitted-symbol list above, the
 # closed source manifest pins scalar.mdk byte for byte, and M15 reds every
 # aggregate omission and a per-element early return in scanSecretBytes.
-# scSecretCandidate, the ingress that now holds them, is still required here.
+#
+# carryFoldRound left this list for reduceCarry when the limb arithmetic moved
+# to U64 expressions over Int storage (#3427): the round is now small enough
+# that the link inlines it into reduceCarry, which survives. Its shape is
+# pinned where its definition always exists, by constant_time_reductions.sh.
 for symbol in \
-  mdk_lib_scalar__scSecretCandidate mdk_lib_field__carryFoldRound \
+  mdk_lib_scalar__scSecretCandidate mdk_lib_field__reduceCarry \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
   mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
@@ -212,8 +259,11 @@ check_ir_closure
 # is the optimizer's business.  Pin that shape in the emitted IR, where the
 # helper always exists.
 extract_ir_function secretNonzeroBorrow "$IR" "$WORK/secretNonzeroBorrow.ll"
-[ "$(grep -c 'br i1' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold branches exactly once'
+# Two branches since Int traps (#3377): the loop test and the overflow check
+# of `i + 1`. branches_public proves both test only the limb index.
+[ "$(grep -c 'br i1' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 2 ] || fail 'secret nonzero fold branches exactly twice'
 grep -q '^  %t0 = icmp sge i64 %arg1, ' "$WORK/secretNonzeroBorrow.ll" || fail 'secret nonzero fold branches on its public limb index'
+branches_public "$WORK/secretNonzeroBorrow.ll" 1 || fail 'every secret nonzero fold branch tests only its public limb index'
 [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 0 ] || fail 'secret nonzero fold makes no value comparisons'
 [ "$(grep -F -c 'call i64 @mdk_lib_scalar__secretNonzeroBorrow(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold recurses exactly once per limb'
 pass 'emitted secret nonzero fold branches only on its public limb index'
@@ -262,7 +312,18 @@ extract_ir_function secretAffine "$IR" "$WORK/secretAffine.ll"
 pass 'emitted secret affine conversion is one unconditional inversion over a constant-tag branch'
 
 extract_ir_function scalarLadder "$IR" "$WORK/scalarLadder.ll"
-[ "$(grep -c 'br i1' "$WORK/scalarLadder.ll" || true)" -eq 3 ] || fail 'scalar ladder has exactly its fixed loop/control topology'
+# Six branches since Int traps (#3377): the round test, the two zero-divisor
+# tests of `i / 8` and `i % 8` it already had, and three overflow checks
+# (retagging `i / 8`, `7 - i % 8`, `i + 1`). branches_public proves all six
+# test only the round counter; the key byte feeds only shiftRight (amount
+# `7 - i % 8`, public) and bitAnd.
+[ "$(grep -c 'br i1' "$WORK/scalarLadder.ll" || true)" -eq 6 ] || fail 'scalar ladder has exactly its fixed loop/control topology'
+branches_public "$WORK/scalarLadder.ll" 3 || fail 'every scalar ladder branch tests only its public round counter'
+# Liveness: with the round counter withheld from the public set, the same
+# branches must read as non-public, or the audit could not see a secret one.
+if branches_public "$WORK/scalarLadder.ll" 0; then
+  fail 'branch-operand audit reds when the round counter is not declared public'
+fi
 [ "$(grep -F -c '__pointAddComplete' "$WORK/scalarLadder.ll" || true)" -eq 1 ] || fail 'scalar ladder computes one complete addition per round'
 [ "$(grep -F -c '__pointDoubleComplete' "$WORK/scalarLadder.ll" || true)" -eq 2 ] || fail 'scalar ladder computes two complete doublings per round'
 [ "$(grep -F -c '__pointSelect' "$WORK/scalarLadder.ll" || true)" -eq 2 ] || fail 'scalar ladder makes two arithmetic selections per round'
@@ -366,6 +427,13 @@ check_bit_witness() {
   pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
 }
 
+# Since #3377 the Int shift helpers branch on the AMOUNT (a negative amount
+# panics; 63 or more saturates), never on the shifted value. Every witness
+# amount here is a literal or `bitAnd b 7`, which the optimizer proves lies in
+# 0..7, so both amount tests fold away and the linked body must still be
+# straight-line. A surviving conditional jump would therefore be a branch on
+# the value, which is what this witness exists to catch. The limb and ladder
+# shift amounts are public (docs/design/ATPROTO-PDS-CONSTANT-TIME.md §5.1).
 check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
   mdk_bit_and mdk_bit_xor mdk_shift_right
 

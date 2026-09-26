@@ -537,9 +537,9 @@ utf8Len s =
   utf8LenGo arr (arrayLength arr) 0 0
 
 -- ── Decimal-integer magnitude compare + overflow-checked parse ────────────
--- The 63-bit tagged `Int` (runtime/medaka_rt.c) WRAPS on overflow, so a literal
+-- The 63-bit tagged `Int` (runtime/medaka_rt.c) traps on overflow, so a literal
 -- consumer cannot detect an out-of-range value by parsing it — the arithmetic
--- silently wraps.  These helpers work on the digit STRING instead: compare
+-- stops the program.  These helpers work on the digit STRING instead: compare
 -- magnitudes without arithmetic, and parse only after that compare proves the
 -- value fits.  Both assume ASCII decimal digits '0'..'9' (`parseDecChecked` also
 -- skips '_' group separators); neither validates non-digit input.
@@ -560,7 +560,7 @@ decMagNorm s =
 
 {- | Compare two decimal digit strings by numeric magnitude, ignoring leading
      zeros.  At equal significant length ASCII order coincides with numeric
-     order, so this needs no arithmetic and therefore never wraps.
+     order, so this needs no arithmetic and therefore never overflows.
 
      > compareDecMag "42" "9"
      Gt
@@ -589,7 +589,7 @@ decFold (c :: cs) acc = decFold cs (acc * 10 + (charCode c - 48))
 
 {- | Parse a decimal integer string to `Int`, or `None` when its magnitude
      exceeds the positive `Int` maximum (2^62 - 1 = 4611686018427387903) — the
-     range in which naive accumulation would silently WRAP.  '_' group separators
+     range in which naive accumulation would overflow.  '_' group separators
      and leading zeros are accepted; the input is assumed ASCII digits otherwise.
 
      > parseDecChecked "1_000"

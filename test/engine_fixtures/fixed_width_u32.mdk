@@ -6,8 +6,8 @@
 -- 4294967295 (#3421).
 --
 -- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): the same magnitudes as
--- plain `Int` must keep `Int` semantics (no 32-bit wrap), and `Int` still wraps at 63
--- bits.
+-- plain `Int` must keep `Int` semantics (no 32-bit wrap), and `Int` reaches its
+-- 63-bit maximum while one doubling past it is refused by `checkedMul`.
 --
 -- Expected values were computed independently of every engine (Python, `% 2**32`); the
 -- pin is test/engine_value_pins/engine/fixed_width_u32.pin.
@@ -90,5 +90,5 @@ main =
   println (3000000000 * 3)
   println (2147483648 > 2147483647)
   println (4294967295 / 2)
-  println (4611686018427387903 * 2)
+  println (2305843009213693951 * 2, checkedMul 4611686018427387903 2)
   println (double 3000000000)

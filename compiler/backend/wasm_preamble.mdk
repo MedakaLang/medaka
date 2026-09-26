@@ -229,14 +229,14 @@ ioRuntimeLines = [
   "      (then (i64.extend_i32_s (i31.get_s (ref.cast (ref i31) (local.get $v)))))",
   "      (else (struct.get $boxint 0 (ref.cast (ref $boxint) (local.get $v))))))",
   "  ;; box an i64 Int: in [-2^30, 2^30) -> i31 immediate; else -> $boxint struct.",
-  "  ;; N1/WP2: an Int is 63-bit two's complement and WRAPS.  Native gets that for free",
-  "  ;; (its immediates are `(n << 1) | 1`, so every re-tag drops bit 63); wasm has no tag,",
-  "  ;; so the wrap must be explicit.  Renormalize by sign-extending from bit 62 — the",
-  "  ;; `(x << 1) >> 1` arithmetic-shift pair, which mirrors native's tag/untag exactly and",
-  "  ;; is a no-op on any already-63-bit value.  This is the SOLE producer of $boxint, so",
-  "  ;; it makes `every (ref eq) Int holds a 63-bit value` a representation invariant, and",
-  "  ;; with it INT64_MIN is unreachable — which is what re-grounds the R5 `INT_MIN / -1`",
-  "  ;; claim (i64.div_s can no longer engine-trap on a normalized pair).",
+  "  ;; An Int is 63-bit.  The sign-extend from bit 62 (the `(x << 1) >> 1` pair, which",
+  "  ;; mirrors native's tag/untag and is a no-op on any 63-bit value) makes `every",
+  "  ;; (ref eq) Int holds a 63-bit value` a representation invariant, so INT64_MIN is",
+  "  ;; unreachable.  Arithmetic does not lean on it: `+ - * /` and negation are checked",
+  "  ;; before they box ($mdk_int_add...).  It is the defined result only for the",
+  "  ;; operations that discard high bits: shiftLeft drops the bits past bit 62, as",
+  "  ;; native's retag does, and u64TruncateToInt keeps the low 63.  This is the SOLE",
+  "  ;; producer of $boxint.",
   "  (func $mdk_box_int (param $n i64) (result (ref eq))",
   "    (local.set $n (i64.shr_s (i64.shl (local.get $n) (i64.const 1)) (i64.const 1)))",
   "    (if (result (ref eq))",
@@ -365,6 +365,165 @@ trapIntRuntimeLines = [
   "        (call $mdk_write_err_digits (i64.sub (i64.const 0) (local.get $n))))",
   "      (else (call $mdk_write_err_digits (local.get $n)))))"
 ]
+
+{- | Checked `Int` arithmetic and `Int` shifts (#3377), one function per helper
+   a program demands.  `used` names them: `add`, `sub`, `mul`, `div`, `neg` for
+   `$mdk_int_<name>`, and `left`, `right` for `$mdk_shift_<name>`.  Operands and
+   results are raw i64s; ref mode unboxes before and reboxes after.  Every helper
+   traps through the stderr byte import and `trapIntRuntimeLines`, which the
+   emitter demands along with it (`noteIntRt`, wasm_emit.mdk).
+
+   `Int` is 63-bit, and an operator whose exact result falls outside
+   -2^62 .. 2^62 - 1 stops the program with
+   `runtime error [E-INT-OVERFLOW]: <a> <op> <b> overflows Int` (a negative
+   operand parenthesized; negation prints `-<a>`), the text of native's
+   `mdk_int_overflow` (runtime/medaka_rt.c).  Wasm has no overflow flag, so:
+
+   - `+`/`-`: two 63-bit operands never overflow i64, so the i64 result is
+     exact, and it is in range iff sign-extending it from bit 62 leaves it
+     unchanged.
+   - `*`: the i64 product can itself wrap.  It is exact and in range iff it
+     fits 63 bits and, for a nonzero `a`, `p / a == b`: a wrapped product
+     differs from the true one by a nonzero multiple of 2^64, which truncating
+     division by `|a| <= 2^62` cannot hide.  The division cannot engine-trap:
+     `p` fits 63 bits by then, so it is not INT64_MIN.
+   - `/` (divisor already checked nonzero): 63-bit operands are never INT64_MIN,
+     so `i64.div_s` cannot trap, and its quotient leaves the range only at
+     intMinBound / -1.
+   - negation leaves the range only at intMinBound.
+
+   The shifts define every amount as native's `mdk_shift_left`/`mdk_shift_right`
+   do: a negative amount panics (`E-PANIC`, the amount in the message); an amount
+   of 63 or more shifts every bit out, where `i64.shl`/`i64.shr_s` alone would
+   take it modulo 64; `shiftRight` is arithmetic.  `shiftLeft` never traps: the
+   caller's `$mdk_box_int` drops the bits past bit 62. -}
+export
+intRuntimeLines : List String -> List String
+intRuntimeLines used =
+  let arith = filterUsedW used ["add", "sub", "mul", "div", "neg"]
+  let shifts = filterUsedW used ["left", "right"]
+  let core = match arith
+    [] => []
+    _ => intOverflowLines
+  core ++ flatMap checkedIntOpW arith ++ flatMap intShiftW shifts
+
+-- `names` in their own order, keeping those in `used`: the emitted text does not
+-- depend on the order the emitter demanded them.
+filterUsedW : List String -> List String -> List String
+filterUsedW _ [] = []
+filterUsedW used (n :: ns) =
+  if memberW n used then n :: filterUsedW used ns else filterUsedW used ns
+
+memberW : String -> List String -> Bool
+memberW _ [] = False
+memberW x (y :: ys) = x == y || memberW x ys
+
+-- the E-INT-OVERFLOW writer every checked operator calls: `$op` is the
+-- operator's ASCII byte, or 0 for negation.
+intOverflowLines : List String
+intOverflowLines =
+  [
+      "  ;; -- #3377 checked Int arithmetic: E-INT-OVERFLOW instead of a wrap --",
+      "  (func $mdk_int_operand (param $v i64)",
+      "    (if (i64.lt_s (local.get $v) (i64.const 0))",
+      "      (then",
+      "        (call $mdk_write_err_byte (i32.const 40))",
+      "        (call $mdk_write_err_int (local.get $v))",
+      "        (call $mdk_write_err_byte (i32.const 41)))",
+      "      (else (call $mdk_write_err_int (local.get $v)))))",
+      "  (func $mdk_int_overflow (param $op i32) (param $a i64) (param $b i64)",
+    ]
+    ++ asciiTrapBytesW "runtime error [E-INT-OVERFLOW]: "
+    ++ [
+      "    (if (i32.eqz (local.get $op))",
+      "      (then",
+      "        (call $mdk_write_err_byte (i32.const 45))",
+      "        (call $mdk_int_operand (local.get $a)))",
+      "      (else",
+      "        (call $mdk_int_operand (local.get $a))",
+      "        (call $mdk_write_err_byte (i32.const 32))",
+      "        (call $mdk_write_err_byte (local.get $op))",
+      "        (call $mdk_write_err_byte (i32.const 32))",
+      "        (call $mdk_int_operand (local.get $b))))",
+    ]
+    ++ asciiTrapBytesW " overflows Int\n"
+    ++ ["        unreachable)"]
+
+-- `$r` does not survive a sign-extend from bit 62: it is outside the Int range.
+outOfIntRangeW : String
+outOfIntRangeW =
+  "(i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r))"
+
+-- the call that reports `a <op> b` (op byte `code`) as an overflow.
+overflowCallW : String -> String
+overflowCallW code =
+  "(call $mdk_int_overflow (i32.const \{code}) (local.get $a) (local.get $b))"
+
+checkedIntOpW : String -> List String
+checkedIntOpW "neg" = [
+  "  (func $mdk_int_neg (param $a i64) (result i64)",
+  "    (local $r i64)",
+  "    (local.set $r (i64.sub (i64.const 0) (local.get $a)))",
+  "    (if \{outOfIntRangeW}",
+  "      (then (call $mdk_int_overflow (i32.const 0) (local.get $a) (i64.const 0))))",
+  "    (local.get $r))",
+]
+checkedIntOpW "mul" = [
+  "  (func $mdk_int_mul (param $a i64) (param $b i64) (result i64)",
+  "    (local $r i64)",
+  "    (local.set $r (i64.mul (local.get $a) (local.get $b)))",
+  "    (if \{outOfIntRangeW} (then \{overflowCallW "42"}))",
+  "    (if (i64.ne (local.get $a) (i64.const 0))",
+  "      (then",
+  "        (if (i64.ne (i64.div_s (local.get $r) (local.get $a)) (local.get $b))",
+  "          (then \{overflowCallW "42"}))))",
+  "    (local.get $r))",
+]
+checkedIntOpW "add" = checkedBinOpLinesW "add" "i64.add" "43"
+checkedIntOpW "sub" = checkedBinOpLinesW "sub" "i64.sub" "45"
+checkedIntOpW "div" = checkedBinOpLinesW "div" "i64.div_s" "47"
+checkedIntOpW op = panic ("wasm: no checked Int operator '" ++ op ++ "'")
+
+-- a checked operator whose i64 instruction is exact on 63-bit operands, so the
+-- range test on its result is the whole check.
+checkedBinOpLinesW : String -> String -> String -> List String
+checkedBinOpLinesW name instr code = [
+  "  (func $mdk_int_\{name} (param $a i64) (param $b i64) (result i64)",
+  "    (local $r i64)",
+  "    (local.set $r (\{instr} (local.get $a) (local.get $b)))",
+  "    (if \{outOfIntRangeW} (then \{overflowCallW code}))",
+  "    (local.get $r))",
+]
+
+intShiftW : String -> List String
+intShiftW "left" =
+  intShiftHeadW "left" "shiftLeft"
+    ++ [
+      "    (select (i64.shl (local.get $x) (local.get $k)) (i64.const 0)",
+      "      (i64.lt_s (local.get $k) (i64.const 63))))",
+    ]
+intShiftW "right" =
+  intShiftHeadW "right" "shiftRight"
+    ++ [
+      "    (i64.shr_s (local.get $x)",
+      "      (select (local.get $k) (i64.const 63) (i64.lt_s (local.get $k) (i64.const 63)))))",
+    ]
+intShiftW dir = panic ("wasm: no Int shift '" ++ dir ++ "'")
+
+-- a shift helper's signature and its negative-amount panic.
+intShiftHeadW : String -> String -> List String
+intShiftHeadW dir name =
+  [
+      "  (func $mdk_shift_\{dir} (param $x i64) (param $k i64) (result i64)",
+      "    (if (i64.lt_s (local.get $k) (i64.const 0))",
+      "      (then",
+    ]
+    ++ asciiTrapBytesW "runtime error [E-PANIC]: \{name}: negative shift "
+    ++ [
+      "        (call $mdk_write_err_int (local.get $k))",
+      "        (call $mdk_write_err_byte (i32.const 10))",
+      "        unreachable))",
+    ]
 
 -- the stderr byte-write runtime ($str-dependent).  Peer of $mdk_print_str/_strln but
 -- routing each byte through $mdk_write_err_byte (matches medaka_rt.c mdk_eputstr /
@@ -868,8 +1027,9 @@ valueEqRuntimeLines u64 =
 -- the inline int primitive (`$mdk_unbox_int` -> i64 op) TRAPS `illegal cast` on a boxed
 -- `$float` operand (WASM-POLY-NUM-DESIGN §2.2).  These helpers discriminate on the LEFT
 -- operand's RUNTIME shape (exactly as native tests the low tag bit): `$float` -> f64 op +
--- `struct.new $float`; else the i31/`$boxint` int path via `$mdk_unbox_int`/`$mdk_box_int`
--- (byte-identical to the inline int fallback, so an Int instantiation is unchanged).
+-- `struct.new $float`; else the i31/`$boxint` int path via `$mdk_unbox_int`, the checked
+-- operator (`$mdk_int_add`…, intRuntimeLines) and `$mdk_box_int` — the same
+-- operators the inline int fallback calls, so an Int instantiation traps the same way.
 -- `div` truncates toward zero (`i64.div_s` / `f64.div`); `%` is sign-of-dividend for Int
 -- (`i64.rem_s`) and fmod for Float (== `$mdk_float_rem` == LLVM `frem` ==
 -- native's `mdk_num_mod`).  Emitted only when a poly-`Num` operand is routed here
@@ -931,7 +1091,7 @@ valueAddRuntimeLines u64 =
       "      (then (struct.new $float (f64.add",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (else (call $mdk_box_int (call $mdk_int_add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
     ]
 
 export
@@ -946,7 +1106,7 @@ valueSubRuntimeLines u64 =
       "      (then (struct.new $float (f64.sub",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (else (call $mdk_box_int (call $mdk_int_sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
     ]
 
 export
@@ -961,7 +1121,7 @@ valueMulRuntimeLines u64 =
       "      (then (struct.new $float (f64.mul",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
       "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-      "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+      "      (else (call $mdk_box_int (call $mdk_int_mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
     ]
 
 export
@@ -970,7 +1130,7 @@ valueDivRuntimeLines u64 =
   [
       "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
       "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
-      "  ;; if zero, else div_s using the stashed value (unbox once, not twice).",
+      "  ;; if zero, else the checked $mdk_int_div on the stashed value (unbox once, not twice).",
       "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
     ]
@@ -987,7 +1147,7 @@ valueDivRuntimeLines u64 =
     ++ valueDivZeroTrapW
     ++ [
       "        ))",
-      "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
+      "        (call $mdk_box_int (call $mdk_int_div (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
     ]
 
 export
@@ -1102,17 +1262,17 @@ rngRuntimeLines = [
   "    (local.set $z (i64.mul (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 30))) (i64.const 0xBF58476D1CE4E5B9)))",
   "    (local.set $z (i64.mul (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 27))) (i64.const 0x94D049BB133111EB)))",
   "    (i64.xor (local.get $z) (i64.shr_u (local.get $z) (i64.const 31))))",
-  "  ;; #179 randomInt lo hi : i64 lo/hi -> i64 in [lo,hi] (INCLUSIVE).  range<=0 -> lo.",
+  "  ;; #179 randomInt lo hi : i64 lo/hi -> i64 in [lo,hi] (INCLUSIVE).  lo > hi -> lo.",
   "  ;; i64 (not i32): a range > 2^30 (e.g. randomInt 0 1000000000000000) overflows i32 —",
   "  ;; and the old ref.i31 box at the call site trapped `illegal cast` on the large draw.",
-  "  ;; Byte-identical to native mdk_random_int: unsigned modulus of (hi-lo+1).",
+  "  ;; Byte-identical to native mdk_random_int: the span hi-lo+1 is read UNSIGNED, so",
+  "  ;; the full Int range's 2^63 draws too (#3451); it is never 0 for 63-bit bounds.",
   "  (func $mdk_random_int (param $lo i64) (param $hi i64) (result i64)",
-  "    (local $range i64)",
-  "    (local.set $range (i64.add (i64.sub (local.get $hi) (local.get $lo)) (i64.const 1)))",
-  "    (if (result i64) (i64.le_s (local.get $range) (i64.const 0))",
+  "    (if (result i64) (i64.lt_s (local.get $hi) (local.get $lo))",
   "      (then (local.get $lo))", "      (else",
   "        (i64.add (local.get $lo)",
-  "          (i64.rem_u (call $mdk_next_u64) (local.get $range))))))",
+  "          (i64.rem_u (call $mdk_next_u64)",
+  "            (i64.add (i64.sub (local.get $hi) (local.get $lo)) (i64.const 1)))))))",
   "  (func $mdk_random_bool (result i32)",
   "    (i32.wrap_i64 (i64.and (call $mdk_next_u64) (i64.const 1))))",
   "  (func $mdk_random_char (result i32)",

@@ -2,7 +2,8 @@
 -- must NOT refuse: the largest wide literal, 2^62 (the first value past Int,
 -- written without a sign), 0, a computed `fromInt` at Int's maximum, and the
 -- checked `toInt` either side of Int's range.  The last two lines are plain
--- Int: its minimum still parses, and Int arithmetic still wraps at 63 bits.
+-- Int: its minimum still parses, and its maximum is reached exactly while one
+-- past it is refused by `checkedAdd` (a plain `+` there traps).
 import u64 as U64
 
 main =
@@ -11,4 +12,4 @@ main =
   println (U64.toInt 0x3FFFFFFFFFFFFFFF, U64.toInt 0x4000000000000000)
   println (U64.tryFromInt (0 - 1))
   println (-4611686018427387904)
-  println (4611686018427387903 + 1)
+  println (4611686018427387902 + 1, checkedAdd 4611686018427387903 1)

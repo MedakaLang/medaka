@@ -373,6 +373,7 @@ intRangeMessage = "integer does not fit Int (read a U64 with beU64 or leU64)"
 export
 beSint : Int -> ByteParser Int
 beSint n
+  | n <= 0 = deferPure 0
   | n >= 8 = defer
     fill <- takeBytes (n - 8)
     x <- beU64
@@ -457,6 +458,7 @@ leUintGo n shift acc input pos
 export
 leSint : Int -> ByteParser Int
 leSint n
+  | n <= 0 = deferPure 0
   | n >= 8 = defer
     x <- leU64
     fill <- takeBytes (n - 8)

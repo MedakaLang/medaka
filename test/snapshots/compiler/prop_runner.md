@@ -1,5 +1,5 @@
 # META
-source_lines=1245
+source_lines=1247
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -66,10 +66,12 @@ propRngStateRef : Ref Int
 propRngStateRef = Ref 123456789
 
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`.
+-- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
+-- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
+-- already in that range is used as given.
 export
 seedPropRng : Int -> Unit
-seedPropRng n = propRngStateRef := n
+seedPropRng n = propRngStateRef := (n % 2147483648 + 2147483648) % 2147483648
 
 rngNextLocal : Unit -> Int
 -- Odd multiplier and odd increment make bit `i` of consecutive `s` values
@@ -1258,7 +1260,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "propRngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
+(DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EAnnot (EApp (EVar "fromInt") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (TyCon "U32"))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -1560,7 +1562,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "propRngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
+(DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EAnnot (EApp (EMethodRef "fromInt") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (TyCon "U32"))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))

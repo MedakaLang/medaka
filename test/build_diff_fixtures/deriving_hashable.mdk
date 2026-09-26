@@ -8,8 +8,8 @@
 -- routes (literal vs computed) and asserts their hashes agree — a deriver that
 -- broke that would be a silent wrong-answer bug every other gate would pass.
 --
--- The fold is deliberately NOT masked non-negative: `Int` wraps, so `Big`
--- below hashes NEGATIVE, and that is legal (only eq-agreement is contractual;
+-- The fold is deliberately NOT masked non-negative: it wraps (in `U64`,
+-- narrowed to 63 bits), so `Big` below hashes NEGATIVE, and that is legal (only eq-agreement is contractual;
 -- hash_map/hash_set mask at the point of use — see hash_negative_hash.mdk,
 -- #416). `negHashes` pins that a negative derived hash still round-trips
 -- through a HashMap.

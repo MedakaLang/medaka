@@ -787,13 +787,12 @@ Lt
 impl Hashable Bytes
 ```
 
-A byte string hashes as the `Array Int` of its bytes does, so `Bytes`
-can key a `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings
-that are equal under
-`Eq Bytes` hash alike.
+Byte strings hash by their bytes, so `Bytes` can key a
+`hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings that are
+equal under `Eq Bytes` hash alike.
 
 ```medaka
-> hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
+> hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash (encodeUtf8 "\u{1}\u{2}\u{3}")
 True
 ```
 

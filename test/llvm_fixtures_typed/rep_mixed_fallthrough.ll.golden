@@ -10,6 +10,10 @@ declare void @mdk_slice_oob(i64, i64) noreturn
 declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
+declare void @mdk_int_overflow(i64, i64, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare void @mdk_nonexhaustive_match() noreturn
 declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_dispatch_ambiguous() noreturn
@@ -335,39 +339,47 @@ conyes37:
   %t47 = inttoptr i64 %arg0 to ptr
   %t48 = getelementptr i8, ptr %t47, i64 16
   %t49 = load i64, ptr %t48
-  %t50 = ashr i64 %t46, 1
-  %t51 = ashr i64 %t49, 1
-  %t52 = mul i64 %t50, %t51
-  %t53 = shl i64 %t52, 1
-  %t54 = or i64 %t53, 1
-  store i64 %t54, ptr %t0
+  %t50 = sub i64 %t49, 1
+  %t51 = ashr i64 %t46, 1
+  %t52 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t51, i64 %t50)
+  %t53 = extractvalue { i64, i1 } %t52, 0
+  %t54 = extractvalue { i64, i1 } %t52, 1
+  br i1 %t54, label %intovf55, label %intok55
+intovf55:
+  %t56 = ashr i64 %t46, 1
+  %t57 = ashr i64 %t49, 1
+  call void @mdk_int_overflow(i64 2, i64 %t56, i64 %t57)
+  unreachable
+intok55:
+  %t58 = or i64 %t53, 1
+  store i64 %t58, ptr %t0
   br label %decend1
 connext37:
   br label %clause28
 clause28:
-  %t56 = and i64 %arg0, 1
-  %t57 = icmp eq i64 %t56, 1
-  br i1 %t57, label %discimm55, label %discbox55
-discimm55:
-  %t58 = ashr i64 %arg0, 1
-  br label %disccont55
-discbox55:
-  %t59 = inttoptr i64 %arg0 to ptr
-  %t60 = load i64, ptr %t59
-  br label %disccont55
-disccont55:
-  %t61 = phi i64 [ %t58, %discimm55 ], [ %t60, %discbox55 ]
-  %t62 = icmp eq i64 %t61, 3
-  br i1 %t62, label %conyes63, label %connext63
-conyes63:
+  %t60 = and i64 %arg0, 1
+  %t61 = icmp eq i64 %t60, 1
+  br i1 %t61, label %discimm59, label %discbox59
+discimm59:
+  %t62 = ashr i64 %arg0, 1
+  br label %disccont59
+discbox59:
+  %t63 = inttoptr i64 %arg0 to ptr
+  %t64 = load i64, ptr %t63
+  br label %disccont59
+disccont59:
+  %t65 = phi i64 [ %t62, %discimm59 ], [ %t64, %discbox59 ]
+  %t66 = icmp eq i64 %t65, 3
+  br i1 %t66, label %conyes67, label %connext67
+conyes67:
   store i64 5, ptr %t0
   br label %decend1
-connext63:
+connext67:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t64 = load i64, ptr %t0
-  ret i64 %t64
+  %t68 = load i64, ptr %t0
+  ret i64 %t68
 }
 
 ; mdk-module program
@@ -413,19 +425,25 @@ conyes20:
   %t32 = load i64, ptr %t31
   %t33 = call i64 @mdk___user____score(i64 %t29)
   %t34 = call i64 @mdk___user____total(i64 %t32)
-  %t35 = ashr i64 %t33, 1
-  %t36 = ashr i64 %t34, 1
-  %t37 = add i64 %t35, %t36
-  %t38 = shl i64 %t37, 1
-  %t39 = or i64 %t38, 1
-  store i64 %t39, ptr %t0
+  %t35 = sub i64 %t34, 1
+  %t36 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t33, i64 %t35)
+  %t37 = extractvalue { i64, i1 } %t36, 0
+  %t38 = extractvalue { i64, i1 } %t36, 1
+  br i1 %t38, label %intovf39, label %intok39
+intovf39:
+  %t40 = ashr i64 %t33, 1
+  %t41 = ashr i64 %t34, 1
+  call void @mdk_int_overflow(i64 0, i64 %t40, i64 %t41)
+  unreachable
+intok39:
+  store i64 %t37, ptr %t0
   br label %decend1
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t40 = load i64, ptr %t0
-  ret i64 %t40
+  %t42 = load i64, ptr %t0
+  ret i64 %t42
 }
 
 ; mdk-module program

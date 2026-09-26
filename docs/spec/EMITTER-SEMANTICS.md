@@ -169,21 +169,26 @@ laws bind **all four engines** and every reflective helper (V6).
 
 ### Int
 
-- **N1 — Int is 63-bit two's complement, and it wraps.** `intMaxBound =
-  2^62 − 1`, `intMinBound = −2^62`. Overflow on `+ - *` (and `intMinBound`
-  negation/division edge cases) **wraps modulo 2^63** — by decision, not
-  accident. Consequently the emitter must never emit `nsw`/`nuw` flags or an
-  overflow trap on Int arithmetic, and no engine may promote to a wider
-  integer. (Wrapping falls out of V2's tag-shift discipline: retagging
-  truncates to 63 bits; that mechanism *is* the semantics.)
+- **N1 — Int is 63-bit two's complement, and it traps.** `intMaxBound =
+  2^62 − 1`, `intMinBound = −2^62`. `+`, `-`, `*`, negation and `/` whose
+  exact result falls outside that range trap `E-INT-OVERFLOW` (N4, #3377;
+  until then they wrapped modulo 2^63). No engine may wrap or promote to a
+  wider integer. On the LLVM backend `+`/`-` are `llvm.sadd`/`ssub.with.overflow`
+  on the tagged words (2a+1 plus 2b overflows 64 bits exactly when a+b
+  overflows 63), `*` is `llvm.smul.with.overflow` of a and 2b, negation is
+  `2 − v`, and `/` retags its quotient with a checked add. The shifts do not
+  trap: `shiftLeft` discards the bits past bit 62, `shiftRight` is
+  arithmetic, an amount of 63 or more shifts every bit out, and a negative
+  amount panics. The fixed-width `U` types wrap (their own rules,
+  `docs/design/INTEGER-TYPES-DESIGN.md` §4).
 - **N2 — Division truncates toward zero and traps on zero.** `/` and `%` on
   Int are C-style truncating division/remainder (`sdiv`/`srem` on the untagged
   payloads); `x / 0` traps `E-DIV-ZERO`, `x % 0` traps `E-MOD-ZERO` — a
   *guarded* trap emitted before the hardware instruction, because a zero
   divisor is LLVM UB (R5). The identity `(a/b)*b + a%b == a` holds for all
-  defined cases. `intMinBound / (−1)` and `intMinBound % (−1)` are defined by
-  N1's wrap (payloads are 63-bit, so the i64 hardware edge case is
-  structurally unreachable — a proof obligation on V2, not a hope).
+  defined cases. `intMinBound / (−1)` traps `E-INT-OVERFLOW` (N1), and
+  `intMinBound % (−1)` is `0` (payloads are 63-bit, so the i64 hardware edge
+  case is structurally unreachable — a proof obligation on V2, not a hope).
 - **N3 — Int literals.** A decimal literal in `[intMinBound, intMaxBound]`
   denotes that integer exactly, in every engine and in the emitted IR text.
   Out-of-range literals are a *frontend* concern (diagnostic), but the emitter
@@ -357,7 +362,7 @@ laws bind **all four engines** and every reflective helper (V6).
 
 - **T1 — The trap taxonomy is closed and stable.** Every partial operation
   the accepted fragment can reach has a named trap: `E-DIV-ZERO`,
-  `E-MOD-ZERO`, index/bounds (`mdk_oob`), refuted irrefutable-let,
+  `E-MOD-ZERO`, `E-INT-OVERFLOW`, index/bounds (`mdk_oob`), refuted irrefutable-let,
   non-exhaustive match (reachable only through a typechecker-acknowledged
   hole, e.g. a permitted inexhaustive match — otherwise dead by R5),
   explicit `panic`/`abort`/`exit`. A trap is: message to stderr with the

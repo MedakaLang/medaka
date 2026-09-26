@@ -72,15 +72,22 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    reverted S1 filter (ratio -> ~1.0, byte/func count -> ~10x) still reds
 #    hard.  Re-baseline via a follow-up commit if a legitimate corpus/feature
 #    addition grows these for real reasons.
-MODULES_BYTES_CEIL=2450000
-MODULES_FUNCS_CEIL=3200
+#    Re-baselined for #3377 (N4) at modules 2944491 B / 4283 funcs, plain
+#    422794 B / 2896 funcs, typed 19943 B / 124 funcs.  Three causes: the
+#    prelude's `Num`/`Eq`/`Ord U64` and U64 hash folds moved into core.mdk
+#    (already past the old modules ceilings before any wasm change); the checked
+#    Int operators and shifts every module that does Int arithmetic now carries
+#    (`intRuntimeLines`, about +1.2% bytes on the modules corpus); and seventeen
+#    new overflow/shift fixtures.
+MODULES_BYTES_CEIL=3450000
+MODULES_FUNCS_CEIL=5000
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
-PLAIN_BYTES_CEIL=415000
-PLAIN_FUNCS_CEIL=2600
+PLAIN_BYTES_CEIL=495000
+PLAIN_FUNCS_CEIL=3400
 
-TYPED_BYTES_CEIL=20500
-TYPED_FUNCS_CEIL=110
+TYPED_BYTES_CEIL=23500
+TYPED_FUNCS_CEIL=145
 
 # ── exact per-corpus fixture-count floors (F2/S1-2 closure) ────────────────
 # These corpus sizes are fixed and every prior sprint measurement (S1-S5's own
@@ -89,8 +96,8 @@ TYPED_FUNCS_CEIL=110
 # every ceiling above still improves (fewer bytes/funcs/ratio look like a win
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
-MODULES_OK_EXACT=46
-PLAIN_OK_EXACT=157
+MODULES_OK_EXACT=53
+PLAIN_OK_EXACT=167
 TYPED_OK_EXACT=9
 
 # ── F1's wasm-opt-derived function-count floor (F2/S2-4) ───────────────────
@@ -102,7 +109,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=2200   # emitted-funcs/F1-floor * 1000, headroom over measured
+MODULES_F1_RATIO_CEIL_X1000=3300   # emitted-funcs/F1-floor * 1000, headroom over measured
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

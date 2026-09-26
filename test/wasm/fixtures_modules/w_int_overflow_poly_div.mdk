@@ -1,0 +1,8 @@
+-- #3377: the poly-`Num` `/` Int arm ($mdk_value_div / mdk_num_div) passes its
+-- divisor-zero guard and then traps at intMinBound / -1.
+polyDiv : Num a => a -> a -> a
+polyDiv a b = a / b
+
+main =
+  println (polyDiv 7 2)
+  println (polyDiv intMinBound (-1))

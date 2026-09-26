@@ -1763,6 +1763,34 @@ IDENT "src"
 IDENT "p"
 IDENT "endp"
 IDENT "acc"
+EQUAL
+IDENT "magnitudeInt"
+LPAREN
+IDENT "parseIntNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "acc"
+RPAREN
+NEWLINE
+IDENT "parseIntNeg"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseIntNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "acc"
 INDENT
 PIPE
 IDENT "p"
@@ -1778,7 +1806,7 @@ IDENT "p"
 EQ_EQ
 CHAR "_"
 EQUAL
-IDENT "parseIntFrom"
+IDENT "parseIntNeg"
 IDENT "src"
 LPAREN
 IDENT "p"
@@ -1792,7 +1820,7 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-IDENT "parseIntFrom"
+IDENT "parseIntNeg"
 IDENT "src"
 LPAREN
 IDENT "p"
@@ -1804,7 +1832,7 @@ LPAREN
 IDENT "acc"
 STAR
 INT 10
-PLUS
+MINUS
 LPAREN
 IDENT "charCode"
 LPAREN
@@ -1820,6 +1848,26 @@ NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "magnitudeInt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "magnitudeInt"
+IDENT "neg"
+EQUAL
+IF
+IDENT "neg"
+EQ_EQ
+IDENT "intMinBound"
+THEN
+IDENT "neg"
+ELSE
+INT 0
+MINUS
+IDENT "neg"
 NEWLINE
 IDENT "intLitOverflows"
 COLON
@@ -3451,6 +3499,41 @@ IDENT "p"
 IDENT "endp"
 IDENT "base"
 IDENT "acc"
+EQUAL
+INDENT
+IDENT "magnitudeInt"
+LPAREN
+IDENT "parseRadixNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "base"
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseRadixNeg"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseRadixNeg"
+IDENT "src"
+IDENT "p"
+IDENT "endp"
+IDENT "base"
+IDENT "acc"
 INDENT
 PIPE
 IDENT "p"
@@ -3466,7 +3549,7 @@ IDENT "p"
 EQ_EQ
 CHAR "_"
 EQUAL
-IDENT "parseRadix"
+IDENT "parseRadixNeg"
 IDENT "src"
 LPAREN
 IDENT "p"
@@ -3481,7 +3564,7 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-IDENT "parseRadix"
+IDENT "parseRadixNeg"
 IDENT "src"
 LPAREN
 IDENT "p"
@@ -3494,7 +3577,7 @@ LPAREN
 IDENT "acc"
 STAR
 IDENT "base"
-PLUS
+MINUS
 IDENT "digitVal"
 LPAREN
 IDENT "at"

@@ -1018,7 +1018,9 @@ gradeServiceExpiry : RequestContext ->
   Int ->
   Result Response Int
 gradeServiceExpiry context lxm at =
-  let ahead = at - context.nowSeconds
+  -- `at` is the client's number, anywhere in `Int`'s range: compared before it
+  -- is subtracted, so `ahead` cannot overflow.
+  let ahead = if at < context.nowSeconds then -1 else at - context.nowSeconds
   if ahead < 0 then
     Err (badExpirationRefusal "expiration is in past")
   else if ahead > serviceAuthMaxExpirySeconds then

@@ -1,5 +1,5 @@
 # META
-source_lines=1022
+source_lines=1037
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -239,11 +239,9 @@ export impl Index Bytes Int U8 where
 export impl Slice Bytes where
   slice (Bytes bb) lo hi =
     -- `hi < lo` rather than `hi - lo < 0`, as in `Slice (Array a)`: the
-    -- difference wraps once `lo` and `hi` are far enough apart, and a range
-    -- that slips past the guard reaches `byteBlockBlit` with an out-of-range
-    -- offset.
+    -- difference overflows once `lo` and `hi` are far enough apart.
     if lo < 0 || hi > byteBlockLength bb || hi < lo then
-      sliceError lo (hi - 1)
+      sliceError lo (sliceLastIndex hi)
     else
       let dst = byteBlockMake (hi - lo)
       let _ = byteBlockBlit bb lo dst 0 (hi - lo)
@@ -715,19 +713,24 @@ export impl Ord Bytes where
   compare (Bytes a) (Bytes b) =
     compareGo a b 0 (byteBlockLength a) (byteBlockLength b)
 
+-- The prelude's compound fold, `acc * 33 + hash byte`, one `derivedHashStep`
+-- per byte.
 hashGo : Int -> ByteBlock -> Int -> Int -> Int
 hashGo acc bb i n =
   if i >= n then
     acc
   else
-    hashGo (acc * 33 + hashInt (byteBlockGetUnsafe i bb)) bb (i + 1) n
+    hashGo
+      (derivedHashStep acc (hashInt (byteBlockGetUnsafe i bb)))
+      bb
+      (i + 1)
+      n
 
-{- | A byte string hashes as the `Array Int` of its bytes does, so `Bytes`
-   can key a `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings
-   that are equal under
-   `Eq Bytes` hash alike.
+{- | Byte strings hash by their bytes, so `Bytes` can key a
+   `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings that are
+   equal under `Eq Bytes` hash alike.
 
-   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
+   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash (encodeUtf8 "\u{1}\u{2}\u{3}")
    True -}
 export impl Hashable Bytes where
   hash (Bytes bb) = hashGo 0 bb 0 (byteBlockLength bb)
@@ -956,6 +959,18 @@ decodeUtf8Lossy (Bytes bb) =
 prop "decodeUtf8 (encodeUtf8 s) == Some s" (s : String) =
   decodeUtf8 (encodeUtf8 s) == Some s
 
+-- LAW: hashing a long byte string never overflows, and two byte strings built
+-- by different routes from the same 1,000 bytes hash alike.
+prop "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" (x : Int) =
+  let block = fromArrayAssumeByteDomain (arrayFromList (propBytes x 1000))
+  hash block == hash (fromU8Array (toU8Array block))
+
+-- `n` bytes derived from `x`, for the property above.
+propBytes : Int -> Int -> List Int
+propBytes x n
+  | n <= 0 = []
+  | otherwise = bitAnd (bitXor n x) 255 :: propBytes x (n - 1)
+
 -- # Output
 
 {- | Writes the bytes of `b` to standard output, unchanged.
@@ -1051,7 +1066,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "U8")))))
 (DFunDef false "get" ((PVar "i") (PCon "Bytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "U8")) () ((im "index" ((PCon "Bytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb"))))))
-(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
+(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
 (DTypeSig true "sliceClamped" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes")))))
 (DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
 (DTypeSig true "take" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
@@ -1121,7 +1136,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "compareGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "na") (PVar "nb")) (EIf (EBinOp ">=" (EVar "i") (EVar "na")) (EIf (EBinOp ">=" (EVar "i") (EVar "nb")) (EVar "Eq") (EVar "Lt")) (EIf (EBinOp ">=" (EVar "i") (EVar "nb")) (EVar "Gt") (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "a"))) (DoLet false false (PVar "y") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EBinOp "<" (EVar "x") (EVar "y")) (EVar "Lt") (EIf (EBinOp ">" (EVar "x") (EVar "y")) (EVar "Gt") (EApp (EApp (EApp (EApp (EApp (EVar "compareGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "na")) (EVar "nb")))))))))
 (DImpl true "Ord" ((TyCon "Bytes")) () ((im "compare" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "compareGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "a"))) (EApp (EVar "byteBlockLength") (EVar "b"))))))
 (DTypeSig false "hashGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
+(DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyCon "Bytes")) () ((im "hash" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "hashGo") (ELit (LInt 0))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))))
 (DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "hexDigit" ((PVar "n")) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?")))))
@@ -1151,6 +1166,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "decodeUtf8Lossy" (TyFun (TyCon "Bytes") (TyCon "String")))
 (DFunDef false "decodeUtf8Lossy" ((PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EApp (EVar "byteBlockToString") (EVar "bb")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EVar "dst"))))))))
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
+(DProp false "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "block") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "propBytes") (EVar "x")) (ELit (LInt 1000)))))) (DoExpr (EBinOp "==" (EApp (EVar "hash") (EVar "block")) (EApp (EVar "hash") (EApp (EVar "fromU8Array") (EApp (EVar "toU8Array") (EVar "block"))))))))
+(DTypeSig false "propBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "propBytes" ((PVar "x") (PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "bitXor") (EVar "n")) (EVar "x"))) (ELit (LInt 255))) (EApp (EApp (EVar "propBytes") (EVar "x")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "writeStdoutBytes" (TyFun (TyCon "Bytes") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DFunDef false "writeStdoutBytes" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockWriteStdout") (EVar "bb")))
 (DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
@@ -1186,7 +1204,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "U8")))))
 (DFunDef false "get" ((PVar "i") (PCon "Bytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb")))))
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "U8")) () ((im "index" ((PCon "Bytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bb"))))))
-(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
+(DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
 (DTypeSig true "sliceClamped" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes")))))
 (DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
 (DTypeSig true "take" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
@@ -1256,7 +1274,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "compareGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "na") (PVar "nb")) (EIf (EBinOp ">=" (EVar "i") (EVar "na")) (EIf (EBinOp ">=" (EVar "i") (EVar "nb")) (EVar "Eq") (EVar "Lt")) (EIf (EBinOp ">=" (EVar "i") (EVar "nb")) (EVar "Gt") (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "a"))) (DoLet false false (PVar "y") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EBinOp "<" (EVar "x") (EVar "y")) (EVar "Lt") (EIf (EBinOp ">" (EVar "x") (EVar "y")) (EVar "Gt") (EApp (EApp (EApp (EApp (EApp (EVar "compareGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "na")) (EVar "nb")))))))))
 (DImpl true "Ord" ((TyCon "Bytes")) () ((im "compare" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EVar "compareGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "a"))) (EApp (EVar "byteBlockLength") (EVar "b"))))))
 (DTypeSig false "hashGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
+(DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyCon "Bytes")) () ((im "hash" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "hashGo") (ELit (LInt 0))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))))
 (DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "hexDigit" ((PVar "n")) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?")))))
@@ -1286,6 +1304,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "decodeUtf8Lossy" (TyFun (TyCon "Bytes") (TyCon "String")))
 (DFunDef false "decodeUtf8Lossy" ((PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "utf8ValidFrom") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EApp (EVar "byteBlockToString") (EVar "bb")) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EApp (EApp (EApp (EApp (EVar "lossyLength") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "lossyFill") (EVar "bb")) (ELit (LInt 0))) (EVar "n")) (EVar "dst")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EVar "dst"))))))))
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
+(DProp false "Hashable Bytes: a 1,000-byte string hashes alike when rebuilt" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "block") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "propBytes") (EVar "x")) (ELit (LInt 1000)))))) (DoExpr (EBinOp "==" (EApp (EMethodRef "hash") (EVar "block")) (EApp (EMethodRef "hash") (EApp (EVar "fromU8Array") (EApp (EVar "toU8Array") (EVar "block"))))))))
+(DTypeSig false "propBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "propBytes" ((PVar "x") (PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "bitXor") (EVar "n")) (EVar "x"))) (ELit (LInt 255))) (EApp (EApp (EVar "propBytes") (EVar "x")) (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "writeStdoutBytes" (TyFun (TyCon "Bytes") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DFunDef false "writeStdoutBytes" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockWriteStdout") (EVar "bb")))
 (DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))

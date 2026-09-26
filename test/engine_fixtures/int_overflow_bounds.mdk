@@ -1,0 +1,41 @@
+-- `Int` arithmetic traps on overflow (#3377), so every result AT the 63-bit
+-- bounds must come back exact and none may trap: intMaxBound + 0, intMinBound % -1
+-- (the one `%` that could look suspicious), a product that lands exactly on
+-- intMinBound, the largest square below 2^62, intMaxBound / -1, and negation of
+-- intMaxBound.  Each operator goes through a function, so no engine can fold it.
+-- The checked* helpers answer None exactly where the operator would trap.
+add x y = x + y
+
+sub x y = x - y
+
+md x y = x % y
+
+mul x y = x * y
+
+neg x = -x
+
+dv x y = x / y
+
+main =
+  println (add intMaxBound 0)
+  println (add intMinBound 0)
+  println (sub intMinBound 0)
+  println (sub (-1) intMaxBound)
+  println (md intMinBound (-1))
+  println (mul 2147483648 (-2147483648))
+  println (mul (-1) intMaxBound)
+  println (neg intMaxBound)
+  println (dv intMinBound 1)
+  println (dv intMaxBound (-1))
+  println (add intMaxBound intMinBound)
+  println (mul 2147483647 2147483647)
+  println (mul 0 intMinBound)
+  println (mul intMinBound 1)
+  println (negate intMaxBound)
+  println (abs (-5))
+  println (checkedAdd intMaxBound 1)
+  println (checkedSub intMinBound 1)
+  println (checkedMul 3037000500 3037000500)
+  println (checkedMul intMinBound (-1))
+  println (checkedAdd 40 2)
+  println (checkedMul 2147483648 (-2147483648))

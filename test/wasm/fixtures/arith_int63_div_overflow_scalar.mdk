@@ -1,0 +1,7 @@
+-- #3377: the only `/` whose result leaves the 63-bit range: intMinBound / -1 is
+-- 2^62, one past intMaxBound, so it traps ($mdk_int_div).  -2^62 is not INT64_MIN,
+-- so `i64.div_s` itself never engine-traps here; the coded trap is the check on its
+-- quotient.  (Prelude-free corpus, and the literal 2^62 lexes as intMinBound, so
+-- intMinBound is built by subtraction.)
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) / (-1) overflows Int
+main = (0 - 4611686018427387903 - 1) / (0 - 1)

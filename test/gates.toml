@@ -473,7 +473,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/car_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1567,7 +1567,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dict_semantics_ir"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1678,7 +1678,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_polarity"
 area = "infra"
-shard = "gates_5"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1873,7 +1873,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2038,7 +2038,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_comment_shout_diff"
 area = "docs"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2320,7 +2320,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2410,7 +2410,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_run_check_agreement"
 area = "infra"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2455,7 +2455,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_selfproc"
 area = "backend"
-shard = "gates_6"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2575,7 +2575,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_stage_ir_scaling"
 area = "infra"
-shard = "gates_8"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge", "nightly/STAGE_IR_TIER=full"]
 cost = "heavy"
@@ -2620,7 +2620,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_tmc_parity"
 area = "backend"
-shard = "gates_2"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2845,7 +2845,7 @@ toolchain = []
 [[gate]]
 name = "pr_helper_test"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3289,7 +3289,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_closure_alloc"
 area = "backend"
-shard = "gates_6"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

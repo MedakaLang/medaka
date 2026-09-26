@@ -1,0 +1,5 @@
+-- #3377: the prelude's `negate` for Int is `0 - a`, so negating intMinBound is a
+-- subtraction overflow, and the message names it that way on every engine.
+main =
+  println "before"
+  println (negate intMinBound)

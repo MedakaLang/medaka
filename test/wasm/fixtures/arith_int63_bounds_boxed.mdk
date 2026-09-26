@@ -1,0 +1,23 @@
+-- #3377: the REF-mode peer of arith_int63_bounds_scalar: every result at the
+-- 63-bit bounds comes back exact, through $mdk_unbox_int, the checked operator and
+-- $mdk_box_int.  The `data` forces the uniform (ref eq) rep.
+data Box = Box Int
+
+unbox b = match b
+  Box n => n
+
+maxB = unbox (Box 4611686018427387903)
+
+minB = unbox (Box (0 - 4611686018427387903 - 1))
+
+main = (maxB + 0 == maxB)
+  && (minB - 0 == minB)
+  && (maxB + minB == 0 - 1)
+  && (minB % (0 - 1) == 0)
+  && (2147483648 * (0 - 2147483648) == minB)
+  && (2147483647 * 2147483647 == 4611686014132420609)
+  && (0 * minB == 0)
+  && (minB * 1 == minB)
+  && (-maxB == minB + 1)
+  && (maxB / (0 - 1) == minB + 1)
+  && (minB / 1 == minB)

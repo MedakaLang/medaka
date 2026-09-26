@@ -1,0 +1,9 @@
+-- #3377: a concrete `Int` product past the 63-bit range stops with the coded
+-- E-INT-OVERFLOW line on both backends (this gate compares stdout, stderr and exit
+-- code), after the earlier output has been written.  The product also overflows
+-- i64, so the wasm arm's `p / a == b` check is what catches it.
+mul x y = x * y
+
+main =
+  println "before"
+  println (mul 3037000500 3037000500)

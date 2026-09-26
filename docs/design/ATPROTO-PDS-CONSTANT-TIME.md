@@ -33,7 +33,8 @@ Native is the security boundary because it is the PDS deployment engine. Eval
 and Wasm remain required value-parity arms, but this contract does not claim
 constant-time execution for them. Wasm's ordinary `Int` carrier selects between
 `i31ref` and boxed `i64` representations according to the value; boxing can
-branch and allocate below any PDS helper. A Wasm constant-time claim therefore
+branch and allocate below any PDS helper. The limb arithmetic is `U64`
+(§5.1), whose Wasm carrier is equally outside this claim. A Wasm constant-time claim therefore
 requires a separately accepted uniform integer/crypto carrier or backend
 representation design. It cannot be established by scanning the PDS helper,
 and the absence of host entropy already independently prevents Wasm key
@@ -100,7 +101,8 @@ second folded value is below `2^54 + c < M`. The third carry pass therefore
 returns zero. All three rounds execute even for already canonical input.
 
 The implementation must retain the module's non-negative intermediates and
-existing `2^62 - 1` ceiling argument. A `3 -> 2` mutation must be rejected by
+existing `2^62 - 1` ceiling argument, which bounds every stored limb (§5.1).
+A `3 -> 2` mutation must be rejected by
 the permanent pass-count control and by the conservative-bound witness with
 limbs 0 through 8 equal to `2^26 - 1` and limb 9 equal to `2^43 - 1`. That
 witness is private test access to the reduction precondition, not a fabricated
@@ -164,13 +166,62 @@ limb index.
 
 The formula intentionally avoids negative masks and comparison booleans.
 Field `t` stays below `2^27` (below `2^23` at the top limb), scalar `t` stays
-below `2^17`, and the blend remains within one limb. These are within Medaka's
-non-negative bit-operation contract and far below its fixnum ceiling.
+below `2^17`, and the blend remains within one limb. `diff[i] - original`
+wraps modulo 2^64 when negative, and multiplied by `keepDiff` and added back
+it gives the exact limb.
 
 An implementation using `if gte...`, an early-return compare, a branch on
 `d < 0`, or `hashBool`/another Bool-to-Int conversion does not satisfy this
 contract. Native `if` lowers to an LLVM branch and Wasm `if` remains a Wasm
 control instruction; neither is a constant-time select guarantee.
+
+### 5.1 The limb carrier, narrowing, and shift amounts
+
+Limbs, columns and carries are stored as non-negative `Int`s, in `Array Int`.
+Every arithmetic step on them is one `U64` expression: its operands widen
+through `U64.truncate`, the expression computes modulo 2^64, and its result
+narrows through `U64.toIntTruncating` before it is stored or bound. `U64`
+`+`, `-` and `*` wrap and have no branch; with a literal shift amount, the
+conversions, the bit operations and the shifts are inline kernels fused with
+that arithmetic, so the whole expression is straight-line code that neither
+calls nor allocates. `Int` traps on overflow (#3377): an `Int` `+`, `-` or
+`*` is the operation plus a branch on the overflow flag, and on a secret
+operand that is a secret-dependent jump even where the headroom proofs above
+show it is never taken. So no secret value meets `Int` arithmetic; the only
+`Int` `+ - *` on these paths is on public counters and indexes, which
+`pds/test/constant_time_reductions.sh` proves operand by operand in the
+emitted IR. The narrowing keeps 63 bits and is exact below `2^62`; the proofs
+in §3 through §5 bound every stored value below that, and inside one
+expression an intermediate may exceed it or wrap (as `diff[i] - original`
+does) with the narrowed result still exact.
+
+Secret condition bits are `Int` 0 or 1 and combine only through `bitAnd`,
+`bitOr` and `bitXor` (`bitXor b 1` for `1 - b`), which cannot overflow and
+do not branch. The `*Bit` predicates cross the module boundary this way, and
+`pds/lib/secp256k1.mdk` combines them the same way.
+
+Two rules follow, and hold for every secret-bearing value in `pds/`:
+
+1. A secret-derived value narrows only through a masking conversion:
+   `u64.toIntTruncating`, `u64.truncate`, or a narrower type's `truncateU64`
+   (`u8.truncateU64`). The checked doors, `fromInt`, `tryFromInt` and
+   `toInt`, test their argument and are
+   therefore branches; they never take a secret-derived operand. A byte held
+   as an `Int` enters `U64` through the masking `U64.truncate`; a `U8`
+   through the total `U64.fromU8`.
+2. A shift amount is never secret-derived. `U64.shiftLeft` and
+   `U64.shiftRight` give 0 for an amount of 64 or more through a select, and
+   panic on a negative amount through a branch on the amount; with a public
+   amount both are fixed. Every shift in the reduction helpers passes a
+   literal, so none of them is a call, and
+   `pds/test/constant_time_reductions.sh` checks that in the emitted IR. The
+   byte codecs shift by a public bit counter, which calls the `u64` wrapper;
+   its branches test only that counter.
+
+A `U64` bound by `let`, passed as an argument, returned, or stored in an
+array is a boxed cell (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), so the
+helpers bind only the narrowed `Int`. The reductions gate pins every audited
+helper's cell allocation count at 0.
 
 ## 6. Verification mechanism
 

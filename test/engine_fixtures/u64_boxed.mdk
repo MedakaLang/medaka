@@ -5,8 +5,8 @@
 -- Every value above 2^62 is a wide literal (#3423).
 --
 -- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): the same magnitudes
--- as plain `Int` keep `Int` semantics (63-bit wrap), and `hash` on an `Int` is
--- unchanged.
+-- as plain `Int` keep `Int` semantics (its maximum reached, one past it refused
+-- by `checkedAdd`), and `hash` on an `Int` is unchanged.
 --
 -- Expected values were computed independently of every engine (Python, `% 2**64`);
 -- the pin is test/engine_value_pins/engine/u64_boxed.pin.
@@ -85,6 +85,6 @@ main =
   println (sum ws)
   println (product [3, 0x5555555555555556 : U64])
   println "int bystanders"
-  println (4611686018427387903 + 1)
+  println (4611686018427387902 + 1, checkedAdd 4611686018427387903 1)
   println (9007199254740993 * 3)
   println (hash 42)

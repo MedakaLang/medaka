@@ -368,40 +368,6 @@ decimal x =
 
 -- # Impls
 
-export impl Eq U64 where
-  eq a b = a == b
-
--- Every method is defined, not only `compare`, so each one is a single builtin
--- comparison and a generic caller never falls back to an interface default.
--- `min` and `max` are the methods being defined, so they are written out.
--- lint-disable-next-line rule-if-max-min
-export impl Ord U64 where
-  compare a b = if a < b then Lt else if a > b then Gt else Eq
-  lt a b = a < b
-  gt a b = a > b
-  lte a b = a <= b
-  gte a b = a >= b
-  min a b = if a <= b then a else b
-  max a b = if a >= b then a else b
-
-{- | Arithmetic modulo 2^64. `fromInt` panics on a negative `Int`; it is what
-   a literal in a generic `Num a =>` position becomes, and `tryFromInt` and
-   `truncate` are the non-panicking conversions. -}
-export impl Num U64 where
-  add a b = a + b
-  sub a b = a - b
-  mul a b = a * b
-  div a b = a / b
-  negate a = 0 - a
-  abs a = a
-  signum a = if a == 0 then 0 else 1
-  fromInt n =
-    if n < 0 then
-      panic "fromInt: \{n} does not fit U64 (0..18446744073709551615)"
-    else
-      u64Truncate n
-  rem a b = a % b
-
 export impl Bounded U64 where
   minBound = 0
   maxBound = 0xFFFFFFFFFFFFFFFF

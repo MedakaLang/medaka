@@ -61,9 +61,14 @@ range lo hi = [lo..hi]
 export
 rangeStep : Int -> Int -> Int -> List Int
 rangeStep lo hi step
-  | step > 0 && lo < hi = lo :: rangeStep (lo + step) hi step
-  | step < 0 && lo > hi = lo :: rangeStep (lo + step) hi step
+  | step > 0 && lo < hi || step < 0 && lo > hi = lo :: rangeStepFrom lo hi step
   | otherwise = []
+
+-- The rest after `lo`.  A next element past `Int`'s range is past `hi` too.
+rangeStepFrom : Int -> Int -> Int -> List Int
+rangeStepFrom lo hi step = match checkedAdd lo step
+  Some next => rangeStep next hi step
+  None => []
 
 -- > rangeStep 0 10 0
 -- []

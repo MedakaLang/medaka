@@ -1,5 +1,5 @@
 # META
-source_lines=2815
+source_lines=2834
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -409,22 +409,35 @@ substrNoUs src start endp =
   stringFromChars (arrayFromList (collectNoUs src start endp))
 
 parseIntFrom : Array Char -> Int -> Int -> Int -> Int
-parseIntFrom src p endp acc
+parseIntFrom src p endp acc = magnitudeInt (parseIntNeg src p endp acc)
+
+-- The digits' value NEGATED: a magnitude up to 2^62 (the range guard below
+-- admits no more) fits only on the negative side, and `Int` arithmetic traps.
+parseIntNeg : Array Char -> Int -> Int -> Int -> Int
+parseIntNeg src p endp acc
   | p >= endp = acc
-  | at src p == '_' = parseIntFrom src (p + 1) endp acc
+  | at src p == '_' = parseIntNeg src (p + 1) endp acc
   | otherwise =
-    parseIntFrom src (p + 1) endp (acc * 10 + (charCode (at src p) - 48))
+    parseIntNeg src (p + 1) endp (acc * 10 - (charCode (at src p) - 48))
+
+-- A negated magnitude back to the literal's `Int`: 2^62 has no positive `Int`,
+-- so it stays `intMinBound`, which is what the parser's `isIntMinLit` expects
+-- of every spelling of 2^62 (a negated literal is `intMinBound`, a bare one is
+-- refused).
+magnitudeInt : Int -> Int
+magnitudeInt neg = if neg == intMinBound then neg else 0 - neg
 
 -- ── Int-literal range guard ─────────────────────────────────────────────
 -- The tagged-Int rep is 63-bit (`word = (n << 1) | 1`, `runtime/medaka_rt.c`),
 -- so `Int` spans [-2^62, 2^62-1]. The lexer sees only the unsigned digits (the
 -- `-` is a separate token, negated in the parser), and the negative minimum
 -- -2^62 must stay writable, so the largest admissible magnitude is
--- 2^62 = 4611686018427387904 (19 digits). A bare positive 2^62 still wraps
--- (the lexer can't see the sign); 2^62+1 and above are rejected outright.
--- `parseIntFrom` accumulates in the compiler's own 63-bit `Int` and would wrap,
--- so overflow is detected on the digit STRING via `compareDecMag` (magnitude
--- compare with no arithmetic), never by parsing.  `substrNoUs` strips the '_'
+-- 2^62 = 4611686018427387904 (19 digits). A bare positive 2^62 becomes
+-- `intMinBound` (the lexer can't see the sign; `magnitudeInt`); 2^62+1 and
+-- above are rejected outright. `parseIntFrom` accumulates in the compiler's own
+-- 63-bit `Int`, whose arithmetic traps, so overflow is detected on the digit
+-- STRING via `compareDecMag` (magnitude compare with no arithmetic), never by
+-- parsing.  `substrNoUs` strips the '_'
 -- separators; `compareDecMag` ignores leading zeros, so the largest admissible
 -- magnitude is exactly 2^62 (anything greater overflows).
 intLitOverflows : Array Char -> Int -> Int -> Bool
@@ -681,24 +694,30 @@ radixEnd src len p k
   | otherwise = p
 
 parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
-parseRadix src p endp base acc
+parseRadix src p endp base acc =
+  magnitudeInt (parseRadixNeg src p endp base acc)
+
+-- `parseIntNeg` for a radix: the value negated, so 2^62 fits.
+parseRadixNeg : Array Char -> Int -> Int -> Int -> Int -> Int
+parseRadixNeg src p endp base acc
   | p >= endp = acc
-  | at src p == '_' = parseRadix src (p + 1) endp base acc
+  | at src p == '_' = parseRadixNeg src (p + 1) endp base acc
   | otherwise =
-    parseRadix src (p + 1) endp base (acc * base + digitVal (at src p))
+    parseRadixNeg src (p + 1) endp base (acc * base - digitVal (at src p))
 
 -- ── Radix-literal range guard (#556) ────────────────────────────────────
--- `parseRadix` accumulates in the compiler's own 63-bit `Int` and wraps
--- SILENTLY, so — exactly as on the decimal path (`intLitOverflows`) — the range
--- is decided on the DIGIT STRING, with no arithmetic, never by parsing.
+-- `parseRadix` accumulates in the compiler's own 63-bit `Int`, whose arithmetic
+-- traps, so — exactly as on the decimal path (`intLitOverflows`) — the range is
+-- decided on the DIGIT STRING, with no arithmetic, never by parsing.
 --
 -- The bound is deliberately the SAME one the decimal path uses: magnitude
 -- ≤ 2^62.  The lexer sees only unsigned digits (the `-` is a separate token,
 -- negated in the parser), so it must admit magnitude 2^62 to keep the negative
 -- minimum -2^62 writable — `-0x4000000000000000` stays legal exactly as
--- `-4611686018427387904` does.  A BARE positive 2^62 wraps to `intMinBound`
--- here and is then rejected in positive position by the parser's `isIntMinLit`
--- (#171), which keys on the value and so covers every spelling of 2^62 —
+-- `-4611686018427387904` does.  A BARE positive 2^62 becomes
+-- `intMinBound` here (`magnitudeInt`) and is then rejected in positive
+-- position by the parser's `isIntMinLit` (#171), which keys on the value and
+-- so covers every spelling of 2^62 —
 -- decimal and radix alike — from one rule.  Anything above 2^62 never reaches
 -- the parser: it is rejected right here, in whatever base it was written.
 --
@@ -1513,13 +1532,13 @@ charClose src len p
 -- which turned a correct rejection into a SPACE (exit 0, no diagnostic).
 --
 -- Honouring the `None` is necessary but NOT sufficient. `parseRadix` accumulates in
--- the compiler's own WRAPPING 63-bit `Int`, so a long escape can wrap back INSIDE
--- the valid range and reach `charFromCode` looking legitimate:
--- `\u{8000000000000041}` = 2^63+65 wraps to 65 and printed `A`. So the digit COUNT
--- is checked FIRST: >6 significant hex digits is >= 0x1000000 > 0x10FFFF and is
--- rejected without parsing at all, and <=6 significant digits is <= 0xFFFFFF < 2^62,
--- so the `parseRadix` that survives is exact and CANNOT wrap. Range and wrap are two
--- bounds, not one; either alone leaves the other live.
+-- the compiler's own 63-bit `Int`, so a long escape would overflow it (when `Int`
+-- wrapped, `\u{8000000000000041}` = 2^63+65 came back as 65 and printed `A`). So
+-- the digit COUNT is checked FIRST: >6 significant hex digits is >= 0x1000000 >
+-- 0x10FFFF and is rejected without parsing at all, and <=6 significant digits is
+-- <= 0xFFFFFF < 2^62, so the `parseRadix` that survives is exact and CANNOT
+-- overflow. Range and overflow are two bounds, not one; either alone leaves the
+-- other live.
 --
 -- `sigRadixDigits`/`radixMagOverflows` (#556) are deliberately NOT reused: they strip
 -- `_` separators, which `uHexEnd` does not accept inside `\u{…}` anyway, and
@@ -3030,7 +3049,11 @@ collectComments s =
 (DTypeSig false "substrNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "substrNoUs" ((PVar "src") (PVar "start") (PVar "endp")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EVar "start")) (EVar "endp")))))
 (DTypeSig false "parseIntFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "parseIntFrom" ((PVar "src") (PVar "p") (PVar "endp") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EVar "parseIntFrom") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseIntFrom") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (ELit (LInt 48))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "parseIntFrom" ((PVar "src") (PVar "p") (PVar "endp") (PVar "acc")) (EApp (EVar "magnitudeInt") (EApp (EApp (EApp (EApp (EVar "parseIntNeg") (EVar "src")) (EVar "p")) (EVar "endp")) (EVar "acc"))))
+(DTypeSig false "parseIntNeg" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "parseIntNeg" ((PVar "src") (PVar "p") (PVar "endp") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EVar "parseIntNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseIntNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (ELit (LInt 48))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "magnitudeInt" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "magnitudeInt" ((PVar "neg")) (EIf (EBinOp "==" (EVar "neg") (EVar "intMinBound")) (EVar "neg") (EBinOp "-" (ELit (LInt 0)) (EVar "neg"))))
 (DTypeSig false "intLitOverflows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "intLitOverflows" ((PVar "src") (PVar "start") (PVar "endp")) (EBinOp "==" (EApp (EApp (EVar "compareDecMag") (EApp (EApp (EApp (EVar "substrNoUs") (EVar "src")) (EVar "start")) (EVar "endp"))) (ELit (LString "4611686018427387904"))) (EVar "Gt")))
 (DTypeSig false "wideHalves" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
@@ -3116,7 +3139,9 @@ collectComments s =
 (DTypeSig false "radixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyCon "Int"))))))
 (DFunDef false "radixEnd" ((PVar "src") (PVar "len") (PVar "p") (PVar "k")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "len")) (EBinOp "||" (EApp (EApp (EVar "isRadixDigit") (EVar "k")) (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))))) (EApp (EApp (EApp (EApp (EVar "radixEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "k")) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "parseRadix" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "parseRadix" ((PVar "src") (PVar "p") (PVar "endp") (PVar "base") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseRadix") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "parseRadix") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EBinOp "+" (EBinOp "*" (EVar "acc") (EVar "base")) (EApp (EVar "digitVal") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "parseRadix" ((PVar "src") (PVar "p") (PVar "endp") (PVar "base") (PVar "acc")) (EApp (EVar "magnitudeInt") (EApp (EApp (EApp (EApp (EApp (EVar "parseRadixNeg") (EVar "src")) (EVar "p")) (EVar "endp")) (EVar "base")) (EVar "acc"))))
+(DTypeSig false "parseRadixNeg" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "parseRadixNeg" ((PVar "src") (PVar "p") (PVar "endp") (PVar "base") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseRadixNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "parseRadixNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EBinOp "-" (EBinOp "*" (EVar "acc") (EVar "base")) (EApp (EVar "digitVal") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "radixMaxLen" (TyFun (TyCon "Char") (TyCon "Int")))
 (DFunDef false "radixMaxLen" ((PLit (LChar "x"))) (ELit (LInt 16)))
 (DFunDef false "radixMaxLen" ((PLit (LChar "b"))) (ELit (LInt 63)))
@@ -3810,7 +3835,11 @@ collectComments s =
 (DTypeSig false "substrNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "substrNoUs" ((PVar "src") (PVar "start") (PVar "endp")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EVar "start")) (EVar "endp")))))
 (DTypeSig false "parseIntFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "parseIntFrom" ((PVar "src") (PVar "p") (PVar "endp") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EVar "parseIntFrom") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseIntFrom") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (ELit (LInt 48))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "parseIntFrom" ((PVar "src") (PVar "p") (PVar "endp") (PVar "acc")) (EApp (EVar "magnitudeInt") (EApp (EApp (EApp (EApp (EVar "parseIntNeg") (EVar "src")) (EVar "p")) (EVar "endp")) (EVar "acc"))))
+(DTypeSig false "parseIntNeg" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "parseIntNeg" ((PVar "src") (PVar "p") (PVar "endp") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EVar "parseIntNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseIntNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (ELit (LInt 48))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "magnitudeInt" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "magnitudeInt" ((PVar "neg")) (EIf (EBinOp "==" (EVar "neg") (EVar "intMinBound")) (EVar "neg") (EBinOp "-" (ELit (LInt 0)) (EVar "neg"))))
 (DTypeSig false "intLitOverflows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "intLitOverflows" ((PVar "src") (PVar "start") (PVar "endp")) (EBinOp "==" (EApp (EApp (EVar "compareDecMag") (EApp (EApp (EApp (EVar "substrNoUs") (EVar "src")) (EVar "start")) (EVar "endp"))) (ELit (LString "4611686018427387904"))) (EVar "Gt")))
 (DTypeSig false "wideHalves" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
@@ -3896,7 +3925,9 @@ collectComments s =
 (DTypeSig false "radixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyCon "Int"))))))
 (DFunDef false "radixEnd" ((PVar "src") (PVar "len") (PVar "p") (PVar "k")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "len")) (EBinOp "||" (EApp (EApp (EVar "isRadixDigit") (EVar "k")) (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))))) (EApp (EApp (EApp (EApp (EVar "radixEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "k")) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "parseRadix" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "parseRadix" ((PVar "src") (PVar "p") (PVar "endp") (PVar "base") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseRadix") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "parseRadix") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EBinOp "+" (EBinOp "*" (EVar "acc") (EVar "base")) (EApp (EVar "digitVal") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "parseRadix" ((PVar "src") (PVar "p") (PVar "endp") (PVar "base") (PVar "acc")) (EApp (EVar "magnitudeInt") (EApp (EApp (EApp (EApp (EApp (EVar "parseRadixNeg") (EVar "src")) (EVar "p")) (EVar "endp")) (EVar "base")) (EVar "acc"))))
+(DTypeSig false "parseRadixNeg" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "parseRadixNeg" ((PVar "src") (PVar "p") (PVar "endp") (PVar "base") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseRadixNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "parseRadixNeg") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EVar "base")) (EBinOp "-" (EBinOp "*" (EVar "acc") (EVar "base")) (EApp (EVar "digitVal") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "radixMaxLen" (TyFun (TyCon "Char") (TyCon "Int")))
 (DFunDef false "radixMaxLen" ((PLit (LChar "x"))) (ELit (LInt 16)))
 (DFunDef false "radixMaxLen" ((PLit (LChar "b"))) (ELit (LInt 63)))

@@ -535,6 +535,8 @@ There is no postfix `?` operator — it was removed as a redundant spelling of `
 ### Unrecoverable Errors → `panic`
 For genuine invariant violations, index out of bounds, stack overflow — situations where the program cannot reasonably continue. `panic` is an ordinary primitive (`String -> a`), not an effect label — it carries no row annotation (see Effects).
 
+`Int` arithmetic overflow is one of these: `+`, `-`, `*`, negation and `/` whose result falls outside `Int`'s 63-bit range panic (`E-INT-OVERFLOW`) rather than wrap. Where an out-of-range value is an expected input rather than a bug, `checkedAdd`, `checkedSub` and `checkedMul` return `Option Int`; arithmetic that should wrap is written on the fixed-width types `U8`/`U16`/`U32`/`U64`, which wrap by definition (`docs/design/INTEGER-TYPES-DESIGN.md`).
+
 ---
 
 ## Effect System

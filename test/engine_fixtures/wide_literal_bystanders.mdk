@@ -27,7 +27,7 @@ twice x = x + x + 0
 
 main =
   println (map classify [0, 4611686018427387903, -4611686018427387904, 7, 42])
-  println (4611686018427387903 + 1)
+  println (4611686018427387902 + 1, checkedAdd 4611686018427387903 1)
   println (twice 21, twice 1.5)
   println (sum [1, 2, 3], sum [0.5, 0.25])
   println [1..=5]

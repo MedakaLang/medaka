@@ -1,0 +1,4 @@
+-- #3377: `intMinBound - 1` traps in SCALAR mode ($mdk_int_sub), and the negative
+-- operand prints parenthesized, as native's mdk_int_overflow does.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: (-4611686018427387904) - 1 overflows Int
+main = 0 - 4611686018427387903 - 1 - 1

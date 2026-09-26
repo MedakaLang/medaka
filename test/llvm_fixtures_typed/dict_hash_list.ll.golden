@@ -10,6 +10,10 @@ declare void @mdk_slice_oob(i64, i64) noreturn
 declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
+declare void @mdk_int_overflow(i64, i64, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare void @mdk_nonexhaustive_match() noreturn
 declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_dispatch_ambiguous() noreturn
@@ -261,26 +265,40 @@ conyes20:
   %t30 = inttoptr i64 %arg2 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = ashr i64 %arg1, 1
-  %t34 = ashr i64 63, 1
-  %t35 = mul i64 %t33, %t34
-  %t36 = shl i64 %t35, 1
-  %t37 = or i64 %t36, 1
-  %t38 = call i64 @mdk_disp_hash_0_1(i64 %arg0, i64 %t29)
-  %t39 = ashr i64 %t37, 1
-  %t40 = ashr i64 %t38, 1
-  %t41 = add i64 %t39, %t40
-  %t42 = shl i64 %t41, 1
-  %t43 = or i64 %t42, 1
-  %t44 = call i64 @mdk___user____hashListItems(i64 %arg0, i64 %t43, i64 %t32)
-  store i64 %t44, ptr %t0
+  %t33 = sub i64 63, 1
+  %t34 = ashr i64 %arg1, 1
+  %t35 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t34, i64 %t33)
+  %t36 = extractvalue { i64, i1 } %t35, 0
+  %t37 = extractvalue { i64, i1 } %t35, 1
+  br i1 %t37, label %intovf38, label %intok38
+intovf38:
+  %t39 = ashr i64 %arg1, 1
+  %t40 = ashr i64 63, 1
+  call void @mdk_int_overflow(i64 2, i64 %t39, i64 %t40)
+  unreachable
+intok38:
+  %t41 = or i64 %t36, 1
+  %t42 = call i64 @mdk_disp_hash_0_1(i64 %arg0, i64 %t29)
+  %t43 = sub i64 %t42, 1
+  %t44 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t41, i64 %t43)
+  %t45 = extractvalue { i64, i1 } %t44, 0
+  %t46 = extractvalue { i64, i1 } %t44, 1
+  br i1 %t46, label %intovf47, label %intok47
+intovf47:
+  %t48 = ashr i64 %t41, 1
+  %t49 = ashr i64 %t42, 1
+  call void @mdk_int_overflow(i64 0, i64 %t48, i64 %t49)
+  unreachable
+intok47:
+  %t50 = call i64 @mdk___user____hashListItems(i64 %arg0, i64 %t45, i64 %t32)
+  store i64 %t50, ptr %t0
   br label %decend1
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t45 = load i64, ptr %t0
-  ret i64 %t45
+  %t51 = load i64, ptr %t0
+  ret i64 %t51
 }
 
 ; mdk-module impl:Int_hash

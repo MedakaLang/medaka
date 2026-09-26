@@ -1,0 +1,11 @@
+-- #3377: the REF-mode peer of arith_int63_add_overflow_scalar.  The `data` forces
+-- the uniform (ref eq) rep, so the operands come through $mdk_unbox_int; the sum
+-- must trap BEFORE $mdk_box_int, whose sign-extend would otherwise wrap it to
+-- intMinBound.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: 4611686018427387903 + 1 overflows Int
+data Box = Box Int
+
+unbox b = match b
+  Box n => n
+
+main = unbox (Box (4611686018427387903 + 1))

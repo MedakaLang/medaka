@@ -1,5 +1,5 @@
 # META
-source_lines=476
+source_lines=481
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -51,6 +51,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import io.{runCommandOk}
+import u64 as U64
 import tools.lint.{Finding(..), Directive(..), DirScope(..)}
 import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
 import support.char.{isAlnum}
@@ -136,9 +137,9 @@ ruleSetStamp _ = match readFileBytes (executablePath ())
   Ok bs => "\{fnv62 bs (arrayLength bs) 0 fnv62Offset}"
 
 -- FNV-1a widened to Medaka's full Int range instead of `hashString`'s 30 bits —
--- same single pass, same measured cost (~15 ms on 3.37 MB), 62 bits instead of
--- 30.  `*` wraps at 63 bits by design (Int wraps; RNG/hashing rely on it), and
--- the mask keeps the accumulator non-negative so it renders as a stable decimal.
+-- same single pass, 62 bits instead of 30.  The multiply runs in `U64`, which
+-- wraps (an `Int` multiply traps), and the mask keeps the accumulator's low 62
+-- bits, non-negative, so it renders as a stable decimal.
 fnv62Mask : Int
 fnv62Mask = 4611686018427387903
 
@@ -158,7 +159,11 @@ fnv62 bs n i acc
       bs
       n
       (i + 1)
-      (bitAnd fnv62Mask (bitXor acc (arrayGetUnsafe i bs) * fnv62Prime))
+      (bitAnd
+        fnv62Mask
+        (U64.toIntTruncating
+          (U64.truncate (bitXor acc (arrayGetUnsafe i bs))
+            * U64.truncate fnv62Prime)))
 
 -- ── shard paths ──────────────────────────────────────────────────────────────
 
@@ -482,6 +487,7 @@ makeStagingDir cacheDir =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
+(DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -500,7 +506,7 @@ makeStagingDir cacheDir =
 (DTypeSig false "fnv62Prime" (TyCon "Int"))
 (DFunDef false "fnv62Prime" () (ELit (LInt 1099511628211)))
 (DTypeSig false "fnv62" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "fnv62" ((PVar "bs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "fnv62Mask")) (EBinOp "*" (EApp (EApp (EVar "bitXor") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs"))) (EVar "fnv62Prime")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fnv62" ((PVar "bs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "fnv62Mask")) (EApp (EVar "U64.toIntTruncating") (EBinOp "*" (EApp (EVar "U64.truncate") (EApp (EApp (EVar "bitXor") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))) (EApp (EVar "U64.truncate") (EVar "fnv62Prime")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "cacheDirOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "cacheDirOf" ((PVar "root")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/.medaka/lint-cache"))))
 (DTypeSig true "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -597,6 +603,7 @@ makeStagingDir cacheDir =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
+(DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -615,7 +622,7 @@ makeStagingDir cacheDir =
 (DTypeSig false "fnv62Prime" (TyCon "Int"))
 (DFunDef false "fnv62Prime" () (ELit (LInt 1099511628211)))
 (DTypeSig false "fnv62" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "fnv62" ((PVar "bs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "fnv62Mask")) (EBinOp "*" (EApp (EApp (EVar "bitXor") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs"))) (EVar "fnv62Prime")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fnv62" ((PVar "bs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "fnv62") (EVar "bs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "fnv62Mask")) (EApp (EVar "U64.toIntTruncating") (EBinOp "*" (EApp (EVar "U64.truncate") (EApp (EApp (EVar "bitXor") (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "bs")))) (EApp (EVar "U64.truncate") (EVar "fnv62Prime")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "cacheDirOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "cacheDirOf" ((PVar "root")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/.medaka/lint-cache"))))
 (DTypeSig true "shardPathOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
