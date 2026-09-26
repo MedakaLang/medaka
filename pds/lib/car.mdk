@@ -124,12 +124,15 @@ parseCidAt input start end = do
   (_, p2) <- readVarintAt "CID codec" input p1 end
   (_, p3) <- readVarintAt "CID hash code" input p2 end
   (digestLength, p4) <- readVarintAt "CID hash length" input p3 end
-  let cidEnd = p4 + digestLength
-  if digestLength < 0 || cidEnd > end then
+  -- The length is the input's own varint, up to 2^62 - 1: compared against
+  -- what remains before it is added, so the sum cannot overflow.
+  if digestLength < 0 || digestLength > end - p4 then
     Err "car: truncated CID digest"
-  else match cidFromBytes (slice input start (cidEnd - start))
-    Err message => Err "car: malformed or non-blessed CID: \{message}"
-    Ok cid => Ok (cid, cidEnd)
+  else
+    let cidEnd = p4 + digestLength
+    match cidFromBytes (slice input start (cidEnd - start))
+      Err message => Err "car: malformed or non-blessed CID: \{message}"
+      Ok cid => Ok (cid, cidEnd)
 
 decodeSections : Array Int ->
   Int ->
