@@ -3376,12 +3376,12 @@ COLON
 UPPER "Hashable"
 IDENT "a"
 FAT_ARROW
-UPPER "U64"
+UPPER "Int"
 ARROW
 UPPER "List"
 IDENT "a"
 ARROW
-UPPER "U64"
+UPPER "Int"
 NEWLINE
 IDENT "hashListItems"
 IDENT "acc"
@@ -3400,11 +3400,8 @@ RPAREN
 EQUAL
 IDENT "hashListItems"
 LPAREN
+IDENT "derivedHashStep"
 IDENT "acc"
-STAR
-INT 33
-PLUS
-IDENT "u64Truncate"
 LPAREN
 IDENT "hash"
 IDENT "x"
@@ -3427,12 +3424,9 @@ INDENT
 IDENT "hash"
 IDENT "xs"
 EQUAL
-IDENT "u64TruncateToInt"
-LPAREN
 IDENT "hashListItems"
 INT 0
 IDENT "xs"
-RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -3451,8 +3445,6 @@ INDENT
 IDENT "hash"
 IDENT "arr"
 EQUAL
-IDENT "u64TruncateToInt"
-LPAREN
 IDENT "hashArrGo"
 INT 0
 IDENT "arr"
@@ -3460,7 +3452,6 @@ INT 0
 LPAREN
 IDENT "arrayLength"
 IDENT "arr"
-RPAREN
 RPAREN
 NEWLINE
 DEDENT
@@ -3470,7 +3461,7 @@ COLON
 UPPER "Hashable"
 IDENT "a"
 FAT_ARROW
-UPPER "U64"
+UPPER "Int"
 ARROW
 UPPER "Array"
 IDENT "a"
@@ -3479,7 +3470,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "U64"
+UPPER "Int"
 NEWLINE
 IDENT "hashArrGo"
 IDENT "acc"
@@ -3501,11 +3492,8 @@ ELSE
 INDENT
 IDENT "hashArrGo"
 LPAREN
+IDENT "derivedHashStep"
 IDENT "acc"
-STAR
-INT 33
-PLUS
-IDENT "u64Truncate"
 LPAREN
 IDENT "hash"
 LPAREN

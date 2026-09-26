@@ -709,15 +709,15 @@ export impl Ord Bytes where
   compare (Bytes a) (Bytes b) =
     compareGo a b 0 (byteBlockLength a) (byteBlockLength b)
 
--- The prelude's compound fold, `acc * 33 + hash byte`, in `U64` so it wraps by
--- definition; the result is the low 63 bits.
-hashGo : U64 -> ByteBlock -> Int -> Int -> U64
+-- The prelude's compound fold, `acc * 33 + hash byte`, one `derivedHashStep`
+-- per byte.
+hashGo : Int -> ByteBlock -> Int -> Int -> Int
 hashGo acc bb i n =
   if i >= n then
     acc
   else
     hashGo
-      (acc * 33 + u64Truncate (hashInt (byteBlockGetUnsafe i bb)))
+      (derivedHashStep acc (hashInt (byteBlockGetUnsafe i bb)))
       bb
       (i + 1)
       n
@@ -729,7 +729,7 @@ hashGo acc bb i n =
    > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash (encodeUtf8 "\u{1}\u{2}\u{3}")
    True -}
 export impl Hashable Bytes where
-  hash (Bytes bb) = u64TruncateToInt (hashGo 0 bb 0 (byteBlockLength bb))
+  hash (Bytes bb) = hashGo 0 bb 0 (byteBlockLength bb)
 
 -- `hex.mdk` has an encoder already, but importing it here would cycle: it
 -- imports `bytes` for `Bytes` itself. This walks the block a byte at a time,
