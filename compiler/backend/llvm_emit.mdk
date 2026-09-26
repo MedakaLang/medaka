@@ -3823,70 +3823,120 @@ emitU64Extern : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
-emitU64Extern e env "u64Truncate" args = match emitArgs e env args
-  [a] => (boxU64 e (untagInt e a), LTU64)
-  _ => panic "llvm: u64Truncate takes one argument"
-emitU64Extern e env "u64TruncateToInt" args = match emitArgs e env args
-  [a] => (tagInt e (unboxU64 e a), LTInt)
-  _ => panic "llvm: u64TruncateToInt takes one argument"
-emitU64Extern e env "u64BitAnd" args = emitU64Bin e env "and" args
-emitU64Extern e env "u64BitOr" args = emitU64Bin e env "or" args
-emitU64Extern e env "u64BitXor" args = emitU64Bin e env "xor" args
-emitU64Extern e env "u64ShiftLeft" args = emitU64Shift e env "shl" args
-emitU64Extern e env "u64ShiftRight" args = emitU64Shift e env "lshr" args
-emitU64Extern e env "u64MulHigh" args = match emitArgs e env args
-  [a, b] =>
-    let x = unboxU64 e a
-    let y = unboxU64 e b
-    let wa = freshReg e
-    let _ = emit e "  \{wa} = zext i64 \{x} to i128"
-    let wb = freshReg e
-    let _ = emit e "  \{wb} = zext i64 \{y} to i128"
-    let p = freshReg e
-    let _ = emit e "  \{p} = mul i128 \{wa}, \{wb}"
-    let h = freshReg e
-    let _ = emit e "  \{h} = lshr i128 \{p}, 64"
-    let r = freshReg e
-    let _ = emit e "  \{r} = trunc i128 \{h} to i64"
-    (boxU64 e r, LTU64)
-  _ => panic "llvm: u64MulHigh takes two arguments"
-emitU64Extern e _ name _ = gapE e ("unsupported U64 extern " ++ name)
+emitU64Extern e env "u64TruncateToInt" [a] =
+  (tagInt e (emitU64Raw e env a), LTInt)
+emitU64Extern _ _ "u64TruncateToInt" _ =
+  panic "llvm: u64TruncateToInt takes one argument"
+emitU64Extern e env name args =
+  (boxU64 e (emitU64Kernel e env name args), LTU64)
 
--- a bitwise U64 kernel: one instruction on the two payloads.
-emitU64Bin : Emit ->
+-- The raw 64-bit payload of a `U64`-valued expression.  Nested U64 arithmetic and
+-- the kernels below compute on payloads and are boxed once, by the outermost node
+-- that needs a cell: every intermediate cell would be a heap allocation, and the
+-- allocator was most of a boxed-U64 fold's cost (a `U64` is boxed until N5,
+-- docs/design/INTEGER-TYPES-DESIGN.md §6.2).  Anything else is emitted as usual
+-- and unboxed; a U64 literal is a static cell, so that is a load.
+emitU64Raw : Emit -> OrdMap (String, LTy) -> CExpr -> String
+emitU64Raw e env (CBinPrim op l r tag)
+  | isU64Head tag && isArithOp op = emitU64RawArith e env op l r
+  | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag)))
+emitU64Raw e env ex = emitU64RawApp e env ex (flattenApp ex [])
+
+-- a saturated call of a kernel is computed on payloads; anything else is boxed
+-- by its own emission and unboxed here.
+emitU64RawApp : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  (CExpr, List CExpr) ->
+  String
+emitU64RawApp e env ex (CVar f _, args)
+  | isU64RawKernel f (lengthS args) && not (isLocal env f) =
+    emitU64Kernel e env f args
+  | otherwise = unboxU64 e (fst (emitExpr e env ex))
+emitU64RawApp e env ex _ = unboxU64 e (fst (emitExpr e env ex))
+
+-- the kernels `emitU64Raw` computes on payloads, at their full arity.
+isU64RawKernel : String -> Int -> Bool
+isU64RawKernel "u64Truncate" n = n == 1
+isU64RawKernel f n =
+  n == 2
+    && contains f [
+      "u64BitAnd", "u64BitOr", "u64BitXor", "u64ShiftLeft", "u64ShiftRight",
+      "u64MulHigh"
+    ]
+
+-- A U64 arithmetic operator on its operands' payloads: `+`, `-` and `*` are the
+-- 64-bit instructions, which wrap modulo 2^64; `/` and `%` are `udiv`/`urem`
+-- behind Int's zero-divisor abort.
+emitU64RawArith : Emit ->
   OrdMap (String, LTy) ->
   String ->
-  List CExpr ->
-  (String, LTy)
-emitU64Bin e env instr args = match emitArgs e env args
-  [a, b] =>
-    let x = unboxU64 e a
-    let y = unboxU64 e b
-    let r = freshReg e
-    let _ = emit e "  \{r} = \{instr} i64 \{x}, \{y}"
-    (boxU64 e r, LTU64)
-  _ => panic "llvm: a U64 bitwise kernel takes two arguments"
+  CExpr ->
+  CExpr ->
+  String
+emitU64RawArith e env op l r =
+  let a = emitU64Raw e env l
+  let b = emitU64Raw e env r
+  let _ = if op == "/" || op == "%" then emitDivZeroGuard e op b
+  let res = freshReg e
+  let _ = emit e "  \{res} = \{u64Op op} i64 \{a}, \{b}"
+  res
+
+-- The kernels on payloads: `u64Truncate` sign-extends the untagged Int, the
+-- bitwise kernels are one instruction, the shifts give 0 outside `0 .. 63` by a
+-- select, and `u64MulHigh` is the top half of the 128-bit product.
+emitU64Kernel : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> String
+emitU64Kernel e env "u64Truncate" [a] = untagInt e (fst (emitExpr e env a))
+emitU64Kernel e env "u64BitAnd" [a, b] = emitU64Bin e env "and" a b
+emitU64Kernel e env "u64BitOr" [a, b] = emitU64Bin e env "or" a b
+emitU64Kernel e env "u64BitXor" [a, b] = emitU64Bin e env "xor" a b
+emitU64Kernel e env "u64ShiftLeft" [a, k] = emitU64Shift e env "shl" a k
+emitU64Kernel e env "u64ShiftRight" [a, k] = emitU64Shift e env "lshr" a k
+emitU64Kernel e env "u64MulHigh" [a, b] =
+  let x = emitU64Raw e env a
+  let y = emitU64Raw e env b
+  let wa = freshReg e
+  let _ = emit e "  \{wa} = zext i64 \{x} to i128"
+  let wb = freshReg e
+  let _ = emit e "  \{wb} = zext i64 \{y} to i128"
+  let p = freshReg e
+  let _ = emit e "  \{p} = mul i128 \{wa}, \{wb}"
+  let h = freshReg e
+  let _ = emit e "  \{h} = lshr i128 \{p}, 64"
+  let r = freshReg e
+  let _ = emit e "  \{r} = trunc i128 \{h} to i64"
+  r
+emitU64Kernel _ _ name _ =
+  panic ("llvm: U64 kernel " ++ name ++ " applied to the wrong arguments")
+
+-- a bitwise U64 kernel: one instruction on the two payloads.
+emitU64Bin : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> String
+emitU64Bin e env instr a b =
+  let x = emitU64Raw e env a
+  let y = emitU64Raw e env b
+  let r = freshReg e
+  let _ = emit e "  \{r} = \{instr} i64 \{x}, \{y}"
+  r
 
 -- a logical U64 shift by a tagged Int amount; 0 outside `0 .. 63`.
 emitU64Shift : Emit ->
   OrdMap (String, LTy) ->
   String ->
-  List CExpr ->
-  (String, LTy)
-emitU64Shift e env instr args = match emitArgs e env args
-  [a, k] =>
-    let x = unboxU64 e a
-    let n = untagInt e k
-    let inRange = freshReg e
-    let _ = emit e "  \{inRange} = icmp ult i64 \{n}, 64"
-    let masked = freshReg e
-    let _ = emit e "  \{masked} = and i64 \{n}, 63"
-    let shifted = freshReg e
-    let _ = emit e "  \{shifted} = \{instr} i64 \{x}, \{masked}"
-    let r = freshReg e
-    let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
-    (boxU64 e r, LTU64)
-  _ => panic "llvm: a U64 shift takes two arguments"
+  CExpr ->
+  CExpr ->
+  String
+emitU64Shift e env instr a k =
+  let x = emitU64Raw e env a
+  let n = untagInt e (fst (emitExpr e env k))
+  let inRange = freshReg e
+  let _ = emit e "  \{inRange} = icmp ult i64 \{n}, 64"
+  let masked = freshReg e
+  let _ = emit e "  \{masked} = and i64 \{n}, 63"
+  let shifted = freshReg e
+  let _ = emit e "  \{shifted} = \{instr} i64 \{x}, \{masked}"
+  let r = freshReg e
+  let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
+  r
 
 isHashExtern : String -> Bool
 isHashExtern name =
@@ -4816,10 +4866,7 @@ emitU64Arith : Emit ->
   CExpr ->
   CExpr ->
   (String, LTy)
-emitU64Arith e env op l r =
-  let (lv, _) = emitExpr e env l
-  let (rv, _) = emitExpr e env r
-  emitU64ArithW e op lv rv
+emitU64Arith e env op l r = (boxU64 e (emitU64RawArith e env op l r), LTU64)
 
 -- the U64 operator on two already-emitted cell words.
 emitU64ArithW : Emit -> String -> String -> String -> (String, LTy)
@@ -5138,9 +5185,11 @@ emitU64Cmp : Emit ->
   CExpr ->
   (String, LTy)
 emitU64Cmp e env op l r =
-  let (lv, _) = emitExpr e env l
-  let (rv, _) = emitExpr e env r
-  emitU64CmpW e op lv rv
+  let a = emitU64Raw e env l
+  let b = emitU64Raw e env r
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp \{u64Pred op} i64 \{a}, \{b}"
+  boolFromI1 e c
 
 -- the U64 comparison on two already-emitted cell words.
 emitU64CmpW : Emit -> String -> String -> String -> (String, LTy)
