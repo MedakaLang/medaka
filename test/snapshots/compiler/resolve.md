@@ -1,5 +1,5 @@
 # META
-source_lines=6422
+source_lines=6432
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -1759,7 +1759,7 @@ checkDecl env (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasR
 checkDecl env (DNewtype { newtypeParams = ps, newtypeParamKinds = ks, newtypeCtorBinders = bs, newtypeFieldTy = fty }) =
   checkKindLabels env ks
     ++ checkBinderLabels env bs
-    ++ duplicateCtorBinders (authorityParams ps ks) bs
+    ++ duplicateCtorBinders (authorityParams ps ks) bs (firstTyLoc fty)
     ++ checkTypeIn (map fst bs ++ authorityParams ps ks) None env fty
 checkDecl env (DAttrib _ inner) = checkDecl env inner
 checkDecl _ _ = []
@@ -1780,7 +1780,7 @@ checkVariants : Env ->
   List ResError
 checkVariants env bound (v :: vs) (bs :: rest) =
   checkBinderLabels env bs
-    ++ duplicateCtorBinders bound bs
+    ++ duplicateCtorBinders bound bs (firstTyLocList (variantFieldTys v))
     ++ checkVariant env (map fst bs ++ bound) v
     ++ checkVariants env bound vs rest
 checkVariants _ _ _ _ = []
@@ -1789,11 +1789,21 @@ checkVariants _ _ _ _ = []
 -- parameters: a binder spelled like a parameter would shadow the parameter
 -- every field's `@p` was written against, so it is a duplicate, as a binder
 -- repeated in the same list is.
-duplicateCtorBinders : List String -> List (String, KindAnn) -> List ResError
-duplicateCtorBinders bound binders =
+duplicateCtorBinders : List String ->
+  List (String, KindAnn) ->
+  Option Loc ->
+  List ResError
+duplicateCtorBinders bound binders loc =
   map
-    (n => DuplicateBinder "constructor" n None)
+    (n => DuplicateBinder "constructor" n loc)
     (findDups bound (map fst binders))
+
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
 
 checkVariant : Env -> List String -> Variant -> List ResError
 checkVariant env bound (Variant _ (ConPos tys)) =
@@ -6827,7 +6837,7 @@ takeOriginTrace _ =
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkInterfaceDecl") (EVar "env")) (EVar "supers")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplDecl") (EVar "env")) (EVar "iface")) (EVar "tys")) (EVar "reqs")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "None")) (EVar "env")) (EVar "rhs"))))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs"))) (EApp (EApp (EVar "duplicateCtorBinders") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "bs"))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))) (EVar "None")) (EVar "env")) (EVar "fty"))))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs"))) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "bs")) (EApp (EVar "firstTyLoc") (EVar "fty")))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))) (EVar "None")) (EVar "env")) (EVar "fty"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DAttrib" PWild (PVar "inner"))) (EApp (EApp (EVar "checkDecl") (EVar "env")) (EVar "inner")))
 (DFunDef false "checkDecl" (PWild PWild) (EListLit))
 (DTypeSig false "padBinders" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))))))
@@ -6835,10 +6845,15 @@ takeOriginTrace _ =
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs"))))
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EListLit))))
 (DTypeSig false "checkVariants" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs"))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
+(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs")) (EApp (EVar "firstTyLocList") (EApp (EVar "variantFieldTys") (EVar "v"))))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
 (DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "None")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "binders")))))
+(DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders") (PVar "loc")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "binders")))))
+(DTypeSig false "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "map") (EVar "fieldTyOf")) (EVar "fs")))
+(DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
+(DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "t"))) (EVar "t"))
 (DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "None")) (EVar "env"))) (EVar "tys")))
 (DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkFieldType") (EVar "env")) (EVar "bound"))) (EVar "fs")))
@@ -8382,7 +8397,7 @@ takeOriginTrace _ =
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkInterfaceDecl") (EVar "env")) (EVar "supers")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplDecl") (EVar "env")) (EVar "iface")) (EVar "tys")) (EVar "reqs")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasParams" (PVar "ps")) (rf "tyAliasParamKinds" (PVar "ks")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "None")) (EVar "env")) (EVar "rhs"))))
-(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs"))) (EApp (EApp (EVar "duplicateCtorBinders") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "bs"))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))) (EVar "None")) (EVar "env")) (EVar "fty"))))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeParams" (PVar "ps")) (rf "newtypeParamKinds" (PVar "ks")) (rf "newtypeCtorBinders" (PVar "bs")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs"))) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "bs")) (EApp (EVar "firstTyLoc") (EVar "fty")))) (EApp (EApp (EApp (EApp (EVar "checkTypeIn") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks")))) (EVar "None")) (EVar "env")) (EVar "fty"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DAttrib" PWild (PVar "inner"))) (EApp (EApp (EVar "checkDecl") (EVar "env")) (EVar "inner")))
 (DFunDef false "checkDecl" (PWild PWild) (EListLit))
 (DTypeSig false "padBinders" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))))))
@@ -8390,10 +8405,15 @@ takeOriginTrace _ =
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "::" (EVar "b") (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs"))))
 (DFunDef false "padBinders" ((PCons PWild (PVar "vs")) (PList)) (EBinOp "::" (EListLit) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EListLit))))
 (DTypeSig false "checkVariants" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyApp (TyCon "List") (TyCon "ResError")))))))
-(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs"))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
+(DFunDef false "checkVariants" ((PVar "env") (PVar "bound") (PCons (PVar "v") (PVar "vs")) (PCons (PVar "bs") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "checkBinderLabels") (EVar "env")) (EVar "bs")) (EApp (EApp (EApp (EVar "duplicateCtorBinders") (EVar "bound")) (EVar "bs")) (EApp (EVar "firstTyLocList") (EApp (EVar "variantFieldTys") (EVar "v"))))) (EApp (EApp (EApp (EVar "checkVariant") (EVar "env")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs")) (EVar "bound"))) (EVar "v"))) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EVar "bound")) (EVar "vs")) (EVar "rest"))))
 (DFunDef false "checkVariants" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "None")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "binders")))))
+(DTypeSig false "duplicateCtorBinders" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "duplicateCtorBinders" ((PVar "bound") (PVar "binders") (PVar "loc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (ELit (LString "constructor"))) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EVar "bound")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "binders")))))
+(DTypeSig false "variantFieldTys" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "Ty"))))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EVar "tys"))
+(DFunDef false "variantFieldTys" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EMethodRef "map") (EVar "fieldTyOf")) (EVar "fs")))
+(DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
+(DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "t"))) (EVar "t"))
 (DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkTypeIn") (EVar "bound")) (EVar "None")) (EVar "env"))) (EVar "tys")))
 (DFunDef false "checkVariant" ((PVar "env") (PVar "bound") (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkFieldType") (EVar "env")) (EVar "bound"))) (EVar "fs")))

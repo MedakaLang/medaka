@@ -448,22 +448,30 @@ explicit. Matching recovers exactly the declared field types under the
 scrutinee's index substitution, flowing directed and never through undirected
 unification; it never refines the index.
 
-Carrying the parameter in a field is necessary, not sufficient: a field the
-applier can fill with a value that proves nothing (`[]` at `List (Handle p)`,
-a closure performing nothing at `Unit -> <L p> Unit`) still carries it. So
-outside the declaring module a construction's index is a *claim*, distinct
-from the variable its fields mention, and it is bounded by the evidence the
-arguments supply: where the arguments ground the fields' authority κ (a
-constant, a rigid, a variable an argument of the enclosing binding carries,
-or a variable such a term bounds from below) the claim κ' covers it
-(`κ ⊑ κ'`); where nothing grounds κ, the claim is the domain's top.
-`Tok 1 [] : Tok *`, `Tok 1 [Handle "config/app"] : Tok "config/*"`, and
-`Tok 1 [] : Tok "config/*"` is refused. The declaring module mints no claim,
-which is the trust §4.1 already grants it. Two further consequences of the
-same rule: a field read outside a pattern of a field under an existential
-binder recovers the domain's top for that binder, since a read cannot open
-it; and an unsigned binding whose authority variable occurs in no argument
-position of its type publishes the top for it (`mkRaw = Raw` is
+*Carrying* is decided by the field's type, not by mention. A field carries
+the parameter `p` when every value of the field's type holds a value at `p`'s
+authority: a qualifier (`String @p`), a tuple with a carrying component, or an
+index `H … p …` of a head whose every constructor carries that parameter
+(`Handle p`, by `Handle`'s own constructors; through a type parameter,
+`Box (Handle p)` when `Box`'s constructor holds its parameter). `List (Handle p)`
+mentions `p` and carries nothing, since `[]` inhabits it at every index; an
+arrow `Unit -> <FileRead p> Unit` carries nothing, since an idle closure
+inhabits it. A head whose constructors an importer cannot apply (`export data`,
+a private head) is trusted, since only its declaring module builds a value of
+it; a builtin container (`List`, `Array`) carries nothing. Recursion through
+a head assumes the head carries: a finite value bottoms out in a carrying
+constructor, or the type is empty. So `public export data Tok (p : Authority
+FileRead) = Tok Int (List (Handle p))` is refused as a phantom export, and a
+carrying head is applied anywhere and proves its index through the ordinary
+argument route, in any order of inference. Three further consequences: a
+field read outside a pattern of a field under an existential binder recovers
+the domain's top for that binder, since a read cannot open it; an update of
+such a record replaces every field that mentions the binder or none of them,
+since one binder cannot name two values at different authorities; and an
+unsigned binding whose authority variable occurs in no argument position of
+its type publishes the top for it (`mkRaw = Raw` is `Int -> Raw *`), while a
+written signature publishes as written.
+(`mkRaw = Raw` is
 `Int -> Raw *`), so a forwarder cannot republish a phantom constructor.
 
 An `Authority`-kinded type-argument slot takes an authority term, kind-directed
@@ -727,7 +735,11 @@ value type. A declared but unused `Effect` parameter is legal: a phantom index
 does not itself store or discharge a computation.
 
 Effect and authority index slots are invariant. `F φ₁ a` and `F φ₂ a`
-require equal indices, not merely `φ₁ ≤ φ₂`. This remains true when ordinary
+require equal indices, not merely `φ₁ ≤ φ₂`; a flexible index variable
+takes the other side as its solution outright, as a substitution. An impl head
+abstracts over an authority index — `impl I (Handle p)` covers every index,
+since an instance is chosen by the type's head and the index is erased — so a
+written term in an impl head's `Authority` slot is refused. This remains true when ordinary
 type parameters have inferred variance. For example, covariantly widening the
 index of `Sink e = Sink ((Unit →^e Unit) → Int)` would manufacture a pure
 consumer of an effectful callback.

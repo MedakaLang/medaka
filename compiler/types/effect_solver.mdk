@@ -83,11 +83,6 @@ export
 hasSummaryScope : SummarySolver c -> Bool
 hasSummaryScope solver = isNonEmptyL solver.essStack.value
 
--- The authority obligations the open scope has recorded so far, newest first.
-export
-scopeAuthorities : SummarySolver c -> List (AuthWanted c)
-scopeAuthorities solver = (currentScope solver).essAuthorities.value
-
 export
 openSummaryScope : SummarySolver c -> Int -> Int -> Unit
 openSummaryScope solver owner level =
@@ -567,9 +562,8 @@ closeSummaryScope : SummarySolver c ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   (List (Ref Effvar) -> Ref Effvar) ->
   (Int -> Ref Effvar) ->
-  (Unit -> Unit) ->
   List (SummaryFailure c)
-closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual decideClaims =
+closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual =
   let scope = currentScope solver
   -- Authorities first: an argument's lower bounds decide a callee's flexible
   -- authority before any row is compared, so a row check sees concrete atoms
@@ -649,11 +643,8 @@ closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin 
       makeResidual
   let unproven = filter (rel => not (relationProven escape rel)) residual0
   let failures = validateRelations solver frozen escape unproven
-  -- Row validation may have derived new authority obligations.  With every
-  -- obligation of the scope now recorded, the caller decides what else it
-  -- owes (a constructor's index claims, `decideClaims`); then the variables
-  -- the obligations bound are solved and every obligation is checked.
-  let _ = decideClaims ()
+  -- Row validation may have derived new authority obligations; solve the
+  -- variables they bound, then decide every obligation this scope owns.
   let _ = solveOwnedAuthorities scope rigidAuths
   let authFailures = checkAuthorities solver scope rigidAuths
   solver.essStack := match solver.essStack.value

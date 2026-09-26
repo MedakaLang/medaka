@@ -215,10 +215,12 @@ or a function clause whose pattern names it opens a fresh authority scoped to
 that arm or clause; a `let` pattern cannot.  A `public export data` with an
 `Authority` parameter must carry it in every constructor's fields; a
 constructor that does not is a proof source only in its declaring module, which
-exports the type abstractly (`export data`).  Outside the declaring module a
-construction claims an index only as far as its arguments prove it:
-`Tok 1 [] : Tok *`, and `Tok 1 [] : Tok "cfg/*"` is refused.  A field read
-of a record field under an existential binder recovers the domain's top.
+exports the type abstractly (`export data`).  Carrying is decided by the
+field's type: `String @p`, a tuple holding one, or an index of a type whose
+every constructor carries it; `List (Handle p)` and a closure carry nothing.
+A field read of a record field under an existential binder recovers the
+domain's top.  An impl head takes a name in an `Authority` slot
+(`impl Describe (Handle p)`), never a written term.
 
 ```medaka
 effect Store Prefix

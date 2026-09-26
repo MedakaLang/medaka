@@ -470,8 +470,10 @@ ppQual : Ref (List (Int, String)) ->
   Mono ->
   Authority ->
   String
-ppQual ctx cnt prec inner q =
-  wrapIf (prec > 2) "\{ppGo ctx cnt 3 inner} @\{ppAuthority ctx cnt q}"
+ppQual ctx cnt prec inner q
+  | authIsTop q = ppGo ctx cnt prec inner
+  | otherwise =
+    wrapIf (prec > 2) "\{ppGo ctx cnt 3 inner} @\{ppAuthority ctx cnt q}"
 
 -- The authority term without a leading space, under the shared naming context.
 export

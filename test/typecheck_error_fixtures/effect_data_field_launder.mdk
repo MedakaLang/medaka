@@ -57,4 +57,18 @@ mkRaw = Raw
 forgeRaw : Unit -> Raw "config/*"
 forgeRaw _ = mkRaw 3
 
+-- an impl head abstracts over the index: a written term is refused
+interface Describe a where
+  describe : a -> String
+
+impl Describe (Handle "config/*") where
+  describe _ = "config"
+
+-- an update under an existential binder replaces every field that mentions
+-- it, or none
+data Two = Two (p : Authority FileRead) { a : Handle p, b : Handle p }
+
+repointOne : Two -> Two
+repointOne t = { t | a = Handle "/etc/x" }
+
 main = println 1

@@ -630,43 +630,57 @@ session"):
    and the constructor binders (`ctorBindersSource`); `ppDomain` renders a
    qualified domain as `(p : T)` only at the binder's first occurrence, after an
    index it is `T @p`.
-8. **Claims.** A constructor applied outside its declaring module has its
-   result's index variables split from its fields' (`claimCtorIndices`, at
-   the constructor's use and at record creation): the result carries a fresh
-   claim β, the fields keep α, and the pair is parked on the open solver
-   scope's frame (`authorityClaimsRef`). The scope's close decides every
-   frame inside the solver (`closeSummaryScope`'s `decideClaims` callback,
-   after row validation has turned every row check into an authority
-   obligation and before the scope's variables are solved): the grounded set
-   is the least fixpoint over the scope's obligations from the rigid cells
-   and the variables the scope's bindings carry in an argument position
-   (`qualifierAuthIds`, now domain-only), claims ground each other
-   (`decideAuthorityClaimsGo`), an evidenced claim records `α ⊑ β`, and an
-   unevidenced one takes the top — reported as `authorityClaimMsg` at the
-   construction when the result flow has already pinned β to a bound the top
-   does not lie within. The syntactic export check (`T-AUTHORITY-PHANTOM-EXPORT`)
-   stays as the declaration-site report; the claim is what makes a carrying
-   field that proves nothing (`[]`, an idle closure) harmless. A record read
+8. **Carrying.** The export check decides whether a constructor's field
+   carries the parameter by the field's type (`tyCarries`, over
+   `crossRun.universeDataCtors`: every registered head's parameters and
+   constructors, the prelude's included): a qualifier, the parameter itself, a
+   tuple with a carrying component, or an index of a head whose every
+   constructor carries that parameter (through a type parameter the head
+   holds); `List (Handle p)` and an arrow carry nothing, a head whose
+   constructors an importer cannot apply is trusted, a builtin container has
+   no constructors and carries nothing, recursion assumes the head carries.
+   With mention
+   replaced by carrying, `T-AUTHORITY-PHANTOM-EXPORT` alone keeps an importer
+   from building a value at an index nothing proves, and the first cut's
+   dynamic "claim" (a split result index decided against the scope's
+   obligations at close) is gone: it was order-dependent across claims and
+   scopes, which the second review round showed with `Tok 1 (hsOf t)` against
+   `hsOf t |> Tok 1`. Publication counts only argument-position authorities as
+   sources (`qualifierAuthIds`), so an unsigned forwarder of an abstract
+   phantom head is `Int -> Raw *`; a written signature's binders are never
+   defaulted (`generalizeBindingDeclared`, `smDeclaredAuths`). A record read
    outside a pattern instantiates an existential binder as the domain's top
-   (`sharedAuthority`); an alias's `Authority` parameter is a link, never an
-   obligation (`aliasArgBindings`); an impl head elaborates under declared
-   kinds through the one `implHeadMonos` (inference and coherence); every
-   head's kinds are recorded before any field elaborates (`recordDeclKinds`);
-   a binder used at two domain shapes is reported whatever binds it
-   (`reportBinderDomains`); an effect failure is located at the first site
-   whose authority lies outside the admitted bound (`effectSiteOf`); a
-   Product label's axes are distinct and a bare literal lifts into a Set
-   first axis as a one-element set (`productPrimaryLift`, the one lift); a
-   signature's own unlocated diagnostics land on the signature
-   (`sigToSchemeTvsIn`); and the LSP hover's `generalize` quantifies without
-   defaulting (`quantifyFree`), since its cells are shared with published
-   schemes.
+   (`sharedAuthority`); an update repacks a binder only when every field that
+   mentions it is replaced (`instantiateRecordUpdate`); the existential id
+   table lives with the id counter (`graphRun.ctorExistentialsRef`), so a
+   record the universe seeds into an importer still knows its binders; a
+   record's binder cells are collected from its fields (`recordAuthCells`).
+   An index slot is invariant and a flexible index variable substitutes
+   (`unifyIndex`), so a match or an improvement loop over indices makes
+   progress; an impl head takes a name in an `Authority` slot
+   (`checkImplHeadIndices`) and dispatch identity is index-blind
+   (`monoSameGiven`, as `cohEqR`). An alias's `Authority` parameter is a
+   link, never an obligation (`aliasArgBindings`); an impl head elaborates
+   under declared kinds through the one `implHeadMonos` (inference and
+   coherence); every head's kinds are recorded before any field elaborates
+   (`recordDeclKinds`, a constant-time prepend per head); a binder used at
+   two domain shapes is reported whatever binds it (`reportBinderDomains`,
+   once per signature); an effect failure is located at the first site whose
+   authority lies outside the admitted bound (`effectSiteOf`); a Product
+   label's axes are distinct and a bare literal lifts into a Set first axis
+   as a one-element set (`productPrimaryLift`, the one lift); a signature's
+   own unlocated diagnostics land on the signature (`atSignature`);
+   obligations are recorded normalised (`wantAuthority`); a qualifier at the
+   top renders as the bare type; and the LSP hover's `generalize` quantifies
+   without defaulting (`quantifyFree`), since its cells are shared with
+   published schemes.
 
 Coverage: `types/effect_authority_test.mdk` (the data-half groups beside
 the arrow half's, the review's findings each beside its control, and a
 two-module claim group through `checkModulesDiagsChain`);
 `test/typecheck_error_fixtures/effect_data_field_{ok,launder}` (extended with
-the review's cases), `effect_existential_{ok,launder}`, `effect_phantom_export`;
+both review rounds' cases), `effect_existential_{ok,launder}`,
+`effect_phantom_export` (mention is not carrying), `effect_ctor_binder_shadow`;
 `test/check_module_fixtures/authority_handle_import` (the kind and the
 abstract handle across a module boundary); `test/parse_fixtures/declared_kinds`
 (the formatter round trip of every new spelling, the existential record

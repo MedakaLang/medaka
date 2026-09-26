@@ -1755,7 +1755,7 @@ checkDecl env (DTypeAlias { tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasR
 checkDecl env (DNewtype { newtypeParams = ps, newtypeParamKinds = ks, newtypeCtorBinders = bs, newtypeFieldTy = fty }) =
   checkKindLabels env ks
     ++ checkBinderLabels env bs
-    ++ duplicateCtorBinders (authorityParams ps ks) bs
+    ++ duplicateCtorBinders (authorityParams ps ks) bs (firstTyLoc fty)
     ++ checkTypeIn (map fst bs ++ authorityParams ps ks) None env fty
 checkDecl env (DAttrib _ inner) = checkDecl env inner
 checkDecl _ _ = []
@@ -1776,7 +1776,7 @@ checkVariants : Env ->
   List ResError
 checkVariants env bound (v :: vs) (bs :: rest) =
   checkBinderLabels env bs
-    ++ duplicateCtorBinders bound bs
+    ++ duplicateCtorBinders bound bs (firstTyLocList (variantFieldTys v))
     ++ checkVariant env (map fst bs ++ bound) v
     ++ checkVariants env bound vs rest
 checkVariants _ _ _ _ = []
@@ -1785,11 +1785,21 @@ checkVariants _ _ _ _ = []
 -- parameters: a binder spelled like a parameter would shadow the parameter
 -- every field's `@p` was written against, so it is a duplicate, as a binder
 -- repeated in the same list is.
-duplicateCtorBinders : List String -> List (String, KindAnn) -> List ResError
-duplicateCtorBinders bound binders =
+duplicateCtorBinders : List String ->
+  List (String, KindAnn) ->
+  Option Loc ->
+  List ResError
+duplicateCtorBinders bound binders loc =
   map
-    (n => DuplicateBinder "constructor" n None)
+    (n => DuplicateBinder "constructor" n loc)
     (findDups bound (map fst binders))
+
+variantFieldTys : Variant -> List Ty
+variantFieldTys (Variant _ (ConPos tys)) = tys
+variantFieldTys (Variant _ (ConNamed fs _)) = map fieldTyOf fs
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ t) = t
 
 checkVariant : Env -> List String -> Variant -> List ResError
 checkVariant env bound (Variant _ (ConPos tys)) =

@@ -1,5 +1,5 @@
 # META
-source_lines=765
+source_lines=767
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -474,8 +474,10 @@ ppQual : Ref (List (Int, String)) ->
   Mono ->
   Authority ->
   String
-ppQual ctx cnt prec inner q =
-  wrapIf (prec > 2) "\{ppGo ctx cnt 3 inner} @\{ppAuthority ctx cnt q}"
+ppQual ctx cnt prec inner q
+  | authIsTop q = ppGo ctx cnt prec inner
+  | otherwise =
+    wrapIf (prec > 2) "\{ppGo ctx cnt 3 inner} @\{ppAuthority ctx cnt q}"
 
 -- The authority term without a leading space, under the shared naming context.
 export
@@ -810,7 +812,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "ppAuthArg" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
 (DFunDef false "ppAuthArg" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EIf (EApp (EVar "authIsTop") (EApp (EVar "authNorm") (EVar "q"))) (ELit (LString "*")) (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q"))))
 (DTypeSig true "ppQual" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Authority") (TyCon "String")))))))
-(DFunDef false "ppQual" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "inner") (PVar "q")) (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "inner")))) (ELit (LString " @"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q")))) (ELit (LString "")))))
+(DFunDef false "ppQual" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "inner") (PVar "q")) (EIf (EApp (EVar "authIsTop") (EVar "q")) (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "inner")) (EIf (EVar "otherwise") (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "inner")))) (ELit (LString " @"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ppAuthority" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
 (DFunDef false "ppAuthority" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "renderAuthorityWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "q"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString " ")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "ppAuthvarName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")))))
@@ -934,7 +936,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "ppAuthArg" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
 (DFunDef false "ppAuthArg" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EIf (EApp (EVar "authIsTop") (EApp (EVar "authNorm") (EVar "q"))) (ELit (LString "*")) (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q"))))
 (DTypeSig true "ppQual" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Authority") (TyCon "String")))))))
-(DFunDef false "ppQual" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "inner") (PVar "q")) (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "inner")))) (ELit (LString " @"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q")))) (ELit (LString "")))))
+(DFunDef false "ppQual" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "inner") (PVar "q")) (EIf (EApp (EVar "authIsTop") (EVar "q")) (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "inner")) (EIf (EVar "otherwise") (EApp (EApp (EVar "wrapIf") (EBinOp ">" (EVar "prec") (ELit (LInt 2)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3))) (EVar "inner")))) (ELit (LString " @"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ppAuthority" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
 (DFunDef false "ppAuthority" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "renderAuthorityWith") (EApp (EApp (EVar "ppAuthvarName") (EVar "ctx")) (EVar "cnt"))) (EVar "q"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString " ")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "ppAuthvarName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")))))

@@ -2102,12 +2102,12 @@ printNamedFieldData : DataVis ->
   List (List (String, KindAnn)) ->
   List DeriveRef ->
   Doc
-printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] [[]] derives =
+printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] [binders] derives =
   let eqPart =
     if nameOmitted then
       text " = {"
     else
-      Cat (text " = ") (Cat (text cname) (text " {"))
+      Cat (text " = ") (Cat (text cname) (Cat (bindersDoc binders) (text " {")))
   let head =
     Cat (text "data ") (Cat (text n) (Cat (tyParamsDoc params kinds) eqPart))
   let body =

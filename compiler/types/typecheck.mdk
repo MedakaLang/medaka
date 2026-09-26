@@ -270,7 +270,7 @@ import types.effect_solver as EffectSolver
 import types.effect_bindings.{
   BindingSummary(..), newBindingSummary, bodyArrows, bodyRowAt
 }
-import types.effect_solver.{SummarySolver, SummaryFailure, AuthWanted(..)}
+import types.effect_solver.{SummarySolver, SummaryFailure}
 import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes
 }
@@ -969,7 +969,6 @@ effectSiteOf fn (Some label) bound =
 
 beginEffectSummaryScope : Unit -> Unit
 beginEffectSummaryScope _ =
-  perRun.value.authorityClaimsRef := [] :: perRun.value.authorityClaimsRef.value
   EffectSolver.openSummaryScope
     perRun.value.effectSummaries
     (newEffvarId ())
@@ -996,21 +995,18 @@ summaryEscape : Bool -> List Atom -> List Atom -> List Atom
 summaryEscape True lower upper = atomsDiff lower upper
 summaryEscape False lower upper = atomsEscape lower upper
 
-finishEffectSummaryScope : Map Int Unit ->
-  Map Int (Ref Effvar) ->
-  Map Int Unit ->
-  Unit
-finishEffectSummaryScope retained borrowed sources =
-  let failures = EffectSolver.closeSummaryScope
-    perRun.value.effectSummaries
-    perRun.value.rigidEffvarsRef.value
-    perRun.value.rigidAuthvarsRef.value
-    retained
-    borrowed
-    summaryEscape
-    joinCellOf
-    freshEffvarAt
-    (_ => decideAuthorityClaims sources)
+finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
+finishEffectSummaryScope retained borrowed =
+  let failures =
+    EffectSolver.closeSummaryScope
+      perRun.value.effectSummaries
+      perRun.value.rigidEffvarsRef.value
+      perRun.value.rigidAuthvarsRef.value
+      retained
+      borrowed
+      summaryEscape
+      joinCellOf
+      freshEffvarAt
   reportEffectSummaryFailures failures
 
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
@@ -1131,7 +1127,6 @@ finishValueEffects monos =
   finishEffectSummaryScope
     (fold (acc mono => effectRoots mono acc) Tip monos)
     (fold (acc mono => borrowedEffectCells mono acc) Tip monos)
-    (fold (acc mono => qualifierAuthIds mono acc) Tip monos)
 
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
 borrowedEffectCells mono cells =
@@ -1179,176 +1174,39 @@ authRowRoots row roots =
 
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectContract (saved, savedAuths) =
-  let _ = finishEffectSummaryScope Tip Tip Tip
+  let _ = finishEffectSummaryScope Tip Tip
   perRun.value.rigidEffvarsRef := saved
   perRun.value.rigidAuthvarsRef := savedAuths
 
--- A constructor's result index is a CLAIM, distinct from the variable its
--- fields mention: `Tok 1 [] : Tok β` with the field at `List (Handle α)`.
--- The claim is bounded by the evidence the arguments supply for α.  Where
--- the scope's obligations ground α — a constant, a rigid, a variable the
--- binding's own arguments carry, or a variable such a term bounds from
--- below — the claim covers the evidence (`α ⊑ β`, the ordinary obligation a
--- value flowing into a slot records); where nothing does, the value proves
--- nothing and the claim is the domain's top.  A pattern recovers the
--- declared field types under the index and mints no claim; the declaring
--- module, trusted with phantom construction (EFFECTS-SEMANTICS §4.1), mints
--- none either.  The decision runs inside the solver's close, once row
--- validation has turned every row check into an authority obligation and
--- before the scope's variables are solved (`closeSummaryScope`).
-data AuthClaim = AuthClaim {
-  acClaim : Ref Authvar,
-  acEvidence : Ref Authvar,
-  acCtor : String,
-  acFn : String,
-  acLoc : Option Loc,
-}
+-- An index slot is invariant.  A flexible variable on either side takes the
+-- other side as its solution outright — a substitution, as an alias
+-- parameter's or an impl head's variable is — so a match or an improvement
+-- loop that unifies indices sees progress rather than a pair of pending
+-- obligations; two determined terms (constants, rigids, joins) record the
+-- equality as the pair of obligations the scope checks.
+unifyIndex : Authority -> Authority -> Unit
+unifyIndex qa qb = match (authNorm qa, authNorm qb)
+  (AVar a, b) if flexibleIndex a b => substituteIndex a b
+  (a, AVar b) if flexibleIndex b a => substituteIndex b a
+  (a, b) =>
+    let _ = wantAuthority a b
+    wantAuthority b a
 
-claimCtorIndices : String -> Mono -> Mono
-claimCtorIndices ctor mono
-  | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
-    claimResultIndices ctor mono
-  | otherwise = mono
-
-claimResultIndices : String -> Mono -> Mono
-claimResultIndices ctor mono = match normalize mono
-  TFun a row b => TFun a row (claimResultIndices ctor b)
-  t => if declaredHere t then t else claimSpineIndices ctor t
-
--- A head declared by the module under inference.
-declaredHere : Mono -> Bool
-declaredHere t = match headMonoNode t
-  TCon _ (OriginModule mid) => mid == driverState.value.currentModuleRef.value
-  _ => False
-
-claimSpineIndices : String -> Mono -> Mono
-claimSpineIndices ctor t = match normalize t
-  TApp a b => TApp (claimSpineIndices ctor a) (claimIndex ctor b)
-  other => other
-
-claimIndex : String -> Mono -> Mono
-claimIndex ctor arg = match normalize arg
-  TAuth (AVar cell) => match !cell
-    AUnbound _ _ top name =>
-      let claim = freshAuthvar top name
-      let entry = AuthClaim {
-        acClaim = claim,
-        acEvidence = cell,
-        acCtor = ctor,
-        acFn = perRun.value.currentFn.value,
-        acLoc = !currentLoc,
-      }
-      let _ = match perRun.value.authorityClaimsRef.value
-        frame :: outer =>
-          perRun.value.authorityClaimsRef := (entry :: frame) :: outer
-        [] => ()
-      TAuth (AVar claim)
-    ALink _ _ => arg
-  other => other
-
--- Decide the closing scope's claims against its obligations (`AuthClaim`).
--- [sources] are the authority variables the scope's bindings carry in an
--- argument position — what a caller supplies.  Claims ground each other
--- (`Tok 1 [Handle "config/app"]`: the inner claim, once equal to its
--- evidence, grounds the outer's), so the decision is a fixpoint: every claim
--- whose evidence is grounded becomes its evidence, and only what no round
--- can ground is the top.
-decideAuthorityClaims : Map Int Unit -> Unit
-decideAuthorityClaims sources = match perRun.value.authorityClaimsRef.value
-  [] => ()
-  frame :: outer =>
-    perRun.value.authorityClaimsRef := outer
-    match frame
-      [] => ()
-      claims =>
-        decideAuthorityClaimsGo
-          (IdMap.foldlWithKey
-            (acc id _ => IdMap.set id () acc)
-            sources
-            perRun.value.rigidAuthvarsRef.value)
-          (reverseL claims)
-
-decideAuthorityClaimsGo : Map Int Unit -> List AuthClaim -> Unit
-decideAuthorityClaimsGo _ [] = ()
-decideAuthorityClaimsGo seed pending =
-  let grounded =
-    groundedAuthorities
-      (EffectSolver.scopeAuthorities perRun.value.effectSummaries)
-      seed
-  let ready =
-    filterList (c => groundedAuthority grounded (AVar c.acEvidence)) pending
-  match ready
-    [] => fold (_ c => decideAuthorityClaim False c) () pending
-    _ =>
-      let _ = fold (_ c => decideAuthorityClaim True c) () ready
-      decideAuthorityClaimsGo
-        (fold (g c => IdMap.set (authvarId c.acClaim) () g) grounded ready)
-        (filterList
-          (c => not (groundedAuthority grounded (AVar c.acEvidence)))
-          pending)
-
--- An evidenced claim covers its evidence; an unevidenced one is the top.
--- Where the result flow has already pinned the claim to a bound the top
--- does not lie within (a written index, a signature's binder), the report
--- names the constructor and the bound, at the construction site.
-decideAuthorityClaim : Bool -> AuthClaim -> Unit
-decideAuthorityClaim evidenced (AuthClaim { acClaim = claim, acEvidence = evidence, acCtor = ctor, acFn = fn, acLoc = loc }) =
-  let savedLoc = !currentLoc
-  let savedFn = perRun.value.currentFn.value
-  currentLoc := loc
-  perRun.value.currentFn := fn
+substituteIndex : Ref Authvar -> Authority -> Unit
+substituteIndex cell term =
+  let _ = lowerAuthLevels (authvarLevel cell) term
   let _ =
-    if evidenced then
-      wantAuthority (AVar evidence) (AVar claim)
+    if authHasVars term then
+      ()
     else
-      let top = authTop (authvarDomain claim)
-      match authNorm (AVar claim)
-        AVar cell =>
-          if IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value then
-            pushTypeErrorAt
-              "T-AUTHORITY"
-              loc
-              (authorityClaimMsg ctor (AVar cell))
-          else
-            wantAuthority top (AVar claim)
-        pinned =>
-          if authSub top pinned then
-            ()
-          else
-            pushTypeErrorAt "T-AUTHORITY" loc (authorityClaimMsg ctor pinned)
-  perRun.value.currentFn := savedFn
-  currentLoc := savedLoc
+      perRun.value.indexSubstitutedRef :=
+        IdMap.set (authvarId cell) () perRun.value.indexSubstitutedRef.value
+  linkAuthvar cell term
 
-authorityClaimMsg : String -> Authority -> String
-authorityClaimMsg ctor bound =
-  "Constructor '\{ctor}' is applied at index \{ppAuthority (Ref []) (Ref 0) bound}, but its arguments carry no evidence for that authority: a construction claims only what its arguments prove, so this value's index is `*`. Derive the index from an argument (a qualified field, a handle, a closure's row), or claim `*`"
-
--- A term is grounded when every variable it mentions is.
-groundedAuthority : Map Int Unit -> Authority -> Bool
-groundedAuthority grounded q =
-  allList (cell => IdMap.has (authvarId cell) grounded) (authVars q)
-
--- The least fixpoint over the scope's obligations: the rigid and
--- argument-carried variables, then every variable an obligation bounds from
--- below by a grounded term.
-groundedAuthorities : List (AuthWanted (Option Loc, String)) ->
-  Map Int Unit ->
-  Map Int Unit
-groundedAuthorities wanteds grounded =
-  let (next, changed) =
-    fold
-      (acc w => match authNorm w.awUpper
-        AVar cell =>
-          if IdMap.has (authvarId cell) (fst acc) then
-            acc
-          else if groundedAuthority (fst acc) w.awLower then
-            (IdMap.set (authvarId cell) () (fst acc), True)
-          else
-            acc
-        _ => acc)
-      (grounded, False)
-      wanteds
-  if changed then groundedAuthorities wanteds next else next
+flexibleIndex : Ref Authvar -> Authority -> Bool
+flexibleIndex cell other =
+  not (IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value)
+    && not (anyList (c => authvarId c == authvarId cell) (authVars other))
 
 -- Ordinary row equality can solve flexible cells, never declaration universals.
 -- Binding-owned summaries instead record both directions for scoped solving.
@@ -1864,13 +1722,15 @@ checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, 
     supers
 checkDeclaredKindsDecl _ _ = ()
 
--- A constructor mentioning an `Authority` parameter in NO field is a phantom
+-- A constructor CARRYING an `Authority` parameter in no field is a phantom
 -- index: applying it proves nothing, so it may invent any authority.  Its
 -- declaring module is trusted with that (an `export data` handle's raw
 -- descriptor), exactly as it is trusted with an extern's row; a module that
 -- exports the constructor itself hands that trust to every importer, which
 -- §4.1 forbids.  Every constructor of a `public export data` with an
--- `Authority` parameter must therefore carry it.
+-- `Authority` parameter must therefore carry it, and carrying is decided by
+-- `tyCarries`, not by mention: `List (Handle p)` mentions `p` and carries
+-- nothing, since `[]` inhabits it at every index.
 checkPhantomAuthorityExport : DataVis ->
   String ->
   List String ->
@@ -1881,7 +1741,7 @@ checkPhantomAuthorityExport VisPublic tyName (p :: ps) variants =
     fold
       (_ v =>
         let tys = payloadAstTypes (variantPayload v)
-        if anyList (tyMentionsAuthority p) tys then
+        if anyList (tyCarries [] p) tys then
           ()
         else
           pushTypeErrorOnceAt
@@ -1905,41 +1765,61 @@ authorityParamNames params anns =
       _ => [])
     (zipL params (padAnns params anns))
 
--- Does the field type carry the authority [p] anywhere a value can prove it:
--- as a qualifier (`String @p`), an atom's parameter (`<L p>`), or an index
--- argument (`Handle p`, by the head's declared kind)?
-tyMentionsAuthority : String -> Ty -> Bool
-tyMentionsAuthority p (TyQual t n) = n == p || tyMentionsAuthority p t
-tyMentionsAuthority p (TyEffect atoms _ t) =
-  anyList (atomNamesAuthority p) atoms || tyMentionsAuthority p t
-tyMentionsAuthority p (TyRow atoms _ _) = anyList (atomNamesAuthority p) atoms
-tyMentionsAuthority p (TyFun a b) =
-  tyMentionsAuthority p a || tyMentionsAuthority p b
-tyMentionsAuthority p (TyTuple ts) = anyList (tyMentionsAuthority p) ts
-tyMentionsAuthority p (TyConstrained _ t) = tyMentionsAuthority p t
-tyMentionsAuthority p (TyNamed _ t) = tyMentionsAuthority p t
-tyMentionsAuthority p (TyApp a b) = match tyAppSpine (TyApp a b)
+-- A field CARRIES the parameter [p] when every value of the field's type
+-- holds a value at [p]'s authority: a qualifier (`String @p`), the
+-- parameter itself, a tuple with a carrying component, or an index `H … p …`
+-- of a head whose every constructor carries that parameter (`Handle p`, by
+-- the head's own constructors) — not `List (Handle p)`, whose `[]` carries
+-- nothing, and not an arrow, which an idle closure inhabits.  A head whose
+-- constructors an importer cannot apply (`export data`, a private head) is
+-- trusted: only its declaring module builds a value of it, so holding one is
+-- holding that module's word.  A builtin container (`List`, `Array`) has no
+-- registered constructors and carries nothing.  Recursion through a head
+-- assumes the head carries (the greatest fixpoint): a finite value bottoms
+-- out in a carrying constructor, or the type is empty.
+tyCarries : List TabKey -> String -> Ty -> Bool
+tyCarries _ p (TyVar n) = n == p
+tyCarries seen p (TyQual t n) = n == p || tyCarries seen p t
+tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
+tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
+tyCarries seen p (TyNamed _ t) = tyCarries seen p t
+tyCarries seen p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
-      Some kinds if listLen kinds == listLen args =>
-        anyList (ka => authoritySlotNames p (fst ka) (snd ka)) (zipL kinds args)
-          || anyList (tyMentionsAuthority p) args
-      _ => anyList (tyMentionsAuthority p) args
-  (hd, args) => tyMentionsAuthority p hd || anyList (tyMentionsAuthority p) args
-tyMentionsAuthority _ _ = False
-
-authoritySlotNames : String -> Kind -> Ty -> Bool
-authoritySlotNames p (KAuth _) (TyVar n) = n == p
-authoritySlotNames _ _ _ = False
-
-atomNamesAuthority : String -> EffAtomTy -> Bool
-atomNamesAuthority p a = match a.eatParam
-  EPName n => n == p
+    argsCarry seen p (tyTabKey o n) 0 args
   _ => False
+tyCarries _ _ _ = False
+
+-- Argument [i] of head [key] carries [p] when the head's parameter [i]
+-- carries and the argument is [p] itself or carries it.
+argsCarry : List TabKey -> String -> TabKey -> Int -> List Ty -> Bool
+argsCarry _ _ _ _ [] = False
+argsCarry seen p key i (arg :: rest) =
+  paramCarries seen key i && tyCarries seen p arg
+    || argsCarry seen p key (i + 1) rest
+
+paramCarries : List TabKey -> TabKey -> Int -> Bool
+paramCarries seen key i
+  | anyList (k => tabKeyEq k key) seen = True
+  | otherwise = match lookupTab key crossRun.value.universeDataCtors.value
+    None => False
+    Some (VisPublic, params, variants) => match nthOpt i params
+      None => False
+      Some q =>
+        allList
+          (v =>
+            anyList
+              (tyCarries (key :: seen) q)
+              (payloadAstTypes (variantPayload v)))
+          variants
+    Some _ => True
+
+nthOpt : Int -> List a -> Option a
+nthOpt _ [] = None
+nthOpt i (x :: rest) = if i == 0 then Some x else nthOpt (i - 1) rest
 
 phantomExportMsg : String -> String -> String -> String
 phantomExportMsg tyName ctor p =
-  "Constructor '\{ctor}' of public type '\{tyName}' carries its authority parameter '\{p}' in no field, so applying it from another module would invent an authority nothing proves. Export '\{tyName}' abstractly (`export data`, constructing it only here), or give '\{ctor}' a field that carries '\{p}' (`String @\{p}`, an atom `<L \{p}>`, or an index)"
+  "Constructor '\{ctor}' of public type '\{tyName}' carries its authority parameter '\{p}' in no field, so applying it from another module would invent an authority nothing proves. Export '\{tyName}' abstractly (`export data`, constructing it only here), or give '\{ctor}' a field that carries '\{p}': a qualifier (`String @\{p}`), a tuple holding one, or an index of a type whose every constructor carries it (`Handle \{p}`; not `List (Handle \{p})`, whose empty list carries nothing, and not a closure)"
 
 authorityParamAsRowMsg : String -> String -> String
 authorityParamAsRowMsg name p =
@@ -8846,6 +8726,10 @@ data CrossRun = CrossRun {
   universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
   universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
   universeRecordByName : Ref (OrdMap RecordInfo),
+  -- Every registered head's parameters and constructors, from every module
+  -- the universe has registered (the prelude's included), keyed by identity
+  -- and read by `tyCarries`; a head absent here is abstract.
+  universeDataCtors : Ref (List (TabKey, (DataVis, List String, List Variant))),
   universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
   universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
   universeDataEnv : Ref TcEnv,
@@ -8947,6 +8831,7 @@ freshCrossRun env = CrossRun {
   universeMethodCollidedRef = Ref [],
   universeMethodDispatchIdxByIdRef = Ref [],
   universeRecordByName = Ref omEmpty,
+  universeDataCtors = Ref [],
   universeRecordIdentsRef = Ref omEmpty,
   universeRecordCollidedRef = Ref [],
   universeDataEnv = Ref env,
@@ -10177,6 +10062,16 @@ data EvCell = EvCell {
 data GraphRun = GraphRun {
   tyvarCounter : Ref Int,
   effvarCounter : Ref Int,
+  -- The quantified authority ids of every constructor scheme that are
+  -- EXISTENTIAL (a binder written on the constructor, not the head); keyed by
+  -- the id itself, so a same-named constructor in another module cannot
+  -- answer.  It lives with the id counter: a record or scheme the universe
+  -- seeds into a later module carries cells minted here, and their ids must
+  -- still answer there.
+  ctorExistentialsRef : Ref (Map Int Unit),
+  -- set once any constructor with an existential binder is registered, so a
+  -- program without one pays nothing per pattern
+  anyExistentialsRef : Ref Bool,
   -- #2547 unit 2: the ONE channel for the route-stamped site goals (return sites,
   -- arg stamps, RLocal sites, binop/unop sites, arithmetic sites) — see `Obligation`.
   goals : Ref (List Obligation),
@@ -10228,6 +10123,8 @@ freshGraphRun : Unit -> GraphRun
 freshGraphRun _ = GraphRun {
   tyvarCounter = Ref 0,
   effvarCounter = Ref 0,
+  ctorExistentialsRef = Ref Tip,
+  anyExistentialsRef = Ref False,
   goals = Ref [],
   numlitRefs = Ref [],
   numlitN = Ref 0,
@@ -10391,6 +10288,8 @@ copyGraphRun : GraphRun -> GraphRun
 copyGraphRun g = GraphRun {
   tyvarCounter = Ref g.tyvarCounter.value,
   effvarCounter = Ref g.effvarCounter.value,
+  ctorExistentialsRef = Ref g.ctorExistentialsRef.value,
+  anyExistentialsRef = Ref g.anyExistentialsRef.value,
   goals = Ref g.goals.value,
   numlitRefs = Ref g.numlitRefs.value,
   numlitN = Ref g.numlitN.value,
@@ -10688,13 +10587,6 @@ data PerRun = PerRun {
   effectSummaries : SummarySolver (Option Loc, String),
   rigidEffvarsRef : Ref (Map Int Unit),
   rigidAuthvarsRef : Ref (Map Int Unit),
-  -- The quantified authority ids of every constructor scheme that are
-  -- EXISTENTIAL (a binder written on the constructor, not the head); keyed by
-  -- the id itself, so a same-named constructor in another module cannot answer.
-  ctorExistentialsRef : Ref (Map Int Unit),
-  -- set once any constructor with an existential binder is registered, so a
-  -- program without one pays nothing per pattern
-  anyExistentialsRef : Ref Bool,
   -- Effect provenance: for each (binding, label key), the first site in that
   -- binding that performed the label, so a failure about the label's
   -- authority or its presence points at the call rather than at the body or
@@ -10710,13 +10602,14 @@ data PerRun = PerRun {
   -- Existential cells reported as escaping their scope: an obligation over
   -- one is a consequence of the escape, not a second defect.
   escapedExistentialsRef : Ref (Map Int Unit),
+  -- Index variables an index equality substituted a determined term for
+  -- (`unifyIndex`): a report reads such a variable as the written bound it
+  -- stands for, not as a bound the scope solved.
+  indexSubstitutedRef : Ref (Map Int Unit),
   -- The retained post-hoc escape walk's findings, held until the group's
   -- solver scope has closed, so the scoped report (located at the call)
   -- wins and the walk adds only what the solver did not see.
   pendingEscapesRef : Ref (List (String, Option Loc, String)),
-  -- Each open solver scope's constructor-index claims (`AuthClaim`), decided
-  -- against the scope's obligations when it closes.
-  authorityClaimsRef : Ref (List (List AuthClaim)),
   -- The existential cells the pattern site currently being inferred opened,
   -- parked per pattern site exactly as `patLitPending` is (`takePatLits`).
   openedExistentialsRef : Ref (List (Ref Authvar)),
@@ -10827,14 +10720,12 @@ freshPerRun _ = PerRun {
   effectSummaries = EffectSolver.newSolver (),
   rigidEffvarsRef = Ref Tip,
   rigidAuthvarsRef = Ref Tip,
-  ctorExistentialsRef = Ref Tip,
-  anyExistentialsRef = Ref False,
   effectSitesRef = Ref omEmpty,
   rowFailureReportedRef = Ref omEmpty,
   typeErrorKeySetRef = Ref omEmpty,
   escapedExistentialsRef = Ref Tip,
+  indexSubstitutedRef = Ref Tip,
   pendingEscapesRef = Ref [],
-  authorityClaimsRef = Ref [],
   openedExistentialsRef = Ref [],
   openedExistentialsStackRef = Ref [],
   recordByNameRef = Ref omEmpty,
@@ -11097,9 +10988,7 @@ unifyN (TFun a1 r1 b1) (TFun a2 r2 b2) =
 unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2
 -- An `Authority`-kinded type-argument index is INVARIANT (§6.4): the two
 -- authorities must cover each other, in both directions, whatever the flow.
-unifyN (TAuth qa) (TAuth qb) =
-  let _ = wantAuthority qa qb
-  wantAuthority qb qa
+unifyN (TAuth qa) (TAuth qb) = unifyIndex qa qb
 unifyN (TQual a qa) (TQual b qb) =
   let _ = wantAuthority qa qb
   let _ = wantAuthority qb qa
@@ -11191,10 +11080,13 @@ mentionsEscaped q =
       IdMap.has (authvarId cell) perRun.value.escapedExistentialsRef.value)
     (authVars q)
 
--- The upper term was recorded as a variable and has since been solved.
+-- The upper term was recorded as a variable and has since been solved by
+-- the scope — not substituted by an index equality with a written term,
+-- which reads as the written bound it is.
 solvedUpper : Option Authority -> Bool
 solvedUpper (Some (AVar cell)) = match !cell
-  ALink _ _ => True
+  ALink _ _ =>
+    not (IdMap.has (authvarId cell) perRun.value.indexSubstitutedRef.value)
   AUnbound _ _ _ _ => False
 solvedUpper _ = False
 
@@ -11555,10 +11447,12 @@ bindOutsideDoMsg =
 generalize : Mono -> Scheme
 generalize t = quantifyFree pureRow t
 
-generalizeBinding : EffRow -> Mono -> Scheme
-generalizeBinding force t =
+-- [declared] are the authority cells a written signature binds: rigid through
+-- the body and published as written, never defaulted.
+generalizeBindingDeclared : Map Int Unit -> EffRow -> Mono -> Scheme
+generalizeBindingDeclared declared force t =
   let _ = defaultDeferredPatLitsIn perRun.value.currentLevel.value t
-  let _ = defaultSourcelessAuthorities force t
+  let _ = defaultSourcelessAuthorities declared force t
   quantifyFree force t
 
 quantifyFree : EffRow -> Mono -> Scheme
@@ -11767,11 +11661,11 @@ lowerToCurrent t = match normalize t
 -- Generalize a value RHS; value-restrict (monomorphize, lowering free vars)
 -- otherwise.  monoScheme leaves the mono ungeneralized.
 genRestricted : Bool -> Mono -> Scheme
-genRestricted isValue t = genBindingRestricted isValue pureRow t
+genRestricted isValue t = genBindingRestricted Tip isValue pureRow t
 
-genBindingRestricted : Bool -> EffRow -> Mono -> Scheme
-genBindingRestricted isValue force t
-  | isValue = generalizeBinding force t
+genBindingRestricted : Map Int Unit -> Bool -> EffRow -> Mono -> Scheme
+genBindingRestricted declared isValue force t
+  | isValue = generalizeBindingDeclared declared force t
   | otherwise =
     let _ = lowerToCurrent t
     let _ = lowerRowLevels perRun.value.currentLevel.value force
@@ -11827,12 +11721,20 @@ freshAuthSubstOpening : List Int ->
   (List (Int, Authority), List (Ref Authvar))
 freshAuthSubstOpening [] _ = ([], [])
 freshAuthSubstOpening ids body =
-  let cells = authCellsIn body Tip
+  freshAuthSubstOpeningIn ids (authCellsIn body Tip)
+
+-- The same, given the scheme's cells already collected (a record's binder
+-- cells sit in its fields, not in its result).
+freshAuthSubstOpeningIn : List Int ->
+  Map Int (Ref Authvar) ->
+  (List (Int, Authority), List (Ref Authvar))
+freshAuthSubstOpeningIn [] _ = ([], [])
+freshAuthSubstOpeningIn ids cells =
   let pairs =
     map
       (id =>
         let cell = freshInferenceAuthvar (IdMap.get id cells)
-        (id, cell, IdMap.has id perRun.value.ctorExistentialsRef.value))
+        (id, cell, IdMap.has id graphRun.value.ctorExistentialsRef.value))
       ids
   let opened = flatMap (p => if third3 p then [second3 p] else []) pairs
   perRun.value.rigidAuthvarsRef :=
@@ -11938,9 +11840,9 @@ generalizableAuthvars cells =
 -- caller a way to supply it: a qualified argument slot.  A variable that
 -- occurs only in rows has no source, so publication takes the domain's top
 -- for it rather than claiming an authority nothing determines.
-defaultSourcelessAuthorities : EffRow -> Mono -> Unit
-defaultSourcelessAuthorities force t =
-  let sources = qualifierAuthIds t Tip
+defaultSourcelessAuthorities : Map Int Unit -> EffRow -> Mono -> Unit
+defaultSourcelessAuthorities declared force t =
+  let sources = qualifierAuthIds t declared
   let candidates = IdMap.values (authCellsIn t (authRowCells force Tip))
   fold
     (_ cell =>
@@ -12407,7 +12309,7 @@ reportBinderDomains ty uses =
       if anyList
         (v => fst v == fst u && not (sameDomainTop (snd u) (snd v)))
         uses then
-        pushTypeErrorOnceAt
+        pushTypeErrorAt
           "T-AUTHORITY-DOMAIN"
           (firstTyLoc ty)
           (binderDomainMsg (fst u)))
@@ -15311,10 +15213,13 @@ inferRecordCreateWith env rname ri fields =
       (recordFieldNames ri)
       (omFromPairs (map fieldAssignNamePair fields) omEmpty)
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
-  claimCtorIndices rname (snd sr)
+  snd sr
 
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignNamePair (FieldAssign fn _) = (fn, ())
+
+assignedFieldNames : List FieldAssign -> List String
+assignedFieldNames fields = map (fa => fst (fieldAssignNamePair fa)) fields
 
 -- Index-based field-assignment unify for the record CREATE and UPDATE paths: instead of
 -- instantiating all N declared fields and linearly `lookupAssoc`-ing each supplied
@@ -16344,7 +16249,7 @@ inferRecordUpdatePicked : String ->
   RecordInfo ->
   Mono
 inferRecordUpdatePicked rname bt env fields ri =
-  let sr = instantiateRecordShared ri
+  let sr = instantiateRecordUpdate rname ri (assignedFieldNames fields)
   let _ = unify bt (snd sr)
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
   snd sr
@@ -16356,7 +16261,7 @@ inferRecordUpdateWith : TcEnv ->
   RecordInfo ->
   Mono
 inferRecordUpdateWith env rname base fields ri =
-  let sr = instantiateRecordShared ri
+  let sr = instantiateRecordUpdate rname ri (assignedFieldNames fields)
   let _ = unify (infer env base) (snd sr)
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
   snd sr
@@ -17275,12 +17180,7 @@ inferVarPlainId env x id = match lookupVar env x
       recordMethodObligationOwned env x s inst.mtiBody inst.mtiSubstitution None
     None =>
       let mono = instantiateVarTrackedId env x id s
-      let guarded = recordMethodObligationGuarded env x s mono
-      -- `lookupVar` answered from the constructor table
-      if isSome (lookupBinding env x) then
-        guarded
-      else
-        claimCtorIndices x guarded
+      recordMethodObligationGuarded env x s mono
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -18191,9 +18091,7 @@ unifyIntoN vf pos (TQual e qe) a =
 unifyIntoN vf pos e (TQual a qa) =
   let _ = if pos then () else wantAuthority (authTop (authDomainTop qa)) qa
   unifyIntoOrd vf pos e a
-unifyIntoN _ _ (TAuth qe) (TAuth qa) =
-  let _ = wantAuthority qa qe
-  wantAuthority qe qa
+unifyIntoN _ _ (TAuth qe) (TAuth qa) = unifyIndex qa qe
 unifyIntoN vf pos (TFun e1 er e2) (TFun a1 ar a2) =
   let _ = unifyIntoOrd vf (not pos) e1 a1
   let _ = rowInto pos (effrowNorm er) (effrowNorm ar)
@@ -20854,7 +20752,7 @@ inferArms env scrutTy ((Arm pat gs body) :: rest) =
 
 inferArm : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
 inferArm env scrutTy pat gs body
-  | perRun.value.anyExistentialsRef.value && patOpensExistentials env pat =
+  | graphRun.value.anyExistentialsRef.value && patOpensExistentials env pat =
     inferArmOpening env scrutTy pat gs body
   | otherwise =
     let lits = takePatLits ()
@@ -20895,7 +20793,7 @@ recordHasExistentials None = False
 
 anyExistential : List Int -> Bool
 anyExistential ids =
-  anyList (id => IdMap.has id perRun.value.ctorExistentialsRef.value) ids
+  anyList (id => IdMap.has id graphRun.value.ctorExistentialsRef.value) ids
 
 -- An arm whose pattern opened existential authorities (§4.1) is their scope.
 -- The body runs one level deeper, so a cell bound into anything the arm did
@@ -21105,7 +21003,8 @@ instantiateRecordOpening : RecordInfo ->
   ((Mono, List (String, Mono)), List (Ref Authvar))
 instantiateRecordOpening (RecordInfo paramIds authIds result fields _) =
   let subst = freshSubst paramIds
-  let (asub, opened) = freshAuthSubstOpening authIds result
+  let (asub, opened) =
+    freshAuthSubstOpeningIn authIds (recordAuthCells authIds result fields)
   (
     (substMono subst [] asub result, map (substField subst asub) fields),
     opened,
@@ -21119,13 +21018,66 @@ instantiateRecordOpening (RecordInfo paramIds authIds result fields _) =
 instantiateRecordShared : RecordInfo -> (RecordSubst, Mono)
 instantiateRecordShared (RecordInfo paramIds authIds result fields _) =
   let subst = freshSubst paramIds
-  let cells =
-    if isEmptyL authIds then
-      Tip
-    else
-      fold (m f => authCellsIn (snd f) m) (authCellsIn result Tip) fields
+  let cells = recordAuthCells authIds result fields
   let asub = map (id => (id, sharedAuthority id (IdMap.get id cells))) authIds
   (RecordSubst subst asub, substMono subst [] asub result)
+
+-- The record's authority cells, by id: the head's in the result, a
+-- constructor binder's in the fields.
+recordAuthCells : List Int ->
+  Mono ->
+  List (String, Mono) ->
+  Map Int (Ref Authvar)
+recordAuthCells [] _ _ = Tip
+recordAuthCells _ result fields =
+  fold (m f => authCellsIn (snd f) m) (authCellsIn result Tip) fields
+
+-- An update repacks a field under an existential binder only where it
+-- replaces every field that mentions the binder: the value's index is then
+-- the replacement's own.  Replacing some of them would leave one binder
+-- naming two values at different authorities, so that is refused.  A binder
+-- none of the assigned fields mentions is untouched and, as at a read,
+-- recovers the top.
+instantiateRecordUpdate : String ->
+  RecordInfo ->
+  List String ->
+  (RecordSubst, Mono)
+instantiateRecordUpdate rname (RecordInfo paramIds authIds result fields _) assigned =
+  let subst = freshSubst paramIds
+  let cells = recordAuthCells authIds result fields
+  let asub =
+    map
+      (id =>
+        (id, updateAuthority rname fields assigned id (IdMap.get id cells)))
+      authIds
+  (RecordSubst subst asub, substMono subst [] asub result)
+
+updateAuthority : String ->
+  List (String, Mono) ->
+  List String ->
+  Int ->
+  Option (Ref Authvar) ->
+  Authority
+updateAuthority rname fields assigned id source
+  | IdMap.has id graphRun.value.ctorExistentialsRef.value =
+    let mentioning =
+      map fst (filterList (f => IdMap.has id (authCellsIn (snd f) Tip)) fields)
+    let replaced = filterList (n => contains n assigned) mentioning
+    if isEmptyL replaced then
+      sharedAuthority id source
+    else if listLen replaced == listLen mentioning then
+      AVar (freshInferenceAuthvar source)
+    else
+      let _ =
+        pushTypeError
+          "T-AUTHORITY-EXISTENTIAL-SCOPE"
+          (partialExistentialUpdateMsg rname mentioning)
+      AVar (freshInferenceAuthvar source)
+  | otherwise = AVar (freshInferenceAuthvar source)
+
+partialExistentialUpdateMsg : String -> List String -> String
+partialExistentialUpdateMsg rname names =
+  "Updating '\{rname}' replaces a field under an existential authority binder, but not every field that mentions the binder (\{joinWith ", " names}): one binder cannot name two values at different authorities. Replace them all together, or rebuild the record"
 
 -- A universal freshens flexible, as at any use.  An existential binder is
 -- opened only by a pattern; a field read or update sees the value without
@@ -21133,7 +21085,7 @@ instantiateRecordShared (RecordInfo paramIds authIds result fields _) =
 -- nothing about an authority the read cannot name.
 sharedAuthority : Int -> Option (Ref Authvar) -> Authority
 sharedAuthority id source
-  | IdMap.has id perRun.value.ctorExistentialsRef.value = match source
+  | IdMap.has id graphRun.value.ctorExistentialsRef.value = match source
     Some cell => authTop (authvarDomain cell)
     None => authTop PUnit
   | otherwise = AVar (freshInferenceAuthvar source)
@@ -21236,6 +21188,17 @@ registerVariants o env name params anns variants binders =
 -- overlay over the data universe and therefore win, which is the ordering every reader
 -- assumes (see the `dataEnv` binding in checkBodyImpl).
 -- (`o` is the DECLARATION's identity — #1111 A-2.3; see `tyTabKey`.)
+recordCtors : TyConOrigin ->
+  String ->
+  DataVis ->
+  List String ->
+  List Variant ->
+  Unit
+recordCtors o name vis params variants =
+  crossRun.value.universeDataCtors :=
+    (tyTabKey o name, (vis, params, variants))
+      :: crossRun.value.universeDataCtors.value
+
 -- Called once per head, by `recordDeclKinds` ahead of the declarations
 -- (`registerAllDataGo`): a constant-time prepend, never a scan of the table,
 -- which grows with every imported module.
@@ -21789,11 +21752,11 @@ existentialCells binders =
 recordExistentials : List (String, Ref Authvar) -> Unit
 recordExistentials [] = ()
 recordExistentials cells =
-  perRun.value.anyExistentialsRef := True
-  perRun.value.ctorExistentialsRef :=
+  graphRun.value.anyExistentialsRef := True
+  graphRun.value.ctorExistentialsRef :=
     fold
       (m c => IdMap.set (authvarId (snd c)) () m)
-      perRun.value.ctorExistentialsRef.value
+      graphRun.value.ctorExistentialsRef.value
       cells
 
 -- positional with the variants; a short list (a decl synthesised without
@@ -25418,11 +25381,38 @@ cohFreshTys tys = snd (implHeadMonos tys)
 -- variable.
 implHeadMonos : List Ty -> (List (String, Mono), List Mono)
 implHeadMonos tys =
+  let _ = fold (_ ty => checkImplHeadIndices ty) () tys
   let auths = dedupBinders (flatMap authArgBindersIn tys) []
   let tvMap =
     freshTvMap (removeAllS (map fst auths) (dedup (flatMap tyVarNames tys)))
   let etbl = sigVarsWithAuths (map freshAuthBinder auths) emptySigVars
   (tvMap, map (fromAstTypeE etbl tvMap) tys)
+
+-- An instance is chosen by its head's type constructor and the index is
+-- erased, so an impl covers every index of the head: an `Authority` slot of
+-- an impl head takes a name, never a written term.
+checkImplHeadIndices : Ty -> Unit
+checkImplHeadIndices (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+    match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+      Some kinds if listLen kinds == listLen args =>
+        fold
+          (_ ka => match ka
+            (KAuth _, TyAuth p loc) =>
+              pushTypeErrorOnceAt
+                "T-AUTHORITY-KIND"
+                loc
+                (implHeadIndexMsg n (ppTy (TyAuth p loc)))
+            _ => ())
+          ()
+          (zipL kinds args)
+      _ => ()
+  _ => ()
+checkImplHeadIndices _ = ()
+
+implHeadIndexMsg : String -> String -> String
+implHeadIndexMsg head written =
+  "An impl head abstracts over an `Authority` index: `impl I (\{head} p)` covers every index, since an instance is chosen by the type's head and the index is erased. Write a name in the slot instead of `\{written}`"
 
 -- #1559 A-3.7: THE `IE`→`CohImpl` ADAPTER — coherence's input, relocated off the decl
 -- walk.  Every one of the four things coherence judges on comes out of the row:
@@ -36426,6 +36416,12 @@ monoSameGiven a b = match peelQual a
   TFun a1 _ b1 => match peelQual b
     TFun a2 _ b2 => monoSameGiven a1 a2 && monoSameGiven b1 b2
     _ => False
+  -- an authority index is erased at dispatch: one instance covers every
+  -- index of its head (`checkImplHeadIndices`), as coherence's `cohEqR`
+  -- already answers
+  TAuth _ => match peelQual b
+    TAuth _ => True
+    _ => False
   _ => False
 
 -- #1956: THE ANSWER TO "when are two predicate argument vectors the same predicate?" —
@@ -37951,9 +37947,12 @@ registerAllDataGo env ds =
 
 recordDeclKinds : Decl -> Unit
 recordDeclKinds (DAttrib _ d) = recordDeclKinds d
-recordDeclKinds (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataOrigin = o }) =
+recordDeclKinds (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) =
+  let _ = recordCtors o name vis params variants
   recordParamKinds o name (declParamKinds params anns)
-recordDeclKinds (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeOrigin = o }) =
+recordDeclKinds (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) =
+  let vis = if pub then VisPublic else VisAbstract
+  let _ = recordCtors o name vis params [Variant con (ConPos [fty])]
   recordParamKinds o name (declParamKinds params anns)
 recordDeclKinds (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
   recordParamKinds o name (declParamKinds params anns)
@@ -38340,10 +38339,6 @@ processSCC env sigs grouped0 members =
       (fold (acc member => memberEffectRoots member acc) Tip scopedMembers)
       (fold
         (acc member => borrowedEffectCells member.smOwned.bsValue acc)
-        Tip
-        scopedMembers)
-      (fold
-        (acc member => qualifierAuthIds member.smOwned.bsValue acc)
         Tip
         scopedMembers)
   perRun.value.rigidEffvarsRef := savedRigidEffects
@@ -39238,7 +39233,14 @@ sccSchemes _ _ _ _ [] = []
 sccSchemes env sigs grouped isLetrec (member :: rest) =
   let m = member.smName
   let isVal = allList (memberClauseIsValue env) (clausesOf m grouped)
-  (m, genBindingRestricted isVal (memberForce member) member.smMono)
+  (
+      m,
+      genBindingRestricted
+        member.smDeclaredAuths.value
+        isVal
+        (memberForce member)
+        member.smMono,
+    )
     :: sccSchemes env sigs grouped isLetrec rest
 
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
@@ -45895,6 +45897,7 @@ copyCrossRun c = CrossRun {
   universeMethodDispatchIdxByIdRef =
     Ref c.universeMethodDispatchIdxByIdRef.value,
   universeRecordByName = Ref c.universeRecordByName.value,
+  universeDataCtors = Ref c.universeDataCtors.value,
   universeRecordIdentsRef = Ref c.universeRecordIdentsRef.value,
   universeRecordCollidedRef = Ref c.universeRecordCollidedRef.value,
   universeDataEnv = Ref c.universeDataEnv.value,

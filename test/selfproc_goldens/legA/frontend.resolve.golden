@@ -136,7 +136,7 @@ dupSignatureErrors : List Decl -> List ResError
 dupValClause : Decl -> Option (String, Bool, Option Loc)
 dupValGo : Option String -> Bool -> List Decl -> List ResError
 dupValueBindingErrors : List Decl -> List ResError
-duplicateCtorBinders : List String -> List (String, KindAnn) -> List ResError
+duplicateCtorBinders : List String -> List (String, KindAnn) -> Option Loc -> List ResError
 duplicateErrors : List Decl -> List Decl -> List ResError
 dvbName : ResError -> String
 effectAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
@@ -154,6 +154,7 @@ externWithBodyErrors : List String -> List Decl -> List ResError
 fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
 fieldOwnersOf : List Decl -> List (String, String)
+fieldTyOf : Field -> Ty
 fieldVerdict : Option Loc -> Env -> String -> String -> List String -> List ResError
 fileOfModuleErrors : List (String, String) -> (String, List ResError) -> (String, List ResError)
 fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
@@ -459,6 +460,7 @@ useStubNames : UsePath -> List String
 userValueNames : List Decl -> List String
 valueProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
 variantFieldOwners : Variant -> List (String, String)
+variantFieldTys : Variant -> List Ty
 variantName : Variant -> String
 whenL : Bool -> List a -> List a
 withResErrorLoc : Loc -> ResError -> ResError

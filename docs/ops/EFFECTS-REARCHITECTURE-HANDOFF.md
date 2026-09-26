@@ -479,12 +479,19 @@ recommended option of a short proposal:**
   open the binder; it recovers the domain's top (`sharedAuthority`).
 - *S0: the phantom check is syntactic.* `Tok Int (List (Handle p))` and
   `Cb Int (Unit -> <FileRead p> Unit)` pass `T-AUTHORITY-PHANTOM-EXPORT`, and an
-  importer built `Tok 1 []` and `Cb 1 (u => ())` at `"config/*"`. The general
-  rule: a construction's index is a claim bounded by its arguments' evidence
-  (architecture item 8, semantics §4.1). The same rule closes the S2 forwarder
-  (`export mkRaw = Raw` republished `Int -> Raw p`): publication now counts
+  importer built `Tok 1 []` and `Cb 1 (u => ())` at `"config/*"`. The first
+  answer was a dynamic rule — a construction's index as a claim bounded by its
+  arguments' evidence, decided at the scope's close — and the second review
+  round showed it order-dependent (`Tok 1 (hsOf t)` published `Tok *` where
+  `hsOf t |> Tok 1` published `Tok p`; a claim in a `let` was decided before
+  its evidence; grounding accepted `[] : List (Handle "cfg/*")`). The rule that
+  stands is static: the export check decides *carrying* by the field's type
+  (architecture item 8, semantics §4.1), so `Tok` is refused at its
+  declaration and the claim machinery is gone. The S2 forwarder (`export
+  mkRaw = Raw` republished `Int -> Raw p`) is closed by publication counting
   only argument-position occurrences as sources (`qualifierAuthIds`), so the
-  forwarder is `Int -> Raw *`.
+  forwarder is `Int -> Raw *`; a written signature's binders are never
+  defaulted.
 - *S0: a constructor binder spelled like the head's parameter defeated the
   check.* Resolve reports it as `R-DUP-BINDER` (`duplicateCtorBinders`).
 - *S0: `fmt` corrupted an existential record constructor* (binders printed
@@ -523,6 +530,28 @@ recommended option of a short proposal:**
   #154/#150 quadratic's own band (CI read r2 2.53 on the data-half head
   before any of this).
 
+**The second review round (2026-09-25, on `04b66839b`), reproduced and answered:**
+
+- *S0:* an imported existential record's field read published `SealedR ->
+  Handle a` (the existential id table was per module; it lives with the id
+  counter now); the claim rule was grounded by positions that prove nothing
+  (replaced, above).
+- *S1:* the claim decision was order-dependent and scope-dependent
+  (replaced); a written signature with a result-only index was republished at
+  `*` (declared binders are never defaulted); a return-position method at an
+  authority-indexed impl head panicked (`monoSameGiven` is index-blind, as
+  coherence is); a two-parameter interface over an indexed head hung in an
+  improvement loop (a flexible index substitutes, `unifyIndex`); an impl at a
+  literal index never dispatched (refused: an impl head takes a name).
+- *S2/S3:* a binder-domain report once per module (once per signature now);
+  `fmt` moved a comment out of an existential record constructor
+  (`printNamedFieldData` renders the binders); a top qualifier printed as
+  `String @` (bare type); a partial update of an existential record (refused
+  unless every field under the binder is replaced); the duplicate-binder
+  report was unlocated (at the constructor's fields); a record-pattern
+  existential escape named `'?'` (the binder's cells are collected from the
+  fields). The claim fixpoint's superlinearity went with the claims.
+
 **Owed after the data-half session:**
 
 - A span on `TyQual`, the `ELoc` restore, the `@(a | b)` qualifier form
@@ -530,11 +559,9 @@ recommended option of a short proposal:**
 - Delivery item 7 (stdlib migration to handles).
 - An unlocated `effect` declaration (`DEffect` carries no `Loc`): the axis
   and kind-label diagnostics report at the file's first span.
-- The claim report reuses `T-AUTHORITY` with its own wording; an index
-  mismatch between two written indices still reads as a row failure
-  ("reaches X where its declared bound admits only Y"). A dedicated wording
-  for index equality, and naming an existential cell after the field that
-  carries it in messages, are wording work.
+- An index mismatch between two written indices still reads as a row failure
+  ("reaches X where its declared bound admits only Y"); a dedicated wording
+  for index equality is wording work.
 - `check_policy`'s bare Product token lifts through the same first-axis
   rule; a manifest row naming two same-spelled labels from two origins is
   keyed qualified (above) but the policy's `Method=true` decode of a written
@@ -814,6 +841,17 @@ Every negative needs an honest control. #3382 and #3383 must become ordinary
 regressions asserting rejection, not disappear by changing their expected output.
 
 ## Verification receipts and their limits
+
+Data-half head `04b66839b` (PR #3445, 2026-09-25): the `pull_request` run
+36200182399 completed green on every job — the eight gate shards each ran
+their planned gates (the shard step and the timing upload both succeeded),
+`compiler-soundness` ran the must-fail suite, the whole-source typecheck and
+the emitter fixpoint, `soundness`, `wasm`, `inlang`, `seed-health`,
+`ci-gen-drift`, `gate-balance`, `gate-budget` and `gate-cost` all succeeded.
+Locally on the same head: strict closure clean, whole-source typecheck PASS,
+C3a/C3b yes, matrix 26/26, 46 gates green, `modules:typecheck` r1 2.50 r2 2.34
+quiet. A PR run is narrowed by the change→gate map; the merge queue runs the
+whole suite.
 
 Before the recursive carrier additions: 69 binding, 26 solver, 5 value and 3 repr
 native tests passed (103 total); CHECK CLI plus 71 entries and ELABORATE CLI;

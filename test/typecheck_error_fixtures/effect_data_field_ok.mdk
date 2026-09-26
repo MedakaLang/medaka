@@ -94,4 +94,36 @@ count s = s.n
 -- an unsigned forwarder of a phantom constructor publishes the top
 mkRaw = Raw
 
+-- a signature's index publishes as written
+none : Unit -> List (Handle p)
+none _ = []
+
+useNone : Unit -> List (Handle "config/*")
+useNone _ = none ()
+
+-- a return-position method and a two-parameter interface at an indexed head
+interface Make a where
+  make : Int -> a
+
+impl Make (Raw p) where
+  make n = Raw n
+
+madeRaw : Unit -> Raw "config/*"
+madeRaw _ = make 3
+
+interface Conv a b where
+  conv : a -> b
+
+impl Conv (Raw p) Int where
+  conv _ = 1
+
+convRaw : Raw "config/a" -> Int
+convRaw r = conv r
+
+-- an existential record update repacks the binder whole
+data Two = Two (p : Authority FileRead) { a : Handle p, b : Handle p }
+
+repackTwo : Two -> Two
+repackTwo t = { t | a = Handle "/etc/x", b = Handle "/etc/x" }
+
 main = println 1
