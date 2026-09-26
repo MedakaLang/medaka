@@ -14,6 +14,7 @@
 
 import frontend.ast.{
   Loc(..),
+  declNameLoc,
   orElseLoc,
   Lit(..),
   Ty(..),
@@ -2477,21 +2478,63 @@ externWithBodyErrors externs ((DFunDef _ n _ _) :: rest) =
     ++ externWithBodyErrors externs rest
 externWithBodyErrors externs (_ :: rest) = externWithBodyErrors externs rest
 
+-- A program's own type may shadow a prelude type (#3465): the resolver and
+-- the typechecker give a module's declaration precedence over the prelude's
+-- (`tyOriginScope`), so only a builtin head, which no declaration defines,
+-- and a second declaration in the program itself clash.  Constructors and
+-- interfaces are still reserved against the prelude: a constructor is keyed
+-- by its spelling downstream (#3471) and an interface's methods collide with
+-- the prelude's.  Each report is located at the declaration's name.
 duplicateErrors : List Decl -> List Decl -> List ResError
 duplicateErrors preludeDecls prog =
   let seed = not (programIsCore prog)
-  let typeSeed = primitiveTypes ++ whenL seed (dataRecordNames preludeDecls)
-  let ctorSeed = primitiveConstructors ++ whenL seed (ctorNames preludeDecls)
-  let ifaceSeed = whenL seed (map fst (interfaceList preludeDecls))
-  map (dupErr "type") (findDups typeSeed (dataRecordNames prog))
-    ++ map (dupErr "constructor") (findDups ctorSeed (ctorNames prog))
-    ++ map
-      (dupErr "interface")
-      (findDups ifaceSeed (map fst (interfaceList prog)))
+  let types = namedLocs dataRecordNames prog
+  let ctors = namedLocs ctorNames prog
+  let ifaces = namedLocs (ds => map fst (interfaceList ds)) prog
+  reservedClashes "built-in type" primitiveTypes types
+    ++ ownDups "type" types omEmpty
+    ++ reservedClashes "built-in constructor" primitiveConstructors ctors
+    ++ reservedClashes
+      "prelude constructor"
+      (whenL seed (ctorNames preludeDecls))
+      ctors
+    ++ ownDups "constructor" ctors omEmpty
+    ++ reservedClashes
+      "prelude interface"
+      (whenL seed (map fst (interfaceList preludeDecls)))
+      ifaces
+    ++ ownDups "interface" ifaces omEmpty
     ++ ifaceMethodCollisions prog
 
-dupErr : String -> String -> ResError
-dupErr kind n = DuplicateDefinition kind n None
+-- Every declaration of a name in [reserved], as a [kind] clash.
+reservedClashes : String ->
+  List String ->
+  List (String, Option Loc) ->
+  List ResError
+reservedClashes kind reserved named =
+  let reservedSet = omFromNames reserved omEmpty
+  flatMap
+    ((n, l) =>
+      if omHasKey n reservedSet then [DuplicateDefinition kind n l] else [])
+    named
+
+-- Every second declaration of a name the program declares twice.
+ownDups : String ->
+  List (String, Option Loc) ->
+  OrdMap Unit ->
+  List ResError
+ownDups _ [] _ = []
+ownDups kind ((n, l) :: rest) seen
+  | omHasKey n seen = DuplicateDefinition kind n l :: ownDups kind rest seen
+  | otherwise = ownDups kind rest (omInsert n () seen)
+
+-- The names [names] extracts from each declaration, each at that
+-- declaration's name span (an attribute's wrapped declaration included).
+namedLocs : (List Decl -> List String) ->
+  List Decl ->
+  List (String, Option Loc)
+namedLocs names decls =
+  flatMap (d => map (n => (n, declNameLoc d)) (names [d])) decls
 
 -- Q1 (Stage B / Phase 4b): a module whose OWN declarations include two
 -- `interface`s declaring the same METHOD name is REJECTED, on the DECLARATION.
@@ -2754,6 +2797,14 @@ ppResError (UnknownEffect n _) =
 ppResError (UnknownField n _) = "Unknown field: " ++ n
 ppResError (FieldNotInRecord f r _) =
   "Unknown field: \{f}. Record '\{r}' has no field '\{f}'"
+ppResError (DuplicateDefinition "built-in type" n _) =
+  "'\{n}' is a built-in type: a program cannot declare a type of that name. Rename the declaration"
+ppResError (DuplicateDefinition "built-in constructor" n _) =
+  "'\{n}' is a built-in constructor: a program cannot declare a constructor of that name. Rename the constructor"
+ppResError (DuplicateDefinition "prelude constructor" n _) =
+  "'\{n}' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name"
+ppResError (DuplicateDefinition "prelude interface" n _) =
+  "'\{n}' is an interface of the prelude: a program cannot declare an interface of that name, since its methods would collide with the prelude's. Rename the interface"
 ppResError (DuplicateDefinition k n _) = "Duplicate \{k}: \{n}"
 ppResError (UnknownInterface n _) = "Unknown interface: " ++ n
 ppResError (MethodNotInInterface m i _) =

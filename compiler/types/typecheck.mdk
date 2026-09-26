@@ -5150,6 +5150,7 @@ deKindAbstractFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindPrivateFixture : Decl
@@ -5163,6 +5164,7 @@ deKindPrivateFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindNewtypeFixture : Decl
@@ -5176,6 +5178,7 @@ deKindNewtypeFixture = DNewtype {
   newtypeCtorBinders = [],
   newtypeDerives = [],
   newtypeOrigin = OriginModule "m",
+  newtypeNameLoc = None,
 }
 
 deKindFixtureDecls : List Decl
@@ -5332,6 +5335,7 @@ deNameIdxAlpha = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedA : Decl
@@ -5345,6 +5349,7 @@ deNameIdxSharedA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxBeta : Decl
@@ -5358,6 +5363,7 @@ deNameIdxBeta = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedB : Decl
@@ -5371,6 +5377,7 @@ deNameIdxSharedB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxModA : DeclEnvModule
@@ -5842,6 +5849,7 @@ aliasFixturePubCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePrivCore : Decl
@@ -5852,6 +5860,7 @@ aliasFixturePrivCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePubM : Decl
@@ -5862,6 +5871,7 @@ aliasFixturePubM = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "m",
+  tyAliasNameLoc = None,
 }
 
 -- PUBLIC, but wrapped in an attribute.  ⚠️ SINCE #1228/#1586 THIS ROW IS VISIBLE:
@@ -5879,6 +5889,7 @@ aliasFixtureAttribCore =
       tyAliasParamKinds = [],
       tyAliasRhs = tyConBuiltin "Int" None,
       tyAliasOrigin = OriginModule "core",
+      tyAliasNameLoc = None,
     }
 
 aliasFixtureEnv : DataEnv
@@ -5937,6 +5948,7 @@ deFieldOwnerFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerFixtureB : Decl
@@ -5951,6 +5963,7 @@ deFieldOwnerFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
@@ -5974,6 +5987,7 @@ deFieldOwnerFixtureC = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerCollisionEnv : DataEnv
@@ -6022,6 +6036,7 @@ deRecordOrderFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deRecordOrderFixtureB : Decl
@@ -6036,6 +6051,7 @@ deRecordOrderFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
@@ -7442,6 +7458,7 @@ ceSameDeclIn m methods = DInterface {
   supers = [ceSuperEq],
   methods = methods,
   ifaceOrigin = OriginModule m,
+  ifaceNameLoc = None,
 }
 
 -- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
@@ -7656,6 +7673,7 @@ ceGradedIface = DInterface {
   supers = [],
   methods = [ceGradedMethod],
   ifaceOrigin = OriginModule "gmod",
+  ifaceNameLoc = None,
 }
 
 ceGradedEnv : ClassEnv
@@ -7698,6 +7716,7 @@ ceFunctorIface = DInterface {
   supers = [],
   methods = [ceFunctorMethod],
   ifaceOrigin = OriginModule "fmod",
+  ifaceNameLoc = None,
 }
 
 ceFunctorEnv : ClassEnv
@@ -11546,22 +11565,52 @@ typeMismatchReportRest a b = match !currentDoOrigin
 -- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
 -- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
 -- yields `None` here and its message is untouched.  That residual is #1243.)
+-- A program's own type may shadow a prelude type (#3465), so two sides whose
+-- heads share a spelling but not an identity can also differ in shape
+-- (`Result vs Result a b`): their heads are compared as well.
 sameSpellingHint : Mono -> Mono -> Option String
 sameSpellingHint a b
-  | ppMono a /= ppMono b = None
+  | ppMono a /= ppMono b = map idConflictHelp (headIdConflict a b)
   | otherwise = map idConflictHelp (firstIdConflict a b)
 
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idConflictHelp (name, o1, o2) =
-  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — import the one you mean rather than declaring a second type of the same name"
+  let remedy =
+    if isPreludeOrigin o1 || isPreludeOrigin o2 then
+      "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects"
+    else
+      "import the one you mean rather than declaring a second type of the same name"
+  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — \{remedy}"
+
+isPreludeOrigin : TyConOrigin -> Bool
+isPreludeOrigin (OriginModule m) = m == "core"
+isPreludeOrigin _ = False
 
 -- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
 -- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
 -- present identities) and is answered rather than omitted so this stays total.
 originPhrase : TyConOrigin -> String
+originPhrase (OriginModule "core") = "the prelude"
+originPhrase (OriginModule "__user__") = "this program"
 originPhrase (OriginModule m) = "module '\{m}'"
 originPhrase OriginBuiltin = "the language itself"
 originPhrase OriginUnresolved = "an unknown module"
+
+-- The two sides' application heads, when they are same-spelled type
+-- constructors of different declarations.
+headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+headIdConflict a b = match (spineHead a, spineHead b)
+  (TCon n1 o1, TCon n2 o2) =>
+    if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
+      Some (n1, o1, o2)
+    else
+      None
+  _ => None
+
+spineHead : Mono -> Mono
+spineHead t = match normalize t
+  TApp f _ => spineHead f
+  other => other
 
 -- The FIRST head, in a parallel structural walk of the two monos, whose name
 -- agrees while its identity does not.  Parallel and shape-guarded on purpose:
@@ -41233,6 +41282,7 @@ methodRowTestIface moduleId name typarams methods = DInterface {
   supers = [],
   methods = methods,
   ifaceOrigin = OriginModule moduleId,
+  ifaceNameLoc = None,
 }
 
 methodRowTestConstraint : String -> String -> List Ty -> Constraint
