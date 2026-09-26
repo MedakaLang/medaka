@@ -14617,8 +14617,8 @@ freshLocalAbsName : String -> String
 freshLocalAbsName x =
   let st = localAbs.value
   let k = st.lasCounter.value
-  let _ = st.lasCounter := k + 1
-  x ++ "$" ++ intToString k ++ "$lb"
+  st.lasCounter := k + 1
+  "\{x}$\{intToString k}$lb"
 
 isLocalAbsName : String -> Bool
 isLocalAbsName n = endsWith "$lb" n
@@ -14633,7 +14633,7 @@ localAbsFor name = match omLookup name localAbs.value.lasBinders.value
 forgetLocalAbs : String -> Unit
 forgetLocalAbs name =
   let st = localAbs.value
-  let _ = st.lasBinders := omDelete name st.lasBinders.value
+  st.lasBinders := omDelete name st.lasBinders.value
   st.lasRecOccs := omDelete name st.lasRecOccs.value
 
 -- Enter a candidate local binder's own scope before its right-hand side is
@@ -14679,7 +14679,7 @@ registerLocalAbs name lscope sch oblN0 callN0 =
     if isEmptyL boundIds then [] else localAbsSlots name boundIds oblN0 callN0
   let st = localAbs.value
   let recOccs = optionOr [] (omLookup name st.lasRecOccs.value)
-  let _ = st.lasRecOccs := omDelete name st.lasRecOccs.value
+  st.lasRecOccs := omDelete name st.lasRecOccs.value
   match slots
     [] => st.lasBinders := omInsert name None st.lasBinders.value
     _ =>
@@ -14690,7 +14690,7 @@ registerLocalAbs name lscope sch oblN0 callN0 =
         laSlots = slots,
         laParams = localAbsParams lscope 0 slots,
       }
-      let _ = st.lasBinders := omInsert name (Some la) st.lasBinders.value
+      st.lasBinders := omInsert name (Some la) st.lasBinders.value
       fold (_ occ => pushLocalDictApp (fst occ) la [] (snd occ)) () recOccs
 
 localAbsSlots : String -> List Int -> Int -> Int -> List PredicateSlot
@@ -14758,15 +14758,15 @@ inferLocalDictAt env name ev =
       None => unboundVarFresh name
     Some None => inferVarId env name 0
     None =>
-      let st = localAbs.value
-      let _ =
-        st.lasRecOccs :=
-          omInsert
-            name
-            ((ev, captureScope ())
-              :: optionOr [] (omLookup name st.lasRecOccs.value))
-            st.lasRecOccs.value
+      let _ = recordLocalRecOcc name ev
       inferVarId env name 0
+
+recordLocalRecOcc : String -> EvId -> Unit
+recordLocalRecOcc name ev =
+  let st = localAbs.value
+  let occs =
+    (ev, captureScope ()) :: optionOr [] (omLookup name st.lasRecOccs.value)
+  st.lasRecOccs := omInsert name occs st.lasRecOccs.value
 
 -- dict_pass for locals: an abstracted binder takes its dictionary parameters, and an
 -- occurrence of a binder that abstracted nothing is a plain variable again.
@@ -24292,7 +24292,8 @@ propParamName (PropParam n _ _) = n
 -- scanned by `contains` — a deep local nesting (N sequential lets, a reference
 -- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
 -- O(depth²) over the body (the `scoperefs` shape).  `boundInsert`/`boundOfList`
--- extend it; membership is `omHasKey`.
+-- extend it; membership is `omHasKey`.  A name maps to "" for an ordinary binder
+-- and to the renamed binder for a candidate let binder (`letPatRename`).
 boundInsert : List String -> OrdMap String -> OrdMap String
 boundInsert [] b = b
 boundInsert (n :: rest) b = boundInsert rest (omInsert n "" b)
@@ -24521,9 +24522,6 @@ rewriteArgStmts rw bound ((DoAssign x e) :: rest) =
 rewriteArgStmts rw bound ((DoFieldAssign x fs e) :: rest) =
   DoFieldAssign x fs (rewriteArgScoped rw bound e)
     :: rewriteArgStmts rw bound rest
-
-letBindNamesTc : List LetBind -> List String
-letBindNamesTc binds = map letBindNameTc binds
 
 letBindNameTc : LetBind -> String
 letBindNameTc (LetBind n _) = n
