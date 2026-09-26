@@ -10,6 +10,10 @@ declare void @mdk_slice_oob(i64, i64) noreturn
 declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
+declare void @mdk_int_overflow(i64, i64, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
+declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 declare void @mdk_nonexhaustive_match() noreturn
 declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_dispatch_ambiguous() noreturn
@@ -201,13 +205,19 @@ entry:
   store i64 9, ptr %t2
   %t3 = ptrtoint ptr %t1 to i64
   %t4 = call i64 @mdk___user____unbox(i64 %t3)
-  %t5 = ashr i64 %t0, 1
-  %t6 = ashr i64 %t4, 1
-  %t7 = add i64 %t5, %t6
-  %t8 = shl i64 %t7, 1
-  %t9 = or i64 %t8, 1
-  %t10 = ashr i64 %t9, 1
-  call void @mdk_print_int(i64 %t10)
+  %t5 = sub i64 %t4, 1
+  %t6 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t0, i64 %t5)
+  %t7 = extractvalue { i64, i1 } %t6, 0
+  %t8 = extractvalue { i64, i1 } %t6, 1
+  br i1 %t8, label %intovf9, label %intok9
+intovf9:
+  %t10 = ashr i64 %t0, 1
+  %t11 = ashr i64 %t4, 1
+  call void @mdk_int_overflow(i64 0, i64 %t10, i64 %t11)
+  unreachable
+intok9:
+  %t12 = ashr i64 %t7, 1
+  call void @mdk_print_int(i64 %t12)
   ret i32 0
 }
 ; mdk-module program
@@ -251,20 +261,34 @@ entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
   %t2 = load i64, ptr %t1
-  %t3 = ashr i64 %t2, 1
-  %t4 = ashr i64 21, 1
-  %t5 = mul i64 %t3, %t4
-  %t6 = shl i64 %t5, 1
-  %t7 = or i64 %t6, 1
-  %t8 = inttoptr i64 %arg0 to ptr
-  %t9 = getelementptr i8, ptr %t8, i64 16
-  %t10 = load i64, ptr %t9
-  %t11 = ashr i64 %t7, 1
-  %t12 = ashr i64 %t10, 1
-  %t13 = add i64 %t11, %t12
-  %t14 = shl i64 %t13, 1
-  %t15 = or i64 %t14, 1
-  ret i64 %t15
+  %t3 = sub i64 21, 1
+  %t4 = ashr i64 %t2, 1
+  %t5 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t4, i64 %t3)
+  %t6 = extractvalue { i64, i1 } %t5, 0
+  %t7 = extractvalue { i64, i1 } %t5, 1
+  br i1 %t7, label %intovf8, label %intok8
+intovf8:
+  %t9 = ashr i64 %t2, 1
+  %t10 = ashr i64 21, 1
+  call void @mdk_int_overflow(i64 2, i64 %t9, i64 %t10)
+  unreachable
+intok8:
+  %t11 = or i64 %t6, 1
+  %t12 = inttoptr i64 %arg0 to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 16
+  %t14 = load i64, ptr %t13
+  %t15 = sub i64 %t14, 1
+  %t16 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t11, i64 %t15)
+  %t17 = extractvalue { i64, i1 } %t16, 0
+  %t18 = extractvalue { i64, i1 } %t16, 1
+  br i1 %t18, label %intovf19, label %intok19
+intovf19:
+  %t20 = ashr i64 %t11, 1
+  %t21 = ashr i64 %t14, 1
+  call void @mdk_int_overflow(i64 0, i64 %t20, i64 %t21)
+  unreachable
+intok19:
+  ret i64 %t17
 }
 
 ; mdk-module impl:Tri_sides

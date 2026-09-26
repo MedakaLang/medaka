@@ -1,5 +1,5 @@
 # META
-source_lines=2082
+source_lines=2228
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -628,9 +628,11 @@ derivedNextDepth c depth
 -- Primitive impls delegate to per-type externs (`hashInt`/`hashString`/…,
 -- deterministic and byte-identical across the tree-walker and the native
 -- backend).  The compound fold: seed with the constructor ordinal, then
--- `acc = acc * 33 + hash field` left-to-right over fields.  `Int` wraps, so
--- the result is not masked non-negative; hash_map/hash_set mask at the point
--- of use.
+-- `acc = acc * 33 + hash field` left-to-right over fields, computed in `U64`
+-- so it wraps by definition (an `Int` fold would overflow after about 13
+-- elements).  The result is the low 63 bits, which is the value a wrapping
+-- 63-bit fold gives, and is not masked non-negative; hash_map/hash_set mask at
+-- the point of use.
 export interface Hashable a where
   hash : a -> Int
 
@@ -666,41 +668,60 @@ export impl Hashable (Option a) requires Hashable a where
 -- Ok seeds at 0, Err at 1.
 export impl Hashable (Result e a) requires Hashable e, Hashable a where
   hash (Ok x) = hash x
-  hash (Err e) = 33 + hash e
+  hash (Err e) = derivedHashStep 1 (hash e)
 
--- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x.
-hashListItems : Hashable a => Int -> List a -> Int
+-- One step of the compound fold, `acc * 33 + h` modulo 2^64, narrowed to the
+-- low 63 bits.  The derived `Hashable` impls call it too (desugar.mdk's
+-- `hashFold`), so a derived and a hand-written impl of the same shape agree.
+-- Narrowing between steps loses nothing: the low 63 bits of a step depend only
+-- on the low 63 bits of its inputs.
+derivedHashStep : Int -> Int -> Int
+derivedHashStep acc h = u64TruncateToInt (u64Truncate acc * 33 + u64Truncate h)
+
+-- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x, in `U64`.
+hashListItems : Hashable a => U64 -> List a -> U64
 hashListItems acc [] = acc
-hashListItems acc (x :: xs) = hashListItems (acc * 33 + hash x) xs
+hashListItems acc (x :: xs) = hashListItems (acc * 33 + u64Truncate (hash x)) xs
 
 export impl Hashable (List a) requires Hashable a where
-  hash xs = hashListItems 0 xs
+  hash xs = u64TruncateToInt (hashListItems 0 xs)
 
 -- The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
 -- and the list of the same elements hash equally.  Agrees with `Eq (Array a)`
 -- by construction: equal arrays have equal elements in equal order.
 export impl Hashable (Array a) requires Hashable a where
-  hash arr = hashArrGo 0 arr 0 (arrayLength arr)
+  hash arr = u64TruncateToInt (hashArrGo 0 arr 0 (arrayLength arr))
 
-hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
+hashArrGo : Hashable a => U64 -> Array a -> Int -> Int -> U64
 hashArrGo acc arr i n =
   if i >= n then
     acc
   else
-    hashArrGo (acc * 33 + hash (arrayGetUnsafe i arr)) arr (i + 1) n
+    hashArrGo
+      (acc * 33 + u64Truncate (hash (arrayGetUnsafe i arr)))
+      arr
+      (i + 1)
+      n
 
 export impl Hashable (a, b) requires Hashable a, Hashable b where
-  hash (a, b) = hash a * 33 + hash b
+  hash (a, b) = derivedHashStep (hash a) (hash b)
 
 export impl Hashable (a, b, c) requires Hashable a, Hashable b, Hashable c where
-  hash (a, b, c) = (hash a * 33 + hash b) * 33 + hash c
+  hash (a, b, c) = derivedHashStep (derivedHashStep (hash a) (hash b)) (hash c)
 
 export impl Hashable (a, b, c, d) requires Hashable a, Hashable b, Hashable c, Hashable d where
-  hash (a, b, c, d) = ((hash a * 33 + hash b) * 33 + hash c) * 33 + hash d
+  hash (a, b, c, d) =
+    derivedHashStep
+      (derivedHashStep (derivedHashStep (hash a) (hash b)) (hash c))
+      (hash d)
 
 export impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c, Hashable d, Hashable e where
   hash (a, b, c, d, e) =
-    (((hash a * 33 + hash b) * 33 + hash c) * 33 + hash d) * 33 + hash e
+    derivedHashStep
+      (derivedHashStep
+        (derivedHashStep (derivedHashStep (hash a) (hash b)) (hash c))
+        (hash d))
+      (hash e)
 
 -- # Output
 
@@ -767,6 +788,44 @@ export impl Num Float where
   fromInt x = intToFloat x
   rem a b = a % b
 
+-- `U64`'s arithmetic and comparisons are builtin operators, but an operator on
+-- `U64` still needs these impls in scope, and the prelude's `Hashable` fold is
+-- written in `U64`.  The rest of the type's surface is the `u64` module, which
+-- the prelude cannot import.
+export impl Eq U64 where
+  eq a b = a == b
+
+-- Every method is defined, not only `compare`, so each one is a single builtin
+-- comparison and a generic caller never falls back to an interface default.
+-- `min` and `max` are the methods being defined, so they are written out.
+-- lint-disable-next-line rule-if-max-min
+export impl Ord U64 where
+  compare a b = if a < b then Lt else if a > b then Gt else Eq
+  lt a b = a < b
+  gt a b = a > b
+  lte a b = a <= b
+  gte a b = a >= b
+  min a b = if a <= b then a else b
+  max a b = if a >= b then a else b
+
+{- | Arithmetic modulo 2^64. `fromInt` panics on a negative `Int`; it is what
+   a literal in a generic `Num a =>` position becomes, and `u64.tryFromInt` and
+   `u64.truncate` are the non-panicking conversions. -}
+export impl Num U64 where
+  add a b = a + b
+  sub a b = a - b
+  mul a b = a * b
+  div a b = a / b
+  negate a = 0 - a
+  abs a = a
+  signum a = if a == 0 then 0 else 1
+  fromInt n =
+    if n < 0 then
+      panic "fromInt: \{n} does not fit U64 (0..18446744073709551615)"
+    else
+      u64Truncate n
+  rem a b = a % b
+
 -- > (-7) % 3
 -- -1
 -- > 5.5 % 2.0
@@ -792,6 +851,68 @@ isOdd n = n % 2 /= 0
 
 -- > isOdd 8
 -- False
+
+{- | The sum of two integers, or `None` when it does not fit `Int`.
+
+   `+` panics on overflow. Use `checkedAdd` where an operand comes from
+   outside the program, such as a length read from a file or a request, and
+   an out-of-range value should be refused rather than stop the program.
+
+   > checkedAdd 2 3
+   Some 5
+   > checkedAdd intMaxBound 1
+   None
+   > checkedAdd intMinBound (-1)
+   None -}
+export
+checkedAdd : Int -> Int -> Option Int
+checkedAdd a b =
+  if b > 0 && a > intMaxBound - b || b < 0 && a < intMinBound - b then
+    None
+  else
+    Some (a + b)
+
+{- | The difference of two integers, or `None` when it does not fit `Int`.
+   See `checkedAdd`.
+
+   > checkedSub 2 3
+   Some -1
+   > checkedSub intMinBound 1
+   None
+   > checkedSub 0 intMinBound
+   None -}
+export
+checkedSub : Int -> Int -> Option Int
+checkedSub a b =
+  if b < 0 && a > intMaxBound + b || b > 0 && a < intMinBound + b then
+    None
+  else
+    Some (a - b)
+
+{- | The product of two integers, or `None` when it does not fit `Int`.
+   See `checkedAdd`.
+
+   > checkedMul 6 7
+   Some 42
+   > checkedMul intMaxBound 2
+   None
+   > checkedMul intMinBound (-1)
+   None
+   > checkedMul (-1) intMaxBound
+   Some -4611686018427387903 -}
+export
+checkedMul : Int -> Int -> Option Int
+checkedMul a b = if mulOverflows a b then None else Some (a * b)
+
+-- Each comparison is against a quotient that cannot itself overflow: the
+-- divisor is never `-1` where the dividend is `intMinBound`.
+mulOverflows : Int -> Int -> Bool
+mulOverflows a b
+  | a > 0 && b > 0 = a > intMaxBound / b
+  | a > 0 = b < intMinBound / a
+  | b > 0 = a < intMinBound / b
+  | a == 0 = False
+  | otherwise = b < intMaxBound / a
 
 -- | Types with a smallest and a largest value.
 export interface Bounded a where
@@ -1270,13 +1391,12 @@ export interface Slice c where
    [|20, 30|] -}
 export impl Slice (Array a) where
   slice arr lo hi =
-    -- The emptiness test is `hi < lo`, not `hi - lo < 0`: the difference wraps
-    -- once `lo` and `hi` are far enough apart, so the subtracting form admits
-    -- the very ranges the guard exists to reject and lets `arrayGetUnsafe`
-    -- read off the end. The two `Slice` impls below and `Slice Bytes` in
-    -- `stdlib/bytes.mdk` carry the same test for the same reason.
+    -- The emptiness test is `hi < lo`, not `hi - lo < 0`: the difference
+    -- overflows once `lo` and `hi` are far enough apart. The two `Slice` impls
+    -- below and `Slice Bytes` in `stdlib/bytes.mdk` carry the same test for the
+    -- same reason.
     if lo < 0 || hi > arrayLength arr || hi < lo then
-      sliceError lo (hi - 1)
+      sliceError lo (sliceLastIndex hi)
     else
       arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) arr)
 
@@ -1290,7 +1410,7 @@ export impl Slice (Array a) where
 export impl Slice String where
   slice s lo hi =
     if lo < 0 || hi > stringLength s || hi < lo then
-      sliceError lo (hi - 1)
+      sliceError lo (sliceLastIndex hi)
     else
       stringSlice lo hi s
 
@@ -1303,7 +1423,24 @@ export impl Slice String where
    [20, 30] -}
 export impl Slice (List a) where
   slice xs lo hi =
-    if lo < 0 || hi < lo then sliceError lo (hi - 1) else sliceListGo xs 0 lo hi
+    if lo < 0 || hi < lo then
+      sliceError lo (sliceLastIndex hi)
+    else
+      sliceListGo xs 0 lo hi
+
+-- The inclusive last index a slice error reports for the half-open end `hi`.
+-- `hi - 1` has no `Int` when `hi` is `intMinBound`; that refusal reports
+-- `intMinBound` itself rather than overflowing before it can refuse.
+sliceLastIndex : Int -> Int
+sliceLastIndex hi = if hi == intMinBound then hi else hi - 1
+
+-- The half-open end of `a.[lo..=hi]` (desugar.mdk).  `hi + 1` has no `Int` when
+-- `hi` is `intMaxBound`, and no container reaches that index, so the end stays
+-- `intMaxBound` and the slice refuses as out of range.  Called only from the
+-- code desugar generates, which the dead-code rule cannot see.
+sliceInclusiveEnd : Int -> Int
+-- lint-disable-next-line rule-dead-code
+sliceInclusiveEnd hi = if hi == intMaxBound then hi else hi + 1
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
 -- `[lo, hi)`, stop at `hi`.  Reaching the end of the chain while the running
@@ -1312,7 +1449,7 @@ export impl Slice (List a) where
 sliceListGo : List a -> Int -> Int -> Int -> List a
 sliceListGo [] i lo hi
   | i >= hi = []
-  | otherwise = sliceError lo (hi - 1)
+  | otherwise = sliceError lo (sliceLastIndex hi)
 sliceListGo (x :: xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
@@ -2084,6 +2221,15 @@ prop "Hashable Array agrees with Hashable List" (xs : List Int) =
 
 prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
   eq (hash (arrayFromList xs)) (hash (arrayFromList xs))
+
+-- LAW: the compound fold never overflows, however long its input.  An `Int`
+-- accumulator passes 2^62 after about 13 elements; 1,000 elements is far past
+-- it, and the list, the array and a fold of `derivedHashStep` (the step the
+-- tuple and derived impls use) must agree.
+prop "Hashable List: a 1,000-element list hashes as its array and its step fold" (x : Int) =
+  let xs = map (i => bitXor i x) [1..1000]
+  eq (hash xs) (hash (arrayFromList xs))
+    && eq (hash xs) (fold derivedHashStep 0 (map hash xs))
 # DESUGAR
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
@@ -2204,18 +2350,20 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DImpl true "Hashable" ((TyCon "Unit")) () ((im "hash" (PWild) (ELit (LInt 0)))))
 (DImpl true "Hashable" ((TyCon "Ordering")) () ((im "hash" ((PCon "Lt")) (ELit (LInt 0))) (im "hash" ((PCon "Eq")) (ELit (LInt 1))) (im "hash" ((PCon "Gt")) (ELit (LInt 2)))))
 (DImpl true "Hashable" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "None")) (ELit (LInt 1))) (im "hash" ((PCon "Some" (PVar "x"))) (EApp (EVar "hash") (EVar "x")))))
-(DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EVar "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EBinOp "+" (ELit (LInt 33)) (EApp (EVar "hash") (EVar "e"))))))
-(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))))
+(DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EVar "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (ELit (LInt 1))) (EApp (EVar "hash") (EVar "e"))))))
+(DTypeSig false "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "derivedHashStep" ((PVar "acc") (PVar "h")) (EApp (EVar "u64TruncateToInt") (EBinOp "+" (EBinOp "*" (EApp (EVar "u64Truncate") (EVar "acc")) (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EVar "h")))))
+(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "U64")))))
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hash") (EVar "x")))) (EVar "xs")))
-(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EApp (EVar "hashListItems") (ELit (LInt 0))) (EVar "xs")))))
-(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EApp (EApp (EApp (EVar "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
-(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "c"))))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "c"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "d"))))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d"))) (req "Hashable" ((TyVar "e")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "c"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "d"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "e"))))))
+(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EVar "hash") (EVar "x"))))) (EVar "xs")))
+(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EVar "hashListItems") (ELit (LInt 0))) (EVar "xs"))))))
+(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))))))
+(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "U64")))))))
+(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EVar "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b"))))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b")))) (EApp (EVar "hash") (EVar "c"))))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b")))) (EApp (EVar "hash") (EVar "c")))) (EApp (EVar "hash") (EVar "d"))))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d"))) (req "Hashable" ((TyVar "e")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b")))) (EApp (EVar "hash") (EVar "c")))) (EApp (EVar "hash") (EVar "d")))) (EApp (EVar "hash") (EVar "e"))))))
 (DTypeSig true "println" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "println" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EVar "display") (EVar "x"))))
 (DTypeSig true "print" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
@@ -2223,10 +2371,21 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None) (imethod "rem" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None)))
 (DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x")) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
 (DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x"))) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
+(DImpl true "Eq" ((TyCon "U64")) () ((im "eq" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))))
+(DImpl true "Ord" ((TyCon "U64")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq")))) (im "lt" ((PVar "a") (PVar "b")) (EBinOp "<" (EVar "a") (EVar "b"))) (im "gt" ((PVar "a") (PVar "b")) (EBinOp ">" (EVar "a") (EVar "b"))) (im "lte" ((PVar "a") (PVar "b")) (EBinOp "<=" (EVar "a") (EVar "b"))) (im "gte" ((PVar "a") (PVar "b")) (EBinOp ">=" (EVar "a") (EVar "b"))) (im "min" ((PVar "a") (PVar "b")) (EIf (EBinOp "<=" (EVar "a") (EVar "b")) (EVar "a") (EVar "b"))) (im "max" ((PVar "a") (PVar "b")) (EIf (EBinOp ">=" (EVar "a") (EVar "b")) (EVar "a") (EVar "b")))))
+(DImpl true "Num" ((TyCon "U64")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EVar "a")) (im "signum" ((PVar "a")) (EIf (EBinOp "==" (EVar "a") (ELit (LInt 0))) (ELit (LInt 0)) (ELit (LInt 1)))) (im "fromInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "fromInt: ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " does not fit U64 (0..18446744073709551615)")))) (EApp (EVar "u64Truncate") (EVar "n")))) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
 (DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isOdd" ((PVar "n")) (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
+(DTypeSig true "checkedAdd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "checkedAdd" ((PVar "a") (PVar "b")) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "-" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "-" (EVar "intMinBound") (EVar "b"))))) (EVar "None") (EApp (EVar "Some") (EBinOp "+" (EVar "a") (EVar "b")))))
+(DTypeSig true "checkedSub" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "checkedSub" ((PVar "a") (PVar "b")) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "+" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "+" (EVar "intMinBound") (EVar "b"))))) (EVar "None") (EApp (EVar "Some") (EBinOp "-" (EVar "a") (EVar "b")))))
+(DTypeSig true "checkedMul" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "checkedMul" ((PVar "a") (PVar "b")) (EIf (EApp (EApp (EVar "mulOverflows") (EVar "a")) (EVar "b")) (EVar "None") (EApp (EVar "Some") (EBinOp "*" (EVar "a") (EVar "b")))))
+(DTypeSig false "mulOverflows" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "mulOverflows" ((PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "a") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 0)))) (EBinOp ">" (EVar "a") (EBinOp "/" (EVar "intMaxBound") (EVar "b"))) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (EBinOp "/" (EVar "intMinBound") (EVar "a"))) (EIf (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "/" (EVar "intMinBound") (EVar "b"))) (EIf (EBinOp "==" (EVar "a") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "<" (EVar "b") (EBinOp "/" (EVar "intMaxBound") (EVar "a"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DInterface true false "Bounded" ("a") () ((imethod "minBound" (TyVar "a") None) (imethod "maxBound" (TyVar "a") None)))
 (DImpl true "Bounded" ((TyCon "Int")) () ((im "minBound" () (EVar "intMinBound")) (im "maxBound" () (EVar "intMaxBound"))))
 (DImpl true "Bounded" ((TyCon "Char")) () ((im "minBound" () (EVar "charMinBound")) (im "maxBound" () (EVar "charMaxBound"))))
@@ -2301,11 +2460,15 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "indexGo" ((PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EVar "indexGo") (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
-(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
-(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
-(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
+(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
+(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
+(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
+(DTypeSig false "sliceLastIndex" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "sliceLastIndex" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMinBound")) (EVar "hi") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))))
+(DTypeSig false "sliceInclusiveEnd" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "sliceInclusiveEnd" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMaxBound")) (EVar "hi") (EBinOp "+" (EVar "hi") (ELit (LInt 1)))))
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
-(DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "sliceListGo" ((PCons (PVar "x") (PVar "xs")) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EBinOp ">=" (EVar "i") (EVar "lo")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "empty")))))
 (DImpl true "Foldable" ((TyCon "Option")) () ((im "fold" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "None")) (EListLit)) (im "toList" ((PCon "Some" (PVar "x"))) (EListLit (EVar "x"))) (im "foldMap" ((PVar "f")) (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EVar "empty"))) (im "isEmpty" ((PVar "t")) (EMatch (EApp (EVar "toList") (EVar "t")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (im "length" ((PVar "t")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "t")))))
@@ -2474,6 +2637,7 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DProp false "Ord Array: a proper prefix sorts before its extension" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "compare") (EApp (EVar "arrayFromList") (EVar "xs"))) (EApp (EVar "arrayFromList") (EBinOp "++" (EVar "xs") (EListLit (EVar "y")))))) (EVar "Lt")))
 (DProp false "Hashable Array agrees with Hashable List" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EVar "hash") (EVar "xs"))))
 (DProp false "Hashable Array: equal arrays hash equally" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))))
+(DProp false "Hashable List: a 1,000-element list hashes as its array and its step fold" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "xs") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "bitXor") (EVar "i")) (EVar "x")))) (ERangeList (ELit (LInt 1)) (ELit (LInt 1000)) false))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "hash") (EVar "xs"))) (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EVar "hash") (EVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "derivedHashStep")) (ELit (LInt 0))) (EApp (EApp (EVar "map") (EVar "hash")) (EVar "xs"))))))))
 # MARK
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
@@ -2594,18 +2758,20 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DImpl true "Hashable" ((TyCon "Unit")) () ((im "hash" (PWild) (ELit (LInt 0)))))
 (DImpl true "Hashable" ((TyCon "Ordering")) () ((im "hash" ((PCon "Lt")) (ELit (LInt 0))) (im "hash" ((PCon "Eq")) (ELit (LInt 1))) (im "hash" ((PCon "Gt")) (ELit (LInt 2)))))
 (DImpl true "Hashable" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "None")) (ELit (LInt 1))) (im "hash" ((PCon "Some" (PVar "x"))) (EApp (EMethodRef "hash") (EVar "x")))))
-(DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EMethodRef "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EBinOp "+" (ELit (LInt 33)) (EApp (EMethodRef "hash") (EVar "e"))))))
-(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))))
+(DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EMethodRef "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (ELit (LInt 1))) (EApp (EMethodRef "hash") (EVar "e"))))))
+(DTypeSig false "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "derivedHashStep" ((PVar "acc") (PVar "h")) (EApp (EVar "u64TruncateToInt") (EBinOp "+" (EBinOp "*" (EApp (EVar "u64Truncate") (EVar "acc")) (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EVar "h")))))
+(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "U64")))))
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EDictApp "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "x")))) (EVar "xs")))
-(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EApp (EDictApp "hashListItems") (ELit (LInt 0))) (EVar "xs")))))
-(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
-(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EMethodRef "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "c"))))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "c"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "d"))))))
-(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d"))) (req "Hashable" ((TyVar "e")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "c"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "d"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "e"))))))
+(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EDictApp "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EMethodRef "hash") (EVar "x"))))) (EVar "xs")))
+(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EDictApp "hashListItems") (ELit (LInt 0))) (EVar "xs"))))))
+(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))))))
+(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "U64")))))))
+(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EMethodRef "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b"))))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b")))) (EApp (EMethodRef "hash") (EVar "c"))))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b")))) (EApp (EMethodRef "hash") (EVar "c")))) (EApp (EMethodRef "hash") (EVar "d"))))))
+(DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d"))) (req "Hashable" ((TyVar "e")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b")))) (EApp (EMethodRef "hash") (EVar "c")))) (EApp (EMethodRef "hash") (EVar "d")))) (EApp (EMethodRef "hash") (EVar "e"))))))
 (DTypeSig true "println" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "println" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EMethodRef "display") (EVar "x"))))
 (DTypeSig true "print" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
@@ -2613,10 +2779,21 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None) (imethod "rem" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None)))
 (DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x")) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
 (DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x"))) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
+(DImpl true "Eq" ((TyCon "U64")) () ((im "eq" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))))
+(DImpl true "Ord" ((TyCon "U64")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq")))) (im "lt" ((PVar "a") (PVar "b")) (EBinOp "<" (EVar "a") (EVar "b"))) (im "gt" ((PVar "a") (PVar "b")) (EBinOp ">" (EVar "a") (EVar "b"))) (im "lte" ((PVar "a") (PVar "b")) (EBinOp "<=" (EVar "a") (EVar "b"))) (im "gte" ((PVar "a") (PVar "b")) (EBinOp ">=" (EVar "a") (EVar "b"))) (im "min" ((PVar "a") (PVar "b")) (EIf (EBinOp "<=" (EVar "a") (EVar "b")) (EVar "a") (EVar "b"))) (im "max" ((PVar "a") (PVar "b")) (EIf (EBinOp ">=" (EVar "a") (EVar "b")) (EVar "a") (EVar "b")))))
+(DImpl true "Num" ((TyCon "U64")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EVar "a")) (im "signum" ((PVar "a")) (EIf (EBinOp "==" (EVar "a") (ELit (LInt 0))) (ELit (LInt 0)) (ELit (LInt 1)))) (im "fromInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "fromInt: ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " does not fit U64 (0..18446744073709551615)")))) (EApp (EVar "u64Truncate") (EVar "n")))) (im "rem" ((PVar "a") (PVar "b")) (EBinOp "%" (EVar "a") (EVar "b")))))
 (DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isOdd" ((PVar "n")) (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
+(DTypeSig true "checkedAdd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "checkedAdd" ((PVar "a") (PVar "b")) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "-" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "-" (EVar "intMinBound") (EVar "b"))))) (EVar "None") (EApp (EVar "Some") (EBinOp "+" (EVar "a") (EVar "b")))))
+(DTypeSig true "checkedSub" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "checkedSub" ((PVar "a") (PVar "b")) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "+" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "+" (EVar "intMinBound") (EVar "b"))))) (EVar "None") (EApp (EVar "Some") (EBinOp "-" (EVar "a") (EVar "b")))))
+(DTypeSig true "checkedMul" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "checkedMul" ((PVar "a") (PVar "b")) (EIf (EApp (EApp (EVar "mulOverflows") (EVar "a")) (EVar "b")) (EVar "None") (EApp (EVar "Some") (EBinOp "*" (EVar "a") (EVar "b")))))
+(DTypeSig false "mulOverflows" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "mulOverflows" ((PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "a") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 0)))) (EBinOp ">" (EVar "a") (EBinOp "/" (EVar "intMaxBound") (EVar "b"))) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (EBinOp "/" (EVar "intMinBound") (EVar "a"))) (EIf (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "/" (EVar "intMinBound") (EVar "b"))) (EIf (EBinOp "==" (EVar "a") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "<" (EVar "b") (EBinOp "/" (EVar "intMaxBound") (EVar "a"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DInterface true false "Bounded" ("a") () ((imethod "minBound" (TyVar "a") None) (imethod "maxBound" (TyVar "a") None)))
 (DImpl true "Bounded" ((TyCon "Int")) () ((im "minBound" () (EVar "intMinBound")) (im "maxBound" () (EVar "intMaxBound"))))
 (DImpl true "Bounded" ((TyCon "Char")) () ((im "minBound" () (EVar "charMinBound")) (im "maxBound" () (EVar "charMaxBound"))))
@@ -2691,11 +2868,15 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "indexGo" ((PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EVar "indexGo") (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
-(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
-(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
-(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
+(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
+(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
+(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
+(DTypeSig false "sliceLastIndex" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "sliceLastIndex" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMinBound")) (EVar "hi") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))))
+(DTypeSig false "sliceInclusiveEnd" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "sliceInclusiveEnd" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMaxBound")) (EVar "hi") (EBinOp "+" (EVar "hi") (ELit (LInt 1)))))
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
-(DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "sliceListGo" ((PCons (PVar "x") (PVar "xs")) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EBinOp ">=" (EVar "i") (EVar "lo")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EMethodRef "empty")))))
 (DImpl true "Foldable" ((TyCon "Option")) () ((im "fold" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "None")) (EListLit)) (im "toList" ((PCon "Some" (PVar "x"))) (EListLit (EVar "x"))) (im "foldMap" ((PVar "f")) (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "f") (EVar "x"))))) (EMethodRef "empty"))) (im "isEmpty" ((PVar "t")) (EMatch (EApp (EMethodRef "toList") (EVar "t")) (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (im "length" ((PVar "t")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "t")))))
@@ -2864,3 +3045,4 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DProp false "Ord Array: a proper prefix sorts before its extension" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "compare") (EApp (EVar "arrayFromList") (EVar "xs"))) (EApp (EVar "arrayFromList") (EBinOp "++" (EVar "xs") (EListLit (EVar "y")))))) (EVar "Lt")))
 (DProp false "Hashable Array agrees with Hashable List" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EMethodRef "hash") (EVar "xs"))))
 (DProp false "Hashable Array: equal arrays hash equally" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))))
+(DProp false "Hashable List: a 1,000-element list hashes as its array and its step fold" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "xs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "bitXor") (EVar "i")) (EVar "x")))) (ERangeList (ELit (LInt 1)) (ELit (LInt 1000)) false))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "hash") (EVar "xs"))) (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "hash") (EVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "derivedHashStep")) (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (EMethodRef "hash")) (EVar "xs"))))))))

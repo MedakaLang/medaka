@@ -218,7 +218,7 @@ parseSign a n c
 
 {- Accumulates a NON-POSITIVE running magnitude (`acc <= 0`) regardless of
    the parsed sign, and detects overflow before every multiply/add rather
-   than after (`Int` wraps by design, so a post-hoc check can't see it).
+   than after (the overflowing operation would itself stop the program).
    Negative accumulation — not positive-then-negate — is deliberate:
    `intMinBound`'s magnitude (2^62) is one larger than `intMaxBound`'s
    (2^62 - 1), so only the negative side can hold it without overflowing;

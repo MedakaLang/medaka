@@ -59,6 +59,7 @@ mapTyListB : (Ty -> (Ty, Bool)) -> List Ty -> (List Ty, Bool)
 mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
 mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
 mkIdent : Ns -> TyConOrigin -> String -> Option Ident
+negateLiteral : Int -> Int
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 patBoundNames : Pat -> List String
 qualifiedLocal : String -> String -> String

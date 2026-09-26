@@ -1,5 +1,5 @@
 # META
-source_lines=1804
+source_lines=1812
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -131,6 +131,7 @@ import frontend.ast.{
   EvId(..),
 }
 import types.route_key.{remapEvidence}
+import u64 as U64
 import support.util.{
   lookupAssoc,
   contains,
@@ -1380,14 +1381,21 @@ hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
 -- non-injectivity has nothing to do with the tag alphabet being small, and
 -- nothing to do with the mask width.
 -- `core_ir_lower.dictWitnessTagGuard` is what makes it loud; keep the two together.
+--
+-- The fold runs in `U64` so it wraps by definition, and the result is its low 63
+-- bits: the value the tags have always had, when `Int` itself wrapped.
 export
 hashName : String -> Int
-hashName s = hashChars (stringToChars s) 0 5381
+hashName s = U64.toIntTruncating (hashChars (stringToChars s) 0 5381)
 
-hashChars : Array Char -> Int -> Int -> Int
+hashChars : Array Char -> Int -> U64 -> U64
 hashChars cs i acc
   | i >= arrayLength cs = acc
-  | otherwise = hashChars cs (i + 1) (acc * 33 + charCode (arrayGetUnsafe i cs))
+  | otherwise =
+    hashChars
+      cs
+      (i + 1)
+      (acc * 33 + U64.truncate (charCode (arrayGetUnsafe i cs)))
 
 -- the i31-safe dict-witness tag: `hashName` masked into the low 30 bits (positive
 -- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
@@ -1809,6 +1817,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
+(DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -2070,9 +2079,9 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "hexNibble" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "hexNibble" ((PVar "n")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))))
 (DTypeSig true "hashName" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "hashName" ((PVar "s")) (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381))))
-(DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "hashName" ((PVar "s")) (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381)))))
+(DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "U64") (TyCon "U64")))))
+(DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "U64.truncate") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
 (DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -2218,6 +2227,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
+(DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -2479,9 +2489,9 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "hexNibble" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "hexNibble" ((PVar "n")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))))
 (DTypeSig true "hashName" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "hashName" ((PVar "s")) (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381))))
-(DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "hashName" ((PVar "s")) (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381)))))
+(DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "U64") (TyCon "U64")))))
+(DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "U64.truncate") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
 (DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))

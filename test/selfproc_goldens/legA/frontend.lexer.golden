@@ -102,6 +102,7 @@ lexErrorTok : Int -> String -> List RawTok
 lineStartSearch : Array Int -> Int -> Int -> Int -> Int
 lineStartsGo : Array Char -> Int -> Int -> List Int
 lineStartsOf : String -> Array Int
+magnitudeInt : Int -> Int
 malformedExpDotTok : Array Char -> Int -> Int -> Int -> List RawTok
 malformedLeadingDotTok : Array Char -> Int -> Int -> List RawTok
 malformedRadixErr : Int -> String -> String -> String -> List RawTok
@@ -120,7 +121,9 @@ offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLinesGo : Array Char -> List Int -> Int -> Int -> List Int
 openBrace : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 parseIntFrom : Array Char -> Int -> Int -> Int -> Int
+parseIntNeg : Array Char -> Int -> Int -> Int -> Int
 parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
+parseRadixNeg : Array Char -> Int -> Int -> Int -> Int -> Int
 popDedents : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> List (Token, Int)
 popDedentsPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> List (Token, Int, Int)
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)

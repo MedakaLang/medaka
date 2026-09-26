@@ -48,6 +48,7 @@ charPred : (Char -> Bool) -> Value a -> <a> Value a
 charToVChar : Char -> Value a
 charUpper : String -> String -> Bool -> Bool
 checkArgTagDecidable : List (Value a) -> Value a -> Unit
+checkedInt : String -> Int -> Int -> Option Int -> Value a
 clauseClosure : EvalEnv (Value a) -> (List Pat, Expr) -> Value a
 clauseDef : String -> FunClause -> (String, (List Pat, Expr))
 clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Expr)
@@ -195,7 +196,9 @@ installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installGroup : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List LetBind -> <a> Unit
 installGroups : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List (String, List (List Pat, Expr)) -> <a> Unit
 installModGroups : List (ModInfo (Value a)) -> <a> Unit
+intOverflow : String -> Value a
 intSeq : Int -> Int -> List Int
+intSeqIncl : Int -> Int -> List Int
 ioExternBindings : Unit -> List (String, Value <IO>)
 isDefaultCand : Value a -> Bool
 isDispatching : Value a -> Bool
@@ -269,6 +272,8 @@ ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
 orderingToValue : Ordering -> Value a
 outputRef : Ref String
+overflowOperand : Int -> String
+overflowOperands : String -> Int -> Int -> String
 ownDefault : EvalEnv (Value a) -> String -> String -> <a> Option (Value a)
 pAcos : Value a -> <a> Value a
 pAllocBytes : Value a -> <a> Value a

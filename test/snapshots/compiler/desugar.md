@@ -1,5 +1,5 @@
 # META
-source_lines=1216
+source_lines=1218
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -215,14 +215,16 @@ rewriteSugar (EBinOp ":=" lhs rhs _) = callBin "setRef" lhs rhs
 rewriteSugar (EIndex a i _) = callBin "index" a i
 -- `a.[lo..hi]` / `a.[lo..=hi]` (slice) → `slice a lo hi'` (Slice interface
 -- dispatch, #670), half-open: the inclusive `..=` form normalizes here to
--- `slice a lo (hi + 1)` so the method itself stays a plain 3-arg `[lo, hi)`
--- (parallels `index`).  Routing through a constrained method makes a non-container
+-- `slice a lo (sliceInclusiveEnd hi)` (the prelude's `hi + 1`, which stops at
+-- `intMaxBound` rather than overflowing) so the method itself stays a plain
+-- 3-arg `[lo, hi)` (parallels `index`).  Routing through a constrained method
+-- makes a non-container
 -- receiver a check-time "no impl of Slice" error, where the old static-tag
 -- lowering read a String/Int/[] through the Array rep (an S0 run≠build memory
 -- fault).  Pure surface sugar: no dedicated typecheck/eval/lower arm survives
 -- (they become dead — a stray post-desugar ESlice is a loud guard).
 rewriteSugar (ESlice a lo hi incl _) =
-  let hiEx = if incl then binOp "+" hi (intLit 1) else hi
+  let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
   EApp (EApp (EApp (EVar "slice") a) lo) hiEx
 rewriteSugar e = e
 
@@ -543,7 +545,7 @@ newtypeDerivers name params kinds con fty =
           (deriveShowData "Display" "display" name synthetic),
     ),
     -- Hashable needs no specialized newtype deriver: the synthetic variant is
-    -- ordinal 0 with one field, so the fold collapses to `0 * 33 + hash x` —
+    -- ordinal 0 with one field, so the fold is `derivedHashStep 0 (hash x)` —
     -- exactly "hash the wrapped value", which is what a newtype key should do.
     (
       "Hashable",
@@ -841,16 +843,16 @@ lexCompareExprs ((ea, eb) :: rest) = EMatch (callBin "compare" ea eb) [
 -- Hashable: the djb2-style fold core.mdk's `Hashable` doc specifies — seed the
 -- accumulator with the constructor's ordinal, then `acc = acc * 33 + hash field`
 -- left-to-right.  One arm per constructor, so the ordinal seed is what keeps
--- `A 1` and `B 1` apart.  This is the SAME fold the hand-written compound impls
--- next to that doc use (`hash (a, b) = hash a * 33 + hash b`, `hashListItems`),
--- which is why a derived and a hand-written impl of the same shape agree.
+-- `A 1` and `B 1` apart.  Each step is the prelude's private `derivedHashStep`,
+-- the step the hand-written compound impls use (`hash (a, b) = derivedHashStep
+-- (hash a) (hash b)`), which is why a derived and a hand-written impl of the same
+-- shape agree.  The step computes in `U64`, so it wraps where an `Int` fold
+-- would overflow.
 --
--- Deliberately does NOT mask the result non-negative.  `Int` wraps, so the fold
--- goes negative routinely — that is safe and intended: the `Hashable` contract
--- requires only that equal values hash equal, never non-negativity, and both
--- consumers mask at the point of use (`slotOf` in hash_map/hash_set, #416).
--- Masking here would buy nothing, cost a bit of hash space, and make derived
--- impls silently disagree with the unmasked compound impls in core.mdk.
+-- Deliberately does NOT mask the result non-negative: the fold goes negative
+-- routinely, and the `Hashable` contract requires only that equal values hash
+-- equal, never non-negativity; both consumers mask at the point of use
+-- (`slotOf` in hash_map/hash_set, #416).
 deriveHashData : String -> List Variant -> Decl
 deriveHashData name variants = derivedImpl "Hashable" name [
   ImplMethod
@@ -864,13 +866,13 @@ hashArm (i, v) =
   let vars = genVars "__a" (conArity v)
   Arm (conBindPat v vars) [] (hashFold (intLit i) vars)
 
--- `acc * 33 + hash field` per field, left-to-right.  A field-less constructor
--- hashes to its bare ordinal (matching core.mdk's `hash None = 1`).
+-- `derivedHashStep acc (hash field)` per field, left-to-right.  A field-less
+-- constructor hashes to its bare ordinal (matching core.mdk's `hash None = 1`).
 hashFold : Expr -> List String -> Expr
 hashFold acc [] = acc
 hashFold acc (v :: vs) =
   hashFold
-    (binOp "+" (binOp "*" acc (intLit 33)) (EApp (EVar "hash") (EVar v)))
+    (EApp (EApp (EVar "derivedHashStep") acc) (EApp (EVar "hash") (EVar v)))
     vs
 
 -- Generic: one arm per constructor → RCon name [to_rep a0, …]
@@ -1313,7 +1315,7 @@ desugar prog =
 (DFunDef false "rewriteSugar" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "interpToCore") (EVar "parts")))
 (DFunDef false "rewriteSugar" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setRef"))) (EVar "lhs")) (EVar "rhs")))
 (DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
-(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EApp (EVar "binOp") (ELit (LString "+"))) (EVar "hi")) (EApp (EVar "intLit") (ELit (LInt 1)))) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
+(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
@@ -1533,7 +1535,7 @@ desugar prog =
 (DFunDef false "hashArm" ((PTuple (PVar "i") (PVar "v"))) (EBlock (DoLet false false (PVar "vars") (EApp (EApp (EVar "genVars") (ELit (LString "__a"))) (EApp (EVar "conArity") (EVar "v")))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "conBindPat") (EVar "v")) (EVar "vars"))) (EListLit)) (EApp (EApp (EVar "hashFold") (EApp (EVar "intLit") (EVar "i"))) (EVar "vars"))))))
 (DTypeSig false "hashFold" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr"))))
 (DFunDef false "hashFold" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "hashFold" ((PVar "acc") (PCons (PVar "v") (PVar "vs"))) (EApp (EApp (EVar "hashFold") (EApp (EApp (EApp (EVar "binOp") (ELit (LString "+"))) (EApp (EApp (EApp (EVar "binOp") (ELit (LString "*"))) (EVar "acc")) (EApp (EVar "intLit") (ELit (LInt 33))))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "hash")))) (EApp (EVar "EVar") (EVar "v"))))) (EVar "vs")))
+(DFunDef false "hashFold" ((PVar "acc") (PCons (PVar "v") (PVar "vs"))) (EApp (EApp (EVar "hashFold") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "derivedHashStep")))) (EVar "acc"))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "hash")))) (EApp (EVar "EVar") (EVar "v"))))) (EVar "vs")))
 (DTypeSig false "deriveGenericData" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "Decl"))))
 (DFunDef false "deriveGenericData" ((PVar "name") (PVar "variants")) (EApp (EApp (EApp (EVar "derivedImpl") (ELit (LString "Generic"))) (EVar "name")) (EListLit (EApp (EApp (EApp (EVar "ImplMethod") (ELit (LString "to_rep"))) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "__x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__x")))) (EApp (EApp (EVar "map") (EVar "genericArm")) (EVar "variants")))))))
 (DTypeSig false "genericArm" (TyFun (TyCon "Variant") (TyCon "Arm")))
@@ -1763,7 +1765,7 @@ desugar prog =
 (DFunDef false "rewriteSugar" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "interpToCore") (EVar "parts")))
 (DFunDef false "rewriteSugar" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setRef"))) (EVar "lhs")) (EVar "rhs")))
 (DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
-(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EApp (EVar "binOp") (ELit (LString "+"))) (EVar "hi")) (EApp (EVar "intLit") (ELit (LInt 1)))) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
+(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
@@ -1983,7 +1985,7 @@ desugar prog =
 (DFunDef false "hashArm" ((PTuple (PVar "i") (PVar "v"))) (EBlock (DoLet false false (PVar "vars") (EApp (EApp (EVar "genVars") (ELit (LString "__a"))) (EApp (EVar "conArity") (EVar "v")))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "conBindPat") (EVar "v")) (EVar "vars"))) (EListLit)) (EApp (EApp (EVar "hashFold") (EApp (EVar "intLit") (EVar "i"))) (EVar "vars"))))))
 (DTypeSig false "hashFold" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr"))))
 (DFunDef false "hashFold" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "hashFold" ((PVar "acc") (PCons (PVar "v") (PVar "vs"))) (EApp (EApp (EVar "hashFold") (EApp (EApp (EApp (EVar "binOp") (ELit (LString "+"))) (EApp (EApp (EApp (EVar "binOp") (ELit (LString "*"))) (EVar "acc")) (EApp (EVar "intLit") (ELit (LInt 33))))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "hash")))) (EApp (EVar "EVar") (EVar "v"))))) (EVar "vs")))
+(DFunDef false "hashFold" ((PVar "acc") (PCons (PVar "v") (PVar "vs"))) (EApp (EApp (EVar "hashFold") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "derivedHashStep")))) (EVar "acc"))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "hash")))) (EApp (EVar "EVar") (EVar "v"))))) (EVar "vs")))
 (DTypeSig false "deriveGenericData" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "Decl"))))
 (DFunDef false "deriveGenericData" ((PVar "name") (PVar "variants")) (EApp (EApp (EApp (EVar "derivedImpl") (ELit (LString "Generic"))) (EVar "name")) (EListLit (EApp (EApp (EApp (EVar "ImplMethod") (ELit (LString "to_rep"))) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "__x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__x")))) (EApp (EApp (EMethodRef "map") (EVar "genericArm")) (EVar "variants")))))))
 (DTypeSig false "genericArm" (TyFun (TyCon "Variant") (TyCon "Arm")))
