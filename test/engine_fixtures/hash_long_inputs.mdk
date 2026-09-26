@@ -1,0 +1,31 @@
+-- The prelude's compound `Hashable` fold is `acc * 33 + hash x` over the
+-- elements.  On an `Int` accumulator it passes 2^62 after about 13 elements,
+-- so it is computed in `U64` and narrowed to the low 63 bits once at the end.
+-- Every input here is long enough to have overflowed an `Int` fold: a 1,000
+-- element list and array, a 1,000-byte `Bytes`, a derived impl over a long
+-- list, and a tuple and a `Result` whose fields are long lists.  The value pin
+-- holds the hashes the wrapping `Int` fold gave before the fold moved, so a
+-- change to any hash value reds it (`hash_map` iteration order depends on
+-- them), and an engine that traps or disagrees reds the differential.
+
+import bytes.{fromU8Array}
+import u8 as U8
+import list.{reverse}
+
+data Tree = Leaf | Node Tree Int Tree deriving (Eq, Hashable)
+
+build : List Int -> Tree
+build [] = Leaf
+build (x :: xs) = Node Leaf x (build xs)
+
+main =
+  let xs = [1..1000]
+  let block = fromU8Array (arrayFromList (map (i => U8.truncate (i * 7)) xs))
+  let pairs = map (i => (i, i * i)) xs
+  println (hash xs)
+  println (hash (arrayFromList xs))
+  println (hash block)
+  println (hash pairs)
+  println (hash (build xs))
+  println (hash (xs, reverse xs, "tail"))
+  println (hash (Err xs : Result (List Int) Int))

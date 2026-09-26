@@ -624,9 +624,11 @@ derivedNextDepth c depth
 -- Primitive impls delegate to per-type externs (`hashInt`/`hashString`/…,
 -- deterministic and byte-identical across the tree-walker and the native
 -- backend).  The compound fold: seed with the constructor ordinal, then
--- `acc = acc * 33 + hash field` left-to-right over fields.  `Int` wraps, so
--- the result is not masked non-negative; hash_map/hash_set mask at the point
--- of use.
+-- `acc = acc * 33 + hash field` left-to-right over fields, computed in `U64`
+-- so it wraps by definition (an `Int` fold would overflow after about 13
+-- elements).  The result is the low 63 bits, which is the value a wrapping
+-- 63-bit fold gives, and is not masked non-negative; hash_map/hash_set mask at
+-- the point of use.
 export interface Hashable a where
   hash : a -> Int
 
@@ -662,41 +664,60 @@ export impl Hashable (Option a) requires Hashable a where
 -- Ok seeds at 0, Err at 1.
 export impl Hashable (Result e a) requires Hashable e, Hashable a where
   hash (Ok x) = hash x
-  hash (Err e) = 33 + hash e
+  hash (Err e) = derivedHashStep 1 (hash e)
 
--- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x.
-hashListItems : Hashable a => Int -> List a -> Int
+-- One step of the compound fold, `acc * 33 + h` modulo 2^64, narrowed to the
+-- low 63 bits.  The derived `Hashable` impls call it too (desugar.mdk's
+-- `hashFold`), so a derived and a hand-written impl of the same shape agree.
+-- Narrowing between steps loses nothing: the low 63 bits of a step depend only
+-- on the low 63 bits of its inputs.
+derivedHashStep : Int -> Int -> Int
+derivedHashStep acc h = u64TruncateToInt (u64Truncate acc * 33 + u64Truncate h)
+
+-- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x, in `U64`.
+hashListItems : Hashable a => U64 -> List a -> U64
 hashListItems acc [] = acc
-hashListItems acc (x :: xs) = hashListItems (acc * 33 + hash x) xs
+hashListItems acc (x :: xs) = hashListItems (acc * 33 + u64Truncate (hash x)) xs
 
 export impl Hashable (List a) requires Hashable a where
-  hash xs = hashListItems 0 xs
+  hash xs = u64TruncateToInt (hashListItems 0 xs)
 
 -- The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
 -- and the list of the same elements hash equally.  Agrees with `Eq (Array a)`
 -- by construction: equal arrays have equal elements in equal order.
 export impl Hashable (Array a) requires Hashable a where
-  hash arr = hashArrGo 0 arr 0 (arrayLength arr)
+  hash arr = u64TruncateToInt (hashArrGo 0 arr 0 (arrayLength arr))
 
-hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
+hashArrGo : Hashable a => U64 -> Array a -> Int -> Int -> U64
 hashArrGo acc arr i n =
   if i >= n then
     acc
   else
-    hashArrGo (acc * 33 + hash (arrayGetUnsafe i arr)) arr (i + 1) n
+    hashArrGo
+      (acc * 33 + u64Truncate (hash (arrayGetUnsafe i arr)))
+      arr
+      (i + 1)
+      n
 
 export impl Hashable (a, b) requires Hashable a, Hashable b where
-  hash (a, b) = hash a * 33 + hash b
+  hash (a, b) = derivedHashStep (hash a) (hash b)
 
 export impl Hashable (a, b, c) requires Hashable a, Hashable b, Hashable c where
-  hash (a, b, c) = (hash a * 33 + hash b) * 33 + hash c
+  hash (a, b, c) = derivedHashStep (derivedHashStep (hash a) (hash b)) (hash c)
 
 export impl Hashable (a, b, c, d) requires Hashable a, Hashable b, Hashable c, Hashable d where
-  hash (a, b, c, d) = ((hash a * 33 + hash b) * 33 + hash c) * 33 + hash d
+  hash (a, b, c, d) =
+    derivedHashStep
+      (derivedHashStep (derivedHashStep (hash a) (hash b)) (hash c))
+      (hash d)
 
 export impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c, Hashable d, Hashable e where
   hash (a, b, c, d, e) =
-    (((hash a * 33 + hash b) * 33 + hash c) * 33 + hash d) * 33 + hash e
+    derivedHashStep
+      (derivedHashStep
+        (derivedHashStep (derivedHashStep (hash a) (hash b)) (hash c))
+        (hash d))
+      (hash e)
 
 -- # Output
 
@@ -763,6 +784,44 @@ export impl Num Float where
   fromInt x = intToFloat x
   rem a b = a % b
 
+-- `U64`'s arithmetic and comparisons are builtin operators, but an operator on
+-- `U64` still needs these impls in scope, and the prelude's `Hashable` fold is
+-- written in `U64`.  The rest of the type's surface is the `u64` module, which
+-- the prelude cannot import.
+export impl Eq U64 where
+  eq a b = a == b
+
+-- Every method is defined, not only `compare`, so each one is a single builtin
+-- comparison and a generic caller never falls back to an interface default.
+-- `min` and `max` are the methods being defined, so they are written out.
+-- lint-disable-next-line rule-if-max-min
+export impl Ord U64 where
+  compare a b = if a < b then Lt else if a > b then Gt else Eq
+  lt a b = a < b
+  gt a b = a > b
+  lte a b = a <= b
+  gte a b = a >= b
+  min a b = if a <= b then a else b
+  max a b = if a >= b then a else b
+
+{- | Arithmetic modulo 2^64. `fromInt` panics on a negative `Int`; it is what
+   a literal in a generic `Num a =>` position becomes, and `u64.tryFromInt` and
+   `u64.truncate` are the non-panicking conversions. -}
+export impl Num U64 where
+  add a b = a + b
+  sub a b = a - b
+  mul a b = a * b
+  div a b = a / b
+  negate a = 0 - a
+  abs a = a
+  signum a = if a == 0 then 0 else 1
+  fromInt n =
+    if n < 0 then
+      panic "fromInt: \{n} does not fit U64 (0..18446744073709551615)"
+    else
+      u64Truncate n
+  rem a b = a % b
+
 -- > (-7) % 3
 -- -1
 -- > 5.5 % 2.0
@@ -788,6 +847,68 @@ isOdd n = n % 2 /= 0
 
 -- > isOdd 8
 -- False
+
+{- | The sum of two integers, or `None` when it does not fit `Int`.
+
+   `+` panics on overflow. Use `checkedAdd` where an operand comes from
+   outside the program, such as a length read from a file or a request, and
+   an out-of-range value should be refused rather than stop the program.
+
+   > checkedAdd 2 3
+   Some 5
+   > checkedAdd intMaxBound 1
+   None
+   > checkedAdd intMinBound (-1)
+   None -}
+export
+checkedAdd : Int -> Int -> Option Int
+checkedAdd a b =
+  if b > 0 && a > intMaxBound - b || b < 0 && a < intMinBound - b then
+    None
+  else
+    Some (a + b)
+
+{- | The difference of two integers, or `None` when it does not fit `Int`.
+   See `checkedAdd`.
+
+   > checkedSub 2 3
+   Some -1
+   > checkedSub intMinBound 1
+   None
+   > checkedSub 0 intMinBound
+   None -}
+export
+checkedSub : Int -> Int -> Option Int
+checkedSub a b =
+  if b < 0 && a > intMaxBound + b || b > 0 && a < intMinBound + b then
+    None
+  else
+    Some (a - b)
+
+{- | The product of two integers, or `None` when it does not fit `Int`.
+   See `checkedAdd`.
+
+   > checkedMul 6 7
+   Some 42
+   > checkedMul intMaxBound 2
+   None
+   > checkedMul intMinBound (-1)
+   None
+   > checkedMul (-1) intMaxBound
+   Some -4611686018427387903 -}
+export
+checkedMul : Int -> Int -> Option Int
+checkedMul a b = if mulOverflows a b then None else Some (a * b)
+
+-- Each comparison is against a quotient that cannot itself overflow: the
+-- divisor is never `-1` where the dividend is `intMinBound`.
+mulOverflows : Int -> Int -> Bool
+mulOverflows a b
+  | a > 0 && b > 0 = a > intMaxBound / b
+  | a > 0 = b < intMinBound / a
+  | b > 0 = a < intMinBound / b
+  | a == 0 = False
+  | otherwise = b < intMaxBound / a
 
 -- | Types with a smallest and a largest value.
 export interface Bounded a where
@@ -2080,3 +2201,12 @@ prop "Hashable Array agrees with Hashable List" (xs : List Int) =
 
 prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
   eq (hash (arrayFromList xs)) (hash (arrayFromList xs))
+
+-- LAW: the compound fold never overflows, however long its input.  An `Int`
+-- accumulator passes 2^62 after about 13 elements; 1,000 elements is far past
+-- it, and the list, the array and a fold of `derivedHashStep` (the step the
+-- tuple and derived impls use) must agree.
+prop "Hashable List: a 1,000-element list hashes as its array and its step fold" (x : Int) =
+  let xs = map (i => bitXor i x) [1..1000]
+  eq (hash xs) (hash (arrayFromList xs))
+    && eq (hash xs) (fold derivedHashStep 0 (map hash xs))
