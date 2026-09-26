@@ -14632,16 +14632,21 @@ localAbsFor key = match omLookup key localAbs.value.lasBinders.value
   Some found => found
   None => None
 
+-- Forget what a previous inference of the same binder left, before any member of
+-- its group is inferred (a group member's body records its siblings' uses).
+forgetLocalAbs : String -> Unit
+forgetLocalAbs key =
+  let st = localAbs.value
+  let _ = st.lasBinders := omDelete key st.lasBinders.value
+  st.lasRecOccs := omDelete key st.lasRecOccs.value
+
 -- Enter a candidate local binder's own scope before its right-hand side is
--- inferred.  Any abstraction a previous inference of the same binder left is
--- forgotten first.
+-- inferred.
 openLocalScope : String -> String -> ScopeId
 openLocalScope x key =
   let st = localAbs.value
   let k = st.lasCounter.value
   let _ = st.lasCounter := k + 1
-  let _ = st.lasBinders := omDelete key st.lasBinders.value
-  let _ = st.lasRecOccs := omDelete key st.lasRecOccs.value
   let parent = captureScope ()
   let sid =
     Scopes.freshScope
@@ -14656,7 +14661,9 @@ openLocalScope x key =
 -- The candidate local's scope, opened when its right-hand side is a candidate.
 openLocalScopeIf : Bool -> String -> String -> Option ScopeId
 openLocalScopeIf False _ _ = None
-openLocalScopeIf True x key = Some (openLocalScope x key)
+openLocalScopeIf True x key =
+  let _ = forgetLocalAbs key
+  Some (openLocalScope x key)
 
 closeLocalScope : Option ScopeId -> Unit
 closeLocalScope (Some _) = closeScope ()
@@ -22840,6 +22847,7 @@ processLetGroup env binds =
   let recursive =
     map (p => (fst p, monoScheme (snd p).bsRecursiveValue)) summaries
   let env2 = extendLocalVars env recursive
+  let _ = fold (_ bind => forgetLocalAbs (letBindKey bind)) () binds
   let lscopes = inferLetBinds env2 (zipL binds summaries)
   let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
   let _ = finishValueEffects (map (p => (snd p).bsValue) summaries)
@@ -22936,7 +22944,10 @@ inferLetBinds _ [] = []
 inferLetBinds env ((bind@(LetBind name clauses), (_, owned)) :: rest) =
   let pairs = map funClausePair clauses
   let lscope =
-    openLocalScopeIf (localAbsCandidateBind bind) name (letBindKey bind)
+    if localAbsCandidateBind bind then
+      Some (openLocalScope name (letBindKey bind))
+    else
+      None
   let _ = inferMemberClauses env None owned pairs
   let _ = closeLocalScope lscope
   let _ = match pairs
