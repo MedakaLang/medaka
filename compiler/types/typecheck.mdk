@@ -191,6 +191,7 @@ import types.repr.{
   tupleTagArityGo,
   wrapIf,
 }
+import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
 import types.effect_domain.{
   canonParam,
   subTopOf,
@@ -7343,6 +7344,13 @@ ceLookupAt key cur env = match regLookupK key env.ceByKey
   None => None
   Some r => if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
 
+-- An interface named by a RESOLVED reference: the reference's origin was bound by
+-- resolve at a site that could see the declaration, so no ordinal filter applies.
+-- Reached from the superclass closure, whose seeds are resolved predicate
+-- interfaces and whose edges are `Super` occurrences stamped by resolve.
+ceLookupGraph : RegKey -> ClassEnv -> Option CeRow
+ceLookupGraph key env = regLookupK key env.ceByKey
+
 -- ── #1557 A-3.5c: the ROW-SET reads, and why there are exactly two ─────────
 -- `ceLookupAt` above answers "what does interface I mean here"; the two
 -- relocated SCANS (W1 acyclicity, phantom methods) instead need a POPULATION,
@@ -13707,10 +13715,7 @@ declaredEffectsAt inst declared =
 
 recordDeclaredBindingCall : CDeclared -> List (Int, Mono) -> Unit
 recordDeclaredBindingCall dc subst =
-  let expanded =
-    expandSupersVecs
-      driverState.value.superDeclsRef.value
-      (zipSlotVecs dc.cdSlots dc.cdArgs)
+  let expanded = expandSupersVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
   recordCallObligations
     (map fst expanded)
     (constraintMonosOf (map (pair => (fst pair).csId) expanded) subst)
@@ -15063,10 +15068,7 @@ inferDeclaredDictAt ev dc inst =
   -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
   -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
   -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
-  let expandedV =
-    expandSupersVecs
-      driverState.value.superDeclsRef.value
-      (zipSlotVecs dc.cdSlots dc.cdArgs)
+  let expandedV = expandSupersVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
   let expanded = map fst expandedV
   let ids = map (s => s.csId) expanded
   let monos = constraintMonosOf ids (snd inst)
@@ -15244,24 +15246,20 @@ constraintMonosOf (id :: rest) subst = match lookupAssocI id subst
 -- both tables and returns both results makes both reads happen before either write, so
 -- the ordering constraint is discharged by the TYPE rather than by statement order in a
 -- caller that a later edit can reshuffle.
-expandFunPredicateSlots : List Decl ->
-  List (String, List PredicateSlot) ->
+expandFunPredicateSlots : List (String, List PredicateSlot) ->
   List (String, List PredicateSlot)
-expandFunPredicateSlots allDecls table =
-  map (expandPredicateSlotEntry allDecls) table
+expandFunPredicateSlots table = map expandPredicateSlotEntry table
 
-expandPredicateSlotEntry : List Decl ->
-  (String, List PredicateSlot) ->
+expandPredicateSlotEntry : (String, List PredicateSlot) ->
   (String, List PredicateSlot)
-expandPredicateSlotEntry allDecls (name, slots) =
-  (name, expandPredicateSlots allDecls slots)
+expandPredicateSlotEntry (name, slots) = (name, expandPredicateSlots slots)
 
-expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
-expandPredicateSlots allDecls slots =
+expandPredicateSlots : List PredicateSlot -> List PredicateSlot
+expandPredicateSlots slots =
   let idx = predicateSlotIndex slots omEmpty
   map
     (predicateSlotFromExpanded idx)
-    (expandSupersVecs allDecls (map predicateSlotView slots))
+    (expandSupersVecs (map predicateSlotView slots))
 
 predicateSlotIndex : List PredicateSlot ->
   OrdMap PredicateSlot ->
@@ -15307,63 +15305,68 @@ predicateSlotFromExpanded idx pair = match omLookup (cslotVecKey pair) idx
 -- lockstep or a cross-module constrained fn under-fills), and reading both tables as its
 -- arguments is what keeps the old iface table visible to the id expansion.  See
 -- `setFunConstraintTables` for why writing the two members simultaneously is forbidden.
-expandSupersTable : List Decl -> Unit
-expandSupersTable allDecls =
+expandSupersTable : Unit -> Unit
+expandSupersTable _ =
   perRun.value.funPredicateSlotsRef :=
-    expandFunPredicateSlots allDecls perRun.value.funPredicateSlotsRef.value
+    expandFunPredicateSlots perRun.value.funPredicateSlotsRef.value
 
--- 🚨 S-dict-arity-contract: the SAME fixpoint, carrying each slot's PREDICATE ARGUMENT
--- VECTOR (in the callee signature's instantiation vars) alongside the slot.  `Ix a b`
--- reached as `requires Ix a b` from a `Sub a b` slot used to route on `a`'s mono ALONE
--- — `callArgVecs`' stored-vector list covers only the DECLARED prefix, so every appended
--- super slot took the singleton `[m]` arm, `Ix Int _` matched both `impl Ix Int Bool`
--- and `impl Ix Int Char`, and first-declared won.  Measured on `sup2.mdk`
--- (`S-predicate-representation` Note N2): 111 where the spec says 222, exit 0, silent.
---
--- 🚨 S-slot-key-vector (#1866) MOVED WHICH SLOTS EXIST HERE, deliberately — the sentence
--- that used to stand in this paragraph ("THIS DOES NOT MOVE WHICH SLOTS EXIST … AND IT
--- MUST NOT") is now FALSE and is retracted rather than left to mislead.  The dedup is
--- `dedupSlotVecs` over `cslotVecKey`, i.e. over the WHOLE PREDICATE, so
--- `(Ix a Char, Ix a Bool) => …` now opens TWO slots where it opened one.  The old wording
--- was right about the HAZARD and wrong about the remedy: what must not move is the
--- SYNTHETIC-id path.  `expandSupersIfaceEntry` expands `idsForIfaceSlots` (slot index)
--- purely to reproduce the same iface SEQUENCE, and it has no real tyvar ids and no vectors
--- at all — so it goes through `expandSupersPairs`, whose slots all carry `[]`, whose keys
--- therefore all gain the same constant empty suffix, and whose sequence is consequently
--- byte-identical to before.  Only the ID entry (`expandSupersEntry`) was given real
--- vectors, and it is the entry `dictArityOf` sizes from and the one the CALL side
--- (`inferDictAtFound`, which has expanded WITH vectors since S-dict-arity-contract)
--- already agreed with slot-for-slot.  `superSlotOf`'s `firstOrZero` id-collapse is
--- untouched and still owed.
---
--- 🚨 F7 / FIX-shadow-arity-skew: the sentence that stood here — "`expandSupersPairs` is a
--- projection of this, so there is ONE fixpoint and the sequence cannot drift between the
--- vector-carrying and vector-free readers" — is FALSE IN THE GENERAL CASE and is retracted.
--- One fixpoint does NOT imply one sequence: `expandSupersPairs` feeds it a constant `[]`
--- suffix, and since the dedup key is the WHOLE PREDICATE, a vector-free reader collapses
--- exactly the slots a vector-carrying reader keeps.  What actually holds is narrower:
--- the SYNTHETIC-id path (`expandSupersIfaceEntry`) never drifts, because it carries no
--- real tyvar ids and no vectors at all, so every one of its keys gains the SAME constant
--- empty suffix and its sequence is byte-unchanged.  Any OTHER vector-free reader of a
--- REAL slot list drifts against `expandSupersEntry` — which is the bug
--- `shadowStandaloneDictSlots` shipped, and the reason `expandSupersPairs` now has exactly
--- one caller.  Before adding a second, check whether its slots have vectors available: if
--- they do, it belongs on `expandSupersVecs`.
-expandSupersVecs : List Decl ->
-  List (CSlot, List Mono) ->
-  List (CSlot, List Mono)
-expandSupersVecs allDecls declared = expandSupersFix allDecls declared declared
+-- The appended super slots of a `=>` constraint list: the superclass closure
+-- (`types/superclass.mdk`) of the declared slots, breadth-first, deduplicated by
+-- `cslotVecKey` over the whole predicate so `(Ix a Char, Ix a Bool) => …` keeps two
+-- slots and `(Shw a, Shw a) => …` keeps one.  Each slot carries the argument vector its
+-- `requires` clause names (`requires Ix a b` off a `Sub a b` slot routes on
+-- `Ix Int Char`, not `Ix Int`).  The define side (`dictArityOf`) and every call side
+-- size from this one function, so they agree slot for slot.
+expandSupersVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
+expandSupersVecs declared =
+  map
+    slotOfSuperNode
+    (superClosure
+      userSuperLookup
+      slotSuperStep
+      slotNodeKey
+      (map (sv => ((fst sv).csIface, ((fst sv).csId, snd sv))) declared))
 
-expandSupersFix : List Decl ->
-  List (CSlot, List Mono) ->
-  List (CSlot, List Mono) ->
-  List (CSlot, List Mono)
-expandSupersFix allDecls acc frontier =
-  let next = dedupSlotVecs (acc ++ flatMap (superSlotsOfV allDecls) frontier)
-  if listLen next == listLen acc then
-    acc
-  else
-    expandSupersFix allDecls next (drop (listLen acc) next)
+slotOfSuperNode : SuperNode (Int, List Mono) -> (CSlot, List Mono)
+slotOfSuperNode n =
+  let (id, vec) = n.superPayload
+  (CSlot { csIface = n.superIface, csId = id }, vec)
+
+slotNodeKey : IfaceRef -> (Int, List Mono) -> String
+slotNodeKey iface (id, vec) =
+  cslotVecKey (CSlot { csIface = iface, csId = id }, vec)
+
+-- Only a USER interface's supers become dict slots (WS-1b): prelude super chains are
+-- dispatched by argument tag.  The gate asks a SPELLING question because
+-- `userIfaceNamesRef` is a name set.
+userSuperLookup : IfaceRef -> Option (List String, List Super)
+userSuperLookup ir
+  | omHasKey ir.irName driverState.value.userIfaceNamesRef.value =
+    superLookup ir
+  | otherwise = None
+
+-- One super of an (id, vector) slot.  A `requires` chain is over the sub-predicate's
+-- type parameters, so the super keeps the sub's lead id (0 for a nullary super).  Its
+-- vector maps the super's parameters positionally through the sub's vector; when the
+-- sub has no complete vector, or a parameter does not resolve, the super gets `[]`
+-- ("no vector recoverable") rather than a shorter-than-declared argument list.
+slotSuperStep : List String ->
+  (Int, List Mono) ->
+  Super ->
+  Option (Int, List Mono)
+slotSuperStep typarams (id, vec) (Super { superParams = params, ... })
+  | not (all (p => contains p typarams) params) = None
+  | otherwise =
+    let superId = if isEmptyL params then 0 else id
+    let superVec =
+      if listLen vec
+        == listLen
+          typarams then match mapAll (p => lookupPos p typarams vec) params
+        Some ms => ms
+        None => []
+      else
+        []
+    Some (superId, superVec)
 
 -- S-slot-key-vector (#1866): keyed on the WHOLE PREDICATE — slot AND argument vector — so
 -- the vector DOES participate in the arity decision.  `(Ix a Char, Ix a Bool) => …` is two
@@ -15388,73 +15391,10 @@ zipSlotVecs [] _ = []
 zipSlotVecs (s :: rest) [] = (s, []) :: zipSlotVecs rest []
 zipSlotVecs (s :: rest) (v :: vs) = (s, v) :: zipSlotVecs rest vs
 
--- the direct super slots of one (iface, id) slot: look up iface's (typarams, supers);
--- the super-param NAMES index into typarams, which map positionally to [id] (a single
--- shared id since constraints in a `requires` chain are over the same type param).
--- ⚠️ Both the user-interface gate and the `ifaceSupersOf` lookup ask a SPELLING
--- question (`userIfaceNamesRef` is a name set, `ifaceSupersOf` scans `DInterface` by
--- name).  U1b (#1482) did not re-key either: doing so would change which slots exist,
--- i.e. dict ARITY, which is emitted-code shape and #1425's ground.  The slot's own
--- identity comes from the `Super` occurrence that produced it.
--- S-dict-arity-contract: it ALSO maps the sub-predicate's own argument vector
--- positionally onto its type parameters, so each super slot can carry the vector its
--- `requires` clause names.  [vec] empty (no vector recorded for this slot) ⇒ every super
--- gets `[]` too, i.e. exactly today's singleton-goal behaviour.
-superSlotsOfV : List Decl -> (CSlot, List Mono) -> List (CSlot, List Mono)
-superSlotsOfV allDecls (s, vec)
-  | not (omHasKey s.csIface.irName driverState.value.userIfaceNamesRef.value) =
-    []  -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
-  | otherwise = match ifaceSupersOf allDecls s.csIface.irName
-    None => []
-    Some (typarams, supers) =>
-      let subst = zipL typarams (replicate (listLen typarams) s.csId)
-      let vsubst =
-        if listLen vec == listLen typarams then zipL typarams vec else []
-      flatMap (superSlotOfV subst vsubst) supers
-
--- one `Super superName params`: map each param name through subst → its id; emit the
--- super slot only if ALL params resolved (matches the oracle's length guard).
-superSlotOf : List (String, Int) -> Super -> List CSlot
-superSlotOf subst sup = map fst (superSlotOfV subst [] sup)
-
--- ⚠️ THE SLOT HALF IS UNCHANGED — same guard, same `firstOrZero` id.  Only the vector is
--- new: each super param name resolved through the sub-predicate's positional vector
--- [vsubst], and ONLY when every param resolves (a partial vector would route on a
--- shorter-than-declared argument list and match nothing, which degrades to the bare head
--- tag — worse than the singleton it replaces).
-superSlotOfV : List (String, Int) ->
-  List (String, Mono) ->
-  Super ->
-  List (CSlot, List Mono)
-superSlotOfV subst vsubst (Super { superHead = superName, superParams = params, superOrigin = so }) =
-  let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
-  let vmapped = filterMaybeMonos (map (p => lookupAssoc p vsubst) params)
-  if listLen mapped == listLen params then
-    (
-        CSlot {
-          csIface = IfaceRef { irName = superName, irOrigin = so },
-          csId = firstOrZero mapped,
-        },
-        if listLen vmapped == listLen params then vmapped else [],
-      )
-      :: []
-  else
-    []
-
-filterMaybeMonos : List (Option Mono) -> List Mono
-filterMaybeMonos [] = []
-filterMaybeMonos ((Some x) :: rest) = x :: filterMaybeMonos rest
-filterMaybeMonos (None :: rest) = filterMaybeMonos rest
-
 -- every super slot in a `requires` chain carries the SAME id; represent the slot by it.
 firstOrZero : List Int -> Int
 firstOrZero [] = 0
 firstOrZero (x :: _) = x
-
-filterMaybeIds : List (Option Int) -> List Int
-filterMaybeIds [] = []
-filterMaybeIds ((Some x) :: rest) = x :: filterMaybeIds rest
-filterMaybeIds (None :: rest) = filterMaybeIds rest
 
 -- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
 -- deliberately — this key feeds the dedup that decides how many dict slots a constrained
@@ -19660,27 +19600,22 @@ monoIsTyvarId m id = match normalize m
   _ => False
 
 -- [iface] plus its transitive `requires` supers (a `Ord a =>` constraint also supplies
--- the `Eq` dict).  Reads superDeclsRef, the program's interface decls; NOT gated on
--- userIfaceNamesRef (unlike superSlotsOf, whose gate is about dict SLOTS, not about
--- which interfaces a constraint satisfies) — a PRELUDE super chain satisfies the
--- superinterface just as much, it is simply serviced by arg-tag dispatch.
+-- the `Eq` dict).  NOT gated on userIfaceNamesRef (unlike `expandSupersVecs`, whose gate
+-- is about dict SLOTS, not about which interfaces a constraint satisfies) — a PRELUDE
+-- super chain satisfies the superinterface just as much, it is simply serviced by
+-- arg-tag dispatch.
+-- Its callers hold interface SPELLINGS (`groupConstraintMonosRef` carries no origin), so
+-- the lookup is by spelling over `superDeclsRef`, first match; every other superclass
+-- reader looks interfaces up by identity (`superLookup`).
 ifaceSelfAndSupers : String -> List String
-ifaceSelfAndSupers iface = supersFix [iface] [iface]
-
-supersFix : List String -> List String -> List String
-supersFix acc [] = acc
-supersFix acc frontier =
-  let next = removeAllS acc (dedup (flatMap directSupers frontier))
-  supersFix (acc ++ next) next
-
-directSupers : String -> List String
-directSupers iface =
-  match ifaceSupersOf driverState.value.superDeclsRef.value iface
-    None => []
-    Some (_, supers) => map superIfaceName supers
-
-superIfaceName : Super -> String
-superIfaceName (Super { superHead = n }) = n
+ifaceSelfAndSupers iface =
+  map
+    (n => n.superIface.irName)
+    (superClosure
+      (ir => ifaceSupersOf driverState.value.superDeclsRef.value ir.irName)
+      (_ _ _ => Some ())
+      (ir _ => ir.irName)
+      [(ifaceRefBare iface, ())])
 
 -- P0-19: impose a definer-shadow standalone's declared domain on the actual argument
 -- [xt] WHEN the occurrence resolves to the standalone (RLocal).  No declared signature ⇒
@@ -20239,10 +20174,7 @@ shadowStandaloneDictSlots slots args subst =
   if isEmptyL slots then
     emptyShadowDicts
   else
-    let expandedV =
-      expandSupersVecs
-        driverState.value.superDeclsRef.value
-        (zipSlotVecs slots args)
+    let expandedV = expandSupersVecs (zipSlotVecs slots args)
     let expanded = map fst expandedV
     -- the ROUTE half stays a SPELLING, exactly as `inferDictAtFound`'s `pushDictApp`
     -- does — route words, not identities (see `dispHeadTab`).
@@ -26760,10 +26692,8 @@ cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 -- 🚨 THE ROW LIST IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
 -- O(rows); `superImplExists` runs per (impl x super).  See its header.
 --
--- ⚠️ The visible-row list replaces [allDecls] for EXISTENCE only.  `ifaceSupersOf`
--- itself is NOT deleted — it has four surviving callers outside this check
--- (constraint solving, `directSupers`, and the two census helpers), and re-keying or
--- removing it would silently move all four.
+-- The visible-row list replaces [allDecls] for EXISTENCE only.  The supers themselves
+-- come from `CE`, as every superclass reader's do (`superLookup`).
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperImpls userDecls ce ie cur =
   let rows = ieRowsVisibleAt cur ie
@@ -28636,6 +28566,14 @@ substParams (p :: rest) subst = match lookupAssoc p subst
 missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
 missingSuperImplMsg iface implTys superName superTys =
   "'impl \{iface} \{joinWith " " (map ppTyAtom implTys)}' requires a superinterface 'impl \{superName} \{joinWith " " (map ppTyAtom superTys)}', which is missing"
+
+-- The type parameters and direct supers of one interface, by identity.
+superLookup : IfaceRef -> Option (List String, List Super)
+superLookup ir =
+  let key = regKeyOfTab (ifaceTabKey ir.irOrigin ir.irName)
+  map
+    (row => (ceRowTyparams row, ceRowSupers row))
+    (ceLookupGraph key driverState.value.declEnvsRef.value.deIfaces)
 
 -- the (typarams, supers) of interface [target], scanning DInterface decls; None if
 -- no such interface is in scope.
@@ -31344,38 +31282,39 @@ argExpandedImplReqRoutes encl useScope subst ((Require { requireHead = rIface, r
     :: argExpandedImplReqRoutes encl useScope subst rest prevSize spent
 
 -- Impl prerequisites use the same flattened superclass representation as `=>`
--- constraints: declared predicates stay first, then each transitive superclass gets
--- its own dictionary slot.  Keeping this expansion in `Require` form gives routing,
--- definition arity, and body registration one shared slot sequence.
+-- constraints: declared predicates stay first (verbatim), then each transitive
+-- superclass not already present gets its own dictionary slot, breadth-first.
+-- Keeping this expansion in `Require` form gives routing, definition arity, and body
+-- registration one shared slot sequence.
 expandImplRequires : List Require -> List Require
 expandImplRequires reqs =
-  expandImplRequiresIn driverState.value.superDeclsRef.value reqs
-
-expandImplRequiresIn : List Decl -> List Require -> List Require
-expandImplRequiresIn allDecls reqs =
   let rigidMap = implRequireRigidMap reqs
-  let seen = implRequireIndex rigidMap reqs omEmpty
+  let closure =
+    superClosure
+      superLookup
+      implRequireSuperStep
+      (iface args => implRequireKey rigidMap (requireOfSuper iface args))
+      (map
+        (r => (
+          IfaceRef { irName = r.requireHead, irOrigin = r.requireOrigin },
+          r.requireArgs,
+        ))
+        reqs)
   reqs
-    ++ uniqueImplRequires
-      rigidMap
-      seen
-      (flatMap (implRequireSupers allDecls) reqs)
+    ++ map
+      (n => requireOfSuper n.superIface n.superPayload)
+      (filter (n => listLen n.superPath > 1) closure)
 
-implRequireSupers : List Decl -> Require -> List Require
-implRequireSupers allDecls req = match ifaceSupersOf allDecls req.requireHead
-  None => []
-  Some (typarams, supers) =>
-    let direct =
-      flatMap (implRequireSuper (zipL typarams req.requireArgs)) supers
-    direct ++ flatMap (implRequireSupers allDecls) direct
+requireOfSuper : IfaceRef -> List Ty -> Require
+requireOfSuper iface args = Require {
+  requireHead = iface.irName,
+  requireArgs = args,
+  requireOrigin = iface.irOrigin,
+}
 
-implRequireSuper : List (String, Ty) -> Super -> List Require
-implRequireSuper subst (Super { superHead = name, superParams = params, superOrigin = origin }) =
-  let args = substParams params subst
-  if listLen args == listLen params then
-    [Require { requireHead = name, requireArgs = args, requireOrigin = origin }]
-  else
-    []
+implRequireSuperStep : List String -> List Ty -> Super -> Option (List Ty)
+implRequireSuperStep typarams args (Super { superParams = params, ... }) =
+  mapAll (p => lookupPos p typarams args) params
 
 implRequireRigidMap : List Require -> List (String, Mono)
 implRequireRigidMap reqs =
@@ -31384,26 +31323,6 @@ implRequireRigidMap reqs =
 implRequireTyvars : Require -> List String
 implRequireTyvars (Require { requireArgs = args, ... }) =
   flatMap tyVarNames args
-
-implRequireIndex : List (String, Mono) ->
-  List Require ->
-  OrdMap Unit ->
-  OrdMap Unit
-implRequireIndex _ [] acc = acc
-implRequireIndex rigidMap (req :: rest) acc =
-  implRequireIndex rigidMap rest (omInsert (implRequireKey rigidMap req) () acc)
-
-uniqueImplRequires : List (String, Mono) ->
-  OrdMap Unit ->
-  List Require ->
-  List Require
-uniqueImplRequires _ _ [] = []
-uniqueImplRequires rigidMap seen (req :: rest) =
-  let key = implRequireKey rigidMap req
-  if omHasKey key seen then
-    uniqueImplRequires rigidMap seen rest
-  else
-    req :: uniqueImplRequires rigidMap (omInsert key () seen) rest
 
 implRequireKey : List (String, Mono) -> Require -> String
 implRequireKey rigidMap (Require { requireHead = iface, requireArgs = args, requireOrigin = origin }) =
@@ -31572,15 +31491,9 @@ firstTvar a b id = match findTvarInMono a id
 -- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
 -- with `omHasKey`.  Membership semantics unchanged.
 dictPass : List String -> List Decl -> List Decl
-dictPass names prog = dictPassIn prog names prog
-
-dictPassIn : List Decl -> List String -> List Decl -> List Decl
-dictPassIn allDecls names prog =
+dictPass names prog =
   map
-    (dictPassDecl
-      (omFromNames names omEmpty)
-      (returnPosMethodNames prog)
-      allDecls)
+    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
     (mapProg rewriteBinopExpr prog)
 
 -- Routed operators become method applications, including generic arithmetic.
@@ -31702,8 +31615,8 @@ unopMethodApp op e routeRef =
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method "" (mintMethodCellWith 1 (fst split) (snd split))) e
 
-dictPassDecl : OrdMap Unit -> List String -> List Decl -> Decl -> Decl
-dictPassDecl names _ _ (DFunDef pub n pats body)
+dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
+dictPassDecl names _ (DFunDef pub n pats body)
   | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
   | otherwise = DFunDef pub n pats body
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
@@ -31712,7 +31625,7 @@ dictPassDecl names _ _ (DFunDef pub n pats body)
 -- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
 -- supplies a leading dict the body never binds → the dict lands in the first user
 -- param → arithmetic over a dict value panics `unknown op`.)
-dictPassDecl names _ _ (DLetGroup pub binds) =
+dictPassDecl names _ (DLetGroup pub binds) =
   DLetGroup pub (map (dictPassLetBind names) binds)
 -- Phase 83/84 single-level + D3b-1: a parametric impl with `requires` gets one
 -- leading `$dict_<method>_<slot>` param on each method (return- OR argument-
@@ -31721,22 +31634,19 @@ dictPassDecl names _ _ (DLetGroup pub binds) =
 -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl _ _ allDecls (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
+dictPassDecl _ _ (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
   methods =
-    implDictPassMethods
-      implOrigin
-      (listLen (expandImplRequiresIn allDecls reqs))
-      methods,
+    implDictPassMethods implOrigin (listLen (expandImplRequires reqs)) methods,
 }
 -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
 -- inferDefaultMethod).
-dictPassDecl _ _ _ (d@(DInterface { typarams, methods, ... })) =
+dictPassDecl _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
-dictPassDecl names ret allDecls (DAttrib attrs d) =
-  DAttrib attrs (dictPassDecl names ret allDecls d)
-dictPassDecl _ _ _ d = d
+dictPassDecl names ret (DAttrib attrs d) =
+  DAttrib attrs (dictPassDecl names ret d)
+dictPassDecl _ _ d = d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -32771,7 +32681,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- lint-disable-next-line rule-prefer-assign-op
 
   let _ =
-    let _ = expandSupersTable driverState.value.superDeclsRef.value
+    let _ = expandSupersTable ()
     -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
     -- must not propagate as a graph-wide deletion into the next module's seed.
     let _ =
@@ -39896,30 +39806,30 @@ predicateSlotKnownSupers : PredicateSlot -> List PredicateSlot
 predicateSlotKnownSupers slot = match slot.psArgs
   PSArgsUnknown => []
   PSArgsKnown args =>
-    match (ifaceSupersOf
-      driverState.value.superDeclsRef.value
-      slot.psIface.irName)
-      None => []
-      Some (typarams, supers) =>
-        if listLen args /= listLen typarams then
-          []
-        else
-          let direct = flatMap (predicateSuperSlot (zipL typarams args)) supers
-          direct ++ flatMap predicateSlotKnownSupers direct
+    map
+      predicateSlotOfNode
+      (filter
+        (n => listLen n.superPath > 1)
+        (superClosure superLookup predicateSuperStep predicateNodeKey [
+          (slot.psIface, args),
+        ]))
 
-predicateSuperSlot : List (String, Mono) -> Super -> List PredicateSlot
-predicateSuperSlot subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
-  let mapped = filterMaybeMonos (map (p => lookupAssoc p subst) params)
-  if listLen mapped /= listLen params then
-    []
-  else
-    [
-      PredicateSlot {
-        psIface = IfaceRef { irName = superName, irOrigin = so },
-        psArgs = PSArgsKnown mapped,
-        psBoundIds = dedupI (flatMap monoTyvarIds mapped),
-      },
-    ]
+-- One predicate by interface identity and structural argument vector.
+predicateNodeKey : IfaceRef -> List Mono -> String
+predicateNodeKey iface monos =
+  "\{regKeyRender (regKeyOfTab (oblIfaceKey iface))}|\{joinWith "," (map oblArgKey monos)}"
+
+predicateSuperStep : List String -> List Mono -> Super -> Option (List Mono)
+predicateSuperStep typarams args (Super { superParams = params, ... })
+  | listLen args /= listLen typarams = None
+  | otherwise = mapAll (p => lookupPos p typarams args) params
+
+predicateSlotOfNode : SuperNode (List Mono) -> PredicateSlot
+predicateSlotOfNode n = PredicateSlot {
+  psIface = n.superIface,
+  psArgs = PSArgsKnown n.superPayload,
+  psBoundIds = dedupI (flatMap monoTyvarIds n.superPayload),
+}
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -40696,7 +40606,7 @@ vecOblKey o =
 -- `cslotKey` already folds the raw lead `csId` into this same key, and the non-lead ids
 -- come from the SAME predicate occurrence in the SAME signature, normalized together.
 -- Both `dedupSlotVecs` call sites compare keys only WITHIN one binding's slot list
--- (`expandSupersFix`'s frontier, `setFunConstraintEntry`'s declared prefix) and
+-- (`expandSupersVecs`'s closure, `setFunConstraintEntry`'s declared prefix) and
 -- `vecOblKey`'s `voIds` are equally raw — so this adds no exposure the lead id did not
 -- already carry.  The G4 hazard at `registerPredGiven` is about `activeDictVars`, which
 -- no key here consults.
@@ -42457,7 +42367,7 @@ pairsOfVecObls (o :: rest) =
 -- so pair coverage passes though the JOINT `Ix a d` is undeclared).
 -- #619/#607 item 4: reportUncoveredVec closes that gap — an inferred JOINT vector
 -- (arity >= 2) whose EXACT argument vector is not among the declared vectors
--- (vector-valued superclass closure, censusSuperCloseVec / superSlotVecOf) is
+-- (vector-valued superclass closure, censusSuperCloseVec) is
 -- uncovered, and is reported when the pair test did not already flag one of its args.
 checkSigConstraintCoverage : List ConstraintReg ->
   List (String, Ty) ->
@@ -42483,10 +42393,7 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
   match omLookup m driverState.value.sigTyMapRef.value
     None => ()  -- unsigned member: its inferred constraints are promoted, not checked
     Some _ =>
-      let declaredPairs =
-        censusSuperClose
-          driverState.value.superDeclsRef.value
-          (declaredPairsFor m regs)
+      let declaredPairs = censusSuperClose (declaredPairsFor m regs)
       let inferredA =
         pairsOfVecObls (schemeObligationsOf (schemeIds sch) addedObls)
       let inferredFwd =
@@ -42495,9 +42402,7 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
       let inferred = dedupIfacePairs (inferredA ++ inferredFwd ++ inferredB)
       let _ = reportUncovered m sigTvMaps declaredPairs inferred
       let declaredVecs =
-        censusSuperCloseVec
-          driverState.value.superDeclsRef.value
-          (declaredSchemeOblsFor sigTvMaps m (schemeIds sch))
+        censusSuperCloseVec (declaredSchemeOblsFor sigTvMaps m (schemeIds sch))
       let inferredVecs =
         schemeObligationsOf (schemeIds sch) addedObls
           ++ forwardedVecObls (schemeIds sch) callObls
@@ -42549,77 +42454,63 @@ ifaceMonoName (ir, monos) = map (mono => (ir.irName, mono)) monos
 declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
 declaredPairOne (iface, monos) = map (id => (iface, id)) (abstractSlotIds monos)
 
--- UNGATED transitive super-closure over declared (iface, id) slots — mirrors
--- expandSupersPairs but WITHOUT the userIfaceNamesRef gate, so prelude super chains
--- (Applicative requires Mappable, Thenable requires Applicative, …) are included.
--- (The gated expandSupersPairs stays user-only because its slots drive dict arity;
--- this closure only feeds the read-only subset test, so gating is not needed here.)
-censusSuperClose : List Decl -> List (IfaceRef, Int) -> List (IfaceRef, Int)
-censusSuperClose allDecls declared =
-  censusSuperCloseFix allDecls declared declared
+-- UNGATED superclass closure over declared (iface, id) slots, so prelude super chains
+-- (Applicative requires Mappable, Thenable requires Applicative, …) are included.  The
+-- gated `expandSupersVecs` stays user-only because its slots drive dict arity; this
+-- closure only feeds the read-only subset test.
+censusSuperClose : List (IfaceRef, Int) -> List (IfaceRef, Int)
+censusSuperClose declared =
+  map
+    (n => (n.superIface, n.superPayload))
+    (superClosure
+      superLookup
+      censusSuperStep
+      (iface id => ifacePairKey (iface, id))
+      declared)
 
-censusSuperCloseFix : List Decl ->
-  List (IfaceRef, Int) ->
-  List (IfaceRef, Int) ->
-  List (IfaceRef, Int)
-censusSuperCloseFix allDecls acc frontier =
-  let next =
-    dedupIfacePairs (acc ++ flatMap (censusSuperSlotsOf allDecls) frontier)
-  if listLen next == listLen acc then
-    acc
-  else
-    censusSuperCloseFix allDecls next (drop (listLen acc) next)
+-- A super shares the sub-predicate's lead id (0 for a nullary super) when every one of
+-- its parameters is one of the sub's type parameters.
+censusSuperStep : List String -> Int -> Super -> Option Int
+censusSuperStep typarams id (Super { superParams = params, ... })
+  | not (all (p => contains p typarams) params) = None
+  | isEmptyL params = Some 0
+  | otherwise = Some id
 
-censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
-censusSuperSlotsOf allDecls (iface, id) =
-  match ifaceSupersOf allDecls iface.irName
-    None => []
-    Some (typarams, supers) =>
-      let subst = zipL typarams (replicate (listLen typarams) id)
-      map (sl => (sl.csIface, sl.csId)) (flatMap (superSlotOf subst) supers)
+-- #619/#607 item 4: VECTOR-valued superclass closure over declared constraint vectors.
+-- Unlike censusSuperClose (which collapses each predicate to per-arg pairs), this
+-- preserves the whole argument vector, so an inferred JOINT predicate can be tested for
+-- membership as a unit — the exotic cross-pairing `Ix a d` is NOT a member of
+-- {`Ix a b`, `Ix c d`} even though every one of its args appears in some declared
+-- predicate.  Ungated, like censusSuperClose.  The interface's type parameters map
+-- POSITIONALLY onto a predicate's ids, so a multi-param super carries the right per-arg
+-- ids; a super's ground argument positions are not recovered.
+censusSuperCloseVec : List VecObl -> List VecObl
+censusSuperCloseVec declared =
+  map
+    vecOblOfNode
+    (superClosure
+      superLookup
+      censusVecSuperStep
+      (iface payload =>
+        vecOblKey
+          (vecOblOfNode SuperNode {
+            superPath = [],
+            superIface = iface,
+            superPayload = payload,
+          }))
+      (map (o => (o.voIface, (o.voIds, o.voArgs))) declared))
 
--- #619/#607 item 4: VECTOR-valued transitive super-closure over declared constraint
--- vectors.  Unlike censusSuperClose (which collapses each predicate to per-arg pairs),
--- this preserves the whole argument vector, so an inferred JOINT predicate can be
--- tested for membership as a unit — the exotic cross-pairing `Ix a d` is NOT a member
--- of {`Ix a b`, `Ix c d`} even though every one of its args appears in some declared
--- predicate.  Ungated (mirrors censusSuperClose) so prelude super chains are included.
-censusSuperCloseVec : List Decl -> List VecObl -> List VecObl
-censusSuperCloseVec allDecls declared =
-  censusSuperCloseVecFix allDecls declared declared
+censusVecSuperStep : List String ->
+  (List Int, List Mono) ->
+  Super ->
+  Option (List Int, List Mono)
+censusVecSuperStep typarams (ids, _) (Super { superParams = params, ... }) =
+  map (mapped => (mapped, [])) (mapAll (p => lookupPos p typarams ids) params)
 
-censusSuperCloseVecFix : List Decl -> List VecObl -> List VecObl -> List VecObl
-censusSuperCloseVecFix allDecls acc frontier =
-  let next =
-    dedupVecObls (acc ++ flatMap (censusSuperSlotsVecOf allDecls) frontier)
-  if listLen next == listLen acc then
-    acc
-  else
-    censusSuperCloseVecFix allDecls next (drop (listLen acc) next)
-
--- the direct super vectors of one (iface, ids) predicate: the interface's typarams map
--- POSITIONALLY onto ids (so a multi-param super carries the right per-arg ids, not a
--- single shared one), and each `Super superName params` emits its own arg vector.
-censusSuperSlotsVecOf : List Decl -> VecObl -> List VecObl
-censusSuperSlotsVecOf allDecls o = match ifaceSupersOf allDecls o.voIface.irName
-  None => []
-  Some (typarams, supers) =>
-    let subst = zipL typarams o.voIds
-    flatMap (superSlotVecOf subst) supers
-
-superSlotVecOf : List (String, Int) -> Super -> List VecObl
-superSlotVecOf subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
-  let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
-  if listLen mapped == listLen params then
-    [
-      VecObl {
-        voIface = IfaceRef { irName = superName, irOrigin = so },
-        voIds = mapped,
-        voArgs = [],
-      },
-    ]
-  else
-    []
+vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl
+vecOblOfNode n =
+  let (ids, args) = n.superPayload
+  VecObl { voIface = n.superIface, voIds = ids, voArgs = args }
 
 -- one type_error per inferred JOINT vector (arity >= 2) whose exact vector the declared
 -- (super-closed) set does not contain.  Skipped when the pair test already flagged one
@@ -48784,7 +48675,7 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
-  (mid, dictPassIn scope dictNames prog)
+  (mid, dictPass dictNames prog)
     :: dictPassModulesScoped
       dictNames
       promotedQ
