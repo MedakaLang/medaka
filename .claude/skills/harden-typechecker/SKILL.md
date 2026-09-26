@@ -57,14 +57,14 @@ rather than crashing, because it runs while formatting an error message.
 value**. The gate is `isNonexpansive` (`:2424`) — literal / var / lambda; tuple or
 list-literal of values; `ELoc`/`EAnnot` transparent — *everything else, including
 all applications, is expansive*. Generalization goes through
-`genRestricted isValue t` (`:2494`), not bare `generalize` (`:2398`), at every
+`genBindingRestricted isValue t` (`:2494`), not bare `generalize` (`:2398`), at every
 binding site.
 
 The non-obvious rule if you touch any of this: **a non-generalized binding must
 have its free vars *lowered* to `currentLevel`, not merely wrapped in a
 monotype.** Otherwise the vars sit at a deeper level and an *enclosing* `let`'s
 `generalize` picks them up — reopening the unsoundness one scope out.
-`genRestricted` does this via `lowerToCurrent` (`:2470`); the non-`PVar` pattern
+`genBindingRestricted` does this via `lowerToCurrent` (`:2470`); the non-`PVar` pattern
 path gets it for free because `unify` (`:2305`) lowers through `occursAdjust`
 (`:2277`). Note `Ref` is a *constructor* (`extern Ref : a -> Ref a`), so — like
 SML/OCaml's `ref` — constructor applications are deliberately expansive.
@@ -133,7 +133,7 @@ the name, not the number.
 | Area | Real names |
 |---|---|
 | Unification / generalization | `unify` (:2305), `normalize` (:2261), `generalize` (:2398), `instantiate` (:2518), `freshVar` (:754), `enterLevel`/`exitLevel` (:854/:857), `currentLevel` (:745), `resetState` (:2189) |
-| Value restriction | `isNonexpansive` (:2424), `genRestricted` (:2494), `lowerToCurrent` (:2470), `occursAdjust` (:2277) |
+| Value restriction | `isNonexpansive` (:2424), `genBindingRestricted` (:2494), `lowerToCurrent` (:2470), `occursAdjust` (:2277) |
 | Errors / rendering | `pushTypeError` (:1991), `pushTypeErrorOnce` (:2005), `pushTypeErrorOnceAt` (:2018), `pushTypeErrorHelpFixAt` (:2055), `currentLoc` (:2075), `ppMono` (:2603), `ppScheme` (:2565), `ppMonosShared` (:10147) |
 | Group inference (letrec/SCC) | `processSCCs` (:10751) → `processSCC` (:10799) → `sccSchemes` (:11089), `isLetrecGroup` (:10867) |
 | Constraint obligations | `recordCallObligations` (:3561), `recordImplObligation` (:4635), `recordSchemeCallObligations` (:4615); state in `pendingCallObligations` (:1530), `pendingImplObligations` (:1368), `schemeObligationsRef` (:1555). `allConcreteHeads` (:14345) is the is-it-ground test the obligation checkers actually gate on (`checkCallObligationsU` :13838, `checkReqOne` :14135). ⚠️ This row used to name a monoConcrete helper — which never served that role: it was the swapped-argument hint's private predicate, deleted with that hint (issue 1147). |
