@@ -66,3 +66,7 @@ data J (p : Authority FileRead) (q : Authority FileRead) = J (String @(p | q))
 
 idp : (p : String) -> <FileRead p> String @p
 idp p = p
+
+-- a qualified application head keeps its parentheses
+rt : (a : String) -> <FileRead a> (Result String @a) String
+rt a = Ok a

@@ -93,6 +93,20 @@ test "check-policy accepts a manifest-derived Env Set token" =
     0
     "accepted"
 
+-- a set member may be written quoted, as a source atom writes it
+test "check-policy reads a quoted Env Set member as the member" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "env_hole_accept.mdk",
+      "--allow",
+      "Env={\"HOME\",\"PATH\"}",
+      "--fn",
+      "readHome",
+    ]
+    0
+    "accepted"
+
 test "check-policy rejects an Env Set token missing HOME" =
   expectVerbExitStartsWithAndContains
     "check-policy"

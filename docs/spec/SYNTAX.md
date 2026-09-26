@@ -206,8 +206,9 @@ A qualified value type is written with a spaced `@`: `String @path` names the
 argument's authority on a value derived from it.  A joined qualifier names
 several binders in parentheses, `String @(src | dst)`, a value within either
 authority; it is the spelling a joined authority renders as.  A qualifier's
-binders must draw from one label's domain, so a named argument used only in a
-qualifier, with no atom or index naming it, is an error.  The quoted underscore
+binders must be `String` authorities of one domain shape (two Prefix labels
+are one shape), and a named argument used only in a qualifier, with no atom or
+index naming it, has no domain and is an error.  The quoted underscore
 (`<Store "_">`) is a parse error naming the replacement.
 
 A `data` head may declare an `Authority`-kinded parameter, `(p : Authority

@@ -150,7 +150,7 @@ parsePolicyTok tok =
       if rhsIsProduct rhs then
         productEntry tok label rhs
       else if rhsIsSet rhs then
-        Ok (label, EPSet (decodeSetParam rhs))
+        Ok (label, EPSet (map unquote (decodeSetParam rhs)))
       else
         Ok (label, EPLit (unquote rhs))
 
@@ -166,7 +166,7 @@ policyAxis spec =
       let name = sliceStr cs 0 i
       let v = sliceStr cs (i + 1) (arrayLength cs)
       if rhsIsSet v then
-        Ok (name, EPSet (decodeSetParam v))
+        Ok (name, EPSet (map unquote (decodeSetParam v)))
       else
         Ok (name, EPLit (unquote v))
 

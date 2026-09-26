@@ -13,7 +13,7 @@ import types.effect_rows.{
   Effvar(..), effvarId, rowFlat, rowFlatMembers, rowHasSummary, linkRow,
   solveSummaryCell
 }
-import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList}
+import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList, filterList}
 import support.scc.{tarjanSCCs}
 
 export data SummarySolver c = SummarySolver {
@@ -696,16 +696,15 @@ solveAuthorities : (Ref Authvar -> Bool) -> List (AuthWanted c) -> Unit
 solveAuthorities owned wanteds =
   let lowers =
     fold
-      (acc w => match authNorm w.awUpper
-        AVar cell =>
-          if owned cell then
+      (acc w =>
+        fold
+          (acc2 cell =>
             M.set
               (authvarId cell)
-              (cell, w.awLower :: lowersOf (authvarId cell) acc)
-              acc
-          else
-            acc
-        _ => acc)
+              (cell, w.awLower :: lowersOf (authvarId cell) acc2)
+              acc2)
+          acc
+          (raisedBy owned w.awLower w.awUpper))
       Tip
       wanteds
   match M.keys lowers
@@ -728,6 +727,32 @@ solveAuthorities owned wanteds =
         (_ members => solveClass lowers idOfName members)
         ()
         (tarjanSCCs names edges)
+
+-- The owned variables an obligation `lower ⊑ upper` raises.  An owned
+-- variable takes `lower` as a lower bound.  A join is covered when any of its
+-- members covers `lower`, so it has no single least solution; the rule
+-- chosen is the one with no choice in it: when the join's fixed members (its
+-- constants and rigid or unowned variables) do not already cover `lower`,
+-- every owned member takes it.  A value in `String @(p | q)` built from one
+-- literal therefore lies within both indices.
+export
+raisedBy : (Ref Authvar -> Bool) -> Authority -> Authority -> List (Ref Authvar)
+raisedBy owned lower upper = match authNorm upper
+  AVar cell => if owned cell then [cell] else []
+  AJoin ms =>
+    let flexible = flatMap (m => ownedCellOf owned m) ms
+    let fixed = filterList (m => isEmptyL (ownedCellOf owned m)) ms
+    if isEmptyL flexible then
+      []
+    else if isNonEmptyL fixed && authSub lower (authJoinAll fixed) then
+      []
+    else
+      flexible
+  _ => []
+
+ownedCellOf : (Ref Authvar -> Bool) -> Authority -> List (Ref Authvar)
+ownedCellOf owned (AVar cell) = if owned cell then [cell] else []
+ownedCellOf _ _ = []
 
 lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
 lowersOf id m = match M.get id m

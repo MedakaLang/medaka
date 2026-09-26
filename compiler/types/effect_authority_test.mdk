@@ -919,3 +919,52 @@ test "an effect label crosses a member-list re-export with its identity (#3304)"
 isEmptyList : List a -> Bool
 isEmptyList [] = True
 isEmptyList _ = False
+
+-- The whole-diff review's findings, each beside its control.
+test "a joined field is built with inferred indices, a join of one name carries it, a non-String name is refused" = expectAll
+  [
+    -- a value built into `@(p | q)` from one literal lies within both indices;
+    -- against written indices it must lie within their join (the Prefix join
+    -- is the longest common prefix, here "cfg/*")
+    expectTrue
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk = Two \"cfg/x\"\n"),
+    expectTrue
+      (accepts
+        "data AnyJ = AnyJ (p : Authority Store) (q : Authority Store) (String @(p | q))\nmk = AnyJ \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"cfg/b/x\"\n"),
+    expectFalse
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"/etc/x\"\n"),
+    -- `@(p | p)` is `@p`
+    expectTrue
+      (accepts
+        "public export data One (p : Authority Store) = One (String @(p | p))\n"),
+    -- a qualifier naming a non-String argument is refused, alone or joined
+    expectTrue
+      (contains
+        "T-AUTHORITY-BINDER"
+        (codes
+          "g : (a : String) -> (n : Int) -> <Store a> String @(a | n)\ng a n = a\n")),
+    expectTrue
+      (accepts
+        "g : (a : String) -> (b : String) -> <Store a, Store b> String @(a | b)\ng a b = a\n"),
+  ]
+
+test "an empty bare literal on a Product label is refused, not read as the whole domain" = expectAll
+  [
+    expectTrue
+      (contains
+        "T-EFFECT-PARAM"
+        (codes
+          ("effect Web Product (Host : Prefix, Method : Set)\n"
+            ++ "hit : Int -> <Web Host=\"evil.com/x\"> Int\nhit n = n\n"
+            ++ "f : Unit -> <Web \"\"> Int\nf _ = hit 1\n"))),
+    expectTrue
+      (accepts
+        ("effect Web Product (Host : Prefix, Method : Set)\n"
+          ++ "hit : Int -> <Web Host=\"a.com/x\"> Int\nhit n = n\n"
+          ++ "f : Unit -> <Web \"a.com/*\"> Int\nf _ = hit 1\n")),
+  ]

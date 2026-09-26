@@ -1829,7 +1829,8 @@ authorityParamNames params anns =
 -- out in a carrying constructor, or the type is empty.
 tyCarries : List TabKey -> String -> Ty -> Bool
 tyCarries _ p (TyVar n) = n == p
-tyCarries seen p (TyQual t ns _) = ns == [p] || tyCarries seen p t
+tyCarries seen p (TyQual t ns _) =
+  isNonEmptyL ns && allList (== p) ns || tyCarries seen p t
 tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
 tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
 tyCarries seen p (TyNamed _ t) = tyCarries seen p t
@@ -2870,7 +2871,8 @@ effectParamProblems _ (PSet None) (EPLit _) = []
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
 -- one-element set for a Set axis.
 effectParamProblems l (PProduct schema) (EPLit pat) =
-  productAxesProblems schema (productPrimaryLift schema pat)
+  primaryLiteralProblems schema pat
+    ++ productAxesProblems schema (productPrimaryLift schema pat)
 effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
 effectParamProblems _ (PSet None) (EPSet _) = []
 effectParamProblems l (PPrefix None) (EPSet _) =
@@ -2955,6 +2957,16 @@ binderDomainMsg n =
 atomicLabelParamText : String -> String
 atomicLabelParamText l =
   "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)"
+
+-- A bare literal is checked as the first axis's value BEFORE it is lifted:
+-- the lift canonicalises it, and an empty pattern canonicalises to the top.
+primaryLiteralProblems : List (String, Param) -> String -> List String
+primaryLiteralProblems ((name, PPrefix _) :: _) pat =
+  if prefixPatternOk pat then
+    []
+  else
+    [prefixPatternErrMsg "\{name} pattern" pat]
+primaryLiteralProblems _ _ = []
 
 -- A written product's axes against the label's declared schema: every axis
 -- must be declared, a Prefix axis takes a delimiter-terminated pattern, a Set
@@ -11085,17 +11097,20 @@ wantAuthorityWith exact lower upper
       else
         reportAuthorityFailure !currentLoc lower upper
 
--- Outside a scope, a flexible upper variable takes the lower bound as its
--- least solution.  A rigid or concrete upper that does not cover fails.
+-- Outside a scope, the flexible variables the obligation raises (the
+-- solver's `raisedBy`: the variable itself, or every flexible member of a
+-- join its fixed members do not already cover) take the lower bound.  A
+-- rigid or concrete upper that does not cover fails.
 solveFlexibleUpper : Authority -> Authority -> Bool
-solveFlexibleUpper lower upper = match authNorm upper
-  AVar cell =>
-    if IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value then
-      False
-    else
-      let _ = linkAuthvar cell (authJoin (AVar cell) lower)
+solveFlexibleUpper lower upper =
+  let flexible =
+    cell => not (IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value)
+  match EffectSolver.raisedBy flexible lower upper
+    [] => False
+    cells =>
+      let _ =
+        fold (_ cell => linkAuthvar cell (authJoin (AVar cell) lower)) () cells
       True
-  _ => False
 
 reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
 reportAuthorityFailure loc lower upper =
@@ -12416,16 +12431,17 @@ authorityBinderBound named authNames n = match lookupAssoc n named
 
 -- Every authority name the signature writes (`<L n>`, `String @n`) must be
 -- one of its binders.  Resolve admits any name written to the left; here the
--- kind is known, so a type variable used as an authority is reported once.  A
--- named argument of the wrong type is `checkAuthorityBinder`'s report, not
--- this one: it binds, at a type the domain cannot abstract.
+-- kind is known, so a type variable used as an authority is reported, once at
+-- each atom or qualifier that writes it.
 --
 -- A qualifier naming a `String` named argument that no atom or index slot of
 -- the signature names reads an authority with no domain: an authority is an
 -- element of one label's domain (§4.1), and nothing here says which, so the
 -- qualifier could bound nothing.  That is `T-AUTHORITY-DOMAIN`, the report
--- for a binder at two domains, since one domain is exactly one.  The names a
--- joined qualifier writes must likewise share one domain.
+-- for a binder at two domains, since one domain is exactly one.  A qualifier
+-- naming a named argument of another type is `T-AUTHORITY-BINDER` here (an
+-- atom naming one is reported by `checkAuthorityBinder`).  The names a joined
+-- qualifier writes must likewise share one domain.
 reportUnboundAuthorityNames : Ty -> SigVars -> Unit
 reportUnboundAuthorityNames ty sv =
   let named = namedArgTypes ty
@@ -12439,11 +12455,29 @@ reportUnboundAuthorityNames ty sv =
         else match lookupAssoc n named
           Some a =>
             if isStringTy a then
-              pushTypeErrorOnceAt "T-AUTHORITY-DOMAIN" loc (binderNoDomainMsg n)
+              pushTypeErrorAt "T-AUTHORITY-DOMAIN" loc (binderNoDomainMsg n)
           None =>
-            pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (nameNotAuthorityMsg n))
+            pushTypeErrorAt "T-AUTHORITY-KIND" loc (nameNotAuthorityMsg n))
       ()
       (dedupLocated (authorityNamesWritten ty) [])
+  let _ =
+    fold
+      (_ q =>
+        fold
+          (_ n => match lookupAssoc n named
+            Some a =>
+              if isStringTy a then
+                ()
+              else
+                pushTypeErrorAt
+                  "T-AUTHORITY-BINDER"
+                  (orElseLoc (snd q) (firstTyLoc ty))
+                  (qualifierBinderTypeMsg n (ppTy a))
+            None => ())
+          ()
+          (fst q))
+      ()
+      (writtenQualifiers ty)
   fold
     (_ q =>
       let tops =
@@ -12457,13 +12491,17 @@ reportUnboundAuthorityNames ty sv =
           if allList (sameDomainTop top) rest then
             ()
           else
-            pushTypeErrorOnceAt
+            pushTypeErrorAt
               "T-AUTHORITY-DOMAIN"
               (orElseLoc (snd q) (firstTyLoc ty))
               (joinDomainMsg (fst q))
         [] => ())
     ()
     (writtenQualifiers ty)
+
+qualifierBinderTypeMsg : String -> String -> String
+qualifierBinderTypeMsg n ty =
+  "Named argument '\{n}' has type `\{ty}`, but a qualifier names it as an authority: only a `String` argument has one. Qualify by a `String` argument, or drop '\{n}' from the qualifier"
 
 binderNoDomainMsg : String -> String
 binderNoDomainMsg n =
@@ -16300,7 +16338,7 @@ pushUnknownFieldMaybeSuggest fname rname declared =
         !currentLoc
         (unknownFieldMsg fname rname ++ ". Did you mean '\{sug}'?")
         "did you mean '\{sug}'?"
-        (fieldFixFrom !currentLoc sug)
+        (fieldFixFrom !currentLoc fname sug)
 
 -- "did you mean" for a record field: nearest declared field name by
 -- Levenshtein distance, within a fixed distance of 2.  Skip names < 3 chars
@@ -16352,10 +16390,14 @@ keepBetterField c d (Some (bc, bd)) =
 -- access; a chained `a.b.cty` receiver is itself a field access with no own
 -- ELoc, so this would misplace the fix there — accepted for now (the
 -- common-case gain is worth the narrow miss).
-fieldFixFrom : Option Loc -> String -> Option (Loc, String)
-fieldFixFrom (Some (Loc f _ _ el ec)) sug =
-  Some (Loc f el (ec + 1) el (ec + 1 + stringLength sug), sug)
-fieldFixFrom None _ = None
+-- The misspelled name's span, from the receiver's end: past the `.`, as long
+-- as the name WRITTEN (not the suggestion).  The field name carries no span
+-- of its own, so a receiver separated from its `.` by whitespace still
+-- mislocates it.
+fieldFixFrom : Option Loc -> String -> String -> Option (Loc, String)
+fieldFixFrom (Some (Loc f _ _ el ec)) written sug =
+  Some (Loc f el (ec + 1) el (ec + 1 + stringLength written), sug)
+fieldFixFrom None _ _ = None
 
 unknownFieldMsg : String -> String -> String
 unknownFieldMsg fname rname =

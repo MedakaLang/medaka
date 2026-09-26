@@ -705,7 +705,12 @@ receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
    subexpression, not the last leaf inside it.
 3. **Joined qualifiers.** `String @(a | b)` elaborates to the join of the
    names' cells (`qualifyByAll`); a joined field carries no single name
-   (`tyCarries`); a join across domains is `T-AUTHORITY-DOMAIN`.
+   (`tyCarries`; `@(p | p)` is `@p`); a join across domains is
+   `T-AUTHORITY-DOMAIN`, a non-String name `T-AUTHORITY-BINDER`. An
+   obligation whose upper bound is a join with owned flexible members raises
+   every one of them unless the join's fixed members already cover it
+   (`raisedBy`, shared by the scoped solver and `solveFlexibleUpper`), so a
+   joined field is built with inferred indices.
 4. **One domain, exactly.** A qualifier naming an argument that no atom or
    index gives a domain is `T-AUTHORITY-DOMAIN` (it was dropped silently), and
    `Authority L` over an atomic label is `T-AUTHORITY-KIND`
@@ -719,7 +724,10 @@ receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
    the pure shape check; the typechecker reports its problems at the atom, and
    `check-policy` keeps an `--allow` entry written and decodes it against the
    domain of the label it is compared with (`decodeWrittenParam`), refusing a
-   malformed entry instead of widening it. This is the first piece the policy
+   malformed entry instead of widening it. A bare literal on a Product label
+   is checked as its first axis's value before the lift, which canonicalised
+   an empty pattern to the top (`primaryLiteralProblems`); set members may be
+   quoted. This is the first piece the policy
    consumer shares with the typechecker; the invocation summary itself is not
    built.
 7. **Label identity across member-list re-exports (#3304).** `nsEffects`

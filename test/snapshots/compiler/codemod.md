@@ -311,7 +311,7 @@ declEffectWarns acts (d :: ds) =
   declEffectWarn acts d ++ declEffectWarns acts ds
 
 declEffectWarn : List (String, EffAction) -> Decl -> List String
-declEffectWarn acts (DEffect _ name _ _ _) = match lookupAssoc name acts
+declEffectWarn acts (DEffect _ name _ _ _ _) = match lookupAssoc name acts
   None => []
   Some _ => [
     "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched",
@@ -395,7 +395,7 @@ declEffectWarn _ _ = []
 (DFunDef false "declEffectWarns" (PWild (PList)) (EListLit))
 (DFunDef false "declEffectWarns" ((PVar "acts") (PCons (PVar "d") (PVar "ds"))) (EBinOp "++" (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")) (EApp (EApp (EVar "declEffectWarns") (EVar "acts")) (EVar "ds"))))
 (DTypeSig false "declEffectWarn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild PWild PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
+(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild PWild PWild PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
 (DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")))
 (DFunDef false "declEffectWarn" (PWild PWild) (EListLit))
 # MARK
@@ -475,6 +475,6 @@ declEffectWarn _ _ = []
 (DFunDef false "declEffectWarns" (PWild (PList)) (EListLit))
 (DFunDef false "declEffectWarns" ((PVar "acts") (PCons (PVar "d") (PVar "ds"))) (EBinOp "++" (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")) (EApp (EApp (EVar "declEffectWarns") (EVar "acts")) (EVar "ds"))))
 (DTypeSig false "declEffectWarn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild PWild PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
+(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild PWild PWild PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
 (DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")))
 (DFunDef false "declEffectWarn" (PWild PWild) (EListLit))

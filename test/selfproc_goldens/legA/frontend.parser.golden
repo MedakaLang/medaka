@@ -519,6 +519,8 @@ productAxisValFor : Token -> ParserE <> EffParamTy
 productParamP : ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
 propParam : ParserE <> PropParam
+qualJoinTail : ParserE <> (List String)
+qualJoinTailFor : Token -> ParserE <> (List String)
 rangeAfter : Expr -> Bool -> ParserE <> Expr
 recordFieldExpr : ParserE <> (List String, Expr)
 recordFieldExprRest : List String -> Token -> ParserE <> (List String, Expr)

@@ -409,7 +409,11 @@ Checking an argument against `τ @κ` checks its underlying type and generates
 of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
-first. An obligation over a variable no binding owns — a value binding kept
+first. An upper bound that is a join of several terms (`q₁ ⊔ κ`, the bound a
+joined qualifier writes) has no single least solution when it has flexible
+members; unless its fixed members already cover the lower bound, every
+flexible member takes it, so a value built into `String @(p | q)` from one
+literal lies within both indices. An obligation over a variable no binding owns — a value binding kept
 monomorphic by the value restriction — is decided once over every use in the
 module. An unresolved constraint remains an obligation; it is not successful
 coverage. At a definition, universally bound `κ` is rigid: an unrelated literal

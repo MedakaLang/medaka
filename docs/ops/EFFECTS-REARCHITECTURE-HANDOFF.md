@@ -614,7 +614,11 @@ landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE
   pointed at the digit `3`, the last leaf of `(Box { width = 2, height = 3
   }).widht`, and its fix-it range, computed from that span, covered `}).wi`,
   so applying the fix would have corrupted the source. It now spans the
-  receiver and the fix-it covers exactly `widht`. No LSP golden moved.
+  receiver. No LSP golden moved. The locations of five typecheck-error
+  fixtures moved too (their goldens pin messages, not spans); the notable
+  one is a `match` whose arm disagrees with the declared result, which now
+  reports at the `match` (the whole node) where it reported the LAST arm's
+  leaf, right only when the offending arm was the last.
 - *`@(a | b)`.* Spellable. The qualifier's names are a list and elaborate to
   their join (`qualifyByAll`); the renderer already printed the join this way,
   so the round trip now closes. A joined field carries neither name alone
@@ -660,6 +664,45 @@ landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE
   (`typeOriginExports` carried `effect:` origin rows for wildcard hops only),
   so `<Logging>` from the facade and `<Logging>` from `doLog` were two labels
   (`T-EFFECT-LEAK`). `reexportedEffectOrigins` applies the same binding rule.
+
+**The whole-diff review (on `1c431448e`), reproduced first and answered:**
+
+- *S1: `fmt --write` wrote unparseable source* for a qualified application
+  head (`(Result String @a) E` printed bare). The bare form is now only for
+  the type a row wraps (`printRowResult`).
+- *S1/S2: a joined field could not be built with inferred indices*
+  (`Two "cfg/x"` at `@(p | q)` failed, "the caller chooses"). An upper bound
+  that is a join with flexible members raises every one of them unless its
+  fixed members cover the lower bound (`raisedBy`); semantics §4.1 states it.
+- *S0, older than this branch: an empty bare literal on a Product label meant
+  the whole domain*, in source (`<Web "">`) and in a policy (`Web=`). The
+  literal is checked as the first axis's value before the lift canonicalises
+  it.
+- *S0-class, older: the field fix-it's range was the SUGGESTION's length*, so
+  `(b.heigh)` lost its `)`. It is now the written name's length. The field
+  name has no span of its own, so a receiver separated from its `.` by
+  whitespace (`b .widht`) still mislocates the fix: owed, with the reason.
+- *S2: a qualifier naming a non-String argument* (`@(a | n)`, `@n` with `n :
+  Int`) was dropped silently; it is `T-AUTHORITY-BINDER` at the qualifier.
+- *S3:* quoted set members in a policy never matched; they are unquoted.
+  `@(p | p)` now carries `p`. SYNTAX.md said "one label's domain" where the
+  rule is one domain shape.
+- *Not acted on, recorded as owed (older than this branch, S2):* an alias
+  `type F = (a : String) -> String @a` erases the named authority silently; a
+  named argument inside a higher-order domain (`((a : String) -> String @a)
+  -> Int`) is reported as unbound (`namedArgTypes` walks the top spine only);
+  a stacked `String @b @a` and a qualified non-String `Int @a` are accepted
+  without a report. The `match` location above is a precision loss owed to
+  checking arms against the expected result type.
+- *A design question for Val, found while pinning the join rule:* the Prefix
+  join is the longest common prefix saturating to ⊤ (semantics §2.2), so a
+  WRITTEN bound of two literals of one label, `<FileRead "cfg/*", FileRead
+  "tmp/*">`, is the whole domain: the signature publishes `<FileRead>` and a
+  body reading `/etc/x` is accepted with no report (on `main` too). The same
+  holds for `Two "cfg/*" "tmp/*"` over a `String @(p | q)` field. The manifest
+  stays honest (it reports the top), but the written signature is widened
+  silently. Candidate rules: report a written join that saturates, or give
+  the Prefix domain finite unions; neither is taken here.
 
 **Delivery item 7's prerequisites:**
 

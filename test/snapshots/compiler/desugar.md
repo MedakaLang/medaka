@@ -629,7 +629,7 @@ applyDeriveParams _ _ _ d = d
 export
 typeKindedParams : List String -> List (Option KindAnn) -> List String
 typeKindedParams (_ :: ps) ((Some KindEffect) :: ks) = typeKindedParams ps ks
-typeKindedParams (_ :: ps) ((Some (KindAuthority _ _)) :: ks) =
+typeKindedParams (_ :: ps) ((Some (KindAuthority _ _ _)) :: ks) =
   typeKindedParams ps ks
 typeKindedParams (p :: ps) (_ :: ks) = p :: typeKindedParams ps ks
 typeKindedParams ps [] = ps
@@ -1437,7 +1437,7 @@ desugar prog =
 (DFunDef false "applyDeriveParams" (PWild PWild PWild (PVar "d")) (EVar "d"))
 (DTypeSig true "typeKindedParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "typeKindedParams" ((PCons PWild (PVar "ps")) (PCons (PCon "Some" (PCon "KindEffect")) (PVar "ks"))) (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks")))
-(DFunDef false "typeKindedParams" ((PCons PWild (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild)) (PVar "ks"))) (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks")))
+(DFunDef false "typeKindedParams" ((PCons PWild (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild)) (PVar "ks"))) (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks")))
 (DFunDef false "typeKindedParams" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "typeKindedParams" ((PVar "ps") (PList)) (EVar "ps"))
 (DFunDef false "typeKindedParams" ((PList) PWild) (EListLit))
@@ -1887,7 +1887,7 @@ desugar prog =
 (DFunDef false "applyDeriveParams" (PWild PWild PWild (PVar "d")) (EVar "d"))
 (DTypeSig true "typeKindedParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "typeKindedParams" ((PCons PWild (PVar "ps")) (PCons (PCon "Some" (PCon "KindEffect")) (PVar "ks"))) (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks")))
-(DFunDef false "typeKindedParams" ((PCons PWild (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild)) (PVar "ks"))) (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks")))
+(DFunDef false "typeKindedParams" ((PCons PWild (PVar "ps")) (PCons (PCon "Some" (PCon "KindAuthority" PWild PWild PWild)) (PVar "ks"))) (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks")))
 (DFunDef false "typeKindedParams" ((PCons (PVar "p") (PVar "ps")) (PCons PWild (PVar "ks"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "typeKindedParams") (EVar "ps")) (EVar "ks"))))
 (DFunDef false "typeKindedParams" ((PVar "ps") (PList)) (EVar "ps"))
 (DFunDef false "typeKindedParams" ((PList) PWild) (EListLit))

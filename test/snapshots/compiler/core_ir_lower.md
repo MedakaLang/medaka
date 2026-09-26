@@ -2104,7 +2104,7 @@ methodResultTy : Ty -> Ty
 methodResultTy (TyConstrained _ t) = methodResultTy t
 methodResultTy (TyEffect _ _ t) = methodResultTy t
 methodResultTy (TyFun _ b) = methodResultTy b
-methodResultTy (TyQual t _) = methodResultTy t
+methodResultTy (TyQual t _ _) = methodResultTy t
 methodResultTy t = t
 
 -- does a type mention one of the given interface type-parameter names? (the
@@ -2130,7 +2130,7 @@ tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
 tyMentionsParams (TyAuth _ _) _ = False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 tyMentionsParams (TyNamed _ t) params = tyMentionsParams t params
-tyMentionsParams (TyQual t _) params = tyMentionsParams t params
+tyMentionsParams (TyQual t _ _) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
 -- Per (interface, method): the ARGUMENT positions whose type is a FUNCTION whose
@@ -2304,7 +2304,7 @@ tyMentionsNonParam (TyRow _ tail _) params =
 tyMentionsNonParam (TyAuth _ _) _ = False
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyNamed _ t) params = tyMentionsNonParam t params
-tyMentionsNonParam (TyQual t _) params = tyMentionsNonParam t params
+tyMentionsNonParam (TyQual t _ _) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- Per data-constructor name: the head type-name of each declared field, IN
@@ -2353,7 +2353,7 @@ tyHeadName (TyApp a _) = tyHeadName a
 tyHeadName (TyConstrained _ t) = tyHeadName t
 tyHeadName (TyEffect _ _ t) = tyHeadName t
 tyHeadName (TyNamed _ t) = tyHeadName t
-tyHeadName (TyQual t _) = tyHeadName t
+tyHeadName (TyQual t _ _) = tyHeadName t
 tyHeadName _ = ""
 
 -- ── function → DECLARED param/return type-head names (native backend, Gap E1) ─
@@ -2500,7 +2500,7 @@ methodRetTy : Ty -> Ty
 methodRetTy (TyConstrained _ t) = methodRetTy t
 methodRetTy (TyEffect _ _ t) = methodRetTy t
 methodRetTy (TyFun _ b) = methodRetTy b
-methodRetTy (TyQual t _) = methodRetTy t
+methodRetTy (TyQual t _ _) = methodRetTy t
 methodRetTy t = t
 
 -- positions (0-based) whose type is a TyFun whose result mentions a param.
@@ -3144,7 +3144,7 @@ nodeTag _ = "?"
 (DFunDef false "methodResultTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodResultTy") (EVar "t")))
 (DFunDef false "methodResultTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodResultTy") (EVar "t")))
 (DFunDef false "methodResultTy" ((PCon "TyFun" PWild (PVar "b"))) (EApp (EVar "methodResultTy") (EVar "b")))
-(DFunDef false "methodResultTy" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "methodResultTy") (EVar "t")))
+(DFunDef false "methodResultTy" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "methodResultTy") (EVar "t")))
 (DFunDef false "methodResultTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "tyMentionsParams" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params")))
@@ -3157,7 +3157,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentionsParams" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DTypeSig true "selfFnParamTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnParamTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceSelfFnParamEntries")) (EVar "prog")))
 (DTypeSig false "ifaceSelfFnParamEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -3211,7 +3211,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -3231,7 +3231,7 @@ nodeTag _ = "?"
 (DFunDef false "tyHeadName" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
-(DFunDef false "tyHeadName" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
+(DFunDef false "tyHeadName" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" (PWild) (ELit (LString "")))
 (DTypeSig true "declSigTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "declSigTypeNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "declSigTypeEntries")) (EVar "prog")))
@@ -3263,7 +3263,7 @@ nodeTag _ = "?"
 (DFunDef false "methodRetTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PCon "TyFun" PWild (PVar "b"))) (EApp (EVar "methodRetTy") (EVar "b")))
-(DFunDef false "methodRetTy" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "methodRetTy") (EVar "t")))
+(DFunDef false "methodRetTy" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "selfFnPositions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnPositions" (PWild (PList) PWild) (EListLit))
@@ -3883,7 +3883,7 @@ nodeTag _ = "?"
 (DFunDef false "methodResultTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodResultTy") (EVar "t")))
 (DFunDef false "methodResultTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodResultTy") (EVar "t")))
 (DFunDef false "methodResultTy" ((PCon "TyFun" PWild (PVar "b"))) (EApp (EVar "methodResultTy") (EVar "b")))
-(DFunDef false "methodResultTy" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "methodResultTy") (EVar "t")))
+(DFunDef false "methodResultTy" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "methodResultTy") (EVar "t")))
 (DFunDef false "methodResultTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "tyMentionsParams" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params")))
@@ -3896,7 +3896,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsParams" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentionsParams" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DTypeSig true "selfFnParamTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnParamTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceSelfFnParamEntries")) (EVar "prog")))
 (DTypeSig false "ifaceSelfFnParamEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -3950,7 +3950,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -3970,7 +3970,7 @@ nodeTag _ = "?"
 (DFunDef false "tyHeadName" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
-(DFunDef false "tyHeadName" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
+(DFunDef false "tyHeadName" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" (PWild) (ELit (LString "")))
 (DTypeSig true "declSigTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "declSigTypeNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "declSigTypeEntries")) (EVar "prog")))
@@ -4002,7 +4002,7 @@ nodeTag _ = "?"
 (DFunDef false "methodRetTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PCon "TyFun" PWild (PVar "b"))) (EApp (EVar "methodRetTy") (EVar "b")))
-(DFunDef false "methodRetTy" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "methodRetTy") (EVar "t")))
+(DFunDef false "methodRetTy" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "selfFnPositions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnPositions" (PWild (PList) PWild) (EListLit))
