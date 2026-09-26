@@ -879,15 +879,14 @@ data PendingMethodDict = PendingMethodDict {
 registerReqSlots : ScopeId ->
   List (String, Mono) ->
   Int ->
-  Int ->
-  List Require ->
+  List (Require, List Int) ->
   Unit
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
-expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
+expandPredicateSlots : List PredicateSlot -> List PredicateSlot
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
@@ -897,6 +896,9 @@ data GivenEntry = GivenEntry {
 data GivenMatch =
   | GMPredicate
   | GMIdWitnessed
+data GivenProvenance =
+  | DirectGiven
+  | ProjectedGiven EvidenceBinderId (List Int)
 gGiven : Ref (OrdMap (List GivenEntry)),
 givensForScope : ScopeId -> List GivenEntry
 pushGiven : GivenMatch ->
@@ -1116,7 +1118,7 @@ fi
 ordinary_return_solver_body="$(sed -n '/^solveExactReturnOnce :/,/^exactReturnDefers :/p' "$predicate_slot_src")"
 ordinary_return_solver_required='solveExactReturnOnce request = match request.mrrResolution.value
     request.mrrResolution := Some resolution
-        mrrOutcome = Solved (GivenEvidence (assumAnswerBinder answer))
+        mrrOutcome = Solved (assumAnswerEvidence answer)
         mrrOutcome =
           Solved
             (InstanceEvidence'
@@ -1126,6 +1128,12 @@ printf '%s\n' "$ordinary_return_solver_required" | while IFS= read -r required; 
     exit 1
   fi
 done || exit 1
+# A superclass of a given is that given's projection (`ProjectedGiven` →
+# `SuperclassEvidence`), never a separately registered alias answering on its own.
+if grep -rqE 'LegacySuperclassAlias|LegacySuperAlias|ATLegacySuperclass' "$ROOT/compiler"; then
+  echo "FAIL: a retired superclass-alias given kind is back; supers are projections of their given"
+  exit 1
+fi
 if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then
   echo "FAIL: ordinary return one-outcome solver must contain exactly one instance selector"
   exit 1

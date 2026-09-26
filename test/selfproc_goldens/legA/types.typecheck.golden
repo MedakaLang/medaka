@@ -174,6 +174,7 @@ armUnreachable : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> 
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 assignedFieldNames : List FieldAssign -> List String
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
+assumAnswerEvidence : AssumAnswer -> SolverEvidence
 assumAnswerKind : AssumAnswer -> AssumptionTraceKind
 assumAnswerName : AssumAnswer -> String
 assumptionTraceEnabled : Ref Bool
@@ -940,6 +941,7 @@ expandAliasHeadTy : Ty -> Ty
 expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 expandFunPredicateSlots : List (String, List PredicateSlot) -> List (String, List PredicateSlot)
 expandImplRequires : List Require -> List Require
+expandImplRequiresPaths : List Require -> List (Require, List Int)
 expandIoInBound : List Atom -> List Atom
 expandPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)
 expandPredicateSlots : List PredicateSlot -> List PredicateSlot
@@ -1138,7 +1140,9 @@ generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (Str
 givenAnswerExact : GivenEntry -> AssumAnswer
 givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
 givenAnswerResidual : GivenEntry -> AssumAnswer
+givenEvidenceBinder : SolverEvidence -> EvidenceBinderId
 givenInScope : GivenScope -> GivenEntry -> Bool
+givenRoute : Bool -> EvidenceBinderId -> Route
 givensForScope : ScopeId -> List GivenEntry
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 goalDefersOpenWorld : ScopeId -> IfaceRef -> List Mono -> Bool
@@ -2124,7 +2128,7 @@ predicateSlotIds : List PredicateSlot -> List Int
 predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
 predicateSlotIndex : List PredicateSlot -> Map String PredicateSlot -> Map String PredicateSlot
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
-predicateSlotKnownSupers : PredicateSlot -> List PredicateSlot
+predicateSlotKnownSupers : PredicateSlot -> List (PredicateSlot, List Int)
 predicateSlotOfNode : SuperNode (List Mono) -> PredicateSlot
 predicateSlotTableWithoutArgs : List (a, List PredicateSlot) -> List (a, List PredicateSlot)
 predicateSlotView : PredicateSlot -> (CSlot, List Mono)
@@ -2159,6 +2163,7 @@ processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> (List (String, Scheme), Map String (List (List Pat, Expr)))
 producedSlotCovariants : Mono -> List Bool
 productAxesProblems : List (String, Param) -> Param -> List String
+projectedGivenOf : EvidenceBinderId -> List Int -> Option GivenEntry
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 propagatePoison : Ref Tyvar -> Mono -> Unit
@@ -2328,7 +2333,7 @@ registerEachActive : List Int -> EvidenceBinderId -> Unit
 registerEachActiveId : List Int -> EvidenceBinderId -> Unit
 registerEffectDomain : EffLabel -> Option String -> List (String, String) -> Unit
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
-registerFunPredGivenSlots : List PredicateSlot -> EvidenceBinderId -> Unit
+registerFunPredGivenSlots : List (PredicateSlot, List Int) -> EvidenceBinderId -> Unit
 registerImplMethodDictOne : ScopeId -> Int -> String -> List (String, Mono) -> Unit
 registerImplMethodDicts : ScopeId -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : ScopeId -> Int -> List String -> List (String, Mono) -> Unit
@@ -2348,7 +2353,8 @@ registerOneMethodDict : ScopeId -> Int -> Int -> List (Int, Mono) -> Unit
 registerPredGiven : IfaceRef -> List Mono -> EvidenceBinderId -> Unit
 registerPredicateSlotIds : ScopeId -> Int -> List PredicateSlot -> Unit
 registerRecordInfoKeyed : TyConOrigin -> String -> String -> List String -> List Kind -> List (String, KindAnn) -> List Field -> Unit
-registerReqSlots : ScopeId -> List (String, Mono) -> Int -> Int -> List Require -> Unit
+registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List (Require, List Int) -> Unit
+registerReqSlotsFrom : ScopeId -> List (String, Mono) -> Int -> Int -> List (Require, List Int) -> Unit
 registerSchemeObligations : Map String Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 registerSlotPredGivens : ScopeId -> Int -> List PredicateSlot -> Unit
 registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option KindAnn) -> List Variant -> List (List (String, KindAnn)) -> TcEnv

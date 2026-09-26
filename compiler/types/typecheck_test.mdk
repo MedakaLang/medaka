@@ -2818,13 +2818,13 @@ test "direct predicate evidence keeps same-rendering binders nominal" =
       observed.rvErrors,
     )
 
-test "scalar and superclass assumption paths remain explicit legacy kinds" =
+test "a scalar assumption stays legacy and a superclass assumption is a projection" =
   let scalar = runObserved "trace_scalar" scalarSource
   let super = runObserved "trace_super" superSource
   expectEqual
     (
       [context ATLegacyScalar "trace_scalar" "binding:f"],
-      [context ATLegacySuperclass "trace_super" "binding:f"],
+      [context ATSuperclassProjection "trace_super" "binding:f"],
       0,
       0,
     )
@@ -3024,7 +3024,7 @@ test "mixed default separates argument fallback from qualified givens" =
         },
       ],
       [
-        (ATLegacySuperclass, 0, "default:mixed", "default:mixed", True),
+        (ATSuperclassProjection, 0, "default:mixed", "default:mixed", True),
         (ATDirectPredicate, 1, "default:mixed", "default:mixed", True),
         (ATDirectPredicate, 0, "default:mixed", "default:mixed", True),
       ],

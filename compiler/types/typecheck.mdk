@@ -9771,7 +9771,7 @@ public export data DefaultBodyRNoneTraceEntry = DefaultBodyRNoneTraceEntry {
 public export data AssumptionTraceKind =
   | ATDirectPredicate
   | ATLegacyScalar
-  | ATLegacySuperclass
+  | ATSuperclassProjection
   | ATLegacyPredicate
   deriving (Eq, Debug)
 
@@ -9882,7 +9882,6 @@ public export data EvidenceObservationEntry = EvidenceObservationEntry {
 data AssumAnswer =
   | SemanticGiven SolverEvidence
   | LegacyScalar EvidenceBinderId
-  | LegacySuperAlias EvidenceBinderId
   | LegacyPredicate EvidenceBinderId
 
 assumptionTraceEnabled : Ref Bool
@@ -10185,17 +10184,41 @@ noteNumericPredicateTrace stage predicate scope origin selected route prereqs =
         :: numericPredicateTraceEntries.value
 
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
-assumAnswerBinder (SemanticGiven (GivenEvidence binder)) = binder
-assumAnswerBinder (SemanticGiven _) = panic "non-given assumption evidence"
+assumAnswerBinder (SemanticGiven evidence) = givenEvidenceBinder evidence
 assumAnswerBinder (LegacyScalar binder) = binder
-assumAnswerBinder (LegacySuperAlias binder) = binder
 assumAnswerBinder (LegacyPredicate binder) = binder
 
+-- The evidence an assumption answer denotes.  A legacy answer has no semantic evidence
+-- beyond the binder it routes through.
+assumAnswerEvidence : AssumAnswer -> SolverEvidence
+assumAnswerEvidence (SemanticGiven evidence) = evidence
+assumAnswerEvidence (LegacyScalar binder) = GivenEvidence binder
+assumAnswerEvidence (LegacyPredicate binder) = GivenEvidence binder
+
 assumAnswerKind : AssumAnswer -> AssumptionTraceKind
+assumAnswerKind (SemanticGiven (SuperclassEvidence _ _)) =
+  ATSuperclassProjection
 assumAnswerKind (SemanticGiven _) = ATDirectPredicate
 assumAnswerKind (LegacyScalar _) = ATLegacyScalar
-assumAnswerKind (LegacySuperAlias _) = ATLegacySuperclass
 assumAnswerKind (LegacyPredicate _) = ATLegacyPredicate
+
+-- The dict parameter that carries given-rooted evidence.  A superclass projection of a
+-- given lowers to the parameter the flat calling convention assigns that super: the
+-- projected given's own binder, registered beside it.  The projection is never
+-- selected again; this only names where its value already is.
+givenEvidenceBinder : SolverEvidence -> EvidenceBinderId
+givenEvidenceBinder (GivenEvidence binder) = binder
+givenEvidenceBinder (SuperclassEvidence parent path) =
+  match projectedGivenOf parent path
+    Some g => g.geBinder
+    None => panic "superclass evidence names no registered projection"
+givenEvidenceBinder _ = panic "non-given assumption evidence"
+
+projectedGivenOf : EvidenceBinderId -> List Int -> Option GivenEntry
+projectedGivenOf parent path =
+  find
+    (g => g.geProvenance == ProjectedGiven parent path)
+    (givensForScope (Scopes.binderScope parent))
 
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteAssumption scope answer =
@@ -10296,7 +10319,12 @@ data GivenEntry = GivenEntry {
   geProvenance : GivenProvenance,
 }
 
-data GivenProvenance = DirectGiven | LegacySuperclassAlias
+-- A given is either declared (a signature slot, an impl `requires` slot) or the
+-- projection of a declared given onto one of its interface's transitive supers.
+data GivenProvenance =
+  | DirectGiven
+  | ProjectedGiven EvidenceBinderId (List Int)
+  deriving (Eq)
 
 -- May this given answer a goal on PREDICATE IDENTITY ALONE, or only when the asker also
 -- witnesses that the goal's dispatch variable is one the slot binds?
@@ -24527,10 +24555,11 @@ exactReturnRoutes name encl scope isReturnPosition resolution = match (
   resolution.mrrSelectedRow,
 )
   (Solved (GivenEvidence binder), None) => (
-    if isReturnPosition then
-      RDictFwd (renderEvidenceBinder binder)
-    else
-      RDict (renderEvidenceBinder binder),
+    givenRoute isReturnPosition binder,
+    [],
+  )
+  (Solved (projection@(SuperclassEvidence _ _)), None) => (
+    givenRoute isReturnPosition (givenEvidenceBinder projection),
     [],
   )
   (Solved (InstanceEvidence _ _ prerequisites), Some row) => (
@@ -24544,6 +24573,13 @@ exactReturnRoutes name encl scope isReturnPosition resolution = match (
     Some tag => (RKey tag [], [])
     None => (RNone, [])
   _ => panic "ordinary return outcome and selected row disagree"
+
+givenRoute : Bool -> EvidenceBinderId -> Route
+givenRoute isReturnPosition binder =
+  if isReturnPosition then
+    RDictFwd (renderEvidenceBinder binder)
+  else
+    RDict (renderEvidenceBinder binder)
 
 methodReturnEvidenceRoutes : String ->
   ScopeId ->
@@ -31287,7 +31323,12 @@ argExpandedImplReqRoutes encl useScope subst ((Require { requireHead = rIface, r
 -- Keeping this expansion in `Require` form gives routing, definition arity, and body
 -- registration one shared slot sequence.
 expandImplRequires : List Require -> List Require
-expandImplRequires reqs =
+expandImplRequires reqs = map fst (expandImplRequiresPaths reqs)
+
+-- The same sequence, each entry paired with where it came from: `[i]` for the i-th
+-- declared predicate, `i :: path` for a super projected from it along `path`.
+expandImplRequiresPaths : List Require -> List (Require, List Int)
+expandImplRequiresPaths reqs =
   let rigidMap = implRequireRigidMap reqs
   let closure =
     superClosure
@@ -31300,9 +31341,9 @@ expandImplRequires reqs =
           r.requireArgs,
         ))
         reqs)
-  reqs
+  zipL reqs (map (i => [i]) (rangeFromCount 0 (listLen reqs)))
     ++ map
-      (n => requireOfSuper n.superIface n.superPayload)
+      (n => (requireOfSuper n.superIface n.superPayload, n.superPath))
       (filter (n => listLen n.superPath > 1) closure)
 
 requireOfSuper : IfaceRef -> List Ty -> Require
@@ -34150,7 +34191,7 @@ solveExactReturn request = match methodReturnWanted request
         let _ = noteAssumption wanted.scope answer
         MethodReturnResolution {
           mrrWanted = wanted,
-          mrrOutcome = Solved (GivenEvidence (assumAnswerBinder answer)),
+          mrrOutcome = Solved (assumAnswerEvidence answer),
           mrrSelectedRow = None,
           mrrFallbackTag = methodReturnFallbackTag request,
         }
@@ -34243,8 +34284,7 @@ consumeExactReturnOutcome univ request resolution =
         request.mrrLoc
         request.mrrScope
         (map prerequisiteObligation prerequisites)
-    Solved (SuperclassEvidence _ _) =>
-      panic "ordinary return solver produced unsupported superclass evidence"
+    Solved (SuperclassEvidence _ _) => ()
     Deferred _ _ => ()
     Insoluble wanted MissingInstance =>
       pushNoImplError
@@ -34269,6 +34309,17 @@ methodReturnResolutionValid request resolution =
   methodReturnWantedMatches request resolution.mrrWanted
     && (match (resolution.mrrOutcome, resolution.mrrSelectedRow)
       (Solved (GivenEvidence _), None) => True
+      (Solved (SuperclassEvidence parent path), None) =>
+        match projectedGivenOf parent path
+          Some g =>
+            predicateRequestMatchesSlot
+              PredicateRequest {
+                prIface = resolution.mrrWanted.predicate.predicateInterface,
+                prArgs =
+                  PSArgsKnown resolution.mrrWanted.predicate.predicateArguments,
+              }
+              g.geSlot
+          None => False
       (Solved (InstanceEvidence identity args prerequisites), Some row) =>
         methodReturnInstanceMatches identity row
           && monoVecSameGiven
@@ -36787,8 +36838,7 @@ registerImplRequires ce cur iface implTvMap rpNames reqs (scoped :: rest)
         scoped.simScope
         implTvMap
         methodArity
-        (listLen reqs)
-        (expandImplRequires reqs)
+        (expandImplRequiresPaths reqs)
     registerImplRequires ce cur iface implTvMap rpNames reqs rest
   | otherwise = registerImplRequires ce cur iface implTvMap rpNames reqs rest
   where
@@ -36807,14 +36857,26 @@ registersElementDict : String -> List String -> Bool
 registersElementDict mname rpNames =
   contains mname rpNames || isSome (argDispatchOf mname)
 
+-- One dict parameter per entry of the flat `requires` sequence, starting at [base].  A
+-- declared predicate is direct evidence; an appended super is the projection of the
+-- declared predicate it was reached from, stored at its own parameter so the flat
+-- calling convention's slot sequence is unchanged.
 registerReqSlots : ScopeId ->
   List (String, Mono) ->
   Int ->
-  Int ->
-  List Require ->
+  List (Require, List Int) ->
   Unit
-registerReqSlots _ _ _ _ [] = ()
-registerReqSlots scope implTvMap slot directLeft ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
+registerReqSlots scope implTvMap base entries =
+  registerReqSlotsFrom scope implTvMap base base entries
+
+registerReqSlotsFrom : ScopeId ->
+  List (String, Mono) ->
+  Int ->
+  Int ->
+  List (Require, List Int) ->
+  Unit
+registerReqSlotsFrom _ _ _ _ [] = ()
+registerReqSlotsFrom scope implTvMap base slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }, path) :: rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let binder = Scopes.binderAt scope slot
@@ -36824,21 +36886,23 @@ registerReqSlots scope implTvMap slot directLeft ((Require { requireHead = iface
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
   }
-  let _ =
-    if directLeft > 0 then
+  let _ = match path
+    [_] =>
       let _ = registerEachActive ids binder
       let _ = registerPredGiven reqIface argMonos binder
       -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
       -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
       -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
       -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
-      -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
-      -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
-      -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
       pushGiven GMIdWitnessed DirectGiven slotPred binder
-    else
-      pushGiven GMPredicate LegacySuperclassAlias slotPred binder
-  registerReqSlots scope implTvMap (slot + 1) (directLeft - 1) rest
+    declared :: projection =>
+      pushGiven
+        GMPredicate
+        (ProjectedGiven (Scopes.binderAt scope (base + declared)) projection)
+        slotPred
+        binder
+    [] => panic "impl requires entry without a source path"
+  registerReqSlotsFrom scope implTvMap base (slot + 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
 -- by TYVAR ID, which cannot express a STRUCTURED given: `requires S (List a)` registers
@@ -37015,7 +37079,7 @@ firstPredForEncl request useScope (g :: rest)
 givenAnswerExact : GivenEntry -> AssumAnswer
 givenAnswerExact g = match g.geProvenance
   DirectGiven => SemanticGiven (GivenEvidence g.geBinder)
-  LegacySuperclassAlias => LegacySuperAlias g.geBinder
+  ProjectedGiven parent path => SemanticGiven (SuperclassEvidence parent path)
 
 givenAnswerForRequest : PredicateRequest -> GivenEntry -> AssumAnswer
 givenAnswerForRequest request g = match (
@@ -37035,7 +37099,7 @@ givenAnswerForRequest request g = match (
 givenAnswerResidual : GivenEntry -> AssumAnswer
 givenAnswerResidual g = match g.geProvenance
   DirectGiven => LegacyPredicate g.geBinder
-  LegacySuperclassAlias => LegacySuperAlias g.geBinder
+  ProjectedGiven _ _ => LegacyPredicate g.geBinder
 
 -- The id-witnessed scan.  [scope] is the rung's own declaration of what it may read —
 -- both rungs that reach here supply a tyvar-id witness, but only one of them is keyed on
@@ -39789,10 +39853,14 @@ registerFunPredGiven slot binder
     let _ = pushGiven GMPredicate DirectGiven slot binder
     registerFunPredGivenSlots (predicateSlotKnownSupers slot) binder
 
-registerFunPredGivenSlots : List PredicateSlot -> EvidenceBinderId -> Unit
+-- A signature slot's supers share its dict parameter: the flat convention passes the
+-- sub-predicate's dictionary, which answers every super method by tag.
+registerFunPredGivenSlots : List (PredicateSlot, List Int) ->
+  EvidenceBinderId ->
+  Unit
 registerFunPredGivenSlots [] _ = ()
-registerFunPredGivenSlots (slot :: rest) binder =
-  pushGiven GMPredicate LegacySuperclassAlias slot binder
+registerFunPredGivenSlots ((slot, path) :: rest) binder =
+  let _ = pushGiven GMPredicate (ProjectedGiven binder path) slot binder
   registerFunPredGivenSlots rest binder
 
 -- A dictionary supplied for one predicate also supplies every transitive
@@ -39802,12 +39870,12 @@ registerFunPredGivenSlots (slot :: rest) binder =
 -- `Applicative` -> `Mappable`) are evidence too.  Unknown vectors stay direct-only:
 -- projecting a superclass argument without the sub-predicate's positional vector would
 -- invent identity.
-predicateSlotKnownSupers : PredicateSlot -> List PredicateSlot
+predicateSlotKnownSupers : PredicateSlot -> List (PredicateSlot, List Int)
 predicateSlotKnownSupers slot = match slot.psArgs
   PSArgsUnknown => []
   PSArgsKnown args =>
     map
-      predicateSlotOfNode
+      (n => (predicateSlotOfNode n, drop 1 n.superPath))
       (filter
         (n => listLen n.superPath > 1)
         (superClosure superLookup predicateSuperStep predicateNodeKey [
