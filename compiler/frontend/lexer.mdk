@@ -710,9 +710,10 @@ parseRadixNeg src p endp base acc
 -- ≤ 2^62.  The lexer sees only unsigned digits (the `-` is a separate token,
 -- negated in the parser), so it must admit magnitude 2^62 to keep the negative
 -- minimum -2^62 writable — `-0x4000000000000000` stays legal exactly as
--- `-4611686018427387904` does.  A BARE positive 2^62 becomes `intMinBound`
--- here (`magnitudeInt`) and is then rejected in positive position by the parser's `isIntMinLit`
--- (#171), which keys on the value and so covers every spelling of 2^62 —
+-- `-4611686018427387904` does.  A BARE positive 2^62 becomes
+-- `intMinBound` here (`magnitudeInt`) and is then rejected in positive
+-- position by the parser's `isIntMinLit` (#171), which keys on the value and
+-- so covers every spelling of 2^62 —
 -- decimal and radix alike — from one rule.  Anything above 2^62 never reaches
 -- the parser: it is rejected right here, in whatever base it was written.
 --

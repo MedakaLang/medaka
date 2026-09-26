@@ -728,7 +728,7 @@ hashGo acc bb i n =
    `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings that are
    equal under `Eq Bytes` hash alike.
 
-   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash (fromArrayAssumeByteDomain [|1, 2, 3|])
+   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash (encodeUtf8 "\u{1}\u{2}\u{3}")
    True -}
 export impl Hashable Bytes where
   hash (Bytes bb) = u64TruncateToInt (hashGo 0 bb 0 (byteBlockLength bb))

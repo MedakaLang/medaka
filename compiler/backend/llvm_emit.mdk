@@ -3852,8 +3852,78 @@ emitU64RawApp : Emit ->
 emitU64RawApp e env ex (CVar f _, args)
   | isU64RawKernel f (lengthS args) && not (isLocal env f) =
     emitU64Kernel e env f args
-  | otherwise = unboxU64 e (fst (emitExpr e env ex))
+  | isLocal env f = unboxU64 e (fst (emitExpr e env ex))
+  | otherwise = match u64KernelAlias e f args
+    Some k => emitU64Kernel e env k args
+    None => unboxU64 e (fst (emitExpr e env ex))
 emitU64RawApp e env ex _ = unboxU64 e (fst (emitExpr e env ex))
+
+-- The kernel a saturated call of top-level `f` amounts to, when `f`'s one clause
+-- applies that kernel to its own parameters in order: the `u64` module's
+-- `truncate`, `toIntTruncating`, `bitAnd`, `bitOr` and `bitXor` are such
+-- wrappers, and code outside the stdlib can only reach the kernels through them.
+-- Inlining the kernel lets the call fuse with the U64 arithmetic around it
+-- instead of boxing its result in a call.  `shiftLeft`/`shiftRight` refuse a
+-- negative amount before applying their kernel, so they are inlined only at a
+-- non-negative literal amount, where that refusal cannot fire.
+u64KernelAlias : Emit -> String -> List CExpr -> Option String
+u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
+  Some (CBind _ [CClause pats body]) => match paramNames pats
+    Some ps =>
+      if lengthS ps == lengthS args then u64AliasBody ps body args else None
+    None => None
+  _ => None
+
+-- the parameter names of an all-variable pattern list.
+paramNames : List Pat -> Option (List String)
+paramNames [] = Some []
+paramNames ((PVar n _) :: rest) = map (n :: _) (paramNames rest)
+paramNames _ = None
+
+u64AliasBody : List String -> CExpr -> List CExpr -> Option String
+u64AliasBody ps (CIf (CBinPrim "<" (CVar k _) zero _) _ body) args = match (
+  u64KernelApplied ps (skipOtherwise body),
+  ps,
+  args,
+  intLitOf zero,
+)
+  (Some kern, [_, amount], [_, lit], Some 0) => match intLitOf lit
+    Some n =>
+      if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
+    None => None
+  _ => None
+u64AliasBody ps body _ = match u64KernelApplied ps body
+  Some kern => if isU64ShiftKernel kern then None else Some kern
+  None => None
+
+-- The value of an Int literal as the emitter receives it: bare, or still the
+-- `fromInt` application the typechecker routed to `Num Int`.
+intLitOf : CExpr -> Option Int
+intLitOf (CLit (LInt n)) = Some n
+intLitOf (CApp (CMethod "fromInt" _ (RKey "Int" _) _ _) (CLit (LInt n))) =
+  Some n
+intLitOf _ = None
+
+-- a guard's `| otherwise = e` arm, which lowers to `if otherwise then e else …`.
+skipOtherwise : CExpr -> CExpr
+skipOtherwise (CIf (CVar o _) b _)
+  | o == "otherwise" || o == "core__otherwise" = b
+skipOtherwise ex = ex
+
+-- `body` is a kernel applied to exactly the parameters `ps`, in order.
+u64KernelApplied : List String -> CExpr -> Option String
+u64KernelApplied ps body = match flattenApp body []
+  (CVar kern _, xs) =>
+    if isU64Extern kern && argsAreParams ps xs then Some kern else None
+  _ => None
+
+argsAreParams : List String -> List CExpr -> Bool
+argsAreParams [] [] = True
+argsAreParams (p :: ps) ((CVar x _) :: xs) = p == x && argsAreParams ps xs
+argsAreParams _ _ = False
+
+isU64ShiftKernel : String -> Bool
+isU64ShiftKernel k = k == "u64ShiftLeft" || k == "u64ShiftRight"
 
 -- the kernels `emitU64Raw` computes on payloads, at their full arity.
 isU64RawKernel : String -> Int -> Bool
@@ -6101,6 +6171,10 @@ emitApp e env app =
         emitIndirect e env hd args
       else if isAnyExtern fname && hasArgs args then
         emitExternApplied e env fname args
+      else if isSome (u64KernelAlias e fname args) then
+        -- a `u64` wrapper around one kernel (`u64KernelAlias`): the kernel
+        -- itself, so `U64.toIntTruncating (…)` fuses with its argument
+        emitU64Extern e env (optionOr "" (u64KernelAlias e fname args)) args
       else if isFfiExtern e fname && hasArgs args then
         -- #2074: a USER-declared extern is a FOREIGN symbol, not a builtin, not a
         -- ctor, and not a compiled top-level fn — without this arm the ladder falls
@@ -13345,9 +13419,12 @@ emitFnBody e env self other =
       -- the same correct shape an application in `main`'s own body already gets.
       -- `emitArgs` is 1:1 with `args`, so `lengthS args` is the arg-word count
       -- without emitting anything (the guard must not emit args it may discard).
+      -- A `u64` kernel wrapper (`u64KernelAlias`) goes through `emitApp`, which
+      -- emits the kernel inline.
       if isKnownFn e fname
         && hasArgs args
-        && tailCallSaturated e fname (lengthS args) then
+        && tailCallSaturated e fname (lengthS args)
+        && isNone (u64KernelAlias e fname0 args) then
         let argOps = emitArgs e env args
         let r = freshReg e
         let kw = if fname == self then "musttail call" else "call"

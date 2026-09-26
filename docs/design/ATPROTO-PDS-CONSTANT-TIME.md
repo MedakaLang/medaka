@@ -190,8 +190,9 @@ against `U64`'s `2^64 - 1`.
 Two rules follow, and hold for every secret-bearing value in `pds/`:
 
 1. A secret-derived value narrows only through a masking conversion:
-   `U64.toIntTruncating`, `truncate`, or `truncateU64`. The checked doors,
-   `fromInt`, `tryFromInt` and `toInt`, test their argument and are
+   `u64.toIntTruncating`, `u64.truncate`, or a narrower type's `truncateU64`
+   (`u8.truncateU64`). The checked doors, `fromInt`, `tryFromInt` and
+   `toInt`, test their argument and are
    therefore branches; they never take a secret-derived operand. A byte held
    as an `Int` enters `U64` through the masking `U64.truncate`; a `U8`
    through the total `U64.fromU8`.
