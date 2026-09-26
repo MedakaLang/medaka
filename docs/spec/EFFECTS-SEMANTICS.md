@@ -963,7 +963,12 @@ with each label's verified parameter rendered (`drender`). For
 permitted outbound authority. A `Net` authority names an endpoint the program
 may dial or bind; a socket accepted through a bound endpoint is exercised at
 that endpoint's authority, and waiting for a descriptor to become ready is a
-timed wait (`Clock`), not an operation on an endpoint.
+timed wait (`Clock`), not an operation on an endpoint. The one exception is
+deliberate: the runtime's signal externs (`pdsSignalStart`,
+`pdsSignalRequested`) reach no endpoint but are charged `Net` at the top of its
+domain until process signals have a label of their own. That over-charges,
+which is safe, and the only program using them already holds that grant
+because it binds.
 
 Unresolved symbolic authority at a host boundary is conservatively top in its
 domain, or an explicit unresolved-manifest error. It must never be omitted or

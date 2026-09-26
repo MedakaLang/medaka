@@ -833,8 +833,7 @@ reviewer on a built binary, each refusal paired with a control.
   catalog's indexed network signatures, which every run elaborates. `main`
   itself measured 0.25% under the `check` ceiling on the runner, so the
   ceiling was re-derived by the gate's own 20% convention, with the split
-  written beside it. **Your call:** revert that line if you would rather
-  find the Ir elsewhere first.
+  written beside it. Val kept the re-derived ceiling (2026-09-26).
 
 *Second review round (on `5396fd785`).* The instance match walked through
 every effect row, so two S0s were new and two older ones stood:
@@ -865,6 +864,28 @@ variables now compare as sets in both directions; pinned in
 `effect_catalog_redeclare_rows`. The narrow message now names the arrow it
 compared when the signature has more than one.
 
+*Val's rulings on the close-out (2026-09-26).*
+
+- The `check` Ir ceiling stays re-derived at 1,295M.
+- `pdsSignalStart`/`pdsSignalRequested` keep `<Net>`, documented in §7 and
+  the catalog as a deliberate over-charge until signals have a label.
+- `Socket`/`ListenSocket` keep their names; the fix is general: a program's
+  own type may shadow a prelude type. Its own issue and PR.
+- A redeclaration may not widen an argument-bound index to `*`; the rule
+  stays "fix variables, never an argument's binder".
+- Checklist item 2 ratified as proposed, both halves: inferred residuals with
+  rendering (written residual syntax deferred), and delayed joins for arrows
+  and covariant data slots. A follow-up PR after #3458.
+- Checklist item 3 ratified as proposed: one invocation summary for policy
+  and manifest, the two built-in protocols, explicit unresolved authorities,
+  user protocol syntax deferred. Its own PR, after item 2's.
+- The Prefix join: a written row keeps a set of prefixes per label, and a
+  performed atom is within it when any bound atom covers it; the join is
+  used only where one authority value is needed. A §2.2 spec change, its
+  own issue and PR.
+- #3385 closes when #3458 merges; the four follow-ups above are filed as
+  successor issues.
+
 Owed from the review rounds, not acted on:
 
 - The narrow message's "claims" omits the declaration's row variables, and
@@ -872,25 +893,12 @@ Owed from the review rounds, not acted on:
   one location.
 - Two same-spelled aliases from different modules render identically in the
   shadow message.
-
-- A widened socket (`netTcpConnect : String -> Int -> <Net> Result String
-  (Socket *)`) is refused: an argument's binder cannot be fixed, even to the
-  top. It over-charges, which would be safe; admitting it is a design
-  choice.
 - The narrow message for an index the declaration leaves free reads the
   catalog's `<Net h>` as `<Net>` (the top). The refusal is right, the
   wording is not. Older: it can also over-report which atoms are missing.
-- `pdsSignalStart`/`pdsSignalRequested` still charge `<Net>` for a signal
-  handler, which §7's reading of `Net` as an endpoint does not describe. It
-  over-charges, which is safe; the right label is a question for you.
 - A `No impl of Debug for Socket h` reject advises `deriving`, which an
   `extern data` cannot take and which a core-owned head cannot take from user
   code. The hint needs to know where the head is declared.
-- `Socket` and `ListenSocket` are prelude names, so a program declaring its
-  own `data Socket` fails with `Duplicate type: Socket` at no location. A
-  prelude type clash has always failed this way; these two names are new and
-  common. Renaming the heads or letting a program's type shadow a prelude
-  type are both open.
 
 *Checklist item 2, scope proposal.* (a) Residual constraints in schemes: a
 generalized binding carries its unsolved inequalities between its own

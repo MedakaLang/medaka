@@ -1,5 +1,5 @@
 # META
-source_lines=872
+source_lines=876
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -318,6 +318,10 @@ extern listenSocketFd : ListenSocket a -> Int
 -- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 -- descriptor readable on shutdown. A binary that never calls this retains
 -- the operating system's default signal behavior. Call once after bind.
+--
+-- It reaches no endpoint. It is charged `Net` at the top of its domain
+-- until process signals have a label of their own: an over-charge, borne
+-- by a program that already binds.
 extern pdsSignalStart : Unit -> <Net> Result String Int
 
 -- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;

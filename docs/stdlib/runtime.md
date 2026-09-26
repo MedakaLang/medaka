@@ -437,6 +437,10 @@ Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 descriptor readable on shutdown. A binary that never calls this retains
 the operating system's default signal behavior. Call once after bind.
 
+It reaches no endpoint. It is charged `Net` at the top of its domain
+until process signals have a label of their own: an over-charge, borne
+by a program that already binds.
+
 ### `pdsSignalRequested`
 
 ```
