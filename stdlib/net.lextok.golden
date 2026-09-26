@@ -43,21 +43,31 @@ COMMA
 IDENT "expectTrue"
 RBRACE
 NEWLINE
-PUBLIC
 EXPORT
-DATA
+TYPE
 UPPER "Connection"
+LPAREN
+IDENT "h"
+COLON
+UPPER "Authority"
+UPPER "Net"
+RPAREN
 EQUAL
-UPPER "Connection"
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 NEWLINE
-PUBLIC
 EXPORT
-DATA
+TYPE
 UPPER "Listener"
+LPAREN
+IDENT "a"
+COLON
+UPPER "Authority"
+UPPER "Net"
+RPAREN
 EQUAL
-UPPER "Listener"
-UPPER "Int"
+UPPER "ListenSocket"
+IDENT "a"
 NEWLINE
 PUBLIC
 EXPORT
@@ -115,19 +125,18 @@ IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "host"
+RPAREN
 NEWLINE
 IDENT "connect"
 IDENT "host"
 IDENT "port"
 EQUAL
-IDENT "map"
-UPPER "Connection"
-LPAREN
 IDENT "netTcpConnect"
 IDENT "host"
 IDENT "port"
-RPAREN
 NEWLINE
 EXPORT
 NEWLINE
@@ -147,93 +156,88 @@ IDENT "addr"
 GT
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Listener"
+IDENT "addr"
+RPAREN
 NEWLINE
 IDENT "listen"
 IDENT "addr"
 IDENT "port"
 EQUAL
-IDENT "map"
-UPPER "Listener"
-LPAREN
 IDENT "netTcpListen"
 IDENT "addr"
 IDENT "port"
-RPAREN
 NEWLINE
 EXPORT
 NEWLINE
 IDENT "listenPort"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Int"
 NEWLINE
 IDENT "listenPort"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 EQUAL
 IDENT "netListenPort"
-IDENT "fd"
+IDENT "lis"
 NEWLINE
 EXPORT
 NEWLINE
 IDENT "accept"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "a"
+RPAREN
 NEWLINE
 IDENT "accept"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 EQUAL
-IDENT "map"
-UPPER "Connection"
-LPAREN
 IDENT "netTcpAccept"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 NEWLINE
 EXPORT
 NEWLINE
 IDENT "send"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Int"
 NEWLINE
 IDENT "send"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bs"
 EQUAL
 IDENT "netSend"
-IDENT "fd"
+IDENT "conn"
 IDENT "bs"
 NEWLINE
 EXPORT
@@ -241,11 +245,13 @@ NEWLINE
 IDENT "recv"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -255,14 +261,11 @@ UPPER "Int"
 RPAREN
 NEWLINE
 IDENT "recv"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 EQUAL
 IDENT "netRecv"
-IDENT "fd"
+IDENT "conn"
 IDENT "n"
 NEWLINE
 EXPORT
@@ -270,39 +273,35 @@ NEWLINE
 IDENT "sendAll"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
 IDENT "sendAll"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bs"
 EQUAL
-INDENT
 IDENT "sendAllFrom"
 LPAREN
 IDENT "bytes"
 IDENT "off"
 FAT_ARROW
 IDENT "netSendFrom"
-IDENT "fd"
+IDENT "conn"
 IDENT "bytes"
 IDENT "off"
 RPAREN
 IDENT "bs"
 INT 0
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "sendAllFrom"
 COLON
@@ -1027,12 +1026,14 @@ NEWLINE
 IDENT "recvAllLoop"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Vector"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1112,9 +1113,11 @@ NEWLINE
 IDENT "recvAll"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1139,11 +1142,13 @@ NEWLINE
 IDENT "sendString"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "String"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1165,9 +1170,11 @@ NEWLINE
 IDENT "recvString"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1188,11 +1195,13 @@ NEWLINE
 IDENT "sendLine"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "String"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1213,12 +1222,15 @@ NEWLINE
 IDENT "recvLineLoop"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Vector"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1226,6 +1238,8 @@ LPAREN
 UPPER "Option"
 UPPER "String"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "recvLineLoop"
 IDENT "conn"
@@ -1327,9 +1341,11 @@ NEWLINE
 IDENT "recvLine"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1354,25 +1370,24 @@ NEWLINE
 IDENT "shutdown"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Shutdown"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
 IDENT "shutdown"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "how"
 EQUAL
 IDENT "netShutdown"
-IDENT "fd"
+IDENT "conn"
 LPAREN
 IDENT "shutdownCode"
 IDENT "how"
@@ -1404,69 +1419,66 @@ NEWLINE
 IDENT "close"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
 IDENT "close"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 EQUAL
 IDENT "netClose"
-IDENT "fd"
+IDENT "conn"
 NEWLINE
 EXPORT
 NEWLINE
 IDENT "closeListener"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
 IDENT "closeListener"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 EQUAL
-IDENT "netClose"
-IDENT "fd"
+IDENT "netCloseListener"
+IDENT "lis"
 NEWLINE
 EXPORT
 NEWLINE
 IDENT "setTimeout"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Duration"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
 IDENT "setTimeout"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "d"
 EQUAL
 IDENT "netSetTimeout"
-IDENT "fd"
+IDENT "conn"
 LPAREN
 IDENT "toMillis"
 IDENT "d"
@@ -1476,7 +1488,11 @@ EXPORT
 NEWLINE
 IDENT "withConnection"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 INDENT
 UPPER "Int"
@@ -1484,9 +1500,13 @@ ARROW
 NEWLINE
 LPAREN
 UPPER "Connection"
+IDENT "host"
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
+PIPE
+IDENT "e"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1495,6 +1515,9 @@ RPAREN
 ARROW
 LT
 UPPER "Net"
+IDENT "host"
+PIPE
+IDENT "e"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1544,7 +1567,11 @@ EXPORT
 NEWLINE
 IDENT "withListener"
 COLON
+LPAREN
+IDENT "addr"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 INDENT
 UPPER "Int"
@@ -1552,9 +1579,13 @@ ARROW
 NEWLINE
 LPAREN
 UPPER "Listener"
+IDENT "addr"
 ARROW
 LT
 UPPER "Net"
+IDENT "addr"
+PIPE
+IDENT "e"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1563,6 +1594,9 @@ RPAREN
 ARROW
 LT
 UPPER "Net"
+IDENT "addr"
+PIPE
+IDENT "e"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1613,13 +1647,18 @@ NEWLINE
 IDENT "serveLoop"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 INDENT
 LPAREN
 UPPER "Connection"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
+PIPE
+IDENT "e"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1628,6 +1667,9 @@ RPAREN
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
+PIPE
+IDENT "e"
 GT
 UPPER "Result"
 UPPER "String"

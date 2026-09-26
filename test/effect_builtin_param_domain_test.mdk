@@ -93,6 +93,20 @@ test "check-policy accepts a manifest-derived Env Set token" =
     0
     "accepted"
 
+-- a set member may be written quoted, as a source atom writes it
+test "check-policy reads a quoted Env Set member as the member" =
+  expectVerbExitStartsWith
+    "check-policy"
+    [
+      fixture "env_hole_accept.mdk",
+      "--allow",
+      "Env={\"HOME\",\"PATH\"}",
+      "--fn",
+      "readHome",
+    ]
+    0
+    "accepted"
+
 test "check-policy rejects an Env Set token missing HOME" =
   expectVerbExitStartsWithAndContains
     "check-policy"
@@ -212,7 +226,7 @@ test "a nullary extern is rejected because it has no row for FFI" = expectCheckR
 test "a builtin name with an incompatible signature is rejected" = expectCheckReject
   (fixture "ffi_builtin_shadow_reject.mdk")
   [
-    "Foreign declaration 'log' redeclares a built-in runtime name with an incompatible signature",
+    "Foreign declaration 'log' redeclares a built-in runtime name at a type the built-in does not have",
   ]
 
 test "an extern cannot claim the runtime's mdk_ symbol namespace" = expectCheckReject

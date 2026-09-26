@@ -69,7 +69,7 @@ findContentLength (line :: rest) =
   else
     findContentLength rest
 
-recvFrame : Connection -> Array Int -> <Net> Result String (Array Int)
+recvFrame : Connection * -> Array Int -> <Net> Result String (Array Int)
 recvFrame conn buffer = match headerEnd buffer 0
   None => match recv conn 65536
     Err message => Err "crawl_stub: read failed: \{message}"
@@ -83,7 +83,7 @@ recvFrame conn buffer = match headerEnd buffer 0
       at + 4 + declaredContentLength (fromUtf8 (sliceClamped 0 at buffer))
     recvBody conn buffer need
 
-recvBody : Connection -> Array Int -> Int -> <Net> Result String (Array Int)
+recvBody : Connection * -> Array Int -> Int -> <Net> Result String (Array Int)
 recvBody conn buffer need =
   if arrayLength buffer >= need then
     Ok (sliceClamped 0 need buffer)
@@ -142,7 +142,10 @@ logLine path line = match appendFile path "\{line}\n"
   Ok () => ()
   Err message => panic "crawl_stub: could not log: \{message}"
 
-answerCall : String -> Int -> Connection -> <FileWrite, Net> Result String Unit
+answerCall : String ->
+  Int ->
+  Connection * ->
+  <FileWrite, Net> Result String Unit
 answerCall path status conn =
   let bytes = match recvFrame conn [||]
     Err message =>
@@ -166,15 +169,15 @@ answerCall path status conn =
         answerBytes status hostname authorization
   sendAll conn bytes
 
-ready : Listener -> <IO, Net> Unit
+ready : Listener * -> <IO, Net> Unit
 ready lis = match listenPort lis
   Err message => panic "crawl_stub: listener port unavailable: \{message}"
   Ok port =>
     let () = println "crawl-stub: listening on 127.0.0.1:\{intToString port}"
     flushStdout ()
 
-acceptLoop : Listener ->
-  (Connection -> <FileWrite, Net> Result String Unit) ->
+acceptLoop : Listener * ->
+  (Connection * -> <FileWrite, Net> Result String Unit) ->
   <FileWrite, Net> Unit
 acceptLoop lis handle = match accept lis
   Err message => panic "crawl_stub: accept failed: \{message}"
@@ -184,7 +187,7 @@ acceptLoop lis handle = match accept lis
     acceptLoop lis handle
 
 serve : Int ->
-  (Connection -> <FileWrite, Net> Result String Unit) ->
+  (Connection * -> <FileWrite, Net> Result String Unit) ->
   <IO, Net> Unit
 serve port handle = match listen "127.0.0.1" port
   Err message => panic "crawl_stub: listen failed: \{message}"

@@ -29,10 +29,10 @@ showBytes r = match r
 -- one index, and `main`'s index is the join of all of them.
 
 -- Echo everything until the peer closes.
-echo : Connection -> Async <Net | e> (Result String Unit)
+echo : Connection * -> Async <Clock, Net | e> (Result String Unit)
 echo conn = deferThen (A.recv conn 64) (r => echoStep conn r)
 
-echoStep : Connection -> Result String (Array Int) -> Async <Net | e> (Result String Unit)
+echoStep : Connection * -> Result String (Array Int) -> Async <Clock, Net | e> (Result String Unit)
 echoStep conn (Ok bs) =
   if length bs == 0 then deferPure (Ok ())
   else deferThen (A.sendAll conn bs) (_ => echo conn)
@@ -82,7 +82,7 @@ silentClient port = defer
       note "silent done"
 
 -- A server that accepts and holds the connection open without replying.
-hold : Connection -> Async <Clock, Net | e> (Result String Unit)
+hold : Connection * -> Async <Clock, Net | e> (Result String Unit)
 hold _ = deferThen (sleep (millis 400)) (_ => deferPure (Ok ()))
 
 main : Async <Clock, Net, Stdout> Unit

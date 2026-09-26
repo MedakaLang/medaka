@@ -1,0 +1,7 @@
+-- #3304: the label arrives through the member-list facade.  It used to be
+-- refused with "Module 'f_list' has no exported name 'Logging'" and every
+-- use of the label reported as unknown.
+import f_list.{Logging, doLog}
+
+act : Int -> <Logging> Int
+act x = doLog x

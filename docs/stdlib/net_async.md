@@ -3,7 +3,7 @@
 ## `connect`
 
 ```
-connect : String -> Int -> Async <Net | e> (Result String Connection)
+connect : (host : String) -> Int -> Async <Clock, Net host | e> (Result String (Connection host))
 connect host port
 ```
 
@@ -18,7 +18,7 @@ before the `Err` is returned, so the caller has nothing to release.
 ## `connectWithin`
 
 ```
-connectWithin : Duration -> String -> Int -> Async <Clock, Net | e> (Result String Connection)
+connectWithin : Duration -> (host : String) -> Int -> Async <Clock, Net host | e> (Result String (Connection host))
 connectWithin d host port
 ```
 
@@ -27,17 +27,20 @@ connectWithin d host port
 ## `accept`
 
 ```
-accept : Listener -> Async <Net | e> (Result String Connection)
+accept : Listener a -> Async <Clock, Net a | e> (Result String (Connection a))
 accept lis
 ```
 
 Accepts the next connection, parking until one arrives. The listener
 and the accepted socket are switched to non-blocking mode.
 
+The connection is at the listener's authority: it is reached through the
+address the listener was granted.
+
 ## `recv`
 
 ```
-recv : Connection -> Int -> Async <Net | e> (Result String (Array Int))
+recv : Connection h -> Int -> Async <Clock, Net h | e> (Result String (Array Int))
 recv conn n
 ```
 
@@ -47,7 +50,7 @@ end of stream.
 ## `recvWithin`
 
 ```
-recvWithin : Duration -> Connection -> Int -> Async <Clock, Net | e> (Result String (Array Int))
+recvWithin : Duration -> Connection h -> Int -> Async <Clock, Net h | e> (Result String (Array Int))
 recvWithin d conn n
 ```
 
@@ -56,7 +59,7 @@ recvWithin d conn n
 ## `recvBytes`
 
 ```
-recvBytes : Connection -> Int -> Async <Net | e> (Result String Bytes)
+recvBytes : Connection h -> Int -> Async <Clock, Net h | e> (Result String Bytes)
 recvBytes conn n
 ```
 
@@ -69,7 +72,7 @@ result is end of stream.
 ## `recvBytesWithin`
 
 ```
-recvBytesWithin : Duration -> Connection -> Int -> Async <Clock, Net | e> (Result String Bytes)
+recvBytesWithin : Duration -> Connection h -> Int -> Async <Clock, Net h | e> (Result String Bytes)
 recvBytesWithin d conn n
 ```
 
@@ -78,7 +81,7 @@ recvBytesWithin d conn n
 ## `send`
 
 ```
-send : Connection -> Array Int -> Async <Net | e> (Result String Int)
+send : Connection h -> Array Int -> Async <Clock, Net h | e> (Result String Int)
 send conn bytes
 ```
 
@@ -88,7 +91,7 @@ The count may be short; `sendAll` loops.
 ## `sendAll`
 
 ```
-sendAll : Connection -> Array Int -> Async <Net | e> (Result String Unit)
+sendAll : Connection h -> Array Int -> Async <Clock, Net h | e> (Result String Unit)
 sendAll conn bytes
 ```
 
@@ -97,7 +100,7 @@ Sends every byte, parking as needed.
 ## `sendAllWithin`
 
 ```
-sendAllWithin : Duration -> Connection -> Array Int -> Async <Clock, Net | e> (Result String Unit)
+sendAllWithin : Duration -> Connection h -> Array Int -> Async <Clock, Net h | e> (Result String Unit)
 sendAllWithin d conn bytes
 ```
 
@@ -106,7 +109,7 @@ sendAllWithin d conn bytes
 ## `sendString`
 
 ```
-sendString : Connection -> String -> Async <Net | e> (Result String Unit)
+sendString : Connection h -> String -> Async <Clock, Net h | e> (Result String Unit)
 sendString conn s
 ```
 
@@ -115,7 +118,7 @@ Sends a string as UTF-8, parking as needed.
 ## `close`
 
 ```
-close : Connection -> Async <Net | e> (Result String Unit)
+close : Connection h -> Async <Net h | e> (Result String Unit)
 close conn
 ```
 
@@ -124,7 +127,7 @@ Closes a connection.
 ## `closeListener`
 
 ```
-closeListener : Listener -> Async <Net | e> (Result String Unit)
+closeListener : Listener a -> Async <Net a | e> (Result String Unit)
 closeListener lis
 ```
 
@@ -134,7 +137,7 @@ which ends a `serve` loop.
 ## `serve`
 
 ```
-serve : Listener -> (Connection -> Async <Net | e> (Result String Unit)) -> Async <Net | e> (Result String Unit)
+serve : Listener a -> (Connection a -> Async <Clock, Net a | e> (Result String Unit)) -> Async <Clock, Net a | e> (Result String Unit)
 serve lis handle
 ```
 

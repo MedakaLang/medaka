@@ -170,5 +170,5 @@ runVerb cmd args = match runCommand cmd args
 -- | The value of the environment variable `name`, or `fallback` when it is
 -- unset.
 export
-getEnvOr : String -> String -> <IO> String
+getEnvOr : (name : String) -> String -> <Env name> String
 getEnvOr name fallback = optionOr fallback (getEnv name)

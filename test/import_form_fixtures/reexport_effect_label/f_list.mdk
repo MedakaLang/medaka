@@ -1,0 +1,3 @@
+-- #3304: a member-list hop that names the label carries it, by the same
+-- binding rule as every other namespace.
+export import eff.{Logging, doLog}

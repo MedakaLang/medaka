@@ -20,20 +20,19 @@ WebAssembly backend rejects a program that imports this module.
 ### `Connection`
 
 ```
-data Connection
-  = Connection Int
+type Connection (h : Authority Net) = Socket h
 ```
 
-A connected TCP socket, from `connect` or `accept`.
+A connected TCP socket, from `connect` or `accept`, at the authority of
+the host it reaches.
 
 ### `Listener`
 
 ```
-data Listener
-  = Listener Int
+type Listener (a : Authority Net) = ListenSocket a
 ```
 
-A listening TCP socket, from `listen`.
+A listening TCP socket, from `listen`, at the authority of its address.
 
 ### `Shutdown`
 
@@ -62,7 +61,7 @@ The numeric addresses a host name resolves to.
 ### `connect`
 
 ```
-connect : (host : String) -> Int -> <Net host> Result String Connection
+connect : (host : String) -> Int -> <Net host> Result String (Connection host)
 connect host port
 ```
 
@@ -76,7 +75,7 @@ closes the connection for you.
 ### `listen`
 
 ```
-listen : (addr : String) -> Int -> <Net addr> Result String Listener
+listen : (addr : String) -> Int -> <Net addr> Result String (Listener addr)
 listen addr port
 ```
 
@@ -87,7 +86,8 @@ Port `0` lets the system pick a free port; `listenPort` reports which.
 ### `listenPort`
 
 ```
-listenPort : Listener -> <Net> Result String Int
+listenPort : Listener a -> <Net a> Result String Int
+listenPort lis
 ```
 
 The port a listener is bound to.
@@ -95,18 +95,22 @@ The port a listener is bound to.
 ### `accept`
 
 ```
-accept : Listener -> <Net> Result String Connection
+accept : Listener a -> <Net a> Result String (Connection a)
+accept lis
 ```
 
 Waits for the next connection to a listener.
+
+The connection is at the listener's authority: it is reached through the
+address the listener was granted.
 
 ## Transfer
 
 ### `send`
 
 ```
-send : Connection -> Array Int -> <Net> Result String Int
-send _ bs
+send : Connection h -> Array Int -> <Net h> Result String Int
+send conn bs
 ```
 
 Sends bytes in one call. The result is the number of bytes written,
@@ -117,8 +121,8 @@ which may be fewer than given.
 ### `recv`
 
 ```
-recv : Connection -> Int -> <Net> Result String (Array Int)
-recv _ n
+recv : Connection h -> Int -> <Net h> Result String (Array Int)
+recv conn n
 ```
 
 Receives up to `n` bytes in one call.
@@ -129,8 +133,8 @@ form that reads to the end.
 ### `sendAll`
 
 ```
-sendAll : Connection -> Array Int -> <Net> Result String Unit
-sendAll _ bs
+sendAll : Connection h -> Array Int -> <Net h> Result String Unit
+sendAll conn bs
 ```
 
 Sends every byte, looping over `send` as needed.
@@ -141,7 +145,7 @@ treated as a stalled connection.
 ### `recvAll`
 
 ```
-recvAll : Connection -> <Net> Result String (Array Int)
+recvAll : Connection h -> <Net h> Result String (Array Int)
 recvAll conn
 ```
 
@@ -155,7 +159,7 @@ discarded.
 ### `sendString`
 
 ```
-sendString : Connection -> String -> <Net> Result String Unit
+sendString : Connection h -> String -> <Net h> Result String Unit
 sendString conn s
 ```
 
@@ -164,7 +168,7 @@ Sends a string as UTF-8, every byte of it.
 ### `recvString`
 
 ```
-recvString : Connection -> <Net> Result String String
+recvString : Connection h -> <Net h> Result String String
 recvString conn
 ```
 
@@ -177,7 +181,7 @@ or a bounded amount with `recv`.
 ### `sendLine`
 
 ```
-sendLine : Connection -> String -> <Net> Result String Unit
+sendLine : Connection h -> String -> <Net h> Result String Unit
 sendLine conn s
 ```
 
@@ -186,7 +190,7 @@ Sends a string as UTF-8 followed by a newline.
 ### `recvLine`
 
 ```
-recvLine : Connection -> <Net> Result String (Option String)
+recvLine : Connection h -> <Net h> Result String (Option String)
 recvLine conn
 ```
 
@@ -201,8 +205,8 @@ so it suits small line-based messages, not bulk transfer.
 ### `shutdown`
 
 ```
-shutdown : Connection -> Shutdown -> <Net> Result String Unit
-shutdown _ how
+shutdown : Connection h -> Shutdown -> <Net h> Result String Unit
+shutdown conn how
 ```
 
 Shuts down one or both directions of a connection without closing it.
@@ -210,7 +214,8 @@ Shuts down one or both directions of a connection without closing it.
 ### `close`
 
 ```
-close : Connection -> <Net> Result String Unit
+close : Connection h -> <Net h> Result String Unit
+close conn
 ```
 
 Closes a connection.
@@ -220,7 +225,8 @@ Closing twice is not an error. `withConnection` closes for you.
 ### `closeListener`
 
 ```
-closeListener : Listener -> <Net> Result String Unit
+closeListener : Listener a -> <Net a> Result String Unit
+closeListener lis
 ```
 
 Closes a listener.
@@ -228,8 +234,8 @@ Closes a listener.
 ### `setTimeout`
 
 ```
-setTimeout : Connection -> Duration -> <Net> Result String Unit
-setTimeout _ d
+setTimeout : Connection h -> Duration -> <Net h> Result String Unit
+setTimeout conn d
 ```
 
 Sets a connection's send and receive timeout.
@@ -240,7 +246,7 @@ so a stalled peer cannot block forever.
 ### `withConnection`
 
 ```
-withConnection : String -> Int -> (Connection -> <Net> Result String a) -> <Net> Result String a
+withConnection : (host : String) -> Int -> (Connection host -> <Net host | e> Result String a) -> <Net host | e> Result String a
 withConnection host port body
 ```
 
@@ -255,7 +261,7 @@ fails, in which case `body` does not run.
 ### `withListener`
 
 ```
-withListener : String -> Int -> (Listener -> <Net> Result String a) -> <Net> Result String a
+withListener : (addr : String) -> Int -> (Listener addr -> <Net addr | e> Result String a) -> <Net addr | e> Result String a
 withListener addr port body
 ```
 
@@ -267,7 +273,7 @@ The result is `body`'s result, or the error when listening fails.
 ### `serveLoop`
 
 ```
-serveLoop : Listener -> (Connection -> <Net> Result String Unit) -> <Net> Result String Unit
+serveLoop : Listener a -> (Connection a -> <Net a | e> Result String Unit) -> <Net a | e> Result String Unit
 serveLoop lis handle
 ```
 

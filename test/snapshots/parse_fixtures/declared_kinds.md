@@ -1,5 +1,5 @@
 # META
-source_lines=61
+source_lines=72
 stages=PARSE,PRINTER,DESUGAR,MARK
 # SOURCE
 -- Declared type-parameter kinds on declaration heads
@@ -63,6 +63,17 @@ readIt (Handle s) = readFile s
 
 -- a constructor's existential binder leading a record's fields
 data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
+
+-- a qualifier joined over two binders, the spelling a joined authority
+-- renders as, and a qualified result after a row
+data J (p : Authority FileRead) (q : Authority FileRead) = J (String @(p | q))
+
+idp : (p : String) -> <FileRead p> String @p
+idp p = p
+
+-- a qualified application head keeps its parentheses
+rt : (a : String) -> <FileRead a> (Result String @a) String
+rt a = Ok a
 # PARSE
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) ())
 (DNewtype false "Box" ("e") "MkBox" (TyCon "Int") ())
@@ -85,6 +96,11 @@ data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
 (DTypeSig false "readIt" (TyFun (TyApp (TyCon "Handle") (TyVar "p")) (TyEffect ((atom "FileRead" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "readIt" ((PCon "Handle" (PVar "s"))) (EApp (EVar "readFile") (EVar "s")))
 (DData Private "Sealed" () ((variant "Sealed" (ConNamed (field "path" (TyQual (TyCon "String") "p")) (field "n" (TyCon "Int"))))) ())
+(DData Private "J" ("p" "q") ((variant "J" (ConPos (TyQual (TyCon "String") "p" "q")))) ())
+(DTypeSig false "idp" (TyFun (TyNamed "p" (TyCon "String")) (TyEffect ((atom "FileRead" (name "p"))) None (TyQual (TyCon "String") "p"))))
+(DFunDef false "idp" ((PVar "p")) (EVar "p"))
+(DTypeSig false "rt" (TyFun (TyNamed "a" (TyCon "String")) (TyEffect ((atom "FileRead" (name "a"))) None (TyApp (TyQual (TyApp (TyCon "Result") (TyCon "String")) "a") (TyCon "String")))))
+(DFunDef false "rt" ((PVar "a")) (EApp (EVar "Ok") (EVar "a")))
 # PRINTER
 data Async (e : Effect) a = Done a | Suspend (Unit -> Async e a)
 newtype Box (e : Effect) = MkBox Int
@@ -110,6 +126,11 @@ open path = Handle path
 readIt : Handle p -> <FileRead p> Result String String
 readIt (Handle s) = readFile s
 data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
+data J (p : Authority FileRead) (q : Authority FileRead) = J (String @(p | q))
+idp : (p : String) -> <FileRead p> String @p
+idp p = p
+rt : (a : String) -> <FileRead a> (Result String @a) String
+rt a = Ok a
 # DESUGAR
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) ())
 (DNewtype false "Box" ("e") "MkBox" (TyCon "Int") ())
@@ -132,6 +153,11 @@ data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
 (DTypeSig false "readIt" (TyFun (TyApp (TyCon "Handle") (TyVar "p")) (TyEffect ((atom "FileRead" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "readIt" ((PCon "Handle" (PVar "s"))) (EApp (EVar "readFile") (EVar "s")))
 (DData Private "Sealed" () ((variant "Sealed" (ConNamed (field "path" (TyQual (TyCon "String") "p")) (field "n" (TyCon "Int"))))) ())
+(DData Private "J" ("p" "q") ((variant "J" (ConPos (TyQual (TyCon "String") "p" "q")))) ())
+(DTypeSig false "idp" (TyFun (TyNamed "p" (TyCon "String")) (TyEffect ((atom "FileRead" (name "p"))) None (TyQual (TyCon "String") "p"))))
+(DFunDef false "idp" ((PVar "p")) (EVar "p"))
+(DTypeSig false "rt" (TyFun (TyNamed "a" (TyCon "String")) (TyEffect ((atom "FileRead" (name "a"))) None (TyApp (TyQual (TyApp (TyCon "Result") (TyCon "String")) "a") (TyCon "String")))))
+(DFunDef false "rt" ((PVar "a")) (EApp (EVar "Ok") (EVar "a")))
 # MARK
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) ())
 (DNewtype false "Box" ("e") "MkBox" (TyCon "Int") ())
@@ -154,3 +180,8 @@ data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
 (DTypeSig false "readIt" (TyFun (TyApp (TyCon "Handle") (TyVar "p")) (TyEffect ((atom "FileRead" (name "p"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "readIt" ((PCon "Handle" (PVar "s"))) (EApp (EVar "readFile") (EVar "s")))
 (DData Private "Sealed" () ((variant "Sealed" (ConNamed (field "path" (TyQual (TyCon "String") "p")) (field "n" (TyCon "Int"))))) ())
+(DData Private "J" ("p" "q") ((variant "J" (ConPos (TyQual (TyCon "String") "p" "q")))) ())
+(DTypeSig false "idp" (TyFun (TyNamed "p" (TyCon "String")) (TyEffect ((atom "FileRead" (name "p"))) None (TyQual (TyCon "String") "p"))))
+(DFunDef false "idp" ((PVar "p")) (EVar "p"))
+(DTypeSig false "rt" (TyFun (TyNamed "a" (TyCon "String")) (TyEffect ((atom "FileRead" (name "a"))) None (TyApp (TyQual (TyApp (TyCon "Result") (TyCon "String")) "a") (TyCon "String")))))
+(DFunDef false "rt" ((PVar "a")) (EApp (EVar "Ok") (EVar "a")))

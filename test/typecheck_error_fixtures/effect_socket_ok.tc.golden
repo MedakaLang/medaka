@@ -1,0 +1,6 @@
+cfgDial : Unit -> <Net "api.example.com/*"> Result String Unit
+dial : (host : String) -> Int -> <Net host> Result String Unit
+keep : Socket "api.example.com/*" -> Socket "api.example.com/*"
+main : <IO> Unit
+pollOne : Socket h -> <Clock> Result String (Array Int)
+serveOne : (addr : String) -> <Net addr> Result String Unit

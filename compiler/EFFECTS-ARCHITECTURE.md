@@ -1,8 +1,10 @@
 # Effects within the typechecker
 
-**Status:** DELIVERED THROUGH ITEM 6 — the data-half checkpoint is on the
-branch; item 7 (stdlib migration of precision-dependent signatures to handles)
-and the handoff's owed items remain. The delivery checklist below
+**Status:** DELIVERED THROUGH ITEM 6 — the data half merged in PR #3445
+(`ea782db98`); the close-out checkpoint below answers the handoff's owed list.
+Item 7 (stdlib migration to authority-indexed handles) is delivered on the
+same branch; residual schemes with delayed joins, and one invocation summary
+for policy and manifest, have proposals awaiting ratification in the handoff. The delivery checklist below
 distinguishes the destination from code that has actually migrated. This is
 one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
@@ -685,6 +687,106 @@ both review rounds' cases), `effect_existential_{ok,launder}`,
 abstract handle across a module boundary); `test/parse_fixtures/declared_kinds`
 (the formatter round trip of every new spelling, the existential record
 constructor included); the engine fixture above.
+
+### Close-out checkpoint
+
+What landed after the data half (branch `effects-closeout`; decisions and
+receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
+"Close-out session"):
+
+1. **Located declarations and qualifiers.** `TyQual` carries its span and a
+   list of names, `DEffect` and `KindAuthority` carry the label's span; resolve
+   and the typechecker report a qualifier's names, an effect declaration's
+   domain and axes, and a kind's label there (`checkDomainAxes`,
+   `checkKindLabel`, `reportUnboundAuthorityNames` over located
+   `authorityNamesWritten`).
+2. **The `ELoc` restore.** `infer` and `inferExpected` set the node's own
+   span again on exit, so a check that runs after a subexpression reads that
+   subexpression, not the last leaf inside it.
+3. **Joined qualifiers.** `String @(a | b)` elaborates to the join of the
+   names' cells (`qualifyByAll`); a joined field carries no single name
+   (`tyCarries`; `@(p | p)` is `@p`); a join across domains is
+   `T-AUTHORITY-DOMAIN`, a non-String name `T-AUTHORITY-BINDER`. A joined
+   field is built against determined indices; with inferred ones the join
+   upper has no principal solution and the construction is refused (owed).
+   Every solution the solver writes passes through `widenOpenedFor`: an
+   existential opened in an arm younger than the solved variable becomes its
+   domain's top, so an opened authority cannot leave its arm through the
+   solve (it could, through a clause parameter's index, before this); a
+   collapsed class is widened for its oldest member. A row lowered to an
+   older level lowers the authorities its atoms name (`lowerRowLevels`), so
+   an arm-local variable that reaches an older binding only through a row
+   atom is old when the solve reads it. The
+   unscoped path (`solveFlexibleUpper`) no longer links a variable to a join
+   containing itself, which normalisation followed forever.
+4. **One domain, exactly.** A qualifier naming an argument that no atom or
+   index gives a domain is `T-AUTHORITY-DOMAIN` (it was dropped silently), and
+   `Authority L` over an atomic label is `T-AUTHORITY-KIND`
+   (`checkAuthorityKindLabels`).
+5. **Index equality.** `unifyIndex` records its two halves exact
+   (`wantAuthorityWith True`, `AuthWanted.awExact`, `esfExact`), and a failure
+   is `T-AUTHORITY-INDEX-MISMATCH`, once per equality (`distinctFailures`
+   keys the halves unordered). An opened existential is recorded
+   (`openedAuthvarsRef`) and named as the opened value's authority.
+6. **One parameter-shape rule for every consumer.** `effectParamProblems` is
+   the pure shape check; the typechecker reports its problems at the atom, and
+   `check-policy` keeps an `--allow` entry written and decodes it against the
+   domain of the label it is compared with (`decodeWrittenParam`), refusing a
+   malformed entry instead of widening it. A bare literal on a Product label
+   is checked as its first axis's value before the lift, which canonicalised
+   an empty pattern to the top (`primaryLiteralProblems`); set members may be
+   quoted. This is the first piece the policy
+   consumer shares with the typechecker; the invocation summary itself is not
+   built.
+7. **Label identity across member-list re-exports (#3304).** `nsEffects`
+   carries a label through a member list or a single-name hop by the binding
+   rule every namespace uses, and `reexportedEffectOrigins` carries its
+   declaring identity the same way.
+8. **Formatting.** A qualified type after a row prints bare
+   (`printTypeAppLhs`), since `<L p> String @p` parses as the row over the
+   qualified type.
+
+Coverage: `types/effect_authority_test.mdk` (the close-out groups, each
+negative beside its control, #3327 in both declaration orders and #3304
+through `checkModulesDiagsChain`); `test/import_form_fixtures/reexport_effect_label`;
+`test/parse_fixtures/declared_kinds` (the joined spelling round trip);
+`test/typecheck_error_fixtures/effect_{data_field,existential}_launder`
+(re-derived: index equality, opened authority);
+`test/check_json_fixtures/projects/imported_help_fix` (re-derived: the fix-it
+range now covers the misspelled field).
+
+### Item 7 checkpoint: authority-indexed sockets
+
+A redeclared catalog extern types its callers while the built-in runs, so it
+is admitted only as an instance of the catalog's signature (`ffiSigInstance`,
+`compiler/types/typecheck.mdk`), and its row is compared with the catalog row
+instantiated by the same match. This is what keeps the catalog the only proof
+source for an `extern data` head.
+
+1. **`extern data`** (a head with kinded parameters and no constructors,
+   `DData.dataExtern`): its values come only from externs, so extern
+   signatures are its sole proof sources; a registered non-public head
+   carries its parameter (`paramCarries`). `Socket (h : Authority Net)` and
+   `ListenSocket (a : Authority Net)` are declared in `core.mdk`, since the
+   catalog is extern-only at every stage.
+2. **The catalog charges at the index.** Every fd extern takes a socket and
+   performs `<Net h>`; an accepted socket is at its listener's authority; a
+   poll is `<Clock>`; `socketFd`/`listenSocketFd` are emitter identities over
+   the tagged word, and no endpoint extern takes a number.
+3. **Declared kinds before the catalog.** `graphPreamble` records the
+   prelude's declared kinds before elaborating extern signatures, so an index
+   slot in a catalog signature binds an authority.
+4. **Index rows unify authorities.** `unifyIndexRow` first equates the
+   authorities of same-label atoms as an index (`unifyIndexAtomAuthorities`),
+   then compares labels (`labelsMissing`); the solver's exact relations mark
+   their authority obligations exact. `Async <Net host | e>` is an index like
+   any other.
+5. **Printing.** A variable letter skips a name an authority binder already
+   holds (`assignName`).
+
+Coverage: `test/typecheck_error_fixtures/effect_socket_{ok,launder,forge}`;
+`stdlib/net.mdk`, `stdlib/net_async.mdk`, `pds/`, the net and async fixtures
+typecheck against the new catalog and run under the native engine gates.
 
 ### Foundation verification
 

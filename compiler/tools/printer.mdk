@@ -36,6 +36,7 @@
 
 import frontend.ast.{
   EffAtomTy(..),
+  qualifierSource,
   effAtomSurface,
   authTermSurface,
   ctorBindersSurface,
@@ -80,6 +81,7 @@ import support.util.{
   escOneHex2
 }
 import list.{last, sortBy}
+import support.char.{isUpper}
 
 -- ── Document algebra ──────────────────────────────
 
@@ -983,7 +985,7 @@ printType (TyTuple ts) =
   Cat (text "(") (Cat (sepBy (text ", ") (map printType ts)) (text ")"))
 printType (TyEffect es tail t) =
   let inside = effectInside es tail
-  Cat (text "<") (Cat inside (Cat (text "> ") (printTypeAppLhs t)))
+  Cat (text "<") (Cat inside (Cat (text "> ") (printRowResult t)))
 printType (TyRow [] (a :: b :: rest) _) =
   Cat (text "(") (Cat (text (joinWith " | " (a :: b :: rest))) (text ")"))
 printType (TyRow es tail _) =
@@ -995,7 +997,10 @@ printType (TyNamed n t) =
   Cat
     (text "(")
     (Cat (text n) (Cat (text " : ") (Cat (printType t) (text ")"))))
-printType (TyQual t n) = Cat (printTypeAtom t) (text " @\{n}")
+-- `Result String @a` qualifies the whole application, so an application
+-- needs no parentheses under the qualifier.
+printType (TyQual t ns _) =
+  Cat (printTypeAppLhs t) (text " \{qualifierSource ns}")
 
 constraintsDoc : List Constraint -> Doc
 constraintsDoc [c] = printConstraint c
@@ -1034,6 +1039,13 @@ effAtomDoc a = text (effAtomSurface escStringLit a)
 printConstraint : Constraint -> Doc
 printConstraint (Constraint { constraintHead = iface, constraintArgs = args }) =
   Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
+
+-- The type a row wraps: `<L p> String @p` parses as the row over the
+-- qualified type, so a qualifier needs no parentheses there (it does as the
+-- head of an application, `(Result String @a) E`).
+printRowResult : Ty -> Doc
+printRowResult (TyQual t ns l) = printType (TyQual t ns l)
+printRowResult t = printTypeAppLhs t
 
 printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon { tyConName = n }) = text (tyConSurface n)
@@ -1543,17 +1555,68 @@ printDoStmt : DoStmt -> Doc
 printDoStmt (DoBind pat e) =
   Cat (printPat pat) (Cat (text " <- ") (printExprBody e))
 printDoStmt (DoExpr e) = printExprBody e
-printDoStmt (DoLet isMut _ pat e) =
+printDoStmt (DoLet isMut False pat e) =
   Cat
     (text "let ")
     (Cat
       (if isMut then text "mut " else Nil)
-      (Cat (printPat pat) (sepBody " =" e)))
+      (Cat (printLetBinderPat pat) (sepBody " =" e)))
+printDoStmt (DoLet isMut True pat e) = printDoLetRec isMut pat e
 printDoStmt (DoAssign x e) = Cat (text x) (sepBody " =" e)
 printDoStmt (DoFieldAssign x fields e) =
   Cat
     (text x)
     (Cat (text ".") (Cat (text (joinWith "." fields)) (sepBody " =" e)))
+
+-- The `let`-binder pattern position is special: `letKind` (parser.mdk) reads
+-- a leading bare identifier as the start of a plain/function-shaped binder
+-- before it ever tries full pattern syntax, so a pattern shape that itself
+-- starts with a bare identifier — an as-pattern (`p@(...)`) or a cons
+-- pattern (`x :: xs`) — must be parenthesized here to force the parser back
+-- onto the general-pattern path. Every other pattern shape already
+-- self-delimits (`(a, b)`, `[a, b]`, a parenthesized `PCon`, `Rec { … }`) or
+-- is the plain identifier the fast path is written for (`PVar`) (#2908).
+printLetBinderPat : Pat -> Doc
+printLetBinderPat pat =
+  if letBinderNeedsParens pat then
+    Cat (text "(") (Cat (printPat pat) (text ")"))
+  else
+    printPat pat
+
+letBinderNeedsParens : Pat -> Bool
+letBinderNeedsParens (PAs _ _ _) = True
+letBinderNeedsParens (PCons _ _) = True
+letBinderNeedsParens _ = False
+
+-- A recursive block `let`: either a curried function form (`let f a b = …`,
+-- always self-recursive with no keyword needed) or an explicit `let rec name
+-- = …` wrapping an already-written lambda. Losing this distinction and
+-- always printing the plain `let pat = rhs` form drops the recursion the
+-- source asked for (#2932).
+printDoLetRec : Bool -> Pat -> Expr -> Doc
+printDoLetRec isMut (PVar f _) rhs = match unwrapLams [] rhs
+  ([], body) =>
+    Cat
+      (text "let rec ")
+      (Cat
+        (if isMut then text "mut " else Nil)
+        (Cat (text f) (sepBody " =" body)))
+  (args, body) =>
+    Cat
+      (text "let ")
+      (Cat
+        (if isMut then text "mut " else Nil)
+        (Cat
+          (Cat
+            (text f)
+            (concatD (map (p => Cat (text " ") (printPatAtom p)) args)))
+          (sepBody " =" body)))
+printDoLetRec isMut pat rhs =
+  Cat
+    (text "let rec ")
+    (Cat
+      (if isMut then text "mut " else Nil)
+      (Cat (printLetBinderPat pat) (sepBody " =" rhs)))
 
 -- ── let … in ──────────────────────────────────────
 
@@ -1569,7 +1632,8 @@ printELet True (PVar f _) rhs e2 = match unwrapLams [] rhs
           (text f)
           (concatD (map (p => Cat (text " ") (printPatAtom p)) args)))
     letInDoc headD body e2
-printELet _ pat e1 e2 = letInDoc (Cat (text "let ") (printPat pat)) e1 e2
+printELet _ pat e1 e2 =
+  letInDoc (Cat (text "let ") (printLetBinderPat pat)) e1 e2
 
 letInDoc : Doc -> Expr -> Expr -> Doc
 letInDoc headD rhs e2 =
@@ -1858,12 +1922,12 @@ printAppSpine e = match collectApp [] e
   (head, []) => printExpr precApp head
   (head, args) =>
     let headD = printExpr precApp head
-    let ps = map (a => argPiece head a) args
+    let ps = argPiecesIndexed head args
     if appHugsLast e && not (anyCommented ps) then
-      let initOuts = pieceDocs noSep (map (a => argPiece head a) (initOf args))
+      let initOuts = pieceDocs noSep (argPiecesIndexed head (initOf args))
       let initDocs = map pieceOutDoc initOuts
       match last args
-        Some lastArg => match lastArgDocs head lastArg
+        Some lastArg => match lastArgDocs head (isEmptyL (initOf args)) lastArg
           (openD, closedD) =>
             let explode =
               group
@@ -1891,8 +1955,11 @@ printAppSpine e = match collectApp [] e
 -- form renders broken (`(x =>` with the body below, `[` with the elements
 -- below); the closed form is the ordinary one-line-when-it-fits doc.  Both
 -- share one body doc, so comments inside it are placed exactly once.
-lastArgDocs : Expr -> Expr -> (Doc, Doc)
-lastArgDocs head arg = match stripLocE arg
+-- `isFirst` is True when this argument is also the FIRST (sole) argument of
+-- the spine, the only position where a bare constructor head can fuse with a
+-- following `{` (#2909).
+lastArgDocs : Expr -> Bool -> Expr -> (Doc, Doc)
+lastArgDocs head isFirst arg = match stripLocE arg
   ELam pats body =>
     let patsD = sepBy (text " ") (map printPatAtom pats)
     let bodyPart = sepBody " =>" body
@@ -1901,7 +1968,7 @@ lastArgDocs head arg = match stripLocE arg
     (openD, closedD)
 
   _ =>
-    let d = appArgDoc head arg
+    let d = appArgDoc head isFirst arg
     (openDoc d, d)
 
 -- A separator+body doc with its width group removed, so the body always
@@ -1919,22 +1986,58 @@ openDoc (Cat (Text "(") (Cat (Group d) (Text ")"))) =
 openDoc (Cat (Text "(") (Cat d (Text ")"))) = Cat (text "(") (Cat d (text ")"))
 openDoc d = d
 
-argPiece : Expr -> Expr -> Piece
-argPiece head arg = match exprSpan arg
-  (s, sc, en, ec) => Piece s sc en ec (_ => appArgDoc head arg)
+argPieceAt : Expr -> Bool -> Expr -> Piece
+argPieceAt head isFirst arg = match exprSpan arg
+  (s, sc, en, ec) => Piece s sc en ec (_ => appArgDoc head isFirst arg)
+
+-- Piece a whole argument list, marking only the FIRST element — the one
+-- position where a bare constructor head can fuse with a following `{`.
+argPiecesIndexed : Expr -> List Expr -> List Piece
+argPiecesIndexed head [] = []
+argPiecesIndexed head (a :: rest) =
+  argPieceAt head True a :: map (argPieceAt head False) rest
 
 -- An application argument: atom-parenthesized by precedence, EXCEPT a tight
 -- negative literal (`f -1`) under a non-numeric head and a Ref deref (`f !r`),
 -- which the parser reads as arguments in their own right and which must print
--- bare to round-trip to the same node.
-appArgDoc : Expr -> Expr -> Doc
-appArgDoc head x =
-  if isTightNegLitArg x && not (headIsNumericHead (stripLocE head)) then
+-- bare to round-trip to the same node.  A record-update/create or variant-
+-- update as the FIRST argument of a bare constructor head is force-
+-- parenthesized regardless of its own precedence: `Con { … }` reparses as a
+-- brace attached to `Con` itself (`upperBrace`, parser.mdk), not as `Con`
+-- applied to a record-shaped argument (#2909).
+appArgDoc : Expr -> Bool -> Expr -> Doc
+appArgDoc head isFirst x =
+  if isFirst && ctorArgNeedsParens head x then
+    Cat (text "(") (Cat (printExpr precTop x) (text ")"))
+  else if isTightNegLitArg x && not (headIsNumericHead (stripLocE head)) then
     printExprRaw None (stripLocE x)
   else if isTightDerefArg x then
     printExprRaw None (stripLocE x)
   else
     printExpr precPostfix x
+
+ctorArgNeedsParens : Expr -> Expr -> Bool
+ctorArgNeedsParens head arg = isBareCtorHead head && isBraceGlueArg arg
+
+isBareCtorHead : Expr -> Bool
+isBareCtorHead e = match stripLocE e
+  EVar c => isCtorLikeName c
+  _ => False
+
+isCtorLikeName : String -> Bool
+isCtorLikeName s =
+  let cs = stringToChars s
+  arrayLength cs > 0 && isUpper (arrayGetUnsafe 0 cs)
+
+-- Only an UNTAGGED record update (`{ base | f = v }`) prints with a leading
+-- `{` of its own — a record create or variant update always prints with its
+-- own tag identifier first (`Con { … }`), so nesting one under an outer
+-- constructor's first-argument slot never risks fusing with that outer
+-- head's token.
+isBraceGlueArg : Expr -> Bool
+isBraceGlueArg e = match stripLocE e
+  ERecordUpdate _ _ _ => True
+  _ => False
 
 isTightDerefArg : Expr -> Bool
 isTightDerefArg e = match stripLocE e
@@ -2290,6 +2393,10 @@ printDecl (DFunDef pub n pats body) =
     (Cat (defHeader n pats) (printDefRhs body))
 printDecl (DLetGroup pub bindings) =
   Cat (if pub then text "export " else Nil) (letGroupDecl bindings)
+printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataExtern = True }) =
+  Cat
+    (visPrefix vis)
+    (Cat (text "extern data ") (Cat (text n) (tyParamsDoc params kinds)))
 printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders, dataDerives = derives }) =
   let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   Cat
@@ -2346,7 +2453,7 @@ printDecl (DUse pub path _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (text "import ") (printUsePath path !importForcedRef))
-printDecl (DEffect pub name domain axes _) =
+printDecl (DEffect pub name domain axes _ _) =
   Cat
     (effDeclHead pub)
     (Cat (text name) (Cat (effDomainDoc domain) (effAxesDoc axes)))
@@ -2488,7 +2595,7 @@ ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyAuth p _) = authTermSurface escStringLit p
 ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
-ppTyPrec _ (TyQual t n) = "\{ppTyPrec 2 t} @\{n}"
+ppTyPrec _ (TyQual t ns _) = "\{ppTyPrec 2 t} \{qualifierSource ns}"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c

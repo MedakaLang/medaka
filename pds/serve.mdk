@@ -1039,7 +1039,7 @@ announceToRelay target hostname = defer
 
 announce : String ->
   Int ->
-  Listener ->
+  Listener * ->
   Store ->
   String ->
   Server ->
@@ -1066,7 +1066,7 @@ bound : String ->
   Serving ->
   Option RelayTarget ->
   Duration ->
-  Result String Listener ->
+  Result String (Listener *) ->
   Async <Clock, Env, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
 bound _ _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")

@@ -68,6 +68,32 @@ False
 
 Instances: `Eq`, [`Ord`](#ord-result-e-a), `Debug`, `Display`, `Hashable`, `Mappable`, `Applicative`, `Thenable`, `Bimappable`, `Foldable`, `Traversable`
 
+## Sockets
+
+### `Socket`
+
+```
+extern data Socket (h : Authority Net)
+```
+
+A connected TCP socket, at the authority of the host it was opened
+for.
+
+Only the runtime's externs produce one, so the index is what the extern
+that opened the socket was granted. The `net` module calls it a
+connection.
+
+### `ListenSocket`
+
+```
+extern data ListenSocket (a : Authority Net)
+```
+
+A listening TCP socket, at the authority of the address it is bound
+to. A socket it accepts carries the same authority.
+
+The `net` module calls it a listener.
+
 ## Equality and ordering
 
 ### `Eq`

@@ -6,7 +6,7 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{
   checkOneDiags, checkOneSchemeFullK, checkModulesDiagsChain, ModDiags, tcCode,
-  TcDiag(..)
+  tcMsg, TcDiag(..)
 }
 import types.repr.{Scheme(..), ppScheme}
 import frontend.ast.{Loc(..)}
@@ -14,7 +14,8 @@ import types.effect_authority.{
   Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority
 }
 import types.effect_domain.{Param(..)}
-import support.util.{contains, lookupAssoc}
+import support.util.{contains, lookupAssoc, anyList}
+import string as S
 
 -- A prefix-domain label with a named-authority extern and a set-domain
 -- label beside it, so the two domains can be crossed.
@@ -341,8 +342,9 @@ test "an index in a signature quantifies like a type variable" = expectAll [
 test "an index is invariant; `*` is the top" = expectAll [
   expectTrue
     (accepts (handle ++ "same : H \"cfg/*\" -> H \"cfg/*\"\nsame h = h\n")),
-  expectTrue
-    (rejects (handle ++ "widen : H \"cfg/app\" -> H \"cfg/*\"\nwiden h = h\n")),
+  expectEqual
+    ["T-AUTHORITY-INDEX-MISMATCH"]
+    (codes (handle ++ "widen : H \"cfg/app\" -> H \"cfg/*\"\nwiden h = h\n")),
   expectTrue (accepts (handle ++ "anyH : String -> H *\nanyH s = H s\n")),
   expectTrue
     (accepts
@@ -749,4 +751,275 @@ test "the review's S2 findings: one domain per binder, the offending site, disti
     expectEqual
       [2]
       (errorLines (handle ++ "f : List p -> H p -> Int\nf _ _ = 1\n")),
+  ]
+
+-- The messages a program's diagnostics carry, for a row about wording.
+messagesOf : String -> List String
+messagesOf source =
+  let (errors, _) = checkOneDiags [] [] (
+    "authority",
+    desugar (parseLocated (prelude ++ source)),
+  )
+  map tcMsg errors
+
+anyMentions : String -> List String -> Bool
+anyMentions needle msgs = anyList (m => S.contains needle m) msgs
+
+test "a qualifier's authority has one domain; a joined qualifier is the join of its names" = expectAll
+  [
+    -- a qualifier naming an argument that no label or index gives a domain
+    -- bounds nothing, and is reported at the qualifier (line 1)
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes "idQ : (a : String) -> String @a\nidQ a = a\n")),
+    expectEqual [1] (errorLines "idQ : (a : String) -> String @a\nidQ a = a\n"),
+    -- with a label naming it, the qualifier is a bound a caller relies on
+    expectTrue
+      (accepts
+        "idR : (a : String) -> <Store a> String @a\nidR a = a\nuse : (a : String) -> <Store a> Int\nuse a = load (idR a)\n"),
+    -- a joined qualifier admits either name, and its caller must admit both
+    expectTrue
+      (accepts
+        "pick : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @(a | b)\npick a b c = if c then a else b\nboth : (a : String) -> (b : String) -> <Store a, Store b> Int\nboth a b = load (pick a b True)\n"),
+    expectTrue
+      (rejects
+        "pickA : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @a\npickA a b c = if c then a else b\n"),
+    expectTrue
+      (rejects
+        "pick : (a : String) -> (b : String) -> Bool -> <Store a, Store b> String @(a | b)\npick a b c = if c then a else b\nonly : (a : String) -> <Store a> Int\nonly a = load (pick a \"/etc/x\" True)\n"),
+    -- a join is within one domain
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes
+          "mix : (a : String) -> (b : String) -> <Store a, Var b> String @(a | b)\nmix a b = a\n")),
+    -- a field joined over two parameters carries neither alone
+    expectTrue
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nrd : Two p q -> <Store p, Store q> Int\nrd (Two s) = load s\n"),
+    expectTrue
+      (rejects
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nrd : Two p q -> <Store p> Int\nrd (Two s) = load s\n"),
+    expectTrue
+      (contains
+        "T-AUTHORITY-PHANTOM-EXPORT"
+        (codes
+          "public export data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\n")),
+  ]
+
+test "an effect declaration and an authority kind are located, and an atomic label has no authorities" = expectAll
+  [
+    -- the axis diagnostics land on the declaration (line 1), not on whatever
+    -- span the module's last inferred expression left (line 3)
+    expectEqual [1] (errorLines "effect P Product\nx : Int\nx = 1\n"),
+    expectTrue (accepts "x : Int\nx = 1\neffect P Product (Host : Prefix)\n"),
+    -- `Authority L` ranges over L's domain, so an atomic L is refused at the label
+    expectEqual
+      [2]
+      (errorLines "effect Beep\ndata B (p : Authority Beep) = B Int\n"),
+    expectTrue
+      (contains
+        "T-AUTHORITY-KIND"
+        (codes "data I (p : Authority IO) = I Int\n")),
+    expectTrue (accepts "data S (p : Authority Store) = S Int\n"),
+  ]
+
+test "an index is an equality, reported once as one; an opened authority is named as what it is" = expectAll
+  [
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (codes (handle ++ "f : H \"a/*\" -> H \"b/*\"\nf h = h\n")),
+    -- containment is not equality at an index
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (codes (handle ++ "g : H \"a/x\" -> H \"a/*\"\ng h = h\n")),
+    expectEqual
+      ["T-AUTHORITY-INDEX-MISMATCH"]
+      (codes (handle ++ "k : H p -> H \"a/*\"\nk h = h\n")),
+    expectTrue (accepts (handle ++ "e : H \"a/*\" -> H \"a/*\"\ne h = h\n")),
+    expectTrue (accepts (handle ++ "v : H p -> H p\nv h = h\n")),
+    -- an opened existential is the authority of the opened value, not a
+    -- caller's choice
+    expectTrue
+      (anyMentions
+        "this arm or clause opened"
+        (messagesOf
+          (handle
+            ++ "data AnyH = AnyH (p : Authority Store) (H p)\nsameAs : H p -> String @p -> Int\nsameAs _ _ = 1\nm (AnyH h) = sameAs h \"cfg/x\"\n"))),
+    expectTrue
+      (accepts
+        (handle
+          ++ "data AnyH = AnyH (p : Authority Store) (H p)\nsameAs : H p -> String @p -> Int\nsameAs _ _ = 1\npathOf : H p -> String @p\npathOf (H s) = s\nm (AnyH h) = sameAs h (pathOf h)\n")),
+    expectFalse
+      (anyMentions
+        "this arm or clause opened"
+        (messagesOf
+          "sneaky : (p : String) -> <Store p> Int\nsneaky p = load \"/etc/x\"\n")),
+  ]
+
+-- #3327: a forward reference to an `(e : Effect)` head kinds the same in
+-- either declaration order, and a genuinely mis-kinded use is reported at
+-- the declaration that makes it, in either order.
+test "a forward-referenced Effect-kinded head kinds the same in either order (#3327)" = expectAll
+  [
+    expectTrue
+      (accepts
+        "data W (e : Effect) = WUntil Int (Timer e)\ndata Timer (e : Effect) = Timer (Unit -> <e> Int)\nmk : Int -> W <Store | e>\nmk t = WUntil t (Timer (u => load \"cfg/x\"))\n"),
+    expectTrue
+      (accepts
+        "data Timer (e : Effect) = Timer (Unit -> <e> Int)\ndata W (e : Effect) = WUntil Int (Timer e)\nmk : Int -> W <Store | e>\nmk t = WUntil t (Timer (u => load \"cfg/x\"))\n"),
+    expectEqual
+      [1]
+      (errorLines
+        "data Bad a = Bad (Timer a)\ndata Timer (e : Effect) = Timer (Unit -> <e> Int)\n"),
+    expectEqual
+      [2]
+      (errorLines
+        "data Timer (e : Effect) = Timer (Unit -> <e> Int)\ndata Bad a = Bad (Timer a)\n"),
+  ]
+
+-- #3304: a label re-exported through a member list arrives with its
+-- declaring identity, as through a wildcard; a list that does not name the
+-- label does not carry it.
+reexportCodes : String -> String -> List String
+reexportCodes facade body =
+  flatMap
+    moduleCodes
+    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+      (
+        "eff",
+        desugar
+          (parseLocated
+            "export effect Logging\nexport doLog : Int -> <Logging> Int\ndoLog x = x + 1\n"),
+      ),
+      ("facade", desugar (parseLocated facade)),
+      ("entry", desugar (parseLocated body)),
+    ])
+
+test "an effect label crosses a member-list re-export with its identity (#3304)" = expectAll
+  [
+    expectEqual
+      []
+      (reexportCodes
+        "export import eff.{Logging, doLog}\n"
+        "import facade.{Logging, doLog}\nact : Int -> <Logging> Int\nact x = doLog x\n"),
+    expectEqual
+      []
+      (reexportCodes
+        "export import eff.*\n"
+        "import facade.{Logging, doLog}\nact : Int -> <Logging> Int\nact x = doLog x\n"),
+    expectFalse
+      (isEmptyList
+        (reexportCodes
+          "export import eff.{doLog}\n"
+          "import facade.{doLog}\nact : Int -> <> Int\nact x = doLog x\n")),
+  ]
+
+isEmptyList : List a -> Bool
+isEmptyList [] = True
+isEmptyList _ = False
+
+-- The whole-diff review's findings, each beside its control.
+test "a joined field is built against written indices, a join of one name carries it, a non-String name is refused" = expectAll
+  [
+    -- built against written indices, a value in `@(p | q)` must lie within
+    -- their join (the Prefix join is the longest common prefix, "cfg/*")
+    -- with inferred indices a join upper has no principal solution, so the
+    -- construction is refused (a completeness gap the handoff lists)
+    expectFalse
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk = Two \"cfg/x\"\n"),
+    expectFalse
+      (accepts
+        "data AnyJ = AnyJ (p : Authority Store) (q : Authority Store) (String @(p | q))\nmk = AnyJ \"/etc/x\"\n"),
+    expectTrue
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"cfg/b/x\"\n"),
+    expectFalse
+      (accepts
+        "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk : Unit -> Two \"cfg/a/*\" \"cfg/b/*\"\nmk _ = Two \"/etc/x\"\n"),
+    -- `@(p | p)` is `@p`
+    expectTrue
+      (accepts
+        "public export data One (p : Authority Store) = One (String @(p | p))\n"),
+    -- a qualifier naming a non-String argument is refused, alone or joined
+    expectTrue
+      (contains
+        "T-AUTHORITY-BINDER"
+        (codes
+          "g : (a : String) -> (n : Int) -> <Store a> String @(a | n)\ng a n = a\n")),
+    expectTrue
+      (accepts
+        "g : (a : String) -> (b : String) -> <Store a, Store b> String @(a | b)\ng a b = a\n"),
+  ]
+
+test "an empty bare literal on a Product label is refused, not read as the whole domain" = expectAll
+  [
+    expectTrue
+      (contains
+        "T-EFFECT-PARAM"
+        (codes
+          ("effect Web Product (Host : Prefix, Method : Set)\n"
+            ++ "hit : Int -> <Web Host=\"evil.com/x\"> Int\nhit n = n\n"
+            ++ "f : Unit -> <Web \"\"> Int\nf _ = hit 1\n"))),
+    expectTrue
+      (accepts
+        ("effect Web Product (Host : Prefix, Method : Set)\n"
+          ++ "hit : Int -> <Web Host=\"a.com/x\"> Int\nhit n = n\n"
+          ++ "f : Unit -> <Web \"a.com/*\"> Int\nf _ = hit 1\n")),
+  ]
+
+-- An opened existential cannot leave its arm through the authority solve: a
+-- solution for a variable older than the arm widens it to the domain's top,
+-- so the unsigned reader publishes the top and a caller admitting only
+-- "cfg/*" is refused (as a row leak, which `rejects` does not count).
+escapeByIndex : String
+escapeByIndex =
+  handle
+    ++ "data E1 = E1 (p : Authority Store) (String @p)\n"
+    ++ "pack : Unit -> E1\npack _ = E1 \"/etc/x\"\n"
+    ++ "both : H p -> String @p -> <Store p> Int\nboth _ b = load b\n"
+    ++ "peek h e = match e\n  E1 s => both h s\n"
+
+-- the route through a row: the arm's instantiation of `run1`'s binder
+-- reaches the clause parameter `f` only in an atom of its row
+escapeByRow : String
+escapeByRow =
+  "data E1 = E1 (p : Authority Store) (String @p)\n"
+    ++ "pack : Unit -> E1\npack _ = E1 \"/etc/x\"\n"
+    ++ "run1 : (x : String) -> (Unit -> <Store x> Int) -> <Store x> Int\n"
+    ++ "run1 x g =\n  let _ = g ()\n  load x\n"
+    ++ "peek f e = match e\n  E1 s => run1 s f\n"
+
+escapeByJoin : String
+escapeByJoin =
+  "data E (q : Authority Store) = E (p : Authority Store) (String @(p | q))\n"
+    ++ "peek (E s) = load s\n"
+
+test "an opened authority does not escape through the solve of an older variable" = expectAll
+  [
+    expectFalse
+      (accepts
+        (escapeByIndex
+          ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (H \"cfg/a\") (pack ())\n")),
+    expectTrue
+      (accepts
+        (escapeByIndex
+          ++ "anyAt : String -> H *\nanyAt s = H s\nwide : String -> <Store> Int\nwide x = peek (anyAt x) (pack ())\n")),
+    expectFalse
+      (accepts
+        (escapeByJoin
+          ++ "only : E \"cfg/*\" -> <Store \"cfg/*\"> Int\nonly e = peek e\n")),
+    expectTrue
+      (accepts
+        (escapeByJoin ++ "wide : E q -> <Store> Int\nwide e = peek e\n")),
+    expectFalse
+      (accepts
+        (escapeByRow
+          ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (_ => load \"cfg/a\") (pack ())\n")),
+    expectTrue
+      (accepts
+        (escapeByRow
+          ++ "wide : Unit -> <Store> Int\nwide _ = peek (_ => 1) (pack ())\n")),
   ]
