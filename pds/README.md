@@ -579,14 +579,15 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/i
 
 ### secp256k1 field arithmetic
 
-`pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **10
-limbs in base 2^26** (limbs 0..8 hold 26 bits, limb 9 holds 22). That layout
-is design decision **P10**: it is `libsecp256k1`'s `field_10x26_impl.h`
-layout, chosen so the subtlest arithmetic here is cross-checkable element by
-element against an audited implementation of the identical representation.
-Read the module header before changing anything in it — it carries the
-headroom derivation against Medaka's silently-wrapping 63-bit `Int`, and the
-reason the reference's own overflow proof does **not** transfer.
+`pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **5
+limbs in base 2^52** (limbs 0..3 hold 52 bits, limb 4 holds 48). That layout
+is design decision **P10**: it is `libsecp256k1`'s `field_5x52_impl.h`
+layout, and `feMul` is a straight-line port of its `secp256k1_fe_mul_inner`,
+so the subtlest arithmetic here is cross-checkable against an audited
+implementation of the identical representation. Read the module header before
+changing anything in it — it summarizes the headroom derivation
+(`docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §3.1) and why the reference's own
+magnitude-8 bounds are not the ones this module relies on.
 
 **The answer key.** `pds/test/vectors/field_reference_corpus.txt` (944 rows:
 `red`/`sqr`/`neg`/`inv` over 44 inputs, `mul`/`add`/`sub` over 256 pairs) is
@@ -631,7 +632,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/i
 serialization, and `scIsHigh`.
 
 **It deliberately shares no code with `pds/lib/field.mdk`.** The field module
-mirrors `libsecp256k1`'s 10×2^26 layout because design decision P10 wants
+mirrors `libsecp256k1`'s 5×2^52 layout because design decision P10 wants
 element-by-element cross-checkability of the subtlest arithmetic in the
 project. Scalar operations run a *few times per signature, not thousands*, so
 this module optimises for being easy to argue about instead: **16 limbs of
