@@ -446,6 +446,22 @@ no rotate instruction. That gap is N5's budget. Two folds #3431 lists stay
 on `Int`: `hmac`'s `ctEqAccum` and `pbkdf2`'s xor fold combine bytes with
 `bitOr`/`bitXor`, never leave `0` to `255`, and so never wrap or trap.
 
+N5's measurement (2026-09-26, shared box, instructions:u, each arm built by
+its own tree's compiler, main at `c57f74898`): SHA-256 over 16,448 blocks
+drops from 451M to 198M instructions (0.44), about 1.0 µs per block with setup
+on a quiet box against 3.1 µs, which is under #3377's 1.24–1.35 µs for
+hand-written `i32` IR; the rotates are `rol`/`ror`.  A KDF round of 20k keyed
+HMACs drops to 0.47, 20k field multiplications to 0.15 (126.5M to 18.4M),
+50 scalar inversions to 0.033 (1.049G to 34.8M), one ECDSA signature to 0.18
+(244.7M to 45.2M), and the pdsd export/rehydrate/MST-insert workloads to
+0.64/0.59/0.82.  The hashing workload and the interpreter's per-step cost
+are unchanged; `medaka check` of the compiler is +1.7%, all of it the larger
+source (cross-loaded, the two binaries check the same source in the same
+instructions).  On SHA-256 the steps were: the `i32` lowering alone, with the
+round state still a tuple (#3369's shape), 4% fewer instructions; the state
+carried as eight parameters on top of it, 50%; those parameters passed as
+`i32` to the raw worker, 56%.
+
 N1 precedes N2 because the family's conversion names must be fixed before
 `U8` ships (#3415, point 1). N2 precedes N3 so the tagged mechanism is
 measured before the boxed one is built. N3 precedes N4 because the
