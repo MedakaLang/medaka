@@ -1,0 +1,25 @@
+-- `Int` shifts are defined for every amount (#3377): 63 or more shifts every bit
+-- out (0, or -1 for a negative shiftRight), shiftLeft discards the bits past bit
+-- 62 without trapping (bit 62 becomes the sign), and shiftRight is arithmetic.
+-- Wasm used to take the amount modulo 64 and shift right logically, so
+-- `shiftLeft 1 64` gave 1 and `shiftRight (-4) 2` gave 4611686018427387903 there.
+-- A negative amount panics; that is pinned by the wasm modules corpus
+-- (w_int_shift_*_negative), since this gate compares stdout only.
+main =
+  println (shiftLeft 5 1)
+  println (shiftLeft 1 62)
+  println (shiftLeft 3 62)
+  println (shiftLeft 1 63)
+  println (shiftLeft 1 64)
+  println (shiftLeft 1 100)
+  println (shiftLeft (-1) 62)
+  println (shiftLeft (-1) 63)
+  println (shiftRight (-8) 1)
+  println (shiftRight (-4) 2)
+  println (shiftRight (-1) 63)
+  println (shiftRight (-5) 100)
+  println (shiftRight 5 64)
+  println (shiftRight intMaxBound 62)
+  println (shiftRight intMinBound 62)
+  println (shiftRight intMinBound 63)
+  println (shiftRight 12345 0)

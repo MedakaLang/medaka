@@ -1,0 +1,6 @@
+-- #3377: unary negation of intMinBound traps in SCALAR mode ($mdk_int_neg): its
+-- negation is 2^62, one past intMaxBound.  The message is the unary form.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: -(-4611686018427387904) overflows Int
+minB = 0 - 4611686018427387903 - 1
+
+main = -minB

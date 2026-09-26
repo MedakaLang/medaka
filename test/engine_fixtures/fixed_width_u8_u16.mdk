@@ -6,7 +6,7 @@
 -- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): plain `Int` code in the
 -- same program, touching no U type, must behave exactly as it did before the family
 -- existed — a 300 literal and a `-1` are ordinary Ints, an Int literal pattern still
--- matches, and `Int` arithmetic still wraps at 63 bits.
+-- matches, and `Int` arithmetic keeps all 63 bits (checkedAdd reports its overflow).
 --
 -- Expected values were computed independently of every engine (Python, `% 2**n`); the
 -- pin is test/engine_value_pins/engine/fixed_width_u8_u16.pin.
@@ -92,7 +92,7 @@ main =
   println (big + 0)
   println (-1)
   println (map intKind [300, 0, 7, 44])
-  println (4611686018427387903 + 1)
-  println (4294967295 * 4294967295)
+  println (checkedAdd 4611686018427387903 1)
+  println (4294967295 * 1073741824)
   println (sum [100, 200, 300])
   println (double 200)

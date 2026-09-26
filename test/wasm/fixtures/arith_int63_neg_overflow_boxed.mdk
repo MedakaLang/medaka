@@ -1,0 +1,11 @@
+-- #3377: the REF-mode peer of arith_int63_neg_overflow_scalar: unary negation of
+-- intMinBound traps before $mdk_box_int.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: -(-4611686018427387904) overflows Int
+data Box = Box Int
+
+unbox b = match b
+  Box n => n
+
+minB = 0 - 4611686018427387903 - 1
+
+main = unbox (Box (-minB))
