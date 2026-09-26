@@ -54,16 +54,21 @@ constant-time.
 The fixed counts below are valid only because the modules keep their existing
 opaque canonical types and producer bounds.
 
-Field `canonicalize` has exactly four direct producer classes:
+Field `canonicalizeLimbs` (and `canonicalize`, which reads a five-limb array
+into it) has exactly four direct producer classes:
 
-- `feFromBytesReduce`: a 256-bit byte value;
-- `feAdd`: ten non-negative limbs below `2^27`;
-- `feNegate`: a representation of `p - a`, at most `p`;
-- `feMul`: the carried/folded schoolbook result, with every raw limb below
-  `2^43` (the module's conservative producer contract).
+- `feFromBytesReduce` and `feFromBytes`: a 256-bit byte value, limbs 0
+  through 3 below `2^52` and limb 4 below `2^48`;
+- `feAdd`: five limb sums, limbs 0 through 3 below `2^53` and limb 4 below
+  `2^49`;
+- `feNegate`: `2p - a` limb by limb, within the same bounds as `feAdd`;
+- `feMul`: the port of `secp256k1_fe_mul_inner`, limbs 0 through 3 below
+  `2^52` and limb 4 below `2^48 + 2^34` (§3.1).
 
-`feSub`, `feSquare`, and `feInverse` reach those producers transitively. No
-caller-supplied raw limb array may reach `canonicalize`.
+Its admitted precondition is therefore limbs 0 through 3 below `2^53` and
+limb 4 below `2^49`. `feSub`, `feSquare`, and `feInverse` reach those
+producers transitively. No caller-supplied raw limb array may reach
+`canonicalizeLimbs`.
 
 Scalar `reduceWide` has exactly five direct producer classes:
 
@@ -79,34 +84,107 @@ at run time (see §4); fixed-count reduction does not widen the accepted domain.
 Any new producer or relaxed magnitude bound invalidates this contract until its
 maximum pass count and fixnum headroom are re-derived.
 
-## 3. Field schedule: exactly three carry/fold rounds
+## 3. Field schedule: exactly one fold/carry round
 
-Replace `reduceCarry`'s value-dependent recursion with exactly three calls to a
-round shaped as:
+The field is five limbs in base `2^52`, the layout of `libsecp256k1`'s
+`field_5x52_impl.h`: limbs 0 through 3 hold 52 bits and limb 4 holds 48.
+`canonicalizeLimbs` runs exactly one round, straight-line on registers, and
+then the subtract-and-select of §5:
 
-1. run the fixed ten-limb `carryPass`;
-2. unconditionally add `overflow * 977` to limb 0 and `overflow * 64` to
-   limb 1.
+1. take `x = t4 >> 48` and keep the low 48 bits of limb 4;
+2. unconditionally add `x * (2^32 + 977)` to limb 0, since
+   `2^256 = 2^32 + 977 (mod p)`;
+3. carry limbs 0 through 3 down to 52 bits, the last carry into limb 4.
 
-The third round's overflow is required to be zero by proof, not checked by a
-secret-derived branch.
+This is the first pass of the reference's `secp256k1_fe_normalize`. Its second
+pass, a fold of `(overflow | value >= p)`, is what the subtract-and-select
+does here.
 
-Why three rounds suffice under the conservative producer contract: each limb is
-below `2^43`. Let `M = 2^256` and `c = 2^32 + 977`. Carry entering limb 9
-means the first pass can return at most `H0 = 2^21`. After its fold, the total
-value is `V1 = L0 + H0*c`, where `L0 < M`, hence `V1 < M + 2^54` and the
-second carry overflow is at most 1. If that overflow is zero, the second folded
-value is already below `M`. If it is one, its remainder is below `2^54`, so the
-second folded value is below `2^54 + c < M`. The third carry pass therefore
-returns zero. All three rounds execute even for already canonical input.
+Why one round suffices under the precondition of §2: limb 4 is below `2^49`,
+so `x <= 1` and limb 0 is below `2^53 + 2^33` after the fold. Every carry is
+then at most 2. After the round limbs 0 through 3 are below `2^52`, limb 4 is
+at most `2^48 + 1`, and the value is below `2^256 + 2^209`, which is below
+`2p`. That is exactly what §5 needs: each limb's `t` fits its width plus one
+bit (limb 4's `t` is at most `2^48 + 2`), and a value `V < 2p` leaves
+`V - p < p` after one subtraction whenever `V >= p`. The round's registers
+stay below `2^54`, far from `U64`'s `2^64`.
 
-The implementation must retain the module's non-negative intermediates and
-existing `2^62 - 1` ceiling argument, which bounds every stored limb (§5.1).
-A `3 -> 2` mutation must be rejected by
-the permanent pass-count control and by the conservative-bound witness with
-limbs 0 through 8 equal to `2^26 - 1` and limb 9 equal to `2^43 - 1`. That
-witness is private test access to the reduction precondition, not a fabricated
-public `Fe`.
+Why one round is needed: the subtract-and-select reads each limb at its width,
+and a limb at or above `2^52` makes that limb's `t` reach `2^53`, whose shift
+gives a borrow of `-1` and a wrong result. Real producers make such limbs:
+`feAdd (p - 1) (p - 1)` has limbs 1 through 3 equal to `2^53 - 2`. There is
+no zero-round schedule.
+
+The round runs even for canonical input, and nothing tests its overflow. A
+`1 -> 0` mutation, in which `canonicalizeLimbs` hands its arguments straight to
+`subPSelect`, must be rejected by the permanent schedule control and by the
+conservative-bound witness with limbs 0 through 3 equal to `2^53 - 1` and
+limb 4 equal to `2^49 - 1`, checked against its canonical value
+`0x100000000000010000000000001000000000000100002000007a1`. That witness is
+private test access to the reduction precondition, not a fabricated public
+`Fe`.
+
+### 3.1 Field multiplication headroom
+
+`feMul` is a straight-line port of `secp256k1_fe_mul_inner` from
+`field_5x52_int128_impl.h`: the same products in the same order into two
+128-bit accumulators, `c` and `d`, each held as a `(hi, lo)` pair of `U64`
+registers (§5.1). The reference proves its bounds for inputs up to magnitude
+8, where its `VERIFY_BITS_128` assertions reach 116 bits. This module's
+operands are always canonical, so its bounds are derived here for those
+inputs instead:
+
+| Value | Limbs 0–3 | Limb 4 |
+|---|---|---|
+| a canonical `Fe`, every operand | `< 2^52` | `< 2^48` |
+| `feAdd` and `feNegate` sums, before reduction | `< 2^53` | `< 2^49` |
+| `feMul` result, before reduction | `< 2^52` | `< 2^48 + 2^34` |
+| after the fold/carry round | `< 2^52` | `<= 2^48 + 1` |
+
+A partial product of two canonical limbs is below `2^104`, `2^100` when one
+factor is limb 4, and `2^96` for `a[4] * b[4]`. With `pk` for the sum of the
+products `a[i] * b[k - i]`, the accumulators peak at:
+
+| Step (the reference's order) | Bound |
+|---|---|
+| `d = p3` | `< 2^106.00` |
+| `d += R * low64(p8)` | `< 2^106.03`, the peak |
+| `d >>= 52; d += p4 + (R << 12) * (p8 >> 64)` | `< 2^105.65` |
+| `d += p5` | `< 2^105.09` |
+| `c = p0 + u0 * (R >> 4)` | `< 2^104.01` |
+| `c += p1 + R * low52(d)` | `< 2^105.01` |
+| `d += p6` | `< 2^104.17` |
+| `c += p2 + R * low64(d)` | `< 2^105.62` |
+| `c += (R << 12) * (d >> 64) + t3` | `< 2^85.01` |
+
+The peak leaves 21.97 bits under `2^128`, so a pair never overflows: the high
+word stays below `2^42.03`, `hi + h + carry` never wraps, and the low word
+wraps by design, with the lost bit recovered as the carry (§5.1).
+
+The fold constant is `R = 0x1000003D10 = 2^260 mod p`: `2^256 = 2^32 + 977
+(mod p)`, and `R` is 16 times that, itself below `p`, so it is the residue.
+A limb position `k` has weight `2^(52k)`, so a quantity at position `k + 5`
+has weight `2^260 * 2^(52k)` and folds to `R` times position `k`. `feMul`
+uses it three ways. `R` folds the low bits of a column into the position five
+below it: the low 64 bits of `p8` and of `p7`, and the low 52 of the
+accumulator holding `p6`. `R << 12` folds a column's high word, whose
+weight is `2^64` above its column, which is `2^12` above the next position
+up. `R >> 4 = 2^256 mod p` folds the 56-bit `u0`, which the reference aligns
+to weight `2^256`. `canonicalizeLimbs` folds limb 4's bits above 48, also at
+weight `2^256`, with `R >> 4`.
+
+Nothing above is stored. The accumulators, carries and fold products live in
+registers from the first product to the reduction, and only the five result
+limbs are narrowed to `Int` and stored, each below `2^52`, 10 bits under the
+`2^62` ceiling of an exact narrowing (§5.1). The only arrays that ever hold a
+non-canonical limb are the byte decoder's exact 256-bit limbs (below `2^52`)
+and the reductions gate's private witnesses (below `2^53`).
+
+At a higher operand magnitude every product bound grows by twice the
+magnitude's logarithm, still inside a pair up to the reference's magnitude 8.
+The result would then still meet `canonicalizeLimbs`'s precondition, but
+nothing in this module relies on that slack: only canonical values ever reach
+`feMul`, and nothing checks that at run time.
 
 ## 4. Scalar schedule: exactly four fold/carry rounds
 
@@ -159,13 +237,13 @@ branch:
 out[i] = original[i] + keepDiff * (diff[i] - original[i])
 ```
 
-For field limbs 0 through 8, `WIDTH = 26`; for the field top limb,
-`WIDTH = 22`. For scalar limbs, `WIDTH = 16`. The helper always visits all 10
-or 16 limbs and always performs the blend. It may recurse only on the public
-limb index.
+For field limbs 0 through 3, `WIDTH = 52`; for the field top limb (4),
+`WIDTH = 48`. For scalar limbs, `WIDTH = 16`. The helper always visits all 5
+or 16 limbs and always performs the blend. It is straight-line or recurses
+only on the public limb index.
 
 The formula intentionally avoids negative masks and comparison booleans.
-Field `t` stays below `2^27` (below `2^23` at the top limb), scalar `t` stays
+Field `t` stays below `2^53` (below `2^49` at the top limb), scalar `t` stays
 below `2^17`, and the blend remains within one limb. `diff[i] - original`
 wraps modulo 2^64 when negative, and multiplied by `keepDiff` and added back
 it gives the exact limb.
@@ -177,10 +255,10 @@ control instruction; neither is a constant-time select guarantee.
 
 ### 5.1 The limb carrier, narrowing, and shift amounts
 
-Limbs, columns and carries are stored as non-negative `Int`s, in `Array Int`.
-Every arithmetic step on them is one `U64` expression: its operands widen
-through `U64.truncate`, the expression computes modulo 2^64, and its result
-narrows through `U64.toIntTruncating` before it is stored or bound. `U64`
+Limbs are stored as non-negative `Int`s, in `Array Int`. Arithmetic on them
+is `U64`: operands widen through `U64.truncate`, every step computes modulo
+2^64, and a result narrows through `U64.toIntTruncating` before it is stored.
+`U64`
 `+`, `-` and `*` wrap and have no branch; with a literal shift amount, the
 conversions, the bit operations and the shifts are inline kernels fused with
 that arithmetic, so the whole expression is straight-line code that neither
@@ -214,14 +292,32 @@ Two rules follow, and hold for every secret-bearing value in `pds/`:
    panic on a negative amount through a branch on the amount; with a public
    amount both are fixed. Every shift in the reduction helpers passes a
    literal, so none of them is a call, and
-   `pds/test/constant_time_reductions.sh` checks that in the emitted IR. The
-   byte codecs shift by a public bit counter, which calls the `u64` wrapper;
-   its branches test only that counter.
+   `pds/test/constant_time_reductions.sh` checks that in the emitted IR. A
+   byte codec that shifts by a public bit counter calls the `u64` wrapper,
+   whose branches test only that counter; the field's codecs shift by
+   literals.
 
-A `U64` bound by `let`, passed as an argument, returned, or stored in an
-array is a boxed cell (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), so the
-helpers bind only the narrowed `Int`. The reductions gate pins every audited
-helper's cell allocation count at 0.
+A `U64` stored in an array, a tuple, a list or a record is a boxed cell
+(`docs/design/INTEGER-TYPES-DESIGN.md` §6.2). The native backend keeps a
+`U64` `let` in a register unless it would be boxed more than once in its
+scope, and an annotated single-clause top-level function passes its `U64`
+parameters and result raw. A `U64` named inside an array literal is boxed, so
+a result limb is narrowed into an `Int` `let` before the literal that stores
+it. The reductions gate pins every audited helper's cell allocation count at
+0.
+
+The field (§3.1) computes on registers throughout. Each operation reads a limb
+once through `U64.truncate` and binds its intermediates as `U64` lets, and
+only the result limbs are narrowed. A 104-bit product is
+`let (hi, lo) = U64.mulWide x y`, which the native backend inlines as a
+multiply and a high multiply into two registers, with no tuple. A 128-bit
+accumulator is such a pair, and adding a product to it is
+`lo' = lo + l` and `hi' = hi + h + carryOut lo l lo'`, where `carryOut x y s`
+is the top bit of `(x & y) | ((x | y) & ~s)`: no comparison, no branch.
+`U64.addCarry` and `U64.subBorrow` are not used, because their carry is a
+`Bool` built with `||` and a match, which branch. The field's helpers pass
+registers to each other: `canonicalizeLimbs`, `subPSelect`, `carryOut` and
+`zeroBitOf` take and return `U64` raw.
 
 ## 6. Verification mechanism
 
@@ -241,7 +337,7 @@ The corpora establish values, not constant-time structure.
 ### 6.2 Adversarial count witnesses
 
 Add committed inputs that need the last permitted round. Demonstrate before
-landing that field `3 -> 2` and scalar `4 -> 3` mutations make the focused
+landing that field `1 -> 0` and scalar `4 -> 3` mutations make the focused
 regression red. A pass-count grep alone is insufficient because it could
 protect a needlessly large or semantically unused number.
 
@@ -250,7 +346,7 @@ protect a needlessly large or semantically unused number.
 Add a registered POSIX-shell PDS gate scoped to the dedicated reduction
 helpers. It must:
 
-- require the exact field-three and scalar-four schedules;
+- require the exact field-one and scalar-four schedules;
 - require the unconditional borrow-and-blend helper shape for both moduli;
 - reject calls from the reduction entry points to the retired early-exit
   comparison or conditional-subtraction helpers;

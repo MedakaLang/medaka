@@ -36,7 +36,11 @@ source_closure_ok() {
   # aggregate bits combine through bitAnd, no source branch was added, and the
   # IR checks below pass. constant_time_reductions.sh pins the helper shape.
   [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '2182991326 35966' ] || return 1
-  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '1538248655 30240' ] || return 1
+  # Re-audited for the field's move to 5x52 limbs (N5): every helper is
+  # straight-line U64 register code, the reduction is one fold/carry round and
+  # an unconditional subtract-and-select, and no source branch tests a limb.
+  # constant_time_reductions.sh pins each helper's source and IR shape.
+  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '1376420778 29785' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
   grep -F -q 'let added = pointAddComplete r0 r1' "$tree/pds/lib/secp256k1.mdk" || return 1
@@ -178,7 +182,7 @@ expect_source_red 'M03 secret-derived byte index'
 apply_mutation 'M04' "$WORK/pds/lib/secp256k1.mdk" 'let afterOpposite = pointSelect opposite afterEqual pointInfinity' 's/let afterOpposite = pointSelect opposite afterEqual pointInfinity/let afterOpposite = afterEqual/'
 expect_source_red 'M04 omitted exceptional opposite selection'
 
-apply_mutation 'M05' "$WORK/pds/lib/field.mdk" 'feZeroBit a = feZeroBorrow (rawFe a) 0 1' 's/feZeroBit a = feZeroBorrow \(rawFe a\) 0 1/feZeroBit a = hashBool (feEqual a feZero)/'
+apply_mutation 'M05' "$WORK/pds/lib/field.mdk" 'feZeroBit a =' 's/feZeroBit a =\n/feZeroBit a = hashBool (feEqual a feZero)\n\nfeZeroBitRetired a =\n/'
 expect_source_red 'M05 Bool/sentinel zero conversion'
 
 apply_mutation 'M06' "$WORK/pds/lib/secp256k1.mdk" 'secretAffine (JPoint x y z) =' 's/secretAffine \(JPoint x y z\) =/secretAffine (JPoint x y z) = if feZeroBit z == 1 then AffinePoint feZero feZero else/'
@@ -217,7 +221,8 @@ for symbol in \
   mdk_lib_scalar__scSecretCandidate mdk_lib_scalar__scanSecretBytes \
   mdk_lib_scalar__secretBelowNBorrow mdk_lib_scalar__secretNonzeroBorrow \
   mdk_lib_scalar__reduceFixed mdk_lib_scalar__selectNCandidate \
-  mdk_lib_field__reduceCarry mdk_lib_field__feZeroBorrow mdk_lib_field__feSelectGo \
+  mdk_lib_field__canonicalizeLimbs__rw mdk_lib_field__subPSelect__rw mdk_lib_field__feZeroBit \
+  mdk_lib_field__feSelect \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__secretAffine \
   mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
@@ -244,8 +249,11 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # to U64 expressions over Int storage (#3427): the round is now small enough
 # that the link inlines it into reduceCarry, which survives. Its shape is
 # pinned where its definition always exists, by constant_time_reductions.sh.
+# reduceCarry gave way to canonicalizeLimbs__rw when the field moved to 5x52
+# limbs (N5): the fold/carry round and the tail call into the subtract-and-
+# select are that raw worker, which every field producer calls.
 for symbol in \
-  mdk_lib_scalar__scSecretCandidate mdk_lib_field__reduceCarry \
+  mdk_lib_scalar__scSecretCandidate mdk_lib_field__canonicalizeLimbs__rw \
   mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
   mdk_lib_secp256k1__publicPointForSecret mdk_lib_secp256k1__pointCompressed
