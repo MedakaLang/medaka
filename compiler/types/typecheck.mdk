@@ -46,6 +46,7 @@
 -- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
+  qualifierSource,
   Lit(..),
   isFixedWidthHead,
   fixedWidthMask,
@@ -545,19 +546,28 @@ registerEffectDomain label domain axes =
   driverState.value.effectDomains :=
     entry :: driverState.value.effectDomains.value
 
-checkDomainAxes : String -> Option String -> List (String, String) -> Unit
-checkDomainAxes l (Some "Product") [] =
-  pushTypeError
+-- Located at the declaration's own span: nothing else in an `effect`
+-- declaration has one, and `currentLoc` at declaration level is whatever the
+-- previous declaration left.
+checkDomainAxes : Option Loc ->
+  String ->
+  Option String ->
+  List (String, String) ->
+  Unit
+checkDomainAxes loc l (Some "Product") [] =
+  pushTypeErrorAt
     "T-EFFECT-PARAM"
+    loc
     (effectParamMsg
       l
       "a Product label declares its axes: `effect \{l} Product (Host : Prefix, Method : Set)`, the first axis being the one a bare literal lifts into")
-checkDomainAxes l (Some "Product") axes =
+checkDomainAxes loc l (Some "Product") axes =
   let _ =
     fold
       (_ name =>
-        pushTypeError
+        pushTypeErrorAt
           "T-EFFECT-PARAM"
+          loc
           (effectParamMsg
             l
             "axis '\{name}' of label '\{l}' is declared twice; each axis is one name"))
@@ -568,17 +578,19 @@ checkDomainAxes l (Some "Product") axes =
       "Prefix" => ()
       "Set" => ()
       other =>
-        pushTypeError
+        pushTypeErrorAt
           "T-EFFECT-PARAM"
+          loc
           (effectParamMsg
             l
             "axis '\{fst a}' of label '\{l}' names the domain '\{other}'; an axis is drawn from `Prefix` or `Set`"))
     ()
     axes
-checkDomainAxes _ _ [] = ()
-checkDomainAxes l _ _ =
-  pushTypeError
+checkDomainAxes _ _ _ [] = ()
+checkDomainAxes loc l _ _ =
+  pushTypeErrorAt
     "T-EFFECT-PARAM"
+    loc
     (effectParamMsg l "only a `Product` label declares axes")
 
 -- the ⊤-param a declared label carries: atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
@@ -615,7 +627,7 @@ populateUnitsGo ((_, prog) :: rest) =
 
 populateGo : List Decl -> Unit
 populateGo [] = ()
-populateGo ((DEffect _ name domain axes origin) :: rest) =
+populateGo ((DEffect _ name domain axes origin _) :: rest) =
   let _ = registerEffectDomain (EffLabel name origin) domain axes
   populateGo rest
 populateGo (_ :: rest) = populateGo rest
@@ -1027,6 +1039,8 @@ reportEffectSummaryFailures (failure :: rest) =
     Some (lo, hi) =>
       if mentionsEscaped lo || mentionsEscaped hi then
         ()
+      else if failure.esfExact then
+        reportIndexFailure !currentLoc lo hi
       else
         pushTypeErrorAt
           "T-AUTHORITY"
@@ -1194,8 +1208,8 @@ unifyIndex qa qb = match (authNorm qa, authNorm qb)
   (AVar a, b) if flexibleIndex a b => substituteIndex a b
   (a, AVar b) if flexibleIndex b a => substituteIndex b a
   (a, b) =>
-    let _ = wantAuthority a b
-    wantAuthority b a
+    let _ = wantAuthorityWith True a b
+    wantAuthorityWith True b a
 
 substituteIndex : Ref Authvar -> Authority -> Unit
 substituteIndex cell term =
@@ -1701,9 +1715,11 @@ checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsDecl prog (DAttrib _ d) = checkDeclaredKindsDecl prog d
 -- An effect label's domain schema is declared on its head as a data type's
 -- kinds are: a Product declares its axes, nothing else does.
-checkDeclaredKindsDecl _ (DEffect _ name domain axes _) =
-  checkDomainAxes name domain axes
-checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) =
+checkDeclaredKindsDecl _ (DEffect _ name domain axes _ loc) =
+  checkDomainAxes loc name domain axes
+checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
+  let _ =
+    checkAuthorityKindLabels (ks ++ flatMap (b => map (x => Some (snd x)) b) bs)
   let _ =
     checkHeadKinds
       n
@@ -1711,9 +1727,11 @@ checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, 
       ks
       (flatMap (v => payloadAstTypes (variantPayload v)) vs)
   checkPhantomAuthorityExport vis n (authorityParamNames ps ks) vs
-checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty }) =
+checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty, newtypeCtorBinders = bs }) =
+  let _ = checkAuthorityKindLabels (ks ++ map (b => Some (snd b)) bs)
   checkHeadKinds n ps ks [fty]
 checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
+  let _ = checkAuthorityKindLabels ks
   checkHeadKinds n ps ks [rhs]
 checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, methods, ... }) =
   let _ =
@@ -1726,6 +1744,33 @@ checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, 
     methods
     supers
 checkDeclaredKindsDecl _ _ = ()
+
+-- `Authority L` ranges over the domain `L` declares (§6.1); a label that
+-- declares none — an atomic one, `IO` included — has no authorities to range
+-- over, so the kind is refused at the label rather than admitted as a slot
+-- every index trivially fills.
+checkAuthorityKindLabels : List (Option KindAnn) -> Unit
+checkAuthorityKindLabels anns =
+  fold
+    (_ a => match a
+      Some k => checkAuthorityKindLabel k
+      None => ())
+    ()
+    anns
+
+checkAuthorityKindLabel : KindAnn -> Unit
+checkAuthorityKindLabel (KindAuthority l o loc) = match dtopFor (EffLabel l o)
+  PUnit =>
+    pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
+  _ => ()
+checkAuthorityKindLabel (KindArrow a b) =
+  let _ = checkAuthorityKindLabel a
+  checkAuthorityKindLabel b
+checkAuthorityKindLabel _ = ()
+
+authorityAtomicLabelMsg : String -> String
+authorityAtomicLabelMsg l =
+  "`Authority \{l}` ranges over the domain the label declares, but `\{l}` declares none: it is an atomic label, performed or not, with no path prefix, name set or product to be an authority of. Declare the label with a domain, `effect \{l} Prefix`, or index by a label that has one"
 
 -- A constructor CARRYING an `Authority` parameter in no field is a phantom
 -- index: applying it proves nothing, so it may invent any authority.  Its
@@ -1766,7 +1811,7 @@ authorityParamNames : List String -> List (Option KindAnn) -> List String
 authorityParamNames params anns =
   flatMap
     (pk => match snd pk
-      Some (KindAuthority _ _) => [fst pk]
+      Some (KindAuthority _ _ _) => [fst pk]
       _ => [])
     (zipL params (padAnns params anns))
 
@@ -1784,7 +1829,7 @@ authorityParamNames params anns =
 -- out in a carrying constructor, or the type is empty.
 tyCarries : List TabKey -> String -> Ty -> Bool
 tyCarries _ p (TyVar n) = n == p
-tyCarries seen p (TyQual t n) = n == p || tyCarries seen p t
+tyCarries seen p (TyQual t ns _) = ns == [p] || tyCarries seen p t
 tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
 tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
 tyCarries seen p (TyNamed _ t) = tyCarries seen p t
@@ -1884,7 +1929,7 @@ checkHeadKindsGo name rowNames fieldTys (p :: ps) (a :: anns) =
           "T-EFFECT-KIND-MISMATCH"
           loc
           (typeParamAsRowMsg name p)
-    Some (KindAuthority _ _) =>
+    Some (KindAuthority _ _ _) =>
       if contains p rowNames then
         pushTypeErrorOnceAt
           "T-AUTHORITY-KIND"
@@ -1905,7 +1950,7 @@ tyVarTypeOcc p (TyVar n) = n == p
 tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
 tyVarTypeOcc _ (TyRow _ _ _) = False
 tyVarTypeOcc p (TyNamed _ t) = tyVarTypeOcc p t
-tyVarTypeOcc p (TyQual t _) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyQual t _ _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
 tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
 tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
@@ -1953,7 +1998,7 @@ checkIfaceHeadKinds name (p :: ps) (a :: anns) methods =
         "T-EFFECT-KIND-MISMATCH"
         loc
         (ifaceParamEffectKindMsg name p)
-    Some (KindAuthority _ _) =>
+    Some (KindAuthority _ _ _) =>
       pushTypeErrorOnceAt
         "T-AUTHORITY-KIND"
         loc
@@ -2801,37 +2846,55 @@ checkEffectAtoms (a :: rest) =
 -- exempt from the delimiter rule), a Set label takes a set or a single
 -- member, a Product label takes its axes or a bare host pattern, and an
 -- atomic label takes nothing.  A named authority is checked at its binder.
+-- The rule is `effectParamProblems`; this reports each problem at the atom.
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
-checkOneEffectParam l PUnit (EPName _) = atomicLabelParamError l
-checkOneEffectParam _ _ (EPName _) = ()
-checkOneEffectParam _ _ EPTop = ()
-checkOneEffectParam l (PPrefix None) (EPLit pat) = checkPrefixLiteral l pat
-checkOneEffectParam _ (PSet None) (EPLit _) = ()
+checkOneEffectParam l top p =
+  fold
+    (_ m => pushTypeError "T-EFFECT-PARAM" (effectParamMsg l m))
+    ()
+    (effectParamProblems l top p)
+
+-- The problems a written parameter has as an element of the domain whose top
+-- is [top], each a message; empty when it is an element.  One rule for every
+-- consumer: the typechecker reports them at the atom, and `check-policy`
+-- refuses an `--allow` entry that has any, so a policy is read exactly as a
+-- source atom is.
+export
+effectParamProblems : String -> Param -> EffParamTy -> List String
+effectParamProblems l PUnit (EPName _) = [atomicLabelParamText l]
+effectParamProblems _ _ (EPName _) = []
+effectParamProblems _ _ EPTop = []
+effectParamProblems l (PPrefix None) (EPLit pat) = prefixLiteralProblems l pat
+effectParamProblems _ (PSet None) (EPLit _) = []
 -- A bare literal on a Product label lifts into the first axis as the
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
 -- one-element set for a Set axis.
-checkOneEffectParam l (PProduct schema) (EPLit pat) =
-  checkProductAxes l (PProduct schema) (productPrimaryLift schema pat)
-checkOneEffectParam l _ (EPLit _) = atomicLabelParamError l
-checkOneEffectParam _ (PSet None) (EPSet _) = ()
-checkOneEffectParam l (PPrefix None) (EPSet _) =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg l "label '\{l}' takes a prefix pattern, not a set")
-checkOneEffectParam l (PProduct _) (EPSet _) =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg
-      l
-      "label '\{l}' takes named axes (`Host=… Method=…`), not a bare set")
-checkOneEffectParam l _ (EPSet _) = atomicLabelParamError l
-checkOneEffectParam l (PProduct schema) (EPProduct axes) =
-  checkProductAxes l (PProduct schema) (productNorm (map writtenAxis axes))
-checkOneEffectParam l PUnit (EPProduct _) = atomicLabelParamError l
-checkOneEffectParam l _ (EPProduct _) =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg l "label '\{l}' is not a product domain and takes no axes")
+effectParamProblems l (PProduct schema) (EPLit pat) =
+  productAxesProblems schema (productPrimaryLift schema pat)
+effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
+effectParamProblems _ (PSet None) (EPSet _) = []
+effectParamProblems l (PPrefix None) (EPSet _) =
+  ["label '\{l}' takes a prefix pattern, not a set"]
+effectParamProblems l (PProduct _) (EPSet _) =
+  ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
+effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
+effectParamProblems _ (PProduct schema) (EPProduct axes) =
+  productAxesProblems schema (productNorm (map writtenAxis axes))
+effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
+effectParamProblems l _ (EPProduct _) =
+  ["label '\{l}' is not a product domain and takes no axes"]
+
+-- A written parameter as an element of [label]'s declared domain, or the
+-- first problem that keeps it from being one (`effectParamMsg`'s wording).
+-- Never the domain's top for a malformed parameter: a consumer reading an
+-- allowance would otherwise widen it.
+export
+decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
+decodeWrittenParam label p =
+  let top = dtopFor label
+  match effectParamProblems (effLabelName label) top p
+    [] => Ok (writtenParam top p)
+    m :: _ => Err (effectParamMsg (effLabelName label) m)
 
 -- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
 -- BARE host/path prefix is ambiguous — "example.com" would silently admit
@@ -2845,23 +2908,17 @@ checkOneEffectParam l _ (EPProduct _) =
 -- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
 -- is still rejected, since `<FFI "">` names no library and, being the
 -- prefix of everything, would silently mean ⊤.
-checkPrefixLiteral : String -> String -> Unit
-checkPrefixLiteral l pat =
+prefixLiteralProblems : String -> String -> List String
+prefixLiteralProblems l pat =
   if l == "FFI" then
     if stringLength pat > 0 then
-      ()
+      []
     else
-      pushTypeError
-        "T-EFFECT-PARAM"
-        (effectParamMsg
-          l
-          "the library pattern is empty; name the library, e.g. <FFI \"curl\">")
+      ["the library pattern is empty; name the library, e.g. <FFI \"curl\">"]
   else if prefixPatternOk pat then
-    ()
+    []
   else
-    pushTypeError
-      "T-EFFECT-PARAM"
-      (effectParamMsg l (prefixPatternErrMsg "pattern" pat))
+    [prefixPatternErrMsg "pattern" pat]
 
 -- A binder an effect atom names must have a type the domain can abstract
 -- (a `String`, in this increment), and every label naming it must draw
@@ -2895,30 +2952,17 @@ binderDomainMsg : String -> String
 binderDomainMsg n =
   "Authority '\{n}' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label"
 
-atomicLabelParamError : String -> Unit
-atomicLabelParamError l =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg
-      l
-      "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)")
+atomicLabelParamText : String -> String
+atomicLabelParamText l =
+  "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)"
 
 -- A written product's axes against the label's declared schema: every axis
 -- must be declared, a Prefix axis takes a delimiter-terminated pattern, a Set
 -- axis a set.
-checkProductAxes : String -> Param -> Param -> Unit
-checkProductAxes l (PProduct schema) (PProduct axes) =
-  checkProductAxesGo l schema axes
-checkProductAxes _ _ _ = ()
-
-checkProductAxesGo : String ->
-  List (String, Param) ->
-  List (String, Param) ->
-  Unit
-checkProductAxesGo _ _ [] = ()
-checkProductAxesGo l schema ((name, p) :: rest) =
-  let _ = checkOneAxis l schema name p
-  checkProductAxesGo l schema rest
+productAxesProblems : List (String, Param) -> Param -> List String
+productAxesProblems schema (PProduct axes) =
+  flatMap (a => axisProblems schema (fst a) (snd a)) axes
+productAxesProblems _ _ = []
 
 -- The names that occur more than once, each once, in first-occurrence order.
 repeatedNames : List String -> List String -> List String
@@ -2928,34 +2972,23 @@ repeatedNames (n :: rest) seen
   | contains n rest = n :: repeatedNames rest (n :: seen)
   | otherwise = repeatedNames rest seen
 
-checkOneAxis : String -> List (String, Param) -> String -> Param -> Unit
-checkOneAxis l schema name p = match lookupAxis name schema
-  None =>
-    pushTypeError
-      "T-EFFECT-PARAM"
-      (effectParamMsg
-        l
-        "unknown product axis '\{name}' (declared axes: \{joinWith ", " (map fst schema)})")
+axisProblems : List (String, Param) -> String -> Param -> List String
+axisProblems schema name p = match lookupAxis name schema
+  None => [
+    "unknown product axis '\{name}' (declared axes: \{joinWith ", " (map fst schema)})",
+  ]
   Some (PPrefix _) => match p
     PPrefix (Some pat) =>
       if prefixPatternOk pat then
-        ()
+        []
       else
-        pushTypeError
-          "T-EFFECT-PARAM"
-          (effectParamMsg l (prefixPatternErrMsg "\{name} pattern" pat))
-    PPrefix None => ()
-    _ =>
-      pushTypeError
-        "T-EFFECT-PARAM"
-        (effectParamMsg l "axis '\{name}' takes a prefix pattern, not a set")
+        [prefixPatternErrMsg "\{name} pattern" pat]
+    PPrefix None => []
+    _ => ["axis '\{name}' takes a prefix pattern, not a set"]
   Some (PSet _) => match p
-    PSet _ => ()
-    _ =>
-      pushTypeError
-        "T-EFFECT-PARAM"
-        (effectParamMsg l "axis '\{name}' takes a set, not a pattern")
-  Some _ => ()
+    PSet _ => []
+    _ => ["axis '\{name}' takes a set, not a pattern"]
+  Some _ => []
 
 -- replace a row's bound tail effvar with its fresh instance from [esub], so each
 -- call site of a polymorphic HOF gets its own effect variable
@@ -10607,6 +10640,10 @@ data PerRun = PerRun {
   -- Existential cells reported as escaping their scope: an obligation over
   -- one is a consequence of the escape, not a second defect.
   escapedExistentialsRef : Ref (Map Int Unit),
+  -- Every cell a pattern opened for an existential binder: a report naming
+  -- one says what it is (the authority of the value the arm opened), not
+  -- what a signature binder is (an authority the caller chooses).
+  openedAuthvarsRef : Ref (Map Int Unit),
   -- Index variables an index equality substituted a determined term for
   -- (`unifyIndex`): a report reads such a variable as the written bound it
   -- stands for, not as a bound the scope solved.
@@ -10730,6 +10767,7 @@ freshPerRun _ = PerRun {
   rowFailureReportedRef = Ref omEmpty,
   typeErrorKeySetRef = Ref omEmpty,
   escapedExistentialsRef = Ref Tip,
+  openedAuthvarsRef = Ref Tip,
   indexSubstitutedRef = Ref Tip,
   pendingEscapesRef = Ref [],
   openedExistentialsRef = Ref [],
@@ -11025,17 +11063,27 @@ bindFrom target source = match normalize target
 -- is the written term it stands for, and only a cell the scope solves
 -- afterwards reads as a solved bound in a report (`esfWrittenUpper`).
 wantAuthority : Authority -> Authority -> Unit
-wantAuthority lower upper
+wantAuthority lower upper = wantAuthorityWith False lower upper
+
+-- [exact]: this obligation is one half of an index equality, so its failure
+-- is reported as an index mismatch, once for both halves.
+wantAuthorityWith : Bool -> Authority -> Authority -> Unit
+wantAuthorityWith exact lower upper
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
     EffectSolver.recordAuthority
       perRun.value.effectSummaries
+      exact
       (!currentLoc, perRun.value.currentFn.value)
       (authNorm lower)
       (authNorm upper)
   | authSub lower upper = ()
   | otherwise = match solveFlexibleUpper lower upper
     True => ()
-    False => reportAuthorityFailure !currentLoc lower upper
+    False =>
+      if exact then
+        reportIndexFailure !currentLoc lower upper
+      else
+        reportAuthorityFailure !currentLoc lower upper
 
 -- Outside a scope, a flexible upper variable takes the lower bound as its
 -- least solution.  A rigid or concrete upper that does not cover fails.
@@ -11056,6 +11104,26 @@ reportAuthorityFailure loc lower upper =
     loc
     (authorityFailureMsg perRun.value.currentFn.value lower upper (Some upper))
 
+-- Both halves of one index equality render the same message (the two terms
+-- in one order), so the second is the same (code, span, message) and is
+-- recorded once.
+reportIndexFailure : Option Loc -> Authority -> Authority -> Unit
+reportIndexFailure loc a b =
+  pushTypeErrorAt "T-AUTHORITY-INDEX-MISMATCH" loc (authorityIndexMsg a b)
+
+authorityIndexMsg : Authority -> Authority -> String
+authorityIndexMsg a b =
+  let sa = authorityTermText a
+  let sb = authorityTermText b
+  let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
+  "Authority index mismatch: \{x} vs \{y}. An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"
+
+-- An authority as a message names it: the top as the whole domain, a term
+-- as it is written.
+authorityTermText : Authority -> String
+authorityTermText q =
+  if authIsTop q then "the whole domain" else ppAuthority (Ref []) (Ref 0) q
+
 -- Against a named authority the remedy is to derive the value from the
 -- argument; against a written bound it is to stay within, or widen, the
 -- bound; against a bound the scope SOLVED — an upper term recorded as a
@@ -11073,12 +11141,20 @@ authorityFailureMsg name lower upper written =
     else
       ppAuthority (Ref []) (Ref 0) lower
   let hi = ppAuthority (Ref []) (Ref 0) upper
-  if authHasVars upper then
+  if mentionsOpened upper then
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
+  else if authHasVars upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare"
   else if solvedUpper written then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
   else
     "Binding '\{name}' reaches \{lo} where its declared bound admits only \{hi}. Stay within the declared bound, or widen it to cover what the body reaches"
+
+mentionsOpened : Authority -> Bool
+mentionsOpened q =
+  anyList
+    (cell => IdMap.has (authvarId cell) perRun.value.openedAuthvarsRef.value)
+    (authVars q)
 
 mentionsEscaped : Authority -> Bool
 mentionsEscaped q =
@@ -11749,6 +11825,11 @@ freshAuthSubstOpeningIn ids cells =
       (m cell => IdMap.set (authvarId cell) () m)
       perRun.value.rigidAuthvarsRef.value
       opened
+  perRun.value.openedAuthvarsRef :=
+    fold
+      (m cell => IdMap.set (authvarId cell) () m)
+      perRun.value.openedAuthvarsRef.value
+      opened
   (map (p => (first3 p, AVar (second3 p))) pairs, opened)
 
 first3 : (a, b, c) -> a
@@ -11994,7 +12075,7 @@ tyVarNames (TyConstrained _ t) = tyVarNames t
 tyVarNames (TyRow _ _ _) = []
 tyVarNames (TyAuth _ _) = []
 tyVarNames (TyNamed _ t) = tyVarNames t
-tyVarNames (TyQual t _) = tyVarNames t
+tyVarNames (TyQual t _ _) = tyVarNames t
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
 -- type).  `tyVarNames` deliberately skips TyConstrained's constraints, so a constraint
@@ -12034,7 +12115,7 @@ tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
 tyConNamesInTy (TyRow _ _ _) = []
 tyConNamesInTy (TyAuth _ _) = []
 tyConNamesInTy (TyNamed _ t) = tyConNamesInTy t
-tyConNamesInTy (TyQual t _) = tyConNamesInTy t
+tyConNamesInTy (TyQual t _ _) = tyConNamesInTy t
 tyConNamesInTy (TyConstrained cs t) =
   flatMap tyConNamesInConstraint cs ++ tyConNamesInTy t
 
@@ -12251,7 +12332,7 @@ effTailNames (TyConstrained _ t) = effTailNames t
 effTailNames (TyRow _ tail _) = tail
 effTailNames (TyAuth _ _) = []
 effTailNames (TyNamed _ t) = effTailNames t
-effTailNames (TyQual t _) = effTailNames t
+effTailNames (TyQual t _ _) = effTailNames t
 
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffMap [] = []
@@ -12338,28 +12419,91 @@ authorityBinderBound named authNames n = match lookupAssoc n named
 -- kind is known, so a type variable used as an authority is reported once.  A
 -- named argument of the wrong type is `checkAuthorityBinder`'s report, not
 -- this one: it binds, at a type the domain cannot abstract.
+--
+-- A qualifier naming a `String` named argument that no atom or index slot of
+-- the signature names reads an authority with no domain: an authority is an
+-- element of one label's domain (§4.1), and nothing here says which, so the
+-- qualifier could bound nothing.  That is `T-AUTHORITY-DOMAIN`, the report
+-- for a binder at two domains, since one domain is exactly one.  The names a
+-- joined qualifier writes must likewise share one domain.
 reportUnboundAuthorityNames : Ty -> SigVars -> Unit
 reportUnboundAuthorityNames ty sv =
+  let named = namedArgTypes ty
+  let _ =
+    fold
+      (_ use =>
+        let n = fst use
+        let loc = orElseLoc (snd use) (firstTyLoc ty)
+        if isSome (lookupAssoc n sv.svAuths) then
+          ()
+        else match lookupAssoc n named
+          Some a =>
+            if isStringTy a then
+              pushTypeErrorOnceAt "T-AUTHORITY-DOMAIN" loc (binderNoDomainMsg n)
+          None =>
+            pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (nameNotAuthorityMsg n))
+      ()
+      (dedupLocated (authorityNamesWritten ty) [])
   fold
-    (_ n =>
-      if isSome (lookupAssoc n sv.svAuths)
-        || isSome (lookupAssoc n (namedArgTypes ty)) then
-        ()
-      else
-        pushTypeErrorOnceAt
-          "T-AUTHORITY-KIND"
-          (firstTyLoc ty)
-          (nameNotAuthorityMsg n))
+    (_ q =>
+      let tops =
+        flatMap
+          (n => match lookupAssoc n sv.svAuths
+            Some cell => [authvarDomain cell]
+            None => [])
+          (fst q)
+      match tops
+        top :: rest =>
+          if allList (sameDomainTop top) rest then
+            ()
+          else
+            pushTypeErrorOnceAt
+              "T-AUTHORITY-DOMAIN"
+              (orElseLoc (snd q) (firstTyLoc ty))
+              (joinDomainMsg (fst q))
+        [] => ())
     ()
-    (dedup (authorityNamesWritten ty))
+    (writtenQualifiers ty)
+
+binderNoDomainMsg : String -> String
+binderNoDomainMsg n =
+  "The qualifier names '\{n}', but no effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
+
+joinDomainMsg : List String -> String
+joinDomainMsg ns =
+  "The joined qualifier \{qualifierSource ns} joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
+
+-- First occurrence of each name, keeping its span.
+dedupLocated : List (String, Option Loc) ->
+  List (String, Option Loc) ->
+  List (String, Option Loc)
+dedupLocated [] acc = reverseL acc
+dedupLocated ((n, l) :: rest) acc =
+  if isSome (lookupAssoc n acc) then
+    dedupLocated rest acc
+  else
+    dedupLocated rest ((n, l) :: acc)
+
+-- Every qualifier the type writes, its names with its span.
+writtenQualifiers : Ty -> List (List String, Option Loc)
+writtenQualifiers (TyQual t ns l) = (ns, l) :: writtenQualifiers t
+writtenQualifiers (TyEffect _ _ t) = writtenQualifiers t
+writtenQualifiers (TyApp a b) = writtenQualifiers a ++ writtenQualifiers b
+writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
+writtenQualifiers (TyTuple ts) = flatMap writtenQualifiers ts
+writtenQualifiers (TyConstrained _ t) = writtenQualifiers t
+writtenQualifiers (TyNamed _ t) = writtenQualifiers t
+writtenQualifiers _ = []
 
 nameNotAuthorityMsg : String -> String
 nameNotAuthorityMsg n =
   "'\{n}' is used as an authority, but nothing binds it as one: a name to its left is an authority only as a named argument `(\{n} : String) ->`, in an `Authority`-kinded type argument (`Handle \{n}`), or as an `Authority` parameter of the enclosing data declaration; elsewhere a lowercase name is a type variable"
 
--- The names written in authority position: atom parameters and qualifiers.
-authorityNamesWritten : Ty -> List String
-authorityNamesWritten (TyQual t n) = n :: authorityNamesWritten t
+-- The names written in authority position, atom parameters and qualifiers,
+-- each with the span of the atom or qualifier that writes it.
+authorityNamesWritten : Ty -> List (String, Option Loc)
+authorityNamesWritten (TyQual t ns l) =
+  map (n => (n, l)) ns ++ authorityNamesWritten t
 authorityNamesWritten (TyEffect atoms _ t) =
   flatMap atomAuthorityName atoms ++ authorityNamesWritten t
 authorityNamesWritten (TyRow atoms _ _) = flatMap atomAuthorityName atoms
@@ -12372,9 +12516,9 @@ authorityNamesWritten (TyConstrained _ t) = authorityNamesWritten t
 authorityNamesWritten (TyNamed _ t) = authorityNamesWritten t
 authorityNamesWritten _ = []
 
-atomAuthorityName : EffAtomTy -> List String
+atomAuthorityName : EffAtomTy -> List (String, Option Loc)
 atomAuthorityName a = match a.eatParam
-  EPName n => [n]
+  EPName n => [(n, a.eatLoc)]
   _ => []
 
 -- The type-variable names a signature quantifies as ORDINARY type variables:
@@ -12422,7 +12566,7 @@ authArgBindersIn (TyTuple ts) = flatMap authArgBindersIn ts
 authArgBindersIn (TyEffect _ _ t) = authArgBindersIn t
 authArgBindersIn (TyConstrained _ t) = authArgBindersIn t
 authArgBindersIn (TyNamed _ t) = authArgBindersIn t
-authArgBindersIn (TyQual t _) = authArgBindersIn t
+authArgBindersIn (TyQual t _ _) = authArgBindersIn t
 authArgBindersIn _ = []
 
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
@@ -12453,7 +12597,7 @@ namedAtomBinders (TyRow atoms _ _) = flatMap namedAtomBinder atoms
 namedAtomBinders (TyAuth _ _) = []
 namedAtomBinders (TyConstrained _ t) = namedAtomBinders t
 namedAtomBinders (TyNamed _ t) = namedAtomBinders t
-namedAtomBinders (TyQual t _) = namedAtomBinders t
+namedAtomBinders (TyQual t _ _) = namedAtomBinders t
 
 namedAtomBinder : EffAtomTy -> List (String, Param)
 namedAtomBinder a = match a.eatParam
@@ -12564,7 +12708,8 @@ fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- A binder reached outside an arrow domain is a resolve error already; its
 -- type still elaborates so inference can continue.
 fromAstTypeE etbl tvs (TyNamed _ t) = fromAstTypeE etbl tvs t
-fromAstTypeE etbl tvs (TyQual t n) = qualifyBy etbl n (fromAstTypeE etbl tvs t)
+fromAstTypeE etbl tvs (TyQual t ns _) =
+  qualifyByAll etbl ns (fromAstTypeE etbl tvs t)
 
 -- A bare row atom (#997) reached here means it landed in an ordinary
 -- (non-KRow) type slot — `kindArgMono`'s KRow branch (below) is what
@@ -12591,9 +12736,23 @@ fromAstDomainE etbl tvs (TyNamed n t) =
 fromAstDomainE etbl tvs t = fromAstTypeE etbl tvs t
 
 qualifyBy : SigVars -> String -> Mono -> Mono
-qualifyBy etbl n t = match lookupAssoc n etbl.svAuths
-  Some cell => TQual t (AVar cell)
-  None => t
+qualifyBy etbl n t = qualifyByAll etbl [n] t
+
+-- A qualifier's names are bounded by the join of their authorities.  A name
+-- that is not an authority binder here is reported by
+-- `reportUnboundAuthorityNames`, and the qualifier then bounds nothing.
+qualifyByAll : SigVars -> List String -> Mono -> Mono
+qualifyByAll etbl ns t =
+  let cells =
+    flatMap
+      (n => match lookupAssoc n etbl.svAuths
+        Some cell => [AVar cell]
+        None => [])
+      ns
+  if isNonEmptyL cells && listLen cells == listLen ns then
+    TQual t (authJoinAll cells)
+  else
+    t
 
 -- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
 -- visible yet at this point in the file, so render the row body directly with
@@ -13699,11 +13858,17 @@ infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
 -- "no impl of Slice" constraint error via normal method dispatch.
 infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- ELoc is transparent: capture the span in `currentLoc` (so any type error
--- recorded while inferring the wrapped expr is attributable to this position), then
--- infer the inner expr.
+-- recorded while inferring the wrapped expr is attributable to this position),
+-- infer the inner expr, and leave the span set to this node's own on the way
+-- out.  A check that runs after a subexpression — an application's argument
+-- flow, a clause body against its signature, a branch join — then reads the
+-- span of the subexpression it is about, not whichever leaf inside it was
+-- entered last.
 infer env (ELoc l e) =
   currentLoc := Some l
-  infer env e
+  let t = infer env e
+  currentLoc := Some l
+  t
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
 -- error (see typeMismatch); RESTORE the previous value afterwards, not a hard
@@ -18072,7 +18237,9 @@ unifySpineProbe ft (a :: rest) =
 inferExpected : TcEnv -> Expr -> Mono -> Mono
 inferExpected env (ELoc l e) expected =
   currentLoc := Some l
-  inferExpected env e expected
+  let t = inferExpected env e expected
+  currentLoc := Some l
+  t
 -- A lambda meeting a known arrow takes the arrow's domains as its parameters
 -- before its body is inferred, so a signed `f = p => …` sees `String @κ` the
 -- way a clause `f p = …` does.
@@ -21359,7 +21526,7 @@ padAnns (_ :: ps) [] = None :: padAnns ps []
 
 kindOfAnn : Option KindAnn -> Kind
 kindOfAnn (Some KindEffect) = KRow
-kindOfAnn (Some (KindAuthority l o)) = KAuth (EffLabel l o)
+kindOfAnn (Some (KindAuthority l o _)) = KAuth (EffLabel l o)
 kindOfAnn _ = KType
 
 -- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
@@ -21371,21 +21538,21 @@ kindAnnSlots _ = []
 
 kindAnnAtom : KindAnn -> Kind
 kindAnnAtom KindEffect = KRow
-kindAnnAtom (KindAuthority l o) = KAuth (EffLabel l o)
+kindAnnAtom (KindAuthority l o _) = KAuth (EffLabel l o)
 kindAnnAtom _ = KType
 
 -- A kind that is not `Type` and must therefore be written (§6.3): `Effect`
 -- or `Authority`.
 kindAnnHasEffect : KindAnn -> Bool
 kindAnnHasEffect KindEffect = True
-kindAnnHasEffect (KindAuthority _ _) = True
+kindAnnHasEffect (KindAuthority _ _ _) = True
 kindAnnHasEffect (KindArrow a b) = kindAnnHasEffect a || kindAnnHasEffect b
 kindAnnHasEffect _ = False
 
 renderKindAnn : KindAnn -> String
 renderKindAnn KindType = "Type"
 renderKindAnn KindEffect = "Effect"
-renderKindAnn (KindAuthority l _) = "Authority \{l}"
+renderKindAnn (KindAuthority l _ _) = "Authority \{l}"
 renderKindAnn (KindArrow a b) = "\{renderKindAnnAtomic a} -> \{renderKindAnn b}"
 
 renderKindAnnAtomic : KindAnn -> String
@@ -21523,7 +21690,7 @@ inferParamPolarities tab params anns variants =
       -- An authority index is invariant by kind (§6.4), whatever its
       -- occurrences: a qualifier or an atom is not a type position this
       -- walk could read a variance off.
-      Some (KindAuthority _ _) => PInv
+      Some (KindAuthority _ _ _) => PInv
       _ =>
         joinPolarities
           (flatMap (t => paramOccPolarities tab (fst pk) PCo t) fieldTys))
@@ -21556,7 +21723,7 @@ paramOccPolarities tab p pol (TyConstrained _ t) =
 paramOccPolarities _ _ _ (TyRow _ _ _) = []
 paramOccPolarities _ _ _ (TyAuth _ _) = []
 paramOccPolarities tab p pol (TyNamed _ t) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyQual t _) = paramOccPolarities tab p pol t
+paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3): same record pattern as
   -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
@@ -21866,7 +22033,7 @@ existentialCells : List (String, KindAnn) -> List (String, Ref Authvar)
 existentialCells binders =
   map
     (b => match snd b
-      KindAuthority l o =>
+      KindAuthority l o _ =>
         (fst b, freshAuthvar (dtopFor (EffLabel l o)) (Some (fst b)))
       _ => (fst b, freshAuthvar PUnit (Some (fst b))))
     binders
@@ -28237,7 +28404,7 @@ tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
 tyIsConcrete (TyRow _ _ _) = True
 tyIsConcrete (TyAuth _ _) = True
 tyIsConcrete (TyNamed _ t) = tyIsConcrete t
-tyIsConcrete (TyQual t _) = tyIsConcrete t
+tyIsConcrete (TyQual t _ _) = tyIsConcrete t
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
 -- concrete is fully ground).
@@ -29065,7 +29232,7 @@ tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyRow _ _ _) _ = MOk
 tyStep (TyAuth _ _) _ = MOk
 tyStep (TyNamed _ t1) s = MKids [(t1, stripTyWrap s)]
-tyStep (TyQual t1 _) s = MKids [(t1, stripTyWrap s)]
+tyStep (TyQual t1 _ _) s = MKids [(t1, stripTyWrap s)]
 
 eqStr : String -> String -> Bool
 eqStr a b = a == b
@@ -29074,7 +29241,7 @@ stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
 stripTyWrap (TyNamed _ t) = stripTyWrap t
-stripTyWrap (TyQual t _) = stripTyWrap t
+stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
 -- structural equality of two AST type patterns (rigid; TyVar names must match).
@@ -34404,7 +34571,7 @@ substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
 substTyVars _ (TyRow es eff l) = TyRow es eff l
 substTyVars _ (TyAuth p l) = TyAuth p l
 substTyVars sub (TyNamed n t) = TyNamed n (substTyVars sub t)
-substTyVars sub (TyQual t n) = TyQual (substTyVars sub t) n
+substTyVars sub (TyQual t ns l) = TyQual (substTyVars sub t) ns l
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
 -- un-implementable for an ordinary interface (no `impl Display (a -> b)` exists).
@@ -37037,7 +37204,7 @@ ffiCrossableTy t = match expandAliasHeadTy t
   -- A named argument crosses as its type; the name is the authority the
   -- declared row charges, which is compile-time only.
   TyNamed _ inner => ffiCrossableTy inner
-  TyQual inner _ => ffiCrossableTy inner
+  TyQual inner _ _ => ffiCrossableTy inner
   -- `Array Int` and nothing else: §2.4 specifies only the all-immediate-element
   -- case, so `Array String` / `Array (Array Int)` fall through to False.
   TyApp a b => match (expandAliasHeadTy a, expandAliasHeadTy b)
@@ -37434,7 +37601,7 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyConstrained _ t => ffiTyHeadNameWith aliases t
   TyEffect _ _ t => ffiTyHeadNameWith aliases t
   TyNamed _ t => ffiTyHeadNameWith aliases t
-  TyQual t _ => ffiTyHeadNameWith aliases t
+  TyQual t _ _ => ffiTyHeadNameWith aliases t
   -- A parenthesised arrow in a VALUE position (a function-typed parameter).  It
   -- gets its own token rather than falling into the catch-all so that two
   -- unrelated exotic shapes do not compare equal and re-open the exemption.

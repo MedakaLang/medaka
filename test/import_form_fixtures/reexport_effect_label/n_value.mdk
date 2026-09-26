@@ -1,0 +1,6 @@
+-- The negative: a facade that re-exports only the value does not export the
+-- label, so naming it is refused as any unexported name is.
+import f_value.{Logging}
+
+n : Int
+n = 1

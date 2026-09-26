@@ -1,0 +1,2 @@
+-- PARITY CONTROL: the wildcard hop already carried every exported label.
+export import eff.*

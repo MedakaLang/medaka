@@ -384,10 +384,16 @@ shadows every outer let and every outer checked type of that name (an arm that
 merely renames the scrutinee reads the scrutinee), and a let's right-hand side
 is read in the scope it was bound in, never against a later rebinding. A binder must have type `String`
 (`T-AUTHORITY-BINDER`) and serves labels of one domain (`T-AUTHORITY-DOMAIN`).
-A qualifier is written with a spaced `@`: `String @p`.
+A qualifier is written with a spaced `@`: `String @p`. A joined qualifier
+`String @(a | b)` is bounded by the join `a ⊔ b`: a value within either
+authority, the type of a branch that returns one of two named arguments. Its
+names must be binders of one domain (`T-AUTHORITY-DOMAIN`).
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
-labels shares a variable; incompatible-domain uses are ill-formed. Product
+labels shares a variable; incompatible-domain uses are ill-formed, and so is a
+qualifier naming a named argument that no atom or index slot of the signature
+gives a domain (`(a : String) -> String @a`): nothing says which domain `a` is
+an element of, so the qualifier would bound nothing. Product
 domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a
@@ -708,8 +714,10 @@ TyParam ::= name | (name : Kind)
 ```
 
 Kind arrows associate right. `Effect` classifies rows; `Authority Label`
-classifies a parameter in that label's declared domain, not a row. Compatible
-domain aliases give compatible authority kinds.
+classifies a parameter in that label's declared domain, not a row. The label
+must declare a domain: an atomic label, `IO` included, has no authorities, so
+`Authority` over one is ill-formed. Compatible domain aliases give compatible
+authority kinds.
 
 ### 6.2 Declaration sites
 
@@ -1079,9 +1087,9 @@ values, resolved label identity, the abstraction `α`, the scoped authority
 solver and publication as far as a binding's own scope: a residual obligation
 over a variable no scope owns is decided over the module, not carried in a
 generalized scheme, so "residual constraints travel with a generalized scheme"
-is not implemented; qualified data fields, constructor proof sources and
-authority-indexed existentials remain the proposed surface of §4.1, not
-implemented. No conformance claim may turn a pending proof into success or
+is not implemented. Qualified data fields, constructor proof sources,
+carrying and authority-indexed existentials are implemented (the data-half
+and close-out checkpoints there). No conformance claim may turn a pending proof into success or
 describe the whole effects system as laundering-free while a known channel
 remains. Issue status belongs in the issue tracker; the archived observations
 explain counterexamples but are not a live backlog.

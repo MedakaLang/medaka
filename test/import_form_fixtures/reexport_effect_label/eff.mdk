@@ -1,0 +1,6 @@
+-- The declarer (#3304): one exported effect label and one exported value
+-- that carries it, re-exported below by three facades.
+export effect Logging
+
+export doLog : Int -> <Logging> Int
+doLog x = x + 1

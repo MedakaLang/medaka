@@ -1,8 +1,10 @@
 # Effects within the typechecker
 
-**Status:** DELIVERED THROUGH ITEM 6 — the data-half checkpoint is on the
-branch; item 7 (stdlib migration of precision-dependent signatures to handles)
-and the handoff's owed items remain. The delivery checklist below
+**Status:** DELIVERED THROUGH ITEM 6 — the data half merged in PR #3445
+(`ea782db98`); the close-out checkpoint below answers the handoff's owed list.
+Item 7 (stdlib migration of precision-dependent signatures to handles),
+residual schemes with delayed joins, and one invocation summary for policy
+and manifest have proposals awaiting ratification in the handoff. The delivery checklist below
 distinguishes the destination from code that has actually migrated. This is
 one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
@@ -685,6 +687,57 @@ both review rounds' cases), `effect_existential_{ok,launder}`,
 abstract handle across a module boundary); `test/parse_fixtures/declared_kinds`
 (the formatter round trip of every new spelling, the existential record
 constructor included); the engine fixture above.
+
+### Close-out checkpoint
+
+What landed after the data half (branch `effects-closeout`; decisions and
+receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
+"Close-out session"):
+
+1. **Located declarations and qualifiers.** `TyQual` carries its span and a
+   list of names, `DEffect` and `KindAuthority` carry the label's span; resolve
+   and the typechecker report a qualifier's names, an effect declaration's
+   domain and axes, and a kind's label there (`checkDomainAxes`,
+   `checkKindLabel`, `reportUnboundAuthorityNames` over located
+   `authorityNamesWritten`).
+2. **The `ELoc` restore.** `infer` and `inferExpected` set the node's own
+   span again on exit, so a check that runs after a subexpression reads that
+   subexpression, not the last leaf inside it.
+3. **Joined qualifiers.** `String @(a | b)` elaborates to the join of the
+   names' cells (`qualifyByAll`); a joined field carries no single name
+   (`tyCarries`); a join across domains is `T-AUTHORITY-DOMAIN`.
+4. **One domain, exactly.** A qualifier naming an argument that no atom or
+   index gives a domain is `T-AUTHORITY-DOMAIN` (it was dropped silently), and
+   `Authority L` over an atomic label is `T-AUTHORITY-KIND`
+   (`checkAuthorityKindLabels`).
+5. **Index equality.** `unifyIndex` records its two halves exact
+   (`wantAuthorityWith True`, `AuthWanted.awExact`, `esfExact`), and a failure
+   is `T-AUTHORITY-INDEX-MISMATCH`, once per equality (`distinctFailures`
+   keys the halves unordered). An opened existential is recorded
+   (`openedAuthvarsRef`) and named as the opened value's authority.
+6. **One parameter-shape rule for every consumer.** `effectParamProblems` is
+   the pure shape check; the typechecker reports its problems at the atom, and
+   `check-policy` keeps an `--allow` entry written and decodes it against the
+   domain of the label it is compared with (`decodeWrittenParam`), refusing a
+   malformed entry instead of widening it. This is the first piece the policy
+   consumer shares with the typechecker; the invocation summary itself is not
+   built.
+7. **Label identity across member-list re-exports (#3304).** `nsEffects`
+   carries a label through a member list or a single-name hop by the binding
+   rule every namespace uses, and `reexportedEffectOrigins` carries its
+   declaring identity the same way.
+8. **Formatting.** A qualified type after a row prints bare
+   (`printTypeAppLhs`), since `<L p> String @p` parses as the row over the
+   qualified type.
+
+Coverage: `types/effect_authority_test.mdk` (the close-out groups, each
+negative beside its control, #3327 in both declaration orders and #3304
+through `checkModulesDiagsChain`); `test/import_form_fixtures/reexport_effect_label`;
+`test/parse_fixtures/declared_kinds` (the joined spelling round trip);
+`test/typecheck_error_fixtures/effect_{data_field,existential}_launder`
+(re-derived: index equality, opened authority);
+`test/check_json_fixtures/projects/imported_help_fix` (re-derived: the fix-it
+range now covers the misspelled field).
 
 ### Foundation verification
 

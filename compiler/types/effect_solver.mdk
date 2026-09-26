@@ -45,6 +45,10 @@ public export data AuthWanted c = AuthWanted {
   -- so a report can locate the site that performed the label; `None` for a
   -- value flowing into a qualified slot, whose context is already the argument
   awLabel : Option String,
+  -- one half of an index EQUALITY (an `Authority`-kinded argument slot is
+  -- invariant, so `F q1 ~ F q2` records `q1 ⊑ q2` and `q2 ⊑ q1`): a failure
+  -- is an index mismatch, and the two halves are one defect
+  awExact : Bool,
 }
 
 data SummaryNode = SummaryNode {
@@ -173,8 +177,8 @@ recordRelation solver exact context lower upper =
       :: scope.essRelations.value
 
 export
-recordAuthority : SummarySolver c -> c -> Authority -> Authority -> Unit
-recordAuthority solver context lower upper =
+recordAuthority : SummarySolver c -> Bool -> c -> Authority -> Authority -> Unit
+recordAuthority solver exact context lower upper =
   let scope = currentScope solver
   scope.essAuthorities :=
     AuthWanted {
@@ -182,6 +186,7 @@ recordAuthority solver context lower upper =
         awUpper = upper,
         awContext = context,
         awLabel = None,
+        awExact = exact,
       }
       :: scope.essAuthorities.value
 
@@ -527,6 +532,7 @@ authorityEscapes scope context upper (x :: rest) =
               awUpper = atomAuth y,
               awContext = context,
               awLabel = Some (atomKey x),
+              awExact = False,
             }
             :: scope.essAuthorities.value
         others
@@ -816,6 +822,7 @@ checkAuthorities solver scope rigid =
                       awUpper = w.awUpper,
                       awContext = w.awContext,
                       awLabel = w.awLabel,
+                      awExact = w.awExact,
                     }
                     :: parent.essAuthorities.value
                 []
@@ -829,6 +836,7 @@ checkAuthorities solver scope rigid =
                       awUpper = w.awUpper,
                       awContext = w.awContext,
                       awLabel = w.awLabel,
+                      awExact = w.awExact,
                     }
                     :: solver.essRoot.value
                 []
@@ -839,7 +847,7 @@ checkAuthorities solver scope rigid =
 -- One obligation, one report: the same `lower ⊑ upper` pair recorded from two
 -- sites (an invariant index meeting a declared one, then the result flowing
 -- into the same declaration) is one defect, reported where it was first
--- recorded.
+-- recorded.  The two halves of one index equality are one pair, unordered.
 distinctFailures : List (SummaryFailure c) -> List (SummaryFailure c)
 distinctFailures failures = distinctFailuresGo failures []
 
@@ -849,7 +857,15 @@ distinctFailuresGo : List (SummaryFailure c) ->
 distinctFailuresGo [] _ = []
 distinctFailuresGo (f :: rest) seen = match f.esfAuthority
   Some (lo, hi) =>
-    let key = "\{renderAuthority lo}\t\{renderAuthority hi}"
+    let a = renderAuthority lo
+    let b = renderAuthority hi
+    let key =
+      if not f.esfExact then
+        "\{a}\t\{b}"
+      else if a <= b then
+        "=\{a}\t\{b}"
+      else
+        "=\{b}\t\{a}"
     if elem key seen then
       distinctFailuresGo rest seen
     else
@@ -879,7 +895,7 @@ authorityFailure : AuthWanted c -> Authority -> Authority -> SummaryFailure c
 authorityFailure w lo hi = SummaryFailure {
   esfLower = EffRow [] None,
   esfUpper = EffRow [] None,
-  esfExact = False,
+  esfExact = w.awExact,
   esfContext = w.awContext,
   esfAuthority = Some (lo, hi),
   esfWrittenUpper = Some w.awUpper,

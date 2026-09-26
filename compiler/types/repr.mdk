@@ -31,7 +31,7 @@ import types.effect_rows.{
 }
 import frontend.ast.{
   Ty(..), Constraint(..), TyConOrigin(..), EffAtomTy(..), effAtomSurface,
-  authTermSurface
+  authTermSurface, qualifierSource
 }
 import support.util.{listLen, filterList, isEmptyL, joinWith, sortUniqS, escStr}
 
@@ -718,7 +718,7 @@ ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
 ppTy (TyAuth p _) = authTermSurface escStr p
 ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 ppTy (TyNamed n t) = "(\{n} : \{ppTy t})"
-ppTy (TyQual t n) = "\{ppTyAtom t} @\{n}"
+ppTy (TyQual t ns _) = "\{ppTyAtom t} \{qualifierSource ns}"
 
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's

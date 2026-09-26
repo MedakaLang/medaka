@@ -709,8 +709,12 @@ public export data Ty =
   | TyNamed String Ty
   -- An explicit authority qualifier `String @p`: the value's domain-directed
   -- abstraction is bounded by the authority `p` names.  `p` must be bound by a
-  -- `TyNamed` to its left (or a data parameter); resolve checks that.
-  | TyQual Ty String
+  -- `TyNamed` to its left (or a data parameter); resolve checks that.  A
+  -- joined qualifier `String @(a | b)` names several binders and is bounded by
+  -- their join, so the names are a list of one or more.  The span is the
+  -- qualifier's own, from the `@`, so a diagnostic about a name it writes
+  -- points there; `None` for a qualifier a tool synthesises.
+  | TyQual Ty (List String) (Option Loc)
   -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
   -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
   -- always WRAPS an inner type (`<Stdout> Unit` meaning "Unit, performing
@@ -789,9 +793,10 @@ effectDeclUnstamped : Bool ->
   String ->
   Option String ->
   List (String, String) ->
+  Option Loc ->
   Decl
-effectDeclUnstamped pub name dom axes =
-  DEffect pub name dom axes OriginUnresolved
+effectDeclUnstamped pub name dom axes loc =
+  DEffect pub name dom axes OriginUnresolved loc
 
 export
 effAtomWith : String -> EffParamTy -> EffAtomTy
@@ -943,14 +948,16 @@ public export data KindAnn =
   -- `Authority L`: a parameter in the declared domain of the effect label
   -- `L`.  The label's declaring origin is stamped by resolve exactly as an
   -- `EffAtomTy`'s is; the parser leaves it unresolved.
-  | KindAuthority String TyConOrigin
+  -- The span is the label's, so a diagnostic about it (an unknown label, a
+  -- label with no domain to draw authorities from) points at it.
+  | KindAuthority String TyConOrigin (Option Loc)
   | KindArrow KindAnn KindAnn
 
 -- The kind as the parser produces it: the label's origin is resolve's to
 -- stamp, so before resolve it carries none.
 export
-kindAuthorityUnstamped : String -> KindAnn
-kindAuthorityUnstamped l = KindAuthority l OriginUnresolved
+kindAuthorityUnstamped : String -> Option Loc -> KindAnn
+kindAuthorityUnstamped l loc = KindAuthority l OriginUnresolved loc
 
 -- The SOURCE spelling of a kind, and of a whole declaration head's parameter
 -- list.  It lives HERE, beside the node, for the reason `firstTyLoc` below
@@ -962,8 +969,16 @@ export
 kindAnnSource : KindAnn -> String
 kindAnnSource KindType = "Type"
 kindAnnSource KindEffect = "Effect"
-kindAnnSource (KindAuthority l _) = "Authority \{l}"
+kindAnnSource (KindAuthority l _ _) = "Authority \{l}"
 kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
+
+-- The source spelling of a qualifier's names, `@p` or the joined `@(a | b)`,
+-- shared by every tool that renders a `TyQual` for the reason
+-- `kindAnnSource` is.
+export
+qualifierSource : List String -> String
+qualifierSource [n] = "@\{n}"
+qualifierSource ns = "@(" ++ join " | " ns ++ ")"
 
 -- The arrow associates right, so only a LEFT operand that is itself an arrow
 -- needs parentheses: `Effect -> Type -> Type` prints bare, and `(Type ->
@@ -1026,7 +1041,7 @@ firstTyLoc (TyFun f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyTuple ts) = firstTyLocList ts
 firstTyLoc (TyEffect _ _ t) = firstTyLoc t
 firstTyLoc (TyNamed _ t) = firstTyLoc t
-firstTyLoc (TyQual t _) = firstTyLoc t
+firstTyLoc (TyQual t _ l) = orElseLoc (firstTyLoc t) l
 firstTyLoc (TyConstrained _ t) = firstTyLoc t
 firstTyLoc (TyRow _ _ l) = l
 firstTyLoc (TyAuth _ l) = l
@@ -1702,8 +1717,10 @@ public export data Decl =
   -- order: the first axis is the PRIMARY one a bare string literal lifts
   -- into; empty for every other domain).  The origin is the declaration's own
   -- identity, stamped by resolve exactly like `dataOrigin`; an occurrence of
-  -- the label carries the same identity on its `EffAtomTy`.
-  | DEffect Bool String (Option String) (List (String, String)) TyConOrigin
+  -- the label carries the same identity on its `EffAtomTy`.  The span is the
+  -- declaration's, so a diagnostic about its domain or axes points at it;
+  -- `None` for a declaration a tool synthesises.
+  | DEffect Bool String (Option String) (List (String, String)) TyConOrigin (Option Loc)
   | DProp Bool String (List PropParam) Expr
   | DTest Bool String Expr
   | DInterface {
@@ -1947,9 +1964,9 @@ mapTyKids _ (TyAuth p l) = (TyAuth p l, False)
 mapTyKids f (TyNamed n t) =
   let (t2, c) = mapTyFull f t
   (TyNamed n t2, c)
-mapTyKids f (TyQual t n) =
+mapTyKids f (TyQual t ns l) =
   let (t2, c) = mapTyFull f t
-  (TyQual t2 n, c)
+  (TyQual t2 ns l, c)
 mapTyKids f (TyConstrained cs t) =
   let (cs2, cc) = mapConstraintsB f cs
   let (t2, ct) = mapTyFull f t
@@ -1998,7 +2015,7 @@ mapTyInDecl f (d@(DData { dataCtors })) =
   let (vs2, c) = mapVariantsB f dataCtors
   (DData { d | dataCtors = vs2 }, c)
 mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
-mapTyInDecl _ (DEffect pub n dom axes o) = (DEffect pub n dom axes o, False)
+mapTyInDecl _ (DEffect pub n dom axes o l) = (DEffect pub n dom axes o l, False)
 mapTyInDecl f (DProp pub n params body) =
   let (params2, c1) = mapPropParamsB f params
   let (body2, c2) = mapTyInExpr f body

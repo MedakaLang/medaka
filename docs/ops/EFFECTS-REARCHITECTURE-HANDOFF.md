@@ -1,19 +1,19 @@
 # Effects rearchitecture session handoff
 
-**Status:** MERGED. [PR #3393](https://github.com/MedakaLang/medaka/pull/3393)
-landed on `main` as `f81ff1d9d` on 2026-09-25 through the merge queue (run
-36163162966, every job green); #3382, #3383, #3391 and #825 closed with it. The
-named-authority work (#3385's arrow half) is on `main`; the data half of #3385
-and the review leftovers listed under "Owed after this session" are the open
-work. Handoff first recorded 2026-09-24.
+**Status:** The arrow half (PR #3393, `f81ff1d9d`) and the data half (PR
+#3445, `ea782db98`) of #3385 are on `main`. The close-out session (branch
+`effects-closeout`, § "Close-out session") answers the data half's owed list,
+fixes #3304 and pins #3327; delivery item 7 and the two remaining checklist
+items have proposals awaiting ratification there. Handoff first recorded
+2026-09-24.
 
 ## Resume here
 
 The effects rearchitecture is on `main`. Start the next piece of work from
-`main` on a topic branch; there is no effects branch to continue. Read, in
-order, the same documents as before: this handoff (the named-authority session
-and its "Owed after this session"), the architecture, the semantics, the
-typechecker contracts. The reading order below still applies.
+`main` on a topic branch. Read this handoff's § "Close-out session" first: its
+last list is the open work, as proposals awaiting ratification, and nothing in
+it is to be implemented before Val rules on it. Then the architecture, the
+semantics and the typechecker contracts; the reading order below still applies.
 
 Read, in order:
 
@@ -552,7 +552,8 @@ recommended option of a short proposal:**
   existential escape named `'?'` (the binder's cells are collected from the
   fields). The claim fixpoint's superlinearity went with the claims.
 
-**Owed after the data-half session:**
+**Owed after the data-half session** (every item below is answered in §
+"Close-out session"; kept as the record of what was owed):
 
 - A span on `TyQual`, the `ELoc` restore, the `@(a | b)` qualifier form
   (above).
@@ -588,6 +589,176 @@ recommended option of a short proposal:**
 - The engine gate's eval and wasm arms are ORACLES: a fixture using new syntax
   reads as "eval printed nothing" and "wasm emitter: unexpected `(`" until
   `build_oracles.sh --for 'diff_compiler_engines*'` has run on the new source.
+
+## Close-out session (2026-09-25/26)
+
+Branch `effects-closeout` from `ea782db98` (the merge of PR #3445). What
+landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Close-out checkpoint"; the normative changes are in
+[Effects semantics](../spec/EFFECTS-SEMANTICS.md) §4.1 and §6.1 and in
+`docs/spec/SYNTAX.md`; the codes are in `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
+
+**The owed list, each answered by a general rule:**
+
+- *A span on `TyQual`.* `TyQual Ty (List String) (Option Loc)`: the qualifier
+  carries its span from the `@`, and every diagnostic about a name it writes
+  (resolve's `R-UNBOUND-AUTHORITY`, the typechecker's `T-AUTHORITY-KIND` and
+  `T-AUTHORITY-DOMAIN`) is located there. `authorityNamesWritten` returns each
+  name with the span of the atom or qualifier that wrote it.
+- *The `ELoc` restore.* `infer`'s and `inferExpected`'s `ELoc` arms set the
+  node's own span again on the way out, so a check that runs after a
+  subexpression reads that subexpression's span, not its last leaf.
+  The forecast that this would move pinned locations across the JSON and LSP
+  corpora did not hold: one golden moved,
+  `test/check_json_fixtures/projects/imported_help_fix`. Its diagnostic had
+  pointed at the digit `3`, the last leaf of `(Box { width = 2, height = 3
+  }).widht`, and its fix-it range, computed from that span, covered `}).wi`,
+  so applying the fix would have corrupted the source. It now spans the
+  receiver and the fix-it covers exactly `widht`. No LSP golden moved.
+- *`@(a | b)`.* Spellable. The qualifier's names are a list and elaborate to
+  their join (`qualifyByAll`); the renderer already printed the join this way,
+  so the round trip now closes. A joined field carries neither name alone
+  (`tyCarries`), and a join across domains is `T-AUTHORITY-DOMAIN`.
+- *An unlocated `effect` declaration.* `DEffect` carries the label's span;
+  `checkDomainAxes` reports there. The same class of defect, a declaration-level
+  name with no span, also covered the label in `(p : Authority L)`:
+  `KindAuthority` carries its span, and resolve's unknown-label report uses it.
+- *Index mismatch wording.* An authority index equality is recorded as two
+  exact halves (`wantAuthorityWith True`, `AuthWanted.awExact`, carried to
+  `esfExact`); a failure reads `T-AUTHORITY-INDEX-MISMATCH`, "Authority index
+  mismatch: X vs Y …", once for both halves. It was two row-bound reports.
+- *The two unreproduced S3s.* The policy's `Method=true` decode reproduced: a
+  `--allow` entry was decoded by a schema-blind parser, so `Method=true` and
+  `Method=GET` were prefix strings on a Set axis, and a bare
+  `Net=idp.example.com/*` on a Product label never lifted into its first axis
+  (an admissible plugin was refused). Fixed by one rule for both consumers: the
+  shape check is a pure function (`effectParamProblems`), the typechecker reports
+  its problems at the atom, and `check-policy` keeps each entry written and
+  decodes it against the domain of the label it is compared with
+  (`decodeWrittenParam`), refusing a malformed entry with the problem rather
+  than reading it as the whole domain. The unused round-trip renderer
+  (`manifestToAllowStr`) spelled a top axis `=true`; it now omits it. Naming an
+  existential cell after the field that carries it did NOT reproduce: every
+  site renders the binder's name (`AnyH h`, `AnyR { hd = zz, n }`,
+  `AnyR { hd = h2, ... }` in a match arm, an escape, a record pattern, a
+  mismatch inside the arm; all say `p`/`q`, never `h`, `hd`, `zz`, `h2`).
+  Retired.
+
+**Found while closing, each reproduced first and fixed as a rule:**
+
+- A qualifier naming a named argument that no atom or index names was
+  silently dropped: `idQ : (a : String) -> String @a` published `String` and a
+  caller's `readFile (idQ a)` reached the whole domain. An authority has
+  exactly one domain, so zero is `T-AUTHORITY-DOMAIN` at the qualifier.
+- `Authority L` over an atomic label (`Beep`, `IO`) was accepted as a slot
+  every index trivially fills; it is `T-AUTHORITY-KIND` at the label.
+- An opened existential was described as "an authority the caller chooses";
+  `openedAuthvarsRef` records the cells a pattern opened and the failure says
+  what they are.
+- #3304 had a second half: the label's NAME crossed a member-list hop once
+  `nsEffects` carried it, but its declaring identity did not
+  (`typeOriginExports` carried `effect:` origin rows for wildcard hops only),
+  so `<Logging>` from the facade and `<Logging>` from `doLog` were two labels
+  (`T-EFFECT-LEAK`). `reexportedEffectOrigins` applies the same binding rule.
+
+**Delivery item 7's prerequisites:**
+
+- #3327 does not reproduce on `ea782db98`: `recordDeclKinds` (the data half)
+  records every head's kinds before any field elaborates. Pinned in the matrix:
+  both declaration orders accept, and a genuinely mis-kinded use is reported at
+  its own declaration in either order.
+- #3304 fixed as above; pinned by `test/import_form_fixtures/reexport_effect_label`
+  (resolve: a member list naming the label, a wildcard, and a member list NOT
+  naming it, which is refused) and a matrix row through
+  `checkModulesDiagsChain` (typecheck: the identity arrives).
+
+**Owed after the close-out session (proposals awaiting Val's ratification):**
+
+*Delivery item 7, proposal (stdlib review first).* A survey of `stdlib/`
+found one family that loses an authority through an opaque value: the `Net`
+socket handles. Files, commands and environment variables are always passed
+as strings, so they need no handle. The openers are already precise
+(`connect : (host : String) -> Int -> <Net host> …`,
+`listen : (addr : String) -> Int -> <Net addr> …`), but `Connection` and
+`Listener` are `public export data … = … Int`, and every consumer is typed
+with the bare `<Net>`. Proposed signature changes:
+
+| Now | Proposed |
+|---|---|
+| `public export data Connection = Connection Int` | `export data Connection (h : Authority Net)` (abstract; see the open question) |
+| `public export data Listener = Listener Int` | `export data Listener (a : Authority Net)` |
+| `connect : (host : String) -> Int -> <Net host> Result String Connection` | `… Result String (Connection host)` |
+| `listen : (addr : String) -> Int -> <Net addr> Result String Listener` | `… Result String (Listener addr)` |
+| `send`/`recv`/`sendAll`/`recvAll`/`sendString`/`recvString`/`sendLine`/`recvLine`/`shutdown`/`close`/`setTimeout : Connection -> … <Net> …` | `Connection h -> … <Net h> …` |
+| `listenPort`/`closeListener : Listener -> <Net> …` | `Listener a -> <Net a> …` |
+| `accept : Listener -> <Net> Result String Connection` | `Listener a -> <Net a> Result String (Connection a)` (the accepted socket speaks under the listener's grant) |
+| `serveLoop`, `withConnection`, `withListener` | index threaded through; the `with*` forms name their host argument |
+| `net_async`: `connect`, `connectWithin : String -> Int -> Async <Net \| e> …` | `(host : String) -> Int -> Async <Net host \| e> (Result String (Connection host))`; every consumer `Connection h -> Async <Net h \| e> …` |
+| `io.getEnvOr : String -> String -> <IO> String` | `(name : String) -> String -> <Env name> String` (a named argument, not a handle) |
+
+The open question, which decides whether this needs a language addition: an
+honest `send : Connection h -> … <Net h> …` must call a fd-level extern that
+performs `<Net h>`, but the runtime externs take a raw `Int` and perform the
+bare `<Net>`, and a `newtype` is boxed, so it cannot stand in for the `Int`
+at the extern boundary. Three routes:
+
+1. *(recommended)* An authority-indexed opaque FFI type, `NetFd (h : Authority
+   Net)`, represented as the C `Int`, whose only proof sources are the opening
+   externs (`netTcpConnect : (host : String) -> Int -> <Net host> Result String
+   (NetFd host)`) and whose consumers are indexed (`netSend : NetFd h -> … <Net
+   h> …`). This is §4.1's "explicitly trusted FFI operation". It needs a way to
+   declare an opaque extern type with a kinded parameter, which is new surface.
+2. The handle carries its host as evidence, `Connection (String @h) Int`, and
+   every fd-level extern gains a host argument the C side ignores. No new
+   surface, but it changes the C signatures, and the evidence is the host
+   string, not the socket.
+3. Defer: keep the consumers bare and index only the handle types, so a
+   signature can at least say which host a handle came from.
+
+`fs.mkdirAll`/`walkDir`/`replaceDurably` and `test_process.boundedVerb` could
+name their arguments too, but `mkdirAll "a/b"` writes the prefix `a`, which is
+outside `<FileWrite "a/b">`, so those stay bare unless the body proves it.
+
+*Checklist item 2, scope proposal.* (a) Residual constraints in schemes: a
+generalized binding carries its unsolved inequalities between its own
+quantified authority variables (`C ⇒ τ`), instantiated with the scheme's one
+substitution at each use and re-emitted as obligations in the user's scope;
+anything mentioning a non-quantified variable is decided where it is today.
+IN: inferred residuals (unsigned bindings), rendering them in hover/doc.
+DEFER: a written surface for residuals in signatures (a signature would stay
+less expressive than inference until it lands, which is itself a design
+question). (b) Delayed joins: when branch alternatives have unknown shapes,
+record a join constraint the solver resolves once the shapes are known,
+instead of HM equality. IN: arrows and covariant data slots, the cases the
+envelope already handles for known shapes. This is a completeness fix (it
+rejects fewer honest programs); no known laundering depends on it.
+
+*Checklist item 3, scope proposal.* One invocation summary in `types/`,
+consumed by `check-policy` and `manifest`, replacing `monoEffects`' structural
+walk. Given a scheme and the host's protocol (force the entry; call it with
+N arguments; any function value it returns may be invoked), it returns the
+forcing row joined with the latent rows the host can reach (positive
+positions only, by declared variance), plus the atoms whose authority is
+still symbolic, reported explicitly (manifest `= true` with an "unresolved"
+note, policy "not proven"). IN: the two built-in protocols the verbs use
+today. DEFER: a user-declared protocol syntax. Today's walk descends into
+every data argument whatever its variance, so it counts a row in a callback
+slot the host would supply, which over-rejects; the change narrows that
+without admitting anything the host can run.
+
+**Traps paid for in this session:**
+
+- `medaka test` on a native gate file reads `$MEDAKA_ROOT` for the lint
+  probe's stdlib index; run bare, eight `rule-stdlib-reimpl` rows read as
+  failures. `medaka gate run` (and `run_gates.sh`) set it.
+- A pristine `main` tree for pin discrimination needs `compiler/`, `stdlib/`,
+  `runtime/`, the `main` binary AND its emitter beside it (`medaka test`
+  builds natively); both binaries are in the build cache
+  (`$MEDAKA_SCRATCH/medaka-build-cache`). A test program string the old parser
+  cannot read panics the whole run, so drop that group to see the rest.
+- `diff_compiler_fmt`'s typecheck-error rows grade `check_main`'s sorted
+  output, so an intended wording change moves `*.tc.golden` files, which no
+  capture script regenerates; regenerate from the oracle and read the diff.
 
 ## Delivered code and invariants to preserve
 
@@ -653,9 +824,9 @@ claiming purity. Keep inference, signatures, docs and snapshots consistent.
 
 ## What remains after the merge
 
-The adversarial review and the CI run on the final head are done (see the
-named-authority session). What the architecture's delivery checklist still
-lists as open:
+Updated by the close-out session: item 1 below is delivered (PR #3445), item 4
+is answered by the close-out checkpoint, and items 2 and 3 have scope
+proposals awaiting ratification in § "Close-out session". The original list:
 
 1. Qualified data fields, constructor proof sources and existentials (#3385's
    data half). Named authorities on arrows, the underscore's retirement, label

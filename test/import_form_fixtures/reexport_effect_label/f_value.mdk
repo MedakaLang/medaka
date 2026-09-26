@@ -1,0 +1,3 @@
+-- A member-list hop that names only the value carries only the value: the
+-- label is not re-exported, so `n_value.mdk` below is refused.
+export import eff.{doLog}

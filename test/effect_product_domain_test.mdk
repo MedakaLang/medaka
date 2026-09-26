@@ -9,6 +9,7 @@ import compiler_cli_test_support.{
   expectCheckAccept,
   expectCheckReject,
   expectVerbExitStartsWith,
+  expectVerbExitStartsWithAndContains,
   fixtureIn,
 }
 
@@ -72,3 +73,50 @@ test "check-policy rejects a Product policy with a narrow Method axis" =
     ]
     1
     "rejected"
+
+-- A policy entry is read by the rules a source atom is: a bare pattern on a
+-- Product label lifts into its first axis, and an entry the label's domain
+-- does not admit is refused with the reason, never read as the whole domain.
+policyRun : String -> <IO> List String
+policyRun allow = [
+  fixture "prod_policy_plugin.mdk",
+  "--allow",
+  allow,
+  "--fn",
+  "transform",
+]
+
+test "check-policy lifts a bare Product pattern into the first axis" =
+  expectVerbExitStartsWith
+    "check-policy"
+    (policyRun "Net=idp.example.com/*,FFI")
+    0
+    "accepted"
+
+test "check-policy confines a lifted Product pattern" =
+  expectVerbExitStartsWith
+    "check-policy"
+    (policyRun "Net=other.com/*,FFI")
+    1
+    "rejected"
+
+test "check-policy refuses a pattern on a Set axis rather than reading it as one" = expectVerbExitStartsWithAndContains
+  "check-policy"
+  (policyRun "Net=Host=\"idp.example.com/*\";Method=GET,FFI")
+  1
+  "rejected"
+  ["axis 'Method' takes a set, not a pattern"]
+
+test "check-policy refuses an axis without a value rather than widening it" = expectVerbExitStartsWithAndContains
+  "check-policy"
+  (policyRun "Net=Host=\"idp.example.com/*\";Method,FFI")
+  1
+  "rejected"
+  ["axis 'Method' has no value"]
+
+test "check-policy refuses an undeclared axis" = expectVerbExitStartsWithAndContains
+  "check-policy"
+  (policyRun "Net=Host=\"idp.example.com/*\";Verb={GET},FFI")
+  1
+  "rejected"
+  ["unknown product axis 'Verb'"]

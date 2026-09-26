@@ -57,6 +57,7 @@ import frontend.ast.{
   FunClause(..),
   Expr(..),
   Decl(..),
+  qualifierSource,
 }
 import frontend.parser.{
   Positions,
@@ -2005,7 +2006,7 @@ localTyNamesL (DData { dataName = n }) = [n]
 localTyNamesL (DNewtype { newtypeName = n }) = [n]
 localTyNamesL (DTypeAlias { tyAliasName = n }) = [n]
 localTyNamesL (DInterface { name = n }) = [n]
-localTyNamesL (DEffect _ n _ _ _) = [n]
+localTyNamesL (DEffect _ n _ _ _ _) = [n]
 localTyNamesL (DAttrib _ d) = localTyNamesL d
 localTyNamesL _ = []
 
@@ -2024,7 +2025,7 @@ tyNamesOf (TyRow es _ _) = map effAtomLabel es
 tyNamesOf (TyAuth _ _) = []
 tyNamesOf (TyConstrained cs t) = flatMap constrTyNames cs ++ tyNamesOf t
 tyNamesOf (TyNamed _ t) = tyNamesOf t
-tyNamesOf (TyQual t _) = tyNamesOf t
+tyNamesOf (TyQual t _ _) = tyNamesOf t
 
 effAtomLabel : EffAtomTy -> String
 effAtomLabel a = a.eatLabel
@@ -2337,7 +2338,7 @@ tyVarsOf (TyConstrained cs t) = flatMap constrTyVars cs ++ tyVarsOf t
 tyVarsOf (TyRow _ _ _) = []
 tyVarsOf (TyAuth _ _) = []
 tyVarsOf (TyNamed _ t) = tyVarsOf t
-tyVarsOf (TyQual t _) = tyVarsOf t
+tyVarsOf (TyQual t _ _) = tyVarsOf t
 
 constrTyVars : Constraint -> List String
 constrTyVars (Constraint { constraintArgs = args }) = flatMap tyVarsOf args
@@ -2356,7 +2357,7 @@ rowVarsOf (TyConstrained cs t) = flatMap constrRowVars cs ++ rowVarsOf t
 rowVarsOf (TyRow _ tl _) = tl
 rowVarsOf (TyAuth _ _) = []
 rowVarsOf (TyNamed _ t) = rowVarsOf t
-rowVarsOf (TyQual t _) = rowVarsOf t
+rowVarsOf (TyQual t _ _) = rowVarsOf t
 
 constrRowVars : Constraint -> List String
 constrRowVars (Constraint { constraintArgs = args }) = flatMap rowVarsOf args
@@ -2377,7 +2378,8 @@ tyCanonIn _ _ (TyAuth p _) = "(auth " ++ authTermSurface escStr p ++ ")"
 -- An authority binder and a qualifier are part of what a declared type
 -- means: two signatures differing only in them are different signatures.
 tyCanonIn tvs rvs (TyNamed n t) = "(named \{n} \{tyCanonIn tvs rvs t})"
-tyCanonIn tvs rvs (TyQual t n) = "(qual \{tyCanonIn tvs rvs t} \{n})"
+tyCanonIn tvs rvs (TyQual t ns _) =
+  "(qual \{tyCanonIn tvs rvs t} \{qualifierSource ns})"
 tyCanonIn tvs rvs (TyConstrained cs t) =
   "(=> \{joinWith " " (sortUniqS (map (constrCanon tvs rvs) cs))} \{tyCanonIn tvs rvs t})"
 
@@ -5741,7 +5743,7 @@ nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
-nonDefRefL (DEffect _ _ _ _ _) = []
+nonDefRefL (DEffect _ _ _ _ _ _) = []
 nonDefRefL (DTypeAlias { tyAliasOrigin = _ }) = []
 nonDefRefL (DNewtype { newtypeOrigin = _ }) = []
 nonDefRefL d = bodyIdents d

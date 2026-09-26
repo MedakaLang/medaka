@@ -32,6 +32,7 @@ import frontend.ast.{
   Decl(..),
   Ty(..),
   EffAtomTy(..),
+  qualifierSource,
   effAtomSurface,
   authTermSurface,
   ctorBindersSource,
@@ -134,7 +135,7 @@ ppTyP _ (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 ppTyP _ (TyRow effs tail _) = "<\{ppEffInsideDoc effs tail}>"
 ppTyP _ (TyAuth p _) = authTermSurface escStr p
 ppTyP _ (TyNamed n t) = "(\{n} : \{ppTyP 0 t})"
-ppTyP _ (TyQual t n) = "\{ppTyP 2 t} @\{n}"
+ppTyP _ (TyQual t ns _) = "\{ppTyP 2 t} \{qualifierSource ns}"
 ppTyP _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstrDoc c

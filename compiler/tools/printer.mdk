@@ -36,6 +36,7 @@
 
 import frontend.ast.{
   EffAtomTy(..),
+  qualifierSource,
   effAtomSurface,
   authTermSurface,
   ctorBindersSurface,
@@ -995,7 +996,8 @@ printType (TyNamed n t) =
   Cat
     (text "(")
     (Cat (text n) (Cat (text " : ") (Cat (printType t) (text ")"))))
-printType (TyQual t n) = Cat (printTypeAtom t) (text " @\{n}")
+printType (TyQual t ns _) =
+  Cat (printTypeAtom t) (text " \{qualifierSource ns}")
 
 constraintsDoc : List Constraint -> Doc
 constraintsDoc [c] = printConstraint c
@@ -1060,6 +1062,9 @@ printTypeFunLhs t = printType t
 -- Left operand of a TyApp: a nested TyApp prints bare; anything else as an atom.
 printTypeAppLhs : Ty -> Doc
 printTypeAppLhs (TyApp a b) = printType (TyApp a b)
+-- `<L p> String @p` parses as a row over the qualified type, so the
+-- qualifier needs no parentheses there.
+printTypeAppLhs (TyQual t ns l) = printType (TyQual t ns l)
 printTypeAppLhs t = printTypeAtom t
 
 -- ── Patterns ──────────────────────────────────────
@@ -2346,7 +2351,7 @@ printDecl (DUse pub path _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (text "import ") (printUsePath path !importForcedRef))
-printDecl (DEffect pub name domain axes _) =
+printDecl (DEffect pub name domain axes _ _) =
   Cat
     (effDeclHead pub)
     (Cat (text name) (Cat (effDomainDoc domain) (effAxesDoc axes)))
@@ -2488,7 +2493,7 @@ ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyAuth p _) = authTermSurface escStringLit p
 ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
-ppTyPrec _ (TyQual t n) = "\{ppTyPrec 2 t} @\{n}"
+ppTyPrec _ (TyQual t ns _) = "\{ppTyPrec 2 t} \{qualifierSource ns}"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c
