@@ -13,4 +13,10 @@ extern arrayMakeWith : Int -> (Int -> <IO> a) -> <> Array a
 -- the write happens at the second arrow, not the first
 extern writeFile : (path : String) -> <FileWrite path> (String -> Result String Unit)
 
+data Box (e : Effect) = Box (Unit -> <e> Unit)
+
+-- a row is a set: a repeated atom is that atom once, not a stand-in for
+-- another, so the stored box cannot differ from the cell's
+extern setRef : Ref (Box <Stdout, Stdout>) -> Box <Stdout, FileWrite> -> Unit
+
 main = println 1

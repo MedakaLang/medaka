@@ -7,6 +7,11 @@ extern arrayMakeWith : Int -> (Int -> <IO> a) -> <IO> Array a
 
 extern writeFile : (path : String) -> String -> <FileWrite path> Result String Unit
 
+data Box (e : Effect) = Box (Unit -> <e> Unit)
+
+-- the same row spelled with a repeat
+extern setRef : Ref (Box <Stdout, Stdout>) -> Box <Stdout> -> Unit
+
 later : Unit -> <IO> Unit
 later u = (!(Ref (v => println "ran"))) ()
 

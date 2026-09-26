@@ -37629,17 +37629,19 @@ ffiParamOf _ = None
 ffiSameParam : EffParamTy -> EffParamTy -> Bool
 ffiSameParam p q = ppTy (TyAuth p None) == ppTy (TyAuth q None)
 
--- Two written rows are the same row: the same atoms, each label by its
--- declared identity, and the same row variables.
+-- Two written rows are the same row: the same set of atoms, each label by its
+-- declared identity, and the same set of row variables. A row is a set, so a
+-- repeated atom is that atom once and never stands in for another.
 ffiSameRow : List EffAtomTy ->
   List String ->
   List EffAtomTy ->
   List String ->
   Bool
 ffiSameRow l1 t1 l2 t2 =
-  listLen l1 == listLen l2
-    && allList (a => anyList (b => ffiSameAtom a b) l2) l1
-    && ffiSameNames t1 t2
+  ffiAtomsWithin l1 l2 && ffiAtomsWithin l2 l1 && ffiSameNames t1 t2
+
+ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
+ffiAtomsWithin xs ys = allList (a => anyList (b => ffiSameAtom a b) ys) xs
 
 ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
 ffiSameAtom a b =
@@ -37647,7 +37649,8 @@ ffiSameAtom a b =
     && ffiSameParam a.eatParam b.eatParam
 
 ffiSameNames : List String -> List String -> Bool
-ffiSameNames xs ys = listLen xs == listLen ys && allList (x => contains x ys) xs
+ffiSameNames xs ys =
+  allList (x => contains x ys) xs && allList (y => contains y xs) ys
 
 -- Two written types are the same type: heads by identity, variables by
 -- name, rows by `ffiSameRow`, authorities by their rendering.
@@ -37777,10 +37780,20 @@ ffiCheckCatalogRowGo ((DExtern _ n ty) :: rest) =
     Some (cat, catNames) => match ffiSigInstance cat ty
       Some sub =>
         let aliases = perRun.value.aliasTableRef.value
+        let pairs = zipL (ffiSpineRows aliases cat) (ffiSpineRows aliases ty)
+        let arrows = listLen pairs
         fold
-          (_ p => ffiCheckSpineRow n ty catNames sub (fst p) (snd p))
+          (_ ip =>
+            ffiCheckSpineRow
+              n
+              ty
+              catNames
+              sub
+              (ffiArrowNote (fst ip) arrows)
+              (fst (snd ip))
+              (snd (snd ip)))
           ()
-          (zipL (ffiSpineRows aliases cat) (ffiSpineRows aliases ty))
+          (zipL (rangeFromCount 1 arrows) pairs)
       -- the shadow rule has refused the declaration
       None => ()
     None => ()
@@ -37794,15 +37807,17 @@ ffiCheckSpineRow : String ->
   Ty ->
   List (String, Int) ->
   List (String, Ty) ->
+  String ->
   (List EffAtomTy, List String) ->
   (List EffAtomTy, List String) ->
   Unit
-ffiCheckSpineRow n ty catNames sub cat decl =
+ffiCheckSpineRow n ty catNames sub arrow cat decl =
   let tails = ffiExpandTails sub (snd cat)
   let _ =
     ffiCheckCatalogRowOne
       n
       ty
+      arrow
       (ffiInstRow catNames sub (fst cat) ++ fst tails)
       catNames
       (fst decl)
@@ -37812,7 +37827,16 @@ ffiCheckSpineRow n ty catNames sub cat decl =
       pushTypeErrorAt
         "T-FFI-CATALOG-NARROW"
         (firstTyLoc ty)
-        (ffiCatalogTailMsg n missing)
+        (ffiCatalogTailMsg n arrow missing)
+
+-- Which arrow a spine row belongs to, for a signature with more than one: a
+-- row written on another arrow of the declaration does not cover it.
+ffiArrowNote : Int -> Int -> String
+ffiArrowNote i arrows =
+  if arrows > 1 then
+    " on the result of argument \{display i} of \{display arrows}"
+  else
+    ""
 
 ffiExpandTails : List (String, Ty) ->
   List String ->
@@ -37824,9 +37848,9 @@ ffiExpandTails sub (v :: vs) =
     Some (TyRow bl bt _) => (bl ++ fst rest, bt ++ snd rest)
     _ => (fst rest, v :: snd rest)
 
-ffiCatalogTailMsg : String -> List String -> String
-ffiCatalogTailMsg n missing =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in also performs the row variable \{joinWith ", " missing}, which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '\{n}' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"
+ffiCatalogTailMsg : String -> String -> List String -> String
+ffiCatalogTailMsg n arrow missing =
+  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row\{arrow}: the built-in also performs the row variable \{joinWith ", " missing}, which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '\{n}' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"
 
 -- Both rows are lifted with the SAME authority variable per argument
 -- position, so a binder covers the catalog's binder only when it names the
@@ -37834,11 +37858,12 @@ ffiCatalogTailMsg n missing =
 -- covers a bare catalog label.
 ffiCheckCatalogRowOne : String ->
   Ty ->
+  String ->
   List EffAtomTy ->
   List (String, Int) ->
   List EffAtomTy ->
   Unit
-ffiCheckCatalogRowOne n ty catRow catNames declRow =
+ffiCheckCatalogRowOne n ty arrow catRow catNames declRow =
   let declNames = namedArgOrder ty
   let cells = positionCells (catNames ++ declNames)
   let catAtoms = atomsOfWrittenIn (positionalSigVars catNames cells) catRow
@@ -37849,7 +37874,7 @@ ffiCheckCatalogRowOne n ty catRow catNames declRow =
       pushTypeErrorAt
         "T-FFI-CATALOG-NARROW"
         (firstTyLoc ty)
-        (ffiCatalogNarrowMsg n catAtoms declAtoms missing)
+        (ffiCatalogNarrowMsg n arrow catAtoms declAtoms missing)
 
 -- One variable per argument position named by either row, carrying the
 -- first binder spelling seen for that position so a message reads as written.
@@ -37873,9 +37898,14 @@ positionalSigVars names cells = SigVars {
       names,
 }
 
-ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
-ffiCatalogNarrowMsg n cat decl missing =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
+ffiCatalogNarrowMsg : String ->
+  String ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  String
+ffiCatalogNarrowMsg n arrow cat decl missing =
+  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row\{arrow}: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
 
 -- S3-1 (`ffi-boundary-honesty` review round): a parameterised label whose param is
 -- ⊤ renders as the BARE LABEL — `drenderN (PPrefix None)` is "" by design, and a

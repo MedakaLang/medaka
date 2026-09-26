@@ -855,7 +855,23 @@ declaration wrote for it. The row each arrow's result carries is compared
 arrow by arrow, the catalog's instantiated by the same match. Pinned by
 `effect_catalog_redeclare_rows` and its `_ok` control.
 
+*Third review round (on `5b098969a`).* One S0: two rows compared as equal
+when they had the same length and every atom of the first had a partner in
+the second, so `<Stdout, Stdout>` equalled `<Stdout, FileWrite>` and a
+catalog variable bound at the first gained `FileWrite` at its next
+occurrence (`setRef`, and `Ref` through a callback's callback). The
+row-as-type-argument form was new here, the others older. Rows and their
+variables now compare as sets in both directions; pinned in
+`effect_catalog_redeclare_rows`. The narrow message now names the arrow it
+compared when the signature has more than one.
+
 Owed from the review rounds, not acted on:
+
+- The narrow message's "claims" omits the declaration's row variables, and
+  an atom miss and a row-variable miss on one declaration are two errors at
+  one location.
+- Two same-spelled aliases from different modules render identically in the
+  shadow message.
 
 - A widened socket (`netTcpConnect : String -> Int -> <Net> Result String
   (Socket *)`) is refused: an argument's binder cannot be fixed, even to the

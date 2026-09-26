@@ -4,4 +4,5 @@ later : Unit -> <IO> Unit
 main : <IO> Unit
 numbered : Int -> <IO> Array Int
 save : (path : String) -> <FileWrite path> Result String Unit
+setRef : Ref (Box <Stdout>) -> Box <Stdout> -> Unit
 writeFile : (path : String) -> String -> <FileWrite path> Result String Unit

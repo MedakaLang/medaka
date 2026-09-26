@@ -964,12 +964,14 @@ externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
 externSigsToMap : List Decl -> Map String (Ty, List (String, Int)) -> Map String (Ty, List (String, Int))
 failureBound : SummaryFailure (Option Loc, String) -> Option Authority
+ffiArrowNote : Int -> Int -> String
+ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
 ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
-ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
-ffiCatalogTailMsg : String -> List String -> String
+ffiCatalogNarrowMsg : String -> String -> List Atom -> List Atom -> List Atom -> String
+ffiCatalogTailMsg : String -> String -> List String -> String
 ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
-ffiCheckCatalogRowOne : String -> Ty -> List EffAtomTy -> List (String, Int) -> List EffAtomTy -> Unit
+ffiCheckCatalogRowOne : String -> Ty -> String -> List EffAtomTy -> List (String, Int) -> List EffAtomTy -> Unit
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
@@ -982,7 +984,7 @@ ffiCheckExternsShadow : Bool -> List Decl -> Unit
 ffiCheckLabelsGo : List Decl -> Unit
 ffiCheckReservedGo : List Decl -> Unit
 ffiCheckShadowGo : List Decl -> Unit
-ffiCheckSpineRow : String -> Ty -> List (String, Int) -> List (String, Ty) -> (List EffAtomTy, List String) -> (List EffAtomTy, List String) -> Unit
+ffiCheckSpineRow : String -> Ty -> List (String, Int) -> List (String, Ty) -> String -> (List EffAtomTy, List String) -> (List EffAtomTy, List String) -> Unit
 ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
 ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
