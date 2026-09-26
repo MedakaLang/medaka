@@ -883,8 +883,8 @@ compared when the signature has more than one.
   performed atom is within it when any bound atom covers it; the join is
   used only where one authority value is needed. A §2.2 spec change, its
   own issue and PR.
-- #3385 closes when #3458 merges; the four follow-ups above are filed as
-  successor issues.
+- #3385 closes when #3458 merges. Successors: #3462 (item 2), #3463 (item
+  3), #3464 (prefix sets), #3465 (prelude type shadowing).
 
 Owed from the review rounds, not acted on:
 
