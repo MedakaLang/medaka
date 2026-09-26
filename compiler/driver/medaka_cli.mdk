@@ -2905,7 +2905,7 @@ runRunCmd argv =
                         (filter diagIsError surfaceDiags)))
             True =>
               let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, perMod, residual, _) =
+              let (coreE, modsE, perMod, residual, _, _) =
                 elaborateRun rtD coreD modsD
               -- Read the sticky flag before `analyzeFinish`: the auto-print
               -- obligation re-check it runs typechecks a synthetic wrapped
@@ -2979,7 +2979,7 @@ runRunCmd argv =
             -- from a second, check-only pass over the same graph.
             "" =>
               let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, perMod, residual, _) =
+              let (coreE, modsE, perMod, residual, _, _) =
                 elaborateRun rtD coreD modsD
               match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
                 (Some errText, _, _) => match jsonMode
@@ -3082,8 +3082,8 @@ elaborateRun rtD coreD modsD =
 -- driver), so what the residual gate carries in practice is the graph-end
 -- drain's diagnostics and the core pass's, which no per-module list holds.
 plainPerModuleOf : ElabResult -> ElabResult -> ElabResult
-plainPerModuleOf (_, _, perMod, _, _) (coreW, modsW, _, residualW, evW) =
-  (coreW, modsW, perMod, residualW, evW)
+plainPerModuleOf (_, _, perMod, _, _, _) (coreW, modsW, _, residualW, evW, dispW) =
+  (coreW, modsW, perMod, residualW, evW, dispW)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main

@@ -275,6 +275,7 @@ buildClassEnv : List DeclEnvModule -> ClassEnv
 buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List DeclEnvModule -> DataEnv
 buildDeclEnvs : DeclEnvAcc -> DeclEnvModule -> List DeclEnvModule -> DeclEnvs
+buildDispositions : DeclEnvs -> DispositionTable
 buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnvGo : List DeclEnvModule -> ImplAcc -> ImplAcc
@@ -817,6 +818,9 @@ dispHeadTab : HeadKey -> TabKey
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
 dispatchTyparams : List String -> List String
+dispositionRowsOfImpl : ImplRow -> ClassEnv -> List MethodDisposition
+dispositionRowsOfImpls : List ImplRow -> ClassEnv -> List MethodDisposition
+dispositionRowsOfMethods : InstId -> IfaceRef -> List String -> List String -> List String -> List MethodDisposition
 distinctIdentsIn2 : List (Ident, String) -> Bool
 doBindArgHint : String -> String
 doBindArgMsg : String -> String
@@ -876,7 +880,7 @@ effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
-elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry)
+elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
@@ -1267,6 +1271,7 @@ ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowInst : ImplRow -> InstRef
 ieRowMethodHeadCollides : ImplEnv -> ImplRow -> Bool
+ieRowMethodNames : ImplRow -> List String
 ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
 ieRowOrd : ImplRow -> Int
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)

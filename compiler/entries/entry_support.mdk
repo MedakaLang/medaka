@@ -369,7 +369,7 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   -- `underivedMainDiags` re-check between them typechecks a synthetic program
   -- whose errors must not be read as that second elaboration's residual.
   let _ = resetTypeErrorsSticky ()
-  let (coreE, modulesE, perMod, residual, _) =
+  let (coreE, modulesE, perMod, residual, _, _) =
     elaborateModules runtimeDecls coreDecls modules
   -- Both halves of the fold now read the trees the loader parsed: the elaboration
   -- above is the user's own program, so a diagnostic names the constructors and
@@ -418,7 +418,7 @@ emitModulesWith emitTail modsWithPath runtimeDecls coreDecls modules =
   let _ = setLocalPinDisabled (argtagUnpinArmed ())
   -- Elaborate first, mangle after — see `runEmitWith` (#2809).
   let _ = resetTypeErrorsSticky ()
-  let (coreE, modulesE, _, residual, _) =
+  let (coreE, modulesE, _, residual, _, _) =
     elaborateModules runtimeDecls coreDecls modules
   let _ =
     emitResidualGate

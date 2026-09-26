@@ -32,7 +32,18 @@ import types.evidence.{
   ScopeId,
   SolverEvidence(..),
 }
-import types.repr.{Scheme(..), ppMono, ppScheme}
+import types.disposition.{
+  DispositionTable,
+  InstId(..),
+  MethodDisposition(..),
+  dispositionIface,
+  dispositionInstance,
+  dispositionMethod,
+  dispositionRows,
+  instIdMid,
+  installedDispositions,
+}
+import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.typecheck.{
   AssumptionTraceEntry(..),
@@ -57,6 +68,7 @@ import types.typecheck.{
   checkModulesEntryReport,
   checkOneDiags,
   checkOneSchemeFullK,
+  elaborateModules,
   elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
@@ -3329,4 +3341,138 @@ test "a generalized local's use site is never itself a dict application; the pin
     expectTrue (match evidenceEntriesWithPredicate "a" entries
       [e] => e.eoeOutcome == EOKGiven
       _ => False),
+  ]
+
+-- #1112 A-3 (m-evidence S3): production-path observation of `buildDispositions`'
+-- installed table, over a real multi-module elaboration. `elaborateModules`
+-- installs the table it built via `installDispositions` before returning
+-- (`types/typecheck.mdk`'s `driveGraphK`), so a caller reads it back with
+-- `installedDispositions` exactly as X-E (#1403) will.
+--
+-- Rows are matched by MODULE ID rather than by exact `InstId` (which also
+-- carries a whole-graph-running `seq` the prelude's own impls advance), so a
+-- future prelude change that adds or removes an `impl` cannot move these
+-- numbers underneath the test.
+dispositionsAfter : List (String, String) -> DispositionTable
+dispositionsAfter sources =
+  let _ =
+    elaborateModules
+      []
+      (desugar (parse numericPreludeSource))
+      (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
+  installedDispositions ()
+
+sameIfaceSpelling : IfaceRef -> String -> Bool
+sameIfaceSpelling iface name = iface.irName == name
+
+anyMatchSupplied : String -> String -> List MethodDisposition -> Bool
+anyMatchSupplied _ _ [] = False
+anyMatchSupplied wantMid wantMethod (d :: rest) = match d
+  Supplied { instance = i, method = m } =>
+    instIdMid i == wantMid && m == wantMethod
+      || anyMatchSupplied wantMid wantMethod rest
+  InheritedDefault _ _ _ => anyMatchSupplied wantMid wantMethod rest
+
+anyMatchInheritedDefault : String ->
+  String ->
+  String ->
+  List MethodDisposition ->
+  Bool
+anyMatchInheritedDefault _ _ _ [] = False
+anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
+  InheritedDefault { instance = i, iface = ir, method = m } =>
+    instIdMid i == wantMid && sameIfaceSpelling ir wantIface && m == wantMethod
+      || anyMatchInheritedDefault wantMid wantIface wantMethod rest
+  Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
+
+-- #1265's shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
+-- `ifb::Greet`) that happen to share the bare method name `speak`, both
+-- method-less (both `InheritedDefault`). The disposition table keys on
+-- INSTANCE identity (one row per `impl` declaration), so it must keep the two
+-- rows apart by their declaring module — the (method, tag)-keyed collapse
+-- #1265 pins is a Core IR default-registry defect, not one this table can
+-- even express.
+test "#1265: two same-named methods of two different interfaces stay two rows" =
+  let table = dispositionsAfter [
+    (
+      "ifa",
+      joinNl [
+        "export interface Speak x where",
+        "  speak : x -> String",
+        "  speak _ = \"A-default\"",
+      ],
+    ),
+    (
+      "ifb",
+      joinNl [
+        "export interface Greet x where",
+        "  speak : x -> String",
+        "  speak _ = \"B-default\"",
+      ],
+    ),
+    ("dog", "public export data Dog = Dog"),
+    (
+      "ca",
+      joinNl [
+        "import ifa.{Speak(..), speak}",
+        "import dog.{Dog(..)}",
+        "impl Speak Dog where",
+      ],
+    ),
+    (
+      "cb",
+      joinNl [
+        "import ifb.{Greet(..), speak}",
+        "import dog.{Dog(..)}",
+        "impl Greet Dog where",
+      ],
+    ),
+  ]
+  expectAll [
+    expectTrue
+      (anyMatchInheritedDefault "ca" "Speak" "speak" (dispositionRows table)),
+    expectTrue
+      (anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table)),
+  ]
+
+-- #1020's cross-module shape: a cross-module `impl` overriding NOTHING
+-- (`Speak Dog`) is `InheritedDefault`; a sibling overriding its one method
+-- (`Loud Cat`) is `Supplied`; a second cross-module empty impl of the SAME
+-- interface (`Loud Dog`) is `InheritedDefault` alongside it.
+test "#1020: cross-module empty and overriding impls disposition correctly" =
+  let table = dispositionsAfter [
+    (
+      "dface",
+      joinNl [
+        "export interface Speak a where",
+        "  speak : a -> String",
+        "  speak _ = \"woof\"",
+        "export interface Loud a where",
+        "  loud : a -> String",
+        "  loud _ = \"WOOF\"",
+      ],
+    ),
+    (
+      "entry",
+      joinNl [
+        "import dface.{Speak(..), speak, Loud(..), loud}",
+        "data Cat = Cat",
+        "data Dog = Dog",
+        "impl Speak Dog where",
+        "impl Loud Cat where",
+        "  loud _ = \"MEOW\"",
+        "impl Loud Dog where",
+      ],
+    ),
+  ]
+  expectAll [
+    expectTrue
+      (anyMatchInheritedDefault
+        "entry"
+        "Speak"
+        "speak"
+        (dispositionRows table)),
+    expectTrue (anyMatchSupplied "entry" "loud" (dispositionRows table)),
+    expectTrue
+      (anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table)),
   ]

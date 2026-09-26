@@ -450,6 +450,13 @@ import types.route_key.{
   installEvidence,
   evDictRoutes,
 }
+import types.disposition.{
+  InstId(..),
+  MethodDisposition(..),
+  DispositionTable,
+  buildDispositionTable,
+  installDispositions,
+}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -6227,6 +6234,11 @@ ieRowInst (ImplRow _ i _ _ _ _) = i
 
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
 ieRowTriple (ImplRow _ _ ir tys reqs _) = (ir, tys, reqs)
+
+-- The impl's own explicit/synthesized method table (§1112 A-3's disposition
+-- producer reads this to decide `Supplied` vs `InheritedDefault` per slot).
+ieRowMethodNames : ImplRow -> List String
+ieRowMethodNames (ImplRow _ _ _ _ _ ms) = ms
 
 -- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
 -- modules, `implDeclsWithReqs` order within one); the rest are INDEXES over it.
@@ -23943,7 +23955,7 @@ clauseIsValue _ (FunClause _ _) = True
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
-  let (coreD, modules, _, _, _) =
+  let (coreD, modules, _, _, _, _) =
     elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
 
@@ -47994,6 +48006,65 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
         chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 keys2 rest
       (finalResults, moreSteps ++ [step])
 
+-- #1112 A-3: the disposition producer.  For every accepted instance
+-- (`ieRowsAll` — every impl row in the whole-graph `IE`, prelude included) and
+-- every method of its interface's `CeRow`, exactly one row: `Supplied` when the
+-- impl names the method, `InheritedDefault` when it does not and the method is
+-- not in `ceRowRequired` (a required method with no default and no override is
+-- rejected upstream, M1 — never reaches this walk at all).
+buildDispositions : DeclEnvs -> DispositionTable
+buildDispositions envs =
+  buildDispositionTable
+    (dispositionRowsOfImpls (ieRowsAll envs.deImpls) envs.deIfaces)
+
+dispositionRowsOfImpls : List ImplRow -> ClassEnv -> List MethodDisposition
+dispositionRowsOfImpls [] _ = []
+dispositionRowsOfImpls (r :: rest) ce =
+  dispositionRowsOfImpl r ce ++ dispositionRowsOfImpls rest ce
+
+dispositionRowsOfImpl : ImplRow -> ClassEnv -> List MethodDisposition
+dispositionRowsOfImpl r ce =
+  let (iface, _, _) = ieRowTriple r
+  let inst = InstId (instRefMid (ieRowInst r)) (instRefSeq (ieRowInst r))
+  let supplied = ieRowMethodNames r
+  match (ceLookupAt
+    (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
+    (ieRowOrd r)
+    ce)
+    None =>
+      panic
+        "disposition table: no interface declaration for \{iface.irName} visible to accepted impl at ordinal \{intToString (ieRowOrd r)}"
+    Some ceRow =>
+      dispositionRowsOfMethods
+        inst
+        iface
+        supplied
+        (ceRowRequired ceRow)
+        (ceRowMethodNames ceRow)
+
+dispositionRowsOfMethods : InstId ->
+  IfaceRef ->
+  List String ->
+  List String ->
+  List String ->
+  List MethodDisposition
+dispositionRowsOfMethods _ _ _ _ [] = []
+dispositionRowsOfMethods inst iface supplied required (m :: rest) =
+  let restRows = dispositionRowsOfMethods inst iface supplied required rest
+  if contains m supplied then
+    Supplied { instance = inst, iface = iface, method = m } :: restRows
+  else if not (contains m required) then
+    InheritedDefault { instance = inst, iface = iface, method = m } :: restRows
+  else
+    -- A required method with no default and no override: M1 pushes a
+    -- diagnostic (accumulate-errors, never an abort — T-ERRORS-ACCUM), so
+    -- elaboration still reaches this walk on an already-ill-typed program.
+    -- No disposition is correct for a slot the program will not compile
+    -- with, so it is skipped rather than fabricated — panicking here turned
+    -- a clean REJECT into a crash on
+    -- test/run_check_agreement_fixtures/p0_17_missing_impl_method.mdk.
+    restRows
+
 -- ── THE graph driver ─────────────────────────────────────────────────────────
 -- What a whole-graph drive produces, for either output selection.  `gdPerMod` and
 -- `gdCoreSchemes` are filled on both; the remaining three are the tree arm's and
@@ -48006,6 +48077,11 @@ data GraphDrive = GraphDrive {
   gdModules : List (String, List Decl),
   gdResidual : List (String, TcDiag),
   gdEvTable : EvTable,
+  -- #1112 A-3: the whole-graph per-method disposition table, filled on both
+  -- arms exactly like `gdEvTable` — the whole-graph IE/CE it is built from
+  -- (`declEnvsRef`) is complete by the graph preamble above, before either
+  -- arm's own work begins.
+  gdDispositions : DispositionTable,
 }
 
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
@@ -48096,6 +48172,12 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
   let perMod = attachCoherenceConflict perModRaw
+  -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
+  -- above is already complete at this point — installed here, once per
+  -- elaboration, on both arms alike (mirroring `installEvidence`'s own
+  -- install-ordering invariant, #2705).
+  let dispositions = buildDispositions driverState.value.declEnvsRef.value
+  let _ = installDispositions dispositions
   match sel
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
@@ -48104,6 +48186,7 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
       gdModules = [],
       gdResidual = [],
       gdEvTable = graphRun.value.evTable.value,
+      gdDispositions = dispositions,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -48129,6 +48212,7 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
         gdModules = map resolveAliasMethodSpellings modules3,
         gdResidual = stickyTypeErrorDiagsSince stickyBefore,
         gdEvTable = graphRun.value.evTable.value,
+        gdDispositions = dispositions,
       }
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —
@@ -48534,7 +48618,11 @@ allModuleLines ((mid, ss) :: rest) =
 -- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
 -- cell.  Nothing consumes it yet: the routes it carries are the same routes already
 -- stamped into the trees' own cells, so a caller that ignores it loses nothing.
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable)
+-- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
+-- TABLE (`compiler/types/disposition.mdk`) — same rationale as the evidence
+-- table: the reader this exists for (X-E, #1403) is not yet written, so a
+-- caller that ignores it loses nothing today.
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable)
 
 -- The multi-module analog of `elaborate`: the composition of `checkModules`
 -- (per-module-frame typecheck, dependency-first) and the EMethodAt route-
@@ -48578,6 +48666,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
     map dropModSchemes g.gdPerMod,
     g.gdResidual,
     g.gdEvTable,
+    g.gdDispositions,
   )
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
