@@ -49,6 +49,7 @@ import frontend.ast.{
   tyConUnresolved,
   tyConBuiltin,
   dDataUnresolved,
+  externDataUnresolved,
   kindAnnSource,
   kindAuthorityUnstamped,
   dTypeAliasUnresolved,
@@ -2345,8 +2346,9 @@ parseTyApp = defer
 
 -- An explicit authority qualifier `T @p` on a whole type application: `@`
 -- after whitespace (the lexer's `TAt`, never the adjacent as-pattern `TAsAt`)
--- followed by the binder's name.  `p` must be bound by a `(p : T)` binder to
--- the left, which resolve checks.
+-- followed by the binder's name, or by a parenthesised join of binder names,
+-- `T @(a | b)`, the spelling a joined qualifier renders as.  Each name must be
+-- bound by a `(p : T)` binder to the left, which resolve checks.
 tyQualTail : Ty -> Parser Ty
 tyQualTail ty = defer
   t <- peekP
@@ -2355,15 +2357,40 @@ tyQualTail ty = defer
 
 tyQualTailFor : Ty -> Token -> Token -> Parser Ty
 tyQualTailFor ty TAt (TIdent n) = defer
+  s <- getPos
   advance
   advance
-  deferPure (TyQual ty n)
+  q <- getPos
+  deferPure (TyQual ty [n] (Some (locOfSpan s q)))
+tyQualTailFor ty TAt TLParen = defer
+  s <- getPos
+  advance
+  advance
+  first <- identNameP
+  rest <- qualJoinTail
+  expectTok TRParen
+  q <- getPos
+  deferPure (TyQual ty (first :: rest) (Some (locOfSpan s q)))
 tyQualTailFor _ TAsAt (TIdent n) = defer
   pos <- getPos
   fatalAtP
     "an authority qualifier is written with a space before the `@`: `String @\{n}`"
     pos
 tyQualTailFor ty _ _ = deferPure ty
+
+-- The `| name` operands after a joined qualifier's first name.
+qualJoinTail : Parser (List String)
+qualJoinTail = defer
+  t <- peekP
+  qualJoinTailFor t
+
+qualJoinTailFor : Token -> Parser (List String)
+qualJoinTailFor TPipe = defer
+  advance
+  n <- identNameP
+  rest <- qualJoinTail
+  deferPure (n :: rest)
+qualJoinTailFor _ = deferPure []
 
 tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
@@ -2648,6 +2675,10 @@ afterPublic = defer
 -- a `fix` that deletes exactly the `public` token at that same location.
 afterPublicFor : Int -> Token -> Parser Decl
 afterPublicFor _ TData = parseData VisPublic
+afterPublicFor pubPos TExtern =
+  fatalAtP
+    "`public` only applies to `data` declarations with constructors, and an `extern` declaration has none; write `export extern`"
+    pubPos
 afterPublicFor pubPos _ =
   fatalAtP "`public` only applies to `data` declarations" pubPos
 
@@ -2684,11 +2715,39 @@ parseFunOrSig pub = defer
 parseExtern : Bool -> Parser Decl
 parseExtern pub = defer
   expectTok TExtern
+  t <- peekP
+  parseExternFor pub t
+
+parseExternFor : Bool -> Token -> Parser Decl
+parseExternFor pub TData = defer
+  expectTok TData
+  name <- upperNameP
+  ps <- tyParamsP
+  t <- peekP
+  externDataEnd pub name ps t
+parseExternFor pub _ = defer
   name <- externName
   expectTok TColon
   ty <- parseTy
   skipNewlines
   deferPure (DExtern pub name ty)
+
+-- An extern type has no body: its values come from externs, so a
+-- constructor list or a derived instance has nothing to describe.
+externDataEnd : Bool ->
+  String ->
+  List (String, Option KindAnn) ->
+  Token ->
+  Parser Decl
+externDataEnd _ _ _ TEqual =
+  failP
+    "an `extern data` type has no constructors: its values come only from externs. Drop the `= …`, or declare an ordinary `data` type"
+externDataEnd _ _ _ TDeriving =
+  failP
+    "an `extern data` type derives nothing: it has no constructors to derive from. Drop the `deriving` clause"
+externDataEnd pub name ps _ = defer
+  skipNewlines
+  deferPure (externDataUnresolved pub name (map fst ps) (map snd ps))
 
 -- ── type alias / newtype / top-level let-group / attributes ──────────────
 -- `type Name a… = ty`
@@ -3061,11 +3120,13 @@ parseBench _ = defer
 parseEffect : Bool -> Parser Decl
 parseEffect pub = defer
   expectTok TEffect
+  s <- getPos
   name <- upperNameP
+  q <- getPos
   dom <- effDomainP
   axes <- effAxesP
   skipNewlines
-  deferPure (effectDeclUnstamped pub name dom axes)
+  deferPure (effectDeclUnstamped pub name dom axes (Some (locOfSpan s q)))
 
 -- A Product label's axis schema, `(Host : Prefix, Method : Set)`: each axis
 -- named with the domain it is drawn from, in the order written, the first
@@ -3593,8 +3654,10 @@ kindExpectedMsg =
 kindAuthorityP : Parser KindAnn
 kindAuthorityP = defer
   advance
+  s <- getPos
   l <- upperNameP
-  deferPure (kindAuthorityUnstamped l)
+  q <- getPos
+  deferPure (kindAuthorityUnstamped l (Some (locOfSpan s q)))
 
 kindAtomEmit : KindAnn -> Parser KindAnn
 kindAtomEmit k = defer
@@ -3802,7 +3865,7 @@ ctorBinderColon TColon = defer
 ctorBinderColon _ = failP "expected a constructor binder"
 
 ctorBinderKind : String -> KindAnn -> Parser (String, KindAnn)
-ctorBinderKind n (k@(KindAuthority _ _)) = deferPure (n, k)
+ctorBinderKind n (k@(KindAuthority _ _ _)) = deferPure (n, k)
 ctorBinderKind n k = defer
   pos <- getPos
   fatalAtP
@@ -4490,7 +4553,7 @@ declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DEffect _ _ _ _ _) i =
+declNameTokIdxAt toks (DEffect _ _ _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DProp _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))

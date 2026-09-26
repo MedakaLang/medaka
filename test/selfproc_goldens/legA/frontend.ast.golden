@@ -15,7 +15,8 @@ effAtomWith : String -> EffParamTy -> EffAtomTy
 effAxisSurface : (String -> String) -> EffParamTy -> String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
-effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Decl
+effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
+externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
@@ -31,7 +32,7 @@ isU64Head : String -> Bool
 isUnsignedHead : String -> Bool
 kindAnnArg : KindAnn -> String
 kindAnnSource : KindAnn -> String
-kindAuthorityUnstamped : String -> KindAnn
+kindAuthorityUnstamped : String -> Option Loc -> KindAnn
 lookupTab : TabKey -> List (TabKey, a) -> Option a
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
@@ -62,6 +63,7 @@ mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 patBoundNames : Pat -> List String
 qualifiedLocal : String -> String -> String
+qualifierSource : List String -> String
 recPatFieldNames : RecPatField -> List String
 requireUnresolved : String -> List Ty -> Require
 sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool

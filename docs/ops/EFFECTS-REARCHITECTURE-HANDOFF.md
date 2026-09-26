@@ -1,19 +1,19 @@
 # Effects rearchitecture session handoff
 
-**Status:** MERGED. [PR #3393](https://github.com/MedakaLang/medaka/pull/3393)
-landed on `main` as `f81ff1d9d` on 2026-09-25 through the merge queue (run
-36163162966, every job green); #3382, #3383, #3391 and #825 closed with it. The
-named-authority work (#3385's arrow half) is on `main`; the data half of #3385
-and the review leftovers listed under "Owed after this session" are the open
-work. Handoff first recorded 2026-09-24.
+**Status:** The arrow half (PR #3393, `f81ff1d9d`) and the data half (PR
+#3445, `ea782db98`) of #3385 are on `main`. The close-out session (branch
+`effects-closeout`, § "Close-out session") answers the data half's owed list,
+fixes #3304, pins #3327 and delivers item 7 (authority-indexed sockets); the
+two remaining checklist items have proposals awaiting ratification there. Handoff first recorded
+2026-09-24.
 
 ## Resume here
 
 The effects rearchitecture is on `main`. Start the next piece of work from
-`main` on a topic branch; there is no effects branch to continue. Read, in
-order, the same documents as before: this handoff (the named-authority session
-and its "Owed after this session"), the architecture, the semantics, the
-typechecker contracts. The reading order below still applies.
+`main` on a topic branch. Read this handoff's § "Close-out session" first: its
+last list is the open work, as proposals awaiting ratification, and nothing in
+it is to be implemented before Val rules on it. Then the architecture, the
+semantics and the typechecker contracts; the reading order below still applies.
 
 Read, in order:
 
@@ -552,7 +552,8 @@ recommended option of a short proposal:**
   existential escape named `'?'` (the binder's cells are collected from the
   fields). The claim fixpoint's superlinearity went with the claims.
 
-**Owed after the data-half session:**
+**Owed after the data-half session** (every item below is answered in §
+"Close-out session"; kept as the record of what was owed):
 
 - A span on `TyQual`, the `ELoc` restore, the `@(a | b)` qualifier form
   (above).
@@ -588,6 +589,357 @@ recommended option of a short proposal:**
 - The engine gate's eval and wasm arms are ORACLES: a fixture using new syntax
   reads as "eval printed nothing" and "wasm emitter: unexpected `(`" until
   `build_oracles.sh --for 'diff_compiler_engines*'` has run on the new source.
+
+## Close-out session (2026-09-25/26)
+
+Branch `effects-closeout` from `ea782db98` (the merge of PR #3445). What
+landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Close-out checkpoint"; the normative changes are in
+[Effects semantics](../spec/EFFECTS-SEMANTICS.md) §4.1 and §6.1 and in
+`docs/spec/SYNTAX.md`; the codes are in `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
+
+**The owed list, each answered by a general rule:**
+
+- *A span on `TyQual`.* `TyQual Ty (List String) (Option Loc)`: the qualifier
+  carries its span from the `@`, and every diagnostic about a name it writes
+  (resolve's `R-UNBOUND-AUTHORITY`, the typechecker's `T-AUTHORITY-KIND` and
+  `T-AUTHORITY-DOMAIN`) is located there. `authorityNamesWritten` returns each
+  name with the span of the atom or qualifier that wrote it.
+- *The `ELoc` restore.* `infer`'s and `inferExpected`'s `ELoc` arms set the
+  node's own span again on the way out, so a check that runs after a
+  subexpression reads that subexpression's span, not its last leaf.
+  The forecast that this would move pinned locations across the JSON and LSP
+  corpora did not hold: one golden moved,
+  `test/check_json_fixtures/projects/imported_help_fix`. Its diagnostic had
+  pointed at the digit `3`, the last leaf of `(Box { width = 2, height = 3
+  }).widht`, and its fix-it range, computed from that span, covered `}).wi`,
+  so applying the fix would have corrupted the source. It now spans the
+  receiver. No LSP golden moved. The locations of five typecheck-error
+  fixtures moved too (their goldens pin messages, not spans); the notable
+  one is a `match` whose arm disagrees with the declared result, which now
+  reports at the `match` (the whole node) where it reported the LAST arm's
+  leaf, right only when the offending arm was the last.
+- *`@(a | b)`.* Spellable. The qualifier's names are a list and elaborate to
+  their join (`qualifyByAll`); the renderer already printed the join this way,
+  so the round trip now closes. A joined field carries neither name alone
+  (`tyCarries`), and a join across domains is `T-AUTHORITY-DOMAIN`.
+- *An unlocated `effect` declaration.* `DEffect` carries the label's span;
+  `checkDomainAxes` reports there. The same class of defect, a declaration-level
+  name with no span, also covered the label in `(p : Authority L)`:
+  `KindAuthority` carries its span, and resolve's unknown-label report uses it.
+- *Index mismatch wording.* An authority index equality is recorded as two
+  exact halves (`wantAuthorityWith True`, `AuthWanted.awExact`, carried to
+  `esfExact`); a failure reads `T-AUTHORITY-INDEX-MISMATCH`, "Authority index
+  mismatch: X vs Y …", once for both halves. It was two row-bound reports.
+- *The two unreproduced S3s.* The policy's `Method=true` decode reproduced: a
+  `--allow` entry was decoded by a schema-blind parser, so `Method=true` and
+  `Method=GET` were prefix strings on a Set axis, and a bare
+  `Net=idp.example.com/*` on a Product label never lifted into its first axis
+  (an admissible plugin was refused). Fixed by one rule for both consumers: the
+  shape check is a pure function (`effectParamProblems`), the typechecker reports
+  its problems at the atom, and `check-policy` keeps each entry written and
+  decodes it against the domain of the label it is compared with
+  (`decodeWrittenParam`), refusing a malformed entry with the problem rather
+  than reading it as the whole domain. The unused round-trip renderer
+  (`manifestToAllowStr`) spelled a top axis `=true`; it now omits it. Naming an
+  existential cell after the field that carries it did NOT reproduce: every
+  site renders the binder's name (`AnyH h`, `AnyR { hd = zz, n }`,
+  `AnyR { hd = h2, ... }` in a match arm, an escape, a record pattern, a
+  mismatch inside the arm; all say `p`/`q`, never `h`, `hd`, `zz`, `h2`).
+  Retired.
+
+**Found while closing, each reproduced first and fixed as a rule:**
+
+- A qualifier naming a named argument that no atom or index names was
+  silently dropped: `idQ : (a : String) -> String @a` published `String` and a
+  caller's `readFile (idQ a)` reached the whole domain. An authority has
+  exactly one domain, so zero is `T-AUTHORITY-DOMAIN` at the qualifier.
+- `Authority L` over an atomic label (`Beep`, `IO`) was accepted as a slot
+  every index trivially fills; it is `T-AUTHORITY-KIND` at the label.
+- An opened existential was described as "an authority the caller chooses";
+  `openedAuthvarsRef` records the cells a pattern opened and the failure says
+  what they are.
+- #3304 had a second half: the label's NAME crossed a member-list hop once
+  `nsEffects` carried it, but its declaring identity did not
+  (`typeOriginExports` carried `effect:` origin rows for wildcard hops only),
+  so `<Logging>` from the facade and `<Logging>` from `doLog` were two labels
+  (`T-EFFECT-LEAK`). `reexportedEffectOrigins` applies the same binding rule.
+
+**The whole-diff review (on `1c431448e`), reproduced first and answered:**
+
+- *S1: `fmt --write` wrote unparseable source* for a qualified application
+  head (`(Result String @a) E` printed bare). The bare form is now only for
+  the type a row wraps (`printRowResult`).
+- *S1/S2: a joined field could not be built with inferred indices*
+  (`Two "cfg/x"` at `@(p | q)` failed, "the caller chooses"). The first
+  answer, raising every flexible member of the join, was WITHDRAWN after the
+  second round: it tied an opened existential to the data index and a read
+  escaped its bound at runtime (`peek (E s) = readFile s` over `E (p : …)
+  (String @(p | q))`), merged independent indices of an unsigned reader, and
+  hung the unscoped path. The construction is refused loudly again; owed,
+  with semantics §4.1 saying why (no principal solution).
+- *S0, older than this branch: an empty bare literal on a Product label meant
+  the whole domain*, in source (`<Web "">`) and in a policy (`Web=`). The
+  literal is checked as the first axis's value before the lift canonicalises
+  it.
+- *S0-class, older: the field fix-it's range was the SUGGESTION's length*, so
+  `(b.heigh)` lost its `)`. It is now the written name's length. The field
+  name has no span of its own, so a receiver separated from its `.` by
+  whitespace (`b .widht`) still mislocates the fix: owed, with the reason.
+- *S2: a qualifier naming a non-String argument* (`@(a | n)`, `@n` with `n :
+  Int`) was dropped silently; it is `T-AUTHORITY-BINDER` at the qualifier.
+- *S3:* quoted set members in a policy never matched; they are unquoted.
+  `@(p | p)` now carries `p`. SYNTAX.md said "one label's domain" where the
+  rule is one domain shape.
+- *Second round (on `71d035fd9`), reproduced and answered:* besides the
+  withdrawn join rule above, an S0 that is on `main` since the data half: an
+  unsigned `peek h e = match e; E1 s => both h s` published `H p -> E1 ->
+  <FileRead p> String` over the OPENED authority, so `peek (H "cfg/a") (pack
+  ())` read `/etc/hostname` under `<FileRead "cfg/*">`. The arm's own close
+  checks escape, but the authority solve runs at the binding's close, after
+  it, and linked the clause parameter's index to the opened cell. Every
+  solution the solver writes now passes through `widenOpenedFor`: an
+  existential opened in an arm younger than the variable becomes its
+  domain's top. The unscoped path linked a variable to a join containing
+  itself (a hang in a `test` block); it now takes the lower bound. A trailing
+  `@x` after a signature is an ATTRIBUTE, not a stacked qualifier, so the
+  owed item below about `String @b @a` is really the parser and `fmt`
+  treating `@a` as an attribute (older, S0-class: `fmt` rewrites it to
+  `@inline`).
+- *Third round (on `db7ba9382`), focused on the widening:* the same escape
+  by another route, also on `main`: `peek f e = match e; E1 s => run1 s f`,
+  where the arm's instance of `run1`'s binder reaches `f` only in a ROW ATOM.
+  Level adjustment lowered a row's tail but not the authorities its atoms
+  name, so that instance stayed as young as the opened authority and the
+  widening kept it. `lowerRowLevels` now lowers atom authorities too, and a
+  collapsed class is widened for its oldest member. The unscoped path
+  (`test` blocks) now refuses loudly where it hung; it fixes a variable at
+  its first lower bound, so a later wider bound is refused (S2, owed, with
+  the empty `Binding ''` name in its message).
+- *Not acted on, recorded as owed (older than this branch, S2):* an alias
+  `type F = (a : String) -> String @a` erases the named authority silently; a
+  named argument inside a higher-order domain (`((a : String) -> String @a)
+  -> Int`) is reported as unbound (`namedArgTypes` walks the top spine only);
+  a stacked `String @b @a` and a qualified non-String `Int @a` are accepted
+  without a report. The `match` location above is a precision loss owed to
+  checking arms against the expected result type.
+- *A design question for Val, found while pinning the join rule:* the Prefix
+  join is the longest common prefix saturating to ⊤ (semantics §2.2), so a
+  WRITTEN bound of two literals of one label, `<FileRead "cfg/*", FileRead
+  "tmp/*">`, is the whole domain: the signature publishes `<FileRead>` and a
+  body reading `/etc/x` is accepted with no report (on `main` too). The same
+  holds for `Two "cfg/*" "tmp/*"` over a `String @(p | q)` field. The manifest
+  stays honest (it reports the top), but the written signature is widened
+  silently. Candidate rules: report a written join that saturates, or give
+  the Prefix domain finite unions; neither is taken here.
+
+**Delivery item 7's prerequisites:**
+
+- #3327 does not reproduce on `ea782db98`: `recordDeclKinds` (the data half)
+  records every head's kinds before any field elaborates. Pinned in the matrix:
+  both declaration orders accept, and a genuinely mis-kinded use is reported at
+  its own declaration in either order.
+- #3304 fixed as above; pinned by `test/import_form_fixtures/reexport_effect_label`
+  (resolve: a member list naming the label, a wildcard, and a member list NOT
+  naming it, which is refused) and a matrix row through
+  `checkModulesDiagsChain` (typecheck: the identity arrives).
+
+**Owed after the close-out session** (delivery item 7 is delivered; checklist
+items 2 and 3 are proposals awaiting Val's ratification):
+
+*Delivery item 7, DELIVERED (Val ratified Fable's recommendation,
+2026-09-26).* A survey of `stdlib/` found one family that lost an authority
+through an opaque value, the `Net` socket handles; files, commands and
+environment variables are passed as strings. Fable (consulted on the principled
+fix) showed the draft's premise wrong: every value is one tagged word
+(RUNTIME-DESIGN §8), so a type with no constructors whose values only externs
+return needs no new representation. What landed, each a general rule:
+
+- **`extern data`.** `export extern data Socket (h : Authority Net)` and
+  `ListenSocket (a : Authority Net)`, declared in `core.mdk` (the catalog
+  `runtime.mdk` stays extern-only, which every stage assumes). No
+  constructors, no `deriving`, never `public`; a field of such a type
+  carries its parameter (a registered non-public head is trusted).
+- **The catalog is the proof source.** `netTcpConnect`/`netConnectStart`
+  return `Socket host`, `netTcpListen` returns `ListenSocket host`, and every
+  extern that consumes a socket is charged at its index (`netSend : Socket h
+  -> … <Net h> …`). Listener operations take a `ListenSocket a`
+  (`netCloseListener`, `netSetNonblockListener`, both over the existing C
+  shims). An accepted socket is at the listener's authority (`netTcpAccept :
+  ListenSocket a -> <Net a> Result String (Socket a)`).
+- **Readiness is a timed wait.** `ioPoll`, `waitRead`, `waitWrite` and the
+  poller are `<Clock>`: every socket a wait watches was opened under a grant
+  of its own. `socketFd`/`listenSocketFd` read the descriptor number (an
+  identity in the emitter); no extern that reaches an endpoint takes a number.
+- **`net` and `net_async` build nothing.** `Connection h`/`Listener a` are
+  aliases of the socket heads; every operation carries the index, the
+  callbacks of `withConnection`, `withListener`, `serveLoop` and `serve` open
+  their row (`<Net host | e>`), and a parked `net_async` operation performs
+  `<Clock, Net h | e>`. `io.getEnvOr` is `(name : String) -> String -> <Env
+  name> String`.
+- **Holes closed:** a public `Connection Int` constructor let any importer wrap
+  any descriptor (`close (Connection 1)` closed stdout under `<Net>`); a
+  listener closed as a connection; the PDS server and its test stub called
+  the fd externs on raw numbers; the signal pipe's number was a valid
+  `netRecv` argument. Pinned by `test/typecheck_error_fixtures/effect_socket_{ok,launder,forge}`.
+- **Found on the way, each a general rule:** an extern's signature was
+  elaborated before the prelude's declared kinds were recorded, so an index
+  slot in a catalog signature read as a type (`graphPreamble` records them
+  first); an `Effect`-kinded index row compared its atoms by containment, so
+  `Async <Net κ | e>` never unified with `Async <Net host | e>`
+  (`unifyIndexAtomAuthorities`: same-label authorities are an index
+  equality, then the rows compare labels); the scheme printer handed a row
+  variable a letter an authority binder already had (`<Net a | a>`).
+- Bootstrap: `extern data` in `core.mdk` needs an emitter that parses it, so
+  the seed was re-minted twice.
+
+Not taken: a `Mode` axis separating dial from bind authorities (`Net
+"0.0.0.0"` reads as an endpoint); `ByteBlock` as an `extern data` (it is
+still a hard-coded primitive).
+
+*Item 7 review round (on `9966c9d87`).* Each finding was reproduced by the
+reviewer on a built binary, each refusal paired with a control.
+
+- **S0, older rule, fixed.** A redeclared catalog extern was compared to
+  the catalog by type heads only, so `extern stringIndexOf : String ->
+  String -> Option (Socket "api.example.com/*")` typed any number as a socket
+  and the built program sent on it. The same route was a general coercion
+  (`Option String` for `Option Int` segfaults natively). A redeclaration
+  must now be an instance of the catalog's signature (`ffiSigInstance`): it
+  may fix type variables and index authorities, and an argument's binder
+  matches only the declaration's binder at the same position, so a dial
+  cannot be re-indexed either. The row rule instantiates the catalog row by
+  the same match, so an honest `Socket "a.com/*" -> … <Net "a.com/*">` is
+  accepted where it was refused. One fixture had declared `writeFile` at a
+  swapped `Result` and now reads the catalog's type. Pinned by
+  `effect_socket_redeclare` and `effect_socket_redeclare_ok`.
+- **S2, fixed in the spec.** `extern data` read as a construct a program can
+  use. A foreign extern cannot return one and a redeclaration is an
+  instance, so a program's own `extern data` names a type with no values;
+  SYNTAX and §4.1 say so.
+- **S2, wording fixed.** `waitRead` and `ioPoll` claimed every descriptor
+  they watch was a socket opened under a grant; they read and write nothing,
+  which is the reason they are `<Clock>`.
+- **S3, fixed.** `public export extern …` now names the extern case, with
+  the same fix-it.
+- **CI on `9966c9d87`, fixed.** The multi-module emitter gates pass an empty
+  prelude, so the catalog's `Socket h` had no declared kind; they now pass
+  core's `extern data` lines, derived from `core.mdk`. `check_ir_floor` was
+  over: the early kind pass recorded every core head a second time
+  (`universeDataCtors` persists across the run), so every missed lookup
+  scanned duplicates. The catalog now elaborates inside
+  `withDeclParamKinds`, which records only heads with a declared non-`Type`
+  kind and restores the tables. That recovers 2.1M; the remaining 4.9M is the
+  catalog's indexed network signatures, which every run elaborates. `main`
+  itself measured 0.25% under the `check` ceiling on the runner, so the
+  ceiling was re-derived by the gate's own 20% convention, with the split
+  written beside it. Val kept the re-derived ceiling (2026-09-26).
+
+*Second review round (on `5396fd785`).* The instance match walked through
+every effect row, so two S0s were new and two older ones stood:
+
+- a type variable instantiated with an effectful function type was read back
+  as a pure one (`extern Ref : (Unit -> <IO> Unit) -> Ref (Unit -> Unit)`),
+  laundering any effect or authority, in one module or across two;
+- a bare row compared by rendering lost label identity, so one module's
+  `Beep` passed as another's;
+- older: a callback's row was never compared, and a catalog row variable
+  read as empty (`arrayMakeWith … (Int -> <IO> a) -> <> Array a`);
+- older: a row moved to an earlier arrow escaped (`ffiWrittenRow` read only
+  the first row on the spine).
+
+Rows are now part of the instance relation. Off the arrow spine they match
+exactly, labels by identity, and a catalog row variable binds the row the
+declaration wrote for it. The row each arrow's result carries is compared
+arrow by arrow, the catalog's instantiated by the same match. Pinned by
+`effect_catalog_redeclare_rows` and its `_ok` control.
+
+*Third review round (on `5b098969a`).* One S0: two rows compared as equal
+when they had the same length and every atom of the first had a partner in
+the second, so `<Stdout, Stdout>` equalled `<Stdout, FileWrite>` and a
+catalog variable bound at the first gained `FileWrite` at its next
+occurrence (`setRef`, and `Ref` through a callback's callback). The
+row-as-type-argument form was new here, the others older. Rows and their
+variables now compare as sets in both directions; pinned in
+`effect_catalog_redeclare_rows`. The narrow message now names the arrow it
+compared when the signature has more than one.
+
+*Val's rulings on the close-out (2026-09-26).*
+
+- The `check` Ir ceiling stays re-derived at 1,295M.
+- `pdsSignalStart`/`pdsSignalRequested` keep `<Net>`, documented in §7 and
+  the catalog as a deliberate over-charge until signals have a label.
+- `Socket`/`ListenSocket` keep their names; the fix is general: a program's
+  own type may shadow a prelude type. Its own issue and PR.
+- A redeclaration may not widen an argument-bound index to `*`; the rule
+  stays "fix variables, never an argument's binder".
+- Checklist item 2 ratified as proposed, both halves: inferred residuals with
+  rendering (written residual syntax deferred), and delayed joins for arrows
+  and covariant data slots. A follow-up PR after #3458.
+- Checklist item 3 ratified as proposed: one invocation summary for policy
+  and manifest, the two built-in protocols, explicit unresolved authorities,
+  user protocol syntax deferred. Its own PR, after item 2's.
+- The Prefix join: a written row keeps a set of prefixes per label, and a
+  performed atom is within it when any bound atom covers it; the join is
+  used only where one authority value is needed. A §2.2 spec change, its
+  own issue and PR.
+- #3385 closes when #3458 merges. Successors: #3462 (item 2), #3463 (item
+  3), #3464 (prefix sets), #3465 (prelude type shadowing).
+
+Owed from the review rounds, not acted on:
+
+- The narrow message's "claims" omits the declaration's row variables, and
+  an atom miss and a row-variable miss on one declaration are two errors at
+  one location.
+- Two same-spelled aliases from different modules render identically in the
+  shadow message.
+- The narrow message for an index the declaration leaves free reads the
+  catalog's `<Net h>` as `<Net>` (the top). The refusal is right, the
+  wording is not. Older: it can also over-report which atoms are missing.
+- A `No impl of Debug for Socket h` reject advises `deriving`, which an
+  `extern data` cannot take and which a core-owned head cannot take from user
+  code. The hint needs to know where the head is declared.
+
+*Checklist item 2, scope proposal.* (a) Residual constraints in schemes: a
+generalized binding carries its unsolved inequalities between its own
+quantified authority variables (`C ⇒ τ`), instantiated with the scheme's one
+substitution at each use and re-emitted as obligations in the user's scope;
+anything mentioning a non-quantified variable is decided where it is today.
+IN: inferred residuals (unsigned bindings), rendering them in hover/doc.
+DEFER: a written surface for residuals in signatures (a signature would stay
+less expressive than inference until it lands, which is itself a design
+question). (b) Delayed joins: when branch alternatives have unknown shapes,
+record a join constraint the solver resolves once the shapes are known,
+instead of HM equality. IN: arrows and covariant data slots, the cases the
+envelope already handles for known shapes. This is a completeness fix (it
+rejects fewer honest programs); no known laundering depends on it.
+
+*Checklist item 3, scope proposal.* One invocation summary in `types/`,
+consumed by `check-policy` and `manifest`, replacing `monoEffects`' structural
+walk. Given a scheme and the host's protocol (force the entry; call it with
+N arguments; any function value it returns may be invoked), it returns the
+forcing row joined with the latent rows the host can reach (positive
+positions only, by declared variance), plus the atoms whose authority is
+still symbolic, reported explicitly (manifest `= true` with an "unresolved"
+note, policy "not proven"). IN: the two built-in protocols the verbs use
+today. DEFER: a user-declared protocol syntax. Today's walk descends into
+every data argument whatever its variance, so it counts a row in a callback
+slot the host would supply, which over-rejects; the change narrows that
+without admitting anything the host can run.
+
+**Traps paid for in this session:**
+
+- `medaka test` on a native gate file reads `$MEDAKA_ROOT` for the lint
+  probe's stdlib index; run bare, eight `rule-stdlib-reimpl` rows read as
+  failures. `medaka gate run` (and `run_gates.sh`) set it.
+- A pristine `main` tree for pin discrimination needs `compiler/`, `stdlib/`,
+  `runtime/`, the `main` binary AND its emitter beside it (`medaka test`
+  builds natively); both binaries are in the build cache
+  (`$MEDAKA_SCRATCH/medaka-build-cache`). A test program string the old parser
+  cannot read panics the whole run, so drop that group to see the rest.
+- `diff_compiler_fmt`'s typecheck-error rows grade `check_main`'s sorted
+  output, so an intended wording change moves `*.tc.golden` files, which no
+  capture script regenerates; regenerate from the oracle and read the diff.
 
 ## Delivered code and invariants to preserve
 
@@ -653,9 +1005,9 @@ claiming purity. Keep inference, signatures, docs and snapshots consistent.
 
 ## What remains after the merge
 
-The adversarial review and the CI run on the final head are done (see the
-named-authority session). What the architecture's delivery checklist still
-lists as open:
+Updated by the close-out session: item 1 below is delivered (PR #3445), item 4
+is answered by the close-out checkpoint, and items 2 and 3 have scope
+proposals awaiting ratification in § "Close-out session". The original list:
 
 1. Qualified data fields, constructor proof sources and existentials (#3385's
    data half). Named authorities on arrows, the underscore's retirement, label

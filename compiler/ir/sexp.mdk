@@ -99,7 +99,7 @@ tySexp (TyAuth p _) = node "TyAuth" [effParamSexp p]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 tySexp (TyNamed n t) = node "TyNamed" [escStr n, tySexp t]
-tySexp (TyQual t n) = node "TyQual" [tySexp t, escStr n]
+tySexp (TyQual t ns _) = node "TyQual" (tySexp t :: map escStr ns)
 
 constraintSexp : Constraint -> String
 constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
@@ -266,6 +266,8 @@ declSexp (DTypeSig p n t) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern p n t) = node "DExtern" [boolStr p, escStr n, tySexp t]
 declSexp (DFunDef p n ps b) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]
+declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataExtern = True }) =
+  node "DExternData" [visSexp vis, escStr n, slist (map escStr ps)]
 declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, dataDerives = ds }) = node
   "DData"
   [
@@ -276,7 +278,7 @@ declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, 
     slist (map (d => escStr (deriveRefName d)) ds),
   ]
 declSexp (DUse pub path _) = node "DUse" [boolStr pub, usePathSexp path]
-declSexp (DEffect pub n dom axes _) = node "DEffect" [
+declSexp (DEffect pub n dom axes _ _) = node "DEffect" [
   boolStr pub,
   escStr n,
   optStrSexp dom,

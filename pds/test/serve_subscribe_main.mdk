@@ -95,7 +95,7 @@ findHeaderEnd buf i =
    response by `content-length`, and a 101 has no body and carries no such
    field — the bytes after its header section are the WebSocket stream. So
    this stops at the terminator and hands the remainder back. -}
-readHead : Connection ->
+readHead : Connection * ->
   Array Int ->
   <Net> Result String (Int, String, Array Int)
 readHead conn pending = match findHeaderEnd pending 0
@@ -146,7 +146,7 @@ contentLengthRe = mustCompile "(?i)^content-length:(.*)$"
    Framed by `content-length`, which every refusal this server writes carries:
    the 101 path has no body to read and `readHead` hands back whatever followed
    the header section, so the two readers cannot be one. -}
-readRefusalBody : Connection ->
+readRefusalBody : Connection * ->
   String ->
   Array Int ->
   <Net> Result String String
@@ -155,7 +155,7 @@ readRefusalBody conn headerText pending =
     None => Err "serve_subscribe: refusal carried no content-length"
     Some want => readBodyBytes conn want pending
 
-readBodyBytes : Connection -> Int -> Array Int -> <Net> Result String String
+readBodyBytes : Connection * -> Int -> Array Int -> <Net> Result String String
 readBodyBytes conn want have =
   if arrayLength have >= want then
     Ok (fromUtf8 (sliceClamped 0 want have))
@@ -173,7 +173,7 @@ readBodyBytes conn want have =
    with the wrong `Sec-WebSocket-Accept` has not completed RFC 6455's
    handshake, and a client that skipped the check would call that a
    subscription. -}
-mustUpgrade : Connection -> String -> <IO, Net> Array Int
+mustUpgrade : Connection * -> String -> <IO, Net> Array Int
 mustUpgrade conn cursor =
   let () = mustSend conn (handshakeRequest cursor)
   match readHead conn [||]
@@ -199,7 +199,7 @@ mustUpgrade conn cursor =
 {- | The next complete frame, reading as needed. `None` means the peer closed
    the TCP connection without a Close frame, which every case here treats as
    the stream ending. -}
-readFrame : Connection ->
+readFrame : Connection * ->
   Array Int ->
   <Net> Result String (Option (Frame, Array Int))
 readFrame conn buffered = match decodeFrame FromServer maxFrameBytes buffered 0
@@ -227,7 +227,7 @@ maxFrameBytes = 16777216
    allows to be interleaved. A Close ends the stream.
 
    `Err` is a transport failure; `Ok None` is the stream ending. -}
-nextEvent : Connection ->
+nextEvent : Connection * ->
   Array Int ->
   <Net> Result String (Option (Array Int, Array Int))
 nextEvent conn buffered = match readFrame conn buffered
@@ -297,11 +297,11 @@ report label ok detail =
     let () = println "\{label}: FAIL \{detail}"
     exit 1
 
-mustConnect : Int -> <Net> Connection
+mustConnect : Int -> <Net> Connection *
 mustConnect port =
   resultOrPanic "serve_subscribe: connect failed" (connect "127.0.0.1" port)
 
-mustSend : Connection -> Array Int -> <Net> Unit
+mustSend : Connection * -> Array Int -> <Net> Unit
 mustSend conn bytes = match sendAll conn bytes
   Ok () => ()
   Err message => panic "serve_subscribe: send failed: \{message}"
@@ -313,7 +313,7 @@ ignoreResult (Err _) = ()
 -- | Say goodbye the way RFC 6455 §5.5.1 says a client does, then drop the
 -- socket. The server's own close frame is not waited for: every case has
 -- already read what it came for.
-sayGoodbye : Connection -> <Net> Unit
+sayGoodbye : Connection * -> <Net> Unit
 sayGoodbye conn =
   ignoreResult (sendAll conn (encodeClientFrame maskKey (closeFrame 1000 "")))
 
@@ -328,7 +328,7 @@ readBudget = seconds 20
 silenceBudget : Duration
 silenceBudget = seconds 3
 
-armRead : Connection -> Duration -> <Net> Unit
+armRead : Connection * -> Duration -> <Net> Unit
 armRead conn budget = ignoreResult (setTimeout conn budget)
 
 -- # Writing, so a subscriber has something to receive
@@ -386,7 +386,7 @@ runLive port token did collection rkeyPrefix =
   let () = sayGoodbye conn
   ignoreResult (close conn)
 
-twoCommits : Connection -> Array Int -> <Net> Result String (Int, Int)
+twoCommits : Connection * -> Array Int -> <Net> Result String (Int, Int)
 twoCommits conn buffered = match commitSeq conn buffered
   Err message => Err message
   Ok (first, rest) => map ((second, _) => (first, second)) (commitSeq conn rest)
@@ -394,7 +394,7 @@ twoCommits conn buffered = match commitSeq conn buffered
 -- | The sequence number of the next `#commit` event, refusing any other kind:
 -- an `#info` or an error frame where a commit is expected is a different
 -- stream from the one the case is grading.
-commitSeq : Connection -> Array Int -> <Net> Result String (Int, Array Int)
+commitSeq : Connection * -> Array Int -> <Net> Result String (Int, Array Int)
 commitSeq conn buffered = match nextEvent conn buffered
   Err message => Err message
   Ok None => Err "serve_subscribe: stream ended before the next #commit"
@@ -450,7 +450,7 @@ runGenesis port =
 genesisKinds : List String
 genesisKinds = ["#identity", "#account", "#commit", "#sync"]
 
-readEvents : Connection ->
+readEvents : Connection * ->
   Array Int ->
   Int ->
   List (DagCbor, DagCbor) ->
@@ -726,7 +726,10 @@ runCeiling port ceiling did =
       "\{intToString ceiling} subscriptions held; attempt \{intToString (ceiling + 1)} answered \{intToString refusal} with no upgrade (wanted 503); describeRepo answered \{intToString answered} in \{floatToString elapsed}s (wanted 200)"
   closeAll held
 
-holdSubscriptions : Int -> Int -> List Connection -> <IO, Net> List Connection
+holdSubscriptions : Int ->
+  Int ->
+  List (Connection *) ->
+  <IO, Net> List (Connection *)
 holdSubscriptions port remaining held =
   if remaining <= 0 then
     held
@@ -767,7 +770,7 @@ describeRepoStatus port did =
   let () = ignoreResult (close conn)
   status
 
-closeAll : List Connection -> <Net> Unit
+closeAll : List (Connection *) -> <Net> Unit
 closeAll [] = ()
 closeAll (conn :: rest) =
   let () = ignoreResult (close conn)
@@ -810,10 +813,10 @@ runHold port hold token did collection rkey =
 -- # Frame-level cases: RFC 6455 §5.4 fragmentation and §5.5.1 close
 
 -- | One client frame on the wire, masked the way §5.1 requires of a client.
-sendFrame : Connection -> Frame -> <Net> Unit
+sendFrame : Connection * -> Frame -> <Net> Unit
 sendFrame conn frame = mustSend conn (encodeClientFrame maskKey frame)
 
-sendFrames : Connection -> List Frame -> <Net> Unit
+sendFrames : Connection * -> List Frame -> <Net> Unit
 sendFrames _ [] = ()
 sendFrames conn (frame :: rest) =
   let () = sendFrame conn frame
@@ -826,7 +829,7 @@ sendFrames conn (frame :: rest) =
    and `Some 0` is a Close frame carrying no status code at all. Both are
    distinct answers from any code, and a case that folded them into one would
    accept a server that said nothing where a code was owed. -}
-serverCloseCode : Connection -> Array Int -> <Net> Result String (Option Int)
+serverCloseCode : Connection * -> Array Int -> <Net> Result String (Option Int)
 serverCloseCode conn buffered = match readFrame conn buffered
   Err message => Err message
   Ok None => Ok None
@@ -891,7 +894,7 @@ runFragment port =
   let () = sayGoodbye conn
   ignoreResult (close conn)
 
-nextPong : Connection -> Array Int -> <Net> Result String (Option String)
+nextPong : Connection * -> Array Int -> <Net> Result String (Option String)
 nextPong conn buffered = match readFrame conn buffered
   Err message => Err message
   Ok None => Ok None
@@ -947,7 +950,7 @@ soakCommitPath body = match mapField body "ops"
       Err "serve_subscribe: synthetic soak commit has no create path"
   _ => Err "serve_subscribe: synthetic soak commit must carry one create op"
 
-soakLoop : Connection ->
+soakLoop : Connection * ->
   Array Int ->
   Float ->
   Float ->

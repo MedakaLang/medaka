@@ -166,19 +166,20 @@ awaitAny waits = Await waits (u => Done ())
 
 {- | A wait for `fd` to become readable, as a wait for `awaitAny`.
 
-   Polls the descriptor, so `<Net>` joins `e`. -}
+   A timed wait on the descriptor, so `<Clock>` joins `e`. It reaches no
+   endpoint: waiting reads and writes nothing on `fd`. -}
 export
-waitRead : Int -> Wait <Net | e>
+waitRead : Int -> Wait <Clock | e>
 waitRead fd = WaitRead fd systemPoller
 
 {- | A wait for `fd` to become writable, as a wait for `awaitAny`.
 
-   Polls the descriptor, so `<Net>` joins `e`. -}
+   A timed wait on the descriptor, so `<Clock>` joins `e`. -}
 export
-waitWrite : Int -> Wait <Net | e>
+waitWrite : Int -> Wait <Clock | e>
 waitWrite fd = WaitWrite fd systemPoller
 
-systemPoller : Poller <Net | e>
+systemPoller : Poller <Clock | e>
 systemPoller = Poller (fds interests timeout => ioPoll fds interests timeout)
 
 {- | A wait for `flag` to be set, as a wait for `awaitAny`.

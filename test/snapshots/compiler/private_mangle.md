@@ -1475,7 +1475,7 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --     exists because of that split — an alias arm here would rename half of it.
 renameDecl _ (d@(DExtern _ _ _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
-renameDecl _ (d@(DEffect _ _ _ _ _)) = d
+renameDecl _ (d@(DEffect _ _ _ _ _ _)) = d
 renameDecl _ (d@(DTypeAlias { tyAliasName = _, ... })) = d
 
 -- rename a data variant's constructor name (payload types are unaffected).
@@ -2090,7 +2090,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "renameDecl") (EVar "rm")) (EVar "d"))))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DExtern" PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DUse" PWild PWild PWild))) (EVar "d"))
-(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DEffect" PWild PWild PWild PWild PWild))) (EVar "d"))
+(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DEffect" PWild PWild PWild PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" PWild)) true))) (EVar "d"))
 (DTypeSig false "renameVariant" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Variant") (TyCon "Variant"))))
 (DFunDef false "renameVariant" ((PVar "rm") (PCon "Variant" (PVar "n") (PVar "payload"))) (EApp (EApp (EVar "Variant") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "payload")))
@@ -2499,7 +2499,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "renameDecl") (EVar "rm")) (EVar "d"))))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DExtern" PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DUse" PWild PWild PWild))) (EVar "d"))
-(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DEffect" PWild PWild PWild PWild PWild))) (EVar "d"))
+(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DEffect" PWild PWild PWild PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" PWild)) true))) (EVar "d"))
 (DTypeSig false "renameVariant" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Variant") (TyCon "Variant"))))
 (DFunDef false "renameVariant" ((PVar "rm") (PCon "Variant" (PVar "n") (PVar "payload"))) (EApp (EApp (EVar "Variant") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "payload")))

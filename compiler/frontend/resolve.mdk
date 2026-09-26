@@ -519,9 +519,9 @@ checkTypeGo bound cur env (TyEffect labels _ t) =
   (errs ++ e2, b2)
 checkTypeGo bound cur _ (TyNamed n _) =
   ([MisplacedAuthorityBinder n cur], bound)
-checkTypeGo bound cur env (TyQual t n) =
+checkTypeGo bound cur env (TyQual t ns l) =
   let (e1, b1) = checkTypeGo bound cur env t
-  (e1 ++ checkAuthorityName b1 cur n, b1)
+  (e1 ++ flatMap (checkAuthorityName b1 (orElseLoc l cur)) ns, b1)
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -556,7 +556,7 @@ checkTypesGo bound cur env (t :: ts) =
 -- The names a declaration head binds as authorities: its `Authority`-kinded
 -- parameters (positional with the name list, as the kinds are stored).
 authorityParams : List String -> List (Option KindAnn) -> List String
-authorityParams (p :: ps) ((Some (KindAuthority _ _)) :: ks) =
+authorityParams (p :: ps) ((Some (KindAuthority _ _ _)) :: ks) =
   p :: authorityParams ps ks
 authorityParams (_ :: ps) (_ :: ks) = authorityParams ps ks
 authorityParams _ _ = []
@@ -567,7 +567,7 @@ checkKindLabels : Env -> List (Option KindAnn) -> List ResError
 checkKindLabels env kinds = flatMap (checkKindLabel env) kinds
 
 checkKindLabel : Env -> Option KindAnn -> List ResError
-checkKindLabel env (Some (KindAuthority l _)) = checkEffect None env l
+checkKindLabel env (Some (KindAuthority l _ loc)) = checkEffect loc env l
 checkKindLabel _ _ = []
 
 checkBinderLabels : Env -> List (String, KindAnn) -> List ResError
@@ -1943,7 +1943,7 @@ dataRecordNames (_ :: rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _ _ _) :: rest) = n :: effectNames rest
+effectNames ((DEffect _ n _ _ _ _) :: rest) = n :: effectNames rest
 effectNames ((DAttrib _ d) :: rest) = effectNames (d :: rest)
 effectNames (_ :: rest) = effectNames rest
 
@@ -4233,26 +4233,26 @@ nsIfaceMethods = ExpNs {
         (filterContains src.expInterfaces (reexportOrigins path src)),
 }
 
--- exported effect labels (Phase 146).  The only namespace whose carriage rule
--- never consults `reexportBindings` at all: a label has no members and no
--- alias, so a wildcard hop carries the whole list and every other form
--- carries nothing.
+-- exported effect labels (Phase 146).  A hop carries a label by the same
+-- binding rule as every other namespace: a wildcard carries every exported
+-- label, a member list or a single name carries the labels it names, and an
+-- alias carries nothing.
 nsEffects : ExpNs String
 nsEffects = ExpNs {
   nsGet = exp => exp.expEffects,
   nsDirectOf =
     d => match d
-      DEffect True n _ _ _ => [n]
+      DEffect True n _ _ _ _ => [n]
       _ => [],
   nsCarry =
     path src => match path
       UseWild _ => src.expEffects
-      _ => [],
+      _ => localsExportedFrom src.expEffects (reexportBindings path src),
 }
 
 -- The identity-carrying twin of `nsEffects`: no direct rule (the declaring
 -- module is supplied by `buildExports`, which has the id), and the same
--- wildcard-only carriage.
+-- carriage, each carried label keeping its declaring module.
 nsEffectOrigins : ExpNs (String, String)
 nsEffectOrigins = ExpNs {
   nsGet = exp => exp.expEffectOrigins,
@@ -4260,8 +4260,18 @@ nsEffectOrigins = ExpNs {
   nsCarry =
     path src => match path
       UseWild _ => src.expEffectOrigins
-      _ => [],
+      _ => carriedEffectOrigins src.expEffectOrigins (reexportBindings path src),
 }
+
+-- The (local, declaring module) pair of each re-exported label a hop's
+-- (origin, local) bindings name.
+carriedEffectOrigins : List (String, String) ->
+  List (String, String) ->
+  List (String, String)
+carriedEffectOrigins _ [] = []
+carriedEffectOrigins origins ((o, l) :: rest) = match lookupAssoc o origins
+  Some m => (l, m) :: carriedEffectOrigins origins rest
+  None => carriedEffectOrigins origins rest
 
 -- pub `newtype` (ctorName, typeName) pairs — the deliberately module-private
 -- constructors NoExportedConstructors' import path must refuse rather than
@@ -5132,16 +5142,35 @@ importedEffectOrigins known path =
     None => []
     Some src => filterList (r => isEffectKey (fst r)) src
 
+-- The `effect:` rows a re-export hop carries onward: a wildcard carries every
+-- label the source module exports, a member list or a single name the labels
+-- it names, an alias none — the rule `nsEffects` states for the names, so a
+-- label arrives with its declaring identity whichever spelling re-exported it.
+reexportedEffectOrigins : OrdMap (List (String, String)) ->
+  UsePath ->
+  List (String, String)
+reexportedEffectOrigins known (UseWild ns) =
+  importedEffectOrigins known (UseWild ns)
+reexportedEffectOrigins known (UseGroup ns members) =
+  let named = map (m => effectKey (useMemberOrigin m)) members
+  filterList
+    (r => contains (fst r) named)
+    (importedEffectOrigins known (UseGroup ns members))
+reexportedEffectOrigins known (UseName ns) =
+  if listLen ns > 1 then
+    filterList
+      (r => fst r == effectKey (lastOf ns))
+      (importedEffectOrigins known (UseName ns))
+  else
+    []
+reexportedEffectOrigins _ (UseAlias _ _) = []
+
 -- The FOURTH namespace on the origin map: an effect label under `effect:<Name>`.
 effectKey : String -> String
 effectKey n = "effect:\{n}"
 
 isEffectKey : String -> Bool
 isEffectKey k = startsWith "effect:" k
-
-isWildPath : UsePath -> Bool
-isWildPath (UseWild _) = True
-isWildPath _ = False
 
 effectDeclaredIn : String -> String -> (String, String)
 effectDeclaredIn mid n = (effectKey n, mid)
@@ -5220,9 +5249,7 @@ typeOriginExports : OrdMap (List (String, String)) ->
 -- DEFINING module can answer it.
 typeOriginExports known mid prog =
   flatMap (importedTypeOrigins known) (pubUsePaths prog)
-    ++ flatMap
-      (importedEffectOrigins known)
-      (filterList isWildPath (pubUsePaths prog))
+    ++ flatMap (reexportedEffectOrigins known) (pubUsePaths prog)
     ++ map (effectDeclaredIn mid) (directIn nsEffects prog)
     ++ map (typeDeclaredIn mid) (directIn nsTypes prog)
     ++ map (ifaceDeclaredIn mid) (directIn nsInterfaces prog)
@@ -5462,10 +5489,10 @@ stampKindOpt scope (Some k) = Some (stampKind scope k)
 stampKindOpt _ None = None
 
 stampKind : OrdMap TyConOrigin -> KindAnn -> KindAnn
-stampKind scope (KindAuthority l OriginUnresolved) =
+stampKind scope (KindAuthority l OriginUnresolved loc) =
   match omLookup (effectKey l) scope
-    Some o => KindAuthority l o
-    None => KindAuthority l OriginUnresolved
+    Some o => KindAuthority l o loc
+    None => KindAuthority l OriginUnresolved loc
 stampKind scope (KindArrow a b) =
   KindArrow (stampKind scope a) (stampKind scope b)
 stampKind _ k = k
@@ -5861,8 +5888,8 @@ stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
   DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
 stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
   DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
-stampDeclOrigin mid (DEffect pub n dom axes o) =
-  DEffect pub n dom axes (fillDeclOrigin mid o)
+stampDeclOrigin mid (DEffect pub n dom axes o l) =
+  DEffect pub n dom axes (fillDeclOrigin mid o) l
 stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
 stampDeclOrigin _ d = d
 

@@ -1,0 +1,7 @@
+-- A socket has no constructor: only the runtime's externs produce one, so a
+-- program cannot pair a descriptor number with an authority of its choosing.
+-- (A resolve error ends checking, so this is its own fixture.)
+forge : Int -> Socket "api.example.com/*"
+forge fd = Socket fd
+
+main = println 1

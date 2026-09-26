@@ -640,7 +640,7 @@ countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
 countTyvars (TyAuth _ _) = 0
 countTyvars (TyNamed _ t) = countTyvars t
-countTyvars (TyQual t _) = countTyvars t
+countTyvars (TyQual t _ _) = countTyvars t
 
 sumInts : List Int -> Int
 sumInts [] = 0
@@ -727,7 +727,7 @@ headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
-headTycon (TyQual t _) = headTycon t
+headTycon (TyQual t _ _) = headTycon t
 headTycon (TyTuple ts) = Some (tupleHeadTag (listLen ts))
 headTycon (TyFun _ _) = Some funHeadTag
 headTycon _ = None
@@ -758,7 +758,7 @@ tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
 tyMentions (TyNamed _ t) params = tyMentions t params
-tyMentions (TyQual t _) params = tyMentions t params
+tyMentions (TyQual t _ _) params = tyMentions t params
 -- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
 -- no labels) IS a mention of that name — the same relationship `TyVar`
 -- above already tracks for an ordinary type parameter used unwrapped.

@@ -625,7 +625,7 @@ applyDeriveParams _ _ _ d = d
 export
 typeKindedParams : List String -> List (Option KindAnn) -> List String
 typeKindedParams (_ :: ps) ((Some KindEffect) :: ks) = typeKindedParams ps ks
-typeKindedParams (_ :: ps) ((Some (KindAuthority _ _)) :: ks) =
+typeKindedParams (_ :: ps) ((Some (KindAuthority _ _ _)) :: ks) =
   typeKindedParams ps ks
 typeKindedParams (p :: ps) (_ :: ks) = p :: typeKindedParams ps ks
 typeKindedParams ps [] = ps

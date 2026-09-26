@@ -148,7 +148,22 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # switches; S-known-rep-discriminant, testing the cheapest discriminant a ctor roster
 # proves) shrink emitted-IR volume, and the prelude every hello-world pays is part of
 # that same graph. The 20% convention is re-applied to the fresh local measurement.
-CEIL_check="${CHECK_IR_CEIL:-1075000000}"
+# RE-DERIVED for `check` only (effects close-out, PR #3458, against main 2f9c3197f),
+# same method, one run per arm on this box:
+#
+#   main 2f9c3197f   1,059,238,026   (the CI runner reads ~13.1M above this box, so
+#                                     main sat 0.25% under the old ceiling)
+#   this tree        1,065,697,386   (CI runner on 9966c9d87, before the fix below:
+#                                     1,080,874,155; offset 13.1M)
+#
+# The branch adds 6.5M (0.6%). 4.9M is the runtime catalog's authority-indexed network
+# signatures (`Socket h -> … <Net h>`), which every run elaborates: split by loading this
+# binary against the parent commit's stdlib. The rest is the close-out's declaration-time
+# authority checks. An early prelude kind pass had cost a further 1.8M by recording every
+# core head twice; it now records only the declared kinds, scoped to the catalog's
+# elaboration. The 20% convention is re-applied to the runner figure this tree predicts
+# (1,065.7M + 13.1M = 1,078.8M; x1.20, up to 5M). `build`/`run`/`test` did not move.
+CEIL_check="${CHECK_IR_CEIL:-1295000000}"
 CEIL_build="${BUILD_IR_CEIL:-695000000}"
 CEIL_run="${RUN_IR_CEIL:-760000000}"
 CEIL_test="${TEST_IR_CEIL:-680000000}"

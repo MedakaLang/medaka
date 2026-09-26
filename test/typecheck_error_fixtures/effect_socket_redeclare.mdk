@@ -1,0 +1,20 @@
+-- A redeclared catalog extern types its callers while the built-in runs, so
+-- it must be an instance of the catalog's signature (EFFECTS-SEMANTICS §4.1).
+-- Each declaration below is refused; effect_socket_redeclare_ok holds the
+-- honest instances.
+
+-- a number typed as a socket: the built-in returns `Option Int`
+extern stringIndexOf : String -> String -> Option (Socket "api.example.com/*")
+
+-- an accepted socket re-indexed away from its listener's authority
+extern netTcpAccept : ListenSocket a -> <Net a> Result String (Socket b)
+
+-- a dialed socket re-indexed away from the host it dialed: `host` is the
+-- argument's value, which the declaration cannot fix
+extern netTcpConnect : (host : String) -> Int -> <Net host> Result String (Socket "api.example.com/*")
+
+-- a socket fixed at one host, charged at another: the built-in performs the
+-- index it was given
+extern netSend : Socket "a.com/*" -> Array Int -> <Net "b.com/*"> Result String Int
+
+main = println 1

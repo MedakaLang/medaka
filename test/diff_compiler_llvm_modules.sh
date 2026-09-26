@@ -20,9 +20,11 @@
 #             IO-capture golden — see runtime/medaka_rt.c mdk_print_unit)
 #   diff ref vs self byte-for-byte.
 #
-# PRELUDE.  The fixtures are PRELUDE-FREE (they touch only runtime externs), so the
-# gate passes an EMPTY prelude file as the <core> arg — the multi-module analog of
-# the single-file gate passing ONLY runtime.mdk.
+# PRELUDE.  The fixtures are prelude-free (they touch only runtime externs), so the
+# gate passes as the <core> arg only the prelude's `extern data` heads, derived from
+# stdlib/core.mdk: the catalog's signatures index them (`netSend : Socket h -> …`)
+# and elaborate against their declared kinds.  The multi-module analog of the
+# single-file gate passing only runtime.mdk.
 #
 # Scope: cross-module DATA, cross-module RETURN-POSITION dispatch (RKey), and
 # cross-module ARG-POSITION ADT dispatch.  Arg-position dispatch on a PRIMITIVE
@@ -60,9 +62,9 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Empty prelude file (see PRELUDE note above).
-CORE="$WORK/empty_core.mdk"
- > "$CORE"
+# The prelude's `extern data` heads only (see PRELUDE note above).
+CORE="$WORK/catalog_core.mdk"
+grep '^export extern data ' "$ROOT/stdlib/core.mdk" > "$CORE" || :
 
 # The native binary auto-prints main's Unit result as a trailing "()"; the
 # IO-capture golden has none — drop a sole trailing "()" line from native stdout.

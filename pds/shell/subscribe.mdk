@@ -136,7 +136,7 @@ messageTooBigCloseCode = 1009
 export
 runSubscription : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   String ->
   Option Int ->
   Array Int ->
@@ -156,7 +156,7 @@ newestSeq (Some seq) = seq
 
 openStream : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Option Int ->
   Array Int ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
@@ -181,7 +181,7 @@ openStream dir budget conn cursor pending = defer
    replay, no gap, nothing to announce. -}
 gradeCursor : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Option Int ->
   Array Int ->
   Int ->
@@ -212,7 +212,7 @@ outdated wanted newest [] = wanted < newest
 outdated wanted _ (first :: _) = first.seq > wanted + 1
 
 refuseFuture : Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Int ->
   Async <Clock, Net | e> (Result String Unit)
@@ -227,7 +227,7 @@ refuseFuture budget conn wanted newest =
 
 announceOutdated : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Array Int ->
   List EventLogEntry ->
@@ -247,7 +247,7 @@ announceOutdated dir budget conn wanted pending replay =
 
 replayThenTail : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Array Int ->
   List EventLogEntry ->
@@ -267,7 +267,7 @@ replayThenTail dir budget conn wanted pending replay = defer
    over exactly these bytes, so a byte this server rewrote is a signature this
    server broke. -}
 sendEntries : Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   List EventLogEntry ->
   Async <Clock, Net | e> (Result String Int)
@@ -287,14 +287,14 @@ sendEntries budget conn delivered (entry :: rest) =
 -- frame. The payload is two concatenated CBOR objects and the reader decodes
 -- both from the one message, so it may not be split across frames.
 sendPayload : Duration ->
-  Connection ->
+  Connection * ->
   Array Int ->
   Async <Clock, Net | e> (Result String Unit)
 sendPayload budget conn payload =
   A.sendAllWithin budget conn (encodeServerFrame (Frame True Binary payload))
 
 sendPayloadThenClose : Duration ->
-  Connection ->
+  Connection * ->
   Array Int ->
   Async <Clock, Net | e> (Result String Unit)
 sendPayloadThenClose budget conn payload = defer
@@ -304,7 +304,7 @@ sendPayloadThenClose budget conn payload = defer
     Ok () => sendClose budget conn normalCloseCode
 
 sendClose : Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Async <Clock, Net | e> (Result String Unit)
 sendClose budget conn code = defer
@@ -320,7 +320,7 @@ sendClose budget conn code = defer
    sent. -}
 tailFrom : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Reassembly ->
   Array Int ->
@@ -334,7 +334,7 @@ tailFrom dir budget conn lastSeq pending buffered = defer
 
 tailStep : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Reassembly ->
   Array Int ->
@@ -368,7 +368,7 @@ tailStep dir budget conn lastSeq pending buffered =
 
 pollLog : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Reassembly ->
   Array Int ->
@@ -385,7 +385,7 @@ pollLog dir budget conn lastSeq pending buffered = defer
 
 deliverNew : String ->
   Duration ->
-  Connection ->
+  Connection * ->
   Int ->
   Reassembly ->
   Array Int ->

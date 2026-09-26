@@ -203,7 +203,12 @@ under path = load (path ++ "/x")
 ```
 
 A qualified value type is written with a spaced `@`: `String @path` names the
-argument's authority on a value derived from it.  The quoted underscore
+argument's authority on a value derived from it.  A joined qualifier names
+several binders in parentheses, `String @(src | dst)`, a value within either
+authority; it is the spelling a joined authority renders as.  A qualifier's
+binders must be `String` authorities of one domain shape (two Prefix labels
+are one shape), and a named argument used only in a qualifier, with no atom or
+index naming it, has no domain and is an error.  The quoted underscore
 (`<Store "_">`) is a parse error naming the replacement.
 
 A `data` head may declare an `Authority`-kinded parameter, `(p : Authority
@@ -703,8 +708,10 @@ keywords). Partial annotation is the common case. An UNANNOTATED parameter is ne
 tail, or an `Effect` slot of another type) MUST be declared, or
 `T-EFFECT-KIND-MISMATCH` is reported at the field that demands it; a parameter used as
 an authority (`String @p`, `<L p>`, an `Authority` slot) MUST be declared `(p :
-Authority L)`. `impl` heads take no annotation, and an `interface` head takes no
-`Authority` kind. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §4.1, §6.1–§6.5.
+Authority L)`, and `L` must declare a domain (`effect L Prefix`, `Set` or
+`Product`): an atomic label, `IO` included, has no authorities to range over.
+`impl` heads take no annotation, and an `interface` head takes no `Authority`
+kind. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §4.1, §6.1–§6.5.
 
 ```medaka
 data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
@@ -1038,6 +1045,26 @@ to disk. A row that COVERS the catalog's own is accepted, and it may be wider �
 `extern putStrLn : String -> <IO> Unit` above is legal against the catalog's
 narrower `<Stdout>`, because over-declaring what a caller must permit is the safe
 direction.
+
+### Extern types
+
+An `extern data` head declares an opaque type whose values only the runtime
+catalog's externs produce, as the prelude's `Socket` and `ListenSocket` are:
+
+```medaka
+export extern data Channel (h : Authority Net)
+```
+
+It has no constructors, derives nothing and cannot be `public`: a constructor
+list, a `deriving` clause or `public export extern data` is a parse error. So
+the externs that return one are its only proof sources, and an
+`Authority`-kinded parameter is the authority the opening extern was granted
+(`netTcpConnect : (host : String) -> Int -> <Net host> Result String (Socket
+host)`). At runtime a value is whatever the C side returned, one tagged word;
+nothing is boxed. A foreign extern cannot return one, since its types must cross
+the C boundary and an extern type does not, and a redeclared catalog extern must
+be an instance of the catalog's signature. So an `extern data` a program
+declares for itself names a type with no values.
 
 ### Linking a C library
 

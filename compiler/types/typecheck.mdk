@@ -46,6 +46,7 @@
 -- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
+  qualifierSource,
   Lit(..),
   isFixedWidthHead,
   fixedWidthMask,
@@ -545,19 +546,28 @@ registerEffectDomain label domain axes =
   driverState.value.effectDomains :=
     entry :: driverState.value.effectDomains.value
 
-checkDomainAxes : String -> Option String -> List (String, String) -> Unit
-checkDomainAxes l (Some "Product") [] =
-  pushTypeError
+-- Located at the declaration's own span: nothing else in an `effect`
+-- declaration has one, and `currentLoc` at declaration level is whatever the
+-- previous declaration left.
+checkDomainAxes : Option Loc ->
+  String ->
+  Option String ->
+  List (String, String) ->
+  Unit
+checkDomainAxes loc l (Some "Product") [] =
+  pushTypeErrorAt
     "T-EFFECT-PARAM"
+    loc
     (effectParamMsg
       l
       "a Product label declares its axes: `effect \{l} Product (Host : Prefix, Method : Set)`, the first axis being the one a bare literal lifts into")
-checkDomainAxes l (Some "Product") axes =
+checkDomainAxes loc l (Some "Product") axes =
   let _ =
     fold
       (_ name =>
-        pushTypeError
+        pushTypeErrorAt
           "T-EFFECT-PARAM"
+          loc
           (effectParamMsg
             l
             "axis '\{name}' of label '\{l}' is declared twice; each axis is one name"))
@@ -568,17 +578,19 @@ checkDomainAxes l (Some "Product") axes =
       "Prefix" => ()
       "Set" => ()
       other =>
-        pushTypeError
+        pushTypeErrorAt
           "T-EFFECT-PARAM"
+          loc
           (effectParamMsg
             l
             "axis '\{fst a}' of label '\{l}' names the domain '\{other}'; an axis is drawn from `Prefix` or `Set`"))
     ()
     axes
-checkDomainAxes _ _ [] = ()
-checkDomainAxes l _ _ =
-  pushTypeError
+checkDomainAxes _ _ _ [] = ()
+checkDomainAxes loc l _ _ =
+  pushTypeErrorAt
     "T-EFFECT-PARAM"
+    loc
     (effectParamMsg l "only a `Product` label declares axes")
 
 -- the ⊤-param a declared label carries: atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
@@ -615,7 +627,7 @@ populateUnitsGo ((_, prog) :: rest) =
 
 populateGo : List Decl -> Unit
 populateGo [] = ()
-populateGo ((DEffect _ name domain axes origin) :: rest) =
+populateGo ((DEffect _ name domain axes origin _) :: rest) =
   let _ = registerEffectDomain (EffLabel name origin) domain axes
   populateGo rest
 populateGo (_ :: rest) = populateGo rest
@@ -1012,6 +1024,7 @@ finishEffectSummaryScope retained borrowed =
       summaryEscape
       joinCellOf
       freshEffvarAt
+      widenOpenedFor
   reportEffectSummaryFailures failures
 
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
@@ -1027,6 +1040,8 @@ reportEffectSummaryFailures (failure :: rest) =
     Some (lo, hi) =>
       if mentionsEscaped lo || mentionsEscaped hi then
         ()
+      else if failure.esfExact then
+        reportIndexFailure !currentLoc lo hi
       else
         pushTypeErrorAt
           "T-AUTHORITY"
@@ -1194,8 +1209,8 @@ unifyIndex qa qb = match (authNorm qa, authNorm qb)
   (AVar a, b) if flexibleIndex a b => substituteIndex a b
   (a, AVar b) if flexibleIndex b a => substituteIndex b a
   (a, b) =>
-    let _ = wantAuthority a b
-    wantAuthority b a
+    let _ = wantAuthorityWith True a b
+    wantAuthorityWith True b a
 
 substituteIndex : Ref Authvar -> Authority -> Unit
 substituteIndex cell term =
@@ -1510,7 +1525,25 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
 --     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
 --     decision with its own blast radius, tracked separately — not a copy-paste of this.
 unifyIndexRow : EffRow -> EffRow -> Unit
-unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+unifyIndexRow r1 r2 =
+  let _ = unifyIndexAtomAuthorities r1 r2
+  unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+
+-- An index row is an equality, so an atom the two rows both carry names one
+-- authority on both sides (`Async <Net host | e>` against `Async <Net κ |
+-- e>`): the two authorities are unified as an index is (`unifyIndex`), a
+-- flexible one substituted, two fixed ones compared for equality.  What is
+-- left for the row comparison is which labels each side carries.
+unifyIndexAtomAuthorities : EffRow -> EffRow -> Unit
+unifyIndexAtomAuthorities r1 r2 =
+  let (a1, _) = rowFlat r1
+  let (a2, _) = rowFlat r2
+  fold
+    (_ x => match findAtom (atomKey x) a2
+      Some y => unifyIndex (atomAuth x) (atomAuth y)
+      None => ())
+    ()
+    a1
 
 -- #821: an index row whose tail is a join is solved by the join unifier in
 -- INDEX mode (equality, never subsumption).
@@ -1529,11 +1562,23 @@ unifyIndexRowN r1 r2 =
 
 unifyIndexRowPlain : EffRow -> EffRow -> Unit
 unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) =
-  indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+  indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
 unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 =
-    indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+    indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
 unifyIndexRowPlain r1 r2 = unifyRowN r1 r2
+
+-- The atoms of [l1] whose label [l2] does not carry.  A shared label's two
+-- authorities were already equated by `unifyIndexAtomAuthorities`, which
+-- reports their mismatch as an authority index, so it is not a second report
+-- here.
+labelsMissing : List Atom -> List Atom -> List Atom
+labelsMissing l1 l2 =
+  filterList
+    (x => match findAtom (atomKey x) l2
+      Some _ => False
+      None => True)
+    l1
 
 -- Two index rows with nothing left to solve — both closed, or both already ending in the
 -- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
@@ -1701,9 +1746,11 @@ checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsDecl prog (DAttrib _ d) = checkDeclaredKindsDecl prog d
 -- An effect label's domain schema is declared on its head as a data type's
 -- kinds are: a Product declares its axes, nothing else does.
-checkDeclaredKindsDecl _ (DEffect _ name domain axes _) =
-  checkDomainAxes name domain axes
-checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) =
+checkDeclaredKindsDecl _ (DEffect _ name domain axes _ loc) =
+  checkDomainAxes loc name domain axes
+checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
+  let _ =
+    checkAuthorityKindLabels (ks ++ flatMap (b => map (x => Some (snd x)) b) bs)
   let _ =
     checkHeadKinds
       n
@@ -1711,9 +1758,11 @@ checkDeclaredKindsDecl _ (DData { dataVis = vis, dataName = n, dataParams = ps, 
       ks
       (flatMap (v => payloadAstTypes (variantPayload v)) vs)
   checkPhantomAuthorityExport vis n (authorityParamNames ps ks) vs
-checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty }) =
+checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty, newtypeCtorBinders = bs }) =
+  let _ = checkAuthorityKindLabels (ks ++ map (b => Some (snd b)) bs)
   checkHeadKinds n ps ks [fty]
 checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
+  let _ = checkAuthorityKindLabels ks
   checkHeadKinds n ps ks [rhs]
 checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, methods, ... }) =
   let _ =
@@ -1726,6 +1775,33 @@ checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, 
     methods
     supers
 checkDeclaredKindsDecl _ _ = ()
+
+-- `Authority L` ranges over the domain `L` declares (§6.1); a label that
+-- declares none — an atomic one, `IO` included — has no authorities to range
+-- over, so the kind is refused at the label rather than admitted as a slot
+-- every index trivially fills.
+checkAuthorityKindLabels : List (Option KindAnn) -> Unit
+checkAuthorityKindLabels anns =
+  fold
+    (_ a => match a
+      Some k => checkAuthorityKindLabel k
+      None => ())
+    ()
+    anns
+
+checkAuthorityKindLabel : KindAnn -> Unit
+checkAuthorityKindLabel (KindAuthority l o loc) = match dtopFor (EffLabel l o)
+  PUnit =>
+    pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
+  _ => ()
+checkAuthorityKindLabel (KindArrow a b) =
+  let _ = checkAuthorityKindLabel a
+  checkAuthorityKindLabel b
+checkAuthorityKindLabel _ = ()
+
+authorityAtomicLabelMsg : String -> String
+authorityAtomicLabelMsg l =
+  "`Authority \{l}` ranges over the domain the label declares, but `\{l}` declares none: it is an atomic label, performed or not, with no path prefix, name set or product to be an authority of. Declare the label with a domain, `effect \{l} Prefix`, or index by a label that has one"
 
 -- A constructor CARRYING an `Authority` parameter in no field is a phantom
 -- index: applying it proves nothing, so it may invent any authority.  Its
@@ -1766,7 +1842,7 @@ authorityParamNames : List String -> List (Option KindAnn) -> List String
 authorityParamNames params anns =
   flatMap
     (pk => match snd pk
-      Some (KindAuthority _ _) => [fst pk]
+      Some (KindAuthority _ _ _) => [fst pk]
       _ => [])
     (zipL params (padAnns params anns))
 
@@ -1784,7 +1860,8 @@ authorityParamNames params anns =
 -- out in a carrying constructor, or the type is empty.
 tyCarries : List TabKey -> String -> Ty -> Bool
 tyCarries _ p (TyVar n) = n == p
-tyCarries seen p (TyQual t n) = n == p || tyCarries seen p t
+tyCarries seen p (TyQual t ns _) =
+  isNonEmptyL ns && allList (== p) ns || tyCarries seen p t
 tyCarries seen p (TyTuple ts) = anyList (tyCarries seen p) ts
 tyCarries seen p (TyConstrained _ t) = tyCarries seen p t
 tyCarries seen p (TyNamed _ t) = tyCarries seen p t
@@ -1884,7 +1961,7 @@ checkHeadKindsGo name rowNames fieldTys (p :: ps) (a :: anns) =
           "T-EFFECT-KIND-MISMATCH"
           loc
           (typeParamAsRowMsg name p)
-    Some (KindAuthority _ _) =>
+    Some (KindAuthority _ _ _) =>
       if contains p rowNames then
         pushTypeErrorOnceAt
           "T-AUTHORITY-KIND"
@@ -1905,7 +1982,7 @@ tyVarTypeOcc p (TyVar n) = n == p
 tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
 tyVarTypeOcc _ (TyRow _ _ _) = False
 tyVarTypeOcc p (TyNamed _ t) = tyVarTypeOcc p t
-tyVarTypeOcc p (TyQual t _) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyQual t _ _) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
 tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
 tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
@@ -1953,7 +2030,7 @@ checkIfaceHeadKinds name (p :: ps) (a :: anns) methods =
         "T-EFFECT-KIND-MISMATCH"
         loc
         (ifaceParamEffectKindMsg name p)
-    Some (KindAuthority _ _) =>
+    Some (KindAuthority _ _ _) =>
       pushTypeErrorOnceAt
         "T-AUTHORITY-KIND"
         loc
@@ -2801,37 +2878,56 @@ checkEffectAtoms (a :: rest) =
 -- exempt from the delimiter rule), a Set label takes a set or a single
 -- member, a Product label takes its axes or a bare host pattern, and an
 -- atomic label takes nothing.  A named authority is checked at its binder.
+-- The rule is `effectParamProblems`; this reports each problem at the atom.
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
-checkOneEffectParam l PUnit (EPName _) = atomicLabelParamError l
-checkOneEffectParam _ _ (EPName _) = ()
-checkOneEffectParam _ _ EPTop = ()
-checkOneEffectParam l (PPrefix None) (EPLit pat) = checkPrefixLiteral l pat
-checkOneEffectParam _ (PSet None) (EPLit _) = ()
+checkOneEffectParam l top p =
+  fold
+    (_ m => pushTypeError "T-EFFECT-PARAM" (effectParamMsg l m))
+    ()
+    (effectParamProblems l top p)
+
+-- The problems a written parameter has as an element of the domain whose top
+-- is [top], each a message; empty when it is an element.  One rule for every
+-- consumer: the typechecker reports them at the atom, and `check-policy`
+-- refuses an `--allow` entry that has any, so a policy is read exactly as a
+-- source atom is.
+export
+effectParamProblems : String -> Param -> EffParamTy -> List String
+effectParamProblems l PUnit (EPName _) = [atomicLabelParamText l]
+effectParamProblems _ _ (EPName _) = []
+effectParamProblems _ _ EPTop = []
+effectParamProblems l (PPrefix None) (EPLit pat) = prefixLiteralProblems l pat
+effectParamProblems _ (PSet None) (EPLit _) = []
 -- A bare literal on a Product label lifts into the first axis as the
 -- domain does (`productPrimaryLift`): a prefix pattern for a Prefix axis, a
 -- one-element set for a Set axis.
-checkOneEffectParam l (PProduct schema) (EPLit pat) =
-  checkProductAxes l (PProduct schema) (productPrimaryLift schema pat)
-checkOneEffectParam l _ (EPLit _) = atomicLabelParamError l
-checkOneEffectParam _ (PSet None) (EPSet _) = ()
-checkOneEffectParam l (PPrefix None) (EPSet _) =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg l "label '\{l}' takes a prefix pattern, not a set")
-checkOneEffectParam l (PProduct _) (EPSet _) =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg
-      l
-      "label '\{l}' takes named axes (`Host=… Method=…`), not a bare set")
-checkOneEffectParam l _ (EPSet _) = atomicLabelParamError l
-checkOneEffectParam l (PProduct schema) (EPProduct axes) =
-  checkProductAxes l (PProduct schema) (productNorm (map writtenAxis axes))
-checkOneEffectParam l PUnit (EPProduct _) = atomicLabelParamError l
-checkOneEffectParam l _ (EPProduct _) =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg l "label '\{l}' is not a product domain and takes no axes")
+effectParamProblems l (PProduct schema) (EPLit pat) =
+  primaryLiteralProblems schema pat
+    ++ productAxesProblems schema (productPrimaryLift schema pat)
+effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
+effectParamProblems _ (PSet None) (EPSet _) = []
+effectParamProblems l (PPrefix None) (EPSet _) =
+  ["label '\{l}' takes a prefix pattern, not a set"]
+effectParamProblems l (PProduct _) (EPSet _) =
+  ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
+effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
+effectParamProblems _ (PProduct schema) (EPProduct axes) =
+  productAxesProblems schema (productNorm (map writtenAxis axes))
+effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
+effectParamProblems l _ (EPProduct _) =
+  ["label '\{l}' is not a product domain and takes no axes"]
+
+-- A written parameter as an element of [label]'s declared domain, or the
+-- first problem that keeps it from being one (`effectParamMsg`'s wording).
+-- Never the domain's top for a malformed parameter: a consumer reading an
+-- allowance would otherwise widen it.
+export
+decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
+decodeWrittenParam label p =
+  let top = dtopFor label
+  match effectParamProblems (effLabelName label) top p
+    [] => Ok (writtenParam top p)
+    m :: _ => Err (effectParamMsg (effLabelName label) m)
 
 -- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
 -- BARE host/path prefix is ambiguous — "example.com" would silently admit
@@ -2845,23 +2941,17 @@ checkOneEffectParam l _ (EPProduct _) =
 -- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
 -- is still rejected, since `<FFI "">` names no library and, being the
 -- prefix of everything, would silently mean ⊤.
-checkPrefixLiteral : String -> String -> Unit
-checkPrefixLiteral l pat =
+prefixLiteralProblems : String -> String -> List String
+prefixLiteralProblems l pat =
   if l == "FFI" then
     if stringLength pat > 0 then
-      ()
+      []
     else
-      pushTypeError
-        "T-EFFECT-PARAM"
-        (effectParamMsg
-          l
-          "the library pattern is empty; name the library, e.g. <FFI \"curl\">")
+      ["the library pattern is empty; name the library, e.g. <FFI \"curl\">"]
   else if prefixPatternOk pat then
-    ()
+    []
   else
-    pushTypeError
-      "T-EFFECT-PARAM"
-      (effectParamMsg l (prefixPatternErrMsg "pattern" pat))
+    [prefixPatternErrMsg "pattern" pat]
 
 -- A binder an effect atom names must have a type the domain can abstract
 -- (a `String`, in this increment), and every label naming it must draw
@@ -2895,30 +2985,27 @@ binderDomainMsg : String -> String
 binderDomainMsg n =
   "Authority '\{n}' is used at labels from different domains (a path prefix and a name set are different kinds of authority). One authority has one domain: name a second binder for the other label"
 
-atomicLabelParamError : String -> Unit
-atomicLabelParamError l =
-  pushTypeError
-    "T-EFFECT-PARAM"
-    (effectParamMsg
-      l
-      "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)")
+atomicLabelParamText : String -> String
+atomicLabelParamText l =
+  "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)"
+
+-- A bare literal is checked as the first axis's value BEFORE it is lifted:
+-- the lift canonicalises it, and an empty pattern canonicalises to the top.
+primaryLiteralProblems : List (String, Param) -> String -> List String
+primaryLiteralProblems ((name, PPrefix _) :: _) pat =
+  if prefixPatternOk pat then
+    []
+  else
+    [prefixPatternErrMsg "\{name} pattern" pat]
+primaryLiteralProblems _ _ = []
 
 -- A written product's axes against the label's declared schema: every axis
 -- must be declared, a Prefix axis takes a delimiter-terminated pattern, a Set
 -- axis a set.
-checkProductAxes : String -> Param -> Param -> Unit
-checkProductAxes l (PProduct schema) (PProduct axes) =
-  checkProductAxesGo l schema axes
-checkProductAxes _ _ _ = ()
-
-checkProductAxesGo : String ->
-  List (String, Param) ->
-  List (String, Param) ->
-  Unit
-checkProductAxesGo _ _ [] = ()
-checkProductAxesGo l schema ((name, p) :: rest) =
-  let _ = checkOneAxis l schema name p
-  checkProductAxesGo l schema rest
+productAxesProblems : List (String, Param) -> Param -> List String
+productAxesProblems schema (PProduct axes) =
+  flatMap (a => axisProblems schema (fst a) (snd a)) axes
+productAxesProblems _ _ = []
 
 -- The names that occur more than once, each once, in first-occurrence order.
 repeatedNames : List String -> List String -> List String
@@ -2928,34 +3015,23 @@ repeatedNames (n :: rest) seen
   | contains n rest = n :: repeatedNames rest (n :: seen)
   | otherwise = repeatedNames rest seen
 
-checkOneAxis : String -> List (String, Param) -> String -> Param -> Unit
-checkOneAxis l schema name p = match lookupAxis name schema
-  None =>
-    pushTypeError
-      "T-EFFECT-PARAM"
-      (effectParamMsg
-        l
-        "unknown product axis '\{name}' (declared axes: \{joinWith ", " (map fst schema)})")
+axisProblems : List (String, Param) -> String -> Param -> List String
+axisProblems schema name p = match lookupAxis name schema
+  None => [
+    "unknown product axis '\{name}' (declared axes: \{joinWith ", " (map fst schema)})",
+  ]
   Some (PPrefix _) => match p
     PPrefix (Some pat) =>
       if prefixPatternOk pat then
-        ()
+        []
       else
-        pushTypeError
-          "T-EFFECT-PARAM"
-          (effectParamMsg l (prefixPatternErrMsg "\{name} pattern" pat))
-    PPrefix None => ()
-    _ =>
-      pushTypeError
-        "T-EFFECT-PARAM"
-        (effectParamMsg l "axis '\{name}' takes a prefix pattern, not a set")
+        [prefixPatternErrMsg "\{name} pattern" pat]
+    PPrefix None => []
+    _ => ["axis '\{name}' takes a prefix pattern, not a set"]
   Some (PSet _) => match p
-    PSet _ => ()
-    _ =>
-      pushTypeError
-        "T-EFFECT-PARAM"
-        (effectParamMsg l "axis '\{name}' takes a set, not a pattern")
-  Some _ => ()
+    PSet _ => []
+    _ => ["axis '\{name}' takes a set, not a pattern"]
+  Some _ => []
 
 -- replace a row's bound tail effvar with its fresh instance from [esub], so each
 -- call site of a polymorphic HOF gets its own effect variable
@@ -2986,8 +3062,15 @@ substMember esub m = match !m
   _ => m
 
 -- lower a row's tail effvar level to <= [level] alongside the tyvar being bound
+-- A row's level is its tail's and every authority its atoms name: a row that
+-- reaches an older binding carries its atoms' authorities with it, so they
+-- are lowered with the tail (an authority left at an arm's level would read
+-- as local to the arm after it escaped through the row).
 lowerRowLevels : Int -> EffRow -> Unit
-lowerRowLevels level r = lowerMembers level (snd (rowFlat r))
+lowerRowLevels level r =
+  let (atoms, members) = rowFlat r
+  let _ = lowerMembers level members
+  fold (_ a => lowerAuthLevels level (atomAuth a)) () atoms
 
 lowerMembers : Int -> List (Ref Effvar) -> Unit
 lowerMembers _ [] = ()
@@ -5065,6 +5148,7 @@ deKindAbstractFixture = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deKindPrivateFixture : Decl
@@ -5077,6 +5161,7 @@ deKindPrivateFixture = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deKindNewtypeFixture : Decl
@@ -5245,6 +5330,7 @@ deNameIdxAlpha = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modA",
+  dataExtern = False,
 }
 
 deNameIdxSharedA : Decl
@@ -5257,6 +5343,7 @@ deNameIdxSharedA = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modA",
+  dataExtern = False,
 }
 
 deNameIdxBeta : Decl
@@ -5269,6 +5356,7 @@ deNameIdxBeta = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modB",
+  dataExtern = False,
 }
 
 deNameIdxSharedB : Decl
@@ -5281,6 +5369,7 @@ deNameIdxSharedB = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modB",
+  dataExtern = False,
 }
 
 deNameIdxModA : DeclEnvModule
@@ -5846,6 +5935,7 @@ deFieldOwnerFixtureA = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deFieldOwnerFixtureB : Decl
@@ -5859,6 +5949,7 @@ deFieldOwnerFixtureB = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "n",
+  dataExtern = False,
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
@@ -5881,6 +5972,7 @@ deFieldOwnerFixtureC = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "n",
+  dataExtern = False,
 }
 
 deFieldOwnerCollisionEnv : DataEnv
@@ -5928,6 +6020,7 @@ deRecordOrderFixtureA = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deRecordOrderFixtureB : Decl
@@ -5941,6 +6034,7 @@ deRecordOrderFixtureB = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "n",
+  dataExtern = False,
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
@@ -7660,7 +7754,7 @@ data DriverState = DriverState {
   coherenceUserDecls : Ref (List Decl),
   stdlibOwnedModsRef : Ref (OrdMap Unit),
   flatEntryIsStdlibRef : Ref Bool,
-  builtinExternNamesRef : Ref (OrdMap (String, List EffAtomTy, List (String, Int))),
+  builtinExternNamesRef : Ref (OrdMap (Ty, List (String, Int))),
   superDeclsRef : Ref (List Decl),
   standaloneValuesRef : Ref (OrdMap Unit),
   methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -10607,6 +10701,10 @@ data PerRun = PerRun {
   -- Existential cells reported as escaping their scope: an obligation over
   -- one is a consequence of the escape, not a second defect.
   escapedExistentialsRef : Ref (Map Int Unit),
+  -- Every cell a pattern opened for an existential binder: a report naming
+  -- one says what it is (the authority of the value the arm opened), not
+  -- what a signature binder is (an authority the caller chooses).
+  openedAuthvarsRef : Ref (Map Int Unit),
   -- Index variables an index equality substituted a determined term for
   -- (`unifyIndex`): a report reads such a variable as the written bound it
   -- stands for, not as a bound the scope solved.
@@ -10730,6 +10828,7 @@ freshPerRun _ = PerRun {
   rowFailureReportedRef = Ref omEmpty,
   typeErrorKeySetRef = Ref omEmpty,
   escapedExistentialsRef = Ref Tip,
+  openedAuthvarsRef = Ref Tip,
   indexSubstitutedRef = Ref Tip,
   pendingEscapesRef = Ref [],
   openedExistentialsRef = Ref [],
@@ -11025,29 +11124,82 @@ bindFrom target source = match normalize target
 -- is the written term it stands for, and only a cell the scope solves
 -- afterwards reads as a solved bound in a report (`esfWrittenUpper`).
 wantAuthority : Authority -> Authority -> Unit
-wantAuthority lower upper
+wantAuthority lower upper = wantAuthorityWith False lower upper
+
+-- [exact]: this obligation is one half of an index equality, so its failure
+-- is reported as an index mismatch, once for both halves.
+wantAuthorityWith : Bool -> Authority -> Authority -> Unit
+wantAuthorityWith exact lower upper
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
     EffectSolver.recordAuthority
       perRun.value.effectSummaries
+      exact
       (!currentLoc, perRun.value.currentFn.value)
       (authNorm lower)
       (authNorm upper)
   | authSub lower upper = ()
   | otherwise = match solveFlexibleUpper lower upper
     True => ()
-    False => reportAuthorityFailure !currentLoc lower upper
+    False =>
+      if exact then
+        reportIndexFailure !currentLoc lower upper
+      else
+        reportAuthorityFailure !currentLoc lower upper
 
 -- Outside a scope, a flexible upper variable takes the lower bound as its
--- least solution.  A rigid or concrete upper that does not cover fails.
+-- solution, widened as the scoped solver widens a solution
+-- (`widenOpenedFor`).  Once solved it is no longer a variable, so a later
+-- obligation is checked against that solution; a variable is never linked to
+-- a join containing itself, which normalisation would follow forever.  A
+-- rigid or concrete upper that does not cover fails.
 solveFlexibleUpper : Authority -> Authority -> Bool
 solveFlexibleUpper lower upper = match authNorm upper
   AVar cell =>
     if IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value then
       False
-    else
-      let _ = linkAuthvar cell (authJoin (AVar cell) lower)
-      True
+    else match withoutVar cell lower
+      [] => True
+      rest =>
+        let _ =
+          linkAuthvar
+            cell
+            (widenOpenedFor (authvarLevel cell) (authJoinAll rest))
+        True
   _ => False
+
+-- A term's join members other than [cell] (`κ ⊔ x ⊑ κ` asks only `x ⊑ κ`).
+withoutVar : Ref Authvar -> Authority -> List Authority
+withoutVar cell q =
+  let members = match authNorm q
+    AJoin ms => ms
+    other => [other]
+  filterList
+    (m => match m
+      AVar c => authvarId c /= authvarId cell
+      _ => True)
+    members
+
+-- An existential a pattern opened is scoped to its arm or clause, which runs
+-- one level deeper than anything older (`openExistentialScope`).  The arm's
+-- own close checks what the arm's inference bound to it, but an authority
+-- obligation is solved later, at the binding's close, and its solution can
+-- name the opened authority for a variable older than the arm (a clause
+-- parameter's index, a binding's row).  Such a solution is widened: the
+-- opened authority becomes its domain's top, the §4 over-approximation a
+-- sourceless opened authority publishes as.  A variable as young as the arm
+-- keeps it, since it cannot leave the arm.
+widenOpenedFor : Int -> Authority -> Authority
+widenOpenedFor level q =
+  let asub =
+    flatMap
+      (c =>
+        if IdMap.has (authvarId c) perRun.value.openedAuthvarsRef.value
+          && authvarLevel c > level then
+          [(authvarId c, authTop (authvarDomain c))]
+        else
+          [])
+      (authVars q)
+  substAuth asub q
 
 reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
 reportAuthorityFailure loc lower upper =
@@ -11055,6 +11207,26 @@ reportAuthorityFailure loc lower upper =
     "T-AUTHORITY"
     loc
     (authorityFailureMsg perRun.value.currentFn.value lower upper (Some upper))
+
+-- Both halves of one index equality render the same message (the two terms
+-- in one order), so the second is the same (code, span, message) and is
+-- recorded once.
+reportIndexFailure : Option Loc -> Authority -> Authority -> Unit
+reportIndexFailure loc a b =
+  pushTypeErrorAt "T-AUTHORITY-INDEX-MISMATCH" loc (authorityIndexMsg a b)
+
+authorityIndexMsg : Authority -> Authority -> String
+authorityIndexMsg a b =
+  let sa = authorityTermText a
+  let sb = authorityTermText b
+  let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
+  "Authority index mismatch: \{x} vs \{y}. An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"
+
+-- An authority as a message names it: the top as the whole domain, a term
+-- as it is written.
+authorityTermText : Authority -> String
+authorityTermText q =
+  if authIsTop q then "the whole domain" else ppAuthority (Ref []) (Ref 0) q
 
 -- Against a named authority the remedy is to derive the value from the
 -- argument; against a written bound it is to stay within, or widen, the
@@ -11073,12 +11245,20 @@ authorityFailureMsg name lower upper written =
     else
       ppAuthority (Ref []) (Ref 0) lower
   let hi = ppAuthority (Ref []) (Ref 0) upper
-  if authHasVars upper then
+  if mentionsOpened upper then
+    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
+  else if authHasVars upper then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or narrow it, never reach a value it does not derive from. Perform the operation on the named argument, or widen the declared row to the label bare"
   else if solvedUpper written then
     "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
   else
     "Binding '\{name}' reaches \{lo} where its declared bound admits only \{hi}. Stay within the declared bound, or widen it to cover what the body reaches"
+
+mentionsOpened : Authority -> Bool
+mentionsOpened q =
+  anyList
+    (cell => IdMap.has (authvarId cell) perRun.value.openedAuthvarsRef.value)
+    (authVars q)
 
 mentionsEscaped : Authority -> Bool
 mentionsEscaped q =
@@ -11749,6 +11929,11 @@ freshAuthSubstOpeningIn ids cells =
       (m cell => IdMap.set (authvarId cell) () m)
       perRun.value.rigidAuthvarsRef.value
       opened
+  perRun.value.openedAuthvarsRef :=
+    fold
+      (m cell => IdMap.set (authvarId cell) () m)
+      perRun.value.openedAuthvarsRef.value
+      opened
   (map (p => (first3 p, AVar (second3 p))) pairs, opened)
 
 first3 : (a, b, c) -> a
@@ -11891,6 +12076,7 @@ authTermIds q acc =
   fold (m cell => IdMap.set (authvarId cell) () m) acc (authVars q)
 
 lowerAuthLevels : Int -> Authority -> Unit
+lowerAuthLevels _ (AConst _) = ()
 lowerAuthLevels level q =
   fold
     (_ cell => match !cell
@@ -11994,7 +12180,7 @@ tyVarNames (TyConstrained _ t) = tyVarNames t
 tyVarNames (TyRow _ _ _) = []
 tyVarNames (TyAuth _ _) = []
 tyVarNames (TyNamed _ t) = tyVarNames t
-tyVarNames (TyQual t _) = tyVarNames t
+tyVarNames (TyQual t _ _) = tyVarNames t
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
 -- type).  `tyVarNames` deliberately skips TyConstrained's constraints, so a constraint
@@ -12034,7 +12220,7 @@ tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
 tyConNamesInTy (TyRow _ _ _) = []
 tyConNamesInTy (TyAuth _ _) = []
 tyConNamesInTy (TyNamed _ t) = tyConNamesInTy t
-tyConNamesInTy (TyQual t _) = tyConNamesInTy t
+tyConNamesInTy (TyQual t _ _) = tyConNamesInTy t
 tyConNamesInTy (TyConstrained cs t) =
   flatMap tyConNamesInConstraint cs ++ tyConNamesInTy t
 
@@ -12251,7 +12437,7 @@ effTailNames (TyConstrained _ t) = effTailNames t
 effTailNames (TyRow _ tail _) = tail
 effTailNames (TyAuth _ _) = []
 effTailNames (TyNamed _ t) = effTailNames t
-effTailNames (TyQual t _) = effTailNames t
+effTailNames (TyQual t _ _) = effTailNames t
 
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffMap [] = []
@@ -12335,31 +12521,117 @@ authorityBinderBound named authNames n = match lookupAssoc n named
 
 -- Every authority name the signature writes (`<L n>`, `String @n`) must be
 -- one of its binders.  Resolve admits any name written to the left; here the
--- kind is known, so a type variable used as an authority is reported once.  A
--- named argument of the wrong type is `checkAuthorityBinder`'s report, not
--- this one: it binds, at a type the domain cannot abstract.
+-- kind is known, so a type variable used as an authority is reported, once at
+-- each atom or qualifier that writes it.
+--
+-- A qualifier naming a `String` named argument that no atom or index slot of
+-- the signature names reads an authority with no domain: an authority is an
+-- element of one label's domain (§4.1), and nothing here says which, so the
+-- qualifier could bound nothing.  That is `T-AUTHORITY-DOMAIN`, the report
+-- for a binder at two domains, since one domain is exactly one.  A qualifier
+-- naming a named argument of another type is `T-AUTHORITY-BINDER` here (an
+-- atom naming one is reported by `checkAuthorityBinder`).  The names a joined
+-- qualifier writes must likewise share one domain.
 reportUnboundAuthorityNames : Ty -> SigVars -> Unit
 reportUnboundAuthorityNames ty sv =
+  let named = namedArgTypes ty
+  let _ =
+    fold
+      (_ use =>
+        let n = fst use
+        let loc = orElseLoc (snd use) (firstTyLoc ty)
+        if isSome (lookupAssoc n sv.svAuths) then
+          ()
+        else match lookupAssoc n named
+          Some a =>
+            if isStringTy a then
+              pushTypeErrorAt "T-AUTHORITY-DOMAIN" loc (binderNoDomainMsg n)
+          None =>
+            pushTypeErrorAt "T-AUTHORITY-KIND" loc (nameNotAuthorityMsg n))
+      ()
+      (dedupLocated (authorityNamesWritten ty) [])
+  let _ =
+    fold
+      (_ q =>
+        fold
+          (_ n => match lookupAssoc n named
+            Some a =>
+              if isStringTy a then
+                ()
+              else
+                pushTypeErrorAt
+                  "T-AUTHORITY-BINDER"
+                  (orElseLoc (snd q) (firstTyLoc ty))
+                  (qualifierBinderTypeMsg n (ppTy a))
+            None => ())
+          ()
+          (fst q))
+      ()
+      (writtenQualifiers ty)
   fold
-    (_ n =>
-      if isSome (lookupAssoc n sv.svAuths)
-        || isSome (lookupAssoc n (namedArgTypes ty)) then
-        ()
-      else
-        pushTypeErrorOnceAt
-          "T-AUTHORITY-KIND"
-          (firstTyLoc ty)
-          (nameNotAuthorityMsg n))
+    (_ q =>
+      let tops =
+        flatMap
+          (n => match lookupAssoc n sv.svAuths
+            Some cell => [authvarDomain cell]
+            None => [])
+          (fst q)
+      match tops
+        top :: rest =>
+          if allList (sameDomainTop top) rest then
+            ()
+          else
+            pushTypeErrorAt
+              "T-AUTHORITY-DOMAIN"
+              (orElseLoc (snd q) (firstTyLoc ty))
+              (joinDomainMsg (fst q))
+        [] => ())
     ()
-    (dedup (authorityNamesWritten ty))
+    (writtenQualifiers ty)
+
+qualifierBinderTypeMsg : String -> String -> String
+qualifierBinderTypeMsg n ty =
+  "Named argument '\{n}' has type `\{ty}`, but a qualifier names it as an authority: only a `String` argument has one. Qualify by a `String` argument, or drop '\{n}' from the qualifier"
+
+binderNoDomainMsg : String -> String
+binderNoDomainMsg n =
+  "The qualifier names '\{n}', but no effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
+
+joinDomainMsg : List String -> String
+joinDomainMsg ns =
+  "The joined qualifier \{qualifierSource ns} joins authorities from different domains (a path prefix and a name set are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
+
+-- First occurrence of each name, keeping its span.
+dedupLocated : List (String, Option Loc) ->
+  List (String, Option Loc) ->
+  List (String, Option Loc)
+dedupLocated [] acc = reverseL acc
+dedupLocated ((n, l) :: rest) acc =
+  if isSome (lookupAssoc n acc) then
+    dedupLocated rest acc
+  else
+    dedupLocated rest ((n, l) :: acc)
+
+-- Every qualifier the type writes, its names with its span.
+writtenQualifiers : Ty -> List (List String, Option Loc)
+writtenQualifiers (TyQual t ns l) = (ns, l) :: writtenQualifiers t
+writtenQualifiers (TyEffect _ _ t) = writtenQualifiers t
+writtenQualifiers (TyApp a b) = writtenQualifiers a ++ writtenQualifiers b
+writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
+writtenQualifiers (TyTuple ts) = flatMap writtenQualifiers ts
+writtenQualifiers (TyConstrained _ t) = writtenQualifiers t
+writtenQualifiers (TyNamed _ t) = writtenQualifiers t
+writtenQualifiers _ = []
 
 nameNotAuthorityMsg : String -> String
 nameNotAuthorityMsg n =
   "'\{n}' is used as an authority, but nothing binds it as one: a name to its left is an authority only as a named argument `(\{n} : String) ->`, in an `Authority`-kinded type argument (`Handle \{n}`), or as an `Authority` parameter of the enclosing data declaration; elsewhere a lowercase name is a type variable"
 
--- The names written in authority position: atom parameters and qualifiers.
-authorityNamesWritten : Ty -> List String
-authorityNamesWritten (TyQual t n) = n :: authorityNamesWritten t
+-- The names written in authority position, atom parameters and qualifiers,
+-- each with the span of the atom or qualifier that writes it.
+authorityNamesWritten : Ty -> List (String, Option Loc)
+authorityNamesWritten (TyQual t ns l) =
+  map (n => (n, l)) ns ++ authorityNamesWritten t
 authorityNamesWritten (TyEffect atoms _ t) =
   flatMap atomAuthorityName atoms ++ authorityNamesWritten t
 authorityNamesWritten (TyRow atoms _ _) = flatMap atomAuthorityName atoms
@@ -12372,9 +12644,9 @@ authorityNamesWritten (TyConstrained _ t) = authorityNamesWritten t
 authorityNamesWritten (TyNamed _ t) = authorityNamesWritten t
 authorityNamesWritten _ = []
 
-atomAuthorityName : EffAtomTy -> List String
+atomAuthorityName : EffAtomTy -> List (String, Option Loc)
 atomAuthorityName a = match a.eatParam
-  EPName n => [n]
+  EPName n => [(n, a.eatLoc)]
   _ => []
 
 -- The type-variable names a signature quantifies as ORDINARY type variables:
@@ -12422,7 +12694,7 @@ authArgBindersIn (TyTuple ts) = flatMap authArgBindersIn ts
 authArgBindersIn (TyEffect _ _ t) = authArgBindersIn t
 authArgBindersIn (TyConstrained _ t) = authArgBindersIn t
 authArgBindersIn (TyNamed _ t) = authArgBindersIn t
-authArgBindersIn (TyQual t _) = authArgBindersIn t
+authArgBindersIn (TyQual t _ _) = authArgBindersIn t
 authArgBindersIn _ = []
 
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
@@ -12453,7 +12725,7 @@ namedAtomBinders (TyRow atoms _ _) = flatMap namedAtomBinder atoms
 namedAtomBinders (TyAuth _ _) = []
 namedAtomBinders (TyConstrained _ t) = namedAtomBinders t
 namedAtomBinders (TyNamed _ t) = namedAtomBinders t
-namedAtomBinders (TyQual t _) = namedAtomBinders t
+namedAtomBinders (TyQual t _ _) = namedAtomBinders t
 
 namedAtomBinder : EffAtomTy -> List (String, Param)
 namedAtomBinder a = match a.eatParam
@@ -12564,7 +12836,8 @@ fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- A binder reached outside an arrow domain is a resolve error already; its
 -- type still elaborates so inference can continue.
 fromAstTypeE etbl tvs (TyNamed _ t) = fromAstTypeE etbl tvs t
-fromAstTypeE etbl tvs (TyQual t n) = qualifyBy etbl n (fromAstTypeE etbl tvs t)
+fromAstTypeE etbl tvs (TyQual t ns _) =
+  qualifyByAll etbl ns (fromAstTypeE etbl tvs t)
 
 -- A bare row atom (#997) reached here means it landed in an ordinary
 -- (non-KRow) type slot — `kindArgMono`'s KRow branch (below) is what
@@ -12591,9 +12864,23 @@ fromAstDomainE etbl tvs (TyNamed n t) =
 fromAstDomainE etbl tvs t = fromAstTypeE etbl tvs t
 
 qualifyBy : SigVars -> String -> Mono -> Mono
-qualifyBy etbl n t = match lookupAssoc n etbl.svAuths
-  Some cell => TQual t (AVar cell)
-  None => t
+qualifyBy etbl n t = qualifyByAll etbl [n] t
+
+-- A qualifier's names are bounded by the join of their authorities.  A name
+-- that is not an authority binder here is reported by
+-- `reportUnboundAuthorityNames`, and the qualifier then bounds nothing.
+qualifyByAll : SigVars -> List String -> Mono -> Mono
+qualifyByAll etbl ns t =
+  let cells =
+    flatMap
+      (n => match lookupAssoc n etbl.svAuths
+        Some cell => [AVar cell]
+        None => [])
+      ns
+  if isNonEmptyL cells && listLen cells == listLen ns then
+    TQual t (authJoinAll cells)
+  else
+    t
 
 -- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
 -- visible yet at this point in the file, so render the row body directly with
@@ -13699,11 +13986,17 @@ infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
 -- "no impl of Slice" constraint error via normal method dispatch.
 infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- ELoc is transparent: capture the span in `currentLoc` (so any type error
--- recorded while inferring the wrapped expr is attributable to this position), then
--- infer the inner expr.
+-- recorded while inferring the wrapped expr is attributable to this position),
+-- infer the inner expr, and leave the span set to this node's own on the way
+-- out.  A check that runs after a subexpression — an application's argument
+-- flow, a clause body against its signature, a branch join — then reads the
+-- span of the subexpression it is about, not whichever leaf inside it was
+-- entered last.
 infer env (ELoc l e) =
   currentLoc := Some l
-  infer env e
+  let t = infer env e
+  currentLoc := Some l
+  t
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
 -- error (see typeMismatch); RESTORE the previous value afterwards, not a hard
@@ -16135,7 +16428,7 @@ pushUnknownFieldMaybeSuggest fname rname declared =
         !currentLoc
         (unknownFieldMsg fname rname ++ ". Did you mean '\{sug}'?")
         "did you mean '\{sug}'?"
-        (fieldFixFrom !currentLoc sug)
+        (fieldFixFrom !currentLoc fname sug)
 
 -- "did you mean" for a record field: nearest declared field name by
 -- Levenshtein distance, within a fixed distance of 2.  Skip names < 3 chars
@@ -16187,10 +16480,14 @@ keepBetterField c d (Some (bc, bd)) =
 -- access; a chained `a.b.cty` receiver is itself a field access with no own
 -- ELoc, so this would misplace the fix there — accepted for now (the
 -- common-case gain is worth the narrow miss).
-fieldFixFrom : Option Loc -> String -> Option (Loc, String)
-fieldFixFrom (Some (Loc f _ _ el ec)) sug =
-  Some (Loc f el (ec + 1) el (ec + 1 + stringLength sug), sug)
-fieldFixFrom None _ = None
+-- The misspelled name's span, from the receiver's end: past the `.`, as long
+-- as the name WRITTEN (not the suggestion).  The field name carries no span
+-- of its own, so a receiver separated from its `.` by whitespace still
+-- mislocates it.
+fieldFixFrom : Option Loc -> String -> String -> Option (Loc, String)
+fieldFixFrom (Some (Loc f _ _ el ec)) written sug =
+  Some (Loc f el (ec + 1) el (ec + 1 + stringLength written), sug)
+fieldFixFrom None _ _ = None
 
 unknownFieldMsg : String -> String -> String
 unknownFieldMsg fname rname =
@@ -18072,7 +18369,9 @@ unifySpineProbe ft (a :: rest) =
 inferExpected : TcEnv -> Expr -> Mono -> Mono
 inferExpected env (ELoc l e) expected =
   currentLoc := Some l
-  inferExpected env e expected
+  let t = inferExpected env e expected
+  currentLoc := Some l
+  t
 -- A lambda meeting a known arrow takes the arrow's domains as its parameters
 -- before its body is inferred, so a signed `f = p => …` sees `String @κ` the
 -- way a clause `f p = …` does.
@@ -21359,7 +21658,7 @@ padAnns (_ :: ps) [] = None :: padAnns ps []
 
 kindOfAnn : Option KindAnn -> Kind
 kindOfAnn (Some KindEffect) = KRow
-kindOfAnn (Some (KindAuthority l o)) = KAuth (EffLabel l o)
+kindOfAnn (Some (KindAuthority l o _)) = KAuth (EffLabel l o)
 kindOfAnn _ = KType
 
 -- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
@@ -21371,21 +21670,21 @@ kindAnnSlots _ = []
 
 kindAnnAtom : KindAnn -> Kind
 kindAnnAtom KindEffect = KRow
-kindAnnAtom (KindAuthority l o) = KAuth (EffLabel l o)
+kindAnnAtom (KindAuthority l o _) = KAuth (EffLabel l o)
 kindAnnAtom _ = KType
 
 -- A kind that is not `Type` and must therefore be written (§6.3): `Effect`
 -- or `Authority`.
 kindAnnHasEffect : KindAnn -> Bool
 kindAnnHasEffect KindEffect = True
-kindAnnHasEffect (KindAuthority _ _) = True
+kindAnnHasEffect (KindAuthority _ _ _) = True
 kindAnnHasEffect (KindArrow a b) = kindAnnHasEffect a || kindAnnHasEffect b
 kindAnnHasEffect _ = False
 
 renderKindAnn : KindAnn -> String
 renderKindAnn KindType = "Type"
 renderKindAnn KindEffect = "Effect"
-renderKindAnn (KindAuthority l _) = "Authority \{l}"
+renderKindAnn (KindAuthority l _ _) = "Authority \{l}"
 renderKindAnn (KindArrow a b) = "\{renderKindAnnAtomic a} -> \{renderKindAnn b}"
 
 renderKindAnnAtomic : KindAnn -> String
@@ -21523,7 +21822,7 @@ inferParamPolarities tab params anns variants =
       -- An authority index is invariant by kind (§6.4), whatever its
       -- occurrences: a qualifier or an atom is not a type position this
       -- walk could read a variance off.
-      Some (KindAuthority _ _) => PInv
+      Some (KindAuthority _ _ _) => PInv
       _ =>
         joinPolarities
           (flatMap (t => paramOccPolarities tab (fst pk) PCo t) fieldTys))
@@ -21556,7 +21855,7 @@ paramOccPolarities tab p pol (TyConstrained _ t) =
 paramOccPolarities _ _ _ (TyRow _ _ _) = []
 paramOccPolarities _ _ _ (TyAuth _ _) = []
 paramOccPolarities tab p pol (TyNamed _ t) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyQual t _) = paramOccPolarities tab p pol t
+paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
 paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3): same record pattern as
   -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
@@ -21866,7 +22165,7 @@ existentialCells : List (String, KindAnn) -> List (String, Ref Authvar)
 existentialCells binders =
   map
     (b => match snd b
-      KindAuthority l o =>
+      KindAuthority l o _ =>
         (fst b, freshAuthvar (dtopFor (EffLabel l o)) (Some (fst b)))
       _ => (fst b, freshAuthvar PUnit (Some (fst b))))
     binders
@@ -28237,7 +28536,7 @@ tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
 tyIsConcrete (TyRow _ _ _) = True
 tyIsConcrete (TyAuth _ _) = True
 tyIsConcrete (TyNamed _ t) = tyIsConcrete t
-tyIsConcrete (TyQual t _) = tyIsConcrete t
+tyIsConcrete (TyQual t _ _) = tyIsConcrete t
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
 -- concrete is fully ground).
@@ -29065,7 +29364,7 @@ tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyRow _ _ _) _ = MOk
 tyStep (TyAuth _ _) _ = MOk
 tyStep (TyNamed _ t1) s = MKids [(t1, stripTyWrap s)]
-tyStep (TyQual t1 _) s = MKids [(t1, stripTyWrap s)]
+tyStep (TyQual t1 _ _) s = MKids [(t1, stripTyWrap s)]
 
 eqStr : String -> String -> Bool
 eqStr a b = a == b
@@ -29074,7 +29373,7 @@ stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
 stripTyWrap (TyNamed _ t) = stripTyWrap t
-stripTyWrap (TyQual t _) = stripTyWrap t
+stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
 -- structural equality of two AST type patterns (rigid; TyVar names must match).
@@ -34404,7 +34703,7 @@ substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
 substTyVars _ (TyRow es eff l) = TyRow es eff l
 substTyVars _ (TyAuth p l) = TyAuth p l
 substTyVars sub (TyNamed n t) = TyNamed n (substTyVars sub t)
-substTyVars sub (TyQual t n) = TyQual (substTyVars sub t) n
+substTyVars sub (TyQual t ns l) = TyQual (substTyVars sub t) ns l
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
 -- un-implementable for an ordinary interface (no `impl Display (a -> b)` exists).
@@ -36788,27 +37087,15 @@ externSchemes scope decls =
 -- process (`medaka test` runs several engines), and a later call carrying a
 -- shorter list must not shrink the set a guard is reading.
 --
--- Each row records TWO projections of the catalog signature, as a pair:
+-- Each row records the catalog's written signature and the positions of its
+-- argument binders, which `ffiCheckExternsShadow` and
+-- `ffiCheckExternsCatalogRow` (#2163) both read: one map, so the two rules about
+-- the same declaration cannot read two tables that fell out of step.
 --
---   fst — its TYPE-HEAD SHAPE KEY (`ffiSigShapeKey`), so that
---         `ffiCheckExternsShadow` can ask not only "is this a catalog name" but
---         "does this local declaration claim the catalog row's shape".
---   snd — its WRITTEN TERMINAL EFFECT ROW (`ffiWrittenRow`), the labels as the
---         author spelled them, so that `ffiCheckExternsCatalogRow` can ask
---         whether a redeclaration's row still covers what the builtin performs
---         (#2163).
---
--- ONE map with a widened value rather than a sibling map keyed the same way: the
--- two projections are read by two rules about the same declaration, and two
--- tables could fall out of step (the reader-prose on `ffiIsBuiltinExternName`
--- below says the same thing about the shape key).
---
--- ⚠️ The ROW is stored as WRITTEN LABELS, not as `List Atom`.  `atomsOfWritten`
+-- The signature's rows stay as written labels, not `List Atom`.  `atomsOfWritten`
 -- resolves each bare label against `driverState.effectDomains`, and this seam can
--- run BEFORE that registry is populated — so lifting the catalog row to atoms here
--- and the declared row to atoms at the check seam would compare two atom sets
--- built under different domain knowledge.  Both sides are lifted at the CHECK
--- seam instead, where the registry is the same for both.
+-- run before that registry is populated, so both sides are lifted at the check
+-- seam, where the registry is the same for both.
 --
 -- Union means a re-seed REWRITES an existing row rather than skipping it — the two
 -- seeds are the same `runtimeDecls` list, so the value is the same pair either
@@ -36820,13 +37107,11 @@ noteBuiltinExternNames ds =
     externSigsToMap ds driverState.value.builtinExternNamesRef.value
 
 externSigsToMap : List Decl ->
-  OrdMap (String, List EffAtomTy, List (String, Int)) ->
-  OrdMap (String, List EffAtomTy, List (String, Int))
+  OrdMap (Ty, List (String, Int)) ->
+  OrdMap (Ty, List (String, Int))
 externSigsToMap [] m = m
 externSigsToMap ((DExtern _ n ty) :: rest) m =
-  externSigsToMap
-    rest
-    (omInsert n (ffiSigShapeKey ty, ffiWrittenRow ty, namedArgOrder ty) m)
+  externSigsToMap rest (omInsert n (ty, namedArgOrder ty) m)
 externSigsToMap (_ :: rest) m = externSigsToMap rest m
 
 -- Each named argument with its absolute position among the arrows: the
@@ -37037,7 +37322,7 @@ ffiCrossableTy t = match expandAliasHeadTy t
   -- A named argument crosses as its type; the name is the authority the
   -- declared row charges, which is compile-time only.
   TyNamed _ inner => ffiCrossableTy inner
-  TyQual inner _ => ffiCrossableTy inner
+  TyQual inner _ _ => ffiCrossableTy inner
   -- `Array Int` and nothing else: §2.4 specifies only the all-immediate-element
   -- case, so `Array String` / `Array (Array Int)` fall through to False.
   TyApp a b => match (expandAliasHeadTy a, expandAliasHeadTy b)
@@ -37101,27 +37386,26 @@ ffiCheckExternsGo (_ :: rest) = ffiCheckExternsGo rest
 -- ⚠️ It is keyed on the name set the SEED was built from, recorded once by
 -- `externSchemes` — not on a hand-copied list here, which would rot the moment
 -- `stdlib/runtime.mdk` gains a row.  `builtinExternNamesRef` maps each catalog
--- name to the PAIR (that row's TYPE-HEAD SHAPE KEY `ffiSigShapeKey`, that row's
--- WRITTEN TERMINAL EFFECT ROW `ffiWrittenRow`) rather than to `Unit`: THIS
--- predicate reads only the key set, but `ffiCheckExternsShadow` below needs the
--- catalog's own signature shape to compare a redeclaration against, and
--- `ffiCheckExternsCatalogRow` (#2163) needs its EFFECT ROW; a second or third
--- table keyed the same way could fall out of step with this one.  (The field
+-- name to that row's written signature and its named-argument positions rather
+-- than to `Unit`: this predicate reads only the key set, but
+-- `ffiCheckExternsShadow` below matches a redeclaration against the catalog's
+-- own signature, and `ffiCheckExternsCatalogRow` (#2163) compares its rows; a
+-- second table keyed the same way could fall out of step with this one.  (The field
 -- carries no comment of its own — `DriverState`'s header forbids one, #829 /
 -- [T-PERRUN-COMMENTS] — so its prose lives here, on its reader.)
 --
 -- 🚨 AND THE MEASUREMENT ABOVE ONLY EVER COVERED A *COMPATIBLE* REDECLARATION.
--- Both measured rows (`bitAnd`, `getEnv`) claim the catalog row's own type-head
--- shape, so "the real builtin ran" is the right answer for them.  A redeclaration
--- that claims a DIFFERENT shape gets the same name-only exemption and the same
--- builtin codegen, which is then the WRONG answer, silently: `extern log : String
+-- Both measured rows (`bitAnd`, `getEnv`) are instances of the catalog row's
+-- type, so "the real builtin ran" is the right answer for them.  A redeclaration
+-- at a different type gets the same name-only exemption and the same builtin
+-- codegen, which is then the wrong answer, silently: `extern log : String
 -- -> <FFI "mylog"> Unit` compiles to `call double @mdk_log(double <String cell
 -- pointer>)` at exit 0, and the user's own C `log` is never called or even
 -- declared.  So a bare name match is not enough to say "this declaration is not a
--- foreign-call contract" — the SHAPE has to agree too, which is
+-- foreign-call contract": the type has to agree too, which is
 -- `ffiCheckExternsShadow` below.  Callers of this predicate are still exempting on
--- the name alone, and that is correct BECAUSE the shadow rule has already made a
--- shape-incompatible name match a hard error: the exemption never has to reason
+-- the name alone, and that is correct because the shadow rule has already made a
+-- name match at any other type a hard error: the exemption never has to reason
 -- about a declaration that survived.
 ffiIsBuiltinExternName : String -> Bool
 ffiIsBuiltinExternName n =
@@ -37154,11 +37438,15 @@ ffiIsBuiltinExternName n =
 -- name at any signature.  This one admits the compatible redeclaration idiom the
 -- effect-domain fixtures use on purpose, and rejects only the contradiction.
 --
--- Granularity is the type-head shape — argument heads plus the return head, with
--- effect rows and constraint prefixes walked THROUGH — the same granularity
--- `ffiExternRows` records for the emitter and the same one `FFI-ABI.md` documents
--- as this mechanism's resolution.  `Array Int` and `Array String` are one shape
--- here; §1's crossable guard is what separates them.
+-- The comparison is the whole type, not its heads: callers are typed against
+-- the local declaration while the built-in runs, so the declaration must be an
+-- INSTANCE of the catalog's type (`ffiSigInstance`). It may fix the built-in's
+-- type variables and authorities (`Array Int` for `Array a`, `Socket "a.com/*"`
+-- for `Socket h`) and nothing else. A head-only comparison let `extern
+-- stringIndexOf : String -> String -> Option (Socket "a.com/*")` type any
+-- number as a socket. Rows are part of the type; only the row each arrow's
+-- result carries may differ, and that is the next rule's business,
+-- instantiated by the same match.
 ffiCheckExternsShadow : Bool -> List Decl -> Unit
 ffiCheckExternsShadow False _ = ()
 ffiCheckExternsShadow True ds = ffiCheckShadowGo (externDecls ds)
@@ -37167,37 +37455,290 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCheckShadowGo [] = ()
 ffiCheckShadowGo ((DExtern _ n ty) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some (k, _, _) if k /= ffiSigShapeKey ty =>
-      pushTypeErrorAt
-        "T-FFI-BUILTIN-SHADOW"
-        (firstTyLoc ty)
-        (ffiShadowMsg n k (ffiSigShapeKey ty))
-    _ => ()
+    Some (cat, _) => match ffiSigInstance cat ty
+      Some _ => ()
+      None =>
+        pushTypeErrorAt
+          "T-FFI-BUILTIN-SHADOW"
+          (firstTyLoc ty)
+          (ffiShadowMsg n (ppTy cat) (ppTy ty))
+    None => ()
   ffiCheckShadowGo rest
 ffiCheckShadowGo (_ :: rest) = ffiCheckShadowGo rest
 
 ffiShadowMsg : String -> String -> String -> String
 ffiShadowMsg n want got =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with an incompatible signature: the built-in is '\{want}', this declaration claims '\{got}' (type heads only; effect rows are not compared). A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so this declaration would silently call '\{n}' with the wrong argument and result representations rather than a foreign symbol of your own. Rename the extern to a name the runtime does not already define, or declare it with the built-in's own signature"
+  "Foreign declaration '\{n}' redeclares a built-in runtime name at a type the built-in does not have: the built-in is '\{want}', this declaration claims '\{got}'. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says, so its callers would be typed against a signature the called code does not honour. A redeclaration may fix the built-in's type variables and authorities, and must otherwise be its type. Rename the extern to a name the runtime does not already define, or declare it at the built-in's own signature"
+
+-- The substitution under which `decl` is the catalog signature `cat` with
+-- some of its variables fixed, or `None` when it is not. A catalog type, row
+-- or authority variable binds to whatever the declaration writes at its first
+-- occurrence and must meet the same thing at every later one; the
+-- declaration's own variables are rigid. An argument's binder (`host` in
+-- `(host : String) -> … Socket host`) is fixed by the argument's value, not by
+-- the declaration, so it is bound up front to the binder the declaration
+-- writes at the same position. Rows are part of the type: off the arrow spine
+-- they match exactly. The row each arrow's result carries is what calling the
+-- built-in performs, which a declaration may widen, so the match peels it and
+-- `ffiCheckExternsCatalogRow` compares it, arrow by arrow.
+ffiSigInstance : Ty -> Ty -> Option (List (String, Ty))
+ffiSigInstance cat decl =
+  ffiMatchSpine
+    perRun.value.aliasTableRef.value
+    cat
+    decl
+    (Some (ffiBinderSeed (namedArgOrder cat) (namedArgOrder decl)))
+
+-- Each catalog binder against the declaration's binder at its position, or a
+-- name no declaration can write when the declaration names none there.
+ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
+ffiBinderSeed cat decl =
+  let byPos = map (p => (snd p, fst p)) decl
+  map (p => (fst p, TyVar (optionOr "" (lookupAssocI (snd p) byPos)))) cat
+
+ffiMatchSpine : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  Ty ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchSpine aliases cat decl acc = match (
+  ffiSigStrip aliases cat,
+  ffiSigStrip aliases decl,
+)
+  (TyFun a r, TyFun c d) =>
+    ffiMatchSpine
+      aliases
+      (ffiRowBody r)
+      (ffiRowBody d)
+      (ffiMatchTy aliases a c acc)
+  (c, d) => ffiMatchTy aliases c d acc
+
+ffiMatchTy : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  Ty ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchTy _ _ _ None = None
+ffiMatchTy aliases cat decl (Some sub) = match (
+  ffiSigStrip aliases cat,
+  ffiSigStrip aliases decl,
+)
+  (TyVar v, d) => match lookupAssoc v sub
+    Some bound => if ffiSameTy aliases bound d then Some sub else None
+    None => Some ((v, d) :: sub)
+  (TyEffect l1 t1 a, TyEffect l2 t2 c) =>
+    ffiMatchTy aliases a c (ffiMatchRow l1 t1 l2 t2 (Some sub))
+  (TyEffect l1 t1 a, c) =>
+    ffiMatchTy aliases a c (ffiMatchRow l1 t1 [] [] (Some sub))
+  (a, TyEffect l2 t2 c) =>
+    ffiMatchTy aliases a c (ffiMatchRow [] [] l2 t2 (Some sub))
+  (TyRow l1 t1 _, TyRow l2 t2 _) => ffiMatchRow l1 t1 l2 t2 (Some sub)
+  (TyApp a b, TyApp c d) =>
+    ffiMatchTy aliases b d (ffiMatchTy aliases a c (Some sub))
+  (TyFun a b, TyFun c d) =>
+    ffiMatchTy aliases b d (ffiMatchTy aliases a c (Some sub))
+  (TyTuple xs, TyTuple ys) => ffiMatchTys aliases xs ys (Some sub)
+  (TyQual a _ _, TyQual c _ _) => ffiMatchTy aliases a c (Some sub)
+  (c, d) => if ffiSameTy aliases c d then Some sub else None
+
+ffiMatchTys : List (TabKey, (List String, Ty)) ->
+  List Ty ->
+  List Ty ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchTys _ [] [] acc = acc
+ffiMatchTys aliases (c :: cs) (d :: ds) acc =
+  ffiMatchTys aliases cs ds (ffiMatchTy aliases c d acc)
+ffiMatchTys _ _ _ _ = None
+
+-- A catalog row against a written one, exactly: each catalog atom meets an
+-- atom of the same label whose authority it matches, and what the
+-- declaration writes beyond them is the catalog's row variable, or nothing
+-- when the catalog row is closed.
+ffiMatchRow : List EffAtomTy ->
+  List String ->
+  List EffAtomTy ->
+  List String ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchRow _ _ _ _ None = None
+ffiMatchRow l1 t1 l2 t2 (Some sub) = match ffiMatchAtoms l1 l2 sub
+  None => None
+  Some (sub2, rest) => match t1
+    [] => match (rest, t2)
+      ([], []) => Some sub2
+      _ => None
+    [v] => match lookupAssoc v sub2
+      Some (TyRow bl bt _) =>
+        if ffiSameRow bl bt rest t2 then Some sub2 else None
+      Some _ => None
+      None => Some ((v, TyRow rest t2 None) :: sub2)
+    _ => match rest
+      [] => if ffiSameNames t1 t2 then Some sub2 else None
+      _ => None
+
+ffiMatchAtoms : List EffAtomTy ->
+  List EffAtomTy ->
+  List (String, Ty) ->
+  Option (List (String, Ty), List EffAtomTy)
+ffiMatchAtoms [] rest sub = Some (sub, rest)
+ffiMatchAtoms (a :: more) ds sub = match ffiTakeAtom a ds [] sub
+  Some (sub2, ds2) => ffiMatchAtoms more ds2 sub2
+  None => None
+
+ffiTakeAtom : EffAtomTy ->
+  List EffAtomTy ->
+  List EffAtomTy ->
+  List (String, Ty) ->
+  Option (List (String, Ty), List EffAtomTy)
+ffiTakeAtom _ [] _ _ = None
+ffiTakeAtom a (d :: ds) skipped sub = match ffiMatchAtom a d sub
+  Some sub2 => Some (sub2, reverseL skipped ++ ds)
+  None => ffiTakeAtom a ds (d :: skipped) sub
+
+ffiMatchAtom : EffAtomTy ->
+  EffAtomTy ->
+  List (String, Ty) ->
+  Option (List (String, Ty))
+ffiMatchAtom a d sub =
+  if sameTyConHead
+    a.eatLabel
+    a.eatOrigin
+    d.eatLabel
+    d.eatOrigin then match a.eatParam
+    EPName v => match lookupAssoc v sub
+      Some bound => match ffiParamOf bound
+        Some p => if ffiSameParam p d.eatParam then Some sub else None
+        None => None
+      None => Some ((v, ffiParamTy d.eatParam) :: sub)
+    p => if ffiSameParam p d.eatParam then Some sub else None
+  else
+    None
+
+-- An authority as a substitution holds it: a name as a variable, anything
+-- written as the authority term.
+ffiParamTy : EffParamTy -> Ty
+ffiParamTy (EPName n) = TyVar n
+ffiParamTy p = TyAuth p None
+
+ffiParamOf : Ty -> Option EffParamTy
+ffiParamOf (TyAuth p _) = Some p
+ffiParamOf (TyVar m) = Some (EPName m)
+ffiParamOf _ = None
+
+ffiSameParam : EffParamTy -> EffParamTy -> Bool
+ffiSameParam p q = ppTy (TyAuth p None) == ppTy (TyAuth q None)
+
+-- Two written rows are the same row: the same set of atoms, each label by its
+-- declared identity, and the same set of row variables. A row is a set, so a
+-- repeated atom is that atom once and never stands in for another.
+ffiSameRow : List EffAtomTy ->
+  List String ->
+  List EffAtomTy ->
+  List String ->
+  Bool
+ffiSameRow l1 t1 l2 t2 =
+  ffiAtomsWithin l1 l2 && ffiAtomsWithin l2 l1 && ffiSameNames t1 t2
+
+ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
+ffiAtomsWithin xs ys = allList (a => anyList (b => ffiSameAtom a b) ys) xs
+
+ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
+ffiSameAtom a b =
+  sameTyConHead a.eatLabel a.eatOrigin b.eatLabel b.eatOrigin
+    && ffiSameParam a.eatParam b.eatParam
+
+ffiSameNames : List String -> List String -> Bool
+ffiSameNames xs ys =
+  allList (x => contains x ys) xs && allList (y => contains y xs) ys
+
+-- Two written types are the same type: heads by identity, variables by
+-- name, rows by `ffiSameRow`, authorities by their rendering.
+ffiSameTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Bool
+ffiSameTy aliases a b = match (ffiSigStrip aliases a, ffiSigStrip aliases b)
+  (TyEffect l1 t1 x, y) => match ffiRowParts y
+    (l2, t2, y2) => ffiSameRow l1 t1 l2 t2 && ffiSameTy aliases x y2
+  (x, TyEffect l2 t2 y) => ffiSameRow [] [] l2 t2 && ffiSameTy aliases x y
+  (TyCon { tyConName = n1, tyConOrigin = o1 }, TyCon { tyConName = n2, tyConOrigin = o2 }) =>
+    sameTyConHead n1 o1 n2 o2
+  (TyVar x, TyVar y) => x == y
+  (TyApp a1 b1, TyApp a2 b2) =>
+    ffiSameTy aliases a1 a2 && ffiSameTy aliases b1 b2
+  (TyFun a1 b1, TyFun a2 b2) =>
+    ffiSameTy aliases a1 a2 && ffiSameTy aliases b1 b2
+  (TyTuple xs, TyTuple ys) =>
+    listLen xs == listLen ys
+      && allList (p => ffiSameTy aliases (fst p) (snd p)) (zipL xs ys)
+  (TyQual x _ _, TyQual y _ _) => ffiSameTy aliases x y
+  (TyAuth p _, TyAuth q _) => ffiSameParam p q
+  (TyRow l1 t1 _, TyRow l2 t2 _) => ffiSameRow l1 t1 l2 t2
+  _ => False
+
+-- A written type with its outer row, which an unwritten row leaves empty.
+ffiRowParts : Ty -> (List EffAtomTy, List String, Ty)
+ffiRowParts (TyEffect l t inner) = (l, t, inner)
+ffiRowParts t = ([], [], t)
+
+ffiRowBody : Ty -> Ty
+ffiRowBody t = match ffiRowParts t
+  (_, _, inner) => inner
+
+ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
+ffiSigStrip aliases t = match expandAliasHeadTyWith aliases t
+  TyConstrained _ inner => ffiSigStrip aliases inner
+  TyNamed _ inner => ffiSigStrip aliases inner
+  u => u
+
+-- The row each arrow of a signature's spine carries on its result, in order.
+ffiSpineRows : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  List (List EffAtomTy, List String)
+ffiSpineRows aliases t = match ffiSigStrip aliases t
+  TyFun _ r => match ffiRowParts r
+    (l, tl, inner) => (l, tl) :: ffiSpineRows aliases inner
+  _ => []
+
+-- The catalog row with each index binder the declaration fixed replaced by
+-- what it wrote there: `<Net h>` against `Socket "a.com/*"` is
+-- `<Net "a.com/*">`. An argument's binder is left as written, since the row
+-- rule pairs those by position.
+ffiInstRow : List (String, Int) ->
+  List (String, Ty) ->
+  List EffAtomTy ->
+  List EffAtomTy
+ffiInstRow names sub ls =
+  let free = filterList (p => isNone (lookupAssoc (fst p) names)) sub
+  map (ffiInstAtom free) ls
+
+ffiInstAtom : List (String, Ty) -> EffAtomTy -> EffAtomTy
+ffiInstAtom sub a = match a.eatParam
+  EPName n => match lookupAssoc n sub
+    Some (TyAuth p _) => { a | eatParam = p }
+    Some (TyVar m) => { a | eatParam = EPName m }
+    _ => a
+  _ => a
 
 -- ── the CATALOG-ROW rule (#2163, epic #2070 R2) ─────────────────────────────
 --
 -- 🚨 THE FIFTH DECLARATION RULE, AND IT IS ABOUT THE EFFECT ROW, NOT THE SHAPE.
 --
--- `ffiCheckExternsShadow` above compares TYPE HEADS and walks THROUGH effect rows
--- on purpose, so `<>` and `<FileWrite>` are one shape to it.  That left R2's
--- own escape-hatch sentence live for all 138 catalog names: a local
+-- `ffiCheckExternsShadow` above leaves the row each arrow's result carries to
+-- this rule, so `<>` and `<FileWrite>` on `writeFile`'s last arrow are one type
+-- to it.  Without this rule, R2's own escape-hatch sentence stays live for every
+-- catalog name: a local
 --
---   extern writeFile : String -> String -> <> Result Unit String
+--   extern writeFile : String -> String -> <> Result String Unit
 --
--- matches the catalog's heads, passes every rule above, and types a caller as
+-- is an instance of the catalog's type, passes every rule above, and types a caller as
 -- `String -> Unit` — while the emitter, which is name-keyed and never sees a
 -- typecheck verdict (`isAnyExtern`/`ffiExternRows`), lowers the call to the REAL
 -- `writeFile` and the file is really written.  `medaka check` printed
 -- `innocent : String -> Unit` for a function that writes to disk, at exit 0.
 --
--- THE RULE IS SUBSUMPTION, NOT EQUALITY, AND NOT A BAN.  The declared row must
--- COVER the catalog's own row (declared ⊇ catalog); it may be wider.  Two reasons
+-- The rule is subsumption, not equality, and not a ban.  At each arrow of the
+-- spine, the declared row must cover the catalog's row at the same arrow
+-- (declared ⊇ catalog), instantiated by the shadow rule's match; it may be
+-- wider.  A row written at an earlier arrow does not cover a later one.  Two reasons
 -- it is not the blunter "refuse catalog redeclaration outright":
 --
 --   * the compatible-redeclaration idiom is load-bearing in the tree, DERIVED not
@@ -37236,10 +37777,80 @@ ffiCheckCatalogRowGo : List Decl -> Unit
 ffiCheckCatalogRowGo [] = ()
 ffiCheckCatalogRowGo ((DExtern _ n ty) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some (_, catRow, catNames) => ffiCheckCatalogRowOne n ty catRow catNames
-    _ => ()
+    Some (cat, catNames) => match ffiSigInstance cat ty
+      Some sub =>
+        let aliases = perRun.value.aliasTableRef.value
+        let pairs = zipL (ffiSpineRows aliases cat) (ffiSpineRows aliases ty)
+        let arrows = listLen pairs
+        fold
+          (_ ip =>
+            ffiCheckSpineRow
+              n
+              ty
+              catNames
+              sub
+              (ffiArrowNote (fst ip) arrows)
+              (fst (snd ip))
+              (snd (snd ip)))
+          ()
+          (zipL (rangeFromCount 1 arrows) pairs)
+      -- the shadow rule has refused the declaration
+      None => ()
+    None => ()
   ffiCheckCatalogRowGo rest
 ffiCheckCatalogRowGo (_ :: rest) = ffiCheckCatalogRowGo rest
+
+-- One arrow of the spine: the catalog's row there, instantiated by the match
+-- (its row variable becomes the row the declaration wrote for it), against the
+-- row the declaration writes at the same arrow.
+ffiCheckSpineRow : String ->
+  Ty ->
+  List (String, Int) ->
+  List (String, Ty) ->
+  String ->
+  (List EffAtomTy, List String) ->
+  (List EffAtomTy, List String) ->
+  Unit
+ffiCheckSpineRow n ty catNames sub arrow cat decl =
+  let tails = ffiExpandTails sub (snd cat)
+  let _ =
+    ffiCheckCatalogRowOne
+      n
+      ty
+      arrow
+      (ffiInstRow catNames sub (fst cat) ++ fst tails)
+      catNames
+      (fst decl)
+  match filterList (v => not (contains v (snd decl))) (snd tails)
+    [] => ()
+    missing =>
+      pushTypeErrorAt
+        "T-FFI-CATALOG-NARROW"
+        (firstTyLoc ty)
+        (ffiCatalogTailMsg n arrow missing)
+
+-- Which arrow a spine row belongs to, for a signature with more than one: a
+-- row written on another arrow of the declaration does not cover it.
+ffiArrowNote : Int -> Int -> String
+ffiArrowNote i arrows =
+  if arrows > 1 then
+    " on the result of argument \{display i} of \{display arrows}"
+  else
+    ""
+
+ffiExpandTails : List (String, Ty) ->
+  List String ->
+  (List EffAtomTy, List String)
+ffiExpandTails _ [] = ([], [])
+ffiExpandTails sub (v :: vs) =
+  let rest = ffiExpandTails sub vs
+  match lookupAssoc v sub
+    Some (TyRow bl bt _) => (bl ++ fst rest, bt ++ snd rest)
+    _ => (fst rest, v :: snd rest)
+
+ffiCatalogTailMsg : String -> String -> List String -> String
+ffiCatalogTailMsg n arrow missing =
+  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row\{arrow}: the built-in also performs the row variable \{joinWith ", " missing}, which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '\{n}' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"
 
 -- Both rows are lifted with the SAME authority variable per argument
 -- position, so a binder covers the catalog's binder only when it names the
@@ -37247,11 +37858,12 @@ ffiCheckCatalogRowGo (_ :: rest) = ffiCheckCatalogRowGo rest
 -- covers a bare catalog label.
 ffiCheckCatalogRowOne : String ->
   Ty ->
+  String ->
   List EffAtomTy ->
   List (String, Int) ->
+  List EffAtomTy ->
   Unit
-ffiCheckCatalogRowOne n ty catRow catNames =
-  let declRow = ffiWrittenRow ty
+ffiCheckCatalogRowOne n ty arrow catRow catNames declRow =
   let declNames = namedArgOrder ty
   let cells = positionCells (catNames ++ declNames)
   let catAtoms = atomsOfWrittenIn (positionalSigVars catNames cells) catRow
@@ -37262,7 +37874,7 @@ ffiCheckCatalogRowOne n ty catRow catNames =
       pushTypeErrorAt
         "T-FFI-CATALOG-NARROW"
         (firstTyLoc ty)
-        (ffiCatalogNarrowMsg n catAtoms declAtoms missing)
+        (ffiCatalogNarrowMsg n arrow catAtoms declAtoms missing)
 
 -- One variable per argument position named by either row, carrying the
 -- first binder spelling seen for that position so a message reads as written.
@@ -37286,9 +37898,14 @@ positionalSigVars names cells = SigVars {
       names,
 }
 
-ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
-ffiCatalogNarrowMsg n cat decl missing =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
+ffiCatalogNarrowMsg : String ->
+  String ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  String
+ffiCatalogNarrowMsg n arrow cat decl missing =
+  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row\{arrow}: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
 
 -- S3-1 (`ffi-boundary-honesty` review round): a parameterised label whose param is
 -- ⊤ renders as the BARE LABEL — `drenderN (PPrefix None)` is "" by design, and a
@@ -37328,21 +37945,6 @@ paramIsTopDomain (PSet None) = True
 paramIsTopDomain (PProduct []) = True
 paramIsTopDomain _ = False
 
--- The WRITTEN terminal effect row of a signature: walk the arrow spine to the
--- result position and read the labels the author spelled there.  A mirror of
--- `ffiResultRowHasFFI`'s walk (same spine, same stopping point) rather than a new
--- one — `Int -> Int -> <> Int` puts the row on the LAST result, so the recursion
--- has to follow the spine, and a signature with no row at all is the EMPTY row,
--- which is the honest reading (`extern f : Int -> Int` performs nothing).
--- `expandAliasHeadTy` at each step for `ffiSigShapeKey`'s reason: an alias-named
--- arrow is invisible to a purely syntactic walk.
-ffiWrittenRow : Ty -> List EffAtomTy
-ffiWrittenRow ty = match expandAliasHeadTy ty
-  TyConstrained _ inner => ffiWrittenRow inner
-  TyFun _ r => ffiWrittenRow r
-  TyEffect ls _ _ => ls
-  _ => []
-
 -- ── the RESERVED-NAMESPACE rule (S0-4, review round of `ffi-lower-and-link`) ─
 --
 -- 🚨 UNCONDITIONAL, AND THAT IS THE POINT.  A user extern's declared name is used
@@ -37381,43 +37983,24 @@ ffiReservedMsg : String -> String
 ffiReservedMsg n =
   "Foreign declaration '\{n}' claims a reserved name: the 'mdk_' prefix is the Medaka runtime's own C symbol namespace (runtime/medaka_rt.c), and a foreign declaration's name is used verbatim as the C symbol it links to. Declaring '\{n}' would bind your calls to a compiler-internal function rather than to a symbol of your own. Rename the extern; if the C symbol you actually need is named '\{n}', it cannot be reached from Medaka in v1"
 
--- ── SIGNATURE SHAPE, at TYPE-HEAD granularity ───────────────────────────────
+-- ── signature heads, for the emitter's FFI rows ─────────────────────────────
 --
--- The `(argument heads, return head)` projection of a signature, rendered as one
--- comparable string.  It is the SAME granularity `ffiExternRows`
--- (`compiler/ir/core_ir_lower.mdk`) records for the emitter's FFI index, on
--- purpose: a rule about what the emitter will do with a declaration must not read
--- the signature at a finer grain than the emitter itself does, or it would reject
--- declarations the emitter treats as identical.
---
--- ⚠️ A TYPE VARIABLE IS NORMALISED TO `_`, not spelled.  `a -> Array a -> Unit` and
--- `x -> Array x -> Unit` are the same declaration; comparing the letters would
--- reject a catalog redeclaration for renaming its own type parameter, which is not
--- a contradiction about anything.  The cost is that `a -> a` and `a -> b` are one
--- shape here — at TYPE-HEAD granularity they already are (`Array Int` and `Array
--- String` are one shape too), so this loses nothing the projection had.
+-- The `(argument heads, return head)` projection of a signature, the granularity
+-- `ffiExternRows` (`compiler/ir/core_ir_lower.mdk`) records for the emitter's FFI
+-- index: a foreign call's representation is decided by its heads.  A type
+-- variable projects to `_`, so renaming one changes nothing.  This projection
+-- says nothing about whether a redeclaration of a catalog name is honest; that
+-- is `ffiSigInstance`, over the whole type.
 --
 -- `expandAliasHeadTy` at each step for the reason `ffiCheckExternSig` needs it: an
 -- alias-named arrow is invisible to a purely syntactic walk.  Cycles cannot recur
--- here — `rejectCyclicAliases` has emptied the table of them before the check seam,
--- and the ONLY other caller (`noteBuiltinExternNames`, which may run at seed time
--- before that) walks `stdlib/runtime.mdk`'s catalog, whose rows name primitive
--- heads literally and so never take an alias-table hit at all.
-ffiSigShapeKey : Ty -> String
-ffiSigShapeKey ty = "\{joinWith "," (ffiSigArgHeads ty)} -> \{ffiSigRetHead ty}"
-
-ffiSigArgHeads : Ty -> List String
-ffiSigArgHeads ty = ffiSigArgHeadsWith perRun.value.aliasTableRef.value ty
-
+-- here: `rejectCyclicAliases` has emptied the table of them before the check seam.
 ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
 ffiSigArgHeadsWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyConstrained _ inner => ffiSigArgHeadsWith aliases inner
   TyEffect _ _ inner => ffiSigArgHeadsWith aliases inner
   TyFun a r => ffiTyHeadNameWith aliases a :: ffiSigArgHeadsWith aliases r
   _ => []
-
-ffiSigRetHead : Ty -> String
-ffiSigRetHead ty = ffiSigRetHeadWith perRun.value.aliasTableRef.value ty
 
 ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
 ffiSigRetHeadWith aliases ty = match expandAliasHeadTyWith aliases ty
@@ -37434,7 +38017,7 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyConstrained _ t => ffiTyHeadNameWith aliases t
   TyEffect _ _ t => ffiTyHeadNameWith aliases t
   TyNamed _ t => ffiTyHeadNameWith aliases t
-  TyQual t _ => ffiTyHeadNameWith aliases t
+  TyQual t _ _ => ffiTyHeadNameWith aliases t
   -- A parenthesised arrow in a VALUE position (a function-typed parameter).  It
   -- gets its own token rather than falling into the catch-all so that two
   -- unrelated exotic shapes do not compare equal and re-open the exemption.
@@ -38093,11 +38676,51 @@ recordDeclKinds (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams 
   let vis = if pub then VisPublic else VisAbstract
   let _ = recordCtors o name vis params [Variant con (ConPos [fty])]
   recordParamKinds o name (declParamKinds params anns)
-recordDeclKinds (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
-  recordParamKinds o name (declParamKinds params anns)
--- only a data, newtype or alias head declares parameter kinds; every other
--- declaration has none to record
-recordDeclKinds _ = ()
+recordDeclKinds d = recordDeclParamKinds d
+
+recordDeclParamKinds : Decl -> Unit
+recordDeclParamKinds d = match declKindEntry d
+  Some (o, name, kinds) => recordParamKinds o name kinds
+  None => ()
+
+-- Only a data, newtype or alias head declares parameter kinds; every other
+-- declaration has none to record.
+declKindEntry : Decl -> Option (TyConOrigin, String, List Kind)
+declKindEntry (DAttrib _ d) = declKindEntry d
+declKindEntry (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataOrigin = o }) =
+  Some (o, name, declParamKinds params anns)
+declKindEntry (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeOrigin = o }) =
+  Some (o, name, declParamKinds params anns)
+declKindEntry (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
+  Some (o, name, declParamKinds params anns)
+declKindEntry _ = None
+
+-- Runs `k` with the declared kinds of `ds` in the table, then puts the table
+-- back as it was. A reader that elaborates signatures against declarations
+-- whose own pass comes later (the extern catalog against the prelude) sees
+-- their kinds, and that later pass still records each head once, so no
+-- lookup scans a duplicate row. Only a head with a parameter whose kind is
+-- not `Type` is recorded: every other head reads as it does with no entry,
+-- which is how the catalog read before any prelude head declared a kind.
+withDeclParamKinds : List Decl -> (Unit -> a) -> a
+withDeclParamKinds ds k =
+  let kinds = perRun.value.dataParamKindsRef.value
+  let names = perRun.value.dataParamNameIndexRef.value
+  let _ = fold (_ d => recordDeclaredKinds d) () ds
+  let result = k ()
+  perRun.value.dataParamKindsRef := kinds
+  perRun.value.dataParamNameIndexRef := names
+  result
+
+recordDeclaredKinds : Decl -> Unit
+recordDeclaredKinds d = match declKindEntry d
+  Some (o, name, kinds) if anyList kindIsDeclared kinds =>
+    recordParamKinds o name kinds
+  _ => ()
+
+kindIsDeclared : Kind -> Bool
+kindIsDeclared KType = False
+kindIsDeclared _ = True
 
 -- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
 -- whatever the universe/import ladder already put in the ref rather than
@@ -38241,7 +38864,8 @@ processTopGroups env sigs defs names =
     reportEffectSummaryFailures
       (EffectSolver.closeRootAuthorities
         perRun.value.effectSummaries
-        perRun.value.rigidAuthvarsRef.value)
+        perRun.value.rigidAuthvarsRef.value
+        widenOpenedFor)
   result
 
 -- per-name dependencies: the other top-level names a binding's bodies reference
@@ -46415,7 +47039,11 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (the caller's
   -- `stampGraphTyOrigins` line), but the scope is derived from its type
   -- NAMES, not its origins, so it is the same map either way.
-  let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
+  -- An extern's signature may index a prelude head by an authority
+  -- (`netSend : Socket h -> … <Net h> …`), and a name in an index slot is an
+  -- authority binder only by the head's declared kind.
+  let runtimeSeed = withDeclParamKinds coreDecls (u =>
+    externSchemes (externTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
   -- TREES only, WS-1b: the interfaces in scope for super expansion before the
   -- first sweep, and the user-interface gate that scopes it.  The diags arm sets

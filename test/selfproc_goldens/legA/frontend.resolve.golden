@@ -44,6 +44,7 @@ builtinEffOrigins : List (String, TyConOrigin)
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigins : List (String, TyConOrigin)
 carriedCtorOwners : List (String, String) -> List UseMember -> List (String, String)
+carriedEffectOrigins : List (String, String) -> List (String, String) -> List (String, String)
 carriedIn : ExpNs a -> ModuleExports -> Map String ModuleExports -> List Decl -> List a
 carriedTypeCtors : List String -> List String -> List (String, List String) -> List (String, List String)
 carriedTypeCtorsFrom : ModuleExports -> List String -> List (String, List String)
@@ -234,7 +235,6 @@ isTaggedOriginKey : String -> Bool
 isTransparentDecl : Decl -> Bool
 isTupleCtorTyName : String -> Bool
 isTypeAmbiguous : Env -> String -> Bool
-isWildPath : UsePath -> Bool
 keepAmbiguous : List String -> List (String, List String) -> List (String, List String)
 keepBetter : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBoundMethods : Env -> List String -> List String
@@ -325,6 +325,7 @@ recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
+reexportedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 resErrorCode : ResError -> String
 resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)

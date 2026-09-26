@@ -24,9 +24,9 @@
 # llvm_emit_modules_main — and the fixtures are gap-free, so neither hits a gap.
 #
 # VALIDATE.  For each test/llvm_fixtures_modules/<dir> (the SAME corpus + invocation
-# as diff_compiler_llvm_modules.sh, EMPTY core prelude, dir as the root):
-#   ir_oracle = test/bin/llvm_emit_modules_main <runtime> <empty_core> <entry> <dir>
-#   ir_native = ./emit (self-clanged here)      <runtime> <empty_core> <entry> <dir>
+# as diff_compiler_llvm_modules.sh, the prelude's extern data heads only, dir as the root):
+#   ir_oracle = test/bin/llvm_emit_modules_main <runtime> <catalog_core> <entry> <dir>
+#   ir_native = ./emit (self-clanged here)      <runtime> <catalog_core> <entry> <dir>
 #   diff ir_native vs ir_oracle BYTE-FOR-BYTE.
 # No need to clang/run the IR — diff_compiler_llvm_modules.sh already proves the
 # emitter IR compiles + runs correctly; the self-clanged native IR == the
@@ -86,11 +86,12 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Empty prelude — the fixtures are prelude-free (touch only runtime externs), and
-# full stdlib/core.mdk is itself outside today's emit subset.  Same as the
+# The prelude's `extern data` heads only — the fixtures are prelude-free (touch
+# only runtime externs), and full stdlib/core.mdk is itself outside today's emit
+# subset, but the catalog's signatures index those heads.  Same as the
 # diff_compiler_llvm_modules.sh <core> arg.
-EMPTY_CORE="$WORK/empty_core.mdk"
-: > "$EMPTY_CORE"
+CATALOG_CORE="$WORK/catalog_core.mdk"
+grep '^export extern data ' "$CORE" > "$CATALOG_CORE" || :
 
 # 1. Build the native `emit` binary: gap-tolerant driver (native test/bin/
 #    llvm_bootstrap_lex_main) emits the WHOLE llvm_emit_modules_main module graph
@@ -127,12 +128,12 @@ for dir in "$FIXDIR"/*/; do
   [ -f "$entry" ] || { echo "skip $(basename "$dir") (no entry.mdk)"; continue; }
   name="$(basename "$dir")"
   # ORACLE: the prebuilt native emitter (test/bin/llvm_emit_modules_main).
-  "$EMITORACLE" "$RUNTIME" "$EMPTY_CORE" "$entry" "${dir%/}" > "$WORK/$name.interp" 2>"$WORK/$name.ierr"
+  "$EMITORACLE" "$RUNTIME" "$CATALOG_CORE" "$entry" "${dir%/}" > "$WORK/$name.interp" 2>"$WORK/$name.ierr"
   if [ -s "$WORK/$name.ierr" ] && ! [ -s "$WORK/$name.interp" ]; then
     fail=$((fail+1)); printf 'FAIL %s (oracle emit)\n%s\n' "$name" "$(cat "$WORK/$name.ierr")"; continue
   fi
   # UNIT-UNDER-TEST: the freshly self-clanged native emitter.
-  if ! "$BIN" "$RUNTIME" "$EMPTY_CORE" "$entry" "${dir%/}" > "$WORK/$name.native" 2>"$WORK/$name.nerr"; then
+  if ! "$BIN" "$RUNTIME" "$CATALOG_CORE" "$entry" "${dir%/}" > "$WORK/$name.native" 2>"$WORK/$name.nerr"; then
     fail=$((fail+1)); printf 'FAIL %s (native emit crashed)\n%s\n' "$name" "$(cat "$WORK/$name.nerr")"; continue
   fi
   if cmp -s "$WORK/$name.interp" "$WORK/$name.native"; then

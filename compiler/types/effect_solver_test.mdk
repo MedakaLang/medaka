@@ -67,16 +67,16 @@ makeResidual level =
   Ref (EUnbound id level)
 
 finish : SummarySolver c -> Map Int Unit -> List (SummaryFailure c)
-finish solver protected =
-  closeSummaryScope
-    solver
-    protected
-    Tip
-    Tip
-    Tip
-    capabilityEscape
-    makeJoin
-    makeResidual
+finish solver protected = closeSummaryScope
+  solver
+  protected
+  Tip
+  Tip
+  Tip
+  capabilityEscape
+  makeJoin
+  makeResidual
+  (_ q => q)
 
 finishRetained : SummarySolver c -> List EffRow -> List (SummaryFailure c)
 finishRetained solver rows =
@@ -94,6 +94,7 @@ finishRetained solver rows =
     capabilityEscape
     makeJoin
     makeResidual
+    (_ q => q)
 
 finishBorrowed : SummarySolver c -> List EffRow -> List (SummaryFailure c)
 finishBorrowed solver rows =
@@ -112,6 +113,7 @@ finishBorrowed solver rows =
     capabilityEscape
     makeJoin
     makeResidual
+    (_ q => q)
 
 test "a retained positive allowance takes its least pure solution" =
   let solver = newSolver ()

@@ -2100,7 +2100,7 @@ methodResultTy : Ty -> Ty
 methodResultTy (TyConstrained _ t) = methodResultTy t
 methodResultTy (TyEffect _ _ t) = methodResultTy t
 methodResultTy (TyFun _ b) = methodResultTy b
-methodResultTy (TyQual t _) = methodResultTy t
+methodResultTy (TyQual t _ _) = methodResultTy t
 methodResultTy t = t
 
 -- does a type mention one of the given interface type-parameter names? (the
@@ -2126,7 +2126,7 @@ tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
 tyMentionsParams (TyAuth _ _) _ = False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 tyMentionsParams (TyNamed _ t) params = tyMentionsParams t params
-tyMentionsParams (TyQual t _) params = tyMentionsParams t params
+tyMentionsParams (TyQual t _ _) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
 -- Per (interface, method): the ARGUMENT positions whose type is a FUNCTION whose
@@ -2300,7 +2300,7 @@ tyMentionsNonParam (TyRow _ tail _) params =
 tyMentionsNonParam (TyAuth _ _) _ = False
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyNamed _ t) params = tyMentionsNonParam t params
-tyMentionsNonParam (TyQual t _) params = tyMentionsNonParam t params
+tyMentionsNonParam (TyQual t _ _) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- Per data-constructor name: the head type-name of each declared field, IN
@@ -2349,7 +2349,7 @@ tyHeadName (TyApp a _) = tyHeadName a
 tyHeadName (TyConstrained _ t) = tyHeadName t
 tyHeadName (TyEffect _ _ t) = tyHeadName t
 tyHeadName (TyNamed _ t) = tyHeadName t
-tyHeadName (TyQual t _) = tyHeadName t
+tyHeadName (TyQual t _ _) = tyHeadName t
 tyHeadName _ = ""
 
 -- ── function → DECLARED param/return type-head names (native backend, Gap E1) ─
@@ -2496,7 +2496,7 @@ methodRetTy : Ty -> Ty
 methodRetTy (TyConstrained _ t) = methodRetTy t
 methodRetTy (TyEffect _ _ t) = methodRetTy t
 methodRetTy (TyFun _ b) = methodRetTy b
-methodRetTy (TyQual t _) = methodRetTy t
+methodRetTy (TyQual t _ _) = methodRetTy t
 methodRetTy t = t
 
 -- positions (0-based) whose type is a TyFun whose result mentions a param.

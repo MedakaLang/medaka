@@ -27,7 +27,7 @@ sleeper n = defer
   _ <- sleep (millis 1)
   deferPure (!n < spins)
 
-echo : Connection -> Async <Clock, Net, Stdout | e> (Result String Unit)
+echo : Connection * -> Async <Clock, Net, Stdout | e> (Result String Unit)
 echo c = deferThen (A.recv c 64) (r => match r
   Ok bs => A.sendAll c bs
   Err e => deferPure (Err e))

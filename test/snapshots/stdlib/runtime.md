@@ -1,5 +1,5 @@
 # META
-source_lines=839
+source_lines=876
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -247,51 +247,67 @@ extern assertSnapshot : String -> String -> <IO> Unit
 
 -- # Networking
 
--- Native-only; unbound under `medaka run`, rejected by --target wasm.  Raw
--- tagged-Int fds at the extern boundary; abstract Socket/Listener/Connection
--- newtypes are a stdlib concern (stdlib/net.mdk).  See NET-DESIGN.md.
+-- Native-only; unbound under `medaka run`, rejected by --target wasm.  A
+-- socket is a `Socket h` or a `ListenSocket a` (declared `extern data` in
+-- core.mdk): only the externs below produce one, and each is produced at the
+-- authority its opening extern was granted, so an operation on it is charged
+-- at that authority.  See NET-DESIGN.md.
 
 -- | The numeric addresses a host name resolves to.
 extern netResolve : (host : String) -> <Net host> Result String (List String)
 
--- | Opens a TCP connection to a host and port. The result is the
--- connection's descriptor.
-extern netTcpConnect : (host : String) -> Int -> <Net host> Result String Int
+-- | Opens a TCP connection to a host and port.
+extern netTcpConnect : (host : String) ->
+  Int ->
+  <Net host> Result String (Socket host)
 
 -- | Starts listening for TCP connections on an address and port. Port `0`
--- picks a free port. The result is the listener's descriptor.
-extern netTcpListen : (host : String) -> Int -> <Net host> Result String Int
+-- picks a free port.
+extern netTcpListen : (host : String) ->
+  Int ->
+  <Net host> Result String (ListenSocket host)
 
 -- | The port a listener is bound to. Use it after listening on port `0`.
-extern netListenPort : Int -> <Net> Result String Int
+extern netListenPort : ListenSocket a -> <Net a> Result String Int
 
--- | Waits for the next connection on a listener. The result is the
--- connection's descriptor.
-extern netTcpAccept : Int -> <Net> Result String Int
+-- | Waits for the next connection on a listener. The connection is at the
+-- listener's authority: it is reached through the address the listener was
+-- granted.
+extern netTcpAccept : ListenSocket a -> <Net a> Result String (Socket a)
 
 -- | Sends bytes on a connection. The result is the number of bytes
 -- written, which may be fewer than given.
-extern netSend : Int -> Array Int -> <Net> Result String Int
+extern netSend : Socket h -> Array Int -> <Net h> Result String Int
 
 -- | Sends bytes starting at the given offset into the array. The result is the number
 -- of bytes written, which may be fewer than given and is limited to 64 KiB per
 -- call so a loop can retain one array while advancing through it.
-extern netSendFrom : Int -> Array Int -> Int -> <Net> Result String Int
+extern netSendFrom : Socket h -> Array Int -> Int -> <Net h> Result String Int
 
 -- | Receives up to the given number of bytes from a connection. An empty array means the
 -- other side has closed.
-extern netRecv : Int -> Int -> <Net> Result String (Array Int)
+extern netRecv : Socket h -> Int -> <Net h> Result String (Array Int)
 
 -- | Shuts down one or both directions of a connection: `0` for reading,
 -- `1` for writing, `2` for both.
-extern netShutdown : Int -> Int -> <Net> Result String Unit
+extern netShutdown : Socket h -> Int -> <Net h> Result String Unit
 
--- | Closes a descriptor.
-extern netClose : Int -> <Net> Result String Unit
+-- | Closes a connection.
+extern netClose : Socket h -> <Net h> Result String Unit
+
+-- | Closes a listener.
+extern netCloseListener : ListenSocket a -> <Net a> Result String Unit
 
 -- | Sets a connection's send and receive timeout in milliseconds. `0`
 -- means no timeout.
-extern netSetTimeout : Int -> Int -> <Net> Result String Unit
+extern netSetTimeout : Socket h -> Int -> <Net h> Result String Unit
+
+-- | The descriptor number of a connection, for `ioPoll`. The number grants
+-- nothing: every other extern takes the socket itself.
+extern socketFd : Socket h -> Int
+
+-- | The descriptor number of a listener, for `ioPoll`.
+extern listenSocketFd : ListenSocket a -> Int
 
 -- ## Readiness
 --
@@ -302,6 +318,10 @@ extern netSetTimeout : Int -> Int -> <Net> Result String Unit
 -- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 -- descriptor readable on shutdown. A binary that never calls this retains
 -- the operating system's default signal behavior. Call once after bind.
+--
+-- It reaches no endpoint. It is charged `Net` at the top of its domain
+-- until process signals have a label of their own: an over-charge, borne
+-- by a program that already binds.
 extern pdsSignalStart : Unit -> <Net> Result String Int
 
 -- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
@@ -311,47 +331,64 @@ extern pdsSignalRequested : Unit -> <Net> Bool
 -- | Waits until any of the descriptors is ready, or the timeout in
 -- milliseconds passes (`-1` waits forever). The interests are parallel to the
 -- descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,
--- both bits on an error or hangup so a retry surfaces the error.
-extern ioPoll : Array Int -> Array Int -> Int -> <Net> Result String (Array Int)
+-- both bits on an error or hangup so a retry surfaces the error. A wait
+-- reaches no endpoint: it reads and writes nothing on any descriptor it
+-- watches, so it is a timed wait, charged as the clock.
+extern ioPoll : Array Int ->
+  Array Int ->
+  Int ->
+  <Clock> Result String (Array Int)
 
--- | Switches a socket's non-blocking mode on or off.
-extern netSetNonblock : Int -> Bool -> <Net> Result String Unit
+-- | Switches a connection's non-blocking mode on or off.
+extern netSetNonblock : Socket h -> Bool -> <Net h> Result String Unit
+
+-- | Switches a listener's non-blocking mode on or off.
+extern netSetNonblockListener : ListenSocket a ->
+  Bool ->
+  <Net a> Result String Unit
 
 -- | `netTcpAccept` that returns `None` instead of blocking.
-extern netTryAccept : Int -> <Net> Result String (Option Int)
+extern netTryAccept : ListenSocket a ->
+  <Net a> Result String (Option (Socket a))
 
 {- | `netTcpConnect` that returns as soon as the handshake is under way. The
-   result is a non-blocking descriptor that is not connected yet: wait for it
+   result is a non-blocking socket that is not connected yet: wait for it
    to become writable, then ask `netConnectCheck` whether it arrived. Name
    resolution still blocks. -}
-extern netConnectStart : (host : String) -> Int -> <Net host> Result String Int
+extern netConnectStart : (host : String) ->
+  Int ->
+  <Net host> Result String (Socket host)
 
-{- | Whether a descriptor from `netConnectStart` has finished its handshake.
+{- | Whether a socket from `netConnectStart` has finished its handshake.
    `None` means not yet, so a woken task asks again rather than trusting the
    wake. `Err` is the handshake's own failure (a refused or unreachable peer)
-   and leaves the descriptor for the caller to close. -}
-extern netConnectCheck : Int -> <Net> Result String (Option Unit)
+   and leaves the socket for the caller to close. -}
+extern netConnectCheck : Socket h -> <Net h> Result String (Option Unit)
 
 -- | `netRecv` that returns `None` instead of blocking. `Some []` is end of
 -- stream.
-extern netTryRecv : Int -> Int -> <Net> Result String (Option (Array Int))
+extern netTryRecv : Socket h ->
+  Int ->
+  <Net h> Result String (Option (Array Int))
 
 -- | `netTryRecv` delivering the chunk as a packed block, one byte per byte
 -- rather than one boxed word per byte. `Some` an empty block is end of
 -- stream. The block is allocated for this call alone and reaches the caller
 -- with no other reference to it.
-extern netTryRecvBytes : Int -> Int -> <Net> Result String (Option ByteBlock)
+extern netTryRecvBytes : Socket h ->
+  Int ->
+  <Net h> Result String (Option ByteBlock)
 
 -- | `netSend` that returns `None` instead of blocking. `Some n` is the count
 -- written, which may be short.
-extern netTrySend : Int -> Array Int -> <Net> Result String (Option Int)
+extern netTrySend : Socket h -> Array Int -> <Net h> Result String (Option Int)
 
 -- | `netTrySend` starting at the given offset into the array, sending at most 64 KiB
 -- per call, so a loop over a large payload pays only for the bytes it sends.
-extern netTrySendFrom : Int ->
+extern netTrySendFrom : Socket h ->
   Array Int ->
   Int ->
-  <Net> Result String (Option Int)
+  <Net h> Result String (Option Int)
 
 -- # Time
 
@@ -886,27 +923,31 @@ extern stringToLower : String -> String
 (DExtern false "__fallthrough__" (TyFun (TyCon "Unit") (TyVar "a")))
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DExtern false "netResolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DExtern false "netTcpConnect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netTcpListen" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
-(DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
-(DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTcpConnect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Socket") (TyVar "host")))))))
+(DExtern false "netTcpListen" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "ListenSocket") (TyVar "host")))))))
+(DExtern false "netListenPort" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "netTcpAccept" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Socket") (TyVar "a"))))))
+(DExtern false "netSend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netSendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DExtern false "netRecv" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DExtern false "netShutdown" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netClose" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "netCloseListener" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "netSetTimeout" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "socketFd" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyCon "Int")))
+(DExtern false "listenSocketFd" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyCon "Int")))
 (DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyCon "Bool"))))
-(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DExtern false "netConnectStart" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
-(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netTryRecvBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
-(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netSetNonblock" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netSetNonblockListener" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTryAccept" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Socket") (TyVar "a")))))))
+(DExtern false "netConnectStart" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Socket") (TyVar "host")))))))
+(DExtern false "netConnectCheck" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
+(DExtern false "netTryRecv" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netTryRecvBytes" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
+(DExtern false "netTrySend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DExtern false "netTrySendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
@@ -1073,27 +1114,31 @@ extern stringToLower : String -> String
 (DExtern false "__fallthrough__" (TyFun (TyCon "Unit") (TyVar "a")))
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DExtern false "netResolve" (TyFun (TyNamed "host" (TyCon "String")) (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DExtern false "netTcpConnect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netTcpListen" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
-(DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
-(DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
-(DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTcpConnect" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Socket") (TyVar "host")))))))
+(DExtern false "netTcpListen" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "ListenSocket") (TyVar "host")))))))
+(DExtern false "netListenPort" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "netTcpAccept" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Socket") (TyVar "a"))))))
+(DExtern false "netSend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netSendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DExtern false "netRecv" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DExtern false "netShutdown" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netClose" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "netCloseListener" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DExtern false "netSetTimeout" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "socketFd" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyCon "Int")))
+(DExtern false "listenSocketFd" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyCon "Int")))
 (DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ("Net") None (TyCon "Bool"))))
-(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DExtern false "netConnectStart" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
-(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
-(DExtern false "netTryRecvBytes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
-(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Net") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netSetNonblock" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netSetNonblockListener" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyFun (TyCon "Bool") (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTryAccept" (TyFun (TyApp (TyCon "ListenSocket") (TyVar "a")) (TyEffect ((atom "Net" (name "a"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Socket") (TyVar "a")))))))
+(DExtern false "netConnectStart" (TyFun (TyNamed "host" (TyCon "String")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "host"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Socket") (TyVar "host")))))))
+(DExtern false "netConnectCheck" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
+(DExtern false "netTryRecv" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netTryRecvBytes" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
+(DExtern false "netTrySend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DExtern false "netTrySendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))

@@ -44,6 +44,7 @@ import frontend.ast.{
   Constraint(..),
   TyConOrigin(..),
   EffAtomTy(..),
+  qualifierSource,
   EffParamTy(..),
   effAtomSurface,
   authTermSurface,
@@ -350,7 +351,7 @@ rkTy (TyConstrained cs t) = "\{rkConstraints cs} => \{rkTy t}"
 -- A binder's name is lexical to its signature and is not part of the word;
 -- the qualifier IS (it changes what the argument means), so it is kept.
 rkTy (TyNamed _ t) = rkTy t
-rkTy (TyQual t n) = "\{rkTyAtom t} @\{n}"
+rkTy (TyQual t ns _) = "\{rkTyAtom t} \{qualifierSource ns}"
 
 -- argument of `->`: wrap `TyFun` (prec ≥ 1) but not `TyApp` (prec < 2).
 rkTyFunArg : Ty -> String

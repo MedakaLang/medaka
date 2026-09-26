@@ -1,5 +1,5 @@
 # META
-source_lines=771
+source_lines=845
 stages=DESUGAR,MARK
 # SOURCE
 import types.effect_domain.{canonParam, drender, Param(..)}
@@ -49,6 +49,8 @@ import types.effect_rows.{
 -- OCaml's log-then-result ordering byte-for-byte.
 
 import frontend.ast.{
+  EffParamTy(..),
+  effParamSurface,
   TyConOrigin(..),
   Decl(..),
   Expr(..),
@@ -74,8 +76,8 @@ import types.repr.{
 import types.typecheck.{
   checkOneSchemeFull,
   checkModulesEntryFullSplitK,
-  decodeProductParam,
   decodeSetParam,
+  decodeWrittenParam,
   TcDiag,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
@@ -121,34 +123,83 @@ filterNonEmpty [] = []
 filterNonEmpty (x :: xs) =
   if x == "" then filterNonEmpty xs else x :: filterNonEmpty xs
 
--- ── WS-1b: policy as (label, param) ─────────────────────────────────────────
--- Each comma-separated token is either a bare label `L` (→ policy param ⊤ =
--- PPrefix None, identical to the WS-1a membership test) or `L=rhs` (→ policy
--- param PPrefix (Some rhs); a written `<Net "pat">` is PPrefix (Some pat), so a
--- policy RHS maps directly).  One entry per label (last wins via lookup order).
-parsePolicy : String -> List (String, Param)
-parsePolicy s = map parsePolicyTok (splitComma s)
+-- ── WS-1b: policy as (label, written parameter) ────────────────────────────
+-- Each comma-separated token is a bare label `L` (the label's whole domain) or
+-- `L=rhs`, whose rhs is a parameter written as an atom writes one: a pattern
+-- (`Net=a.com/*`), a set (`Env={HOME,PATH}`) or a product's axes
+-- (`Net=Host="a.com/*";Method={GET,POST}`, `;` between axes).  The entry is
+-- kept WRITTEN and decoded against the declared domain of the label it is
+-- compared with (`decodeWrittenParam`), by the same rules as a source atom: a
+-- bare pattern on a Product label lifts into its first axis, and an entry the
+-- domain does not admit (`Method=GET` on a Set axis) is refused, never read
+-- as the whole domain.  One entry per label (first wins via lookup order).
+parsePolicy : String -> Result String (List (String, EffParamTy))
+parsePolicy s = allOk (map parsePolicyTok (splitComma s))
 
-parsePolicyTok : String -> (String, Param)
+-- Every result's value, or the first error.
+allOk : List (Result String a) -> Result String (List a)
+allOk [] = Ok []
+allOk ((Err m) :: _) = Err m
+allOk ((Ok x) :: rest) = map (x :: _) (allOk rest)
+
+parsePolicyTok : String -> Result String (String, EffParamTy)
 parsePolicyTok tok =
   match splitOnFirstEq (stringToChars tok) (arrayLength (stringToChars tok)) 0
-    None => (tok, PPrefix None)
+    None => Ok (tok, EPTop)
     Some i =>
       let cs = stringToChars tok
       let n = arrayLength cs
       let label = sliceStr cs 0 i
       let rhs = sliceStr cs (i + 1) n
-      -- WS-4: a PRODUCT policy rhs (`Host="…";Method={…}`) carries an axis `=`.
-      -- Detect it and decode via the shared `decodeProductParam` (wrapping in the
-      -- carrier sentinel `@P{…}`), so the policy compare reaches `dsub` over a
-      -- `PProduct` — pointwise subsumption is inherited.  A plain prefix rhs
-      -- (`a.com/*`, no axis `=`) stays `PPrefix (Some rhs)`, byte-identical to WS-1b.
       if rhsIsProduct rhs then
-        (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
+        productEntry tok label rhs
       else if rhsIsSet rhs then
-        (label, PSet (Some (decodeSetParam rhs)))
+        Ok (label, EPSet (map unquote (decodeSetParam rhs)))
       else
-        (label, PPrefix (Some rhs))
+        Ok (label, EPLit (unquote rhs))
+
+-- One product axis `Axis=value`: a set `{a,b}` or a pattern, quoted or bare.
+policyAxis : String -> Result String (String, EffParamTy)
+policyAxis spec =
+  match splitOnFirstEq (stringToChars spec) (arrayLength (stringToChars spec)) 0
+    None =>
+      Err
+        "axis '\{spec}' has no value; write `\{spec}=…`, or leave the axis out for its whole domain"
+    Some i =>
+      let cs = stringToChars spec
+      let name = sliceStr cs 0 i
+      let v = sliceStr cs (i + 1) (arrayLength cs)
+      if rhsIsSet v then
+        Ok (name, EPSet (map unquote (decodeSetParam v)))
+      else
+        Ok (name, EPLit (unquote v))
+
+-- A product entry's axes, or the first malformed one, named with its entry.
+productEntry : String -> String -> String -> Result String (String, EffParamTy)
+productEntry tok label rhs = match allOk (map policyAxis (splitSemi rhs))
+  Ok axes => Ok (label, EPProduct axes)
+  Err m => Err "policy entry '\{tok}': \{m}"
+
+-- A pattern written quoted (`Host="a.com/*"`) or bare (`a.com/*`).
+unquote : String -> String
+unquote v =
+  let n = stringLength v
+  if n >= 2 && stringSlice 0 1 v == "\"" && stringSlice (n - 1) n v == "\"" then
+    stringSlice 1 (n - 1) v
+  else
+    v
+
+-- Split a product rhs on `;`, the axis separator (a set's `,` is inside braces
+-- and never meets a `;`).
+splitSemi : String -> List String
+splitSemi s = splitSemiGo (stringToChars s) (arrayLength (stringToChars s)) 0 0
+
+splitSemiGo : Array Char -> Int -> Int -> Int -> List String
+splitSemiGo cs n start i
+  | i >= n = [sliceStr cs start n]
+  | arrayGetUnsafe i cs == ';' =
+    sliceStr cs start i :: splitSemiGo cs n (i + 1) (i + 1)
+  | otherwise = splitSemiGo cs n start (i + 1)
 
 -- a policy rhs is a product when it contains an axis assignment `=` (after the
 -- label `=` already consumed) — e.g. `Host="…"` / `Method={…}`.  A bare prefix
@@ -159,10 +210,8 @@ rhsIsProduct rhs =
     None => False
     Some _ => True
 
--- a policy rhs is a top-level Set-domain literal when it is brace-delimited
--- (`Env={HOME,PATH}`) with no axis `=` inside (that's the product case, already
--- routed above) — mirrors the written-annotation carrier `decodeSetParam` decodes
--- (`atomOfWritten`/`decodeAxisVal` in types.typecheck).
+-- a policy rhs is a set when it is brace-delimited (`Env={HOME,PATH}`) with no
+-- axis `=` inside (that's the product case, already routed above).
 rhsIsSet : String -> Bool
 rhsIsSet rhs =
   let n = stringLength rhs
@@ -175,16 +224,12 @@ splitOnFirstEq cs n i
   | arrayGetUnsafe i cs == '=' = Some i
   | otherwise = splitOnFirstEq cs n (i + 1)
 
--- The bare-label list of a policy (for the reject report's `{…}` rendering,
--- byte-identical to WS-1a: a bare entry renders as the label; a parameterized
--- entry renders `L "pat"`).
-policyLabels : List (String, Param) -> List String
+-- The policy as the reject report renders it (`{…}`): a bare entry as the
+-- label, a parameterized one as an atom writes it (`L "pat"`).
+policyLabels : List (String, EffParamTy) -> List String
 policyLabels [] = []
-policyLabels ((l, p) :: rest) = l ++ drender p :: policyLabels rest
-
-lookupParam : String -> List (String, Param) -> Option Param
-lookupParam _ [] = None
-lookupParam k ((l, p) :: rest) = if k == l then Some p else lookupParam k rest
+policyLabels ((l, p) :: rest) =
+  l ++ effParamSurface quoteTok p :: policyLabels rest
 
 -- ── 2. call graph from the desugared AST ────────────────────────────────────
 -- collectEVars: every EVar name referenced in an expression (conservative —
@@ -385,27 +430,45 @@ firstWithEffect effTable label (c :: rest) =
 -- LABELS (the chain trace + reject report stay label-keyed).  Bare `--allow Net`
 -- ⟹ policy param ⊤ (PPrefix None) ⟹ `dsub _ ⊤` = True ⟹ identical to WS-1a's
 -- membership test.  Reuse `dsub` — do NOT reimplement the prefix logic.
-forbiddenLabels : List Atom -> List (String, Param) -> List String
+forbiddenLabels : List Atom -> List (String, EffParamTy) -> List String
 forbiddenLabels effs policy = filterForbidden effs policy
 
-filterForbidden : List Atom -> List (String, Param) -> List String
+filterForbidden : List Atom -> List (String, EffParamTy) -> List String
 filterForbidden [] _ = []
-filterForbidden (a :: rest) policy =
-  if atomPermitted a policy then
-    filterForbidden rest policy
-  else
-    atomLabel a :: filterForbidden rest policy
+filterForbidden (a :: rest) policy = match permitOf a policy
+  Permitted => filterForbidden rest policy
+  _ => atomLabel a :: filterForbidden rest policy
+
+-- Why each refused atom's policy entry could not be read, one report line per
+-- malformed entry the verdict met.
+policyProblems : List Atom -> List (String, EffParamTy) -> List String
+policyProblems effs policy =
+  flatMap
+    (a => match permitOf a policy
+      Malformed m => ["   policy entry for \{atomLabel a}: \{m}\n"]
+      _ => [])
+    effs
+
+data Permit = Permitted | Forbidden | Malformed String
 
 -- Permitted iff the label is in the policy AND the inferred authority is
--- provably within the policy's: an authority still symbolic at the manifest
--- boundary is not proven and is not permitted.
-atomPermitted : Atom -> List (String, Param) -> Bool
-atomPermitted a policy =
-  match lookupParam (policySpelling (qualifiedKey a)) policy
-    Some pp => authSub (atomAuth a) (AConst pp)
-    None => match lookupParam (atomLabel a) policy
-      None => False
-      Some pp => authSub (atomAuth a) (AConst pp)
+-- provably within the policy's, the entry decoded in the domain of the
+-- atom's own label: an authority still symbolic at the manifest boundary is
+-- not proven and is not permitted, and an entry the domain does not admit
+-- permits nothing.
+permitOf : Atom -> List (String, EffParamTy) -> Permit
+permitOf a policy = match policyEntryFor a policy
+  None => Forbidden
+  Some written => match decodeWrittenParam (atomLabelOf a) written
+    Ok pp => if authSub (atomAuth a) (AConst pp) then Permitted else Forbidden
+    Err m => Malformed m
+
+-- The entry for an atom: its qualified key first, then its bare label.
+policyEntryFor : Atom -> List (String, EffParamTy) -> Option EffParamTy
+policyEntryFor a policy =
+  match lookupAssoc (policySpelling (qualifiedKey a)) policy
+    Some e => Some e
+    None => lookupAssoc (atomLabel a) policy
 
 -- A policy token spells a qualified key without the TOML quotes.
 policySpelling : String -> String
@@ -515,50 +578,60 @@ runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
 runCheckPolicy rtSrc coreSrc src allowStr fnName =
   if checkHasErrors rtSrc coreSrc src then
     PolicyReject "rejected. compiler analysis failed before policy evaluation\n"
-  else
-    let policy = parsePolicy allowStr
-    let rawUser = parse src
-    let userD = desugar rawUser
-    let rtD = desugaredPrelude rtSrc
-    let coreD = desugaredPrelude coreSrc
-    let callGraph = buildCallGraph userD
-    -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-    -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
-    -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-    -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-    -- from the table would make the policy check silently ACCEPT an <IO> function as
-    -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-    -- which is why this site was parked on the Flat wrapper until #1116 grew
-    -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-    -- plugin that redefines a prelude name must win its own lookup.
-    let (preludeSchemes, ownSchemes) =
-      checkOneSchemeFull rtD coreD ("__user__", userD)
-    let schemes = ownSchemes ++ preludeSchemes
-    let effTable = fnEffectsTable schemes
-    -- Existence is checked against the complete scheme list, not effTable:
-    -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
-    -- a name index would reject a real pure entry exactly like an absent one.
-    match lookupAssoc fnName schemes
-      None => PolicyReject "rejected. no '\{fnName}' entry found\n"
-      Some fnScheme =>
-        let fnEffects = schemeEffects fnScheme
-        let forbidden = forbiddenLabels fnEffects policy
-        match forbidden
-          [] =>
-            let effStr =
-              if listIsEmpty fnEffects then
-                "pure"
-              else
-                "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
-            let header = "accepted. \{fnName} requires only \{effStr}\n"
-            let pluginOutput = runPlugin fnName rtD coreD userD
-            PolicyAccept (header ++ pluginOutput)
-          _ =>
-            let chain = findChain callGraph effTable fnName (firstOf forbidden)
-            let header =
-              "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
-            let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
-            PolicyReject (header ++ via)
+  else match parsePolicy allowStr
+    Err m => PolicyReject "rejected. \{m}\n"
+    Ok policy => runCheckPolicyWith policy src rtSrc coreSrc fnName
+
+runCheckPolicyWith : List (String, EffParamTy) ->
+  String ->
+  String ->
+  String ->
+  String ->
+  PolicyOutcome
+runCheckPolicyWith policy src rtSrc coreSrc fnName =
+  let rawUser = parse src
+  let userD = desugar rawUser
+  let rtD = desugaredPrelude rtSrc
+  let coreD = desugaredPrelude coreSrc
+  let callGraph = buildCallGraph userD
+  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
+  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
+  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
+  -- from the table would make the policy check silently ACCEPT an <IO> function as
+  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
+  -- which is why this site was parked on the Flat wrapper until #1116 grew
+  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
+  -- plugin that redefines a prelude name must win its own lookup.
+  let (preludeSchemes, ownSchemes) =
+    checkOneSchemeFull rtD coreD ("__user__", userD)
+  let schemes = ownSchemes ++ preludeSchemes
+  let effTable = fnEffectsTable schemes
+  -- Existence is checked against the complete scheme list, not effTable:
+  -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
+  -- a name index would reject a real pure entry exactly like an absent one.
+  match lookupAssoc fnName schemes
+    None => PolicyReject "rejected. no '\{fnName}' entry found\n"
+    Some fnScheme =>
+      let fnEffects = schemeEffects fnScheme
+      let forbidden = forbiddenLabels fnEffects policy
+      match forbidden
+        [] =>
+          let effStr =
+            if listIsEmpty fnEffects then
+              "pure"
+            else
+              "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
+          let header = "accepted. \{fnName} requires only \{effStr}\n"
+          let pluginOutput = runPlugin fnName rtD coreD userD
+          PolicyAccept (header ++ pluginOutput)
+        _ =>
+          let chain = findChain callGraph effTable fnName (firstOf forbidden)
+          let header =
+            "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
+          let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
+          let problems = stringConcat (policyProblems fnEffects policy)
+          PolicyReject (header ++ via ++ problems)
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -738,12 +811,13 @@ atomToAllowTok a =
 -- `;`-separated so it round-trips through `parsePolicyTok`/`splitComma` (the
 -- brace-depth-aware comma split keeps `{…}` intact).
 productAllowRhs : List (String, Param) -> String
-productAllowRhs ax = joinSemiTok (map axisToAllow ax)
+productAllowRhs ax = joinSemiTok (flatMap axisToAllow ax)
 
-axisToAllow : (String, Param) -> String
-axisToAllow (name, PPrefix (Some s)) = "\{name}=\"\{s}\""
-axisToAllow (name, PSet (Some xs)) = "\{name}={\{joinWith "," xs}}"
-axisToAllow (name, _) = name ++ "=true"
+-- A top axis is spelled by leaving it out, as a policy entry spells it.
+axisToAllow : (String, Param) -> List String
+axisToAllow (name, PPrefix (Some s)) = ["\{name}=\"\{s}\""]
+axisToAllow (name, PSet (Some xs)) = ["\{name}={\{joinWith "," xs}}"]
+axisToAllow _ = []
 
 joinSemiTok : List String -> String
 joinSemiTok xs = joinWith ";" xs
@@ -777,13 +851,13 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false) (mem "EffRow" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "tupleSpine" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -799,22 +873,33 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "filterNonEmpty" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "filterNonEmpty" ((PList)) (EListLit))
 (DFunDef false "filterNonEmpty" ((PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString ""))) (EApp (EVar "filterNonEmpty") (EVar "xs")) (EBinOp "::" (EVar "x") (EApp (EVar "filterNonEmpty") (EVar "xs")))))
-(DTypeSig false "parsePolicy" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
-(DFunDef false "parsePolicy" ((PVar "s")) (EApp (EApp (EVar "map") (EVar "parsePolicyTok")) (EApp (EVar "splitComma") (EVar "s"))))
-(DTypeSig false "parsePolicyTok" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Param"))))
-(DFunDef false "parsePolicyTok" ((PVar "tok")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "tok"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "tok")))) (ELit (LInt 0))) (arm (PCon "None") () (ETuple (EVar "tok") (EApp (EVar "PPrefix") (EVar "None")))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "tok"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "label") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (ELit (LInt 0))) (EVar "i"))) (DoLet false false (PVar "rhs") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "rhsIsProduct") (EVar "rhs")) (ETuple (EVar "label") (EApp (EVar "decodeProductParam") (EBinOp "++" (EBinOp "++" (ELit (LString "@P{")) (EVar "rhs")) (ELit (LString "}"))))) (EIf (EApp (EVar "rhsIsSet") (EVar "rhs")) (ETuple (EVar "label") (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "decodeSetParam") (EVar "rhs"))))) (ETuple (EVar "label") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "rhs")))))))))))
+(DTypeSig false "parsePolicy" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))
+(DFunDef false "parsePolicy" ((PVar "s")) (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EVar "parsePolicyTok")) (EApp (EVar "splitComma") (EVar "s")))))
+(DTypeSig false "allOk" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "allOk" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "allOk" ((PCons (PCon "Err" (PVar "m")) PWild)) (EApp (EVar "Err") (EVar "m")))
+(DFunDef false "allOk" ((PCons (PCon "Ok" (PVar "x")) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "allOk") (EVar "rest"))))
+(DTypeSig false "parsePolicyTok" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
+(DFunDef false "parsePolicyTok" ((PVar "tok")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "tok"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "tok")))) (ELit (LInt 0))) (arm (PCon "None") () (EApp (EVar "Ok") (ETuple (EVar "tok") (EVar "EPTop")))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "tok"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "label") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (ELit (LInt 0))) (EVar "i"))) (DoLet false false (PVar "rhs") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "rhsIsProduct") (EVar "rhs")) (EApp (EApp (EApp (EVar "productEntry") (EVar "tok")) (EVar "label")) (EVar "rhs")) (EIf (EApp (EVar "rhsIsSet") (EVar "rhs")) (EApp (EVar "Ok") (ETuple (EVar "label") (EApp (EVar "EPSet") (EApp (EApp (EVar "map") (EVar "unquote")) (EApp (EVar "decodeSetParam") (EVar "rhs")))))) (EApp (EVar "Ok") (ETuple (EVar "label") (EApp (EVar "EPLit") (EApp (EVar "unquote") (EVar "rhs"))))))))))))
+(DTypeSig false "policyAxis" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
+(DFunDef false "policyAxis" ((PVar "spec")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "spec"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "spec")))) (ELit (LInt 0))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "axis '")) (EApp (EVar "display") (EVar "spec"))) (ELit (LString "' has no value; write `"))) (EApp (EVar "display") (EVar "spec"))) (ELit (LString "=…`, or leave the axis out for its whole domain"))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "spec"))) (DoLet false false (PVar "name") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (ELit (LInt 0))) (EVar "i"))) (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "arrayLength") (EVar "cs")))) (DoExpr (EIf (EApp (EVar "rhsIsSet") (EVar "v")) (EApp (EVar "Ok") (ETuple (EVar "name") (EApp (EVar "EPSet") (EApp (EApp (EVar "map") (EVar "unquote")) (EApp (EVar "decodeSetParam") (EVar "v")))))) (EApp (EVar "Ok") (ETuple (EVar "name") (EApp (EVar "EPLit") (EApp (EVar "unquote") (EVar "v")))))))))))
+(DTypeSig false "productEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "EffParamTy")))))))
+(DFunDef false "productEntry" ((PVar "tok") (PVar "label") (PVar "rhs")) (EMatch (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EVar "policyAxis")) (EApp (EVar "splitSemi") (EVar "rhs")))) (arm (PCon "Ok" (PVar "axes")) () (EApp (EVar "Ok") (ETuple (EVar "label") (EApp (EVar "EPProduct") (EVar "axes"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "policy entry '")) (EApp (EVar "display") (EVar "tok"))) (ELit (LString "': "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))))
+(DTypeSig false "unquote" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "unquote" ((PVar "v")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "v"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "v")) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "v")) (ELit (LString "\"")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "v")) (EVar "v")))))
+(DTypeSig false "splitSemi" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "splitSemi" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EApp (EVar "stringToChars") (EVar "s"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "s")))) (ELit (LInt 0))) (ELit (LInt 0))))
+(DTypeSig false "splitSemiGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "splitSemiGo" ((PVar "cs") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ";"))) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rhsIsProduct" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsProduct" ((PVar "rhs")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "rhs"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "rhs")))) (ELit (LInt 0))) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True"))))
 (DTypeSig false "rhsIsSet" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsSet" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))))))
 (DTypeSig false "splitOnFirstEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "splitOnFirstEq" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "="))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "splitOnFirstEq") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "policyLabels" ((PList)) (EListLit))
-(DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EVar "drender") (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
-(DTypeSig false "lookupParam" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "Option") (TyCon "Param")))))
-(DFunDef false "lookupParam" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupParam" ((PVar "k") (PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "l")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "lookupParam") (EVar "k")) (EVar "rest"))))
+(DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EApp (EVar "effParamSurface") (EVar "quoteTok")) (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
 (DTypeSig false "collectEVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectEVars" ((PCon "EVar" (PVar "n"))) (EListLit (EVar "n")))
 (DFunDef false "collectEVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectEVars") (EVar "e")))
@@ -905,13 +990,18 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "firstWithEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstWithEffect" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "label")) (EVar "rest"))))
-(DTypeSig false "forbiddenLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "forbiddenLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "forbiddenLabels" ((PVar "effs") (PVar "policy")) (EApp (EApp (EVar "filterForbidden") (EVar "effs")) (EVar "policy")))
-(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterForbidden" ((PList) PWild) (EListLit))
-(DFunDef false "filterForbidden" ((PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EIf (EApp (EApp (EVar "atomPermitted") (EVar "a")) (EVar "policy")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy")) (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy")))))
-(DTypeSig false "atomPermitted" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "Bool"))))
-(DFunDef false "atomPermitted" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "lookupParam") (EApp (EVar "policySpelling") (EApp (EVar "qualifiedKey") (EVar "a")))) (EVar "policy")) (arm (PCon "Some" (PVar "pp")) () (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupParam") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "policy")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "pp")) () (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp"))))))))
+(DFunDef false "filterForbidden" ((PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Permitted") () (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))) (arm PWild () (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))))))
+(DTypeSig false "policyProblems" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "policyProblems" ((PVar "effs") (PVar "policy")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Malformed" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EVar "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DData Private "Permit" () ((variant "Permitted" (ConPos)) (variant "Forbidden" (ConPos)) (variant "Malformed" (ConPos (TyCon "String")))) ())
+(DTypeSig false "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
+(DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "policyEntryFor") (EVar "a")) (EVar "policy")) (arm (PCon "None") () (EVar "Forbidden")) (arm (PCon "Some" (PVar "written")) () (EMatch (EApp (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a"))) (EVar "written")) (arm (PCon "Ok" (PVar "pp")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp"))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
+(DTypeSig false "policyEntryFor" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "Option") (TyCon "EffParamTy")))))
+(DFunDef false "policyEntryFor" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "policySpelling") (EApp (EVar "qualifiedKey") (EVar "a")))) (EVar "policy")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "policy")))))
 (DTypeSig false "policySpelling" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "policySpelling" ((PVar "k")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "k"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "k")) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "k")) (ELit (LString "\"")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "k")) (EVar "k")))))
 (DTypeSig false "stubSource" (TyCon "String"))
@@ -923,7 +1013,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
 (DData Public "PolicyOutcome" () ((variant "PolicyAccept" (ConPos (TyCon "String"))) (variant "PolicyReject" (ConPos (TyCon "String")))) ())
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
-(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EBlock (DoLet false false (PVar "policy") (EApp (EVar "parsePolicy") (EVar "allowStr"))) (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EVar "header") (EVar "via")))))))))))))))
+(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EMatch (EApp (EVar "parsePolicy") (EVar "allowStr")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "policy")) () (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicyWith") (EVar "policy")) (EVar "src")) (EVar "rtSrc")) (EVar "coreSrc")) (EVar "fnName"))))))
+(DTypeSig false "runCheckPolicyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
+(DFunDef false "runCheckPolicyWith" ((PVar "policy") (PVar "src") (PVar "rtSrc") (PVar "coreSrc") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoLet false false (PVar "problems") (EApp (EVar "stringConcat") (EApp (EApp (EVar "policyProblems") (EVar "fnEffects")) (EVar "policy")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EVar "problems"))))))))))))))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -963,11 +1055,11 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "atomToAllowTok" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "atomToAllowTok" ((PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "atomLabel") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PCon "PPrefix" (PCon "Some" (PVar "s")))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "")))) (arm (PCon "Some" (PCon "PSet" (PCon "Some" (PVar "xs")))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "={"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))) (arm (PCon "Some" (PCon "PProduct" (PVar "ax"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "productAllowRhs") (EVar "ax")))) (ELit (LString "")))) (arm PWild () (EVar "label"))))))
 (DTypeSig false "productAllowRhs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
-(DFunDef false "productAllowRhs" ((PVar "ax")) (EApp (EVar "joinSemiTok") (EApp (EApp (EVar "map") (EVar "axisToAllow")) (EVar "ax"))))
-(DTypeSig false "axisToAllow" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
-(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PPrefix" (PCon "Some" (PVar "s"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "=\""))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\""))))
-(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PSet" (PCon "Some" (PVar "xs"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "={"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}"))))
-(DFunDef false "axisToAllow" ((PTuple (PVar "name") PWild)) (EBinOp "++" (EVar "name") (ELit (LString "=true"))))
+(DFunDef false "productAllowRhs" ((PVar "ax")) (EApp (EVar "joinSemiTok") (EApp (EApp (EVar "flatMap") (EVar "axisToAllow")) (EVar "ax"))))
+(DTypeSig false "axisToAllow" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PPrefix" (PCon "Some" (PVar "s"))))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "=\""))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\"")))))
+(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PSet" (PCon "Some" (PVar "xs"))))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "={"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))))
+(DFunDef false "axisToAllow" (PWild) (EListLit))
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
 (DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
@@ -976,13 +1068,13 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false) (mem "EffRow" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "tupleSpine" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -998,22 +1090,33 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "filterNonEmpty" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "filterNonEmpty" ((PList)) (EListLit))
 (DFunDef false "filterNonEmpty" ((PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString ""))) (EApp (EVar "filterNonEmpty") (EVar "xs")) (EBinOp "::" (EVar "x") (EApp (EVar "filterNonEmpty") (EVar "xs")))))
-(DTypeSig false "parsePolicy" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
-(DFunDef false "parsePolicy" ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "parsePolicyTok")) (EApp (EVar "splitComma") (EVar "s"))))
-(DTypeSig false "parsePolicyTok" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Param"))))
-(DFunDef false "parsePolicyTok" ((PVar "tok")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "tok"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "tok")))) (ELit (LInt 0))) (arm (PCon "None") () (ETuple (EVar "tok") (EApp (EVar "PPrefix") (EVar "None")))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "tok"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "label") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (ELit (LInt 0))) (EVar "i"))) (DoLet false false (PVar "rhs") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "rhsIsProduct") (EVar "rhs")) (ETuple (EVar "label") (EApp (EVar "decodeProductParam") (EBinOp "++" (EBinOp "++" (ELit (LString "@P{")) (EVar "rhs")) (ELit (LString "}"))))) (EIf (EApp (EVar "rhsIsSet") (EVar "rhs")) (ETuple (EVar "label") (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "decodeSetParam") (EVar "rhs"))))) (ETuple (EVar "label") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "rhs")))))))))))
+(DTypeSig false "parsePolicy" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))))))
+(DFunDef false "parsePolicy" ((PVar "s")) (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EVar "parsePolicyTok")) (EApp (EVar "splitComma") (EVar "s")))))
+(DTypeSig false "allOk" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "allOk" ((PList)) (EApp (EVar "Ok") (EListLit)))
+(DFunDef false "allOk" ((PCons (PCon "Err" (PVar "m")) PWild)) (EApp (EVar "Err") (EVar "m")))
+(DFunDef false "allOk" ((PCons (PCon "Ok" (PVar "x")) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "allOk") (EVar "rest"))))
+(DTypeSig false "parsePolicyTok" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
+(DFunDef false "parsePolicyTok" ((PVar "tok")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "tok"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "tok")))) (ELit (LInt 0))) (arm (PCon "None") () (EApp (EVar "Ok") (ETuple (EVar "tok") (EVar "EPTop")))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "tok"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoLet false false (PVar "label") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (ELit (LInt 0))) (EVar "i"))) (DoLet false false (PVar "rhs") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "rhsIsProduct") (EVar "rhs")) (EApp (EApp (EApp (EVar "productEntry") (EVar "tok")) (EVar "label")) (EVar "rhs")) (EIf (EApp (EVar "rhsIsSet") (EVar "rhs")) (EApp (EVar "Ok") (ETuple (EVar "label") (EApp (EVar "EPSet") (EApp (EApp (EMethodRef "map") (EVar "unquote")) (EApp (EVar "decodeSetParam") (EVar "rhs")))))) (EApp (EVar "Ok") (ETuple (EVar "label") (EApp (EVar "EPLit") (EApp (EVar "unquote") (EVar "rhs"))))))))))))
+(DTypeSig false "policyAxis" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
+(DFunDef false "policyAxis" ((PVar "spec")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "spec"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "spec")))) (ELit (LInt 0))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "axis '")) (EApp (EMethodRef "display") (EVar "spec"))) (ELit (LString "' has no value; write `"))) (EApp (EMethodRef "display") (EVar "spec"))) (ELit (LString "=…`, or leave the axis out for its whole domain"))))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "spec"))) (DoLet false false (PVar "name") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (ELit (LInt 0))) (EVar "i"))) (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "arrayLength") (EVar "cs")))) (DoExpr (EIf (EApp (EVar "rhsIsSet") (EVar "v")) (EApp (EVar "Ok") (ETuple (EVar "name") (EApp (EVar "EPSet") (EApp (EApp (EMethodRef "map") (EVar "unquote")) (EApp (EVar "decodeSetParam") (EVar "v")))))) (EApp (EVar "Ok") (ETuple (EVar "name") (EApp (EVar "EPLit") (EApp (EVar "unquote") (EVar "v")))))))))))
+(DTypeSig false "productEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "EffParamTy")))))))
+(DFunDef false "productEntry" ((PVar "tok") (PVar "label") (PVar "rhs")) (EMatch (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EVar "policyAxis")) (EApp (EVar "splitSemi") (EVar "rhs")))) (arm (PCon "Ok" (PVar "axes")) () (EApp (EVar "Ok") (ETuple (EVar "label") (EApp (EVar "EPProduct") (EVar "axes"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "policy entry '")) (EApp (EMethodRef "display") (EVar "tok"))) (ELit (LString "': "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))))
+(DTypeSig false "unquote" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "unquote" ((PVar "v")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "v"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "v")) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "v")) (ELit (LString "\"")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "v")) (EVar "v")))))
+(DTypeSig false "splitSemi" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "splitSemi" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EApp (EVar "stringToChars") (EVar "s"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "s")))) (ELit (LInt 0))) (ELit (LInt 0))))
+(DTypeSig false "splitSemiGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "splitSemiGo" ((PVar "cs") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ";"))) (EBinOp "::" (EApp (EApp (EApp (EVar "sliceStr") (EVar "cs")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitSemiGo") (EVar "cs")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rhsIsProduct" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsProduct" ((PVar "rhs")) (EMatch (EApp (EApp (EApp (EVar "splitOnFirstEq") (EApp (EVar "stringToChars") (EVar "rhs"))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EVar "rhs")))) (ELit (LInt 0))) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True"))))
 (DTypeSig false "rhsIsSet" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rhsIsSet" ((PVar "rhs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "rhs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rhs")) (ELit (LString "{")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "rhs")) (ELit (LString "}")))))))
 (DTypeSig false "splitOnFirstEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "splitOnFirstEq" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "="))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "splitOnFirstEq") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig false "policyLabels" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "policyLabels" ((PList)) (EListLit))
-(DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EVar "drender") (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
-(DTypeSig false "lookupParam" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "Option") (TyCon "Param")))))
-(DFunDef false "lookupParam" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupParam" ((PVar "k") (PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "l")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "lookupParam") (EVar "k")) (EVar "rest"))))
+(DFunDef false "policyLabels" ((PCons (PTuple (PVar "l") (PVar "p")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EVar "l") (EApp (EApp (EVar "effParamSurface") (EVar "quoteTok")) (EVar "p"))) (EApp (EVar "policyLabels") (EVar "rest"))))
 (DTypeSig false "collectEVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectEVars" ((PCon "EVar" (PVar "n"))) (EListLit (EVar "n")))
 (DFunDef false "collectEVars" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectEVars") (EVar "e")))
@@ -1104,13 +1207,18 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "firstWithEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstWithEffect" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "label")) (EVar "rest"))))
-(DTypeSig false "forbiddenLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "forbiddenLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "forbiddenLabels" ((PVar "effs") (PVar "policy")) (EApp (EApp (EVar "filterForbidden") (EVar "effs")) (EVar "policy")))
-(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "filterForbidden" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterForbidden" ((PList) PWild) (EListLit))
-(DFunDef false "filterForbidden" ((PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EIf (EApp (EApp (EVar "atomPermitted") (EVar "a")) (EVar "policy")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy")) (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy")))))
-(DTypeSig false "atomPermitted" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "Bool"))))
-(DFunDef false "atomPermitted" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "lookupParam") (EApp (EVar "policySpelling") (EApp (EVar "qualifiedKey") (EVar "a")))) (EVar "policy")) (arm (PCon "Some" (PVar "pp")) () (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupParam") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "policy")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "pp")) () (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp"))))))))
+(DFunDef false "filterForbidden" ((PCons (PVar "a") (PVar "rest")) (PVar "policy")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Permitted") () (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))) (arm PWild () (EBinOp "::" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "filterForbidden") (EVar "rest")) (EVar "policy"))))))
+(DTypeSig false "policyProblems" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "policyProblems" ((PVar "effs") (PVar "policy")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy")) (arm (PCon "Malformed" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   policy entry for ")) (EApp (EMethodRef "display") (EApp (EVar "atomLabel") (EVar "a")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DData Private "Permit" () ((variant "Permitted" (ConPos)) (variant "Forbidden" (ConPos)) (variant "Malformed" (ConPos (TyCon "String")))) ())
+(DTypeSig false "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
+(DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "policyEntryFor") (EVar "a")) (EVar "policy")) (arm (PCon "None") () (EVar "Forbidden")) (arm (PCon "Some" (PVar "written")) () (EMatch (EApp (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a"))) (EVar "written")) (arm (PCon "Ok" (PVar "pp")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp"))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
+(DTypeSig false "policyEntryFor" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "Option") (TyCon "EffParamTy")))))
+(DFunDef false "policyEntryFor" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "policySpelling") (EApp (EVar "qualifiedKey") (EVar "a")))) (EVar "policy")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "policy")))))
 (DTypeSig false "policySpelling" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "policySpelling" ((PVar "k")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "k"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "k")) (ELit (LString "\"")))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "k")) (ELit (LString "\"")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "k")) (EVar "k")))))
 (DTypeSig false "stubSource" (TyCon "String"))
@@ -1122,7 +1230,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
 (DData Public "PolicyOutcome" () ((variant "PolicyAccept" (ConPos (TyCon "String"))) (variant "PolicyReject" (ConPos (TyCon "String")))) ())
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
-(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EBlock (DoLet false false (PVar "policy") (EApp (EVar "parsePolicy") (EVar "allowStr"))) (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EVar "header") (EVar "via")))))))))))))))
+(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EMatch (EApp (EVar "parsePolicy") (EVar "allowStr")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "policy")) () (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicyWith") (EVar "policy")) (EVar "src")) (EVar "rtSrc")) (EVar "coreSrc")) (EVar "fnName"))))))
+(DTypeSig false "runCheckPolicyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
+(DFunDef false "runCheckPolicyWith" ((PVar "policy") (PVar "src") (PVar "rtSrc") (PVar "coreSrc") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoLet false false (PVar "problems") (EApp (EVar "stringConcat") (EApp (EApp (EVar "policyProblems") (EVar "fnEffects")) (EVar "policy")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EVar "problems"))))))))))))))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -1162,11 +1272,11 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "atomToAllowTok" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "atomToAllowTok" ((PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "atomLabel") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PCon "PPrefix" (PCon "Some" (PVar "s")))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "")))) (arm (PCon "Some" (PCon "PSet" (PCon "Some" (PVar "xs")))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "={"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))) (arm (PCon "Some" (PCon "PProduct" (PVar "ax"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "productAllowRhs") (EVar "ax")))) (ELit (LString "")))) (arm PWild () (EVar "label"))))))
 (DTypeSig false "productAllowRhs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
-(DFunDef false "productAllowRhs" ((PVar "ax")) (EApp (EVar "joinSemiTok") (EApp (EApp (EMethodRef "map") (EVar "axisToAllow")) (EVar "ax"))))
-(DTypeSig false "axisToAllow" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
-(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PPrefix" (PCon "Some" (PVar "s"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "=\""))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\""))))
-(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PSet" (PCon "Some" (PVar "xs"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "={"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}"))))
-(DFunDef false "axisToAllow" ((PTuple (PVar "name") PWild)) (EBinOp "++" (EVar "name") (ELit (LString "=true"))))
+(DFunDef false "productAllowRhs" ((PVar "ax")) (EApp (EVar "joinSemiTok") (EApp (EApp (EDictApp "flatMap") (EVar "axisToAllow")) (EVar "ax"))))
+(DTypeSig false "axisToAllow" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PPrefix" (PCon "Some" (PVar "s"))))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "=\""))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\"")))))
+(DFunDef false "axisToAllow" ((PTuple (PVar "name") (PCon "PSet" (PCon "Some" (PVar "xs"))))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "={"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "xs")))) (ELit (LString "}")))))
+(DFunDef false "axisToAllow" (PWild) (EListLit))
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
 (DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))

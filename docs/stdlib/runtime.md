@@ -316,25 +316,24 @@ The numeric addresses a host name resolves to.
 ### `netTcpConnect`
 
 ```
-netTcpConnect : (host : String) -> Int -> <Net host> Result String Int
+netTcpConnect : (host : String) -> Int -> <Net host> Result String (Socket host)
 ```
 
-Opens a TCP connection to a host and port. The result is the
-connection's descriptor.
+Opens a TCP connection to a host and port.
 
 ### `netTcpListen`
 
 ```
-netTcpListen : (host : String) -> Int -> <Net host> Result String Int
+netTcpListen : (host : String) -> Int -> <Net host> Result String (ListenSocket host)
 ```
 
 Starts listening for TCP connections on an address and port. Port `0`
-picks a free port. The result is the listener's descriptor.
+picks a free port.
 
 ### `netListenPort`
 
 ```
-netListenPort : Int -> <Net> Result String Int
+netListenPort : ListenSocket a -> <Net a> Result String Int
 ```
 
 The port a listener is bound to. Use it after listening on port `0`.
@@ -342,16 +341,17 @@ The port a listener is bound to. Use it after listening on port `0`.
 ### `netTcpAccept`
 
 ```
-netTcpAccept : Int -> <Net> Result String Int
+netTcpAccept : ListenSocket a -> <Net a> Result String (Socket a)
 ```
 
-Waits for the next connection on a listener. The result is the
-connection's descriptor.
+Waits for the next connection on a listener. The connection is at the
+listener's authority: it is reached through the address the listener was
+granted.
 
 ### `netSend`
 
 ```
-netSend : Int -> Array Int -> <Net> Result String Int
+netSend : Socket h -> Array Int -> <Net h> Result String Int
 ```
 
 Sends bytes on a connection. The result is the number of bytes
@@ -360,7 +360,7 @@ written, which may be fewer than given.
 ### `netSendFrom`
 
 ```
-netSendFrom : Int -> Array Int -> Int -> <Net> Result String Int
+netSendFrom : Socket h -> Array Int -> Int -> <Net h> Result String Int
 ```
 
 Sends bytes starting at the given offset into the array. The result is the number
@@ -370,7 +370,7 @@ call so a loop can retain one array while advancing through it.
 ### `netRecv`
 
 ```
-netRecv : Int -> Int -> <Net> Result String (Array Int)
+netRecv : Socket h -> Int -> <Net h> Result String (Array Int)
 ```
 
 Receives up to the given number of bytes from a connection. An empty array means the
@@ -379,7 +379,7 @@ other side has closed.
 ### `netShutdown`
 
 ```
-netShutdown : Int -> Int -> <Net> Result String Unit
+netShutdown : Socket h -> Int -> <Net h> Result String Unit
 ```
 
 Shuts down one or both directions of a connection: `0` for reading,
@@ -388,19 +388,44 @@ Shuts down one or both directions of a connection: `0` for reading,
 ### `netClose`
 
 ```
-netClose : Int -> <Net> Result String Unit
+netClose : Socket h -> <Net h> Result String Unit
 ```
 
-Closes a descriptor.
+Closes a connection.
+
+### `netCloseListener`
+
+```
+netCloseListener : ListenSocket a -> <Net a> Result String Unit
+```
+
+Closes a listener.
 
 ### `netSetTimeout`
 
 ```
-netSetTimeout : Int -> Int -> <Net> Result String Unit
+netSetTimeout : Socket h -> Int -> <Net h> Result String Unit
 ```
 
 Sets a connection's send and receive timeout in milliseconds. `0`
 means no timeout.
+
+### `socketFd`
+
+```
+socketFd : Socket h -> Int
+```
+
+The descriptor number of a connection, for `ioPoll`. The number grants
+nothing: every other extern takes the socket itself.
+
+### `listenSocketFd`
+
+```
+listenSocketFd : ListenSocket a -> Int
+```
+
+The descriptor number of a listener, for `ioPoll`.
 
 ### `pdsSignalStart`
 
@@ -411,6 +436,10 @@ pdsSignalStart : Unit -> <Net> Result String Int
 Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
 descriptor readable on shutdown. A binary that never calls this retains
 the operating system's default signal behavior. Call once after bind.
+
+It reaches no endpoint. It is charged `Net` at the top of its domain
+until process signals have a label of their own: an over-charge, borne
+by a program that already binds.
 
 ### `pdsSignalRequested`
 
@@ -424,26 +453,36 @@ the descriptor remains readable. Only call from ordinary task context.
 ### `ioPoll`
 
 ```
-ioPoll : Array Int -> Array Int -> Int -> <Net> Result String (Array Int)
+ioPoll : Array Int -> Array Int -> Int -> <Clock> Result String (Array Int)
 ```
 
 Waits until any of the descriptors is ready, or the timeout in
 milliseconds passes (`-1` waits forever). The interests are parallel to the
 descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,
-both bits on an error or hangup so a retry surfaces the error.
+both bits on an error or hangup so a retry surfaces the error. A wait
+reaches no endpoint: it reads and writes nothing on any descriptor it
+watches, so it is a timed wait, charged as the clock.
 
 ### `netSetNonblock`
 
 ```
-netSetNonblock : Int -> Bool -> <Net> Result String Unit
+netSetNonblock : Socket h -> Bool -> <Net h> Result String Unit
 ```
 
-Switches a socket's non-blocking mode on or off.
+Switches a connection's non-blocking mode on or off.
+
+### `netSetNonblockListener`
+
+```
+netSetNonblockListener : ListenSocket a -> Bool -> <Net a> Result String Unit
+```
+
+Switches a listener's non-blocking mode on or off.
 
 ### `netTryAccept`
 
 ```
-netTryAccept : Int -> <Net> Result String (Option Int)
+netTryAccept : ListenSocket a -> <Net a> Result String (Option (Socket a))
 ```
 
 `netTcpAccept` that returns `None` instead of blocking.
@@ -451,29 +490,29 @@ netTryAccept : Int -> <Net> Result String (Option Int)
 ### `netConnectStart`
 
 ```
-netConnectStart : (host : String) -> Int -> <Net host> Result String Int
+netConnectStart : (host : String) -> Int -> <Net host> Result String (Socket host)
 ```
 
 `netTcpConnect` that returns as soon as the handshake is under way. The
-result is a non-blocking descriptor that is not connected yet: wait for it
+result is a non-blocking socket that is not connected yet: wait for it
 to become writable, then ask `netConnectCheck` whether it arrived. Name
 resolution still blocks.
 
 ### `netConnectCheck`
 
 ```
-netConnectCheck : Int -> <Net> Result String (Option Unit)
+netConnectCheck : Socket h -> <Net h> Result String (Option Unit)
 ```
 
-Whether a descriptor from `netConnectStart` has finished its handshake.
+Whether a socket from `netConnectStart` has finished its handshake.
 `None` means not yet, so a woken task asks again rather than trusting the
 wake. `Err` is the handshake's own failure (a refused or unreachable peer)
-and leaves the descriptor for the caller to close.
+and leaves the socket for the caller to close.
 
 ### `netTryRecv`
 
 ```
-netTryRecv : Int -> Int -> <Net> Result String (Option (Array Int))
+netTryRecv : Socket h -> Int -> <Net h> Result String (Option (Array Int))
 ```
 
 `netRecv` that returns `None` instead of blocking. `Some []` is end of
@@ -482,7 +521,7 @@ stream.
 ### `netTryRecvBytes`
 
 ```
-netTryRecvBytes : Int -> Int -> <Net> Result String (Option ByteBlock)
+netTryRecvBytes : Socket h -> Int -> <Net h> Result String (Option ByteBlock)
 ```
 
 `netTryRecv` delivering the chunk as a packed block, one byte per byte
@@ -493,7 +532,7 @@ with no other reference to it.
 ### `netTrySend`
 
 ```
-netTrySend : Int -> Array Int -> <Net> Result String (Option Int)
+netTrySend : Socket h -> Array Int -> <Net h> Result String (Option Int)
 ```
 
 `netSend` that returns `None` instead of blocking. `Some n` is the count
@@ -502,7 +541,7 @@ written, which may be short.
 ### `netTrySendFrom`
 
 ```
-netTrySendFrom : Int -> Array Int -> Int -> <Net> Result String (Option Int)
+netTrySendFrom : Socket h -> Array Int -> Int -> <Net h> Result String (Option Int)
 ```
 
 `netTrySend` starting at the given offset into the array, sending at most 64 KiB
