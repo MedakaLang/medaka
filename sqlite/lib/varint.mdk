@@ -79,7 +79,7 @@ ninthByte : Int -> Int -> Int -> BResult Int
 ninthByte acc b pos =
   let x = U64.bitOr (U64.shiftLeft (U64.truncate acc) 8) (U64.truncate b)
   if x < 0x4000000000000000 || x >= 0xC000000000000000 then
-    BOk (U64.truncateToInt x) (pos + 1)
+    BOk (U64.toIntTruncating x) (pos + 1)
   else
     BErr "varint: value does not fit Int" pos
 
@@ -130,7 +130,7 @@ sqVarintBytes v =
   if v < 0 || v >= sqVarint9Threshold then
     let x = U64.truncate v
     map (k => ninthFormGroup x k) [7, 6, 5, 4, 3, 2, 1, 0]
-      ++ [U64.truncateToInt (U64.bitAnd x 255)]
+      ++ [U64.toIntTruncating (U64.bitAnd x 255)]
   else
     addContBits (sqVarintGroups v [])
 
@@ -138,7 +138,7 @@ sqVarintBytes v =
 -- continuation bit.
 ninthFormGroup : U64 -> Int -> Int
 ninthFormGroup x k =
-  contBit + U64.truncateToInt (U64.bitAnd (U64.shiftRight x (8 + 7 * k)) 127)
+  contBit + U64.toIntTruncating (U64.bitAnd (U64.shiftRight x (8 + 7 * k)) 127)
 
 -- ---------------------------------------------------------------------------
 -- Round-trip doctests (moved from byteparser/bytebuilder)

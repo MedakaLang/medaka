@@ -390,7 +390,7 @@ signedFrom64 fill x =
   let signByte = if x >= 0x8000000000000000 then 255 else 0
   if (x < 0x4000000000000000 || x >= 0xC000000000000000)
     && allEqual signByte (toArray fill) 0 then
-    deferPure (U64.truncateToInt x)
+    deferPure (U64.toIntTruncating x)
   else
     failWith intRangeMessage
 

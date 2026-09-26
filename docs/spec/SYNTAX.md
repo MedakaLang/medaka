@@ -93,7 +93,7 @@ arithmetic wraps modulo 2^64 like the rest of the family, and it compares
 unsigned. A literal in `U64` position may be a wide literal
 (`0x9E3779B97F4A7C15`, `18446744073709551615`); a negative one is refused.
 Converting back narrows, since `Int` holds 63 bits: `U64.toInt` answers an
-`Option Int`, and `U64.truncateToInt` keeps the low 63 bits. A literal
+`Option Int`, and `U64.toIntTruncating` keeps the low 63 bits. A literal
 **pattern** cannot match a `U64` (compare in a guard, `x if x == 0`). Design:
 `docs/design/INTEGER-TYPES-DESIGN.md`.
 

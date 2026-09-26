@@ -253,10 +253,11 @@ is the `Num` method rather than a module function, so it is written `fromInt n`
 ### 5.1 `U64`'s asymmetry
 
 `U64 -> Int` is a narrowing, since `Int` holds 63 bits. `U64.toInt` is
-therefore `U64 -> Option Int`, and the masking form is `U64.truncateToInt`,
-which keeps the low 63 bits (bit 62 becomes the sign). N3 ships that name;
-it is the one conversion name this document left for the N3 packet to
-confirm, and the confirmation is Val's.
+therefore `U64 -> Option Int`, and the masking form is `U64.toIntTruncating`,
+which keeps the low 63 bits (bit 62 becomes the sign). This was the one
+conversion name this document left for the N3 packet to confirm; the earlier
+draft's `truncateToInt` has the `xToY` shape that stdlib rule 8 reserves for
+`runtime.mdk` primitives, and Val confirmed `toIntTruncating` on 2026-09-25.
 
 `U64` also carries the limb vocabulary, which is what lets
 `pds/lib/scalar.mdk` go from 16 limbs to 4:

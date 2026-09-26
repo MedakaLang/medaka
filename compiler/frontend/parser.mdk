@@ -18,6 +18,7 @@
 -- forms, and the rest of the operator ladder come in later slices.
 
 import frontend.ast.{
+  intMinLiteralMsg,
   DeriveRef(..),
   Lit(..),
   Ty(..),
@@ -708,7 +709,7 @@ isIntMinLit n = n == intMinLit
 --     "(max magnitude 2^62)" and must NOT get this help: for a literal that far
 --     out of range the `-` advice is useless, since no sign makes it fit.
 intLitTooBigMsg : String
-intLitTooBigMsg = "integer literal too large for Int (max 4611686018427387903)"
+intLitTooBigMsg = intMinLiteralMsg
 
 -- A literal above 2^62 (`TWideInt`) is a `U64` literal or nothing: no sign makes
 -- it fit `Int`, and a literal PATTERN is typed `Int`/`U8`/`U16`/`U32` only

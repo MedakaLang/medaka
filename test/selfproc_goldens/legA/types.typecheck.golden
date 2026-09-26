@@ -445,7 +445,7 @@ checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> 
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
-checkWideLiterals : List (Mono, String, Bool, Option Loc) -> Unit
+checkWideLiterals : List (Mono, String, Bool, Bool, Option Loc) -> Unit
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
@@ -1446,7 +1446,7 @@ inferVar : TcEnv -> String -> Mono
 inferVarId : TcEnv -> String -> Int -> Mono
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
-inferWideLit : TcEnv -> Int -> Ref Route -> String -> Mono
+inferWideLit : TcEnv -> Int -> Int -> Ref Route -> String -> Mono
 inferredConstraintIds : String -> List Int -> List Int
 inferredIfacePairs : String -> List Int -> List (IfaceRef, Int)
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int

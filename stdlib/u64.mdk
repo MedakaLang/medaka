@@ -14,7 +14,7 @@
    conversion into `U64` that discards anything.
 
    `Int` holds 63 bits, so the way back narrows: `toInt` answers `None` for a
-   value above `4611686018427387903`, and `truncateToInt` keeps the low 63
+   value above `4611686018427387903`, and `toIntTruncating` keeps the low 63
    bits.
 
    Within the family, `fromU8`, `fromU16` and `fromU32` widen a narrower
@@ -49,10 +49,10 @@ import bytes as B
 
 {- | The value as a `U64`, or `None` when it is negative.
 
-   > tryFromInt 200 |> map truncateToInt
+   > tryFromInt 200 |> map toIntTruncating
    Some 200
 
-   > tryFromInt (-1) |> map truncateToInt
+   > tryFromInt (-1) |> map toIntTruncating
    None -}
 export
 tryFromInt : Int -> Option U64
@@ -66,7 +66,7 @@ tryFromInt n = if n < 0 then None else Some (u64Truncate n)
    > truncate (-1) == maxBound
    True
 
-   > truncateToInt (truncate 42)
+   > toIntTruncating (truncate 42)
    42 -}
 export
 truncate : Int -> U64
@@ -89,18 +89,18 @@ toInt x = if x < 0x4000000000000000 then Some (u64TruncateToInt x) else None
    This is the one conversion to `Int` that can change the number: bit 63 is
    discarded, and bit 62 becomes the sign.
 
-   > truncateToInt 42
+   > toIntTruncating 42
    42
 
-   > truncateToInt maxBound
+   > toIntTruncating maxBound
    -1 -}
 export
-truncateToInt : U64 -> Int
-truncateToInt x = u64TruncateToInt x
+toIntTruncating : U64 -> Int
+toIntTruncating x = u64TruncateToInt x
 
 {- | A `U8` as a `U64`, the same number.
 
-   > truncateToInt (fromU8 (255 : U8))
+   > toIntTruncating (fromU8 (255 : U8))
    255 -}
 export
 fromU8 : U8 -> U64
@@ -108,7 +108,7 @@ fromU8 x = u64Truncate (u8ToInt x)
 
 {- | A `U16` as a `U64`, the same number.
 
-   > truncateToInt (fromU16 (65535 : U16))
+   > toIntTruncating (fromU16 (65535 : U16))
    65535 -}
 export
 fromU16 : U16 -> U64
@@ -116,7 +116,7 @@ fromU16 x = u64Truncate (u16ToInt x)
 
 {- | A `U32` as a `U64`, the same number.
 
-   > truncateToInt (fromU32 (4294967295 : U32))
+   > toIntTruncating (fromU32 (4294967295 : U32))
    4294967295 -}
 export
 fromU32 : U32 -> U64
@@ -126,7 +126,7 @@ fromU32 x = u64Truncate (u32ToInt x)
 
 {- | The bitwise and of two values.
 
-   > truncateToInt (bitAnd 12 10)
+   > toIntTruncating (bitAnd 12 10)
    8 -}
 export
 bitAnd : U64 -> U64 -> U64
@@ -134,7 +134,7 @@ bitAnd a b = u64BitAnd a b
 
 {- | The bitwise or of two values.
 
-   > truncateToInt (bitOr 12 10)
+   > toIntTruncating (bitOr 12 10)
    14 -}
 export
 bitOr : U64 -> U64 -> U64
@@ -142,7 +142,7 @@ bitOr a b = u64BitOr a b
 
 {- | The bitwise exclusive or of two values.
 
-   > truncateToInt (bitXor 12 10)
+   > toIntTruncating (bitXor 12 10)
    6 -}
 export
 bitXor : U64 -> U64 -> U64
@@ -161,7 +161,7 @@ bitNot x = u64BitXor x 0xFFFFFFFFFFFFFFFF
    Bits shifted past bit 63 are discarded, and a shift of 64 or more gives
    `0`. A negative shift panics.
 
-   > truncateToInt (shiftLeft 1 40)
+   > toIntTruncating (shiftLeft 1 40)
    1099511627776
 
    > shiftLeft 1 64 == 0
@@ -176,7 +176,7 @@ shiftLeft x k
 
    A shift of 64 or more gives `0`. A negative shift panics.
 
-   > truncateToInt (shiftRight maxBound 60)
+   > toIntTruncating (shiftRight maxBound 60)
    15 -}
 export
 shiftRight : U64 -> Int -> U64
@@ -192,7 +192,7 @@ rotateAmount k = (k % 64 + 64) % 64
 
    The amount is taken modulo 64, so a negative amount rotates right.
 
-   > truncateToInt (rotateLeft 0x8000000000000000 1)
+   > toIntTruncating (rotateLeft 0x8000000000000000 1)
    1 -}
 export
 rotateLeft : U64 -> Int -> U64

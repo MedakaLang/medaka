@@ -71,7 +71,7 @@ main =
   println (U32.mulWide 4294967295 4294967295)
   println "u64 conversions"
   println (map U64.toInt ws)
-  println (map U64.truncateToInt ws)
+  println (map U64.toIntTruncating ws)
   println (U64.truncate (-1))
   println (U64.truncate (0 - 4611686018427387903 - 1))
   println (U64.tryFromInt (-1))

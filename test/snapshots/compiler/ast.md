@@ -1,5 +1,5 @@
 # META
-source_lines=2255
+source_lines=2268
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1056,6 +1056,19 @@ isU64Head h = h == "U64"
 export
 isUnsignedHead : String -> Bool
 isUnsignedHead h = isFixedWidthHead h || isU64Head h
+
+-- The diagnostic for a positive 2^62 where an `Int` is wanted.  The parser raises
+-- it for a pattern and the typechecker for an expression (where 2^62 is a wide
+-- literal refused at `Int`); `driver/diagnostics.mdk` attaches the help to the
+-- parser's by this message.  One wording, so the two stages cannot drift.
+export
+intMinLiteralMsg : String
+intMinLiteralMsg = "integer literal too large for Int (max 4611686018427387903)"
+
+export
+intMinLiteralHelp : String
+intMinLiteralHelp =
+  "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`"
 
 -- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
 -- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
@@ -2402,6 +2415,10 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "isU64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "U64"))))
 (DTypeSig true "isUnsignedHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isUnsignedHead" ((PVar "h")) (EBinOp "||" (EApp (EVar "isFixedWidthHead") (EVar "h")) (EApp (EVar "isU64Head") (EVar "h"))))
+(DTypeSig true "intMinLiteralMsg" (TyCon "String"))
+(DFunDef false "intMinLiteralMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
+(DTypeSig true "intMinLiteralHelp" (TyCon "String"))
+(DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
@@ -2744,6 +2761,10 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "isU64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "U64"))))
 (DTypeSig true "isUnsignedHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isUnsignedHead" ((PVar "h")) (EBinOp "||" (EApp (EVar "isFixedWidthHead") (EVar "h")) (EApp (EVar "isU64Head") (EVar "h"))))
+(DTypeSig true "intMinLiteralMsg" (TyCon "String"))
+(DFunDef false "intMinLiteralMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
+(DTypeSig true "intMinLiteralHelp" (TyCon "String"))
+(DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())

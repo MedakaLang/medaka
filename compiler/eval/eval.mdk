@@ -3216,7 +3216,7 @@ u64Mix x = u64Finalize (x + u64Golden)
 
 -- Low 30 bits (the native MDK_HASH_MASK = 2^30 - 1) as a non-negative Int.
 u64Low30 : U64 -> Int
-u64Low30 x = U64.truncateToInt (U64.bitAnd x 0x3FFFFFFF)
+u64Low30 x = U64.toIntTruncating (U64.bitAnd x 0x3FFFFFFF)
 
 -- ── deterministic SplitMix64 RNG — byte-identical to runtime/medaka_rt.c ─────
 -- State is a uint64 (limb tuple), default 0; `setSeed n` sets state = n. Each
@@ -3258,7 +3258,7 @@ pRandomInt (VInt lo) (VInt hi) =
     let rem = rngDraw () % rangeU
     -- `lo + rem` lies in [lo, hi], so its signed 64-bit reading fits `Int` and
     -- bits 63 and 62 agree: the low 63 bits are the number.
-    VInt (U64.truncateToInt (loU + rem))
+    VInt (U64.toIntTruncating (loU + rem))
 pRandomInt _ _ = panic "randomInt: expected Int Int"
 
 pRandomBool : Value e -> <e> Value e
@@ -3268,13 +3268,14 @@ pRandomFloat : Value e -> <e> Value e
 pRandomFloat _ =
   -- `intToFloat 9007199254740992` is the double 2^53 (the mantissa scale); written
   -- via an Int literal because `medaka fmt` corrupts a >= 1e15 float literal (#51).
-  let bits = U64.truncateToInt (U64.shiftRight (rngDraw ()) 11)
+  let bits = U64.toIntTruncating (U64.shiftRight (rngDraw ()) 11)
   VFloat (intToFloat bits * (1.0 / intToFloat 9007199254740992) * 2.0 - 1.0)
 
 pRandomChar : Value e -> <e> Value e
 pRandomChar _ =
   VChar
-    (charToStr (charFromCodeUnsafe (32 + U64.truncateToInt (rngDraw () % 95))))
+    (charToStr
+      (charFromCodeUnsafe (32 + U64.toIntTruncating (rngDraw () % 95))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).

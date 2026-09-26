@@ -1053,6 +1053,19 @@ export
 isUnsignedHead : String -> Bool
 isUnsignedHead h = isFixedWidthHead h || isU64Head h
 
+-- The diagnostic for a positive 2^62 where an `Int` is wanted.  The parser raises
+-- it for a pattern and the typechecker for an expression (where 2^62 is a wide
+-- literal refused at `Int`); `driver/diagnostics.mdk` attaches the help to the
+-- parser's by this message.  One wording, so the two stages cannot drift.
+export
+intMinLiteralMsg : String
+intMinLiteralMsg = "integer literal too large for Int (max 4611686018427387903)"
+
+export
+intMinLiteralHelp : String
+intMinLiteralHelp =
+  "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`"
+
 -- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
 -- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
 -- the marked node holds the cell, the goal's destination holds the same cell, and

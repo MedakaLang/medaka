@@ -51,6 +51,8 @@ import frontend.ast.{
   fixedWidthMask,
   isU64Head,
   isUnsignedHead,
+  intMinLiteralMsg,
+  intMinLiteralHelp,
   -- A-3.2b residual (#1512): named ONLY by `aliasFixtureAttribCore`, the doctest
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
@@ -10228,7 +10230,7 @@ data PerRun = PerRun {
   patLitDeferred : Ref (List (Mono, Int, Option Loc)),  -- integer literal patterns whose scrutinee type was still unknown at their site (`settlePatLitsGo`)
   matchChecksDeferred : Ref (List (Mono, List Arm, Option Loc)),  -- matches whose scrutinee type was unknown after their arms (`checkDeferredMatches`)
   numlitRanges : Ref (List (Mono, Int, Option Loc)),  -- every source integer literal's (var, value, loc), for the fixed-width range check (`checkFixedWidthLiterals`)
-  wideLitRanges : Ref (List (Mono, String, Bool, Option Loc)),  -- every wide literal's (var, lexeme, negated, loc), for `checkWideLiterals`
+  wideLitRanges : Ref (List (Mono, String, Bool, Bool, Option Loc)),  -- every wide literal's (var, lexeme, is-2^62, negated, loc), for `checkWideLiterals`
   numlitUntainted : Ref (List (Mono, Loc)),
   numlitOpLocs : Ref (List Loc),
   numlitCtxTags : Ref (List (Loc, String)),
@@ -12876,7 +12878,7 @@ infer _ (ELit l) = litType l
 -- demand `Num`.  Without the prelude (bare-HM oracle, `builtinClassPresent BNum` False)
 -- `fromInt` is unbound: fall back to a plain fresh var, dref stays RNone (⇒ Int).
 infer env (ENumLit n fref dref _) = inferNumLit env n fref dref
-infer env (EWideLit _ lo dref lx) = inferWideLit env lo dref lx
+infer env (EWideLit hi lo dref lx) = inferWideLit env hi lo dref lx
 infer env (EVar x) = inferVar env x
 -- #837: EVarId carries the resolve-minted binding id; thread it to
 -- instantiateVarTracked so obligation lookup keys by (name, id).
@@ -15674,8 +15676,8 @@ recordNegatedLitRange t (ENumLit n _ _ _) =
     _ => recordNumlitRange t (negate n)
 recordNegatedLitRange t (EWideLit _ _ _ lx) =
   match perRun.value.wideLitRanges.value
-    (_, l, _, loc) :: rest if l == lx =>
-      perRun.value.wideLitRanges := (t, lx, True, loc) :: rest
+    (_, l, pow62, _, loc) :: rest if l == lx =>
+      perRun.value.wideLitRanges := (t, lx, pow62, True, loc) :: rest
     _ => ()
 recordNegatedLitRange _ _ = ()
 
@@ -16016,11 +16018,12 @@ inferNumLit env n fref dref =
 -- it only where that type grounded to `U64`.  The `Int` the shared route carries is
 -- a stand-in (the low half) that nothing reads for a wide literal:
 -- `rewriteBinopExpr` builds its `LU64` from the node's own halves.
-inferWideLit : TcEnv -> Int -> Ref Route -> String -> Mono
-inferWideLit env lo dref lx =
+inferWideLit : TcEnv -> Int -> Int -> Ref Route -> String -> Mono
+inferWideLit env hi lo dref lx =
   let a = inferNumLitVar env lo (Ref None) dref
+  let pow62 = hi == 1073741824 && lo == 0
   perRun.value.wideLitRanges :=
-    (a, lx, False, !currentLoc) :: perRun.value.wideLitRanges.value
+    (a, lx, pow62, False, !currentLoc) :: perRun.value.wideLitRanges.value
   a
 
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
@@ -16158,12 +16161,23 @@ u64RangeText = "0..18446744073709551615"
 -- no `Int` can carry), it is `L-INT-OVERFLOW`, exactly as the lexer's cap refused it
 -- before wide literals existed.  Negated (`-(0xFFFF_FFFF_FFFF_FFFF)`), it fits no
 -- type at all.
-checkWideLiterals : List (Mono, String, Bool, Option Loc) -> Unit
+checkWideLiterals : List (Mono, String, Bool, Bool, Option Loc) -> Unit
 checkWideLiterals [] = ()
-checkWideLiterals ((m, lx, negated, loc) :: rest) =
+checkWideLiterals ((m, lx, pow62, negated, loc) :: rest) =
   let at = orElseLoc loc !currentLoc
   let shown = if negated then "-" ++ lx else lx
   let _ = match normalize m
+    -- A positive 2^62 is the one wide literal the lexer admits as an `Int` (for
+    -- `-4611686018427387904`'s sake); at `Int` it gets the diagnostic that says so.
+    TCon "Int" _ if pow62 && not negated =>
+      recordTypeError
+        (TcDiag
+          "L-INT-OVERFLOW"
+          1
+          at
+          intMinLiteralMsg
+          (Some intMinLiteralHelp)
+          None)
     TCon tag _ if isU64Head tag =>
       if negated then
         recordTypeError

@@ -1,5 +1,5 @@
 # META
-source_lines=5103
+source_lines=5104
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3220,7 +3220,7 @@ u64Mix x = u64Finalize (x + u64Golden)
 
 -- Low 30 bits (the native MDK_HASH_MASK = 2^30 - 1) as a non-negative Int.
 u64Low30 : U64 -> Int
-u64Low30 x = U64.truncateToInt (U64.bitAnd x 0x3FFFFFFF)
+u64Low30 x = U64.toIntTruncating (U64.bitAnd x 0x3FFFFFFF)
 
 -- ── deterministic SplitMix64 RNG — byte-identical to runtime/medaka_rt.c ─────
 -- State is a uint64 (limb tuple), default 0; `setSeed n` sets state = n. Each
@@ -3262,7 +3262,7 @@ pRandomInt (VInt lo) (VInt hi) =
     let rem = rngDraw () % rangeU
     -- `lo + rem` lies in [lo, hi], so its signed 64-bit reading fits `Int` and
     -- bits 63 and 62 agree: the low 63 bits are the number.
-    VInt (U64.truncateToInt (loU + rem))
+    VInt (U64.toIntTruncating (loU + rem))
 pRandomInt _ _ = panic "randomInt: expected Int Int"
 
 pRandomBool : Value e -> <e> Value e
@@ -3272,13 +3272,14 @@ pRandomFloat : Value e -> <e> Value e
 pRandomFloat _ =
   -- `intToFloat 9007199254740992` is the double 2^53 (the mantissa scale); written
   -- via an Int literal because `medaka fmt` corrupts a >= 1e15 float literal (#51).
-  let bits = U64.truncateToInt (U64.shiftRight (rngDraw ()) 11)
+  let bits = U64.toIntTruncating (U64.shiftRight (rngDraw ()) 11)
   VFloat (intToFloat bits * (1.0 / intToFloat 9007199254740992) * 2.0 - 1.0)
 
 pRandomChar : Value e -> <e> Value e
 pRandomChar _ =
   VChar
-    (charToStr (charFromCodeUnsafe (32 + U64.truncateToInt (rngDraw () % 95))))
+    (charToStr
+      (charFromCodeUnsafe (32 + U64.toIntTruncating (rngDraw () % 95))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -6135,7 +6136,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "u64Mix" (TyFun (TyCon "U64") (TyCon "U64")))
 (DFunDef false "u64Mix" ((PVar "x")) (EApp (EVar "u64Finalize") (EBinOp "+" (EVar "x") (EVar "u64Golden"))))
 (DTypeSig false "u64Low30" (TyFun (TyCon "U64") (TyCon "Int")))
-(DFunDef false "u64Low30" ((PVar "x")) (EApp (EVar "U64.truncateToInt") (EApp (EApp (EVar "U64.bitAnd") (EVar "x")) (ELit (LInt 1073741823)))))
+(DFunDef false "u64Low30" ((PVar "x")) (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.bitAnd") (EVar "x")) (ELit (LInt 1073741823)))))
 (DTypeSig true "rngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "rngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig false "rngU64Ref" (TyApp (TyCon "Ref") (TyCon "U64")))
@@ -6143,14 +6144,14 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "rngDraw" (TyFun (TyCon "Unit") (TyCon "U64")))
 (DFunDef false "rngDraw" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EUnOp "!" (EVar "rngU64Ref")) (EVar "u64Golden"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EVar "s"))) (DoExpr (EApp (EVar "u64Finalize") (EVar "s")))))
 (DTypeSig false "pRandomInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "U64.truncate") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EBinOp "+" (EBinOp "-" (EApp (EVar "U64.truncate") (EVar "hi")) (EVar "loU")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "rangeU") (ELit (LInt 0))) (EBinOp ">=" (EVar "rangeU") (ELit (LU64 2147483648 0)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "U64.truncateToInt") (EBinOp "+" (EVar "loU") (EVar "rem"))))))))))
+(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "U64.truncate") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EBinOp "+" (EBinOp "-" (EApp (EVar "U64.truncate") (EVar "hi")) (EVar "loU")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "rangeU") (ELit (LInt 0))) (EBinOp ">=" (EVar "rangeU") (ELit (LU64 2147483648 0)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "U64.toIntTruncating") (EBinOp "+" (EVar "loU") (EVar "rem"))))))))))
 (DFunDef false "pRandomInt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "randomInt: expected Int Int"))))
 (DTypeSig false "pRandomBool" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pRandomBool" (PWild) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "U64.bitAnd") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 1))) (ELit (LInt 1)))))
 (DTypeSig false "pRandomFloat" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "U64.truncateToInt") (EApp (EApp (EVar "U64.shiftRight") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 11))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
+(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.shiftRight") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 11))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
 (DTypeSig false "pRandomChar" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.truncateToInt") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (ELit (LInt 95)))))))))
+(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.toIntTruncating") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (ELit (LInt 95)))))))))
 (DTypeSig false "charFromCodeUnsafe" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
 (DTypeSig false "pSetSeed" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7762,7 +7763,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "u64Mix" (TyFun (TyCon "U64") (TyCon "U64")))
 (DFunDef false "u64Mix" ((PVar "x")) (EApp (EVar "u64Finalize") (EBinOp "+" (EVar "x") (EVar "u64Golden"))))
 (DTypeSig false "u64Low30" (TyFun (TyCon "U64") (TyCon "Int")))
-(DFunDef false "u64Low30" ((PVar "x")) (EApp (EVar "U64.truncateToInt") (EApp (EApp (EVar "U64.bitAnd") (EVar "x")) (ELit (LInt 1073741823)))))
+(DFunDef false "u64Low30" ((PVar "x")) (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.bitAnd") (EVar "x")) (ELit (LInt 1073741823)))))
 (DTypeSig true "rngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "rngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig false "rngU64Ref" (TyApp (TyCon "Ref") (TyCon "U64")))
@@ -7770,14 +7771,14 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "rngDraw" (TyFun (TyCon "Unit") (TyCon "U64")))
 (DFunDef false "rngDraw" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EUnOp "!" (EVar "rngU64Ref")) (EVar "u64Golden"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngU64Ref")) (EVar "s"))) (DoExpr (EApp (EVar "u64Finalize") (EVar "s")))))
 (DTypeSig false "pRandomInt" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "U64.truncate") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EBinOp "+" (EBinOp "-" (EApp (EVar "U64.truncate") (EVar "hi")) (EVar "loU")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "rangeU") (ELit (LInt 0))) (EBinOp ">=" (EVar "rangeU") (ELit (LU64 2147483648 0)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "U64.truncateToInt") (EBinOp "+" (EVar "loU") (EMethodRef "rem"))))))))))
+(DFunDef false "pRandomInt" ((PCon "VInt" (PVar "lo")) (PCon "VInt" (PVar "hi"))) (EBlock (DoLet false false (PVar "loU") (EApp (EVar "U64.truncate") (EVar "lo"))) (DoLet false false (PVar "rangeU") (EBinOp "+" (EBinOp "-" (EApp (EVar "U64.truncate") (EVar "hi")) (EVar "loU")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "rangeU") (ELit (LInt 0))) (EBinOp ">=" (EVar "rangeU") (ELit (LU64 2147483648 0)))) (EApp (EVar "VInt") (EVar "lo")) (EBlock (DoLet false false (PVar "rem") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (EVar "rangeU"))) (DoExpr (EApp (EVar "VInt") (EApp (EVar "U64.toIntTruncating") (EBinOp "+" (EVar "loU") (EMethodRef "rem"))))))))))
 (DFunDef false "pRandomInt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "randomInt: expected Int Int"))))
 (DTypeSig false "pRandomBool" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pRandomBool" (PWild) (EApp (EVar "VBool") (EBinOp "==" (EApp (EApp (EVar "U64.bitAnd") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 1))) (ELit (LInt 1)))))
 (DTypeSig false "pRandomFloat" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "U64.truncateToInt") (EApp (EApp (EVar "U64.shiftRight") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 11))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
+(DFunDef false "pRandomFloat" (PWild) (EBlock (DoLet false false (PVar "bits") (EApp (EVar "U64.toIntTruncating") (EApp (EApp (EVar "U64.shiftRight") (EApp (EVar "rngDraw") (ELit LUnit))) (ELit (LInt 11))))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "bits")) (EBinOp "/" (ELit (LFloat 1.0)) (EApp (EVar "intToFloat") (ELit (LInt 9007199254740992))))) (ELit (LFloat 2.0))) (ELit (LFloat 1.0)))))))
 (DTypeSig false "pRandomChar" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.truncateToInt") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (ELit (LInt 95)))))))))
+(DFunDef false "pRandomChar" (PWild) (EApp (EVar "VChar") (EApp (EVar "charToStr") (EApp (EVar "charFromCodeUnsafe") (EBinOp "+" (ELit (LInt 32)) (EApp (EVar "U64.toIntTruncating") (EBinOp "%" (EApp (EVar "rngDraw") (ELit LUnit)) (ELit (LInt 95)))))))))
 (DTypeSig false "charFromCodeUnsafe" (TyFun (TyCon "Int") (TyCon "Char")))
 (DFunDef false "charFromCodeUnsafe" ((PVar "n")) (EMatch (EApp (EVar "charFromCode") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar " ")))))
 (DTypeSig false "pSetSeed" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))

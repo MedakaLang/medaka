@@ -1155,7 +1155,7 @@ Unsigned 64-bit integers, the `U64` type.
 - [`tryFromInt`](u64.md#tryfromint)
 - [`truncate`](u64.md#truncate)
 - [`toInt`](u64.md#toint)
-- [`truncateToInt`](u64.md#truncatetoint)
+- [`toIntTruncating`](u64.md#tointtruncating)
 - [`fromU8`](u64.md#fromu8)
 - [`fromU16`](u64.md#fromu16)
 - [`fromU32`](u64.md#fromu32)

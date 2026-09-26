@@ -187,6 +187,21 @@ CEIL_test="${TEST_IR_CEIL:-680000000}"
 # ceiling but not by much. If this cell starts flaking, re-derive rather than
 # widen blindly (same discipline as every other ceiling in this file).
 #
+# RE-DERIVED 2026-09-25 (N3, #3422). CI measured this cell at 1,083,243,279 Ir,
+# over 1,080,000,000: the prelude grew between 2026-09-15 and N3, and N3's eight
+# U64 kernel externs in stdlib/runtime.mdk, parsed and typechecked by every
+# `check`, tipped it. Attributed locally with one binary (this box reads about 10%
+# above CI in absolute terms; the deltas are what transfer):
+#
+#   main binary + main tree       1,189,213,561
+#   N3 binary   + main stdlib     1,187,372,826   (the compiler changes: -0.15%)
+#   N3 binary   + N3 tree         1,191,426,848   (the runtime.mdk externs: +0.34%)
+#
+# The revert was not re-measured. At 2026-09-15 it cost +191.8M Ir (the table
+# above), and what it re-does, parsing and desugaring the prelude two more times,
+# only grows with the prelude, so it still costs at least that: 17.7% of the N3
+# figure. A ceiling at 1,100,000,000 (1.5% over the N3 figure) still sees it.
+#
 # NOT ADDED: a cell for S-suggest-pools-lazy (resolve.mdk's on-demand did-you-mean
 # pools). Its own multi-module `check gzip/main.mdk` measurement (see
 # reports/S-suggest-pools-lazy.md §6.3, re-confirmed on this tree) is -0.99%
@@ -202,7 +217,7 @@ CEIL_test="${TEST_IR_CEIL:-680000000}"
 # resolve.mdk's snapshot/LEG-A corpus for a test-only change, outside this
 # slice's licensed sites. See the slice report's Notes.
 CEIL_lint="${LINT_IR_CEIL:-3515000000}"
-CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1080000000}"
+CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1100000000}"
 
 LINT_TARGET="$ROOT/compiler/tools/lint.mdk"
 POLICY_FILE="$ROOT/demo/plugin_good.mdk"
