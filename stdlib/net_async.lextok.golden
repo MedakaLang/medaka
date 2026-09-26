@@ -34,14 +34,8 @@ IMPORT
 IDENT "net"
 DOT_LBRACE
 UPPER "Connection"
-LPAREN
-DOTDOT
-RPAREN
 COMMA
 UPPER "Listener"
-LPAREN
-DOTDOT
-RPAREN
 RBRACE
 NEWLINE
 IMPORT
@@ -65,21 +59,35 @@ EXPORT
 NEWLINE
 IDENT "connect"
 COLON
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "host"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "host"
 RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "connect"
 IDENT "host"
@@ -123,7 +131,10 @@ GT
 LPAREN
 UPPER "Result"
 UPPER "String"
-UPPER "Int"
+LPAREN
+UPPER "Connection"
+IDENT "host"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
@@ -145,19 +156,31 @@ IDENT "connectStarted"
 COLON
 UPPER "Result"
 UPPER "String"
-UPPER "Int"
+LPAREN
+UPPER "Connection"
+IDENT "h"
+RPAREN
 ARROW
+INDENT
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
 RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "connectStarted"
 LPAREN
@@ -174,30 +197,40 @@ NEWLINE
 IDENT "connectStarted"
 LPAREN
 UPPER "Ok"
-IDENT "fd"
+IDENT "conn"
 RPAREN
 EQUAL
 IDENT "connectPending"
-IDENT "fd"
+IDENT "conn"
 NEWLINE
 IDENT "connectPending"
 COLON
-UPPER "Int"
+UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
+RPAREN
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "connectPending"
-IDENT "fd"
+IDENT "conn"
 EQUAL
 INDENT
 IDENT "deferThen"
@@ -207,14 +240,14 @@ LPAREN
 IDENT "u"
 FAT_ARROW
 IDENT "netConnectCheck"
-IDENT "fd"
+IDENT "conn"
 RPAREN
 RPAREN
 LPAREN
 IDENT "step"
 FAT_ARROW
 IDENT "connectStep"
-IDENT "fd"
+IDENT "conn"
 IDENT "step"
 RPAREN
 NEWLINE
@@ -222,7 +255,8 @@ DEDENT
 NEWLINE
 IDENT "connectStep"
 COLON
-UPPER "Int"
+UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Result"
@@ -235,20 +269,26 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectStep"
-IDENT "fd"
+IDENT "conn"
 LPAREN
 UPPER "Ok"
 UPPER "None"
@@ -260,20 +300,23 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitWrite"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 RBRACKET
 RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
 IDENT "connectPending"
-IDENT "fd"
+IDENT "conn"
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectStep"
-IDENT "fd"
+IDENT "conn"
 LPAREN
 UPPER "Ok"
 LPAREN
@@ -285,21 +328,18 @@ EQUAL
 IDENT "deferPure"
 LPAREN
 UPPER "Ok"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 RPAREN
 NEWLINE
 IDENT "connectStep"
-IDENT "fd"
+IDENT "conn"
 LPAREN
 UPPER "Err"
 IDENT "e"
 RPAREN
 EQUAL
 IDENT "abandonConnect"
-IDENT "fd"
+IDENT "conn"
 IDENT "e"
 NEWLINE
 EXPORT
@@ -309,7 +349,11 @@ COLON
 UPPER "Duration"
 ARROW
 INDENT
+LPAREN
+IDENT "host"
+COLON
 UPPER "String"
+RPAREN
 ARROW
 NEWLINE
 UPPER "Int"
@@ -320,13 +364,17 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "host"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "host"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
@@ -346,29 +394,34 @@ LPAREN
 IDENT "dl"
 FAT_ARROW
 IDENT "connectFrom"
-IDENT "dl"
 IDENT "host"
 IDENT "port"
+IDENT "dl"
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectFrom"
 COLON
+LPAREN
+IDENT "host"
+COLON
+UPPER "String"
+RPAREN
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "host"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "String"
-ARROW
-NEWLINE
-UPPER "Int"
 ARROW
 NEWLINE
 UPPER "Async"
@@ -376,21 +429,25 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "host"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "host"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectFrom"
-IDENT "dl"
 IDENT "host"
 IDENT "port"
+IDENT "dl"
 EQUAL
 INDENT
 IDENT "deferThen"
@@ -403,27 +460,31 @@ LPAREN
 IDENT "started"
 FAT_ARROW
 IDENT "connectUntilStarted"
-IDENT "dl"
 IDENT "started"
+IDENT "dl"
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectUntilStarted"
 COLON
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Connection"
+IDENT "h"
+RPAREN
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Result"
-UPPER "String"
-UPPER "Int"
 ARROW
 NEWLINE
 UPPER "Async"
@@ -431,23 +492,27 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectUntilStarted"
-UNDERSCORE
 LPAREN
 UPPER "Err"
 IDENT "e"
 RPAREN
+UNDERSCORE
 EQUAL
 IDENT "deferPure"
 LPAREN
@@ -456,29 +521,31 @@ IDENT "e"
 RPAREN
 NEWLINE
 IDENT "connectUntilStarted"
-IDENT "dl"
 LPAREN
 UPPER "Ok"
-IDENT "fd"
+IDENT "conn"
 RPAREN
+IDENT "dl"
 EQUAL
 IDENT "connectUntil"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
 NEWLINE
 IDENT "connectUntil"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Int"
 ARROW
 NEWLINE
 UPPER "Async"
@@ -486,20 +553,24 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectUntil"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
 EQUAL
 IDENT "deferThen"
 LPAREN
@@ -508,7 +579,7 @@ LPAREN
 IDENT "u"
 FAT_ARROW
 IDENT "netConnectCheck"
-IDENT "fd"
+IDENT "conn"
 RPAREN
 RPAREN
 LPAREN
@@ -516,8 +587,8 @@ IDENT "step"
 FAT_ARROW
 INDENT
 IDENT "connectUntilStep"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
 IDENT "step"
 NEWLINE
 DEDENT
@@ -525,17 +596,19 @@ RPAREN
 NEWLINE
 IDENT "connectUntilStep"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Int"
 ARROW
 NEWLINE
 UPPER "Result"
@@ -551,20 +624,24 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "connectUntilStep"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
 LPAREN
 UPPER "Ok"
 UPPER "None"
@@ -584,7 +661,7 @@ IDENT "late"
 THEN
 INDENT
 IDENT "abandonConnect"
-IDENT "fd"
+IDENT "conn"
 STRING "timed out"
 NEWLINE
 DEDENT
@@ -595,7 +672,10 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitWrite"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 COMMA
 IDENT "dl"
 RBRACKET
@@ -603,9 +683,12 @@ RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
+INDENT
 IDENT "connectUntil"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
+NEWLINE
+DEDENT
 RPAREN
 NEWLINE
 DEDENT
@@ -614,8 +697,8 @@ DEDENT
 RPAREN
 NEWLINE
 IDENT "connectUntilStep"
+IDENT "conn"
 UNDERSCORE
-IDENT "fd"
 LPAREN
 UPPER "Ok"
 LPAREN
@@ -627,54 +710,57 @@ EQUAL
 IDENT "deferPure"
 LPAREN
 UPPER "Ok"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 RPAREN
 NEWLINE
 IDENT "connectUntilStep"
+IDENT "conn"
 UNDERSCORE
-IDENT "fd"
 LPAREN
 UPPER "Err"
 IDENT "e"
 RPAREN
 EQUAL
 IDENT "abandonConnect"
-IDENT "fd"
+IDENT "conn"
 IDENT "e"
 NEWLINE
 IDENT "abandonConnect"
 COLON
-UPPER "Int"
+UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "h"
+RPAREN
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "abandonConnect"
-IDENT "fd"
+IDENT "conn"
 IDENT "message"
 EQUAL
 INDENT
 IDENT "deferThen"
 LPAREN
 IDENT "close"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 RPAREN
 LPAREN
 UNDERSCORE
@@ -693,17 +779,24 @@ NEWLINE
 IDENT "accept"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "a"
+RPAREN
 RPAREN
 NEWLINE
 IDENT "accept"
@@ -733,26 +826,28 @@ NEWLINE
 IDENT "tryAccept"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
 LPAREN
 UPPER "Option"
+LPAREN
 UPPER "Connection"
+IDENT "a"
+RPAREN
 RPAREN
 NEWLINE
 IDENT "tryAccept"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 EQUAL
 MATCH
-IDENT "netSetNonblock"
-IDENT "fd"
+IDENT "netSetNonblockListener"
+IDENT "lis"
 UPPER "True"
 INDENT
 UPPER "Ok"
@@ -760,7 +855,7 @@ UNDERSCORE
 FAT_ARROW
 MATCH
 IDENT "netTryAccept"
-IDENT "fd"
+IDENT "lis"
 INDENT
 UPPER "Ok"
 LPAREN
@@ -773,10 +868,7 @@ LPAREN
 UNDERSCORE
 FAT_ARROW
 UPPER "Some"
-LPAREN
-UPPER "Connection"
 IDENT "c"
-RPAREN
 RPAREN
 LPAREN
 IDENT "netSetNonblock"
@@ -809,35 +901,42 @@ NEWLINE
 IDENT "acceptStep"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 INDENT
 UPPER "Result"
 UPPER "String"
 LPAREN
 UPPER "Option"
+LPAREN
 UPPER "Connection"
+IDENT "a"
+RPAREN
 RPAREN
 ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
 LPAREN
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "a"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "acceptStep"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 LPAREN
 UPPER "Ok"
 UPPER "None"
@@ -849,17 +948,17 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitRead"
-IDENT "fd"
+LPAREN
+IDENT "listenSocketFd"
+IDENT "lis"
+RPAREN
 RBRACKET
 RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
 IDENT "accept"
-LPAREN
-UPPER "Listener"
-IDENT "fd"
-RPAREN
+IDENT "lis"
 RPAREN
 NEWLINE
 DEDENT
@@ -898,12 +997,18 @@ NEWLINE
 IDENT "recv"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -915,6 +1020,8 @@ UPPER "Array"
 UPPER "Int"
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "recv"
 IDENT "conn"
@@ -946,11 +1053,13 @@ NEWLINE
 IDENT "tryRecv"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -963,22 +1072,19 @@ RPAREN
 RPAREN
 NEWLINE
 IDENT "tryRecv"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 EQUAL
 MATCH
 IDENT "netSetNonblock"
-IDENT "fd"
+IDENT "conn"
 UPPER "True"
 INDENT
 UPPER "Ok"
 UNDERSCORE
 FAT_ARROW
 IDENT "netTryRecv"
-IDENT "fd"
+IDENT "conn"
 IDENT "n"
 NEWLINE
 UPPER "Err"
@@ -992,6 +1098,7 @@ NEWLINE
 IDENT "recvStep"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Int"
@@ -1010,7 +1117,10 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1026,10 +1136,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "recvStep"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 LPAREN
 UPPER "Ok"
@@ -1042,17 +1149,17 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitRead"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 RBRACKET
 RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
 IDENT "recv"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 RPAREN
 NEWLINE
@@ -1097,6 +1204,7 @@ UPPER "Duration"
 ARROW
 INDENT
 UPPER "Connection"
+IDENT "h"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1107,6 +1215,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1135,24 +1244,26 @@ LPAREN
 IDENT "dl"
 FAT_ARROW
 IDENT "recvUntil"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "n"
 RPAREN
 NEWLINE
 IDENT "recvUntil"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1163,6 +1274,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1178,8 +1290,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "recvUntil"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "n"
 EQUAL
 IDENT "deferThen"
@@ -1198,8 +1310,8 @@ IDENT "step"
 FAT_ARROW
 INDENT
 IDENT "recvUntilStep"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "n"
 IDENT "step"
 NEWLINE
@@ -1208,17 +1320,19 @@ RPAREN
 NEWLINE
 IDENT "recvUntilStep"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1240,6 +1354,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1255,11 +1370,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "recvUntilStep"
+IDENT "conn"
 IDENT "dl"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
 IDENT "n"
 LPAREN
 UPPER "Ok"
@@ -1293,7 +1405,10 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitRead"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 COMMA
 IDENT "dl"
 RBRACKET
@@ -1303,11 +1418,8 @@ UNDERSCORE
 FAT_ARROW
 INDENT
 IDENT "recvUntil"
+IDENT "conn"
 IDENT "dl"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
 IDENT "n"
 NEWLINE
 DEDENT
@@ -1356,12 +1468,18 @@ NEWLINE
 IDENT "recvBytes"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1370,6 +1488,8 @@ UPPER "Result"
 UPPER "String"
 UPPER "Bytes"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "recvBytes"
 IDENT "conn"
@@ -1396,6 +1516,7 @@ NEWLINE
 IDENT "pendingRecvBytes"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Int"
@@ -1404,6 +1525,7 @@ NEWLINE
 UPPER "Async"
 LT
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1434,11 +1556,13 @@ NEWLINE
 IDENT "tryRecvBytes"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1448,15 +1572,12 @@ UPPER "Bytes"
 RPAREN
 NEWLINE
 IDENT "tryRecvBytes"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 EQUAL
 MATCH
 IDENT "netSetNonblock"
-IDENT "fd"
+IDENT "conn"
 UPPER "True"
 INDENT
 UPPER "Ok"
@@ -1464,7 +1585,7 @@ UNDERSCORE
 FAT_ARROW
 MATCH
 IDENT "netTryRecvBytes"
-IDENT "fd"
+IDENT "conn"
 IDENT "n"
 INDENT
 UPPER "Ok"
@@ -1507,6 +1628,7 @@ NEWLINE
 IDENT "recvBytesStep"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Int"
@@ -1522,7 +1644,10 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1535,10 +1660,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "recvBytesStep"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 LPAREN
 UPPER "Ok"
@@ -1551,17 +1673,17 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitRead"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 RBRACKET
 RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
 IDENT "recvBytes"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "n"
 RPAREN
 NEWLINE
@@ -1606,6 +1728,7 @@ UPPER "Duration"
 ARROW
 INDENT
 UPPER "Connection"
+IDENT "h"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1616,6 +1739,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1642,8 +1766,8 @@ LPAREN
 IDENT "dl"
 FAT_ARROW
 IDENT "recvUntilBytes"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "n"
 RPAREN
 NEWLINE
@@ -1651,17 +1775,19 @@ DEDENT
 NEWLINE
 IDENT "recvUntilBytes"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1672,6 +1798,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1684,8 +1811,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "recvUntilBytes"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "n"
 EQUAL
 IDENT "deferThen"
@@ -1699,8 +1826,8 @@ IDENT "step"
 FAT_ARROW
 INDENT
 IDENT "recvUntilBytesStep"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "n"
 IDENT "step"
 NEWLINE
@@ -1709,17 +1836,19 @@ RPAREN
 NEWLINE
 IDENT "recvUntilBytesStep"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1738,6 +1867,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1750,11 +1880,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "recvUntilBytesStep"
+IDENT "conn"
 IDENT "dl"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
 IDENT "n"
 LPAREN
 UPPER "Ok"
@@ -1771,8 +1898,8 @@ LPAREN
 IDENT "late"
 FAT_ARROW
 IDENT "recvBytesWake"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
 IDENT "n"
 IDENT "late"
 RPAREN
@@ -1814,17 +1941,19 @@ RPAREN
 NEWLINE
 IDENT "recvBytesWake"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Int"
 ARROW
 NEWLINE
 UPPER "Int"
@@ -1838,6 +1967,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1862,8 +1992,8 @@ STRING "timed out"
 RPAREN
 NEWLINE
 IDENT "recvBytesWake"
+IDENT "conn"
 IDENT "dl"
-IDENT "fd"
 IDENT "n"
 UPPER "False"
 EQUAL
@@ -1872,9 +2002,13 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitRead"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 COMMA
 IDENT "dl"
+COMMA
 RBRACKET
 RPAREN
 LPAREN
@@ -1882,11 +2016,8 @@ UNDERSCORE
 FAT_ARROW
 INDENT
 IDENT "recvUntilBytes"
+IDENT "conn"
 IDENT "dl"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
 IDENT "n"
 NEWLINE
 DEDENT
@@ -1897,13 +2028,17 @@ NEWLINE
 IDENT "send"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -1943,12 +2078,14 @@ NEWLINE
 IDENT "trySend"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -1958,22 +2095,19 @@ UPPER "Int"
 RPAREN
 NEWLINE
 IDENT "trySend"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bytes"
 EQUAL
 MATCH
 IDENT "netSetNonblock"
-IDENT "fd"
+IDENT "conn"
 UPPER "True"
 INDENT
 UPPER "Ok"
 UNDERSCORE
 FAT_ARROW
 IDENT "netTrySend"
-IDENT "fd"
+IDENT "conn"
 IDENT "bytes"
 NEWLINE
 UPPER "Err"
@@ -1987,6 +2121,7 @@ NEWLINE
 IDENT "sendStep"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Array"
@@ -2003,7 +2138,10 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2016,10 +2154,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "sendStep"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bytes"
 LPAREN
 UPPER "Ok"
@@ -2032,17 +2167,17 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitWrite"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 RBRACKET
 RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
 IDENT "send"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bytes"
 RPAREN
 NEWLINE
@@ -2084,13 +2219,19 @@ NEWLINE
 IDENT "sendAll"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2099,6 +2240,8 @@ UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "sendAll"
 IDENT "conn"
@@ -2112,6 +2255,7 @@ NEWLINE
 IDENT "sendFrom"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Array"
@@ -2123,7 +2267,10 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2190,14 +2337,18 @@ NEWLINE
 IDENT "trySendFrom"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -2206,24 +2357,23 @@ UPPER "Option"
 UPPER "Int"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "trySendFrom"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bytes"
 IDENT "off"
 EQUAL
 MATCH
 IDENT "netSetNonblock"
-IDENT "fd"
+IDENT "conn"
 UPPER "True"
 INDENT
 UPPER "Ok"
 UNDERSCORE
 FAT_ARROW
 IDENT "netTrySendFrom"
-IDENT "fd"
+IDENT "conn"
 IDENT "bytes"
 IDENT "off"
 NEWLINE
@@ -2238,6 +2388,7 @@ NEWLINE
 IDENT "sendFromStep"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Array"
@@ -2257,7 +2408,10 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2270,10 +2424,7 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "sendFromStep"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bytes"
 IDENT "off"
 LPAREN
@@ -2281,28 +2432,29 @@ UPPER "Ok"
 UPPER "None"
 RPAREN
 EQUAL
-INDENT
 IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitWrite"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
+COMMA
 RBRACKET
 RPAREN
 LPAREN
 UNDERSCORE
 FAT_ARROW
+INDENT
 IDENT "sendFrom"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
+IDENT "conn"
 IDENT "bytes"
 IDENT "off"
-RPAREN
 NEWLINE
 DEDENT
+RPAREN
 NEWLINE
 IDENT "sendFromStep"
 IDENT "conn"
@@ -2348,6 +2500,7 @@ UPPER "Duration"
 ARROW
 INDENT
 UPPER "Connection"
+IDENT "h"
 ARROW
 NEWLINE
 UPPER "Array"
@@ -2359,6 +2512,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2385,8 +2539,8 @@ LPAREN
 IDENT "dl"
 FAT_ARROW
 IDENT "sendUntil"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 INT 0
 RPAREN
@@ -2395,17 +2549,19 @@ DEDENT
 NEWLINE
 IDENT "sendUntil"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Array"
@@ -2420,6 +2576,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2432,8 +2589,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "sendUntil"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 IDENT "off"
 EQUAL
@@ -2478,8 +2635,8 @@ DEDENT
 ELSE
 INDENT
 IDENT "sendUntilTry"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 IDENT "off"
 NEWLINE
@@ -2494,17 +2651,19 @@ DEDENT
 NEWLINE
 IDENT "sendUntilTry"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Array"
@@ -2519,6 +2678,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2531,8 +2691,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "sendUntilTry"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 IDENT "off"
 EQUAL
@@ -2556,8 +2716,8 @@ IDENT "step"
 FAT_ARROW
 INDENT
 IDENT "sendUntilStep"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 IDENT "off"
 IDENT "step"
@@ -2567,17 +2727,19 @@ RPAREN
 NEWLINE
 IDENT "sendUntilStep"
 COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+INDENT
 UPPER "Wait"
 LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
-ARROW
-INDENT
-UPPER "Connection"
 ARROW
 NEWLINE
 UPPER "Array"
@@ -2600,6 +2762,7 @@ LT
 UPPER "Clock"
 COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2612,11 +2775,8 @@ NEWLINE
 DEDENT
 NEWLINE
 IDENT "sendUntilStep"
+IDENT "conn"
 IDENT "dl"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
 IDENT "bytes"
 IDENT "off"
 LPAREN
@@ -2629,7 +2789,10 @@ LPAREN
 IDENT "awaitAny"
 LBRACKET
 IDENT "waitWrite"
-IDENT "fd"
+LPAREN
+IDENT "socketFd"
+IDENT "conn"
+RPAREN
 COMMA
 IDENT "dl"
 COMMA
@@ -2640,11 +2803,8 @@ UNDERSCORE
 FAT_ARROW
 INDENT
 IDENT "sendUntil"
+IDENT "conn"
 IDENT "dl"
-LPAREN
-UPPER "Connection"
-IDENT "fd"
-RPAREN
 IDENT "bytes"
 IDENT "off"
 NEWLINE
@@ -2652,8 +2812,8 @@ DEDENT
 RPAREN
 NEWLINE
 IDENT "sendUntilStep"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 IDENT "off"
 LPAREN
@@ -2666,8 +2826,8 @@ RPAREN
 EQUAL
 INDENT
 IDENT "sendUntil"
-IDENT "dl"
 IDENT "conn"
+IDENT "dl"
 IDENT "bytes"
 LPAREN
 IDENT "off"
@@ -2698,12 +2858,18 @@ NEWLINE
 IDENT "sendString"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
+INDENT
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2712,6 +2878,8 @@ UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "sendString"
 IDENT "conn"
@@ -2729,10 +2897,12 @@ NEWLINE
 IDENT "close"
 COLON
 UPPER "Connection"
+IDENT "h"
 ARROW
 UPPER "Async"
 LT
 UPPER "Net"
+IDENT "h"
 PIPE
 IDENT "e"
 GT
@@ -2760,10 +2930,12 @@ NEWLINE
 IDENT "closeListener"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 UPPER "Async"
 LT
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
@@ -2791,14 +2963,19 @@ NEWLINE
 IDENT "serve"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 INDENT
 LPAREN
 UPPER "Connection"
+IDENT "a"
 ARROW
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
@@ -2812,7 +2989,10 @@ ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
@@ -2845,14 +3025,19 @@ NEWLINE
 IDENT "serveStep"
 COLON
 UPPER "Listener"
+IDENT "a"
 ARROW
 INDENT
 LPAREN
 UPPER "Connection"
+IDENT "a"
 ARROW
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
@@ -2866,12 +3051,18 @@ ARROW
 NEWLINE
 UPPER "Result"
 UPPER "String"
+LPAREN
 UPPER "Connection"
+IDENT "a"
+RPAREN
 ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
@@ -2929,10 +3120,14 @@ IDENT "handleThenClose"
 COLON
 LPAREN
 UPPER "Connection"
+IDENT "a"
 ARROW
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT
@@ -2945,11 +3140,15 @@ RPAREN
 ARROW
 INDENT
 UPPER "Connection"
+IDENT "a"
 ARROW
 NEWLINE
 UPPER "Async"
 LT
+UPPER "Clock"
+COMMA
 UPPER "Net"
+IDENT "a"
 PIPE
 IDENT "e"
 GT

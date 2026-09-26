@@ -1608,6 +1608,7 @@ krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List
 krowSlotVarOccs : List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 kvEVars : (Expr, Expr) -> List String
+labelsMissing : List Atom -> List Atom -> List Atom
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
 launderEscapeFromLog : List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
@@ -2726,6 +2727,7 @@ unifyAll : Mono -> List Mono -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
 unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> List FieldAssign -> Unit
 unifyIndex : Authority -> Authority -> Unit
+unifyIndexAtomAuthorities : EffRow -> EffRow -> Unit
 unifyIndexRow : EffRow -> EffRow -> Unit
 unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyIndexRowPlain : EffRow -> EffRow -> Unit

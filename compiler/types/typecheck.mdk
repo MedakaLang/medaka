@@ -1525,7 +1525,25 @@ unifyRowPlain (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck l1 l2
 --     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
 --     decision with its own blast radius, tracked separately — not a copy-paste of this.
 unifyIndexRow : EffRow -> EffRow -> Unit
-unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+unifyIndexRow r1 r2 =
+  let _ = unifyIndexAtomAuthorities r1 r2
+  unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+
+-- An index row is an equality, so an atom the two rows both carry names one
+-- authority on both sides (`Async <Net host | e>` against `Async <Net κ |
+-- e>`): the two authorities are unified as an index is (`unifyIndex`), a
+-- flexible one substituted, two fixed ones compared for equality.  What is
+-- left for the row comparison is which labels each side carries.
+unifyIndexAtomAuthorities : EffRow -> EffRow -> Unit
+unifyIndexAtomAuthorities r1 r2 =
+  let (a1, _) = rowFlat r1
+  let (a2, _) = rowFlat r2
+  fold
+    (_ x => match findAtom (atomKey x) a2
+      Some y => unifyIndex (atomAuth x) (atomAuth y)
+      None => ())
+    ()
+    a1
 
 -- #821: an index row whose tail is a join is solved by the join unifier in
 -- INDEX mode (equality, never subsumption).
@@ -1544,11 +1562,23 @@ unifyIndexRowN r1 r2 =
 
 unifyIndexRowPlain : EffRow -> EffRow -> Unit
 unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) =
-  indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+  indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
 unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 =
-    indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+    indexRowEqCheck (labelsMissing l1 l2) (labelsMissing l2 l1) l1 l2
 unifyIndexRowPlain r1 r2 = unifyRowN r1 r2
+
+-- The atoms of [l1] whose label [l2] does not carry.  A shared label's two
+-- authorities were already equated by `unifyIndexAtomAuthorities`, which
+-- reports their mismatch as an authority index, so it is not a second report
+-- here.
+labelsMissing : List Atom -> List Atom -> List Atom
+labelsMissing l1 l2 =
+  filterList
+    (x => match findAtom (atomKey x) l2
+      Some _ => False
+      None => True)
+    l1
 
 -- Two index rows with nothing left to solve — both closed, or both already ending in the
 -- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
@@ -5118,6 +5148,7 @@ deKindAbstractFixture = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deKindPrivateFixture : Decl
@@ -5130,6 +5161,7 @@ deKindPrivateFixture = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deKindNewtypeFixture : Decl
@@ -5298,6 +5330,7 @@ deNameIdxAlpha = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modA",
+  dataExtern = False,
 }
 
 deNameIdxSharedA : Decl
@@ -5310,6 +5343,7 @@ deNameIdxSharedA = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modA",
+  dataExtern = False,
 }
 
 deNameIdxBeta : Decl
@@ -5322,6 +5356,7 @@ deNameIdxBeta = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modB",
+  dataExtern = False,
 }
 
 deNameIdxSharedB : Decl
@@ -5334,6 +5369,7 @@ deNameIdxSharedB = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "modB",
+  dataExtern = False,
 }
 
 deNameIdxModA : DeclEnvModule
@@ -5899,6 +5935,7 @@ deFieldOwnerFixtureA = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deFieldOwnerFixtureB : Decl
@@ -5912,6 +5949,7 @@ deFieldOwnerFixtureB = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "n",
+  dataExtern = False,
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
@@ -5934,6 +5972,7 @@ deFieldOwnerFixtureC = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "n",
+  dataExtern = False,
 }
 
 deFieldOwnerCollisionEnv : DataEnv
@@ -5981,6 +6020,7 @@ deRecordOrderFixtureA = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "m",
+  dataExtern = False,
 }
 
 deRecordOrderFixtureB : Decl
@@ -5994,6 +6034,7 @@ deRecordOrderFixtureB = DData {
   dataCtorBinders = [],
   dataDerives = [],
   dataOrigin = OriginModule "n",
+  dataExtern = False,
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
@@ -12035,6 +12076,7 @@ authTermIds q acc =
   fold (m cell => IdMap.set (authvarId cell) () m) acc (authVars q)
 
 lowerAuthLevels : Int -> Authority -> Unit
+lowerAuthLevels _ (AConst _) = ()
 lowerAuthLevels level q =
   fold
     (_ cell => match !cell
@@ -46673,6 +46715,12 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (the caller's
   -- `stampGraphTyOrigins` line), but the scope is derived from its type
   -- NAMES, not its origins, so it is the same map either way.
+  -- An extern's signature may index a prelude head by an authority
+  -- (`netSend : Socket h -> … <Net h> …`), and a name in an index slot is an
+  -- authority binder only by the head's declared kind, so the prelude's
+  -- declared kinds are recorded before the catalog is elaborated (the core
+  -- pass below records them again for its own run).
+  let _ = fold (_ d => recordDeclKinds d) () coreDecls
   let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
   let _ = seedAbstractRecordTypes coreDecls modules
   -- TREES only, WS-1b: the interfaces in scope for super expansion before the

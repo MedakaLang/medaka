@@ -16,6 +16,7 @@ effAxisSurface : (String -> String) -> EffParamTy -> String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
+externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int

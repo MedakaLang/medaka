@@ -2,9 +2,9 @@
 
 **Status:** DELIVERED THROUGH ITEM 6 — the data half merged in PR #3445
 (`ea782db98`); the close-out checkpoint below answers the handoff's owed list.
-Item 7 (stdlib migration of precision-dependent signatures to handles),
-residual schemes with delayed joins, and one invocation summary for policy
-and manifest have proposals awaiting ratification in the handoff. The delivery checklist below
+Item 7 (stdlib migration to authority-indexed handles) is delivered on the
+same branch; residual schemes with delayed joins, and one invocation summary
+for policy and manifest, have proposals awaiting ratification in the handoff. The delivery checklist below
 distinguishes the destination from code that has actually migrated. This is
 one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
@@ -754,6 +754,33 @@ through `checkModulesDiagsChain`); `test/import_form_fixtures/reexport_effect_la
 (re-derived: index equality, opened authority);
 `test/check_json_fixtures/projects/imported_help_fix` (re-derived: the fix-it
 range now covers the misspelled field).
+
+### Item 7 checkpoint: authority-indexed sockets
+
+1. **`extern data`** (a head with kinded parameters and no constructors,
+   `DData.dataExtern`): its values come only from externs, so extern
+   signatures are its sole proof sources; a registered non-public head
+   carries its parameter (`paramCarries`). `Socket (h : Authority Net)` and
+   `ListenSocket (a : Authority Net)` are declared in `core.mdk`, since the
+   catalog is extern-only at every stage.
+2. **The catalog charges at the index.** Every fd extern takes a socket and
+   performs `<Net h>`; an accepted socket is at its listener's authority; a
+   poll is `<Clock>`; `socketFd`/`listenSocketFd` are emitter identities over
+   the tagged word, and no endpoint extern takes a number.
+3. **Declared kinds before the catalog.** `graphPreamble` records the
+   prelude's declared kinds before elaborating extern signatures, so an index
+   slot in a catalog signature binds an authority.
+4. **Index rows unify authorities.** `unifyIndexRow` first equates the
+   authorities of same-label atoms as an index (`unifyIndexAtomAuthorities`),
+   then compares labels (`labelsMissing`); the solver's exact relations mark
+   their authority obligations exact. `Async <Net host | e>` is an index like
+   any other.
+5. **Printing.** A variable letter skips a name an authority binder already
+   holds (`assignName`).
+
+Coverage: `test/typecheck_error_fixtures/effect_socket_{ok,launder,forge}`;
+`stdlib/net.mdk`, `stdlib/net_async.mdk`, `pds/`, the net and async fixtures
+typecheck against the new catalog and run under the native engine gates.
 
 ### Foundation verification
 

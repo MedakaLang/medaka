@@ -1,5 +1,5 @@
 # META
-source_lines=2082
+source_lines=2098
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -45,6 +45,22 @@ public export data Option a = Some a | None
    > isOk (Err "boom")
    False -}
 public export data Result e a = Ok a | Err e
+
+-- # Sockets
+
+{- | A connected TCP socket, at the authority of the host it was opened
+   for.
+
+   Only the runtime's externs produce one, so the index is what the extern
+   that opened the socket was granted. The `net` module calls it a
+   connection. -}
+export extern data Socket (h : Authority Net)
+
+{- | A listening TCP socket, at the authority of the address it is bound
+   to. A socket it accepts carries the same authority.
+
+   The `net` module calls it a listener. -}
+export extern data ListenSocket (a : Authority Net)
 
 -- # Equality and ordering
 
@@ -2088,6 +2104,8 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
 (DData Public "Result" ("e" "a") ((variant "Ok" (ConPos (TyVar "a"))) (variant "Err" (ConPos (TyVar "e")))) ())
+(DExternData Abstract "Socket" ("h"))
+(DExternData Abstract "ListenSocket" ("a"))
 (DInterface true false "Eq" ("a") () ((imethod "eq" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) None)))
 (DTypeSig true "neq" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool")))))
 (DFunDef false "neq" ((PVar "x") (PVar "y")) (EApp (EVar "not") (EApp (EApp (EVar "eq") (EVar "x")) (EVar "y"))))
@@ -2478,6 +2496,8 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
 (DData Public "Result" ("e" "a") ((variant "Ok" (ConPos (TyVar "a"))) (variant "Err" (ConPos (TyVar "e")))) ())
+(DExternData Abstract "Socket" ("h"))
+(DExternData Abstract "ListenSocket" ("a"))
 (DInterface true false "Eq" ("a") () ((imethod "eq" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) None)))
 (DTypeSig true "neq" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool")))))
 (DFunDef false "neq" ((PVar "x") (PVar "y")) (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EVar "x")) (EVar "y"))))

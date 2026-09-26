@@ -1704,7 +1704,10 @@ public export data Decl =
     dataCtorBinders : List (List (String, KindAnn)),
     dataDerives : List DeriveRef,
     dataOrigin : TyConOrigin,
+    dataExtern : Bool,
   }
+  -- declared `extern data`: no constructors, values produced only by
+  -- externs (an opaque FFI resource such as a socket)
   -- Each constructor's EXISTENTIAL binders (EFFECTS-SEMANTICS §4.1), written
   -- as kinded parameters leading its fields: `AnyHandle (p : Authority
   -- FileRead) (Handle p)`.  Positional with `dataCtors`, the same length,
@@ -1817,6 +1820,29 @@ dDataUnresolved vis n params kinds variants binders derives = DData {
   dataCtorBinders = binders,
   dataDerives = derives,
   dataOrigin = OriginUnresolved,
+  dataExtern = False,
+}
+
+-- `extern data Socket (h : Authority Net)`: a head with no constructors whose
+-- values only externs produce, so the externs' signatures are its only proof
+-- sources.  Its visibility is abstract when exported: there is nothing to
+-- make public.
+export
+externDataUnresolved : Bool ->
+  String ->
+  List String ->
+  List (Option KindAnn) ->
+  Decl
+externDataUnresolved pub n params kinds = DData {
+  dataVis = if pub then VisAbstract else VisPrivate,
+  dataName = n,
+  dataParams = params,
+  dataParamKinds = kinds,
+  dataCtors = [],
+  dataCtorBinders = [],
+  dataDerives = [],
+  dataOrigin = OriginUnresolved,
+  dataExtern = True,
 }
 
 export

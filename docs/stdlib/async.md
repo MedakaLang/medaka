@@ -109,24 +109,25 @@ on `[waitRead fd]`, or on `[waitRead fd, deadline]` to give up after a
 ## `waitRead`
 
 ```
-waitRead : Int -> Wait <Net | e>
+waitRead : Int -> Wait <Clock | e>
 waitRead fd
 ```
 
 A wait for `fd` to become readable, as a wait for `awaitAny`.
 
-Polls the descriptor, so `<Net>` joins `e`.
+A timed wait on the descriptor, so `<Clock>` joins `e`. It reaches no
+endpoint: the socket behind `fd` was opened under a grant of its own.
 
 ## `waitWrite`
 
 ```
-waitWrite : Int -> Wait <Net | e>
+waitWrite : Int -> Wait <Clock | e>
 waitWrite fd
 ```
 
 A wait for `fd` to become writable, as a wait for `awaitAny`.
 
-Polls the descriptor, so `<Net>` joins `e`.
+A timed wait on the descriptor, so `<Clock>` joins `e`.
 
 ## `waitFlag`
 

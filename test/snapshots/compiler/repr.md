@@ -1,5 +1,5 @@
 # META
-source_lines=767
+source_lines=773
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -435,13 +435,19 @@ nameOf ctx cnt id = match lookupAssocI id !ctx
   None => assignName ctx cnt id
 
 export
+-- The next letter no variable in this context already answers to: an
+-- authority takes its binder's own name (`ppAuthvarName`), so a letter handed
+-- out later must skip it, or `<Net a | a>` would name two variables one way.
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 assignName ctx cnt id =
   let n = !cnt
   cnt := n + 1
   let s = if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
-  ctx := (id, s) :: !ctx
-  s
+  if nameTaken s !ctx then
+    assignName ctx cnt id
+  else
+    ctx := (id, s) :: !ctx
+    s
 
 export
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
@@ -806,7 +812,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "nameOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "nameOf" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EUnOp "!" (EVar "ctx"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")))))
 (DTypeSig true "assignName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s"))))
+(DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EIf (EApp (EApp (EVar "nameTaken") (EVar "s")) (EUnOp "!" (EVar "ctx"))) (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s")))))))
 (DTypeSig true "ppGo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "String"))))))
 (DFunDef false "ppGo" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppVar") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "TCon" (PVar "n") PWild) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppApp") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "b"))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ppFun") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "eff")) (EVar "b"))) (arm (PCon "TEff" (PVar "r")) () (EApp (EApp (EApp (EVar "ppEffArg") (EVar "ctx")) (EVar "cnt")) (EVar "r"))) (arm (PCon "TQual" (PVar "inner") (PVar "q")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppQual") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "inner")) (EVar "q"))) (arm (PCon "TAuth" (PVar "q")) () (EApp (EApp (EApp (EVar "ppAuthArg") (EVar "ctx")) (EVar "cnt")) (EVar "q")))))
 (DTypeSig true "ppAuthArg" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
@@ -930,7 +936,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 (DTypeSig true "nameOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "nameOf" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EUnOp "!" (EVar "ctx"))) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")))))
 (DTypeSig true "assignName" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s"))))
+(DFunDef false "assignName" ((PVar "ctx") (PVar "cnt") (PVar "id")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "cnt"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cnt")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoLet false false (PVar "s") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 26))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "letters")) (EBinOp "++" (ELit (LString "t")) (EApp (EVar "intToString") (EVar "n"))))) (DoExpr (EIf (EApp (EApp (EVar "nameTaken") (EVar "s")) (EUnOp "!" (EVar "ctx"))) (EApp (EApp (EApp (EVar "assignName") (EVar "ctx")) (EVar "cnt")) (EVar "id")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctx")) (EBinOp "::" (ETuple (EVar "id") (EVar "s")) (EUnOp "!" (EVar "ctx"))))) (DoExpr (EVar "s")))))))
 (DTypeSig true "ppGo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "String"))))))
 (DFunDef false "ppGo" ((PVar "ctx") (PVar "cnt") (PVar "prec") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "ppVar") (EVar "ctx")) (EVar "cnt")) (EVar "cell"))) (arm (PCon "TCon" (PVar "n") PWild) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "ppConName") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppApp") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "b"))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ppFun") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "a")) (EVar "eff")) (EVar "b"))) (arm (PCon "TEff" (PVar "r")) () (EApp (EApp (EApp (EVar "ppEffArg") (EVar "ctx")) (EVar "cnt")) (EVar "r"))) (arm (PCon "TQual" (PVar "inner") (PVar "q")) () (EApp (EApp (EApp (EApp (EApp (EVar "ppQual") (EVar "ctx")) (EVar "cnt")) (EVar "prec")) (EVar "inner")) (EVar "q"))) (arm (PCon "TAuth" (PVar "q")) () (EApp (EApp (EApp (EVar "ppAuthArg") (EVar "ctx")) (EVar "cnt")) (EVar "q")))))
 (DTypeSig true "ppAuthArg" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))

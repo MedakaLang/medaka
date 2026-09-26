@@ -1,6 +1,7 @@
 # META
-source_lines=2082
+source_lines=2098
 stages=TYPES
+diagnostics=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
    can use without an import.
@@ -45,6 +46,22 @@ public export data Option a = Some a | None
    > isOk (Err "boom")
    False -}
 public export data Result e a = Ok a | Err e
+
+-- # Sockets
+
+{- | A connected TCP socket, at the authority of the host it was opened
+   for.
+
+   Only the runtime's externs produce one, so the index is what the extern
+   that opened the socket was granted. The `net` module calls it a
+   connection. -}
+export extern data Socket (h : Authority Net)
+
+{- | A listening TCP socket, at the authority of the address it is bound
+   to. A socket it accepts carries the same authority.
+
+   The `net` module calls it a listener. -}
+export extern data ListenSocket (a : Authority Net)
 
 -- # Equality and ordering
 

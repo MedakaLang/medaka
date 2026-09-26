@@ -431,6 +431,11 @@ renderSig bare (DExtern pub name ty) schemes
 renderSig _ (DLetGroup True bindings) schemes = match bindings
   (LetBind name _) :: _ => Some (name, valueSig name schemes None)
   [] => None
+renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataExtern = True }) _
+  | not (dataVisPrivate vis) = Some (
+    name,
+    "extern data \{joinWith " " (name :: tyParamSources params kinds)}",
+  )
 renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders }) _
   | not (dataVisPrivate vis) =
     let head = joinWith " " (name :: tyParamSources params kinds)

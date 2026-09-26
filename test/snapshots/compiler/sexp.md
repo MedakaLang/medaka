@@ -1,5 +1,5 @@
 # META
-source_lines=387
+source_lines=389
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -270,6 +270,8 @@ declSexp (DTypeSig p n t) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern p n t) = node "DExtern" [boolStr p, escStr n, tySexp t]
 declSexp (DFunDef p n ps b) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]
+declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataExtern = True }) =
+  node "DExternData" [visSexp vis, escStr n, slist (map escStr ps)]
 declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, dataDerives = ds }) = node
   "DData"
   [
@@ -538,6 +540,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "declSexp" ((PCon "DTypeSig" (PVar "p") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "DTypeSig"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "declSexp" ((PCon "DExtern" (PVar "p") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "DExtern"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "declSexp" ((PCon "DFunDef" (PVar "p") (PVar "n") (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "DFunDef"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
+(DFunDef false "declSexp" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataExtern" (PCon "True"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DExternData"))) (EListLit (EApp (EVar "visSexp") (EVar "vis")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "ps"))))))
 (DFunDef false "declSexp" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataDerives" (PVar "ds"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DData"))) (EListLit (EApp (EVar "visSexp") (EVar "vis")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "ps"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "variantSexp")) (EVar "vs"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EVar "escStr") (EApp (EVar "deriveRefName") (EVar "d"))))) (EVar "ds"))))))
 (DFunDef false "declSexp" ((PCon "DUse" (PVar "pub") (PVar "path") PWild)) (EApp (EApp (EVar "node") (ELit (LString "DUse"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "usePathSexp") (EVar "path")))))
 (DFunDef false "declSexp" ((PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "DEffect"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "optStrSexp") (EVar "dom")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "axisSexp")) (EVar "axes"))))))
@@ -729,6 +732,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "declSexp" ((PCon "DTypeSig" (PVar "p") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "DTypeSig"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "declSexp" ((PCon "DExtern" (PVar "p") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "DExtern"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "declSexp" ((PCon "DFunDef" (PVar "p") (PVar "n") (PVar "ps") (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "DFunDef"))) (EListLit (EApp (EVar "boolStr") (EVar "p")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "ps"))) (EApp (EVar "exprSexp") (EVar "b")))))
+(DFunDef false "declSexp" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataExtern" (PCon "True"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DExternData"))) (EListLit (EApp (EVar "visSexp") (EVar "vis")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "ps"))))))
 (DFunDef false "declSexp" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataDerives" (PVar "ds"))) false)) (EApp (EApp (EVar "node") (ELit (LString "DData"))) (EListLit (EApp (EVar "visSexp") (EVar "vis")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "ps"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "variantSexp")) (EVar "vs"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EVar "escStr") (EApp (EVar "deriveRefName") (EVar "d"))))) (EVar "ds"))))))
 (DFunDef false "declSexp" ((PCon "DUse" (PVar "pub") (PVar "path") PWild)) (EApp (EApp (EVar "node") (ELit (LString "DUse"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "usePathSexp") (EVar "path")))))
 (DFunDef false "declSexp" ((PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "DEffect"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "optStrSexp") (EVar "dom")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "axisSexp")) (EVar "axes"))))))

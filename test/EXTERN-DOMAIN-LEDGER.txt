@@ -203,6 +203,8 @@ floatToBytes64	TOTAL	total: IEEE-754 byte decomposition of any Float
 Ref	EXEMPT	mutable-cell constructor — reference identity, not a comparable value
 setRef	EXEMPT	mutation, returns Unit
 panic	EXEMPT	aborting control flow, produces no value (returns bottom)
+socketFd	EXEMPT	native-only socket handle; its argument exists only from a live socket extern
+listenSocketFd	EXEMPT	native-only listener handle; its argument exists only from a live socket extern
 indexError	EXEMPT	aborting control flow, produces no value (returns bottom)
 indexErrorAt	EXEMPT	aborting control flow, produces no value (returns bottom)
 sliceError	EXEMPT	aborting control flow, produces no value (returns bottom)

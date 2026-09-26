@@ -263,7 +263,10 @@ parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
     len <- contentLengthOf rest
     Ok (status, len)
 
-recvAtLeast : Connection -> Array Int -> Int -> <Net> Result String (Array Int)
+recvAtLeast : Connection * ->
+  Array Int ->
+  Int ->
+  <Net> Result String (Array Int)
 recvAtLeast conn buf need =
   if arrayLength buf >= need then
     Ok buf
@@ -281,7 +284,7 @@ recvAtLeast conn buf need =
    their bodies. `pds/lib/httpclient.mdk`'s `parseResponse` refuses input
    carrying bytes after the framed response, so it cannot frame this
    keep-alive stream. -}
-readOneResponse : Connection ->
+readOneResponse : Connection * ->
   Array Int ->
   <Net> Result String (Int, Array Int, Array Int)
 readOneResponse conn pending = match findHeaderEnd pending 0
@@ -308,7 +311,7 @@ readOneResponse conn pending = match findHeaderEnd pending 0
 requestCeiling : Duration
 requestCeiling = seconds 30
 
-mustConnect : Int -> <Net> Connection
+mustConnect : Int -> <Net> Connection *
 mustConnect port = match connect "127.0.0.1" port
   Ok conn =>
     let _ = setTimeout conn requestCeiling
@@ -326,7 +329,7 @@ microsSince start = floatToInt (elapsedSince start * 1000000.0)
 {- | One request, timed from the first byte sent to the last byte of its
    response. Returns the status, the bytes buffered past this response, and
    the elapsed microseconds. -}
-timedRequest : Connection ->
+timedRequest : Connection * ->
   Array Int ->
   Array Int ->
   <Clock, Net> Result String (Int, Array Int, Int)
@@ -382,7 +385,7 @@ recordWriteBody did collection rkey =
       ),
     ])
 
-responseRoundTrip : Connection ->
+responseRoundTrip : Connection * ->
   Array Int ->
   Array Int ->
   <Net> Result String (Int, Array Int, Array Int)
@@ -390,7 +393,7 @@ responseRoundTrip conn pending request = match sendAll conn request
   Err message => Err message
   Ok () => readOneResponse conn pending
 
-writeLoop : Connection ->
+writeLoop : Connection * ->
   Array Int ->
   String ->
   String ->
@@ -542,7 +545,7 @@ reportRoutes target routes i samples =
    than reconnecting — the harness grades a non-zero error count as a failed
    run, and a generator that quietly reconnected would take load off the
    server for the rest of the run without saying so. -}
-loadLoop : Connection ->
+loadLoop : Connection * ->
   Array Int ->
   Plan ->
   Int ->
@@ -592,7 +595,7 @@ runLoad port plan clientId durationMs =
    client, anything that is not the server — lands on both. A rise the loaded
    target shows and the control does not is therefore the loaded server's own
    queuing. -}
-sampleOne : Connection ->
+sampleOne : Connection * ->
   Array Int ->
   String ->
   Plan ->
@@ -615,8 +618,8 @@ sampleOne conn pending target plan i acc =
    every comparison against it regardless of any real effect. Flipping the
    order by `i`'s parity spreads that wake-latency bias evenly across both
    targets over a run. -}
-sampleTick : Connection ->
-  Option Connection ->
+sampleTick : Connection * ->
+  Option (Connection *) ->
   Array Int ->
   Array Int ->
   Plan ->
@@ -645,8 +648,8 @@ sampleTick loaded control loadedPending controlPending plan i acc =
         sampleOne loaded loadedPending "loaded" plan i afterControl
       (loadedRest, controlRest, afterLoaded)
 
-sampleLoop : Connection ->
-  Option Connection ->
+sampleLoop : Connection * ->
+  Option (Connection *) ->
   Array Int ->
   Array Int ->
   Plan ->

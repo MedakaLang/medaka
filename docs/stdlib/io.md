@@ -164,7 +164,7 @@ Ok (3, "", "err")
 ### `getEnvOr`
 
 ```
-getEnvOr : String -> String -> <IO> String
+getEnvOr : (name : String) -> String -> <Env name> String
 getEnvOr name fallback
 ```
 

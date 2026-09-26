@@ -49,6 +49,7 @@ import frontend.ast.{
   tyConUnresolved,
   tyConBuiltin,
   dDataUnresolved,
+  externDataUnresolved,
   kindAnnSource,
   kindAuthorityUnstamped,
   dTypeAliasUnresolved,
@@ -2710,11 +2711,39 @@ parseFunOrSig pub = defer
 parseExtern : Bool -> Parser Decl
 parseExtern pub = defer
   expectTok TExtern
+  t <- peekP
+  parseExternFor pub t
+
+parseExternFor : Bool -> Token -> Parser Decl
+parseExternFor pub TData = defer
+  expectTok TData
+  name <- upperNameP
+  ps <- tyParamsP
+  t <- peekP
+  externDataEnd pub name ps t
+parseExternFor pub _ = defer
   name <- externName
   expectTok TColon
   ty <- parseTy
   skipNewlines
   deferPure (DExtern pub name ty)
+
+-- An extern type has no body: its values come from externs, so a
+-- constructor list or a derived instance has nothing to describe.
+externDataEnd : Bool ->
+  String ->
+  List (String, Option KindAnn) ->
+  Token ->
+  Parser Decl
+externDataEnd _ _ _ TEqual =
+  failP
+    "an `extern data` type has no constructors: its values come only from externs. Drop the `= …`, or declare an ordinary `data` type"
+externDataEnd _ _ _ TDeriving =
+  failP
+    "an `extern data` type derives nothing: it has no constructors to derive from. Drop the `deriving` clause"
+externDataEnd pub name ps _ = defer
+  skipNewlines
+  deferPure (externDataUnresolved pub name (map fst ps) (map snd ps))
 
 -- ── type alias / newtype / top-level let-group / attributes ──────────────
 -- `type Name a… = ty`

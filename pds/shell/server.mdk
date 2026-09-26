@@ -163,7 +163,7 @@ import lib.xrpc.{
   xrpcErrorResponse,
   xrpcFailureResponse,
 }
-import net.{Connection(..), Listener(..), listen}
+import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileCount, blobFileWrite}
 import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
@@ -491,7 +491,7 @@ headerTimeout = seconds 5
    because it cannot: a bind address is a deployment fact, not something this
    process can verify about its own socket. -}
 export
-bindAddress : String -> Int -> <Net> Result String Listener
+bindAddress : String -> Int -> <Net> Result String (Listener *)
 bindAddress addr port = listen addr port
 
 -- ── applying a request and persisting the store ─────────────────────────────
@@ -1939,7 +1939,7 @@ export
 runServer : Server ->
   String ->
   Ref Store ->
-  Listener ->
+  Listener * ->
   Serving ->
   Duration ->
   Int ->
@@ -2008,17 +2008,17 @@ drainPending active until = defer
 
 -- Closing the listening fd from another task would not reliably wake poll(2).
 -- The signal pipe and listener share the same scheduler poller and wait set.
-acceptOrSignal : Listener ->
+acceptOrSignal : Listener * ->
   Int ->
-  Async <Net | e> (Result String (Option Connection))
-acceptOrSignal (Listener fd) signalFd = defer
+  Async <Clock, Net | e> (Result String (Option (Connection *)))
+acceptOrSignal lis signalFd = defer
   requested <- liftIO (u => pdsSignalRequested ())
   if requested then
     deferPure (Ok None)
   else defer
-    attempt <- liftIO (u => match netSetNonblock fd True
+    attempt <- liftIO (u => match netSetNonblockListener lis True
       Err message => Err message
-      Ok () => netTryAccept fd)
+      Ok () => netTryAccept lis)
     match attempt
       Err message => deferPure (Err message)
       Ok (Some conn) => defer
@@ -2032,15 +2032,15 @@ acceptOrSignal (Listener fd) signalFd = defer
             Err message => defer
               _ <- liftIO (u => netClose conn)
               deferPure (Err message)
-            Ok () => deferPure (Ok (Some (Connection conn)))
+            Ok () => deferPure (Ok (Some conn))
       Ok None => defer
-        () <- awaitAny [waitRead fd, waitRead signalFd]
-        acceptOrSignal (Listener fd) signalFd
+        () <- awaitAny [waitRead (listenSocketFd lis), waitRead signalFd]
+        acceptOrSignal lis signalFd
 
 acceptLoop : Server ->
   String ->
   Ref Store ->
-  Listener ->
+  Listener * ->
   Ref Int ->
   Ref Int ->
   Ref RateLimitState ->
@@ -2067,19 +2067,19 @@ acceptLoop server dir storeRef lis active unframed limiterRef census serving sig
 acceptStep : Server ->
   String ->
   Ref Store ->
-  Listener ->
+  Listener * ->
   Ref Int ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
   Int ->
-  Result String (Option Connection) ->
+  Result String (Option (Connection *)) ->
   Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
-acceptStep _ _ _ (Listener fd) _ _ _ _ serving _ (Ok None) = defer
+acceptStep _ _ _ lis _ _ _ _ serving _ (Ok None) = defer
   _ <- liftIO (u => servingStopping serving := True)
-  _ <- liftIO (u => netClose fd)
+  _ <- liftIO (u => netCloseListener lis)
   _ <- liftIO (u =>
     let () =
       putStrLn
@@ -2143,7 +2143,7 @@ serveConnection : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   Ref Int ->
   Ref Int ->
   Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> Unit
@@ -2189,7 +2189,7 @@ connectionLoop : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -2228,7 +2228,7 @@ frameLoop : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   Deadlines <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
@@ -2283,7 +2283,7 @@ framePending : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   Deadlines <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
@@ -2320,7 +2320,7 @@ readMore : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   Deadlines <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
@@ -2447,7 +2447,7 @@ reserveReadBuffer census buf scan =
 
    Either way the connection closes and its retirement gives its whole charge
    back, which is what lets the waiters behind it proceed. -}
-refuseOverBudget : Connection ->
+refuseOverBudget : Connection * ->
   HttpScan ->
   Async <Clock, Net, Stdout | e> (Result String Unit)
 refuseOverBudget conn scan =
@@ -2477,7 +2477,7 @@ refuseOverBudget conn scan =
    reads and the one short wait that finds the queue already empty. A peer
    still sending past that is told by the reset instead, which is the answer
    it left this server no room for. -}
-drainRefused : Connection -> Int -> Async <Clock, Net | e> Unit
+drainRefused : Connection * -> Int -> Async <Clock, Net | e> Unit
 drainRefused conn left =
   if left <= 0 then
     deferPure ()
@@ -2603,7 +2603,7 @@ respond : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
@@ -2636,7 +2636,7 @@ respondAt : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
@@ -3172,7 +3172,7 @@ forwardProxied : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3371,7 +3371,7 @@ admitSubscription : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   RequestTrace ->
@@ -3442,7 +3442,7 @@ sendAndContinue : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3476,7 +3476,7 @@ continueAfterSend : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Connection ->
+  Connection * ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
@@ -3522,7 +3522,7 @@ rejectBuffer : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Connection ->
+  Connection * ->
   ReadBuffer ->
   Bool ->
   Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
@@ -3544,7 +3544,7 @@ rejectBufferAt : Server ->
   String ->
   Ref Store ->
   Ref RateLimitState ->
-  Connection ->
+  Connection * ->
   ReadBuffer ->
   Bool ->
   Int ->

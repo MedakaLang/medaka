@@ -431,13 +431,19 @@ nameOf ctx cnt id = match lookupAssocI id !ctx
   None => assignName ctx cnt id
 
 export
+-- The next letter no variable in this context already answers to: an
+-- authority takes its binder's own name (`ppAuthvarName`), so a letter handed
+-- out later must skip it, or `<Net a | a>` would name two variables one way.
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 assignName ctx cnt id =
   let n = !cnt
   cnt := n + 1
   let s = if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
-  ctx := (id, s) :: !ctx
-  s
+  if nameTaken s !ctx then
+    assignName ctx cnt id
+  else
+    ctx := (id, s) :: !ctx
+    s
 
 export
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String

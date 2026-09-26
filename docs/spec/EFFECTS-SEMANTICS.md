@@ -503,6 +503,16 @@ existential binder; an atom or a qualifier naming a type variable is
 `T-AUTHORITY-KIND`, and an authority binder in a type position, or a type in
 an `Authority` slot, the same code.
 
+An `extern data` head (`extern data Socket (h : Authority Net)`) has no
+constructors: its only proof sources are the extern signatures that return
+it, which are trusted as any extern row is, so its index is exactly the
+authority the producing extern was granted (`netTcpConnect : (host : String) ->
+Int -> <Net host> Result String (Socket host)`), and every extern that consumes
+one is charged at its index (`netSend : Socket h -> … <Net h> …`). A field of
+such a type carries its parameter, since no importer can build a value of it.
+A descriptor number read from one (`socketFd`) grants nothing: no extern that
+reaches an endpoint accepts a number.
+
 A constructor may bind an existential authority by a kinded group leading its
 fields, `data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)`.
 Packing takes the argument's own index. A match arm or a function clause whose
@@ -947,7 +957,10 @@ by the host's declared invocation protocol (calling a function or running an
 effect-indexed entry computation), unfiltered,
 with each label's verified parameter rendered (`drender`). For
 `Net "idp.example.com/*"` the manifest records `idp.example.com/*` as the sole
-permitted outbound authority.
+permitted outbound authority. A `Net` authority names an endpoint the program
+may dial or bind; a socket accepted through a bound endpoint is exercised at
+that endpoint's authority, and waiting for a descriptor to become ready is a
+timed wait (`Clock`), not an operation on an endpoint.
 
 Unresolved symbolic authority at a host boundary is conservatively top in its
 domain, or an explicit unresolved-manifest error. It must never be omitted or

@@ -2301,6 +2301,10 @@ printDecl (DFunDef pub n pats body) =
     (Cat (defHeader n pats) (printDefRhs body))
 printDecl (DLetGroup pub bindings) =
   Cat (if pub then text "export " else Nil) (letGroupDecl bindings)
+printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataExtern = True }) =
+  Cat
+    (visPrefix vis)
+    (Cat (text "extern data ") (Cat (text n) (tyParamsDoc params kinds)))
 printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders, dataDerives = derives }) =
   let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   Cat

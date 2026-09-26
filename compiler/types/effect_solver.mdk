@@ -485,6 +485,7 @@ validateRelations solver protected escape (rel :: rest) =
       authorityEscapes
         (currentScope solver)
         rel.esrContext
+        rel.esrExact
         upperAtoms
         (escape rel.esrExact lowerAtoms upperAtoms)
     if isNonEmptyL escaping
@@ -519,10 +520,16 @@ firstEscapingKey [] lowerAtoms upperAtoms escape exact =
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
 -- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
-authorityEscapes : SummaryScope c -> c -> List Atom -> List Atom -> List Atom
-authorityEscapes _ _ _ [] = []
-authorityEscapes scope context upper (x :: rest) =
-  let others = authorityEscapes scope context upper rest
+-- In an exact (index) relation the obligation is one half of an equality.
+authorityEscapes : SummaryScope c ->
+  c ->
+  Bool ->
+  List Atom ->
+  List Atom ->
+  List Atom
+authorityEscapes _ _ _ _ [] = []
+authorityEscapes scope context exact upper (x :: rest) =
+  let others = authorityEscapes scope context exact upper rest
   match findAtom (atomKey x) upper
     Some y =>
       if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
@@ -532,7 +539,7 @@ authorityEscapes scope context upper (x :: rest) =
               awUpper = atomAuth y,
               awContext = context,
               awLabel = Some (atomKey x),
-              awExact = False,
+              awExact = exact,
             }
             :: scope.essAuthorities.value
         others

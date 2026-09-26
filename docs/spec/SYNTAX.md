@@ -1046,6 +1046,23 @@ to disk. A row that COVERS the catalog's own is accepted, and it may be wider â€
 narrower `<Stdout>`, because over-declaring what a caller must permit is the safe
 direction.
 
+### Extern types
+
+An `extern data` head declares an opaque type whose values only externs produce,
+as the prelude's `Socket` and `ListenSocket` are:
+
+```medaka
+export extern data Channel (h : Authority Net)
+```
+
+It has no constructors, derives nothing and cannot be `public`: a constructor
+list, a `deriving` clause or `public export extern data` is a parse error. So
+the externs that return one are its only proof sources, and an
+`Authority`-kinded parameter is the authority the opening extern was granted
+(`netTcpConnect : (host : String) -> Int -> <Net host> Result String (Socket
+host)`). At runtime a value is whatever the C side returned, one tagged word;
+nothing is boxed.
+
 ### Linking a C library
 
 A foreign call needs its library on the link line. Declare it in the project's

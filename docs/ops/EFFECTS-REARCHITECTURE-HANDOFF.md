@@ -3,8 +3,8 @@
 **Status:** The arrow half (PR #3393, `f81ff1d9d`) and the data half (PR
 #3445, `ea782db98`) of #3385 are on `main`. The close-out session (branch
 `effects-closeout`, § "Close-out session") answers the data half's owed list,
-fixes #3304 and pins #3327; delivery item 7 and the two remaining checklist
-items have proposals awaiting ratification there. Handoff first recorded
+fixes #3304, pins #3327 and delivers item 7 (authority-indexed sockets); the
+two remaining checklist items have proposals awaiting ratification there. Handoff first recorded
 2026-09-24.
 
 ## Resume here
@@ -744,52 +744,58 @@ landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE
   naming it, which is refused) and a matrix row through
   `checkModulesDiagsChain` (typecheck: the identity arrives).
 
-**Owed after the close-out session (proposals awaiting Val's ratification):**
+**Owed after the close-out session** (delivery item 7 is delivered; checklist
+items 2 and 3 are proposals awaiting Val's ratification):
 
-*Delivery item 7, proposal (stdlib review first).* A survey of `stdlib/`
-found one family that loses an authority through an opaque value: the `Net`
-socket handles. Files, commands and environment variables are always passed
-as strings, so they need no handle. The openers are already precise
-(`connect : (host : String) -> Int -> <Net host> …`,
-`listen : (addr : String) -> Int -> <Net addr> …`), but `Connection` and
-`Listener` are `public export data … = … Int`, and every consumer is typed
-with the bare `<Net>`. Proposed signature changes:
+*Delivery item 7, DELIVERED (Val ratified Fable's recommendation,
+2026-09-26).* A survey of `stdlib/` found one family that lost an authority
+through an opaque value, the `Net` socket handles; files, commands and
+environment variables are passed as strings. Fable (consulted on the principled
+fix) showed the draft's premise wrong: every value is one tagged word
+(RUNTIME-DESIGN §8), so a type with no constructors whose values only externs
+return needs no new representation. What landed, each a general rule:
 
-| Now | Proposed |
-|---|---|
-| `public export data Connection = Connection Int` | `export data Connection (h : Authority Net)` (abstract; see the open question) |
-| `public export data Listener = Listener Int` | `export data Listener (a : Authority Net)` |
-| `connect : (host : String) -> Int -> <Net host> Result String Connection` | `… Result String (Connection host)` |
-| `listen : (addr : String) -> Int -> <Net addr> Result String Listener` | `… Result String (Listener addr)` |
-| `send`/`recv`/`sendAll`/`recvAll`/`sendString`/`recvString`/`sendLine`/`recvLine`/`shutdown`/`close`/`setTimeout : Connection -> … <Net> …` | `Connection h -> … <Net h> …` |
-| `listenPort`/`closeListener : Listener -> <Net> …` | `Listener a -> <Net a> …` |
-| `accept : Listener -> <Net> Result String Connection` | `Listener a -> <Net a> Result String (Connection a)` (the accepted socket speaks under the listener's grant) |
-| `serveLoop`, `withConnection`, `withListener` | index threaded through; the `with*` forms name their host argument |
-| `net_async`: `connect`, `connectWithin : String -> Int -> Async <Net \| e> …` | `(host : String) -> Int -> Async <Net host \| e> (Result String (Connection host))`; every consumer `Connection h -> Async <Net h \| e> …` |
-| `io.getEnvOr : String -> String -> <IO> String` | `(name : String) -> String -> <Env name> String` (a named argument, not a handle) |
+- **`extern data`.** `export extern data Socket (h : Authority Net)` and
+  `ListenSocket (a : Authority Net)`, declared in `core.mdk` (the catalog
+  `runtime.mdk` stays extern-only, which every stage assumes). No
+  constructors, no `deriving`, never `public`; a field of such a type
+  carries its parameter (a registered non-public head is trusted).
+- **The catalog is the proof source.** `netTcpConnect`/`netConnectStart`
+  return `Socket host`, `netTcpListen` returns `ListenSocket host`, and every
+  extern that consumes a socket is charged at its index (`netSend : Socket h
+  -> … <Net h> …`). Listener operations take a `ListenSocket a`
+  (`netCloseListener`, `netSetNonblockListener`, both over the existing C
+  shims). An accepted socket is at the listener's authority (`netTcpAccept :
+  ListenSocket a -> <Net a> Result String (Socket a)`).
+- **Readiness is a timed wait.** `ioPoll`, `waitRead`, `waitWrite` and the
+  poller are `<Clock>`: every socket a wait watches was opened under a grant
+  of its own. `socketFd`/`listenSocketFd` read the descriptor number (an
+  identity in the emitter); no extern that reaches an endpoint takes a number.
+- **`net` and `net_async` build nothing.** `Connection h`/`Listener a` are
+  aliases of the socket heads; every operation carries the index, the
+  callbacks of `withConnection`, `withListener`, `serveLoop` and `serve` open
+  their row (`<Net host | e>`), and a parked `net_async` operation performs
+  `<Clock, Net h | e>`. `io.getEnvOr` is `(name : String) -> String -> <Env
+  name> String`.
+- **Holes closed:** a public `Connection Int` constructor let any importer wrap
+  any descriptor (`close (Connection 1)` closed stdout under `<Net>`); a
+  listener closed as a connection; the PDS server and its test stub called
+  the fd externs on raw numbers; the signal pipe's number was a valid
+  `netRecv` argument. Pinned by `test/typecheck_error_fixtures/effect_socket_{ok,launder,forge}`.
+- **Found on the way, each a general rule:** an extern's signature was
+  elaborated before the prelude's declared kinds were recorded, so an index
+  slot in a catalog signature read as a type (`graphPreamble` records them
+  first); an `Effect`-kinded index row compared its atoms by containment, so
+  `Async <Net κ | e>` never unified with `Async <Net host | e>`
+  (`unifyIndexAtomAuthorities`: same-label authorities are an index
+  equality, then the rows compare labels); the scheme printer handed a row
+  variable a letter an authority binder already had (`<Net a | a>`).
+- Bootstrap: `extern data` in `core.mdk` needs an emitter that parses it, so
+  the seed was re-minted twice.
 
-The open question, which decides whether this needs a language addition: an
-honest `send : Connection h -> … <Net h> …` must call a fd-level extern that
-performs `<Net h>`, but the runtime externs take a raw `Int` and perform the
-bare `<Net>`, and a `newtype` is boxed, so it cannot stand in for the `Int`
-at the extern boundary. Three routes:
-
-1. *(recommended)* An authority-indexed opaque FFI type, `NetFd (h : Authority
-   Net)`, represented as the C `Int`, whose only proof sources are the opening
-   externs (`netTcpConnect : (host : String) -> Int -> <Net host> Result String
-   (NetFd host)`) and whose consumers are indexed (`netSend : NetFd h -> … <Net
-   h> …`). This is §4.1's "explicitly trusted FFI operation". It needs a way to
-   declare an opaque extern type with a kinded parameter, which is new surface.
-2. The handle carries its host as evidence, `Connection (String @h) Int`, and
-   every fd-level extern gains a host argument the C side ignores. No new
-   surface, but it changes the C signatures, and the evidence is the host
-   string, not the socket.
-3. Defer: keep the consumers bare and index only the handle types, so a
-   signature can at least say which host a handle came from.
-
-`fs.mkdirAll`/`walkDir`/`replaceDurably` and `test_process.boundedVerb` could
-name their arguments too, but `mkdirAll "a/b"` writes the prefix `a`, which is
-outside `<FileWrite "a/b">`, so those stay bare unless the body proves it.
+Not taken: a `Mode` axis separating dial from bind authorities (`Net
+"0.0.0.0"` reads as an endpoint); `ByteBlock` as an `extern data` (it is
+still a hard-coded primitive).
 
 *Checklist item 2, scope proposal.* (a) Residual constraints in schemes: a
 generalized binding carries its unsolved inequalities between its own
