@@ -1,5 +1,5 @@
 # META
-source_lines=59
+source_lines=64
 stages=DESUGAR,MARK
 # SOURCE
 -- Deterministic per-stage OPERATION counter for the self-hosted pipeline.
@@ -28,10 +28,12 @@ stages=DESUGAR,MARK
 -- which the driver flips ONCE at entry via `setOpCounting (perfEnabled ())`. Zero
 -- write when off — and no `getEnv` (which is <IO>) ever runs inside the hot scan.
 --
--- ACYCLIC: this module imports only prelude primitives, so `util -> opcount` adds no
--- cycle (nothing in util's dependency set imports util). NO reset (unlike refindex's
+-- ACYCLIC: this module imports only the prelude and the stdlib's `u64`, so `util ->
+-- opcount` adds no cycle (nothing in util's dependency set imports util). NO reset (unlike refindex's
 -- `opCnt := 0`) — per-stage counts are read by snapshot-subtract, so the counter is a
 -- single cumulative monotone value.
+
+import u64 as U64
 
 -- The cumulative operation counter.  Module-private: read only via `opSnap`.
 opCounter : Ref Int
@@ -53,7 +55,10 @@ setOpCounting b = opCountOn := b
 export
 opBump : Unit -> Unit
 opBump () = match !opCountOn
-  True => opCounter := !opCounter + 1
+  -- Incremented in `U64`, which wraps and needs no overflow check: `opBump` runs on
+  -- every interpreted step, and the check an `Int` `+ 1` carries kept LLVM from
+  -- inlining it there (about +12% of the interpreter's instructions per step).
+  True => opCounter := U64.toIntTruncating (U64.truncate !opCounter + 1)
   False => ()
 
 -- Read the cumulative counter.  Paired snapshots (before/after a stage) yield that
@@ -62,6 +67,7 @@ export
 opSnap : Unit -> Int
 opSnap () = !opCounter
 # DESUGAR
+(DUse false (UseAlias ("u64") "U64"))
 (DTypeSig false "opCounter" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "opCounter" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "opCountOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
@@ -69,10 +75,11 @@ opSnap () = !opCounter
 (DTypeSig true "setOpCounting" (TyFun (TyCon "Bool") (TyCon "Unit")))
 (DFunDef false "setOpCounting" ((PVar "b")) (EApp (EApp (EVar "setRef") (EVar "opCountOn")) (EVar "b")))
 (DTypeSig true "opBump" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "opCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EBinOp "+" (EUnOp "!" (EVar "opCounter")) (ELit (LInt 1))))) (arm (PCon "False") () (ELit LUnit))))
+(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "opCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EApp (EVar "U64.toIntTruncating") (EBinOp "+" (EApp (EVar "U64.truncate") (EUnOp "!" (EVar "opCounter"))) (ELit (LInt 1)))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig true "opSnap" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "opSnap" ((PLit LUnit)) (EUnOp "!" (EVar "opCounter")))
 # MARK
+(DUse false (UseAlias ("u64") "U64"))
 (DTypeSig false "opCounter" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "opCounter" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "opCountOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
@@ -80,6 +87,6 @@ opSnap () = !opCounter
 (DTypeSig true "setOpCounting" (TyFun (TyCon "Bool") (TyCon "Unit")))
 (DFunDef false "setOpCounting" ((PVar "b")) (EApp (EApp (EVar "setRef") (EVar "opCountOn")) (EVar "b")))
 (DTypeSig true "opBump" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "opCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EBinOp "+" (EUnOp "!" (EVar "opCounter")) (ELit (LInt 1))))) (arm (PCon "False") () (ELit LUnit))))
+(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "opCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EApp (EVar "U64.toIntTruncating") (EBinOp "+" (EApp (EVar "U64.truncate") (EUnOp "!" (EVar "opCounter"))) (ELit (LInt 1)))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig true "opSnap" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "opSnap" ((PLit LUnit)) (EUnOp "!" (EVar "opCounter")))

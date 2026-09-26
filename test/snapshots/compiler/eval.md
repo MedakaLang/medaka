@@ -1,5 +1,5 @@
 # META
-source_lines=5146
+source_lines=5155
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2457,8 +2457,14 @@ appendVal _ _ =
 
 export
 evalArith : String -> Value e -> Value e -> Value e
-evalArith "+" (VInt a) (VInt b) = checkedInt "+" a b (checkedAdd a b)
-evalArith "-" (VInt a) (VInt b) = checkedInt "-" a b (checkedSub a b)
+evalArith "+" (VInt a) (VInt b)
+  | b > 0 && a > intMaxBound - b || b < 0 && a < intMinBound - b =
+    intOverflow (overflowOperands "+" a b)
+  | otherwise = VInt (a + b)
+evalArith "-" (VInt a) (VInt b)
+  | b < 0 && a > intMaxBound + b || b > 0 && a < intMinBound + b =
+    intOverflow (overflowOperands "-" a b)
+  | otherwise = VInt (a - b)
 evalArith "*" (VInt a) (VInt b) = checkedInt "*" a b (checkedMul a b)
 evalArith "/" (VInt a) (VInt b)
   | b == 0 = runtimePanic "E-DIV-ZERO" "division by zero"
@@ -2518,8 +2524,11 @@ u64Value (hi, lo) = VU64 hi lo
 -- `Int` arithmetic traps: a result outside `intMinBound .. intMaxBound` is the
 -- located E-INT-OVERFLOW runtime error, never a wrapped value.  The check comes
 -- first because the interpreter's own `Int` arithmetic traps too, and that
--- would be the host's unlocated panic.  The message is the native runtime's
--- (mdk_int_overflow): the operation, with a negative operand parenthesized.
+-- would be the host's unlocated panic.  `+` and `-` compare against the bounds
+-- in place (the prelude's `checkedAdd` test, without its `Option`), since they
+-- run on every interpreted loop step; `*` goes through `checkedMul`.  The
+-- message is the native runtime's (mdk_int_overflow): the operation, with a
+-- negative operand parenthesized.
 checkedInt : String -> Int -> Int -> Option Int -> Value e
 checkedInt _ _ _ (Some n) = VInt n
 checkedInt op a b None = intOverflow (overflowOperands op a b)
@@ -5945,8 +5954,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "appendVal" ((PCon "VString" (PVar "a")) (PCon "VString" (PVar "b"))) (EApp (EVar "VString") (EBinOp "++" (EVar "a") (EVar "b"))))
 (DFunDef false "appendVal" (PWild PWild) (EApp (EVar "panic") (ELit (LString "'++' requires Semigroup (List, String, or a type with append)"))))
 (DTypeSig true "evalArith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "evalArith" ((PLit (LString "+")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "checkedInt") (ELit (LString "+"))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "checkedAdd") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArith" ((PLit (LString "-")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "checkedInt") (ELit (LString "-"))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "checkedSub") (EVar "a")) (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString "+")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "-" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "-" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "+"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "+" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "evalArith" ((PLit (LString "-")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "+" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "+" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "-"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "-" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "evalArith" ((PLit (LString "*")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "checkedInt") (ELit (LString "*"))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "checkedMul") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "/")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-DIV-ZERO"))) (ELit (LString "division by zero"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "intMinBound")) (EBinOp "==" (EVar "b") (EUnOp "-" (ELit (LInt 1))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "/"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "/" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-MOD-ZERO"))) (ELit (LString "modulo by zero"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "%" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -7586,8 +7595,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "appendVal" ((PCon "VString" (PVar "a")) (PCon "VString" (PVar "b"))) (EApp (EVar "VString") (EBinOp "++" (EVar "a") (EVar "b"))))
 (DFunDef false "appendVal" (PWild PWild) (EApp (EVar "panic") (ELit (LString "'++' requires Semigroup (List, String, or a type with append)"))))
 (DTypeSig true "evalArith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "evalArith" ((PLit (LString "+")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "checkedInt") (ELit (LString "+"))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "checkedAdd") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArith" ((PLit (LString "-")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "checkedInt") (ELit (LString "-"))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "checkedSub") (EVar "a")) (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString "+")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "-" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "-" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "+"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "+" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "evalArith" ((PLit (LString "-")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "||" (EBinOp "&&" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "a") (EBinOp "+" (EVar "intMaxBound") (EVar "b")))) (EBinOp "&&" (EBinOp ">" (EVar "b") (ELit (LInt 0))) (EBinOp "<" (EVar "a") (EBinOp "+" (EVar "intMinBound") (EVar "b"))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "-"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "-" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "evalArith" ((PLit (LString "*")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "checkedInt") (ELit (LString "*"))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "checkedMul") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "/")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-DIV-ZERO"))) (ELit (LString "division by zero"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "intMinBound")) (EBinOp "==" (EVar "b") (EUnOp "-" (ELit (LInt 1))))) (EApp (EVar "intOverflow") (EApp (EApp (EApp (EVar "overflowOperands") (ELit (LString "/"))) (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "/" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VInt" (PVar "a")) (PCon "VInt" (PVar "b"))) (EIf (EBinOp "==" (EVar "b") (ELit (LInt 0))) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-MOD-ZERO"))) (ELit (LString "modulo by zero"))) (EIf (EVar "otherwise") (EApp (EVar "VInt") (EBinOp "%" (EVar "a") (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
