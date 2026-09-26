@@ -1,5 +1,5 @@
 # META
-source_lines=2228
+source_lines=2226
 stages=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -674,34 +674,32 @@ export impl Hashable (Result e a) requires Hashable e, Hashable a where
 -- low 63 bits.  The derived `Hashable` impls call it too (desugar.mdk's
 -- `hashFold`), so a derived and a hand-written impl of the same shape agree.
 -- Narrowing between steps loses nothing: the low 63 bits of a step depend only
--- on the low 63 bits of its inputs.
+-- on the low 63 bits of its inputs.  The accumulator is carried as that `Int`
+-- rather than a `U64`, which would be a heap cell per step; the step itself is
+-- one `U64` expression, computed unboxed.
 derivedHashStep : Int -> Int -> Int
 derivedHashStep acc h = u64TruncateToInt (u64Truncate acc * 33 + u64Truncate h)
 
--- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x, in `U64`.
-hashListItems : Hashable a => U64 -> List a -> U64
+-- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x.
+hashListItems : Hashable a => Int -> List a -> Int
 hashListItems acc [] = acc
-hashListItems acc (x :: xs) = hashListItems (acc * 33 + u64Truncate (hash x)) xs
+hashListItems acc (x :: xs) = hashListItems (derivedHashStep acc (hash x)) xs
 
 export impl Hashable (List a) requires Hashable a where
-  hash xs = u64TruncateToInt (hashListItems 0 xs)
+  hash xs = hashListItems 0 xs
 
 -- The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
 -- and the list of the same elements hash equally.  Agrees with `Eq (Array a)`
 -- by construction: equal arrays have equal elements in equal order.
 export impl Hashable (Array a) requires Hashable a where
-  hash arr = u64TruncateToInt (hashArrGo 0 arr 0 (arrayLength arr))
+  hash arr = hashArrGo 0 arr 0 (arrayLength arr)
 
-hashArrGo : Hashable a => U64 -> Array a -> Int -> Int -> U64
+hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
 hashArrGo acc arr i n =
   if i >= n then
     acc
   else
-    hashArrGo
-      (acc * 33 + u64Truncate (hash (arrayGetUnsafe i arr)))
-      arr
-      (i + 1)
-      n
+    hashArrGo (derivedHashStep acc (hash (arrayGetUnsafe i arr))) arr (i + 1) n
 
 export impl Hashable (a, b) requires Hashable a, Hashable b where
   hash (a, b) = derivedHashStep (hash a) (hash b)
@@ -2306,8 +2304,8 @@ derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
 derivedArgNeedsParens : String -> Bool
 derivedShowWrap : String -> String
 derivedHashStep : Int -> Int -> Int
-hashListItems : Hashable a => U64 -> List a -> U64
-hashArrGo : Hashable a => U64 -> Array a -> Int -> Int -> U64
+hashListItems : Hashable a => Int -> List a -> Int
+hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
 println : Display a => a -> <IO> Unit
 print : Display a => a -> <IO> Unit
 isEven : Int -> Bool

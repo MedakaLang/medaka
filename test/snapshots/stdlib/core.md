@@ -1,5 +1,5 @@
 # META
-source_lines=2228
+source_lines=2226
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -674,34 +674,32 @@ export impl Hashable (Result e a) requires Hashable e, Hashable a where
 -- low 63 bits.  The derived `Hashable` impls call it too (desugar.mdk's
 -- `hashFold`), so a derived and a hand-written impl of the same shape agree.
 -- Narrowing between steps loses nothing: the low 63 bits of a step depend only
--- on the low 63 bits of its inputs.
+-- on the low 63 bits of its inputs.  The accumulator is carried as that `Int`
+-- rather than a `U64`, which would be a heap cell per step; the step itself is
+-- one `U64` expression, computed unboxed.
 derivedHashStep : Int -> Int -> Int
 derivedHashStep acc h = u64TruncateToInt (u64Truncate acc * 33 + u64Truncate h)
 
--- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x, in `U64`.
-hashListItems : Hashable a => U64 -> List a -> U64
+-- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x.
+hashListItems : Hashable a => Int -> List a -> Int
 hashListItems acc [] = acc
-hashListItems acc (x :: xs) = hashListItems (acc * 33 + u64Truncate (hash x)) xs
+hashListItems acc (x :: xs) = hashListItems (derivedHashStep acc (hash x)) xs
 
 export impl Hashable (List a) requires Hashable a where
-  hash xs = u64TruncateToInt (hashListItems 0 xs)
+  hash xs = hashListItems 0 xs
 
 -- The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
 -- and the list of the same elements hash equally.  Agrees with `Eq (Array a)`
 -- by construction: equal arrays have equal elements in equal order.
 export impl Hashable (Array a) requires Hashable a where
-  hash arr = u64TruncateToInt (hashArrGo 0 arr 0 (arrayLength arr))
+  hash arr = hashArrGo 0 arr 0 (arrayLength arr)
 
-hashArrGo : Hashable a => U64 -> Array a -> Int -> Int -> U64
+hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
 hashArrGo acc arr i n =
   if i >= n then
     acc
   else
-    hashArrGo
-      (acc * 33 + u64Truncate (hash (arrayGetUnsafe i arr)))
-      arr
-      (i + 1)
-      n
+    hashArrGo (derivedHashStep acc (hash (arrayGetUnsafe i arr))) arr (i + 1) n
 
 export impl Hashable (a, b) requires Hashable a, Hashable b where
   hash (a, b) = derivedHashStep (hash a) (hash b)
@@ -2353,13 +2351,13 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EVar "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (ELit (LInt 1))) (EApp (EVar "hash") (EVar "e"))))))
 (DTypeSig false "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "derivedHashStep" ((PVar "acc") (PVar "h")) (EApp (EVar "u64TruncateToInt") (EBinOp "+" (EBinOp "*" (EApp (EVar "u64Truncate") (EVar "acc")) (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EVar "h")))))
-(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "U64")))))
+(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))))
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EVar "hash") (EVar "x"))))) (EVar "xs")))
-(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EVar "hashListItems") (ELit (LInt 0))) (EVar "xs"))))))
-(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))))))
-(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "U64")))))))
-(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EVar "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
+(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "hashListItems") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EVar "hash") (EVar "x")))) (EVar "xs")))
+(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EApp (EVar "hashListItems") (ELit (LInt 0))) (EVar "xs")))))
+(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EApp (EApp (EApp (EVar "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
+(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EVar "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b")))) (EApp (EVar "hash") (EVar "c"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EVar "hash") (EVar "a"))) (EApp (EVar "hash") (EVar "b")))) (EApp (EVar "hash") (EVar "c")))) (EApp (EVar "hash") (EVar "d"))))))
@@ -2761,13 +2759,13 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
 (DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EMethodRef "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (ELit (LInt 1))) (EApp (EMethodRef "hash") (EVar "e"))))))
 (DTypeSig false "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "derivedHashStep" ((PVar "acc") (PVar "h")) (EApp (EVar "u64TruncateToInt") (EBinOp "+" (EBinOp "*" (EApp (EVar "u64Truncate") (EVar "acc")) (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EVar "h")))))
-(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "U64")))))
+(DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))))
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
-(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EDictApp "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EMethodRef "hash") (EVar "x"))))) (EVar "xs")))
-(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EDictApp "hashListItems") (ELit (LInt 0))) (EVar "xs"))))))
-(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EVar "u64TruncateToInt") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))))))
-(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "U64") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "U64")))))))
-(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EApp (EMethodRef "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
+(DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EDictApp "hashListItems") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EMethodRef "hash") (EVar "x")))) (EVar "xs")))
+(DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EApp (EDictApp "hashListItems") (ELit (LInt 0))) (EVar "xs")))))
+(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
+(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (EApp (EApp (EVar "derivedHashStep") (EVar "acc")) (EApp (EMethodRef "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b")))) (EApp (EMethodRef "hash") (EVar "c"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EApp (EVar "derivedHashStep") (EApp (EMethodRef "hash") (EVar "a"))) (EApp (EMethodRef "hash") (EVar "b")))) (EApp (EMethodRef "hash") (EVar "c")))) (EApp (EMethodRef "hash") (EVar "d"))))))
