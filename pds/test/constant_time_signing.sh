@@ -69,6 +69,12 @@ write_source_manifest() {
 # `U64`). The new stdlib row is the file as N3 left it, unchanged here; the
 # emitted-closure and control grades below were re-derived for the move and
 # say what entered.
+# Re-blessed for the Int overflow trap (#3377). stdlib/u64.mdk lost its Eq,
+# Ord and Num impls to the prelude, none of which the closure calls by name
+# (U64 operators are builtin). pds/lib/secp256k1.mdk combines its secret
+# condition bits through bitAnd/bitOr/bitXor instead of Int `+ - *`, and
+# blends the secret RFC 6979 candidate bytes on U64 (selectBytesGo), so no
+# overflow branch tests a secret; the grades below say what moved.
 expected_internal_source_manifest() {
   cat <<'EOF'
 3367372070 26913  pds/lib/field.mdk
@@ -76,9 +82,9 @@ expected_internal_source_manifest() {
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
-2984053246 11457  stdlib/u64.mdk
+2001432321 10382  stdlib/u64.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
-1691956410 24617  pds/lib/secp256k1.mdk
+2219660738 25419  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
 EOF
 }
@@ -90,9 +96,9 @@ expected_public_source_manifest() {
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
-2984053246 11457  stdlib/u64.mdk
+2001432321 10382  stdlib/u64.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
-1691956410 24617  pds/lib/secp256k1.mdk
+2219660738 25419  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF
@@ -173,7 +179,7 @@ internal_source_routes_ok() {
   grep -F -q 'let candidate1Bytes = hmacSha256FixedKey rejectionKey rejectionValue' "$secp" || return 1
   grep -F -q 'let signed0 = signCandidate secret digest candidate0' "$secp" || return 1
   grep -F -q 'let signed1 = signCandidate secret digest candidate1' "$secp" || return 1
-  grep -F -q 'let safeNonce = scSelect (1 - nonceValidBit) nonce scOne' "$secp" || return 1
+  grep -F -q 'let safeNonce = scSelect (bitXor nonceValidBit 1) nonce scOne' "$secp" || return 1
   grep -F -q 'let lowS = scSelect (scHighBit rawS) rawS (scNegateCt rawS)' "$secp" || return 1
   tr -s '[:space:]' ' ' < "$secp" | grep -F -q 'if scIsZero r || scIsZero s || scIsHigh s then False' || return 1
   grep -F -q 'let out = arrayMake 64 0' "$secp" || return 1
@@ -329,17 +335,29 @@ collect_full_closure() {
   cp "$WORK/closure.current" "$WORK/full-closure.lst"
 }
 
+# Columns: symbol, control branches, value comparisons, indexes, writes,
+# makes, copies, calls, trap branches. A trap branch is one the emitter adds to
+# an Int operation that can panic: the overflow check after `+ - *` (#3377,
+# `label %intovf`) or the zero-divisor test before `/` and `%`
+# (`label %divzero`). They are counted apart so that the control column still
+# means "branches the source wrote", and a helper that gains secret control
+# cannot hide inside a count that grew for the trap. Whether a trap branch's
+# operand is public is checked where it matters: the reductions gate audits
+# every limb helper's overflow operands, the public-key gate the ladder's and
+# nonzero fold's, and the memcheck arm below reports any key-tainted one.
 write_control_manifest() {
   while IFS= read -r symbol; do
     extract_ir_function "$symbol" "$IR" "$WORK/function.ll" || exit 1
-    branches=$(grep -c 'br i1' "$WORK/function.ll" || true)
+    all_branches=$(grep -c 'br i1' "$WORK/function.ll" || true)
+    traps=$(grep -E -c 'br i1 .*label %(intovf|divzero)[0-9]+,' "$WORK/function.ll" || true)
+    branches=$((all_branches - traps))
     comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/function.ll" || true)
     indices=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/function.ll" || true)
     sets=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$WORK/function.ll" || true)
     makes=$(grep -F -c 'call i64 @mdk_array_make(' "$WORK/function.ll" || true)
     copies=$(grep -F -c 'call i64 @mdk_array_copy(' "$WORK/function.ll" || true)
     total=$(grep -E -c 'call i64 @' "$WORK/function.ll" || true)
-    printf '%s %s %s %s %s %s %s %s\n' "$symbol" "$branches" "$comparisons" "$indices" "$sets" "$makes" "$copies" "$total"
+    printf '%s %s %s %s %s %s %s %s %s\n' "$symbol" "$branches" "$comparisons" "$indices" "$sets" "$makes" "$copies" "$total" "$traps"
   done < "$WORK/full-closure.lst"
 }
 
@@ -418,8 +436,8 @@ apply_mutation M08 "$WORK/pds/lib/secp256k1.mdk" \
 expect_route_red 'M08 candidate validity changed to an early skip of complete candidate 1'
 
 apply_mutation M08-zero "$WORK/pds/lib/secp256k1.mdk" \
-  'let safeNonce = scSelect (1 - nonceValidBit) nonce scOne' \
-  's/let safeNonce = scSelect \(1 - nonceValidBit\) nonce scOne/let safeNonce = if nonceValidBit == 1 then nonce else scOne/'
+  'let safeNonce = scSelect (bitXor nonceValidBit 1) nonce scOne' \
+  's/let safeNonce = scSelect \(bitXor nonceValidBit 1\) nonce scOne/let safeNonce = if nonceValidBit == 1 then nonce else scOne/'
 expect_route_red 'M08-zero invalid nonce placeholder changed to a secret branch'
 
 apply_mutation M09 "$WORK/pds/lib/secp256k1.mdk" \
@@ -649,7 +667,19 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # or the public byte-codec counter. U64 arithmetic allocates its result cell
 # inline (`call ptr @mdk_alloc_atomic`, outside these call columns); the
 # count per call is fixed by the straight-line bodies these rows pin.
-[ "$control_grade" = '4184582546 7176' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived for the Int overflow trap (#3377), with the trap-branch column
+# added (see write_control_manifest). The closure is unchanged (169). Row by
+# row against the grade above: no row's control-branch column grew. Four fell,
+# because zero-divisor tests they already had are now counted as traps:
+# processTail 1 -> 0, sha256AssumeByteDomainFrom 1 -> 0, scalarLadder 3 -> 1,
+# u32 rotateAmount 2 -> 0. 61 rows carry 132 trap branches, all on counters,
+# lengths, indexes and shift/rotate amounts; the limb helpers' are proven
+# public by constant_time_reductions.sh and the ladder's by
+# constant_time_public_key.sh. The secret condition bits in signCandidate
+# (16 -> 23 calls), selectSigningCandidates (5 -> 8) and pointAddComplete
+# (39 -> 42) now combine through the Int bit helpers instead of inline `* -`
+# and carry zero trap branches. No other column moved.
+[ "$control_grade" = '2255993549 7514' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -805,6 +835,13 @@ check_bit_witness() {
   pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
 }
 
+# Since #3377 the Int shift helpers branch on the AMOUNT (a negative amount
+# panics; 63 or more saturates), never on the shifted value. Every witness
+# amount here is a literal or `bitAnd b 7`, which the optimizer proves lies in
+# 0..7, so both amount tests fold away and the linked body must still be
+# straight-line. A surviving conditional jump would therefore be a branch on
+# the value, which is what this witness exists to catch. The limb and ladder
+# shift amounts are public (docs/design/ATPROTO-PDS-CONSTANT-TIME.md §5.1).
 check_bit_witness 'bitXor (bitAnd a b) (bitOr (shiftRight a (bitAnd b 7)) (shiftLeft (bitNot b) 5))' \
   mdk_bit_and mdk_bit_or mdk_bit_xor mdk_bit_not mdk_shift_left mdk_shift_right
 
@@ -897,7 +934,10 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # verification) among the entering u64 helpers: sixteen thunks leave and six
 # u64 helpers enter (199 -> 189). No existing row moved outside the call
 # column.
-if [ "$public_closure_grade" != '4166836887 5349' ] || [ "$public_control_grade" != '1436203063 8008' ]; then
+# Re-derived for the Int overflow trap (#3377): the same row changes as the
+# internal grade above, plus pointIsCanonicalInfinity (3 -> 5 calls, 0 trap
+# branches), whose bit product is now two bitAnd calls. Closure unchanged.
+if [ "$public_closure_grade" != '4166836887 5349' ] || [ "$public_control_grade" != '2364967549 8386' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
@@ -970,6 +1010,7 @@ fi
 write_taint_probe() {
   cat > "$TAINT_PROBE" <<'EOF'
 import hex.{encode}
+import u64 as U64
 import lib.scalar.{scSecretCandidate}
 import lib.secp256k1.{
   ecdsaSignDigest,
@@ -1012,12 +1053,16 @@ probeKey k =
     else
       println "key \{k} exhausted"
 
+-- The sum runs on U64, as secret arithmetic in the signing path does: an Int
+-- `+` would add an overflow branch on the two tainted bytes (#3377), which
+-- memcheck would rightly report here in the probe itself.
 tagProbe : Unit -> <IO, FFI> Unit
 tagProbe () =
   let _ = ctTaintLoad 1
   let heapBytes = arrayMakeWith 32 ctSecretByte
+  let sum = U64.truncate heapBytes[30] + U64.truncate heapBytes[31]
   println
-    "tag \{ctVbits heapBytes[31]} \{ctVbits heapBytes[0]} \{ctVbits (heapBytes[30] + heapBytes[31])}"
+    "tag \{ctVbits heapBytes[31]} \{ctVbits heapBytes[0]} \{ctVbits (U64.toIntTruncating sum)}"
 
 main : <IO, FFI> Unit
 main =
@@ -1191,6 +1236,33 @@ while IFS= read -r pc; do
   printf 'receipt: M-carry-guard reported at 0x%s:%s\n' "$offset" "$(cut -f3- "$WORK/taint-mutant.pc.insn")"
 done < "$WORK/taint-mutant.pcs"
 pass "M-carry-guard checked carry pass is caught by memcheck at an -O2 conditional jump in carryGo ($(wc -l < "$WORK/taint-mutant.tainted") reports)"
+
+# M-int-arith: since Int traps on overflow (#3377), an Int `*` or `-` on a
+# secret condition bit is an overflow branch on that bit. Restoring the
+# arithmetic form of the nonce validity bit must be reported, at a
+# conditional jump, which proves this arm sees trap branches and not only
+# source-written ones.
+apply_mutation M-int-arith "$WORK/pds/lib/secp256k1.mdk" \
+  'let nonceValidBit = bitAnd nonceRangeBit (bitXor (scZeroBit nonce) 1)' \
+  's/let nonceValidBit = bitAnd nonceRangeBit \(bitXor \(scZeroBit nonce\) 1\)/let nonceValidBit = nonceRangeBit * (1 - scZeroBit nonce)/'
+build_taint_probe "$WORK/taint-arith"
+cp "$ROOT/pds/lib/secp256k1.mdk" "$WORK/pds/lib/secp256k1.mdk"
+cmp "$ROOT/pds/lib/secp256k1.mdk" "$WORK/pds/lib/secp256k1.mdk" >/dev/null || fail 'M-int-arith restores secp256k1.mdk byte-exactly'
+run_memcheck "$WORK/taint-arith"
+taint_run_is_live "$WORK/taint-arith" || { cat "$WORK/taint-arith.out" >&2; fail 'M-int-arith probe carries live taint with no collection'; }
+memcheck_uninit_reports "$WORK/taint-arith.memcheck" > "$WORK/taint-arith.reports"
+awk -F '\t' '$3 == "client"' "$WORK/taint-arith.reports" > "$WORK/taint-arith.tainted"
+[ -s "$WORK/taint-arith.tainted" ] || fail 'M-int-arith overflow branch on a secret bit unexpectedly unreported by memcheck'
+arith_load_runtime=$(awk '$1 == "load" { print $2 }' "$WORK/taint-arith.out")
+arith_load_link=$(nm "$WORK/taint-arith" | awk '{ name = $3; sub(/^_/, "", name); if (name == "ctTaintLoad") print $1 }')
+arith_bias=$((arith_load_runtime - 0x$arith_load_link))
+arith_pc=$(cut -f1 "$WORK/taint-arith.tainted" | sed -n '1p')
+arith_offset=$(printf '%x' $((arith_pc - arith_bias)))
+objdump -d --start-address="0x$arith_offset" --stop-address=$((0x$arith_offset + 16)) "$WORK/taint-arith" > "$WORK/taint-arith.pc.asm"
+grep -E "^ *$arith_offset:" "$WORK/taint-arith.pc.asm" > "$WORK/taint-arith.pc.insn" || fail "M-int-arith PC $arith_pc is an instruction boundary"
+is_conditional_jump < "$WORK/taint-arith.pc.insn" || fail "M-int-arith PC $arith_pc is a conditional jump ($(cat "$WORK/taint-arith.pc.insn"))"
+printf 'receipt: M-int-arith reported at 0x%s:%s\n' "$arith_offset" "$(cut -f3- "$WORK/taint-arith.pc.insn")"
+pass "M-int-arith secret-bit Int arithmetic is caught by memcheck at an -O2 conditional jump ($(wc -l < "$WORK/taint-arith.tainted") reports)"
 
 for rel in pds/lib/field.mdk pds/lib/scalar.mdk pds/lib/hmac_sha256.mdk pds/lib/secp256k1.mdk; do
   cmp "$ROOT/$rel" "$WORK/$rel" >/dev/null || fail "memcheck taint probe builds against the unmutated $rel"

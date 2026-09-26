@@ -25,7 +25,11 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 source_closure_ok() {
   tree=$1
   [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '1576054259 4921' ] || return 1
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
+  # Re-audited when Int began trapping on overflow (#3377): secp256k1.mdk's
+  # secret condition bits combine through bitAnd/bitOr/bitXor instead of
+  # `+ - *`, and the RFC 6979 byte blend runs on U64, so no Int overflow
+  # check in it tests a secret operand.
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '2219660738 25419' ] || return 1
   # Re-audited when both modules' limbs moved from Int to U64 (#3427): every
   # limb operation is a builtin U64 op or a u64 bit helper, the secret byte
   # scan and the *Bit predicates cross Int/U64 only through the masking
@@ -93,6 +97,41 @@ require_emitted_symbol() {
 require_native_symbol() {
   symbol=$1
   nm "$BIN" | awk -v symbol="$symbol" '$3 == symbol || $3 == "_" symbol { found = 1 } END { exit !found }' || fail "linked native closure contains $symbol"
+}
+
+# Every conditional branch in helper $1 tests a value computed only from
+# literals and the helper's public counter arguments ($2, `+`-separated
+# indexes). Since Int overflow traps (#3377), each Int `+ - *` and each `/` or
+# `%` adds a branch (the overflow flag, the zero divisor); this proves every
+# such branch here sits on counter arithmetic, never on a limb or a key byte.
+branches_public() {
+  awk -v pub="$2" '
+    BEGIN { n = split(pub, p, "+"); for (k = 1; k <= n; k++) public["%arg" p[k]] = 1 }
+    /^  %[A-Za-z0-9_.]+ = / {
+      dst = $1
+      rest = $0
+      sub(/^  %[A-Za-z0-9_.]+ = /, "", rest)
+      op = rest
+      sub(/ .*/, "", op)
+      ok = (op ~ /^(add|sub|mul|sdiv|srem|ashr|lshr|shl|or|and|xor|icmp|zext|sext|trunc|extractvalue|select)$/) ||
+        (rest ~ /@llvm\.s(add|sub|mul)\.with\.overflow/)
+      body = rest
+      sub(/^[^%]*/, "", body)
+      all = 1
+      while (match(body, /%[A-Za-z0-9_.]+/)) {
+        if (!(substr(body, RSTART, RLENGTH) in public)) all = 0
+        body = substr(body, RSTART + RLENGTH)
+      }
+      if (ok && all) public[dst] = 1
+    }
+    /^  br i1 / {
+      c = $3
+      sub(/,$/, "", c)
+      branches++
+      if (!(c in public)) bad++
+    }
+    END { exit !(branches > 0 && bad == 0) }
+  ' "$1"
 }
 
 check_ir_closure() {
@@ -220,8 +259,11 @@ check_ir_closure
 # is the optimizer's business.  Pin that shape in the emitted IR, where the
 # helper always exists.
 extract_ir_function secretNonzeroBorrow "$IR" "$WORK/secretNonzeroBorrow.ll"
-[ "$(grep -c 'br i1' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold branches exactly once'
+# Two branches since Int traps (#3377): the loop test and the overflow check
+# of `i + 1`. branches_public proves both test only the limb index.
+[ "$(grep -c 'br i1' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 2 ] || fail 'secret nonzero fold branches exactly twice'
 grep -q '^  %t0 = icmp sge i64 %arg1, ' "$WORK/secretNonzeroBorrow.ll" || fail 'secret nonzero fold branches on its public limb index'
+branches_public "$WORK/secretNonzeroBorrow.ll" 1 || fail 'every secret nonzero fold branch tests only its public limb index'
 [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 0 ] || fail 'secret nonzero fold makes no value comparisons'
 [ "$(grep -F -c 'call i64 @mdk_lib_scalar__secretNonzeroBorrow(' "$WORK/secretNonzeroBorrow.ll" || true)" -eq 1 ] || fail 'secret nonzero fold recurses exactly once per limb'
 pass 'emitted secret nonzero fold branches only on its public limb index'
@@ -270,7 +312,18 @@ extract_ir_function secretAffine "$IR" "$WORK/secretAffine.ll"
 pass 'emitted secret affine conversion is one unconditional inversion over a constant-tag branch'
 
 extract_ir_function scalarLadder "$IR" "$WORK/scalarLadder.ll"
-[ "$(grep -c 'br i1' "$WORK/scalarLadder.ll" || true)" -eq 3 ] || fail 'scalar ladder has exactly its fixed loop/control topology'
+# Six branches since Int traps (#3377): the round test, the two zero-divisor
+# tests of `i / 8` and `i % 8` it already had, and three overflow checks
+# (retagging `i / 8`, `7 - i % 8`, `i + 1`). branches_public proves all six
+# test only the round counter; the key byte feeds only shiftRight (amount
+# `7 - i % 8`, public) and bitAnd.
+[ "$(grep -c 'br i1' "$WORK/scalarLadder.ll" || true)" -eq 6 ] || fail 'scalar ladder has exactly its fixed loop/control topology'
+branches_public "$WORK/scalarLadder.ll" 3 || fail 'every scalar ladder branch tests only its public round counter'
+# Liveness: with the round counter withheld from the public set, the same
+# branches must read as non-public, or the audit could not see a secret one.
+if branches_public "$WORK/scalarLadder.ll" 0; then
+  fail 'branch-operand audit reds when the round counter is not declared public'
+fi
 [ "$(grep -F -c '__pointAddComplete' "$WORK/scalarLadder.ll" || true)" -eq 1 ] || fail 'scalar ladder computes one complete addition per round'
 [ "$(grep -F -c '__pointDoubleComplete' "$WORK/scalarLadder.ll" || true)" -eq 2 ] || fail 'scalar ladder computes two complete doublings per round'
 [ "$(grep -F -c '__pointSelect' "$WORK/scalarLadder.ll" || true)" -eq 2 ] || fail 'scalar ladder makes two arithmetic selections per round'
@@ -372,6 +425,13 @@ check_bit_witness() {
   pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
 }
 
+# Since #3377 the Int shift helpers branch on the AMOUNT (a negative amount
+# panics; 63 or more saturates), never on the shifted value. Every witness
+# amount here is a literal or `bitAnd b 7`, which the optimizer proves lies in
+# 0..7, so both amount tests fold away and the linked body must still be
+# straight-line. A surviving conditional jump would therefore be a branch on
+# the value, which is what this witness exists to catch. The limb and ladder
+# shift amounts are public (docs/design/ATPROTO-PDS-CONSTANT-TIME.md §5.1).
 check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
   mdk_bit_and mdk_bit_xor mdk_shift_right
 

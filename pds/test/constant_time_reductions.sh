@@ -85,10 +85,13 @@ check_emitted_helpers() {
     expected_copies=${rest%%:*}
     rest=${rest#*:}
     expected_total=${rest%%:*}
-    expected_allocs=${rest##*:}
+    rest=${rest#*:}
+    expected_allocs=${rest%%:*}
+    public_args=${rest##*:}
     body="$dir/$name.ll"
     extract_function "$name" "$ir" "$body"
     helper_ir_ok "$body" "$expected" "$expected_comparisons" "$expected_indices" "$expected_sets" "$expected_makes" "$expected_copies" "$expected_total" "$expected_allocs" || fail "$name native IR operation/control shape"
+    ovf_operands_public "$body" "$public_args" || fail "$name overflow checks test only its public counter arguments"
     ir_call_shape_ok "$name" "$body" || fail "$name native IR exact callee graph"
   done
 }
@@ -133,6 +136,42 @@ ir_call_shape_ok() {
   esac
   actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
   [ "$actual" = "$expected" ]
+}
+
+# Since Int overflow traps (#3377), every Int `+ - *` lowers to an
+# llvm.s{add,sub,mul}.with.overflow call and a branch to @mdk_int_overflow. In
+# these helpers the only Int arithmetic is on the public limb counters, so each
+# such branch must test a value built only from literals and the helper's
+# counter arguments ($2, `+`-separated argument indexes). A register is public
+# when it is one of those arguments or is computed, by plain arithmetic or an
+# overflow intrinsic's extractvalue, from public registers and literals; any
+# other call result, load or cell payload is not. Every overflow intrinsic's
+# operands must be public, and the branch counts pinned in helper_ir_ok are
+# then the loop branch plus one overflow branch per counter operation.
+ovf_operands_public() {
+  awk -v pub="$2" '
+    BEGIN { n = split(pub, p, "+"); for (k = 1; k <= n; k++) public["%arg" p[k]] = 1 }
+    /^  %[A-Za-z0-9_.]+ = / {
+      dst = $1
+      rest = $0
+      sub(/^  %[A-Za-z0-9_.]+ = /, "", rest)
+      op = rest
+      sub(/ .*/, "", op)
+      ovf = (rest ~ /@llvm\.s(add|sub|mul)\.with\.overflow/)
+      ok = (op ~ /^(add|sub|mul|ashr|shl|or|and|xor|extractvalue)$/) || ovf
+      body = rest
+      sub(/^[^%]*/, "", body)
+      all = 1
+      while (match(body, /%[A-Za-z0-9_.]+/)) {
+        r = substr(body, RSTART, RLENGTH)
+        if (!(r in public)) all = 0
+        body = substr(body, RSTART + RLENGTH)
+      }
+      if (ovf) { seen++; if (!all) bad++ }
+      if (ok && all) public[dst] = 1
+    }
+    END { exit !(bad == 0) }
+  ' "$1"
 }
 
 # The limb helpers call into stdlib/u64.mdk (#3427), outside the local closure
@@ -1275,18 +1314,24 @@ run_probe_red "$WORK/scalar_three_folds.mdk" 'scalar 4-to-3 mutation is rejected
 cp "$FIELD" "$WORK/field_emit.mdk"
 append_field_probe "$WORK/field_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
-# Spec: name:branches:comparisons:indices:writes:makes:copies:calls:allocs.
-# The #3427 re-derivation moved only the call and allocation columns; the
-# call-column changes are the callee swaps listed at ir_call_shape_ok.
+# Spec: name:branches:comparisons:indices:writes:makes:copies:calls:allocs:
+# public-counter-args. The #3427 re-derivation moved only the call and
+# allocation columns; the call-column changes are the callee swaps listed at
+# ir_call_shape_ok. The Int-trap re-derivation (#3377) moved only the branch
+# column, and only in the recursive helpers: each gained one overflow branch
+# per `+`/`-` on its limb counter (carryPassGo 1 -> 4 for its three `i + 1`;
+# the others 1 -> 2 for one `i + 1`), and ovf_operands_public proves every one
+# of them tests only the counter arguments named last. The straight-line
+# schedule helpers have no Int arithmetic and stayed at 0.
 check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
-  carryPass:0:0:0:0:0:0:1:0 carryPassGo:1:0:3:3:0:0:11:1 carryFoldRound:0:0:2:2:0:0:5:4 \
-  reduceCarry:0:0:0:0:0:0:3:0 subPCandidate:1:0:4:2:0:0:11:10 \
-  selectPCandidate:1:0:2:1:0:0:4:3 subPSelect:0:0:0:0:1:0:3:1 \
-  canonicalize:0:0:0:0:0:1:3:0 \
-  feZeroBit:0:0:0:0:0:0:3:0 feZeroBorrow:1:0:2:0:0:0:5:8 \
-  feEqualBit:0:0:0:0:0:0:4:0 feEqualBorrow:1:0:4:0:0:0:9:8 \
-  feSelect:0:0:0:0:1:0:5:0 feSelectGo:1:0:3:1:0:0:5:3 \
-  feNegateCt:0:0:0:0:1:0:5:0 feNegateCtGo:1:0:4:2:0:0:10:9
+  carryPass:0:0:0:0:0:0:1:0:- carryPassGo:4:0:3:3:0:0:11:1:1 carryFoldRound:0:0:2:2:0:0:5:4:- \
+  reduceCarry:0:0:0:0:0:0:3:0:- subPCandidate:2:0:4:2:0:0:11:10:2 \
+  selectPCandidate:2:0:2:1:0:0:4:3:3 subPSelect:0:0:0:0:1:0:3:1:- \
+  canonicalize:0:0:0:0:0:1:3:0:- \
+  feZeroBit:0:0:0:0:0:0:3:0:- feZeroBorrow:2:0:2:0:0:0:5:8:1 \
+  feEqualBit:0:0:0:0:0:0:4:0:- feEqualBorrow:2:0:4:0:0:0:9:8:2 \
+  feSelect:0:0:0:0:1:0:5:0:- feSelectGo:2:0:3:1:0:0:5:3:4 \
+  feNegateCt:0:0:0:0:1:0:5:0:- feNegateCtGo:2:0:4:2:0:0:10:9:2
 extract_function rawFe "$WORK/field_emit.ll" "$WORK/field-ir/rawFe.ll"
 raw_accessor_ir_ok "$WORK/field-ir/rawFe.ll" || fail 'field opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/field-ir" field_emit || fail 'field emitted local call graph is closed'
@@ -1295,10 +1340,10 @@ u64_callees_ok "$WORK/field_emit.ll" "$WORK/field-ir" || fail 'field u64 callees
 pass 'field u64 callees are allowlisted, branch only on a shift amount, and every shift amount is a literal'
 extract_function selectPCandidate "$WORK/field_emit.ll" "$WORK/select-current.ll"
 current_ir_branches=$(grep -c 'br i1' "$WORK/select-current.ll" || true)
-[ "$current_ir_branches" -eq 1 ] || fail "current native IR has one public-counter branch (got $current_ir_branches)"
+[ "$current_ir_branches" -eq 2 ] || fail "current native IR has its loop branch and one counter overflow branch (got $current_ir_branches)"
 extract_function subPCandidate "$WORK/field_emit.ll" "$WORK/borrow-current.ll"
 field_borrow_ir_branches=$(grep -c 'br i1' "$WORK/borrow-current.ll" || true)
-[ "$field_borrow_ir_branches" -eq 1 ] || fail "current field borrow IR has one public-counter branch (got $field_borrow_ir_branches)"
+[ "$field_borrow_ir_branches" -eq 2 ] || fail "current field borrow IR has its loop branch and one counter overflow branch (got $field_borrow_ir_branches)"
 if emitted_comparison_present "$WORK/select-current.ll" || emitted_comparison_present "$WORK/borrow-current.ll"; then
   fail 'current field reduction IR contains secret equality control'
 fi
@@ -1318,7 +1363,7 @@ append_field_probe "$WORK/field_helper_select_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_helper_select_emit.mdk" -o "$WORK/field_helper_select_emit" --keep-ir > "$WORK/build-field-helper-select-mutant.log" 2>&1
 extract_function feSelectGo "$WORK/field_helper_select_emit.ll" "$WORK/field-helper-select-mutant.ll"
 emitted_comparison_present "$WORK/field-helper-select-mutant.ll" || fail 'field helper conditional-select mutation reaches native IR'
-[ "$(grep -c 'br i1' "$WORK/field-helper-select-mutant.ll" || true)" -gt 1 ] || fail 'field helper conditional-select mutation adds secret IR control'
+[ "$(grep -c 'br i1' "$WORK/field-helper-select-mutant.ll" || true)" -gt 2 ] || fail 'field helper conditional-select mutation adds secret IR control'
 pass 'field helper conditional-select mutation is rejected by native IR control'
 
 cp "$WORK/field_borrow_source_mutant.mdk" "$WORK/field_borrow_branch_mutant.mdk"
@@ -1347,17 +1392,20 @@ pass 'conditional-select mutation is rejected by native IR control'
 cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
+# Int-trap re-derivation (#3377), as for the field: takeHigh 1 -> 3 (`i - 16`,
+# `i + 1`), foldAccumRow 1 -> 3 (`i + j`, `j + 1`), carryGo 2 -> 3, the other
+# recursive helpers 1 -> 2; every added branch is a counter overflow check.
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryAll:0:0:0:0:0:0:1:0 carryGo:2:0:1:1:0:0:6:1 carryAllUnchecked:0:0:0:0:0:0:1:0 carryGoUnchecked:1:0:1:1:0:0:6:1 \
-  takeHigh:1:0:1:2:0:0:5:0 foldAccum:1:0:0:0:0:0:2:0 \
-  foldAccumRow:1:0:3:1:0:0:5:2 foldOnce:0:0:0:0:1:0:3:0 reduceFixed:0:0:0:0:0:0:9:0 \
-  subNCandidate:1:0:2:1:0:0:6:5 selectNCandidate:1:0:2:1:0:0:4:3 \
-  subNSelect:0:0:0:0:1:0:3:1 reduceWide:0:0:0:0:1:0:4:0 copyLow:1:0:1:1:0:0:3:0 \
-  scZeroBit:0:0:0:0:0:0:3:0 scZeroBorrow:1:0:1:0:0:0:3:4 \
-  scEqualBit:0:0:0:0:0:0:4:0 scEqualBorrow:1:0:2:0:0:0:5:4 \
-  scSelect:0:0:0:0:1:0:5:0 scSelectGo:1:0:3:1:0:0:5:3 \
-  scHighBit:0:0:0:0:0:0:3:1 scHighBorrow:1:0:2:0:0:0:4:5 \
-  scNegateCt:0:0:0:0:1:0:5:0 scNegateCtGo:1:0:2:1:0:0:6:5
+  carryAll:0:0:0:0:0:0:1:0:- carryGo:3:0:1:1:0:0:6:1:1 carryAllUnchecked:0:0:0:0:0:0:1:0:- carryGoUnchecked:2:0:1:1:0:0:6:1:1 \
+  takeHigh:3:0:1:2:0:0:5:0:2 foldAccum:2:0:0:0:0:0:2:0:2 \
+  foldAccumRow:3:0:3:1:0:0:5:2:2+3 foldOnce:0:0:0:0:1:0:3:0:- reduceFixed:0:0:0:0:0:0:9:0:- \
+  subNCandidate:2:0:2:1:0:0:6:5:2 selectNCandidate:2:0:2:1:0:0:4:3:3 \
+  subNSelect:0:0:0:0:1:0:3:1:- reduceWide:0:0:0:0:1:0:4:0:- copyLow:2:0:1:1:0:0:3:0:2 \
+  scZeroBit:0:0:0:0:0:0:3:0:- scZeroBorrow:2:0:1:0:0:0:3:4:1 \
+  scEqualBit:0:0:0:0:0:0:4:0:- scEqualBorrow:2:0:2:0:0:0:5:4:2 \
+  scSelect:0:0:0:0:1:0:5:0:- scSelectGo:2:0:3:1:0:0:5:3:4 \
+  scHighBit:0:0:0:0:0:0:3:1:- scHighBorrow:2:0:2:0:0:0:4:5:1 \
+  scNegateCt:0:0:0:0:1:0:5:0:- scNegateCtGo:2:0:2:1:0:0:6:5:2
 extract_function rawSc "$WORK/scalar_emit.ll" "$WORK/scalar-ir/rawSc.ll"
 raw_accessor_ir_ok "$WORK/scalar-ir/rawSc.ll" || fail 'scalar opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/scalar-ir" scalar_emit || fail 'scalar emitted local call graph is closed'
@@ -1366,8 +1414,8 @@ u64_callees_ok "$WORK/scalar_emit.ll" "$WORK/scalar-ir" || fail 'scalar u64 call
 pass 'scalar u64 callees are allowlisted, branch only on a shift amount, and every shift amount is a literal'
 extract_function selectNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-select-current.ll"
 extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-current.ll"
-[ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 1 ] || fail 'current scalar select IR has only its public-counter branch'
-[ "$(grep -c 'br i1' "$WORK/scalar-borrow-current.ll" || true)" -eq 1 ] || fail 'current scalar borrow IR has only its public-counter branch'
+[ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 2 ] || fail 'current scalar select IR has only its loop branch and one counter overflow branch'
+[ "$(grep -c 'br i1' "$WORK/scalar-borrow-current.ll" || true)" -eq 2 ] || fail 'current scalar borrow IR has only its loop branch and one counter overflow branch'
 if emitted_comparison_present "$WORK/scalar-select-current.ll" || emitted_comparison_present "$WORK/scalar-borrow-current.ll"; then
   fail 'current scalar reduction IR contains secret equality control'
 fi
@@ -1388,7 +1436,7 @@ append_scalar_probe "$WORK/scalar_high_branch_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_high_branch_emit.mdk" -o "$WORK/scalar_high_branch_emit" --keep-ir > "$WORK/build-scalar-high-branch-mutant.log" 2>&1
 extract_function scHighBorrow "$WORK/scalar_high_branch_emit.ll" "$WORK/scalar-high-branch-mutant.ll"
 emitted_comparison_present "$WORK/scalar-high-branch-mutant.ll" || fail 'scalar high-bit secret-branch mutation reaches native IR'
-[ "$(grep -c 'br i1' "$WORK/scalar-high-branch-mutant.ll" || true)" -gt 1 ] || fail 'scalar high-bit mutation adds secret IR control'
+[ "$(grep -c 'br i1' "$WORK/scalar-high-branch-mutant.ll" || true)" -gt 2 ] || fail 'scalar high-bit mutation adds secret IR control'
 pass 'scalar high-bit secret-branch mutation is rejected by native IR control'
 
 cp "$WORK/scalar_select_source_mutant.mdk" "$WORK/scalar_branch_mutant.mdk"
@@ -1396,7 +1444,7 @@ append_scalar_probe "$WORK/scalar_branch_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_branch_mutant.mdk" -o "$WORK/scalar_branch_mutant" --keep-ir > "$WORK/build-scalar-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_branch_mutant.ll" "$WORK/scalar-select-mutant.ll"
 scalar_mutant_ir_branches=$(grep -c 'br i1' "$WORK/scalar-select-mutant.ll" || true)
-[ "$scalar_mutant_ir_branches" -gt 1 ] || fail 'scalar conditional-select mutation is rejected by native IR control'
+[ "$scalar_mutant_ir_branches" -gt 2 ] || fail 'scalar conditional-select mutation is rejected by native IR control'
 emitted_comparison_present "$WORK/scalar-select-mutant.ll" || fail 'scalar conditional-select mutation exposes equality in native IR'
 pass 'scalar conditional-select mutation is rejected by native IR control'
 
@@ -1404,7 +1452,7 @@ cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
 append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
-if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1 0 2 1 0 0 4; then
+if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 2 0 2 1 0 0 4 3; then
   fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
 fi
 grep -F -q 'mdk_hash_bool' "$WORK/scalar-hash-mutant.ll" || fail 'scalar comparison/hashBool mutation reaches native IR'
@@ -1414,7 +1462,7 @@ cp "$WORK/scalar_index_source_mutant.mdk" "$WORK/scalar_index_mutant.mdk"
 append_scalar_probe "$WORK/scalar_index_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_index_mutant.ll" "$WORK/scalar-index-mutant.ll"
-if helper_ir_ok "$WORK/scalar-index-mutant.ll" 1 0 2 1 0 0 4; then
+if helper_ir_ok "$WORK/scalar-index-mutant.ll" 2 0 2 1 0 0 4 3; then
   fail 'scalar secret-index mutation is rejected by native IR call shape'
 fi
 index_calls=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/scalar-index-mutant.ll" || true)
@@ -1425,7 +1473,7 @@ cp "$WORK/scalar_write_source_mutant.mdk" "$WORK/scalar_write_mutant.mdk"
 append_scalar_probe "$WORK/scalar_write_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_write_mutant.mdk" -o "$WORK/scalar_write_mutant" --keep-ir > "$WORK/build-scalar-write-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_write_mutant.ll" "$WORK/scalar-write-mutant.ll"
-if helper_ir_ok "$WORK/scalar-write-mutant.ll" 1 0 2 1 0 0 4; then
+if helper_ir_ok "$WORK/scalar-write-mutant.ll" 2 0 2 1 0 0 4 3; then
   fail 'scalar secret-write mutation is rejected by native IR call multiset'
 fi
 write_calls=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$WORK/scalar-write-mutant.ll" || true)
@@ -1469,7 +1517,7 @@ cp "$WORK/scalar_copy_source_mutant.mdk" "$WORK/scalar_copy_mutant.mdk"
 append_scalar_probe "$WORK/scalar_copy_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_copy_mutant.mdk" -o "$WORK/scalar_copy_mutant" --keep-ir > "$WORK/build-scalar-copy-mutant.log" 2>&1
 extract_function copyLow "$WORK/scalar_copy_mutant.ll" "$WORK/scalar-copy-mutant.ll"
-if helper_ir_ok "$WORK/scalar-copy-mutant.ll" 1 0 1 1 0 0 3 && ir_call_shape_ok copyLow "$WORK/scalar-copy-mutant.ll"; then
+if helper_ir_ok "$WORK/scalar-copy-mutant.ll" 2 0 1 1 0 0 3 0 && ir_call_shape_ok copyLow "$WORK/scalar-copy-mutant.ll"; then
   fail 'scalar transitive copy mutation is rejected by emitted helper shape'
 fi
 emitted_comparison_present "$WORK/scalar-copy-mutant.ll" || fail 'scalar transitive copy branch reaches native IR'
@@ -1499,6 +1547,26 @@ if u64_callees_ok "$WORK/scalar_shift_amount_mutant.ll" "$WORK/scalar-shift-amou
   fail 'scalar secret shift-amount mutation is rejected by the u64 callee audit'
 fi
 pass 'scalar secret shift-amount mutation is rejected by source structure and the u64 callee audit'
+
+# Int arithmetic on a limb-derived value puts an overflow branch on a secret
+# operand (#3377). The overflow-operand audit must red on it.
+awk '
+  /subNCandidate w diff \(i \+ 1\) \(1 - U64\.shiftRight t 16\)/ {
+    print "    subNCandidate w diff (i + 1) (1 - U64.truncate (U64.toIntTruncating (U64.shiftRight t 16) + i))"
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_int_arith_mutant.mdk"
+if cmp -s "$SCALAR" "$WORK/scalar_int_arith_mutant.mdk"; then
+  fail 'scalar secret Int-arithmetic mutation was constructed'
+fi
+append_scalar_probe "$WORK/scalar_int_arith_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_int_arith_mutant.mdk" -o "$WORK/scalar_int_arith_mutant" --keep-ir > "$WORK/build-scalar-int-arith-mutant.log" 2>&1
+extract_function subNCandidate "$WORK/scalar_int_arith_mutant.ll" "$WORK/scalar-int-arith-mutant.ll"
+if ovf_operands_public "$WORK/scalar-int-arith-mutant.ll" 2; then
+  fail 'scalar secret Int-arithmetic mutation is rejected by the overflow-operand audit'
+fi
+pass 'scalar secret Int-arithmetic mutation is rejected by the overflow-operand audit'
 
 disassemble() {
   binary=$1
@@ -1635,6 +1703,13 @@ check_bit_witness() {
   pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
 }
 
+# Since #3377 the Int shift helpers branch on the AMOUNT (a negative amount
+# panics; 63 or more saturates), never on the shifted value. Every witness
+# amount here is a literal or `bitAnd b 7`, which the optimizer proves lies in
+# 0..7, so both amount tests fold away and the linked body must still be
+# straight-line. A surviving conditional jump would therefore be a branch on
+# the value, which is what this witness exists to catch. The limb and ladder
+# shift amounts are public (docs/design/ATPROTO-PDS-CONSTANT-TIME.md §5.1).
 check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
   mdk_bit_and mdk_bit_xor mdk_shift_right
 
