@@ -9825,6 +9825,52 @@ public export data MethodReturnMemoView = MethodReturnMemoView {
 }
   deriving (Eq, Debug)
 
+-- #2095 (M-EVIDENCE S0): the classification of one solved route, generalized over
+-- every family `entail` and the migrated return family answer today — not a new
+-- solver concept, a reading of the `Route` shape the goal already carries.
+-- `EOKGiven`/`EOKInstance` are `RDict`/`RDictFwd` and `RKey` respectively;
+-- `EOKLocal` is `RLocal` (a definer-shadow seed, never a generalized local's own
+-- dict — no local carries dict params today, #1986); `EOKScalar` is the
+-- arithmetic/comparison builtin bypass (`RScalar`); `EOKNone` is `RNone`,
+-- including a default body's sibling/super call and an entailment that found
+-- nothing.
+public export data EvidenceOutcomeKind =
+  | EOKGiven
+  | EOKInstance
+  | EOKLocal
+  | EOKScalar
+  | EOKNone
+  deriving (Eq, Debug)
+
+-- One observation per solved route a published `EvId` carries: a method
+-- occurrence (`GKReturnSite`/`GKArgStamp`/`GKRLocalSite`/`GKBinopSite`/
+-- `GKUnopSite`/`GKArithSite`) publishes exactly one, a dictionary application
+-- (`GKDictApp`/`GKMethodDict`/`GKRecDictApp`) publishes one per slot, `eoeSlot`-
+-- indexed, all sharing `eoeArity` (the goal's total slot count). `eoePredicate`
+-- is the slot's own constraint, rendered (`ppMono`) rather than carried as a raw
+-- `Mono`, because a solved `Mono`'s tyvars are not meaningfully comparable across
+-- two typecheck runs. `eoeGivenBinder`/`eoeInstanceKey` name the binder or the
+-- instance's route key when the outcome is `EOKGiven`/`EOKInstance`;
+-- `eoePrerequisites` is the nested-route list `RKey`/`RLocal` pack at this slot,
+-- rendered the same way — TODAY this is the family's existing packed-requires or
+-- element-dict list, not a `SuperclassEvidence` projection (S2 introduces that).
+-- `eoeProjectionPath` exists for that reason and is `None` at every observation
+-- this slice can produce; a later slice populates it and flips the pinned tests
+-- that assert `None` today.
+public export data EvidenceObservationEntry = EvidenceObservationEntry {
+  eoeEv : EvId,
+  eoeGoalKind : String,
+  eoeSlot : Int,
+  eoeArity : Int,
+  eoePredicate : Option String,
+  eoeOutcome : EvidenceOutcomeKind,
+  eoeGivenBinder : Option String,
+  eoeInstanceKey : Option String,
+  eoePrerequisites : List String,
+  eoeProjectionPath : Option (List Int),
+  eoeScope : ScopeId,
+}
+
 data AssumAnswer =
   | SemanticGiven SolverEvidence
   | LegacyScalar EvidenceBinderId
@@ -9981,6 +10027,132 @@ noteMethodReturnTrace stage request route prerequisites =
           mrtPrerequisites = prerequisites,
         }
         :: methodReturnTraceEntries.value
+
+-- #2095 (M-EVIDENCE S0): trace-gated, zero cost when off — same discipline as
+-- `noteDefaultBodyRNone` and `methodReturnTrace`. Generalizes that pattern from
+-- the one migrated return family to every `Obligation` `recordEvidence`
+-- publishes: a method occurrence and a dictionary application alike, whatever
+-- family produced the goal, read back from the SAME cells the stampers wrote
+-- (never re-derived), so this can never disagree with the published `EvTable`.
+evidenceObservationEnabled : Ref Bool
+evidenceObservationEnabled = Ref False
+
+evidenceObservationEntries : Ref (List EvidenceObservationEntry)
+evidenceObservationEntries = Ref []
+
+export
+beginEvidenceObservation : Unit -> Unit
+beginEvidenceObservation _ =
+  evidenceObservationEntries := []
+  evidenceObservationEnabled := True
+
+export
+finishEvidenceObservation : Unit -> List EvidenceObservationEntry
+finishEvidenceObservation _ =
+  let entries = reverseL evidenceObservationEntries.value
+  evidenceObservationEntries := []
+  evidenceObservationEnabled := False
+  entries
+
+goalKindName : GoalKind -> String
+goalKindName GKReturnSite = "GKReturnSite"
+goalKindName GKArgStamp = "GKArgStamp"
+goalKindName GKRLocalSite = "GKRLocalSite"
+goalKindName GKBinopSite = "GKBinopSite"
+goalKindName GKUnopSite = "GKUnopSite"
+goalKindName GKArithSite = "GKArithSite"
+goalKindName GKDictApp = "GKDictApp"
+goalKindName GKMethodDict = "GKMethodDict"
+goalKindName GKRecDictApp = "GKRecDictApp"
+
+-- Every route a goal carries, in slot order — one for a site, one per slot for
+-- a dictionary application.
+obligationRoutes : Obligation -> List Route
+obligationRoutes o = match o.oDest
+  EvRoute r => [r.value]
+  EvRoutes rs => rs.value
+
+-- The predicate mono behind each slot, aligned by position with
+-- `obligationRoutes`'s answer for the SAME obligation. `GKMethodDict`'s slots
+-- carry an `IfaceRef`/`PredicateSlotArgs` pair rather than a `Mono` (#8251), so
+-- it answers `None` per slot rather than reconstructing one.
+obligationPredicateMonos : Obligation -> List (Option Mono)
+obligationPredicateMonos o = match o.oPayload
+  GPSite _ m _ => [Some m]
+  GPArith m => [Some m]
+  GPDictApp app => map Some app.pdaMonos
+  GPMethodDict pmd => map (_ => None) pmd.pmdSlots
+  GPRecDictApp (RecDictApp _ _ _ m _ _) => [Some m]
+
+routeOutcomeKind : Route -> EvidenceOutcomeKind
+routeOutcomeKind RNone = EOKNone
+routeOutcomeKind (RKey _ _) = EOKInstance
+routeOutcomeKind (RDict _) = EOKGiven
+routeOutcomeKind (RDictFwd _) = EOKGiven
+routeOutcomeKind (RLocal _ _) = EOKLocal
+routeOutcomeKind (RScalar _) = EOKScalar
+
+routeGivenBinder : Route -> Option String
+routeGivenBinder (RDict n) = Some n
+routeGivenBinder (RDictFwd n) = Some n
+routeGivenBinder _ = None
+
+routeInstanceKey : Route -> Option String
+routeInstanceKey (RKey k _) = Some k
+routeInstanceKey _ = None
+
+-- The nested route list an `RKey`/`RLocal` packs at this slot: today's flattened
+-- super slots and packed `requires` land here exactly as `entailInst` produces
+-- them (§2.1's `PrerequisiteEvidence`/`SuperEvidence` distinction does not exist
+-- yet — S2 introduces it).
+routePrerequisiteRoutes : Route -> List Route
+routePrerequisiteRoutes (RKey _ rs) = rs
+routePrerequisiteRoutes (RLocal _ rs) = rs
+routePrerequisiteRoutes _ = []
+
+renderRouteIdentity : Route -> String
+renderRouteIdentity RNone = "RNone"
+renderRouteIdentity (RKey k _) = "RKey " ++ k
+renderRouteIdentity (RDict n) = "RDict " ++ n
+renderRouteIdentity (RDictFwd n) = "RDictFwd " ++ n
+renderRouteIdentity (RLocal n _) = "RLocal " ++ n
+renderRouteIdentity (RScalar n) = "RScalar " ++ n
+
+noteEvidenceObservation : Obligation -> Unit
+noteEvidenceObservation o =
+  if evidenceObservationEnabled.value then
+    let routes = obligationRoutes o
+    let predicates = obligationPredicateMonos o
+    let arity = listLen routes
+    evidenceObservationEntries :=
+      evidenceObservationEntriesGo o routes predicates arity 0
+        ++ evidenceObservationEntries.value
+
+evidenceObservationEntriesGo : Obligation ->
+  List Route ->
+  List (Option Mono) ->
+  Int ->
+  Int ->
+  List EvidenceObservationEntry
+evidenceObservationEntriesGo _ [] _ _ _ = []
+evidenceObservationEntriesGo o (r :: rs) preds arity slot =
+  let (predHere, predsRest) = match preds
+    p :: ptail => (p, ptail)
+    [] => (None, [])
+  EvidenceObservationEntry {
+      eoeEv = o.oEv,
+      eoeGoalKind = goalKindName o.oKind,
+      eoeSlot = slot,
+      eoeArity = arity,
+      eoePredicate = map ppMono predHere,
+      eoeOutcome = routeOutcomeKind r,
+      eoeGivenBinder = routeGivenBinder r,
+      eoeInstanceKey = routeInstanceKey r,
+      eoePrerequisites = map renderRouteIdentity (routePrerequisiteRoutes r),
+      eoeProjectionPath = None,
+      eoeScope = o.oScope,
+    }
+    :: evidenceObservationEntriesGo o rs predsRest arity (slot + 1)
 
 noteNumericPredicateTrace : NumericPredicateTraceStage ->
   ClassPredicate ->
@@ -49785,6 +49957,7 @@ runStampCtxs (ctx :: rest) =
 recordEvidence : List Obligation -> Unit
 recordEvidence gs =
   let g = graphRun.value
+  let _ = map noteEvidenceObservation gs
   g.evTable := evEntriesOf gs ++ g.evTable.value
 
 evEntriesOf : List Obligation -> EvTable

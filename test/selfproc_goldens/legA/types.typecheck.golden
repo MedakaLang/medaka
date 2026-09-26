@@ -228,6 +228,7 @@ beginAssumptionTrace : Unit -> Unit
 beginDefaultBodyRNoneTrace : Unit -> Unit
 beginEffectContract : EffRow -> Mono -> (Map Int Unit, Map Int Unit)
 beginEffectSummaryScope : Unit -> Unit
+beginEvidenceObservation : Unit -> Unit
 beginMethodReturnTrace : Unit -> Unit
 beginModuleMarking : String -> List Decl -> Map String Int -> Map String Scheme -> Unit
 beginNumericPredicateTrace : Unit -> Unit
@@ -924,6 +925,9 @@ evCell : EvDest -> Ref Route
 evEntriesOf : List Obligation -> List EvEntry
 evOrdinal : EvId -> Int
 evValueOf : EvDest -> EvVal
+evidenceObservationEnabled : Ref Bool
+evidenceObservationEntries : Ref (List EvidenceObservationEntry)
+evidenceObservationEntriesGo : Obligation -> List Route -> List (Option Mono) -> Int -> Int -> List EvidenceObservationEntry
 exactReturnBlockers : List Mono -> List SolverBlocker
 exactReturnDefers : Wanted -> List Mono -> Bool
 exactReturnGoalCount : List Obligation -> Int
@@ -1056,6 +1060,7 @@ finishAssumptionTrace : Unit -> List AssumptionTraceEntry
 finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
+finishEvidenceObservation : Unit -> List EvidenceObservationEntry
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishModuleMarking : ModuleMarking -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
@@ -1146,6 +1151,7 @@ globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 goalDefersOpenWorld : ScopeId -> IfaceRef -> List Mono -> Bool
 goalHeadCon : List Mono -> Option HeadKey
 goalIdsClaimed : List Int -> Bool
+goalKindName : GoalKind -> String
 goalKindTag : GoalKind -> Int
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 goalPredOf : String -> Mono -> Option PredicateRequest
@@ -1948,6 +1954,7 @@ notAFunctionMsg : String -> String
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
 noteDefaultBodyRNone : DefaultBodyRNoneKind -> String -> Option Loc -> ScopeId -> Route -> Route -> Unit
+noteEvidenceObservation : Obligation -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Option Route -> List Route -> Unit
 noteNumericEntailment : EntailKind -> ScopeId -> Option IfaceRef -> Route -> List Route -> Unit
@@ -1989,6 +1996,8 @@ oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
+obligationPredicateMonos : Obligation -> List (Option Mono)
+obligationRoutes : Obligation -> List Route
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 occsOfTails : List String -> List EffAtomTy -> List (String, List Atom)
 occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
@@ -2366,6 +2375,7 @@ renderFlatRow : (List Atom, List (Ref Effvar)) -> String
 renderKindAnn : KindAnn -> String
 renderKindAnnAtomic : KindAnn -> String
 renderKindArrow : List Kind -> String
+renderRouteIdentity : Route -> String
 repeatedNames : List String -> List String -> List String
 reportAmbiguousImpl : String -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
@@ -2452,9 +2462,13 @@ rewriteBinopExpr : Expr -> Expr
 rewriteRPDict : Map String Unit -> Map String Unit -> Expr -> Expr
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
+routeGivenBinder : Route -> Option String
+routeInstanceKey : Route -> Option String
 routeLocalSym : Route -> String
 routeOf : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> Route
 routeOfD : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
+routeOutcomeKind : Route -> EvidenceOutcomeKind
+routePrerequisiteRoutes : Route -> List Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : List Decl -> ScopeId -> String -> Route
 routesOfMonosTop : List Decl -> String -> ScopeId -> List Mono -> List IfaceRef -> List Route

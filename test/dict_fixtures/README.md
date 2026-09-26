@@ -461,8 +461,14 @@ NOT yet cover:
     flagship fixture are about. Covered here only by the verdict rows.
   * §7 -- the WASM engine. Every row drives check/run/build; wasm is a third
     refinement the single-evaluator law also binds.
-  * §4 `gen` for a LOCAL (`let`/`where`) constrained binding, as opposed to a
-    top-level one. See #1052 (the local-dict pin is itself unsound).
+  * §4.1 G1 (uniform dict abstraction at a local binder) for a LOCAL
+    (`let`/`where`) constrained binding, as opposed to a top-level one --
+    UNIMPLEMENTED tree-wide (#1082 is the migration vehicle). #1052 (the
+    local-dict pin merging two distinct rigid signature variables) is CLOSED
+    (PR #2023); `g4-where-multi-type.mdk` and `g4-let-multi-type.mdk` now pin
+    its two spellings' current (rejecting) answer, with `g4-multi-type-
+    control.mdk` and the shipped over-rejection row
+    `g4-ground-type-local-over-reject.mdk` (#2032) beside them.
   * The typed dict-passed Core-IR route kinds (`RKey`/`RLocal`, `CDict`), per
     the note above.
   * `run`'s STDERR on any row. The harness grades `check`'s diagnostic code (from

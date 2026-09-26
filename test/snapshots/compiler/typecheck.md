@@ -1,5 +1,5 @@
 # META
-source_lines=50150
+source_lines=50323
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9829,6 +9829,52 @@ public export data MethodReturnMemoView = MethodReturnMemoView {
 }
   deriving (Eq, Debug)
 
+-- #2095 (M-EVIDENCE S0): the classification of one solved route, generalized over
+-- every family `entail` and the migrated return family answer today — not a new
+-- solver concept, a reading of the `Route` shape the goal already carries.
+-- `EOKGiven`/`EOKInstance` are `RDict`/`RDictFwd` and `RKey` respectively;
+-- `EOKLocal` is `RLocal` (a definer-shadow seed, never a generalized local's own
+-- dict — no local carries dict params today, #1986); `EOKScalar` is the
+-- arithmetic/comparison builtin bypass (`RScalar`); `EOKNone` is `RNone`,
+-- including a default body's sibling/super call and an entailment that found
+-- nothing.
+public export data EvidenceOutcomeKind =
+  | EOKGiven
+  | EOKInstance
+  | EOKLocal
+  | EOKScalar
+  | EOKNone
+  deriving (Eq, Debug)
+
+-- One observation per solved route a published `EvId` carries: a method
+-- occurrence (`GKReturnSite`/`GKArgStamp`/`GKRLocalSite`/`GKBinopSite`/
+-- `GKUnopSite`/`GKArithSite`) publishes exactly one, a dictionary application
+-- (`GKDictApp`/`GKMethodDict`/`GKRecDictApp`) publishes one per slot, `eoeSlot`-
+-- indexed, all sharing `eoeArity` (the goal's total slot count). `eoePredicate`
+-- is the slot's own constraint, rendered (`ppMono`) rather than carried as a raw
+-- `Mono`, because a solved `Mono`'s tyvars are not meaningfully comparable across
+-- two typecheck runs. `eoeGivenBinder`/`eoeInstanceKey` name the binder or the
+-- instance's route key when the outcome is `EOKGiven`/`EOKInstance`;
+-- `eoePrerequisites` is the nested-route list `RKey`/`RLocal` pack at this slot,
+-- rendered the same way — TODAY this is the family's existing packed-requires or
+-- element-dict list, not a `SuperclassEvidence` projection (S2 introduces that).
+-- `eoeProjectionPath` exists for that reason and is `None` at every observation
+-- this slice can produce; a later slice populates it and flips the pinned tests
+-- that assert `None` today.
+public export data EvidenceObservationEntry = EvidenceObservationEntry {
+  eoeEv : EvId,
+  eoeGoalKind : String,
+  eoeSlot : Int,
+  eoeArity : Int,
+  eoePredicate : Option String,
+  eoeOutcome : EvidenceOutcomeKind,
+  eoeGivenBinder : Option String,
+  eoeInstanceKey : Option String,
+  eoePrerequisites : List String,
+  eoeProjectionPath : Option (List Int),
+  eoeScope : ScopeId,
+}
+
 data AssumAnswer =
   | SemanticGiven SolverEvidence
   | LegacyScalar EvidenceBinderId
@@ -9985,6 +10031,132 @@ noteMethodReturnTrace stage request route prerequisites =
           mrtPrerequisites = prerequisites,
         }
         :: methodReturnTraceEntries.value
+
+-- #2095 (M-EVIDENCE S0): trace-gated, zero cost when off — same discipline as
+-- `noteDefaultBodyRNone` and `methodReturnTrace`. Generalizes that pattern from
+-- the one migrated return family to every `Obligation` `recordEvidence`
+-- publishes: a method occurrence and a dictionary application alike, whatever
+-- family produced the goal, read back from the SAME cells the stampers wrote
+-- (never re-derived), so this can never disagree with the published `EvTable`.
+evidenceObservationEnabled : Ref Bool
+evidenceObservationEnabled = Ref False
+
+evidenceObservationEntries : Ref (List EvidenceObservationEntry)
+evidenceObservationEntries = Ref []
+
+export
+beginEvidenceObservation : Unit -> Unit
+beginEvidenceObservation _ =
+  evidenceObservationEntries := []
+  evidenceObservationEnabled := True
+
+export
+finishEvidenceObservation : Unit -> List EvidenceObservationEntry
+finishEvidenceObservation _ =
+  let entries = reverseL evidenceObservationEntries.value
+  evidenceObservationEntries := []
+  evidenceObservationEnabled := False
+  entries
+
+goalKindName : GoalKind -> String
+goalKindName GKReturnSite = "GKReturnSite"
+goalKindName GKArgStamp = "GKArgStamp"
+goalKindName GKRLocalSite = "GKRLocalSite"
+goalKindName GKBinopSite = "GKBinopSite"
+goalKindName GKUnopSite = "GKUnopSite"
+goalKindName GKArithSite = "GKArithSite"
+goalKindName GKDictApp = "GKDictApp"
+goalKindName GKMethodDict = "GKMethodDict"
+goalKindName GKRecDictApp = "GKRecDictApp"
+
+-- Every route a goal carries, in slot order — one for a site, one per slot for
+-- a dictionary application.
+obligationRoutes : Obligation -> List Route
+obligationRoutes o = match o.oDest
+  EvRoute r => [r.value]
+  EvRoutes rs => rs.value
+
+-- The predicate mono behind each slot, aligned by position with
+-- `obligationRoutes`'s answer for the SAME obligation. `GKMethodDict`'s slots
+-- carry an `IfaceRef`/`PredicateSlotArgs` pair rather than a `Mono` (#8251), so
+-- it answers `None` per slot rather than reconstructing one.
+obligationPredicateMonos : Obligation -> List (Option Mono)
+obligationPredicateMonos o = match o.oPayload
+  GPSite _ m _ => [Some m]
+  GPArith m => [Some m]
+  GPDictApp app => map Some app.pdaMonos
+  GPMethodDict pmd => map (_ => None) pmd.pmdSlots
+  GPRecDictApp (RecDictApp _ _ _ m _ _) => [Some m]
+
+routeOutcomeKind : Route -> EvidenceOutcomeKind
+routeOutcomeKind RNone = EOKNone
+routeOutcomeKind (RKey _ _) = EOKInstance
+routeOutcomeKind (RDict _) = EOKGiven
+routeOutcomeKind (RDictFwd _) = EOKGiven
+routeOutcomeKind (RLocal _ _) = EOKLocal
+routeOutcomeKind (RScalar _) = EOKScalar
+
+routeGivenBinder : Route -> Option String
+routeGivenBinder (RDict n) = Some n
+routeGivenBinder (RDictFwd n) = Some n
+routeGivenBinder _ = None
+
+routeInstanceKey : Route -> Option String
+routeInstanceKey (RKey k _) = Some k
+routeInstanceKey _ = None
+
+-- The nested route list an `RKey`/`RLocal` packs at this slot: today's flattened
+-- super slots and packed `requires` land here exactly as `entailInst` produces
+-- them (§2.1's `PrerequisiteEvidence`/`SuperEvidence` distinction does not exist
+-- yet — S2 introduces it).
+routePrerequisiteRoutes : Route -> List Route
+routePrerequisiteRoutes (RKey _ rs) = rs
+routePrerequisiteRoutes (RLocal _ rs) = rs
+routePrerequisiteRoutes _ = []
+
+renderRouteIdentity : Route -> String
+renderRouteIdentity RNone = "RNone"
+renderRouteIdentity (RKey k _) = "RKey " ++ k
+renderRouteIdentity (RDict n) = "RDict " ++ n
+renderRouteIdentity (RDictFwd n) = "RDictFwd " ++ n
+renderRouteIdentity (RLocal n _) = "RLocal " ++ n
+renderRouteIdentity (RScalar n) = "RScalar " ++ n
+
+noteEvidenceObservation : Obligation -> Unit
+noteEvidenceObservation o =
+  if evidenceObservationEnabled.value then
+    let routes = obligationRoutes o
+    let predicates = obligationPredicateMonos o
+    let arity = listLen routes
+    evidenceObservationEntries :=
+      evidenceObservationEntriesGo o routes predicates arity 0
+        ++ evidenceObservationEntries.value
+
+evidenceObservationEntriesGo : Obligation ->
+  List Route ->
+  List (Option Mono) ->
+  Int ->
+  Int ->
+  List EvidenceObservationEntry
+evidenceObservationEntriesGo _ [] _ _ _ = []
+evidenceObservationEntriesGo o (r :: rs) preds arity slot =
+  let (predHere, predsRest) = match preds
+    p :: ptail => (p, ptail)
+    [] => (None, [])
+  EvidenceObservationEntry {
+      eoeEv = o.oEv,
+      eoeGoalKind = goalKindName o.oKind,
+      eoeSlot = slot,
+      eoeArity = arity,
+      eoePredicate = map ppMono predHere,
+      eoeOutcome = routeOutcomeKind r,
+      eoeGivenBinder = routeGivenBinder r,
+      eoeInstanceKey = routeInstanceKey r,
+      eoePrerequisites = map renderRouteIdentity (routePrerequisiteRoutes r),
+      eoeProjectionPath = None,
+      eoeScope = o.oScope,
+    }
+    :: evidenceObservationEntriesGo o rs predsRest arity (slot + 1)
 
 noteNumericPredicateTrace : NumericPredicateTraceStage ->
   ClassPredicate ->
@@ -49789,6 +49961,7 @@ runStampCtxs (ctx :: rest) =
 recordEvidence : List Obligation -> Unit
 recordEvidence gs =
   let g = graphRun.value
+  let _ = map noteEvidenceObservation gs
   g.evTable := evEntriesOf gs ++ g.evTable.value
 
 evEntriesOf : List Obligation -> EvTable
@@ -51613,6 +51786,10 @@ isTyAuth _ = False
 (DData Public "MethodReturnMemoView" () ((variant "MethodReturnMemoView" (ConNamed (field "mrmvInterface" (TyCon "String")) (field "mrmvMethod" (TyCon "String")) (field "mrmvArguments" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))) (field "mrmvOutcome" (TyCon "String")) (field "mrmvPrerequisites" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "mrmvEvidence" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "MethodReturnMemoView")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodReturnMemoView" ((rf "mrmvInterface" (PVar "__a0")) (rf "mrmvMethod" (PVar "__a1")) (rf "mrmvArguments" (PVar "__a2")) (rf "mrmvOutcome" (PVar "__a3")) (rf "mrmvPrerequisites" (PVar "__a4")) (rf "mrmvEvidence" (PVar "__a5"))) false) (PRec "MethodReturnMemoView" ((rf "mrmvInterface" (PVar "__b0")) (rf "mrmvMethod" (PVar "__b1")) (rf "mrmvArguments" (PVar "__b2")) (rf "mrmvOutcome" (PVar "__b3")) (rf "mrmvPrerequisites" (PVar "__b4")) (rf "mrmvEvidence" (PVar "__b5"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))) (EApp (EApp (EVar "eq") (EVar "__a5")) (EVar "__b5"))))))))
 (DImpl true "Debug" ((TyCon "MethodReturnMemoView")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodReturnMemoView" ((rf "mrmvInterface" (PVar "__a0")) (rf "mrmvMethod" (PVar "__a1")) (rf "mrmvArguments" (PVar "__a2")) (rf "mrmvOutcome" (PVar "__a3")) (rf "mrmvPrerequisites" (PVar "__a4")) (rf "mrmvEvidence" (PVar "__a5"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodReturnMemoView {")) (ELit (LString " mrmvInterface = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", mrmvMethod = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", mrmvArguments = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", mrmvOutcome = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", mrmvPrerequisites = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString ", mrmvEvidence = "))) (EApp (EVar "debug") (EVar "__a5"))) (ELit (LString " }"))))))))
+(DData Public "EvidenceOutcomeKind" () ((variant "EOKGiven" (ConPos)) (variant "EOKInstance" (ConPos)) (variant "EOKLocal" (ConPos)) (variant "EOKScalar" (ConPos)) (variant "EOKNone" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "EvidenceOutcomeKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "EOKGiven") (PCon "EOKGiven")) () (EVar "True")) (arm (PTuple (PCon "EOKInstance") (PCon "EOKInstance")) () (EVar "True")) (arm (PTuple (PCon "EOKLocal") (PCon "EOKLocal")) () (EVar "True")) (arm (PTuple (PCon "EOKScalar") (PCon "EOKScalar")) () (EVar "True")) (arm (PTuple (PCon "EOKNone") (PCon "EOKNone")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "EvidenceOutcomeKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "EOKGiven") () (ELit (LString "EOKGiven"))) (arm (PCon "EOKInstance") () (ELit (LString "EOKInstance"))) (arm (PCon "EOKLocal") () (ELit (LString "EOKLocal"))) (arm (PCon "EOKScalar") () (ELit (LString "EOKScalar"))) (arm (PCon "EOKNone") () (ELit (LString "EOKNone")))))))
+(DData Public "EvidenceObservationEntry" () ((variant "EvidenceObservationEntry" (ConNamed (field "eoeEv" (TyCon "EvId")) (field "eoeGoalKind" (TyCon "String")) (field "eoeSlot" (TyCon "Int")) (field "eoeArity" (TyCon "Int")) (field "eoePredicate" (TyApp (TyCon "Option") (TyCon "String"))) (field "eoeOutcome" (TyCon "EvidenceOutcomeKind")) (field "eoeGivenBinder" (TyApp (TyCon "Option") (TyCon "String"))) (field "eoeInstanceKey" (TyApp (TyCon "Option") (TyCon "String"))) (field "eoePrerequisites" (TyApp (TyCon "List") (TyCon "String"))) (field "eoeProjectionPath" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))) (field "eoeScope" (TyCon "ScopeId"))))) ())
 (DData Private "AssumAnswer" () ((variant "SemanticGiven" (ConPos (TyCon "SolverEvidence"))) (variant "LegacyScalar" (ConPos (TyCon "EvidenceBinderId"))) (variant "LegacySuperAlias" (ConPos (TyCon "EvidenceBinderId"))) (variant "LegacyPredicate" (ConPos (TyCon "EvidenceBinderId")))) ())
 (DTypeSig false "assumptionTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "assumptionTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
@@ -51655,6 +51832,58 @@ isTyAuth _ = False
 (DFunDef false "sameTraceEvId" ((PCon "EvId" (PVar "moduleA") (PVar "ordinalA")) (PCon "EvId" (PVar "moduleB") (PVar "ordinalB"))) (EBinOp "&&" (EBinOp "==" (EVar "moduleA") (EVar "moduleB")) (EBinOp "==" (EVar "ordinalA") (EVar "ordinalB"))))
 (DTypeSig false "noteMethodReturnTrace" (TyFun (TyCon "MethodReturnTraceStage") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))
 (DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EIf (EFieldAccess (EVar "methodReturnTraceEnabled") "value") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) true)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReturnTraceEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EVar "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EVar "methodReturnTraceEntries") "value"))))) (ELit LUnit)))
+(DTypeSig false "evidenceObservationEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "evidenceObservationEnabled" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "evidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "evidenceObservationEntries" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "beginEvidenceObservation" (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEnabled")) (EVar "True")))))
+(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "finishEvidenceObservation" (PWild) (EBlock (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EVar "evidenceObservationEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEnabled")) (EVar "False"))) (DoExpr (EVar "entries"))))
+(DTypeSig false "goalKindName" (TyFun (TyCon "GoalKind") (TyCon "String")))
+(DFunDef false "goalKindName" ((PCon "GKReturnSite")) (ELit (LString "GKReturnSite")))
+(DFunDef false "goalKindName" ((PCon "GKArgStamp")) (ELit (LString "GKArgStamp")))
+(DFunDef false "goalKindName" ((PCon "GKRLocalSite")) (ELit (LString "GKRLocalSite")))
+(DFunDef false "goalKindName" ((PCon "GKBinopSite")) (ELit (LString "GKBinopSite")))
+(DFunDef false "goalKindName" ((PCon "GKUnopSite")) (ELit (LString "GKUnopSite")))
+(DFunDef false "goalKindName" ((PCon "GKArithSite")) (ELit (LString "GKArithSite")))
+(DFunDef false "goalKindName" ((PCon "GKDictApp")) (ELit (LString "GKDictApp")))
+(DFunDef false "goalKindName" ((PCon "GKMethodDict")) (ELit (LString "GKMethodDict")))
+(DFunDef false "goalKindName" ((PCon "GKRecDictApp")) (ELit (LString "GKRecDictApp")))
+(DTypeSig false "obligationRoutes" (TyFun (TyCon "Obligation") (TyApp (TyCon "List") (TyCon "Route"))))
+(DFunDef false "obligationRoutes" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "oDest") (arm (PCon "EvRoute" (PVar "r")) () (EListLit (EFieldAccess (EVar "r") "value"))) (arm (PCon "EvRoutes" (PVar "rs")) () (EFieldAccess (EVar "rs") "value"))))
+(DTypeSig false "obligationPredicateMonos" (TyFun (TyCon "Obligation") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono")))))
+(DFunDef false "obligationPredicateMonos" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "oPayload") (arm (PCon "GPSite" PWild (PVar "m") PWild) () (EListLit (EApp (EVar "Some") (EVar "m")))) (arm (PCon "GPArith" (PVar "m")) () (EListLit (EApp (EVar "Some") (EVar "m")))) (arm (PCon "GPDictApp" (PVar "app")) () (EApp (EApp (EVar "map") (EVar "Some")) (EFieldAccess (EVar "app") "pdaMonos"))) (arm (PCon "GPMethodDict" (PVar "pmd")) () (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EFieldAccess (EVar "pmd") "pmdSlots"))) (arm (PCon "GPRecDictApp" (PCon "RecDictApp" PWild PWild PWild (PVar "m") PWild PWild)) () (EListLit (EApp (EVar "Some") (EVar "m"))))))
+(DTypeSig false "routeOutcomeKind" (TyFun (TyCon "Route") (TyCon "EvidenceOutcomeKind")))
+(DFunDef false "routeOutcomeKind" ((PCon "RNone")) (EVar "EOKNone"))
+(DFunDef false "routeOutcomeKind" ((PCon "RKey" PWild PWild)) (EVar "EOKInstance"))
+(DFunDef false "routeOutcomeKind" ((PCon "RDict" PWild)) (EVar "EOKGiven"))
+(DFunDef false "routeOutcomeKind" ((PCon "RDictFwd" PWild)) (EVar "EOKGiven"))
+(DFunDef false "routeOutcomeKind" ((PCon "RLocal" PWild PWild)) (EVar "EOKLocal"))
+(DFunDef false "routeOutcomeKind" ((PCon "RScalar" PWild)) (EVar "EOKScalar"))
+(DTypeSig false "routeGivenBinder" (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "routeGivenBinder" ((PCon "RDict" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "routeGivenBinder" ((PCon "RDictFwd" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "routeGivenBinder" (PWild) (EVar "None"))
+(DTypeSig false "routeInstanceKey" (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "routeInstanceKey" ((PCon "RKey" (PVar "k") PWild)) (EApp (EVar "Some") (EVar "k")))
+(DFunDef false "routeInstanceKey" (PWild) (EVar "None"))
+(DTypeSig false "routePrerequisiteRoutes" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))
+(DFunDef false "routePrerequisiteRoutes" ((PCon "RKey" PWild (PVar "rs"))) (EVar "rs"))
+(DFunDef false "routePrerequisiteRoutes" ((PCon "RLocal" PWild (PVar "rs"))) (EVar "rs"))
+(DFunDef false "routePrerequisiteRoutes" (PWild) (EListLit))
+(DTypeSig false "renderRouteIdentity" (TyFun (TyCon "Route") (TyCon "String")))
+(DFunDef false "renderRouteIdentity" ((PCon "RNone")) (ELit (LString "RNone")))
+(DFunDef false "renderRouteIdentity" ((PCon "RKey" (PVar "k") PWild)) (EBinOp "++" (ELit (LString "RKey ")) (EVar "k")))
+(DFunDef false "renderRouteIdentity" ((PCon "RDict" (PVar "n"))) (EBinOp "++" (ELit (LString "RDict ")) (EVar "n")))
+(DFunDef false "renderRouteIdentity" ((PCon "RDictFwd" (PVar "n"))) (EBinOp "++" (ELit (LString "RDictFwd ")) (EVar "n")))
+(DFunDef false "renderRouteIdentity" ((PCon "RLocal" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "RLocal ")) (EVar "n")))
+(DFunDef false "renderRouteIdentity" ((PCon "RScalar" (PVar "n"))) (EBinOp "++" (ELit (LString "RScalar ")) (EVar "n")))
+(DTypeSig false "noteEvidenceObservation" (TyFun (TyCon "Obligation") (TyCon "Unit")))
+(DFunDef false "noteEvidenceObservation" ((PVar "o")) (EIf (EFieldAccess (EVar "evidenceObservationEnabled") "value") (EBlock (DoLet false false (PVar "routes") (EApp (EVar "obligationRoutes") (EVar "o"))) (DoLet false false (PVar "predicates") (EApp (EVar "obligationPredicateMonos") (EVar "o"))) (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EVar "routes"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEntries")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "routes")) (EVar "predicates")) (EVar "arity")) (ELit (LInt 0))) (EFieldAccess (EVar "evidenceObservationEntries") "value"))))) (ELit LUnit)))
+(DTypeSig false "evidenceObservationEntriesGo" (TyFun (TyCon "Obligation") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))))
+(DFunDef false "evidenceObservationEntriesGo" (PWild (PList) PWild PWild PWild) (EListLit))
+(DFunDef false "evidenceObservationEntriesGo" ((PVar "o") (PCons (PVar "r") (PVar "rs")) (PVar "preds") (PVar "arity") (PVar "slot")) (EBlock (DoLet false false (PTuple (PVar "predHere") (PVar "predsRest")) (EMatch (EVar "preds") (arm (PCons (PVar "p") (PVar "ptail")) () (ETuple (EVar "p") (EVar "ptail"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoExpr (EBinOp "::" (ERecordCreate "EvidenceObservationEntry" ((fa "eoeEv" (EFieldAccess (EVar "o") "oEv")) (fa "eoeGoalKind" (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind"))) (fa "eoeSlot" (EVar "slot")) (fa "eoeArity" (EVar "arity")) (fa "eoePredicate" (EApp (EApp (EVar "map") (EVar "ppMono")) (EVar "predHere"))) (fa "eoeOutcome" (EApp (EVar "routeOutcomeKind") (EVar "r"))) (fa "eoeGivenBinder" (EApp (EVar "routeGivenBinder") (EVar "r"))) (fa "eoeInstanceKey" (EApp (EVar "routeInstanceKey") (EVar "r"))) (fa "eoePrerequisites" (EApp (EApp (EVar "map") (EVar "renderRouteIdentity")) (EApp (EVar "routePrerequisiteRoutes") (EVar "r")))) (fa "eoeProjectionPath" (EVar "None")) (fa "eoeScope" (EFieldAccess (EVar "o") "oScope")))) (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "rs")) (EVar "predsRest")) (EVar "arity")) (EBinOp "+" (EVar "slot") (ELit (LInt 1))))))))
 (DTypeSig false "noteNumericPredicateTrace" (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit")))))))))
 (DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EIf (EFieldAccess (EVar "numericPredicateTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "numericPredicateTraceEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EVar "numericPredicateTraceEntries") "value"))) (ELit LUnit)))
 (DTypeSig false "assumAnswerBinder" (TyFun (TyCon "AssumAnswer") (TyCon "EvidenceBinderId")))
@@ -58025,7 +58254,7 @@ isTyAuth _ = False
 (DFunDef false "runStampCtxs" ((PList)) (ELit LUnit))
 (DFunDef false "runStampCtxs" ((PCons (PVar "ctx") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EFieldAccess (EVar "ctx") "scPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EFieldAccess (EVar "ctx") "scToggles"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EFieldAccess (EVar "ctx") "scModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EVar "ctx") "scImplDecls"))) (DoLet false false PWild (EApp (EApp (EVar "runStampSteps") (EVar "ctx")) (EVar "moduleStampOrder"))) (DoLet false false PWild (EApp (EVar "recordEvidence") (EFieldAccess (EVar "ctx") "scGoals"))) (DoExpr (EApp (EVar "runStampCtxs") (EVar "rest")))))
 (DTypeSig false "recordEvidence" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "Unit")))
-(DFunDef false "recordEvidence" ((PVar "gs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evTable")) (EBinOp "++" (EApp (EVar "evEntriesOf") (EVar "gs")) (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value"))))))
+(DFunDef false "recordEvidence" ((PVar "gs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false PWild (EApp (EApp (EVar "map") (EVar "noteEvidenceObservation")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evTable")) (EBinOp "++" (EApp (EVar "evEntriesOf") (EVar "gs")) (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value"))))))
 (DTypeSig false "evEntriesOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "EvTable")))
 (DFunDef false "evEntriesOf" ((PVar "gs")) (EApp (EApp (EVar "map") (ELam ((PVar "o")) (EApp (EApp (EVar "EvEntry") (EFieldAccess (EVar "o") "oEv")) (EApp (EVar "evValueOf") (EFieldAccess (EVar "o") "oDest"))))) (EVar "gs")))
 (DTypeSig false "evValueOf" (TyFun (TyCon "EvDest") (TyCon "EvVal")))
@@ -59548,6 +59777,10 @@ isTyAuth _ = False
 (DData Public "MethodReturnMemoView" () ((variant "MethodReturnMemoView" (ConNamed (field "mrmvInterface" (TyCon "String")) (field "mrmvMethod" (TyCon "String")) (field "mrmvArguments" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))) (field "mrmvOutcome" (TyCon "String")) (field "mrmvPrerequisites" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "mrmvEvidence" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "MethodReturnMemoView")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodReturnMemoView" ((rf "mrmvInterface" (PVar "__a0")) (rf "mrmvMethod" (PVar "__a1")) (rf "mrmvArguments" (PVar "__a2")) (rf "mrmvOutcome" (PVar "__a3")) (rf "mrmvPrerequisites" (PVar "__a4")) (rf "mrmvEvidence" (PVar "__a5"))) false) (PRec "MethodReturnMemoView" ((rf "mrmvInterface" (PVar "__b0")) (rf "mrmvMethod" (PVar "__b1")) (rf "mrmvArguments" (PVar "__b2")) (rf "mrmvOutcome" (PVar "__b3")) (rf "mrmvPrerequisites" (PVar "__b4")) (rf "mrmvEvidence" (PVar "__b5"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))) (EApp (EApp (EMethodRef "eq") (EVar "__a5")) (EVar "__b5"))))))))
 (DImpl true "Debug" ((TyCon "MethodReturnMemoView")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodReturnMemoView" ((rf "mrmvInterface" (PVar "__a0")) (rf "mrmvMethod" (PVar "__a1")) (rf "mrmvArguments" (PVar "__a2")) (rf "mrmvOutcome" (PVar "__a3")) (rf "mrmvPrerequisites" (PVar "__a4")) (rf "mrmvEvidence" (PVar "__a5"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodReturnMemoView {")) (ELit (LString " mrmvInterface = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", mrmvMethod = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", mrmvArguments = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", mrmvOutcome = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", mrmvPrerequisites = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString ", mrmvEvidence = "))) (EApp (EMethodRef "debug") (EVar "__a5"))) (ELit (LString " }"))))))))
+(DData Public "EvidenceOutcomeKind" () ((variant "EOKGiven" (ConPos)) (variant "EOKInstance" (ConPos)) (variant "EOKLocal" (ConPos)) (variant "EOKScalar" (ConPos)) (variant "EOKNone" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "EvidenceOutcomeKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "EOKGiven") (PCon "EOKGiven")) () (EVar "True")) (arm (PTuple (PCon "EOKInstance") (PCon "EOKInstance")) () (EVar "True")) (arm (PTuple (PCon "EOKLocal") (PCon "EOKLocal")) () (EVar "True")) (arm (PTuple (PCon "EOKScalar") (PCon "EOKScalar")) () (EVar "True")) (arm (PTuple (PCon "EOKNone") (PCon "EOKNone")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "EvidenceOutcomeKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "EOKGiven") () (ELit (LString "EOKGiven"))) (arm (PCon "EOKInstance") () (ELit (LString "EOKInstance"))) (arm (PCon "EOKLocal") () (ELit (LString "EOKLocal"))) (arm (PCon "EOKScalar") () (ELit (LString "EOKScalar"))) (arm (PCon "EOKNone") () (ELit (LString "EOKNone")))))))
+(DData Public "EvidenceObservationEntry" () ((variant "EvidenceObservationEntry" (ConNamed (field "eoeEv" (TyCon "EvId")) (field "eoeGoalKind" (TyCon "String")) (field "eoeSlot" (TyCon "Int")) (field "eoeArity" (TyCon "Int")) (field "eoePredicate" (TyApp (TyCon "Option") (TyCon "String"))) (field "eoeOutcome" (TyCon "EvidenceOutcomeKind")) (field "eoeGivenBinder" (TyApp (TyCon "Option") (TyCon "String"))) (field "eoeInstanceKey" (TyApp (TyCon "Option") (TyCon "String"))) (field "eoePrerequisites" (TyApp (TyCon "List") (TyCon "String"))) (field "eoeProjectionPath" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))) (field "eoeScope" (TyCon "ScopeId"))))) ())
 (DData Private "AssumAnswer" () ((variant "SemanticGiven" (ConPos (TyCon "SolverEvidence"))) (variant "LegacyScalar" (ConPos (TyCon "EvidenceBinderId"))) (variant "LegacySuperAlias" (ConPos (TyCon "EvidenceBinderId"))) (variant "LegacyPredicate" (ConPos (TyCon "EvidenceBinderId")))) ())
 (DTypeSig false "assumptionTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "assumptionTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
@@ -59590,6 +59823,58 @@ isTyAuth _ = False
 (DFunDef false "sameTraceEvId" ((PCon "EvId" (PVar "moduleA") (PVar "ordinalA")) (PCon "EvId" (PVar "moduleB") (PVar "ordinalB"))) (EBinOp "&&" (EBinOp "==" (EVar "moduleA") (EVar "moduleB")) (EBinOp "==" (EVar "ordinalA") (EVar "ordinalB"))))
 (DTypeSig false "noteMethodReturnTrace" (TyFun (TyCon "MethodReturnTraceStage") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))
 (DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EIf (EFieldAccess (EVar "methodReturnTraceEnabled") "value") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) true)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReturnTraceEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EMethodRef "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EVar "methodReturnTraceEntries") "value"))))) (ELit LUnit)))
+(DTypeSig false "evidenceObservationEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "evidenceObservationEnabled" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "evidenceObservationEntries" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "evidenceObservationEntries" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "beginEvidenceObservation" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "beginEvidenceObservation" (PWild) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEnabled")) (EVar "True")))))
+(DTypeSig true "finishEvidenceObservation" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))
+(DFunDef false "finishEvidenceObservation" (PWild) (EBlock (DoLet false false (PVar "entries") (EApp (EVar "reverseL") (EFieldAccess (EVar "evidenceObservationEntries") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEntries")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEnabled")) (EVar "False"))) (DoExpr (EVar "entries"))))
+(DTypeSig false "goalKindName" (TyFun (TyCon "GoalKind") (TyCon "String")))
+(DFunDef false "goalKindName" ((PCon "GKReturnSite")) (ELit (LString "GKReturnSite")))
+(DFunDef false "goalKindName" ((PCon "GKArgStamp")) (ELit (LString "GKArgStamp")))
+(DFunDef false "goalKindName" ((PCon "GKRLocalSite")) (ELit (LString "GKRLocalSite")))
+(DFunDef false "goalKindName" ((PCon "GKBinopSite")) (ELit (LString "GKBinopSite")))
+(DFunDef false "goalKindName" ((PCon "GKUnopSite")) (ELit (LString "GKUnopSite")))
+(DFunDef false "goalKindName" ((PCon "GKArithSite")) (ELit (LString "GKArithSite")))
+(DFunDef false "goalKindName" ((PCon "GKDictApp")) (ELit (LString "GKDictApp")))
+(DFunDef false "goalKindName" ((PCon "GKMethodDict")) (ELit (LString "GKMethodDict")))
+(DFunDef false "goalKindName" ((PCon "GKRecDictApp")) (ELit (LString "GKRecDictApp")))
+(DTypeSig false "obligationRoutes" (TyFun (TyCon "Obligation") (TyApp (TyCon "List") (TyCon "Route"))))
+(DFunDef false "obligationRoutes" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "oDest") (arm (PCon "EvRoute" (PVar "r")) () (EListLit (EFieldAccess (EVar "r") "value"))) (arm (PCon "EvRoutes" (PVar "rs")) () (EFieldAccess (EVar "rs") "value"))))
+(DTypeSig false "obligationPredicateMonos" (TyFun (TyCon "Obligation") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono")))))
+(DFunDef false "obligationPredicateMonos" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "oPayload") (arm (PCon "GPSite" PWild (PVar "m") PWild) () (EListLit (EApp (EVar "Some") (EVar "m")))) (arm (PCon "GPArith" (PVar "m")) () (EListLit (EApp (EVar "Some") (EVar "m")))) (arm (PCon "GPDictApp" (PVar "app")) () (EApp (EApp (EMethodRef "map") (EVar "Some")) (EFieldAccess (EVar "app") "pdaMonos"))) (arm (PCon "GPMethodDict" (PVar "pmd")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EFieldAccess (EVar "pmd") "pmdSlots"))) (arm (PCon "GPRecDictApp" (PCon "RecDictApp" PWild PWild PWild (PVar "m") PWild PWild)) () (EListLit (EApp (EVar "Some") (EVar "m"))))))
+(DTypeSig false "routeOutcomeKind" (TyFun (TyCon "Route") (TyCon "EvidenceOutcomeKind")))
+(DFunDef false "routeOutcomeKind" ((PCon "RNone")) (EVar "EOKNone"))
+(DFunDef false "routeOutcomeKind" ((PCon "RKey" PWild PWild)) (EVar "EOKInstance"))
+(DFunDef false "routeOutcomeKind" ((PCon "RDict" PWild)) (EVar "EOKGiven"))
+(DFunDef false "routeOutcomeKind" ((PCon "RDictFwd" PWild)) (EVar "EOKGiven"))
+(DFunDef false "routeOutcomeKind" ((PCon "RLocal" PWild PWild)) (EVar "EOKLocal"))
+(DFunDef false "routeOutcomeKind" ((PCon "RScalar" PWild)) (EVar "EOKScalar"))
+(DTypeSig false "routeGivenBinder" (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "routeGivenBinder" ((PCon "RDict" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "routeGivenBinder" ((PCon "RDictFwd" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "routeGivenBinder" (PWild) (EVar "None"))
+(DTypeSig false "routeInstanceKey" (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "routeInstanceKey" ((PCon "RKey" (PVar "k") PWild)) (EApp (EVar "Some") (EVar "k")))
+(DFunDef false "routeInstanceKey" (PWild) (EVar "None"))
+(DTypeSig false "routePrerequisiteRoutes" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))
+(DFunDef false "routePrerequisiteRoutes" ((PCon "RKey" PWild (PVar "rs"))) (EVar "rs"))
+(DFunDef false "routePrerequisiteRoutes" ((PCon "RLocal" PWild (PVar "rs"))) (EVar "rs"))
+(DFunDef false "routePrerequisiteRoutes" (PWild) (EListLit))
+(DTypeSig false "renderRouteIdentity" (TyFun (TyCon "Route") (TyCon "String")))
+(DFunDef false "renderRouteIdentity" ((PCon "RNone")) (ELit (LString "RNone")))
+(DFunDef false "renderRouteIdentity" ((PCon "RKey" (PVar "k") PWild)) (EBinOp "++" (ELit (LString "RKey ")) (EVar "k")))
+(DFunDef false "renderRouteIdentity" ((PCon "RDict" (PVar "n"))) (EBinOp "++" (ELit (LString "RDict ")) (EVar "n")))
+(DFunDef false "renderRouteIdentity" ((PCon "RDictFwd" (PVar "n"))) (EBinOp "++" (ELit (LString "RDictFwd ")) (EVar "n")))
+(DFunDef false "renderRouteIdentity" ((PCon "RLocal" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "RLocal ")) (EVar "n")))
+(DFunDef false "renderRouteIdentity" ((PCon "RScalar" (PVar "n"))) (EBinOp "++" (ELit (LString "RScalar ")) (EVar "n")))
+(DTypeSig false "noteEvidenceObservation" (TyFun (TyCon "Obligation") (TyCon "Unit")))
+(DFunDef false "noteEvidenceObservation" ((PVar "o")) (EIf (EFieldAccess (EVar "evidenceObservationEnabled") "value") (EBlock (DoLet false false (PVar "routes") (EApp (EVar "obligationRoutes") (EVar "o"))) (DoLet false false (PVar "predicates") (EApp (EVar "obligationPredicateMonos") (EVar "o"))) (DoLet false false (PVar "arity") (EApp (EVar "listLen") (EVar "routes"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "evidenceObservationEntries")) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "routes")) (EVar "predicates")) (EVar "arity")) (ELit (LInt 0))) (EFieldAccess (EVar "evidenceObservationEntries") "value"))))) (ELit LUnit)))
+(DTypeSig false "evidenceObservationEntriesGo" (TyFun (TyCon "Obligation") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "EvidenceObservationEntry"))))))))
+(DFunDef false "evidenceObservationEntriesGo" (PWild (PList) PWild PWild PWild) (EListLit))
+(DFunDef false "evidenceObservationEntriesGo" ((PVar "o") (PCons (PVar "r") (PVar "rs")) (PVar "preds") (PVar "arity") (PVar "slot")) (EBlock (DoLet false false (PTuple (PVar "predHere") (PVar "predsRest")) (EMatch (EVar "preds") (arm (PCons (PVar "p") (PVar "ptail")) () (ETuple (EVar "p") (EVar "ptail"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoExpr (EBinOp "::" (ERecordCreate "EvidenceObservationEntry" ((fa "eoeEv" (EFieldAccess (EVar "o") "oEv")) (fa "eoeGoalKind" (EApp (EVar "goalKindName") (EFieldAccess (EVar "o") "oKind"))) (fa "eoeSlot" (EVar "slot")) (fa "eoeArity" (EVar "arity")) (fa "eoePredicate" (EApp (EApp (EMethodRef "map") (EVar "ppMono")) (EVar "predHere"))) (fa "eoeOutcome" (EApp (EVar "routeOutcomeKind") (EVar "r"))) (fa "eoeGivenBinder" (EApp (EVar "routeGivenBinder") (EVar "r"))) (fa "eoeInstanceKey" (EApp (EVar "routeInstanceKey") (EVar "r"))) (fa "eoePrerequisites" (EApp (EApp (EMethodRef "map") (EVar "renderRouteIdentity")) (EApp (EVar "routePrerequisiteRoutes") (EVar "r")))) (fa "eoeProjectionPath" (EVar "None")) (fa "eoeScope" (EFieldAccess (EVar "o") "oScope")))) (EApp (EApp (EApp (EApp (EApp (EVar "evidenceObservationEntriesGo") (EVar "o")) (EVar "rs")) (EVar "predsRest")) (EVar "arity")) (EBinOp "+" (EVar "slot") (ELit (LInt 1))))))))
 (DTypeSig false "noteNumericPredicateTrace" (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit")))))))))
 (DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EIf (EFieldAccess (EVar "numericPredicateTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "numericPredicateTraceEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EVar "numericPredicateTraceEntries") "value"))) (ELit LUnit)))
 (DTypeSig false "assumAnswerBinder" (TyFun (TyCon "AssumAnswer") (TyCon "EvidenceBinderId")))
@@ -65960,7 +66245,7 @@ isTyAuth _ = False
 (DFunDef false "runStampCtxs" ((PList)) (ELit LUnit))
 (DFunDef false "runStampCtxs" ((PCons (PVar "ctx") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EFieldAccess (EVar "ctx") "scPerRun"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "toggles")) (EFieldAccess (EVar "ctx") "scToggles"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EFieldAccess (EVar "ctx") "scModule"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EFieldAccess (EVar "ctx") "scImplDecls"))) (DoLet false false PWild (EApp (EApp (EVar "runStampSteps") (EVar "ctx")) (EVar "moduleStampOrder"))) (DoLet false false PWild (EApp (EVar "recordEvidence") (EFieldAccess (EVar "ctx") "scGoals"))) (DoExpr (EApp (EVar "runStampCtxs") (EVar "rest")))))
 (DTypeSig false "recordEvidence" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "Unit")))
-(DFunDef false "recordEvidence" ((PVar "gs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evTable")) (EBinOp "++" (EApp (EVar "evEntriesOf") (EVar "gs")) (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value"))))))
+(DFunDef false "recordEvidence" ((PVar "gs")) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (EVar "noteEvidenceObservation")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "evTable")) (EBinOp "++" (EApp (EVar "evEntriesOf") (EVar "gs")) (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value"))))))
 (DTypeSig false "evEntriesOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyCon "EvTable")))
 (DFunDef false "evEntriesOf" ((PVar "gs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (EApp (EApp (EVar "EvEntry") (EFieldAccess (EVar "o") "oEv")) (EApp (EVar "evValueOf") (EFieldAccess (EVar "o") "oDest"))))) (EVar "gs")))
 (DTypeSig false "evValueOf" (TyFun (TyCon "EvDest") (TyCon "EvVal")))

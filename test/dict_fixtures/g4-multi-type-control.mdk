@@ -1,0 +1,22 @@
+-- DICT-SEMANTICS §4.1 G4 (#2095) control: the same dict-forwarding `where`
+-- helper as `g4-where-multi-type.mdk`, but used at ONE ground type at every
+-- call site, so there is no cross-type sharing for the local pin to guard
+-- against. `pinLocalIfDictForwarded` still declines to generalize `g` --
+-- G4's abstraction never happens either way -- but with a single type in
+-- play the monomorphic route it falls back to is the right one, so the
+-- program accepts and prints the correct answer. This is what separates the
+-- pin's reject from a genuine type error: the reject in the two rows above
+-- is about SHARING one route across two types, not about `g` itself being
+-- unrouteable.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz _ = 1
+
+both : Sz a => a -> a -> Int
+both x y = g x + g y
+  where
+    g v = sz v
+
+main = println (both (1 : Int) (2 : Int))

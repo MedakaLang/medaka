@@ -1,0 +1,23 @@
+-- DICT-SEMANTICS §4.1 G4 (#2095): #1052's `where` spelling. G4 says a local
+-- binding generalized over a residual predicate abstracts it and each use site
+-- is its own instance -- here `g`'s uses at Int and Bool would print 1 and 2,
+-- so `both` should print 3. The located `T-LOCAL-CONSTRAINED-MONO` pin
+-- (#1986 rung 2, PR #2023) instead declines to generalize `g` at all and
+-- rejects the whole binding, because #1082 (G1 dict-abstraction for locals)
+-- has not landed. Pinned to TODAY's answer -- a reject -- not the spec's `3`;
+-- the row goes red the day #1082 lands and must be re-pinned to ACCEPT/`3`.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz _ = 1
+
+impl Sz Bool where
+  sz _ = 2
+
+both : (Sz a, Sz b) => a -> b -> Int
+both x y = g x + g y
+  where
+    g v = sz v
+
+main = println (both (1 : Int) True)

@@ -2292,6 +2292,61 @@ table = [
     pinned = "7\n21\n",
     codes = [],
   },
+  Row {
+    entry = "g4-where-multi-type.mdk",
+    label =
+      "§4.1 G4 (#2095): #1052's `where` spelling. G4 says a local generalized over a residual predicate abstracts it, so `g`'s two uses (Int and Bool) would each get their own instance and `both` would print 3. The located `T-LOCAL-CONSTRAINED-MONO` pin (#1986 rung 2, PR #2023) instead declines to generalize `g` and rejects the whole binding -- #1082 (G1 dict-abstraction for locals) has not landed. Pinned to TODAY's reject, not the spec's ACCEPT/`3`; re-pin the day #1082 lands",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-LOCAL-CONSTRAINED-MONO"],
+  },
+  Row {
+    entry = "g4-let-multi-type.mdk",
+    label =
+      "§4.1 G4 (#2095): #1052's `let` spelling of the row above -- same body, only the binder form differs. Before #1986 rung 2 the two spellings pinned on DIFFERENT predicate sets (`where` collapsed to 2, `let` generalized to the spec's 3, DICT-SEMANTICS.md's §11 G4 row); rung 2 unified all five sites onto one located reject, so this spelling now agrees with `g4-where-multi-type.mdk` -- both reject, uniformly. Pinned to TODAY's reject; re-pin alongside the `where` row when #1082 lands",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-LOCAL-CONSTRAINED-MONO"],
+  },
+  Row {
+    entry = "g4-multi-type-control.mdk",
+    label =
+      "§4.1 G4 (#2095) control for the two rows above: the same dict-forwarding `where` helper, used at ONE ground type at every call site. `pinLocalIfDictForwarded` still declines to generalize `g` -- G4's abstraction never happens either way -- but with a single type in play the monomorphic route it falls back to is the right one, so the program accepts. This is what separates the pin's reject above from a genuine type error: that reject is about SHARING one route across two types, not about `g` being unrouteable",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "g4-ground-type-local-over-reject.mdk",
+    label =
+      "§4.1 G4 (#2095): the shipped OVER-REJECTION `docs/KNOWN-GAPS.md` names under \"Known over-reject: a plain ground-type local also gets pinned\" -- the exact repro quoted there. `s` forwards to the prelude's `debug` and is used at two plain GROUND types with no enclosing polymorphic signature at all, so nothing here needs an abstract dictionary and `s` already looks fully monomorphic per use; it is rejected anyway by the same pin, which cannot tell \"needs abstraction\" apart from \"is merely reused\". Fix order #2032, blocked on #1046. Pinned KNOWN-BAD, not to the spec's accept",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-LOCAL-CONSTRAINED-MONO"],
+  },
+  Row {
+    entry = "s3-super-projected-not-reselected.mdk",
+    label =
+      "§3 `super` (#2095): #1127's shape (a THIRD overlapping instance makes a re-selection value-observable) under different names from `s6-1-4-supers-per-construction-goal.mdk`, which pins the same shape for §6.1.4/C2. `Boxed`'s `requires Sz a` super slot at `useSz`'s construction goal and the independent top-level `sizeOf` goal on the next line are today TWO SEPARATE entailments against the same three overlapping `Sz` instances, each independently picking the min-⊑ winner (`Sz (Box Int)`, 77) -- not one projection that GUARANTEES they agree. Pinned to today's value, 77/77; S2 replaces the super slot's selection with a projection from `useSz`'s own construction evidence, which is the observation this row exists for",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "77\n77\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2303,7 +2358,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 197
+tableRows = 202
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
