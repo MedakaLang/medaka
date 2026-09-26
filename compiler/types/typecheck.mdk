@@ -277,7 +277,9 @@ import types.effect_solver as EffectSolver
 import types.effect_bindings.{
   BindingSummary(..), newBindingSummary, bodyArrows, bodyRowAt
 }
-import types.effect_solver.{SummarySolver, SummaryFailure, ScopeOutcome(..)}
+import types.effect_solver.{
+  SummarySolver, SummaryFailure, ScopeOutcome(..), ScopeRoles(..), noScopeRoles
+}
 import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes,
   resolveDeferredJoin
@@ -1017,23 +1019,23 @@ summaryEscape False lower upper = atomsEscape lower upper
 
 finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
 finishEffectSummaryScope retained borrowed =
-  let _ = finishEffectSummaryScopeKeeping Tip retained borrowed
+  let _ = finishEffectSummaryScopeKeeping noScopeRoles retained borrowed
   ()
 
 -- Close the scope, keeping as residuals the unproven obligations over the
 -- authorities [quantifiable] assigns to a member (see `closeSummaryScope`);
 -- each comes back with its member index.
-finishEffectSummaryScopeKeeping : Map Int Int ->
+finishEffectSummaryScopeKeeping : ScopeRoles ->
   Map Int Unit ->
   Map Int (Ref Effvar) ->
   List (Int, AuthResidual)
-finishEffectSummaryScopeKeeping quantifiable retained borrowed =
+finishEffectSummaryScopeKeeping roles retained borrowed =
   let outcome =
     EffectSolver.closeSummaryScope
       perRun.value.effectSummaries
       perRun.value.rigidEffvarsRef.value
       perRun.value.rigidAuthvarsRef.value
-      quantifiable
+      roles
       retained
       borrowed
       summaryEscape
@@ -1179,16 +1181,18 @@ effectRowRoots row roots =
 -- alternatives can still shape them.  Everything the close reads (roots,
 -- quantifiable authorities) is taken after that.
 finishValueEffectsKeeping : List (Bool, Mono) -> List (Int, AuthResidual)
-finishValueEffectsKeeping members =
+finishValueEffectsKeeping generalizing =
+  let members =
+    map ((generalizes, mono) => (localRole generalizes, mono)) generalizing
   let level = perRun.value.currentLevel.value
   let _ =
-    if anyList fst members then
+    if anyList fst generalizing then
       settlePendingJoins level
     else
       postponePendingJoins level
   let monos = map snd members
   finishEffectSummaryScopeKeeping
-    (quantifiableOf members)
+    (scopeRolesOf members)
     (fold (acc mono => effectRoots mono acc) Tip monos)
     (fold (acc mono => borrowedEffectCells mono acc) Tip monos)
 
@@ -11511,7 +11515,48 @@ bindVar cell t =
     ()
   else
     let _ = propagatePoison cell t
+    let shaped = takeJoinsShapedBy cell t
     cell := Link t
+    settleShapedJoins shaped
+
+-- A recorded join whose result a unification is shaping is decided by that
+-- use, as it was before joins were delayed: once the result has its shape,
+-- every alternative takes it by equality (EFFECTS-SEMANTICS §6.8).  Deciding
+-- it later would let the use first relate a row the alternatives then share
+-- to a closed row, which a caller-supplied row can meet only by equality.
+-- Linking the result to another variable shapes nothing.  The common case has
+-- nothing recorded and costs one emptiness test.
+takeJoinsShapedBy : Ref Tyvar -> Mono -> List PendingJoin
+takeJoinsShapedBy cell t = match perRun.value.pendingJoinsRef.value
+  [] => []
+  pending => match normalize t
+    TVar _ => []
+    _ =>
+      let id = tyvarId cell
+      let hits = filter (pj => joinResultIs id pj) pending
+      match hits
+        [] => []
+        _ =>
+          perRun.value.pendingJoinsRef :=
+            filter (pj => not (joinResultIs id pj)) pending
+          hits
+
+joinResultIs : Int -> PendingJoin -> Bool
+joinResultIs id pj = match normalize pj.pjResult
+  TVar c => tyvarId c == id
+  _ => False
+
+settleShapedJoins : List PendingJoin -> Unit
+settleShapedJoins [] = ()
+settleShapedJoins shaped =
+  fold
+    (_ pj =>
+      fold
+        (_ (loc, value) => pj.pjOps.vjoEqual loc pj.pjResult value)
+        ()
+        pj.pjValues)
+    ()
+    shaped
 
 -- A poisoned variable is one an earlier diagnostic already explained; whatever
 -- it is bound to inherits that, so an obligation on a variable reached only
@@ -21081,12 +21126,13 @@ lowerPending level (pj :: rest)
     { pj | pjLevel = level - 1 } :: lowerPending level rest
 lowerPending _ pending = pending
 
+-- Decide a join at the close of its scope.  A result a unification shaped
+-- was decided then (`takeJoinsShapedBy`); one still shaped here is decided
+-- the same way.
 resolvePendingJoin : PendingJoin -> Unit
-resolvePendingJoin pj =
-  let joined = resolveDeferredJoin pj.pjOps pj.pjResult pj.pjValues
-  match normalize pj.pjResult
-    TVar _ => unify pj.pjResult joined
-    _ => unifyInto True pj.pjResult joined
+resolvePendingJoin pj = match normalize pj.pjResult
+  TVar _ => unify pj.pjResult (resolveDeferredJoin pj.pjOps pj.pjValues)
+  _ => settleShapedJoins [pj]
 
 -- A receiving qualified slot's allowance: one flexible variable of the
 -- current scope, bounded below by every value that reaches the slot.
@@ -40349,27 +40395,51 @@ quantifiableAuthorities : TcEnv ->
   List (String, Ty) ->
   OrdMap (List (List Pat, Expr)) ->
   List ScopedMember ->
-  Map Int Int
+  ScopeRoles
 quantifiableAuthorities env sigs grouped members =
-  quantifiableOf
+  scopeRolesOf
     (map
       (member => (
-        isNone (lookupAssoc member.smName sigs)
-          && allList
-            (memberClauseIsValue env)
-            (clausesOf member.smName grouped),
+        memberRole
+          (isSome (lookupAssoc member.smName sigs))
+          (allList (memberClauseIsValue env) (clausesOf member.smName grouped)),
         member.smMono,
       ))
       members)
 
--- [members] in group order: whether each generalizes, and its type.
-quantifiableOf : List (Bool, Mono) -> Map Int Int
-quantifiableOf members =
+-- What a binding's scheme does with the authorities of its type.
+data BindingRole =
+  -- an unsigned binding that generalizes: it quantifies them
+  | RoleQuantifies
+  -- one the value restriction keeps monomorphic: they are the enclosing
+  -- scope's, which bounds them at its uses
+  | RoleMonomorphic
+  -- a signed binding: it publishes its signature, whose universals are rigid
+  -- in its own scope and never leave it
+  | RoleDeclared
+
+memberRole : Bool -> Bool -> BindingRole
+memberRole True _ = RoleDeclared
+memberRole False True = RoleQuantifies
+memberRole False False = RoleMonomorphic
+
+-- A local binding carries no signature of its own.
+localRole : Bool -> BindingRole
+localRole True = RoleQuantifies
+localRole False = RoleMonomorphic
+
+-- [members] in group order, each with its role and type.  A quantifying
+-- member's argument-position authorities are quantified (a variable two
+-- members share is a recursive group's monomorphic link and is solved as
+-- before); a monomorphic member hands every authority of its type outward.
+scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
+scopeRolesOf members =
   let owners =
     fold
-      ((acc, index) (generalizes, mono) =>
-        let ids =
-          if generalizes then IdMap.keys (qualifierAuthIds mono Tip) else []
+      ((acc, index) (role, mono) =>
+        let ids = match role
+          RoleQuantifies => IdMap.keys (qualifierAuthIds mono Tip)
+          _ => []
         (
           fold
             (m id => IdMap.set id (index :: optionOr [] (IdMap.get id m)) m)
@@ -40379,12 +40449,22 @@ quantifiableOf members =
         ))
       (Tip, 0)
       members
-  IdMap.foldlWithKey
-    (acc id indices => match indices
-      [index] => IdMap.set id index acc
-      _ => acc)
-    Tip
-    (fst owners)
+  ScopeRoles {
+    rlQuantified =
+      IdMap.foldlWithKey
+        (acc id indices => match indices
+          [index] => IdMap.set id index acc
+          _ => acc)
+        Tip
+        (fst owners),
+    rlOutward =
+      fold
+        (acc (role, mono) => match role
+          RoleMonomorphic => authIdsIn mono acc
+          _ => acc)
+        Tip
+        members,
+  }
 
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
 residualsOf index residuals =

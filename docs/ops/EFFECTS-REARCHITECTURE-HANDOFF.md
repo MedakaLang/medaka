@@ -996,9 +996,37 @@ the owning boundary. Measured on `main` and after: `subIn cfg app`, `rdSub`
 under `<FileRead "cfg/app">`, `either`, a local copy, `withApp` and `inCfg`
 were refused and are accepted, every launder variant still refused;
 `choose`/`chooseOpt`/`listBoth`/match/lambda publish what their
-statement-swapped twin published, `pickApply` became `(Unit -> <a> b) -> (Unit
--> <c> b) -> <a | c> b`. A pre-existing S2 fixed on the way: a qualifier whose
-cell had been solved to another variable printed as a fresh binder.
+statement-swapped twin published. A pre-existing S2 fixed on the way: a
+qualifier whose cell had been solved to another variable printed as a fresh
+binder.
+
+**#3462 review round 1** (whole diff on `68fbd3f76`, every finding reproduced
+on a built binary beside a control; each answered by a rule):
+
+- *S1, new here:* a join whose result a use shaped first by a closed slot was
+  refused (`sortBy (if asc then up else down)`, `fold (if c then f else g)`,
+  `runAll [f1, f2]`, an annotated `let`): resolution gave the alternatives
+  fresh caller-supplied rows and then required them below `<>`. A use that
+  shapes the result now decides the join there, by equality, as before joins
+  were delayed (`takeJoinsShapedBy` in `bindVar`), so delayed joins help only
+  where an alternative is shaped first. `pickApply` publishes its `main` type
+  again.
+- *S0, older than this branch but written into the first §4.1 text:* a local
+  helper using a captured handle (`let inner (Dir p) = readUnder h p`) handed
+  its obligation outward while it named the helper's generalized authority, so
+  it held vacuously and `/tmp` was read under `<FileRead "cfg/*">` on every
+  engine. A residual may now name an authority outside the binding's scope as
+  it stands (`outsideAuth`).
+- *S2:* a binding the value restriction keeps monomorphic had its instance
+  decided at its definition (`let p = subIn cfg` then `p app` refused); its
+  type's authorities are now outward, the enclosing scope's (`ScopeRoles`).
+- *S3:* an alias-qualified occurrence (`D.rdSub`) reported at a stale span:
+  desugar dropped the alias head's span (`withLocOf`). A residual forced to
+  top by a top lower bound rendered as `(* <= d)`: such a variable has no
+  freedom and is solved, `Dir *` as on `main`.
+- *Older, not acted on:* `run (Handler (x => (if c then f else g) x))` is
+  refused on `main` too: an unsigned binding's input row is not solved down to
+  a closed slot through a lambda.
 
 **Traps paid for (#3462):**
 
@@ -1016,6 +1044,17 @@ cell had been solved to another variable printed as a fresh binder.
 - An emitter built by a flawed typechecker compiles the next one: after such a
   failure, delete `./medaka` and `./medaka_emitter` so the next build
   bootstraps from the seed.
+- A binding has three roles, not two (`BindingRole`): an unsigned binding
+  that generalizes quantifies its authorities, a monomorphic one hands them
+  outward, and a signed one does neither. The first round-1 fix counted a
+  signed member as monomorphic, so its signature's rigid authority went
+  outward, reached the module root after the rigid set was restored, and was
+  solved: `effect_named_authority_ref_launder` published `String
+  @"/etc/shadow"` and accepted. Only that existing fixture caught it; a
+  universal is now never outward (`withoutRigid`).
+- `diff_compiler_fmt`'s typecheck-error rows run the `check_main` oracle, which
+  `build_oracles.sh --for diff_compiler_fmt` rebuilds; reading a verdict from a
+  stale `test/bin/check_main` after a compiler change reads the old compiler.
 
 ## Delivered code and invariants to preserve
 

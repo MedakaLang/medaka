@@ -803,16 +803,21 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
    not a side table keyed by name: it crosses modules with the scheme and is
    instantiated by the occurrence's one substitution
    (`instantiateMethodTracked`, `mtiResidual`).
-2. **Keeping.** `closeSummaryScope` takes the authorities the closing group
-   will quantify, each with its member (`quantifiableAuthorities`,
-   `quantifiableOf`: the `qualifierAuthIds` of an unsigned value member, a
-   variable two members share excluded). `solveOwnedStaged` solves the local
+2. **Keeping.** `closeSummaryScope` takes the closing group's `ScopeRoles`
+   (`quantifiableAuthorities`, `scopeRolesOf`): the authorities each member
+   will quantify (the `qualifierAuthIds` of an unsigned value member, a
+   variable two members share excluded) and the outward ones, every authority
+   of a member that stays monomorphic, which belong to the enclosing scope and
+   are neither solved nor refused here. `solveOwnedStaged` solves the local
    variables first with every quantifiable one held back, decides eligibility
    on what remains (`residualEligible`: a constraint component quantified by
-   one member and reaching nothing else, found by one walk per component), and
+   one member whose other authorities lie outside the scope, `outsideAuth`,
+   and none bounded below by the top, found by one walk per component), and
    solves any ineligible quantifiable variable as before. `checkAuthorities`
    keeps an unproven obligation over eligible variables and constants
-   (`keptResidual`) and decides the rest. Every local binding route (`blockLet`,
+   (`keptResidual`, which may name an outside authority as it stands) and
+   decides the rest, handing an obligation over an outward authority to the
+   enclosing scope. Every local binding route (`blockLet`,
    `blockRecLet`, `inferLetSimple`, `inferRecLet`, `processLetGroup`) keeps
    residuals the same way (`finishValueEffectsKeeping`).
 3. **Owing.** `forceInstantiation` re-emits each residual through
@@ -824,10 +829,12 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
 4. **Delayed joins.** `joinNonempty` with no shaped alternative asks
    `vjoDefer`; inside a binding scope `deferJoin` records a `PendingJoin`
    (result variable, alternatives, level, deciding services) when at least two
-   distinct variables meet. `resolvePendingJoins` decides a scope's joins before
-   the scope's roots are read and before Num defaulting and generalization
-   (`resolveDeferredJoin`: an alternative's shape, else the result's own shape
-   with the alternatives flowing into it, else equality). A local binding that
+   distinct variables meet. A unification that shapes a recorded join's result
+   decides the join then, by equality (`takeJoinsShapedBy`,
+   `settleShapedJoins` in `bindVar`, one emptiness test when nothing is
+   recorded). `resolvePendingJoins` decides the rest before the scope's roots
+   are read and before Num defaulting and generalization
+   (`resolveDeferredJoin`: an alternative's shape, else equality). A local binding that
    generalizes hands a join of enclosing-scope variables outward with its
    result at the enclosing level (`settlePendingJoins`); one that does not
    generalizes nothing and hands all of them outward (`postponePendingJoins`).
@@ -835,7 +842,10 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
    it uses are fixed when it closes, and a join postponed past that point was
    measured to route a method on an undecided type (the build's emitter
    panicked on an arg-tag route with an `Int` receiver).
-5. **Rendering.** `ppScheme`/`ppSchemeCon` print the context
+5. **Locations.** An alias-qualified reference (`D.subIn`) keeps its alias
+   head's span through desugar (`withLocOf`), so a diagnostic about the
+   occurrence, a residual failure included, points at it.
+6. **Rendering.** `ppScheme`/`ppSchemeCon` print the context
    (`renderResiduals`, `contextText`); `ppDomain` reads a qualifier through its
    links, so a solved cell no longer prints as a fresh binder (`subH h = sub h`
    printed `Dir d -> (a : String) -> Dir d`).

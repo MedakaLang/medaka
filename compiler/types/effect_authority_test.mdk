@@ -1163,3 +1163,71 @@ test "a residual crosses a module boundary with its scheme" = expectAll [
       (residualModuleCodes
         "cfg : Dir \"cfg/*\"\ncfg = mk \"cfg/*\"\nuse _ = subIn cfg (mk \"/etc/x\")\n")),
 ]
+
+-- Review round 1 on #3462.  A local helper that uses a captured handle keeps
+-- its obligation against the enclosing authority as a residual naming it as
+-- it stands; a partial application the value restriction keeps monomorphic
+-- owes its instance where it is used; a quantified authority bounded below by
+-- the domain's top has no freedom and is solved to it.
+test "a residual may name an authority outside the binding's scope" = expectAll
+  [
+    expectTrue
+      (rejects
+        (residual
+          "via h s =\n  let inner (Dir p) = sub h p\n  inner s\nuse _ = via cfg etc\n")),
+    expectTrue
+      (accepts
+        (residual
+          "via h s =\n  let inner (Dir p) = sub h p\n  inner s\nuse _ = via cfg app\n")),
+    expectEqual
+      "(a <= d) => Dir d -> Dir a -> Dir d"
+      (schemeOf
+        (residual "via h s =\n  let inner (Dir p) = sub h p\n  inner s\n")
+        "via"),
+  ]
+
+test "a monomorphic binding owes its residuals where it is used" = expectAll [
+  expectTrue (accepts (residual "outer _ =\n  let p = subIn cfg\n  p app\n")),
+  expectTrue (rejects (residual "outer _ =\n  let p = subIn cfg\n  p etc\n")),
+  expectTrue (accepts (residual "partial = subIn cfg\nuse _ = partial app\n")),
+]
+
+test "an authority bounded below by the top is solved, not kept" =
+  expectEqual
+    "Bool -> String -> String -> Dir * -> Dir *"
+    (schemeOf
+      (residual "pickPath c a b h = sub h (if c then a else b)\n")
+      "pickPath")
+
+aliasResidualLine : Option Int
+aliasResidualLine =
+  let diags =
+    flatMap
+      (m => match m
+        (_, (_, errors, _)) => errors)
+      (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+        (
+          "dirs",
+          desugar
+            (parseLocated
+              ("public export data Dir (d : Authority Store) = Dir (String @d)\n"
+                ++ "export\nmk : (s : String) -> Dir s\nmk s = Dir s\n"
+                ++ "sub : Dir d -> (p : String @d) -> Dir d\nsub h _ = h\n"
+                ++ "export\nsubIn h (Dir p) = sub h p\n")),
+        ),
+        (
+          "entry",
+          desugar
+            (parseLocated
+              ("import dirs as D\n"
+                ++ "cfg : D.Dir \"cfg/*\"\ncfg = D.mk \"cfg/*\"\n"
+                ++ "etc : D.Dir \"/etc/x\"\netc = D.mk \"/etc/x\"\n"
+                ++ "use _ = D.subIn cfg etc\n")),
+        ),
+      ])
+  match filter (d => S.contains "needs" (tcMsg d)) diags
+    (TcDiag _ _ (Some (Loc _ line _ _ _)) _ _ _) :: _ => Some line
+    _ => None
+
+test "an alias-qualified occurrence is located at its own name" =
+  expectEqual (Some 6) aliasResidualLine

@@ -1060,7 +1060,7 @@ finishAssumptionTrace : Unit -> List AssumptionTraceEntry
 finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
 finishEffectSummaryScope : Map Int Unit -> Map Int (Ref Effvar) -> Unit
-finishEffectSummaryScopeKeeping : Map Int Int -> Map Int Unit -> Map Int (Ref Effvar) -> List (Int, AuthResidual)
+finishEffectSummaryScopeKeeping : ScopeRoles -> Map Int Unit -> Map Int (Ref Effvar) -> List (Int, AuthResidual)
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishModuleMarking : ModuleMarking -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
@@ -1611,6 +1611,7 @@ joinMismatchMsg : String -> String -> String
 joinOfOuterVariables : Int -> PendingJoin -> Bool
 joinPolarities : List Polarity -> Polarity
 joinPolaritiesGo : Polarity -> List Polarity -> Polarity
+joinResultIs : Int -> PendingJoin -> Bool
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
 joinValueEqual : String -> Option Loc -> Mono -> Mono -> Unit
 joinValueTypes : String -> List (Option Loc, Mono) -> Mono
@@ -1670,6 +1671,7 @@ localBindingSummary : LetBind -> (String, BindingSummary)
 localDeclaredConstraintFor : String -> CDeclared
 localPinIds : Int -> Int -> List Int
 localPinPairs : Int -> Int -> List (Int, String)
+localRole : Bool -> BindingRole
 lookupBinding : TcEnv -> String -> Option EnvBinding
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 lookupCtor : TcEnv -> String -> Option Scheme
@@ -1739,6 +1741,7 @@ memberForce : ScopedMember -> EffRow
 memberMethodRename : List String -> UseMember -> List (String, String)
 memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
+memberRole : Bool -> Bool -> BindingRole
 memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
 memberSuffix : String -> String
 mentionsEscaped : Authority -> Bool
@@ -2221,8 +2224,7 @@ qualifierAuthIds : Mono -> Map Int Unit -> Map Int Unit
 qualifierBinderTypeMsg : String -> String -> String
 qualifyBy : SigVars -> String -> Mono -> Mono
 qualifyByAll : SigVars -> List String -> Mono -> Mono
-quantifiableAuthorities : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List ScopedMember -> Map Int Int
-quantifiableOf : List (Bool, Mono) -> Map Int Int
+quantifiableAuthorities : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
 quantifyFree : List AuthResidual -> EffRow -> Mono -> Scheme
 quotedNames : List String -> String
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
@@ -2524,6 +2526,7 @@ scopeImplMethods : ScopeId -> List ImplMethod -> List ScopedImplMethod
 scopeMembers : ScopeId -> Map String (List (List Pat, Expr)) -> List (String, Mono) -> List ScopedMember
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> Map String Unit -> List (String, List MethodPredicateSlot)
 scopePredicateSlots : List ((String, String), List PredicateSlot) -> Map String Unit -> List Decl -> List (String, List PredicateSlot)
+scopeRolesOf : List (BindingRole, Mono) -> ScopeRoles
 scopeShadowsForGroup : List String -> Unit
 scopeTraceContext : ScopeId -> (String, String)
 scopedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
@@ -2562,6 +2565,7 @@ settlePatLitsGo : Bool -> List (Mono, Int, Option Loc) -> Unit
 settlePatLitsOnly : List (Mono, Int, Option Loc) -> Unit
 settlePending : Int -> List PendingJoin -> List PendingJoin
 settlePendingJoins : Int -> Unit
+settleShapedJoins : List PendingJoin -> Unit
 shadowBareName : List (String, String) -> String -> String
 shadowDeclaredFor : String -> String -> CDeclared
 shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
@@ -2695,6 +2699,7 @@ tailCellsOf : SigVars -> List String -> List (Ref Effvar)
 taintAndDrop : Int -> List (Mono, Loc) -> List (Mono, Loc)
 takeAlphaConstraint : List (String, String) -> Constraint -> List Constraint -> List Constraint -> Option (List (String, String), List Constraint)
 takeFirst : Int -> List a -> List a
+takeJoinsShapedBy : Ref Tyvar -> Mono -> List PendingJoin
 takeOpenedExistentials : Unit -> List (Ref Authvar)
 takePatLits : Unit -> List (Mono, Int, Option Loc)
 takeUntilInclusiveS : String -> List String -> List String

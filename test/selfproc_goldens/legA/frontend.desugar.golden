@@ -110,6 +110,7 @@ pinType : String -> List Ty -> Ty
 pinTypeGo : Ty -> List Ty -> Ty
 punField : Expr -> FieldAssign
 pureMethodName : Bool -> String
+qualifiedAt : Expr -> String -> Expr -> Expr
 qualifyAliasRefs : List Decl -> List Decl
 qualifyAliasRefsWith : List String -> List Decl -> List Decl
 recPatFields : List Field -> List String -> List RecPatField

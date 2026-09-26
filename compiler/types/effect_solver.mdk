@@ -6,7 +6,7 @@ import map as M
 import map.{Map(..)}
 import types.effect_authority.{
   renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
-  authNorm, authSub, authVars, authJoinAll, linkAuthvar
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar, authIsTop
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -83,6 +83,19 @@ public export data SummaryFailure c = SummaryFailure {
   -- the binding whose residual this failed obligation is (`awResidualOf`)
   esfResidualOf : Option String,
 }
+
+-- What the closing binding group says about the authorities in its members'
+-- types: which member's scheme quantifies each, and which belong to a member
+-- that stays monomorphic.  The latter are the enclosing scope's: they are
+-- lowered to it once the group closes, and later uses there bound them.
+public export data ScopeRoles = ScopeRoles {
+  rlQuantified : Map Int Int,
+  rlOutward : Map Int Unit,
+}
+
+export
+noScopeRoles : ScopeRoles
+noScopeRoles = ScopeRoles { rlQuantified = Tip, rlOutward = Tip }
 
 -- What closing a scope decides: the obligations it could neither prove nor
 -- hand outward, and the obligations it keeps for a scheme — each with the
@@ -596,13 +609,12 @@ retainLeavesAt level (cell :: rest) =
     _ => ()
   retainLeavesAt level rest
 
--- [quantifiable] maps each authority variable the closing binding group will
--- quantify to the index of the member whose scheme quantifies it.
+-- [roles]: the closing binding group's quantified and outward authorities.
 export
 closeSummaryScope : SummarySolver c ->
   Map Int Unit ->
   Map Int Unit ->
-  Map Int Int ->
+  ScopeRoles ->
   Map Int Unit ->
   Map Int (Ref Effvar) ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
@@ -610,12 +622,12 @@ closeSummaryScope : SummarySolver c ->
   (Int -> Ref Effvar) ->
   (Int -> Authority -> Authority) ->
   ScopeOutcome c
-closeSummaryScope solver protected rigidAuths quantifiable retained borrowed escape makeJoin makeResidual widen =
+closeSummaryScope solver protected rigidAuths roles retained borrowed escape makeJoin makeResidual widen =
   let scope = currentScope solver
   -- Authorities first: an argument's lower bounds decide a callee's flexible
   -- authority before any row is compared, so a row check sees concrete atoms
   -- wherever the body determined them.
-  let _ = solveOwnedStaged scope rigidAuths quantifiable widen
+  let _ = solveOwnedStaged scope rigidAuths roles widen
   let summaries = M.values scope.essNodes.value
   let untransferred =
     filter
@@ -692,9 +704,14 @@ closeSummaryScope solver protected rigidAuths quantifiable retained borrowed esc
   let failures = validateRelations solver frozen escape unproven
   -- Row validation may have derived new authority obligations; solve the
   -- variables they bound, then decide every obligation this scope owns.
-  let eligible = solveOwnedStaged scope rigidAuths quantifiable widen
+  let eligible = solveOwnedStaged scope rigidAuths roles widen
   let (residuals, authFailures) =
-    checkAuthorities solver scope rigidAuths eligible
+    checkAuthorities
+      solver
+      scope
+      rigidAuths
+      (withoutRigid rigidAuths roles.rlOutward)
+      eligible
   solver.essStack := match solver.essStack.value
     _ :: rest => rest
     [] => panic "effect scope stack underflow"
@@ -736,16 +753,37 @@ localRigidAuth _ rigid cell = match !cell
 -- the variable); it is applied to every solution written.
 solveOwnedAuthorities : SummaryScope c ->
   Map Int Unit ->
+  Map Int Unit ->
   Map Int Int ->
   (Int -> Authority -> Authority) ->
   Unit
-solveOwnedAuthorities scope rigid eligible widen =
+solveOwnedAuthorities scope rigid outward held widen =
   solveAuthorities
     (cell =>
       ownedFlexibleAuth scope rigid cell
-        && not (M.has (authvarId cell) eligible))
+        && not (M.has (authvarId cell) held)
+        && not (M.has (authvarId cell) outward))
     widen
     (reverseL scope.essAuthorities.value)
+
+-- A universal is never outward: it is rigid in the scope that declared it,
+-- which decides every obligation over it.
+withoutRigid : Map Int Unit -> Map Int Unit -> Map Int Unit
+withoutRigid rigid outward =
+  M.foldlWithKey
+    (acc id _ => if M.has id rigid then acc else M.set id () acc)
+    Tip
+    outward
+
+-- An authority this scope neither owns nor may decide: one from an enclosing
+-- scope (created before this one opened, or at an older level, flexible or
+-- a universal there), or one the closing group hands outward.  A residual
+-- may mention it as it stands, as a scheme mentions its environment.
+outsideAuth : SummaryScope c -> Map Int Unit -> Ref Authvar -> Bool
+outsideAuth scope outward cell = match !cell
+  AUnbound id level _ _ =>
+    M.has id outward || level < scope.essLevel || id <= scope.essEffvarFloor
+  ALink _ _ => False
 
 -- Solve the scope's owned variables, keeping residual-eligible ones open.
 -- Local variables go first, with every quantifiable one held back, so a local
@@ -755,31 +793,70 @@ solveOwnedAuthorities scope rigid eligible widen =
 -- any owned variable is.  Returns the eligible variables.
 solveOwnedStaged : SummaryScope c ->
   Map Int Unit ->
-  Map Int Int ->
+  ScopeRoles ->
   (Int -> Authority -> Authority) ->
   Map Int Int
-solveOwnedStaged scope rigid Tip widen =
-  let _ = solveOwnedAuthorities scope rigid Tip widen
-  Tip
-solveOwnedStaged scope rigid quantifiable widen =
-  let _ = solveOwnedAuthorities scope rigid quantifiable widen
-  let eligible = residualEligible quantifiable rigid scope.essAuthorities.value
-  let _ = solveOwnedAuthorities scope rigid eligible widen
-  eligible
+solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
+  Tip =>
+    let _ =
+      solveOwnedAuthorities
+        scope
+        rigid
+        (withoutRigid rigid roles.rlOutward)
+        Tip
+        widen
+    Tip
+  quantifiable =>
+    let outward = withoutRigid rigid roles.rlOutward
+    let _ = solveOwnedAuthorities scope rigid outward quantifiable widen
+    let eligible =
+      residualEligible
+        scope
+        quantifiable
+        outward
+        rigid
+        scope.essAuthorities.value
+    let _ = solveOwnedAuthorities scope rigid outward eligible widen
+    eligible
 
 -- The quantifiable variables whose obligations become residuals rather than
 -- being solved: those whose whole constraint component (variables linked by
--- a shared obligation) is quantified by one member.  A component that also
--- reaches a variable the group does not quantify — an outer, rigid or local
--- one — keeps today's decision for all of it, so a residual never relates a
--- quantified variable to something its scheme cannot name.
-residualEligible : Map Int Int ->
+-- a shared obligation) is quantified by one member, apart from authorities
+-- outside this scope, which a residual names as they stand.  A component
+-- that also reaches a local variable the group does not quantify is decided
+-- as before, and so is one bounded below by a domain's top: its variable has
+-- no freedom left, and solving it is exact.
+residualEligible : SummaryScope c ->
+  Map Int Int ->
+  Map Int Unit ->
   Map Int Unit ->
   List (AuthWanted c) ->
   Map Int Int
-residualEligible Tip _ _ = Tip
-residualEligible quantifiable rigid wanteds =
+residualEligible _ Tip _ _ _ = Tip
+residualEligible scope quantifiable outward rigid wanteds =
   let edges = fold (acc w => linkIds (wantedVarIds w) acc) Tip wanteds
+  let cells =
+    fold
+      (acc w =>
+        fold
+          (m c => M.set (authvarId c) c m)
+          acc
+          (authVars w.awLower ++ authVars w.awUpper))
+      Tip
+      wanteds
+  let forced =
+    fold
+      (acc w =>
+        if authIsTop w.awLower then
+          fold (m c => M.set (authvarId c) () m) acc (authVars w.awUpper)
+        else
+          acc)
+      Tip
+      wanteds
+  let outside =
+    id => match M.get id cells
+      Some c => outsideAuth scope outward c
+      None => False
   -- every component is walked once, eligible or not
   snd
     (M.foldlWithKey
@@ -789,9 +866,15 @@ residualEligible quantifiable rigid wanteds =
         else
           let comp = componentOf edges [id] Tip
           let seen2 = M.foldlWithKey (m k _ => M.set k () m) seen comp
-          match componentMember quantifiable rigid (M.keys comp)
-            Some member =>
-              (seen2, M.foldlWithKey (m k _ => M.set k member m) acc comp)
+          let ids = M.keys comp
+          match componentMember quantifiable rigid outside forced ids
+            Some member => (
+              seen2,
+              fold
+                (m k => if M.has k quantifiable then M.set k member m else m)
+                acc
+                ids,
+            )
             None => (seen2, acc))
       (Tip, Tip)
       edges)
@@ -817,20 +900,31 @@ componentOf edges (id :: rest) seen =
   else
     componentOf edges (optionOr [] (M.get id edges) ++ rest) (M.set id () seen)
 
-componentMember : Map Int Int -> Map Int Unit -> List Int -> Option Int
-componentMember _ _ [] = None
-componentMember quantifiable rigid (first :: rest) =
-  match M.get first quantifiable
-    Some member =>
-      if M.has first rigid then
-        None
-      else if allList
-        (id => M.get id quantifiable == Some member && not (M.has id rigid))
-        rest then
-        Some member
-      else
-        None
-    None => None
+-- The one member quantifying every local variable of a component, when the
+-- rest lie outside the scope and none is forced to top.
+componentMember : Map Int Int ->
+  Map Int Unit ->
+  (Int -> Bool) ->
+  Map Int Unit ->
+  List Int ->
+  Option Int
+componentMember quantifiable rigid outside forced ids =
+  let members =
+    fold
+      (acc id => match M.get id quantifiable
+        Some member => M.set member () acc
+        None => acc)
+      Tip
+      ids
+  let local =
+    allList
+      (id =>
+        not (M.has id forced)
+          && (M.has id quantifiable && not (M.has id rigid) || outside id))
+      ids
+  match M.keys members
+    [member] => if local then Some member else None
+    _ => None
 
 solveAuthorities : (Ref Authvar -> Bool) ->
   (Int -> Authority -> Authority) ->
@@ -953,53 +1047,62 @@ isVar _ _ = False
 checkAuthorities : SummarySolver c ->
   SummaryScope c ->
   Map Int Unit ->
+  Map Int Unit ->
   Map Int Int ->
   (List (Int, AuthWanted c), List (SummaryFailure c))
-checkAuthorities solver scope rigid eligible =
+checkAuthorities solver scope rigid outward eligible =
   let wanteds = reverseL scope.essAuthorities.value
-  let kept = flatMap (keptResidual eligible) wanteds
-  let decided = filter (w => isEmptyL (keptResidual eligible w)) wanteds
-  (kept, decideAuthorities solver scope rigid decided)
+  let keep = keptResidual (outsideAuth scope outward) eligible
+  let kept = flatMap keep wanteds
+  let decided = filter (w => isEmptyL (keep w)) wanteds
+  (kept, decideAuthorities solver scope rigid outward decided)
 
--- An unproven obligation over eligible variables only (and constants) is kept
--- for the member that quantifies them, normalised.
-keptResidual : Map Int Int -> AuthWanted c -> List (Int, AuthWanted c)
-keptResidual eligible w =
+-- An unproven obligation over one member's eligible variables, constants and
+-- authorities outside this scope is kept for that member, normalised.
+keptResidual : (Ref Authvar -> Bool) ->
+  Map Int Int ->
+  AuthWanted c ->
+  List (Int, AuthWanted c)
+keptResidual outside eligible w =
   let lo = authNorm w.awLower
   let hi = authNorm w.awUpper
-  match authVars lo ++ authVars hi
-    [] => []
-    first :: rest =>
-      if authSub lo hi then
+  let cells = authVars lo ++ authVars hi
+  let members =
+    fold
+      (acc c => match M.get (authvarId c) eligible
+        Some member => M.set member () acc
+        None => acc)
+      Tip
+      cells
+  match M.keys members
+    [member] =>
+      if authSub lo hi
+        || not
+          (allList (c => M.has (authvarId c) eligible || outside c) cells) then
         []
-      else match M.get (authvarId first) eligible
-        Some member =>
-          if allList
-            (c => M.get (authvarId c) eligible == Some member)
-            rest then
-            [
-              (
-                member,
-                AuthWanted {
-                  awLower = lo,
-                  awUpper = hi,
-                  awContext = w.awContext,
-                  awLabel = w.awLabel,
-                  awExact = w.awExact,
-                  awResidualOf = w.awResidualOf,
-                },
-              ),
-            ]
-          else
-            []
-        None => []
+      else
+        [
+          (
+            member,
+            AuthWanted {
+              awLower = lo,
+              awUpper = hi,
+              awContext = w.awContext,
+              awLabel = w.awLabel,
+              awExact = w.awExact,
+              awResidualOf = w.awResidualOf,
+            },
+          ),
+        ]
+    _ => []
 
 decideAuthorities : SummarySolver c ->
   SummaryScope c ->
   Map Int Unit ->
+  Map Int Unit ->
   List (AuthWanted c) ->
   List (SummaryFailure c)
-decideAuthorities solver scope rigid wanteds =
+decideAuthorities solver scope rigid outward wanteds =
   distinctFailures
     (flatMap
       (w =>
@@ -1009,9 +1112,14 @@ decideAuthorities solver scope rigid wanteds =
           []
         else
           let cells = authVars lo ++ authVars hi
+          -- an obligation over an outward authority is the enclosing
+          -- scope's, which owns that authority once this group closes, even
+          -- when it also names a universal; otherwise an obligation moves
+          -- out only over an outer variable and no universal
           let transferable =
-            anyList (outerFlexibleAuth scope rigid) cells
-              && not (anyList (localRigidAuth scope rigid) cells)
+            anyList (c => M.has (authvarId c) outward) cells
+              || anyList (outerFlexibleAuth scope rigid) cells
+                && not (anyList (localRigidAuth scope rigid) cells)
           match solver.essStack.value
             _ :: parent :: _ =>
               if transferable then

@@ -12,6 +12,7 @@ import types.effect_rows.{
 }
 import types.effect_solver.{
   ScopeOutcome(..),
+  noScopeRoles,
   SummaryFailure(..),
   SummarySolver,
   closeSummaryScope,
@@ -73,7 +74,7 @@ finish solver protected =
     solver
     protected
     Tip
-    Tip
+    noScopeRoles
     Tip
     Tip
     capabilityEscape
@@ -92,7 +93,7 @@ finishRetained solver rows =
     solver
     Tip
     Tip
-    Tip
+    noScopeRoles
     retained
     Tip
     capabilityEscape
@@ -112,7 +113,7 @@ finishBorrowed solver rows =
     solver
     Tip
     Tip
-    Tip
+    noScopeRoles
     retained
     cells
     capabilityEscape

@@ -442,12 +442,18 @@ supplies. Each use instantiates the context with the occurrence's one
 substitution and owes the instances as ordinary obligations of the using
 scope, which may prove them, keep them for its own scheme, or refuse them: a
 failure names the binding whose inferred type carried the relation. An
-obligation stays a residual only when its whole constraint component (the
-authorities it is linked to by shared obligations) is quantified by one
-member; one that reaches a variable the binding does not quantify, a rigid
-universal, an outer or restricted variable, or another member of a recursive
-group is decided as before. A binding the value restriction keeps
-monomorphic has no context: its obligations are owed where it is used. A
+obligation stays a residual when its constraint component (the authorities
+it is linked to by shared obligations) relates one member's quantified
+authorities to constants and to authorities outside the binding's scope, an
+enclosing variable or universal, which the residual names as it stands, as a
+scheme names its environment: a local helper that uses a captured handle,
+`let inner (Dir p) = sub h p`, keeps `p <= d_h` and each use of `inner`
+owes it. A component that reaches a local variable the binding does not
+quantify, or another member of a recursive group, is decided as before, and
+so is one bounded below by the domain's top, whose variable has no freedom
+left and is solved to it. A binding the value restriction keeps monomorphic
+has no context: the authorities of its type belong to the enclosing scope,
+which bounds them at its uses (`let p = subIn cfg` then `p app`). A
 residual renders in the context beside the class constraints, `(Num n, p <=
 d) =>`, a join as `p <= (a | b)`. There is no written syntax for a residual
 yet, so a signature cannot state one: an unsigned binding can be more general
@@ -875,10 +881,12 @@ When no alternative has a shape yet (two parameters, `if c then f else g`),
 the join is recorded and decided at the end of the binding scope that owns
 it, not by equating the alternatives: a later use may shape one of them
 (`runPure g`), and the others are then shaped afresh from it, each keeping its
-own latent row, and joined. If the join's result was shaped first (applied,
-annotated), the alternatives are shaped from it and flow into it by the
-directed judgment. A join nothing shaped is decided by equality, as for values
-that never become functions or covariant data. A binding that generalizes
+own latent row, and joined. A use that shapes the join's result first (an
+application, an argument slot, an annotation) decides the join there, by
+equality, as before joins were delayed: a closed slot fixes a callback's row,
+which a caller-supplied row could meet only by equality. A join nothing
+shaped is decided by equality, as for values that never become functions or
+covariant data. A binding that generalizes
 decides the joins recorded in its scope first, so it never generalizes over
 an undecided join; a join whose alternatives are all variables of the
 enclosing scope is handed to it instead, its result kept at that scope's

@@ -1280,10 +1280,32 @@ test "a delayed join accepts the honest use and refuses its launder" = expectAll
       (errorsFor (delayed "use = chooseMatch True quiet loud\n")),
   ]
 
+-- A use that shapes the join's result first decides it, by equality, as
+-- before joins were delayed: a closed slot fixes the callback's row there,
+-- which a caller-supplied row could meet only by equality (review round 1).
+test "a join a later use shapes first is decided by that use" = expectAll [
+  expectEqual
+    []
+    (errorsFor
+      "apply2 : (Int -> Int -> Int) -> Int\napply2 k = k 1 2\nviaApply c f g = apply2 (if c then f else g)\n"),
+  expectEqual
+    []
+    (errorsFor
+      "runAll : List (Int -> Int) -> Int\nrunAll ks = 0\nboth f g = runAll [f, g]\n"),
+  expectEqual
+    []
+    (errorsFor
+      "annotated c f g =\n  let r : Int -> Int = if c then f else g\n  r 1\n"),
+  expectNotEqual
+    []
+    (errorsFor
+      "apply2 : (Unit -> Unit -> Unit) -> Unit\napply2 k = k () ()\nviaApply c f g = apply2 (if c then f else g)\nloud2 : Unit -> Unit -> <Audit> Unit\nloud2 _ _ = emitAudit ()\nuse = viaApply True loud2 (_ _ => ())\n"),
+]
+
 test "a join the result's own use shapes keeps each alternative's row" = expectAll
   [
     expectEqual
-      "Bool -> (Unit -> <a> b) -> (Unit -> <c> b) -> <a | c> b"
+      "Bool -> (Unit -> <a> b) -> (Unit -> <a> b) -> <a> b"
       (renderedFor "pickApply c f g = (if c then f else g) ()\n" "pickApply"),
     expectEqual
       "<Audit> Unit"

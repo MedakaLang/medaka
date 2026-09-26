@@ -1,5 +1,5 @@
 # META
-source_lines=1218
+source_lines=1231
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1200,9 +1200,22 @@ qualifyAliasRefs prog = qualifyAliasRefsWith (moduleAliases prog) prog
 -- "A")) "f"`, never a bare `EVar`.
 rewriteAliasQual : List String -> Expr -> Expr
 rewriteAliasQual aliases (e@(EFieldAccess head f _)) = match stripLocE head
-  EVar a => if contains a aliases then EVar (qualifiedLocal a f) else e
+  EVar a =>
+    if contains a aliases then
+      qualifiedAt head f (EVar (qualifiedLocal a f))
+    else
+      e
   _ => e
 rewriteAliasQual _ e = e
+
+-- The qualified name is located from its alias head through the member
+-- (`V.toList`): the head's span is the only one the parser gave the
+-- reference, so without it a diagnostic about the occurrence would point at
+-- whatever was inferred last.
+qualifiedAt : Expr -> String -> Expr -> Expr
+qualifiedAt (ELoc (Loc file sl sc el ec) _) member e =
+  ELoc (Loc file sl sc el (ec + 1 + stringLength member)) e
+qualifiedAt _ _ e = e
 
 -- ── The pass pipeline ─────────────────────────────────────────────────────
 -- Ported in the reference order (later passes run last): merge_iface_defaults →
@@ -1666,8 +1679,11 @@ desugar prog =
 (DTypeSig false "qualifyAliasRefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "qualifyAliasRefs" ((PVar "prog")) (EApp (EApp (EVar "qualifyAliasRefsWith") (EApp (EVar "moduleAliases") (EVar "prog"))) (EVar "prog")))
 (DTypeSig false "rewriteAliasQual" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "rewriteAliasQual" ((PVar "aliases") (PAs "e" (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild))) (EMatch (EApp (EVar "stripLocE") (EVar "head")) (arm (PCon "EVar" (PVar "a")) () (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "aliases")) (EApp (EVar "EVar") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "f"))) (EVar "e"))) (arm PWild () (EVar "e"))))
+(DFunDef false "rewriteAliasQual" ((PVar "aliases") (PAs "e" (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild))) (EMatch (EApp (EVar "stripLocE") (EVar "head")) (arm (PCon "EVar" (PVar "a")) () (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "aliases")) (EApp (EApp (EApp (EVar "qualifiedAt") (EVar "head")) (EVar "f")) (EApp (EVar "EVar") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "f")))) (EVar "e"))) (arm PWild () (EVar "e"))))
 (DFunDef false "rewriteAliasQual" (PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "qualifiedAt" (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "qualifiedAt" ((PCon "ELoc" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) PWild) (PVar "member") (PVar "e")) (EApp (EApp (EVar "ELoc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EBinOp "+" (EBinOp "+" (EVar "ec") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "member"))))) (EVar "e")))
+(DFunDef false "qualifiedAt" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EVar "fillImplDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
 # MARK
@@ -2116,7 +2132,10 @@ desugar prog =
 (DTypeSig false "qualifyAliasRefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "qualifyAliasRefs" ((PVar "prog")) (EApp (EApp (EVar "qualifyAliasRefsWith") (EApp (EVar "moduleAliases") (EVar "prog"))) (EVar "prog")))
 (DTypeSig false "rewriteAliasQual" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "rewriteAliasQual" ((PVar "aliases") (PAs "e" (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild))) (EMatch (EApp (EVar "stripLocE") (EVar "head")) (arm (PCon "EVar" (PVar "a")) () (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "aliases")) (EApp (EVar "EVar") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "f"))) (EVar "e"))) (arm PWild () (EVar "e"))))
+(DFunDef false "rewriteAliasQual" ((PVar "aliases") (PAs "e" (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild))) (EMatch (EApp (EVar "stripLocE") (EVar "head")) (arm (PCon "EVar" (PVar "a")) () (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "aliases")) (EApp (EApp (EApp (EVar "qualifiedAt") (EVar "head")) (EVar "f")) (EApp (EVar "EVar") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "f")))) (EVar "e"))) (arm PWild () (EVar "e"))))
 (DFunDef false "rewriteAliasQual" (PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "qualifiedAt" (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "qualifiedAt" ((PCon "ELoc" (PCon "Loc" (PVar "file") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) PWild) (PVar "member") (PVar "e")) (EApp (EApp (EVar "ELoc") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EBinOp "+" (EBinOp "+" (EVar "ec") (ELit (LInt 1))) (EApp (EVar "stringLength") (EVar "member"))))) (EVar "e")))
+(DFunDef false "qualifiedAt" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EVar "fillImplDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
