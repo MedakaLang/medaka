@@ -161,11 +161,15 @@ measure_export() {
   awk -v start="$start" -v finish="$finish" 'BEGIN { printf "%.6f", finish - start }'
 }
 
+# Export and rehydrate each sign or verify a commit, a fixed cost per run that
+# does not grow with the row count: about 0.3-0.5 s since the secp256k1 field and
+# scalar limbs became boxed `U64` (#3427; unboxing is N5, #3428).  The ratio bound
+# is what catches a quadratic; the absolute one allows for that fixed cost.
 EXPORT_SMALL=$(measure_export export-1000 1000)
 EXPORT_LARGE=$(measure_export export-2000 2000)
 if ! awk -v small="$EXPORT_SMALL" -v large="$EXPORT_LARGE" 'BEGIN {
   ratio = large / small
-  exit ! (large <= 1.5 && ratio <= 2.5)
+  exit ! (large <= 3.0 && ratio <= 2.5)
 }'; then
   fail "export scaling exceeded bounds: 1000=$EXPORT_SMALL s 2000=$EXPORT_LARGE s"
 fi
@@ -190,7 +194,7 @@ REHYDRATE_SMALL=$(measure_rehydrate rehydrate-1000 1000)
 REHYDRATE_LARGE=$(measure_rehydrate rehydrate-2000 2000)
 if ! awk -v small="$REHYDRATE_SMALL" -v large="$REHYDRATE_LARGE" 'BEGIN {
   ratio = large / small
-  exit ! (large <= 1.5 && ratio <= 2.5)
+  exit ! (large <= 3.0 && ratio <= 2.5)
 }'; then
   fail "rehydrate scaling exceeded bounds: 1000=$REHYDRATE_SMALL s 2000=$REHYDRATE_LARGE s"
 fi
