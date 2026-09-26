@@ -2388,7 +2388,9 @@ negFloatIEEE f =
 
 export
 evalUnop : String -> Value e -> Value e
-evalUnop "-" (VInt n) = VInt (0 - n)
+evalUnop "-" (VInt n)
+  | n == intMinBound = intOverflow ("-" ++ overflowOperand n)
+  | otherwise = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (negFloatIEEE f)
 evalUnop "-" (VU64 hi lo) = u64Value (H.sub (0, 0) (hi, lo))
 evalUnop "-" _ = panic "unary minus on non-number"
@@ -2444,11 +2446,12 @@ appendVal _ _ =
 
 export
 evalArith : String -> Value e -> Value e -> Value e
-evalArith "+" (VInt a) (VInt b) = VInt (a + b)
-evalArith "-" (VInt a) (VInt b) = VInt (a - b)
-evalArith "*" (VInt a) (VInt b) = VInt (a * b)
+evalArith "+" (VInt a) (VInt b) = checkedInt "+" a b (checkedAdd a b)
+evalArith "-" (VInt a) (VInt b) = checkedInt "-" a b (checkedSub a b)
+evalArith "*" (VInt a) (VInt b) = checkedInt "*" a b (checkedMul a b)
 evalArith "/" (VInt a) (VInt b)
   | b == 0 = runtimePanic "E-DIV-ZERO" "division by zero"
+  | a == intMinBound && b == -1 = intOverflow (overflowOperands "/" a b)
   | otherwise = VInt (a / b)
 evalArith "%" (VInt a) (VInt b)
   | b == 0 = runtimePanic "E-MOD-ZERO" "modulo by zero"
@@ -2501,15 +2504,41 @@ evalArithU64 op _ _ = panic ("unknown op '" ++ op ++ "' on U64")
 u64Value : (Int, Int) -> Value e
 u64Value (hi, lo) = VU64 hi lo
 
+-- `Int` arithmetic traps: a result outside `intMinBound .. intMaxBound` is the
+-- located E-INT-OVERFLOW runtime error, never a wrapped value.  The check comes
+-- first because the interpreter's own `Int` arithmetic traps too, and that
+-- would be the host's unlocated panic.  The message is the native runtime's
+-- (mdk_int_overflow): the operation, with a negative operand parenthesized.
+checkedInt : String -> Int -> Int -> Option Int -> Value e
+checkedInt _ _ _ (Some n) = VInt n
+checkedInt op a b None = intOverflow (overflowOperands op a b)
+
+overflowOperands : String -> Int -> Int -> String
+overflowOperands op a b = "\{overflowOperand a} \{op} \{overflowOperand b}"
+
+overflowOperand : Int -> String
+overflowOperand n = if n < 0 then "(\{n})" else intToString n
+
+intOverflow : String -> Value e
+intOverflow operation =
+  runtimePanic "E-INT-OVERFLOW" "\{operation} overflows Int"
+
 -- An arithmetic operator whose operands typecheck grounded to the scalar head
 -- [tag].  At a fixed-width head (`U8`/`U16`/`U32`) the `Int` result is reduced
 -- modulo 2^n: `+`, `-` and `*` wrap, and `/`/`%` of two in-range values are
 -- already in range.  Every other tag is plain `evalArith`.
 export
 evalArithAt : String -> String -> Value e -> Value e -> Value e
-evalArithAt tag op l r = match (fixedWidthMask tag, evalArith op l r)
-  (Some mask, VInt n) => VInt (bitAnd n mask)
-  (_, v) => v
+evalArithAt tag op l r = match fixedWidthMask tag
+  Some mask => match (op, l, r)
+    -- A `U32` product reaches 2^64, past `Int`, which traps: multiply in `U64`,
+    -- whose low 32 bits are the true product's.
+    ("*", VInt a, VInt b) =>
+      VInt (bitAnd (U64.toIntTruncating (U64.truncate a * U64.truncate b)) mask)
+    _ => match evalArith op l r
+      VInt n => VInt (bitAnd n mask)
+      v => v
+  None => evalArith op l r
 
 -- ── program driver ────────────────────────────────────────────────────────
 export
@@ -3243,18 +3272,15 @@ rngDraw _ =
   rngU64Ref := s
   u64Finalize s
 
--- randomInt lo hi (INCLUSIVE). Mirrors mdk_random_int (medaka_rt.c) EXACTLY,
--- including for spans that overflow a 62-bit Medaka Int: native computes
--- `range = hi - lo + 1` and the modulus in 64-bit, so eval must too, or the
--- draw sequence itself desyncs. Everything is done in uint64 — `hi - lo + 1`
--- via sub/add, native's `range <= 0` guard as `zero || sign-bit set`, the
--- modulus with the exact long division, and `lo + rem` back to a signed Int —
--- so no bare 63-bit Int op is ever asked to hold a value it cannot (issue #98).
+-- randomInt lo hi (INCLUSIVE). Mirrors mdk_random_int (medaka_rt.c) EXACTLY:
+-- `lo > hi` answers `lo`, and every other span, up to the full range's 2^63,
+-- draws `lo + next % span`.  The span and the sum are computed in `U64`, so no
+-- 63-bit Int op is ever asked to hold a value it cannot (issues #98, #3451).
 pRandomInt : Value e -> Value e -> <e> Value e
 pRandomInt (VInt lo) (VInt hi) =
   let loU = U64.truncate lo
   let rangeU = U64.truncate hi - loU + 1
-  if rangeU == 0 || rangeU >= 0x8000000000000000 then
+  if hi < lo then
     VInt lo
   else
     let rem = rngDraw () % rangeU
@@ -3498,12 +3524,19 @@ pBitXor : Value e -> Value e -> <e> Value e
 pBitXor (VInt a) (VInt b) = VInt (bitXor a b)
 pBitXor _ _ = panic "bitXor: not Ints"
 
+-- The host shifts define an amount of 63 or more (every bit shifted out) and
+-- panic on a negative one; the interpreter refuses a negative amount first, so
+-- the panic is located.
 pShiftLeft : Value e -> Value e -> <e> Value e
-pShiftLeft (VInt a) (VInt b) = VInt (shiftLeft a b)
+pShiftLeft (VInt a) (VInt b)
+  | b < 0 = runtimePanic "E-PANIC" "shiftLeft: negative shift \{b}"
+  | otherwise = VInt (shiftLeft a b)
 pShiftLeft _ _ = panic "shiftLeft: not Ints"
 
 pShiftRight : Value e -> Value e -> <e> Value e
-pShiftRight (VInt a) (VInt b) = VInt (shiftRight a b)
+pShiftRight (VInt a) (VInt b)
+  | b < 0 = runtimePanic "E-PANIC" "shiftRight: negative shift \{b}"
+  | otherwise = VInt (shiftRight a b)
 pShiftRight _ _ = panic "shiftRight: not Ints"
 
 pBitNot : Value e -> <e> Value e

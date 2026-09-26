@@ -833,6 +833,33 @@ noreturn void mdk_mod_zero(void) {
   exit(1);
 }
 
+/* Int overflow trap.  `Int` arithmetic whose exact result falls outside
+   -2^62 .. 2^62 - 1 stops the program; the U types are the wrapping opt-out.
+   The emitter checks `+`, `-`, `*`, negation and `/` (only intMinBound / -1
+   overflows) with the llvm.s*.with.overflow intrinsics and calls this on the
+   cold path with the untagged operands; `op` is 0 `+`, 1 `-`, 2 `*`, 3 `/`,
+   4 negation (b unused).  The message matches the interpreter's runtimePanic
+   minus the source location: a negative operand is parenthesized. */
+static void mdk_put_operand(long long v) {
+  if (v < 0) fprintf(stderr, "(%lld)", v);
+  else fprintf(stderr, "%lld", v);
+}
+noreturn void mdk_int_overflow(long long op, long long a, long long b) {
+  static const char ops[] = "+-*/";
+  mdk_flush_run_stdout_on_abort();
+  fputs("runtime error [E-INT-OVERFLOW]: ", stderr);
+  if (op == 4) {
+    fputc('-', stderr);
+    mdk_put_operand(a);
+  } else {
+    mdk_put_operand(a);
+    fprintf(stderr, " %c ", ops[op & 3]);
+    mdk_put_operand(b);
+  }
+  fputs(" overflows Int\n", stderr);
+  exit(1);
+}
+
 /* Non-exhaustive match trap.  A compiled match whose decision tree matches no
    arm previously terminated the block with a bare `unreachable` (LLVM `ud2` →
    SIGTRAP, a silent signal death with no output).  The emitter now calls this
@@ -1574,25 +1601,43 @@ static long long mdk_box_float(double d) {
  * tested before the Float fallback, which would read its payload as a double. */
 static inline int mdk_is_int(long long w) { return (w & 1) != 0; }
 
+/* Int's arithmetic here traps as the inline path does (mdk_int_overflow): on
+   the tagged words, (2a+1) + 2b = 2(a+b)+1 overflows 64 bits exactly when a+b
+   overflows 63, and likewise for `-`; `*` multiplies a by 2b. */
 long long mdk_num_add(long long l, long long r) {
-  if (mdk_is_int(l)) return (((l >> 1) + (r >> 1)) << 1) | 1;
+  if (mdk_is_int(l)) {
+    long long s;
+    if (__builtin_add_overflow(l, r - 1, &s)) mdk_int_overflow(0, l >> 1, r >> 1);
+    return s;
+  }
   if (mdk_is_u64(l)) return mdk_box_u64(mdk_u64_payload(l) + mdk_u64_payload(r));
   return mdk_box_float(((double *)l)[1] + ((double *)r)[1]);
 }
 long long mdk_num_sub(long long l, long long r) {
-  if (mdk_is_int(l)) return (((l >> 1) - (r >> 1)) << 1) | 1;
+  if (mdk_is_int(l)) {
+    long long s;
+    if (__builtin_sub_overflow(l, r - 1, &s)) mdk_int_overflow(1, l >> 1, r >> 1);
+    return s;
+  }
   if (mdk_is_u64(l)) return mdk_box_u64(mdk_u64_payload(l) - mdk_u64_payload(r));
   return mdk_box_float(((double *)l)[1] - ((double *)r)[1]);
 }
 long long mdk_num_mul(long long l, long long r) {
-  if (mdk_is_int(l)) return (((l >> 1) * (r >> 1)) << 1) | 1;
+  if (mdk_is_int(l)) {
+    long long p;
+    if (__builtin_mul_overflow(l >> 1, r - 1, &p)) mdk_int_overflow(2, l >> 1, r >> 1);
+    return p | 1;
+  }
   if (mdk_is_u64(l)) return mdk_box_u64(mdk_u64_payload(l) * mdk_u64_payload(r));
   return mdk_box_float(((double *)l)[1] * ((double *)r)[1]);
 }
 long long mdk_num_div(long long l, long long r) {
   if (mdk_is_int(l)) {
+    long long q, t;
     if ((r >> 1) == 0) mdk_div_zero();
-    return (((l >> 1) / (r >> 1)) << 1) | 1;
+    q = (l >> 1) / (r >> 1);
+    if (__builtin_add_overflow(q, q, &t)) mdk_int_overflow(3, l >> 1, r >> 1);
+    return t | 1;
   }
   if (mdk_is_u64(l)) {
     if (mdk_u64_payload(r) == 0) mdk_div_zero();
@@ -1870,9 +1915,27 @@ long long mdk_read_file_bytes(long long path) {
 long long mdk_bit_and(long long a, long long b)    { return a & b; }
 long long mdk_bit_or(long long a, long long b)     { return a | b; }
 long long mdk_bit_xor(long long a, long long b)    { return a ^ b; }
-long long mdk_shift_left(long long a, long long b)  { return a << b; }
-long long mdk_shift_right(long long a, long long b) { return a >> b; }
 long long mdk_bit_not(long long a)                 { return ~a; }
+
+/* Int shifts.  An amount of 63 or more shifts every bit out: `shiftLeft` gives
+   0 and `shiftRight` gives 0 or, for a negative value, -1 (the sign fills).  A
+   negative amount panics, as it does for the U types.  `shiftLeft` discards the
+   bits shifted past bit 62 (the retag drops bit 63), so it never traps; the
+   unsigned shift keeps C from calling a negative operand's shift undefined.
+   `shiftRight` is arithmetic: the vacated bits copy the sign. */
+static noreturn void mdk_negative_shift(const char *name, long long k) {
+  mdk_flush_run_stdout_on_abort();
+  fprintf(stderr, "runtime error [E-PANIC]: %s: negative shift %lld\n", name, k);
+  exit(1);
+}
+long long mdk_shift_left(long long a, long long b) {
+  if (b < 0) mdk_negative_shift("shiftLeft", b);
+  return b >= 63 ? 0 : (long long)((unsigned long long)a << b);
+}
+long long mdk_shift_right(long long a, long long b) {
+  if (b < 0) mdk_negative_shift("shiftRight", b);
+  return a >> (b >= 63 ? 63 : b);
+}
 
 static long long mdk_write_impl(long long path, long long content, const char *mode) {
   const char *p = (const char *)path + 24;
@@ -2272,11 +2335,14 @@ void mdk_set_seed(long long tagged) {        /* setSeed : Int -> Unit */
   mdk_rng_state = (unsigned long long)(tagged >> 1);
 }
 /* randomInt : Int -> Int -> Int (INCLUSIVE).  Returns a RAW int — the emitter tags it. */
+/* The span hi - lo + 1 is computed unsigned: for the full Int range it is
+   2^63, which a signed subtraction overflows (#3451).  lo > hi answers lo; every
+   span up to 2^63 draws.  The interpreter's pRandomInt is the same rule. */
 long long mdk_random_int(long long lo_t, long long hi_t) {
   long long lo = lo_t >> 1, hi = hi_t >> 1;
-  long long range = hi - lo + 1;
-  if (range <= 0) return lo;
-  return lo + (long long)(mdk_next_u64() % (unsigned long long)range);
+  if (hi < lo) return lo;
+  unsigned long long span = (unsigned long long)hi - (unsigned long long)lo + 1ULL;
+  return (long long)((unsigned long long)lo + mdk_next_u64() % span);
 }
 long long mdk_random_bool(long long u) { (void)u;  /* RAW 0/1 — emitter tags to Bool */
   return (long long)(mdk_next_u64() & 1ULL);

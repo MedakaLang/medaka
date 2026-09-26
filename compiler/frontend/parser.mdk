@@ -19,6 +19,7 @@
 
 import frontend.ast.{
   intMinLiteralMsg,
+  negateLiteral,
   DeriveRef(..),
   Lit(..),
   Ty(..),
@@ -831,7 +832,7 @@ negLitArgFor : Token -> Token -> Parser Expr
 negLitArgFor TMinusTight (TInt n lx) = defer
   advance
   advance
-  deferPure (ENumLit (negate n) (Ref None) (Ref RNone) ("-" ++ lx))
+  deferPure (ENumLit (negateLiteral n) (Ref None) (Ref RNone) ("-" ++ lx))
 negLitArgFor TMinusTight (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
 negLitArgFor TMinusTight (TFloat f) = defer
   advance
@@ -1949,7 +1950,7 @@ negIntPat = defer
   advance
   t <- peekP
   match t
-    TInt n _ => negIntRng (LInt (negate n))
+    TInt n _ => negIntRng (LInt (negateLiteral n))
     _ => failP "expected integer after -"
 -- consume MINUS
 
@@ -2001,13 +2002,13 @@ intBoundFor TMinus = defer
   advance
   t <- peekP
   match t
-    TInt n _ => emit (LInt (negate n))
+    TInt n _ => emit (LInt (negateLiteral n))
     _ => failP "expected integer after - in range bound"
 intBoundFor TMinusTight = defer
   advance
   t <- peekP
   match t
-    TInt n _ => emit (LInt (negate n))
+    TInt n _ => emit (LInt (negateLiteral n))
     _ => failP "expected integer after - in range bound"
 intBoundFor _ = failP "expected int range bound"
 
