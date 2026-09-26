@@ -1323,15 +1323,20 @@ MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --k
 # the others 1 -> 2 for one `i + 1`), and ovf_operands_public proves every one
 # of them tests only the counter arguments named last. The straight-line
 # schedule helpers have no Int arithmetic and stayed at 0.
+# The fused U64 lowering (nested U64 arithmetic computed on raw payloads and
+# boxed once) moved only the allocation column, downward: e.g. subPCandidate
+# 10 -> 4, feZeroBorrow 8 -> 4, carryFoldRound 4 -> 2. Each count is still a
+# fixed property of the straight-line body, so the schedule stays
+# input-independent. Every other column, and every call shape, is unchanged.
 check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
-  carryPass:0:0:0:0:0:0:1:0:- carryPassGo:4:0:3:3:0:0:11:1:1 carryFoldRound:0:0:2:2:0:0:5:4:- \
-  reduceCarry:0:0:0:0:0:0:3:0:- subPCandidate:2:0:4:2:0:0:11:10:2 \
-  selectPCandidate:2:0:2:1:0:0:4:3:3 subPSelect:0:0:0:0:1:0:3:1:- \
+  carryPass:0:0:0:0:0:0:1:0:- carryPassGo:4:0:3:3:0:0:11:1:1 carryFoldRound:0:0:2:2:0:0:5:2:- \
+  reduceCarry:0:0:0:0:0:0:3:0:- subPCandidate:2:0:4:2:0:0:11:4:2 \
+  selectPCandidate:2:0:2:1:0:0:4:1:3 subPSelect:0:0:0:0:1:0:3:1:- \
   canonicalize:0:0:0:0:0:1:3:0:- \
-  feZeroBit:0:0:0:0:0:0:3:0:- feZeroBorrow:2:0:2:0:0:0:5:8:1 \
-  feEqualBit:0:0:0:0:0:0:4:0:- feEqualBorrow:2:0:4:0:0:0:9:8:2 \
-  feSelect:0:0:0:0:1:0:5:0:- feSelectGo:2:0:3:1:0:0:5:3:4 \
-  feNegateCt:0:0:0:0:1:0:5:0:- feNegateCtGo:2:0:4:2:0:0:10:9:2
+  feZeroBit:0:0:0:0:0:0:3:0:- feZeroBorrow:2:0:2:0:0:0:5:4:1 \
+  feEqualBit:0:0:0:0:0:0:4:0:- feEqualBorrow:2:0:4:0:0:0:9:4:2 \
+  feSelect:0:0:0:0:1:0:5:0:- feSelectGo:2:0:3:1:0:0:5:1:4 \
+  feNegateCt:0:0:0:0:1:0:5:0:- feNegateCtGo:2:0:4:2:0:0:10:3:2
 extract_function rawFe "$WORK/field_emit.ll" "$WORK/field-ir/rawFe.ll"
 raw_accessor_ir_ok "$WORK/field-ir/rawFe.ll" || fail 'field opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/field-ir" field_emit || fail 'field emitted local call graph is closed'
@@ -1395,17 +1400,18 @@ MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" -
 # Int-trap re-derivation (#3377), as for the field: takeHigh 1 -> 3 (`i - 16`,
 # `i + 1`), foldAccumRow 1 -> 3 (`i + j`, `j + 1`), carryGo 2 -> 3, the other
 # recursive helpers 1 -> 2; every added branch is a counter overflow check.
+# The fused U64 lowering lowered allocations only, as for the field.
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
   carryAll:0:0:0:0:0:0:1:0:- carryGo:3:0:1:1:0:0:6:1:1 carryAllUnchecked:0:0:0:0:0:0:1:0:- carryGoUnchecked:2:0:1:1:0:0:6:1:1 \
   takeHigh:3:0:1:2:0:0:5:0:2 foldAccum:2:0:0:0:0:0:2:0:2 \
-  foldAccumRow:3:0:3:1:0:0:5:2:2+3 foldOnce:0:0:0:0:1:0:3:0:- reduceFixed:0:0:0:0:0:0:9:0:- \
-  subNCandidate:2:0:2:1:0:0:6:5:2 selectNCandidate:2:0:2:1:0:0:4:3:3 \
+  foldAccumRow:3:0:3:1:0:0:5:1:2+3 foldOnce:0:0:0:0:1:0:3:0:- reduceFixed:0:0:0:0:0:0:9:0:- \
+  subNCandidate:2:0:2:1:0:0:6:2:2 selectNCandidate:2:0:2:1:0:0:4:1:3 \
   subNSelect:0:0:0:0:1:0:3:1:- reduceWide:0:0:0:0:1:0:4:0:- copyLow:2:0:1:1:0:0:3:0:2 \
-  scZeroBit:0:0:0:0:0:0:3:0:- scZeroBorrow:2:0:1:0:0:0:3:4:1 \
-  scEqualBit:0:0:0:0:0:0:4:0:- scEqualBorrow:2:0:2:0:0:0:5:4:2 \
-  scSelect:0:0:0:0:1:0:5:0:- scSelectGo:2:0:3:1:0:0:5:3:4 \
-  scHighBit:0:0:0:0:0:0:3:1:- scHighBorrow:2:0:2:0:0:0:4:5:1 \
-  scNegateCt:0:0:0:0:1:0:5:0:- scNegateCtGo:2:0:2:1:0:0:6:5:2
+  scZeroBit:0:0:0:0:0:0:3:0:- scZeroBorrow:2:0:1:0:0:0:3:2:1 \
+  scEqualBit:0:0:0:0:0:0:4:0:- scEqualBorrow:2:0:2:0:0:0:5:2:2 \
+  scSelect:0:0:0:0:1:0:5:0:- scSelectGo:2:0:3:1:0:0:5:1:4 \
+  scHighBit:0:0:0:0:0:0:3:1:- scHighBorrow:2:0:2:0:0:0:4:2:1 \
+  scNegateCt:0:0:0:0:1:0:5:0:- scNegateCtGo:2:0:2:1:0:0:6:2:2
 extract_function rawSc "$WORK/scalar_emit.ll" "$WORK/scalar-ir/rawSc.ll"
 raw_accessor_ir_ok "$WORK/scalar-ir/rawSc.ll" || fail 'scalar opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/scalar-ir" scalar_emit || fail 'scalar emitted local call graph is closed'
@@ -1452,7 +1458,7 @@ cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
 append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
-if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 2 0 2 1 0 0 4 3; then
+if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 2 0 2 1 0 0 4 1; then
   fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
 fi
 grep -F -q 'mdk_hash_bool' "$WORK/scalar-hash-mutant.ll" || fail 'scalar comparison/hashBool mutation reaches native IR'
@@ -1462,7 +1468,7 @@ cp "$WORK/scalar_index_source_mutant.mdk" "$WORK/scalar_index_mutant.mdk"
 append_scalar_probe "$WORK/scalar_index_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_index_mutant.ll" "$WORK/scalar-index-mutant.ll"
-if helper_ir_ok "$WORK/scalar-index-mutant.ll" 2 0 2 1 0 0 4 3; then
+if helper_ir_ok "$WORK/scalar-index-mutant.ll" 2 0 2 1 0 0 4 1; then
   fail 'scalar secret-index mutation is rejected by native IR call shape'
 fi
 index_calls=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/scalar-index-mutant.ll" || true)
@@ -1473,7 +1479,7 @@ cp "$WORK/scalar_write_source_mutant.mdk" "$WORK/scalar_write_mutant.mdk"
 append_scalar_probe "$WORK/scalar_write_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_write_mutant.mdk" -o "$WORK/scalar_write_mutant" --keep-ir > "$WORK/build-scalar-write-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_write_mutant.ll" "$WORK/scalar-write-mutant.ll"
-if helper_ir_ok "$WORK/scalar-write-mutant.ll" 2 0 2 1 0 0 4 3; then
+if helper_ir_ok "$WORK/scalar-write-mutant.ll" 2 0 2 1 0 0 4 1; then
   fail 'scalar secret-write mutation is rejected by native IR call multiset'
 fi
 write_calls=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$WORK/scalar-write-mutant.ll" || true)
