@@ -13,6 +13,7 @@ public export data DefaultBodyIdentity = DefaultBodyIdentity {
 public export data ScopeOwner =
   | ModuleOwner
   | BindingOwner String
+  | LocalBindingOwner String
   | DefaultBodyOwner DefaultBodyIdentity
   | PropOwner String
   | TestOwner String
@@ -116,6 +117,18 @@ enclosingDefaultBody store sid =
       Some parent => enclosingDefaultBody store parent
       None => None
 
+-- The nearest enclosing scope that is not a local binding's own scope: the
+-- scope whose binder owns the enclosing declaration's dictionary parameters.
+export
+declarationScope : ScopeStore -> ScopeId -> ScopeId
+declarationScope store sid =
+  let frame = scopeFrame store sid
+  match frame.sfOwner
+    LocalBindingOwner _ => match frame.sfParent
+      Some parent => declarationScope store parent
+      None => sid
+    _ => sid
+
 export
 binderAt : ScopeId -> Int -> EvidenceBinderId
 binderAt sid ordinal = EvidenceBinderId sid ordinal
@@ -144,6 +157,7 @@ export
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
+scopeOwnerLabel (LocalBindingOwner name) = "local:" ++ name
 scopeOwnerLabel (DefaultBodyOwner owner) = "default:" ++ owner.dbiMethod
 scopeOwnerLabel (PropOwner name) = "prop:" ++ name
 scopeOwnerLabel (TestOwner name) = "test:" ++ name

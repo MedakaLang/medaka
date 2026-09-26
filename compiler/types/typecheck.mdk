@@ -363,6 +363,7 @@ import support.ordmap.{
   omFromNames,
   omMapValues,
   omSize,
+  omDelete,
 }
 import list.{replicate, drop}
 import support.util.{
@@ -10048,6 +10049,7 @@ renderEvidenceBinder : EvidenceBinderId -> String
 renderEvidenceBinder (EvidenceBinderId sid ordinal) =
   match (Scopes.scopeFrame (currentScopeStore ()) sid).sfOwner
     BindingOwner owner => dictParamName owner ordinal
+    LocalBindingOwner owner => dictParamName owner ordinal
     DefaultBodyOwner owner => dictParamName owner.dbiMethod ordinal
     _ => panic "evidence binder outside binding scope"
 
@@ -14583,8 +14585,246 @@ recordNumLitSite predicate tagRef occurrence origin scope =
 -- constraint monos so resolveDictApps can pick a dict route once the call's args
 -- pin those monos.  funConstraintsRef[f] gives f's constraint tyvar ids, mapped
 -- through the instantiation subst to this call's fresh vars.
+-- ── dictionary-abstracted local bindings ─────────────────────────────────────
+-- A generalized local whose scheme keeps class predicates takes one dictionary
+-- parameter per predicate, exactly as a top-level binding does.  The binder is
+-- identified by `localBinderKey` (name + binding location), never by its bare name:
+-- its occurrences were marked `EDictAt` by the scope-threaded pre-pass, which
+-- records the key each occurrence resolves to.
+data LocalAbs = LocalAbs {
+  laScope : ScopeId,
+  laSlots : List PredicateSlot,
+  laParams : List String,
+}
+
+data LocalAbsState = LocalAbsState {
+  -- occurrence evidence id -> the key of the let binder it names
+  lasMintedEvs : Ref (OrdMap String),
+  -- occurrences that received a dictionary application
+  lasAbstractedEvs : Ref (OrdMap Unit),
+  -- binder key -> its abstraction (None: generalized without predicates)
+  lasBinders : Ref (OrdMap (Option LocalAbs)),
+  -- binder key -> occurrences inferred before the binder generalized
+  lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
+  lasCounter : Ref Int,
+}
+
+freshLocalAbsState : Unit -> LocalAbsState
+freshLocalAbsState _ = LocalAbsState {
+  lasMintedEvs = Ref omEmpty,
+  lasAbstractedEvs = Ref omEmpty,
+  lasBinders = Ref omEmpty,
+  lasRecOccs = Ref omEmpty,
+  lasCounter = Ref 0,
+}
+
+localAbs : Ref LocalAbsState
+localAbs = Ref (freshLocalAbsState ())
+
+evKeyOf : EvId -> String
+evKeyOf (EvId m o) = m ++ "#" ++ intToString o
+
+localBinderOfEv : EvId -> Option String
+localBinderOfEv ev = omLookup (evKeyOf ev) localAbs.value.lasMintedEvs.value
+
+localAbsFor : String -> Option LocalAbs
+localAbsFor key = match omLookup key localAbs.value.lasBinders.value
+  Some found => found
+  None => None
+
+-- Enter a candidate local binder's own scope before its right-hand side is
+-- inferred.  Any abstraction a previous inference of the same binder left is
+-- forgotten first.
+openLocalScope : String -> String -> ScopeId
+openLocalScope x key =
+  let st = localAbs.value
+  let k = st.lasCounter.value
+  let _ = st.lasCounter := k + 1
+  let _ = st.lasBinders := omDelete key st.lasBinders.value
+  let _ = st.lasRecOccs := omDelete key st.lasRecOccs.value
+  let parent = captureScope ()
+  let sid =
+    Scopes.freshScope
+      (currentScopeStore ())
+      (Some parent)
+      perRun.value.currentLevel.value
+      (Scopes.scopeFrame (currentScopeStore ()) parent).sfModuleId
+      (LocalBindingOwner (x ++ "_l" ++ intToString k))
+  let _ = openScope sid
+  sid
+
+-- The candidate local's scope, opened when its right-hand side is a candidate.
+openLocalScopeIf : Bool -> String -> String -> Option ScopeId
+openLocalScopeIf False _ _ = None
+openLocalScopeIf True x key = Some (openLocalScope x key)
+
+closeLocalScope : Option ScopeId -> Unit
+closeLocalScope (Some _) = closeScope ()
+closeLocalScope None = ()
+
+registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
+registerLocalAbsIf key (Some lscope) sch oblN0 callN0 =
+  registerLocalAbs key lscope sch oblN0 callN0
+registerLocalAbsIf _ None _ _ _ = ()
+
+-- After a candidate local generalized: the predicates its scheme quantifies become
+-- its dictionary parameters, registered as givens of its own scope so the sites in
+-- its body read them; occurrences inferred before generalization (recursive uses)
+-- are applied to those same parameters.
+registerLocalAbs : String -> ScopeId -> Scheme -> Int -> Int -> Unit
+registerLocalAbs key lscope sch oblN0 callN0 =
+  let boundIds = schemeIds sch
+  let slots =
+    if isEmptyL boundIds then [] else localAbsSlots key boundIds oblN0 callN0
+  let st = localAbs.value
+  let recOccs = optionOr [] (omLookup key st.lasRecOccs.value)
+  let _ = st.lasRecOccs := omDelete key st.lasRecOccs.value
+  match slots
+    [] => st.lasBinders := omInsert key None st.lasBinders.value
+    _ =>
+      let _ = registerSlotPredGivens lscope 0 slots
+      let _ = registerActiveDictVars lscope 0 slots
+      let la = LocalAbs {
+        laScope = lscope,
+        laSlots = slots,
+        laParams = localAbsParams lscope 0 slots,
+      }
+      let _ = st.lasBinders := omInsert key (Some la) st.lasBinders.value
+      fold (_ occ => pushLocalDictApp (fst occ) la [] (snd occ)) () recOccs
+
+localAbsSlots : String -> List Int -> Int -> Int -> List PredicateSlot
+localAbsSlots key boundIds oblN0 callN0 =
+  let addedObls = wWindow perRun.value.implObls oblN0
+  let callObls = callOblsWindow callN0
+  let preds = flatMap oblPredOf addedObls ++ flatMap callPredOf callObls
+  let vecs =
+    directInferredPreds boundIds preds ++ residualInferredPreds boundIds preds
+  inferredPredicateSlots key (dedupI (map inferredPredLead vecs)) vecs
+
+localAbsParams : ScopeId -> Int -> List PredicateSlot -> List String
+localAbsParams _ _ [] = []
+localAbsParams lscope i (_ :: rest) =
+  renderEvidenceBinder (Scopes.binderAt lscope i)
+    :: localAbsParams lscope (i + 1) rest
+
+-- One dictionary application of a local: each slot's predicate at the occurrence's
+-- instantiation [subst] (empty for a recursive use, whose predicate is the binder's
+-- own), solved in the occurrence's scope.
+pushLocalDictApp : EvId -> LocalAbs -> List (Int, Mono) -> ScopeId -> Unit
+pushLocalDictApp ev la subst useScope =
+  let monos = map (localSlotLead subst) la.laSlots
+  let _ = pushDictApp PendingDictApp {
+    pdaRoutesRef = Ref [],
+    pdaEv = ev,
+    pdaMonos = monos,
+    pdaIfaces = map (s => s.psIface) la.laSlots,
+    pdaArgVecs = map (localSlotArgs subst) la.laSlots,
+    pdaEncl = perRun.value.currentFn.value,
+    pdaLoc = !currentLoc,
+    pdaScope = useScope,
+  }
+  let _ =
+    perRun.value.dictAppFns :=
+      consSiteFn
+        perRun.value.currentFn.value
+        monos
+        perRun.value.dictAppFns.value
+  let st = localAbs.value
+  st.lasAbstractedEvs := omInsert (evKeyOf ev) () st.lasAbstractedEvs.value
+
+localSlotArgs : List (Int, Mono) -> PredicateSlot -> List Mono
+localSlotArgs subst slot = match slot.psArgs
+  PSArgsKnown args => map (substMono subst [] []) args
+  PSArgsUnknown => [localSlotLead subst slot]
+
+localSlotLead : List (Int, Mono) -> PredicateSlot -> Mono
+localSlotLead subst slot = match slot.psArgs
+  PSArgsKnown (a :: _) => substMono subst [] [] a
+  _ => match slot.psBoundIds
+    id :: _ => optionOr (freshVar ()) (lookupAssocI id subst)
+    [] => freshVar ()
+
+-- An occurrence of a candidate local.  Once its binder has generalized with
+-- predicates the occurrence instantiates them; before that (a recursive use) it is
+-- recorded for `registerLocalAbs`.
+inferLocalDictAt : TcEnv -> String -> EvId -> String -> Mono
+inferLocalDictAt env name ev key =
+  match omLookup key localAbs.value.lasBinders.value
+    Some (Some la) => match lookupVar env name
+      Some s =>
+        let inst = instantiateVarTrackedWithSubst env name 0 s
+        let _ =
+          pushLocalDictApp
+            ev
+            la
+            inst.mtiSubstitution.misTypeSubst
+            (captureScope ())
+        inst.mtiBody
+      None => unboundVarFresh name
+    Some None => inferVarId env name 0
+    None =>
+      let st = localAbs.value
+      let _ =
+        st.lasRecOccs :=
+          omInsert
+            key
+            ((ev, captureScope ())
+              :: optionOr [] (omLookup key st.lasRecOccs.value))
+            st.lasRecOccs.value
+      inferVarId env name 0
+
+-- dict_pass for locals: an abstracted binder takes its dictionary parameters, and a
+-- candidate occurrence that received no application is a plain variable again.
+rewriteLocalDictExpr : Expr -> Expr
+rewriteLocalDictExpr (EDictAt n ev) = match localBinderOfEv ev
+  Some _ =>
+    if omHasKey (evKeyOf ev) localAbs.value.lasAbstractedEvs.value then
+      EDictAt n ev
+    else
+      EVar n
+  None => EDictAt n ev
+rewriteLocalDictExpr (ELet m r (PVar x xloc) e1 e2) =
+  match localAbsFor (localBinderKey x (Some xloc))
+    Some la => ELet m r (PVar x xloc) (prependLocalDicts la.laParams e1) e2
+    None => ELet m r (PVar x xloc) e1 e2
+rewriteLocalDictExpr (ELetGroup binds body) =
+  ELetGroup (map rewriteLocalLetBind binds) body
+rewriteLocalDictExpr (EBlock stmts) = EBlock (map rewriteLocalDoStmt stmts)
+rewriteLocalDictExpr e = e
+
+rewriteLocalLetBind : LetBind -> LetBind
+rewriteLocalLetBind (bind@(LetBind n clauses)) =
+  match localAbsFor (letBindKey bind)
+    Some la => LetBind n (map (prependLocalDictClause la.laParams) clauses)
+    None => bind
+
+prependLocalDictClause : List String -> FunClause -> FunClause
+prependLocalDictClause params (FunClause pats body) =
+  FunClause (map localDictPat params ++ pats) body
+
+rewriteLocalDoStmt : DoStmt -> DoStmt
+rewriteLocalDoStmt (DoLet m r (PVar x xloc) e) =
+  match localAbsFor (localBinderKey x (Some xloc))
+    Some la => DoLet m r (PVar x xloc) (prependLocalDicts la.laParams e)
+    None => DoLet m r (PVar x xloc) e
+rewriteLocalDoStmt stmt = stmt
+
+prependLocalDicts : List String -> Expr -> Expr
+prependLocalDicts params (ELoc l e) = ELoc l (prependLocalDicts params e)
+prependLocalDicts params (ELam pats body) =
+  ELam (map localDictPat params ++ pats) body
+prependLocalDicts params e = ELam (map localDictPat params) e
+
+localDictPat : String -> Pat
+localDictPat n = PVar n (Loc "" 0 0 0 0)
+
 inferDictAt : TcEnv -> String -> EvId -> Mono
-inferDictAt env name ev = match lookupVar env name
+inferDictAt env name ev = match localBinderOfEv ev
+  Some key => inferLocalDictAt env name ev key
+  None => inferGlobalDictAt env name ev
+
+inferGlobalDictAt : TcEnv -> String -> EvId -> Mono
+inferGlobalDictAt env name ev = match lookupVar env name
   None => panic ("unbound constrained fn: " ++ name)
   Some scheme =>
     let inst = instantiateValueTracked scheme
@@ -15462,7 +15702,10 @@ blockRecLet env x xloc e =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
+  let key = localBinderKey x xloc
+  let lscope = openLocalScopeIf (localAbsCandidate e) x key
   let t1 = inferRecursiveValue env x e
+  let _ = closeLocalScope lscope
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -15477,6 +15720,7 @@ blockRecLet env x xloc e =
   let sch =
     genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  let _ = registerLocalAbsIf key lscope sch oblN0 callN0
   seedAlphaLets (extendLocalVar env x sch) x e  -- WS-2: α scope-seed
 
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
@@ -15486,7 +15730,10 @@ blockLet env (PVar x xloc) e =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
+  let key = localBinderKey x (Some xloc)
+  let lscope = openLocalScopeIf (localAbsCandidate e) x key
   let t = infer env e
+  let _ = closeLocalScope lscope
   let _ = finishValueEffects [t]
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
@@ -15505,6 +15752,7 @@ blockLet env (PVar x xloc) e =
         && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t))
       t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  let _ = registerLocalAbsIf key lscope sch oblN0 callN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
   seedAlphaLets (extendLocalVar env x sch) x e
 blockLet env pat e =
@@ -20640,7 +20888,10 @@ inferRecLet env x xloc e1 e2 =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
+  let key = localBinderKey x xloc
+  let lscope = openLocalScopeIf (localAbsCandidate e1) x key
   let t1 = inferRecursiveValue env x e1
+  let _ = closeLocalScope lscope
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = finalizeNumBoundary NumBoundary {
@@ -20655,6 +20906,7 @@ inferRecLet env x xloc e1 e2 =
   let sch =
     genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  let _ = registerLocalAbsIf key lscope sch oblN0 callN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 
 -- Recursive local bindings are strict. Their initializer is charged here;
@@ -20738,7 +20990,12 @@ inferLetSimple env pat e1 e2 =
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
   let dictN0 = goalsMark ()
+  let lscope = match pat
+    PVar x xloc =>
+      openLocalScopeIf (localAbsCandidate e1) x (localBinderKey x (Some xloc))
+    _ => None
   let t1 = infer env e1
+  let _ = closeLocalScope lscope
   let _ = finishValueEffects [t1]
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground an ambiguous Num-only var owned by this inner let
@@ -20753,10 +21010,19 @@ inferLetSimple env pat e1 e2 =
     nbDefaultObls = addedObls,
     nbAmbiguityObls = addedObls,
   }
-  inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0
+  inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0 lscope
 
-inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
-inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
+inferLetBody : TcEnv ->
+  Pat ->
+  Mono ->
+  Expr ->
+  Expr ->
+  Int ->
+  Int ->
+  Int ->
+  Option ScopeId ->
+  Mono
+inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 lscope =
   let _ = recordLocalBind x (Some xloc) t1  -- LSP hover (PVar let bypasses inferPat)
   let sch =
     genRestricted
@@ -20764,8 +21030,10 @@ inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
         && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1))
       t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  let _ =
+    registerLocalAbsIf (localBinderKey x (Some xloc)) lscope sch oblN0 callN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
-inferLetBody env pat t1 _ e2 _ _ _ =
+inferLetBody env pat t1 _ e2 _ _ _ _ =
   let lits = takePatLits ()
   let pr = inferPat env pat
   let _ = unify (fst pr) t1
@@ -22572,7 +22840,7 @@ processLetGroup env binds =
   let recursive =
     map (p => (fst p, monoScheme (snd p).bsRecursiveValue)) summaries
   let env2 = extendLocalVars env recursive
-  let _ = inferLetBinds env2 (zipL binds summaries)
+  let lscopes = inferLetBinds env2 (zipL binds summaries)
   let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
   let _ = finishValueEffects (map (p => (snd p).bsValue) summaries)
   let _ = flushPendingEscapes ()
@@ -22632,7 +22900,20 @@ processLetGroup env binds =
       callOblsDelta
       addedObls
       (groupSchemesOf genv binds)
+  let _ = registerLocalGroupAbs genv oblN0 callN0 (zipL binds lscopes)
   genv
+
+registerLocalGroupAbs : TcEnv ->
+  Int ->
+  Int ->
+  List (LetBind, Option ScopeId) ->
+  Unit
+registerLocalGroupAbs _ _ _ [] = ()
+registerLocalGroupAbs genv oblN0 callN0 ((bind@(LetBind name _), lscope) :: rest) =
+  let _ = match lookupVar genv name
+    Some sch => registerLocalAbsIf (letBindKey bind) lscope sch oblN0 callN0
+    None => ()
+  registerLocalGroupAbs genv oblN0 callN0 rest
 
 -- the generalized (name, scheme) pairs of a just-closed local group
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
@@ -22648,15 +22929,20 @@ localBindingSummary (LetBind name clauses) =
     [] => 0
   (name, newBindingSummary arity freshVar freshEffectSummary)
 
-inferLetBinds : TcEnv -> List (LetBind, (String, BindingSummary)) -> Unit
-inferLetBinds _ [] = ()
-inferLetBinds env ((LetBind _ clauses, (_, owned)) :: rest) =
+inferLetBinds : TcEnv ->
+  List (LetBind, (String, BindingSummary)) ->
+  List (Option ScopeId)
+inferLetBinds _ [] = []
+inferLetBinds env ((bind@(LetBind name clauses), (_, owned)) :: rest) =
   let pairs = map funClausePair clauses
+  let lscope =
+    openLocalScopeIf (localAbsCandidateBind bind) name (letBindKey bind)
   let _ = inferMemberClauses env None owned pairs
+  let _ = closeLocalScope lscope
   let _ = match pairs
     [([], _)] => performEffect perRun.value.curEffect owned.bsForce
     _ => ()
-  inferLetBinds env rest
+  lscope :: inferLetBinds env rest
 
 schemeMono : Scheme -> Mono
 schemeMono (Forall _ _ _ _ t) = t
@@ -22964,6 +23250,7 @@ localPinIds callN0 dictN0 = map fst (localPinPairs callN0 dictN0)
 
 localPinPairs : Int -> Int -> List (Int, String)
 localPinPairs callN0 dictN0
+  | True = []
   | driverState.value.localPinDisabledRef.value = []
   | otherwise =
     methodConstrainedPairs ()
@@ -23930,6 +24217,16 @@ mintDictAt onDict n =
   let _ = onDict n ev
   EDictAt n ev
 
+-- An occurrence of a let-bound local that may abstract dictionaries.  Whether it
+-- does is known only once the binder generalizes; `inferLocalDictAt` answers it,
+-- and `rewriteLocalDictExpr` restores a plain variable where it does not.
+mintLocalDictAt : String -> String -> Expr
+mintLocalDictAt n key =
+  let ev = freshEvId ()
+  let st = localAbs.value
+  let _ = st.lasMintedEvs := omInsert (evKeyOf ev) key st.lasMintedEvs.value
+  EDictAt n ev
+
 -- ── scope-aware arg-position prepass (emit path; D3a shadow guard) ───────────
 -- The three name sets carried through the scope-threaded rewrite (rp = return-
 -- position methods, dn = constrained-fn dict names, an = arg-position methods).
@@ -24021,11 +24318,74 @@ propParamName (PropParam n _ _) = n
 -- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
 -- O(depth²) over the body (the `scoperefs` shape).  `boundInsert`/`boundOfList`
 -- extend it; membership is `omHasKey`.
-boundInsert : List String -> OrdMap Unit -> OrdMap Unit
+boundInsert : List String -> OrdMap String -> OrdMap String
 boundInsert [] b = b
-boundInsert (n :: rest) b = boundInsert rest (omInsert n () b)
+boundInsert (n :: rest) b = boundInsert rest (omInsert n "" b)
 
-boundOfList : List String -> OrdMap Unit
+-- A let binder whose right-hand side may generalize over a class predicate maps its
+-- name to the binder's key instead of "": its occurrences are marked `EDictAt` so a
+-- use can carry the dictionaries the binder abstracts.
+boundInsertLet : String -> String -> OrdMap String -> OrdMap String
+boundInsertLet n key b = omInsert n key b
+
+-- Only a syntactic function or an alias can be a dictionary-abstracted local.
+localAbsCandidate : Expr -> Bool
+localAbsCandidate (ELoc _ e) = localAbsCandidate e
+localAbsCandidate (EDoOrigin _ e) = localAbsCandidate e
+localAbsCandidate (ELam _ _) = True
+localAbsCandidate (EVar _) = True
+localAbsCandidate (EVarId _ _) = True
+localAbsCandidate (EMethodAt _ _ _) = True
+localAbsCandidate (EMethodRef _) = True
+localAbsCandidate (EDictAt _ _) = True
+localAbsCandidate _ = False
+
+localAbsCandidateBind : LetBind -> Bool
+localAbsCandidateBind (LetBind _ clauses) =
+  anyList localAbsCandidateClause clauses
+
+localAbsCandidateClause : FunClause -> Bool
+localAbsCandidateClause (FunClause [] body) = localAbsCandidate body
+localAbsCandidateClause (FunClause _ _) = True
+
+-- Insert a single-variable let binder, as a candidate when its right-hand side is one.
+boundInsertLetPat : Pat -> Expr -> OrdMap String -> OrdMap String
+boundInsertLetPat (PVar x xloc) e1 b
+  | localAbsCandidate e1 = boundInsertLet x (localBinderKey x (Some xloc)) b
+boundInsertLetPat p _ b = boundInsert (patVarsTc p) b
+
+boundInsertBinds : List LetBind -> OrdMap String -> OrdMap String
+boundInsertBinds [] b = b
+boundInsertBinds ((bind@(LetBind n _)) :: rest) b = boundInsertBinds
+  rest
+  (if localAbsCandidateBind bind then
+    boundInsertLet n (letBindKey bind) b
+  else
+    boundInsert [n] b)
+
+-- A local binder's identity: its name and the location of its binding occurrence
+-- (a group member has no binder location, so its first clause body's stands in).
+localBinderKey : String -> Option Loc -> String
+localBinderKey x (Some (Loc f l c el ec)) =
+  x
+    ++ "@"
+    ++ f
+    ++ ":"
+    ++ intToString l
+    ++ ":"
+    ++ intToString c
+    ++ ":"
+    ++ intToString el
+    ++ ":"
+    ++ intToString ec
+localBinderKey x None = x ++ "@?"
+
+letBindKey : LetBind -> String
+letBindKey (LetBind n ((FunClause _ body) :: _)) =
+  localBinderKey n (exprLoc body)
+letBindKey (LetBind n []) = localBinderKey n None
+
+boundOfList : List String -> OrdMap String
 boundOfList ns = boundInsert ns omEmpty
 
 -- the core scope-threaded rewrite.  `bound` is the set of names in scope as
@@ -24035,13 +24395,16 @@ boundOfList ns = boundInsert ns omEmpty
 -- (ELam/ELet/ELetGroup/EMatch arms/EBlock/EDo + the where/do/guard
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
-rewriteArgScoped : ArgRw -> OrdMap Unit -> Expr -> Expr
+rewriteArgScoped : ArgRw -> OrdMap String -> Expr -> Expr
 rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
   -- symbol (so a no-impl receiver still reaches the standalone `@mdk_<mid>__size`).
-  | omHasKey n bound = EVar n
+  | omHasKey n bound = match omLookup n bound
+    Some "" => EVar n
+    Some key => mintLocalDictAt n key
+    None => EVar n
   | otherwise = match lookupAssoc n sm
     Some bare => EMethodAt bare n (mintMethodCell n)
     None =>
@@ -24058,16 +24421,15 @@ rewriteArgScoped (ArgRw rp dn an sm onDict) bound (EVar n)
 rewriteArgScoped rw bound (ELam ps body) =
   ELam ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
 rewriteArgScoped rw bound (ELet m r p e1 e2) =
-  let pv = patVarsTc p
-  let b1 = if r then boundInsert pv bound else bound
+  let b1 = if r then boundInsertLetPat p e1 bound else bound
   ELet
     m
     r
     p
     (rewriteArgScoped rw b1 e1)
-    (rewriteArgScoped rw (boundInsert pv bound) e2)
+    (rewriteArgScoped rw (boundInsertLetPat p e1 bound) e2)
 rewriteArgScoped rw bound (ELetGroup binds e2) =
-  let bnd = boundInsert (letBindNamesTc binds) bound
+  let bnd = boundInsertBinds binds bound
   ELetGroup (map (rewriteArgLetBind rw bnd) binds) (rewriteArgScoped rw bnd e2)
 rewriteArgScoped rw bound (EMatch e0 arms) =
   EMatch (rewriteArgScoped rw bound e0) (map (rewriteArgArm rw bound) arms)
@@ -24145,44 +24507,44 @@ rewriteArgScoped rw bound (EAsPat x sub) =
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
 rewriteArgScoped _ _ e = e
 
-rewriteArgField : ArgRw -> OrdMap Unit -> FieldAssign -> FieldAssign
+rewriteArgField : ArgRw -> OrdMap String -> FieldAssign -> FieldAssign
 rewriteArgField rw bound (FieldAssign n e) =
   FieldAssign n (rewriteArgScoped rw bound e)
 
-rewriteArgKv : ArgRw -> OrdMap Unit -> (Expr, Expr) -> (Expr, Expr)
+rewriteArgKv : ArgRw -> OrdMap String -> (Expr, Expr) -> (Expr, Expr)
 rewriteArgKv rw bound (k, v) =
   (rewriteArgScoped rw bound k, rewriteArgScoped rw bound v)
 
-rewriteArgInterp : ArgRw -> OrdMap Unit -> InterpPart -> InterpPart
+rewriteArgInterp : ArgRw -> OrdMap String -> InterpPart -> InterpPart
 rewriteArgInterp _ _ (InterpStr s) = InterpStr s
 rewriteArgInterp rw bound (InterpExpr e) =
   InterpExpr (rewriteArgScoped rw bound e)
 
-rewriteArgLetBind : ArgRw -> OrdMap Unit -> LetBind -> LetBind
+rewriteArgLetBind : ArgRw -> OrdMap String -> LetBind -> LetBind
 rewriteArgLetBind rw bound (LetBind n clauses) =
   LetBind n (map (rewriteArgFunClause rw bound) clauses)
 
-rewriteArgFunClause : ArgRw -> OrdMap Unit -> FunClause -> FunClause
+rewriteArgFunClause : ArgRw -> OrdMap String -> FunClause -> FunClause
 rewriteArgFunClause rw bound (FunClause ps body) =
   FunClause ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
 
 -- a match/function arm: the pattern binds for the guards + body; a `| p <- e`
 -- guard binds for later guards + the body (threaded left-to-right).
-rewriteArgArm : ArgRw -> OrdMap Unit -> Arm -> Arm
+rewriteArgArm : ArgRw -> OrdMap String -> Arm -> Arm
 rewriteArgArm rw bound (Arm p gs body) =
   let b0 = boundInsert (patVarsTc p) bound
   let (gs2, bnd) = rewriteArgGuards rw b0 gs
   Arm p gs2 (rewriteArgScoped rw bnd body)
 
-rewriteArgGuardArm : ArgRw -> OrdMap Unit -> GuardArm -> GuardArm
+rewriteArgGuardArm : ArgRw -> OrdMap String -> GuardArm -> GuardArm
 rewriteArgGuardArm rw bound (GuardArm gs body) =
   let (gs2, bnd) = rewriteArgGuards rw bound gs
   GuardArm gs2 (rewriteArgScoped rw bnd body)
 
 rewriteArgGuards : ArgRw ->
-  OrdMap Unit ->
+  OrdMap String ->
   List Guard ->
-  (List Guard, OrdMap Unit)
+  (List Guard, OrdMap String)
 rewriteArgGuards _ bound [] = ([], bound)
 rewriteArgGuards rw bound ((GBool e) :: rest) =
   let e2 = rewriteArgScoped rw bound e
@@ -24195,7 +24557,7 @@ rewriteArgGuards rw bound ((GBind p e) :: rest) =
 
 -- do/block statements: a DoBind/DoLet pattern binds for SUBSEQUENT
 -- statements (a recursive DoLet also for its own RHS).
-rewriteArgStmts : ArgRw -> OrdMap Unit -> List DoStmt -> List DoStmt
+rewriteArgStmts : ArgRw -> OrdMap String -> List DoStmt -> List DoStmt
 rewriteArgStmts _ _ [] = []
 rewriteArgStmts rw bound ((DoExpr e) :: rest) =
   DoExpr (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
@@ -24203,9 +24565,9 @@ rewriteArgStmts rw bound ((DoBind p e) :: rest) =
   DoBind p (rewriteArgScoped rw bound e)
     :: rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
 rewriteArgStmts rw bound ((DoLet m r p e) :: rest) =
-  let b1 = if r then boundInsert (patVarsTc p) bound else bound
+  let b1 = if r then boundInsertLetPat p e bound else bound
   DoLet m r p (rewriteArgScoped rw b1 e)
-    :: rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
+    :: rewriteArgStmts rw (boundInsertLetPat p e bound) rest
 rewriteArgStmts rw bound ((DoAssign x e) :: rest) =
   DoAssign x (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
 rewriteArgStmts rw bound ((DoFieldAssign x fs e) :: rest) =
@@ -25215,7 +25577,10 @@ enclDictVarOf goal m encl useScope
   | encl == "" = None
   | otherwise = match peelQual m
     TVar cell =>
-      map (Scopes.binderAt useScope) (enclSlotIndex goal (tyvarId cell) encl)
+      map
+        (Scopes.binderAt
+          (Scopes.declarationScope (currentScopeStore ()) useScope))
+        (enclSlotIndex goal (tyvarId cell) encl)
     TApp a _ => enclDictVarOf goal a encl useScope
     _ => None
 
@@ -31342,7 +31707,12 @@ resolveRecMono : String -> ScopeId -> Mono -> Route
 resolveRecMono encl scope m = match headTyconNameMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
-    Some slot => RDict (renderEvidenceBinder (Scopes.binderAt scope slot))
+    Some slot =>
+      RDict
+        (renderEvidenceBinder
+          (Scopes.binderAt
+            (Scopes.declarationScope (currentScopeStore ()) scope)
+            slot))
     None => routeOf ifaceRefNone "" scope KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
@@ -31409,7 +31779,7 @@ dictPassIn allDecls names prog =
       (omFromNames names omEmpty)
       (returnPosMethodNames prog)
       allDecls)
-    (mapProg rewriteBinopExpr prog)
+    (mapProg (e => rewriteLocalDictExpr (rewriteBinopExpr e)) prog)
 
 -- Routed operators become method applications, including generic arithmetic.
 -- Packed instance prerequisites move into EMethodAt's implementation-dictionary
