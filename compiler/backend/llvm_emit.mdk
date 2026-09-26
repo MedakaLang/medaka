@@ -4420,6 +4420,13 @@ u64Escapes e x raw (CLet False pat e1 e2) =
   u64EscapesBound e x pat e1
     + (if contains x (patVars pat) then 0 else u64Escapes e x raw e2)
 u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
+-- a container literal or an access binds nothing, so its parts are read as
+-- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
+u64Escapes e x _ (CArray es) = u64EscapesWords e x es
+u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
+u64Escapes e x _ (CList es) = u64EscapesWords e x es
+u64Escapes e x _ (CIndex a i) = u64EscapesWords e x [a, i]
+u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
 u64Escapes e x raw ex = match flattenApp ex []
   (CVar f _, args) =>
     if f == x then
@@ -4455,6 +4462,9 @@ u64EscapesBound e x (PTuple ps) ex = match flattenApp ex []
       u64Escapes e x False ex
   _ => u64Escapes e x False ex
 u64EscapesBound e x _ ex = u64Escapes e x False ex
+
+u64EscapesWords : Emit -> String -> List CExpr -> Int
+u64EscapesWords e x es = u64EscapesArgs e x [] es
 
 u64EscapesArgs : Emit -> String -> List Bool -> List CExpr -> Int
 u64EscapesArgs e x (r :: rs) (a :: as_) =
@@ -6959,7 +6969,11 @@ emitKnownFnApp : Emit ->
 emitKnownFnApp e env fname args = match u32Inline e env fname args
   Some (pats, body) => (tagU32 e (emitU32Inlined e env pats body args), LTInt)
   None => match rawWorkerCall e fname (lengthS args)
-    Some (sym, w) => emitRawWorkerCallW e env sym w args (fnRetTy e fname)
+    Some (sym, w) =>
+      let res = emitRawWorkerCallW e env sym w args (fnRetTy e fname)
+      let n = lengthS args
+      let _ = recordFloatClosureResult e fname n n res
+      res
     None => emitKnownFnCall e env fname args
 
 emitKnownFnCall : Emit ->
