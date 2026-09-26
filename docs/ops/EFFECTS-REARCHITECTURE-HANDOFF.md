@@ -706,6 +706,16 @@ landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE
   owed item below about `String @b @a` is really the parser and `fmt`
   treating `@a` as an attribute (older, S0-class: `fmt` rewrites it to
   `@inline`).
+- *Third round (on `db7ba9382`), focused on the widening:* the same escape
+  by another route, also on `main`: `peek f e = match e; E1 s => run1 s f`,
+  where the arm's instance of `run1`'s binder reaches `f` only in a ROW ATOM.
+  Level adjustment lowered a row's tail but not the authorities its atoms
+  name, so that instance stayed as young as the opened authority and the
+  widening kept it. `lowerRowLevels` now lowers atom authorities too, and a
+  collapsed class is widened for its oldest member. The unscoped path
+  (`test` blocks) now refuses loudly where it hung; it fixes a variable at
+  its first lower bound, so a later wider bound is refused (S2, owed, with
+  the empty `Binding ''` name in its message).
 - *Not acted on, recorded as owed (older than this branch, S2):* an alias
   `type F = (a : String) -> String @a` erases the named authority silently; a
   named argument inside a higher-order domain (`((a : String) -> String @a)

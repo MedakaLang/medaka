@@ -982,6 +982,16 @@ escapeByIndex =
     ++ "both : H p -> String @p -> <Store p> Int\nboth _ b = load b\n"
     ++ "peek h e = match e\n  E1 s => both h s\n"
 
+-- the route through a row: the arm's instantiation of `run1`'s binder
+-- reaches the clause parameter `f` only in an atom of its row
+escapeByRow : String
+escapeByRow =
+  "data E1 = E1 (p : Authority Store) (String @p)\n"
+    ++ "pack : Unit -> E1\npack _ = E1 \"/etc/x\"\n"
+    ++ "run1 : (x : String) -> (Unit -> <Store x> Int) -> <Store x> Int\n"
+    ++ "run1 x g =\n  let _ = g ()\n  load x\n"
+    ++ "peek f e = match e\n  E1 s => run1 s f\n"
+
 escapeByJoin : String
 escapeByJoin =
   "data E (q : Authority Store) = E (p : Authority Store) (String @(p | q))\n"
@@ -1002,5 +1012,14 @@ test "an opened authority does not escape through the solve of an older variable
         (escapeByJoin
           ++ "only : E \"cfg/*\" -> <Store \"cfg/*\"> Int\nonly e = peek e\n")),
     expectTrue
-      (accepts (escapeByJoin ++ "wide : E q -> <Store> Int\nwide e = peek e\n")),
+      (accepts
+        (escapeByJoin ++ "wide : E q -> <Store> Int\nwide e = peek e\n")),
+    expectFalse
+      (accepts
+        (escapeByRow
+          ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (_ => load \"cfg/a\") (pack ())\n")),
+    expectTrue
+      (accepts
+        (escapeByRow
+          ++ "wide : Unit -> <Store> Int\nwide _ = peek (_ => 1) (pack ())\n")),
   ]

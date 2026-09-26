@@ -3032,8 +3032,15 @@ substMember esub m = match !m
   _ => m
 
 -- lower a row's tail effvar level to <= [level] alongside the tyvar being bound
+-- A row's level is its tail's and every authority its atoms name: a row that
+-- reaches an older binding carries its atoms' authorities with it, so they
+-- are lowered with the tail (an authority left at an arm's level would read
+-- as local to the arm after it escaped through the row).
 lowerRowLevels : Int -> EffRow -> Unit
-lowerRowLevels level r = lowerMembers level (snd (rowFlat r))
+lowerRowLevels level r =
+  let (atoms, members) = rowFlat r
+  let _ = lowerMembers level members
+  fold (_ a => lowerAuthLevels level (atomAuth a)) () atoms
 
 lowerMembers : Int -> List (Ref Effvar) -> Unit
 lowerMembers _ [] = ()
@@ -11112,7 +11119,10 @@ solveFlexibleUpper lower upper = match authNorm upper
     else match withoutVar cell lower
       [] => True
       rest =>
-        let _ = linkAuthvar cell (widenOpenedFor cell (authJoinAll rest))
+        let _ =
+          linkAuthvar
+            cell
+            (widenOpenedFor (authvarLevel cell) (authJoinAll rest))
         True
   _ => False
 
@@ -11137,9 +11147,8 @@ withoutVar cell q =
 -- opened authority becomes its domain's top, the §4 over-approximation a
 -- sourceless opened authority publishes as.  A variable as young as the arm
 -- keeps it, since it cannot leave the arm.
-widenOpenedFor : Ref Authvar -> Authority -> Authority
-widenOpenedFor var q =
-  let level = authvarLevel var
+widenOpenedFor : Int -> Authority -> Authority
+widenOpenedFor level q =
   let asub =
     flatMap
       (c =>

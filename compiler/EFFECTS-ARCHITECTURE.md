@@ -712,7 +712,11 @@ receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
    Every solution the solver writes passes through `widenOpenedFor`: an
    existential opened in an arm younger than the solved variable becomes its
    domain's top, so an opened authority cannot leave its arm through the
-   solve (it could, through a clause parameter's index, before this). The
+   solve (it could, through a clause parameter's index, before this); a
+   collapsed class is widened for its oldest member. A row lowered to an
+   older level lowers the authorities its atoms name (`lowerRowLevels`), so
+   an arm-local variable that reaches an older binding only through a row
+   atom is old when the solve reads it. The
    unscoped path (`solveFlexibleUpper`) no longer links a variable to a join
    containing itself, which normalisation followed forever.
 4. **One domain, exactly.** A qualifier naming an argument that no atom or

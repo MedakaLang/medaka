@@ -5,8 +5,8 @@
 import map as M
 import map.{Map(..)}
 import types.effect_authority.{
-  renderAuthority, Authority(..), Authvar(..), authvarId, authNorm, authSub,
-  authVars, authJoinAll, linkAuthvar
+  renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -568,7 +568,7 @@ closeSummaryScope : SummarySolver c ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   (List (Ref Effvar) -> Ref Effvar) ->
   (Int -> Ref Effvar) ->
-  (Ref Authvar -> Authority -> Authority) ->
+  (Int -> Authority -> Authority) ->
   List (SummaryFailure c)
 closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual widen =
   let scope = currentScope solver
@@ -687,12 +687,12 @@ localRigidAuth _ rigid cell = match !cell
 -- Every owned flexible variable takes the join of its lower bounds, its
 -- least solution.  Variables bounded by each other collapse to one
 -- representative first, so no solution can refer back to itself.  [widen]
--- is the checker's policy for a solution that names something the variable
--- may not see (an existential opened in a scope younger than the variable);
--- it is applied to every solution written.
+-- is the checker's policy for a solution that names something a variable of
+-- the given level may not see (an existential opened in a scope younger than
+-- the variable); it is applied to every solution written.
 solveOwnedAuthorities : SummaryScope c ->
   Map Int Unit ->
-  (Ref Authvar -> Authority -> Authority) ->
+  (Int -> Authority -> Authority) ->
   Unit
 solveOwnedAuthorities scope rigid widen =
   solveAuthorities
@@ -701,7 +701,7 @@ solveOwnedAuthorities scope rigid widen =
     (reverseL scope.essAuthorities.value)
 
 solveAuthorities : (Ref Authvar -> Bool) ->
-  (Ref Authvar -> Authority -> Authority) ->
+  (Int -> Authority -> Authority) ->
   List (AuthWanted c) ->
   Unit
 solveAuthorities owned widen wanteds =
@@ -770,7 +770,7 @@ dependencies owned nodes ls =
 
 solveClass : Map Int (Ref Authvar, List Authority) ->
   Map String Int ->
-  (Ref Authvar -> Authority -> Authority) ->
+  (Int -> Authority -> Authority) ->
   List String ->
   Unit
 solveClass _ _ _ [] = ()
@@ -778,6 +778,16 @@ solveClass nodes idOfName widen (first :: rest) =
   let repId = idOfVertex idOfName first
   let (rep, _) = nodeOf repId nodes
   let members = map (idOfVertex idOfName) rest
+  -- every member will read the representative's solution, so it is widened
+  -- for the oldest of them, found before the members are linked (a linked
+  -- cell reports its target's level)
+  let oldest =
+    fold
+      (acc id =>
+        let (cell, _) = nodeOf id nodes
+        min acc (authvarLevel cell))
+      (authvarLevel rep)
+      members
   let _ =
     fold
       (_ id =>
@@ -789,7 +799,7 @@ solveClass nodes idOfName widen (first :: rest) =
   let kept = filter (q => not (isVar repId q)) (joinMembers (authJoinAll all))
   match kept
     [] => ()
-    _ => linkAuthvar rep (widen rep (authJoinAll kept))
+    _ => linkAuthvar rep (widen oldest (authJoinAll kept))
 
 idOfVertex : Map String Int -> String -> Int
 idOfVertex idOfName name = match M.get name idOfName
@@ -890,7 +900,7 @@ distinctFailuresGo (f :: rest) seen = match f.esfAuthority
 export
 closeRootAuthorities : SummarySolver c ->
   Map Int Unit ->
-  (Ref Authvar -> Authority -> Authority) ->
+  (Int -> Authority -> Authority) ->
   List (SummaryFailure c)
 closeRootAuthorities solver rigid widen =
   let wanteds = reverseL solver.essRoot.value
