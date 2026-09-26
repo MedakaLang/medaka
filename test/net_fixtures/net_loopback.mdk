@@ -9,7 +9,7 @@ main = match netTcpListen "127.0.0.1" 0
             Ok bytes =>
               let _ = netClose cfd
               let _ = netClose afd
-              let _ = netClose lfd
+              let _ = netCloseListener lfd
               arrayLength bytes
             Err _ => 0 - 6
           Err _ => 0 - 5

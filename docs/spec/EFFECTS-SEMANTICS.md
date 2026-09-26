@@ -384,10 +384,16 @@ shadows every outer let and every outer checked type of that name (an arm that
 merely renames the scrutinee reads the scrutinee), and a let's right-hand side
 is read in the scope it was bound in, never against a later rebinding. A binder must have type `String`
 (`T-AUTHORITY-BINDER`) and serves labels of one domain (`T-AUTHORITY-DOMAIN`).
-A qualifier is written with a spaced `@`: `String @p`.
+A qualifier is written with a spaced `@`: `String @p`. A joined qualifier
+`String @(a | b)` is bounded by the join `a ⊔ b`: a value within either
+authority, the type of a branch that returns one of two named arguments. Its
+names must be binders of one domain (`T-AUTHORITY-DOMAIN`).
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
-labels shares a variable; incompatible-domain uses are ill-formed. Product
+labels shares a variable; incompatible-domain uses are ill-formed, and so is a
+qualifier naming a named argument that no atom or index slot of the signature
+gives a domain (`(a : String) -> String @a`): nothing says which domain `a` is
+an element of, so the qualifier would bound nothing. Product
 domains retain their declared axis schema, `effect L Product (Host : Prefix,
 Method : Set)`: the axes are declared in order and the first is the primary
 axis an unqualified string argument or a bare written literal lifts into; a
@@ -403,7 +409,14 @@ Checking an argument against `τ @κ` checks its underlying type and generates
 of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
-first. An obligation over a variable no binding owns — a value binding kept
+first. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
+bound a joined qualifier writes) has no single least solution, and no member
+is chosen for it: such an obligation is decided once the join's members are
+known, so a value in `String @(p | q)` is built against written or otherwise
+determined indices. A solution for a variable older than a match arm or a
+clause that opened an existential names the opened authority as its domain's
+top, as an inferred row publishes it: the opened authority cannot leave the
+arm through the solve. An obligation over a variable no binding owns — a value binding kept
 monomorphic by the value restriction — is decided once over every use in the
 module. An unresolved constraint remains an obligation; it is not successful
 coverage. At a definition, universally bound `κ` is rigid: an unrelated literal
@@ -489,6 +502,19 @@ where something binds it — a named argument of type `String`, an
 existential binder; an atom or a qualifier naming a type variable is
 `T-AUTHORITY-KIND`, and an authority binder in a type position, or a type in
 an `Authority` slot, the same code.
+
+An `extern data` head (`extern data Socket (h : Authority Net)`) has no
+constructors: its only proof sources are the runtime catalog's signatures
+that return it, trusted as any catalog row is, so its index is exactly the
+authority the producing extern was granted (`netTcpConnect : (host : String) ->
+Int -> <Net host> Result String (Socket host)`), and every extern that consumes
+one is charged at its index (`netSend : Socket h -> … <Net h> …`). A field of
+such a type carries its parameter, since no importer can build a value of it.
+A descriptor number read from one (`socketFd`) grants nothing: no extern that
+reaches an endpoint accepts a number. A program adds no proof source: a
+redeclared catalog extern must be an instance of the catalog's signature, so it
+may fix `h` (`Socket "a.com/*"`) and is then charged at what it fixed, and a
+foreign extern's types must cross the C boundary, which an extern type does not.
 
 A constructor may bind an existential authority by a kinded group leading its
 fields, `data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)`.
@@ -708,8 +734,10 @@ TyParam ::= name | (name : Kind)
 ```
 
 Kind arrows associate right. `Effect` classifies rows; `Authority Label`
-classifies a parameter in that label's declared domain, not a row. Compatible
-domain aliases give compatible authority kinds.
+classifies a parameter in that label's declared domain, not a row. The label
+must declare a domain: an atomic label, `IO` included, has no authorities, so
+`Authority` over one is ill-formed. Compatible domain aliases give compatible
+authority kinds.
 
 ### 6.2 Declaration sites
 
@@ -932,7 +960,15 @@ by the host's declared invocation protocol (calling a function or running an
 effect-indexed entry computation), unfiltered,
 with each label's verified parameter rendered (`drender`). For
 `Net "idp.example.com/*"` the manifest records `idp.example.com/*` as the sole
-permitted outbound authority.
+permitted outbound authority. A `Net` authority names an endpoint the program
+may dial or bind; a socket accepted through a bound endpoint is exercised at
+that endpoint's authority, and waiting for a descriptor to become ready is a
+timed wait (`Clock`), not an operation on an endpoint. The one exception is
+deliberate: the runtime's signal externs (`pdsSignalStart`,
+`pdsSignalRequested`) reach no endpoint but are charged `Net` at the top of its
+domain until process signals have a label of their own. That over-charges,
+which is safe, and the only program using them already holds that grant
+because it binds.
 
 Unresolved symbolic authority at a host boundary is conservatively top in its
 domain, or an explicit unresolved-manifest error. It must never be omitted or
@@ -1079,9 +1115,9 @@ values, resolved label identity, the abstraction `α`, the scoped authority
 solver and publication as far as a binding's own scope: a residual obligation
 over a variable no scope owns is decided over the module, not carried in a
 generalized scheme, so "residual constraints travel with a generalized scheme"
-is not implemented; qualified data fields, constructor proof sources and
-authority-indexed existentials remain the proposed surface of §4.1, not
-implemented. No conformance claim may turn a pending proof into success or
+is not implemented. Qualified data fields, constructor proof sources,
+carrying and authority-indexed existentials are implemented (the data-half
+and close-out checkpoints there). No conformance claim may turn a pending proof into success or
 describe the whole effects system as laundering-free while a known channel
 remains. Issue status belongs in the issue tracker; the archived observations
 explain counterexamples but are not a live backlog.

@@ -731,7 +731,7 @@ UPPER "Int"
 ARROW
 UPPER "Wait"
 LT
-UPPER "Net"
+UPPER "Clock"
 PIPE
 IDENT "e"
 GT
@@ -751,7 +751,7 @@ UPPER "Int"
 ARROW
 UPPER "Wait"
 LT
-UPPER "Net"
+UPPER "Clock"
 PIPE
 IDENT "e"
 GT
@@ -767,7 +767,7 @@ IDENT "systemPoller"
 COLON
 UPPER "Poller"
 LT
-UPPER "Net"
+UPPER "Clock"
 PIPE
 IDENT "e"
 GT

@@ -110,6 +110,10 @@
 # --- net (10): LLVM implements the whole isNetExtern family; interpreter none.
 #     Gated on the --allow-net security posture, not on implementation work. ---
 netClose	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netCloseListener	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+socketFd	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+listenSocketFd	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netSetNonblockListener	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netListenPort	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netRecv	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netResolve	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
@@ -192,6 +196,10 @@ enableRunStdoutFlush	wasm	PERMANENT	internal `medaka run` CLI plumbing (arms the
 #     net-importing program is REJECTED with that message, not silently
 #     miscompiled — this is the honest, by-design gap in the whole matrix. ---
 netClose	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netCloseListener	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+socketFd	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+listenSocketFd	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netSetNonblockListener	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netListenPort	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netRecv	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netResolve	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead

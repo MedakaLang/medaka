@@ -5,8 +5,8 @@
 import map as M
 import map.{Map(..)}
 import types.effect_authority.{
-  renderAuthority, Authority(..), Authvar(..), authvarId, authNorm, authSub,
-  authVars, authJoinAll, linkAuthvar
+  renderAuthority, Authority(..), Authvar(..), authvarId, authvarLevel,
+  authNorm, authSub, authVars, authJoinAll, linkAuthvar
 }
 import types.effect_rows.{
   Atom, atomsUnion, atomsDiff, atomKey, atomAuth, findAtom, EffRow(..),
@@ -45,6 +45,10 @@ public export data AuthWanted c = AuthWanted {
   -- so a report can locate the site that performed the label; `None` for a
   -- value flowing into a qualified slot, whose context is already the argument
   awLabel : Option String,
+  -- one half of an index EQUALITY (an `Authority`-kinded argument slot is
+  -- invariant, so `F q1 ~ F q2` records `q1 ⊑ q2` and `q2 ⊑ q1`): a failure
+  -- is an index mismatch, and the two halves are one defect
+  awExact : Bool,
 }
 
 data SummaryNode = SummaryNode {
@@ -173,8 +177,8 @@ recordRelation solver exact context lower upper =
       :: scope.essRelations.value
 
 export
-recordAuthority : SummarySolver c -> c -> Authority -> Authority -> Unit
-recordAuthority solver context lower upper =
+recordAuthority : SummarySolver c -> Bool -> c -> Authority -> Authority -> Unit
+recordAuthority solver exact context lower upper =
   let scope = currentScope solver
   scope.essAuthorities :=
     AuthWanted {
@@ -182,6 +186,7 @@ recordAuthority solver context lower upper =
         awUpper = upper,
         awContext = context,
         awLabel = None,
+        awExact = exact,
       }
       :: scope.essAuthorities.value
 
@@ -480,6 +485,7 @@ validateRelations solver protected escape (rel :: rest) =
       authorityEscapes
         (currentScope solver)
         rel.esrContext
+        rel.esrExact
         upperAtoms
         (escape rel.esrExact lowerAtoms upperAtoms)
     if isNonEmptyL escaping
@@ -514,10 +520,16 @@ firstEscapingKey [] lowerAtoms upperAtoms escape exact =
 -- An escaping atom whose label the upper row carries with a symbolic
 -- authority is an authority obligation, not a missing label: record
 -- `lower ⊑ upper` for the authority pass and keep only the genuine escapes.
-authorityEscapes : SummaryScope c -> c -> List Atom -> List Atom -> List Atom
-authorityEscapes _ _ _ [] = []
-authorityEscapes scope context upper (x :: rest) =
-  let others = authorityEscapes scope context upper rest
+-- In an exact (index) relation the obligation is one half of an equality.
+authorityEscapes : SummaryScope c ->
+  c ->
+  Bool ->
+  List Atom ->
+  List Atom ->
+  List Atom
+authorityEscapes _ _ _ _ [] = []
+authorityEscapes scope context exact upper (x :: rest) =
+  let others = authorityEscapes scope context exact upper rest
   match findAtom (atomKey x) upper
     Some y =>
       if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
@@ -527,6 +539,7 @@ authorityEscapes scope context upper (x :: rest) =
               awUpper = atomAuth y,
               awContext = context,
               awLabel = Some (atomKey x),
+              awExact = exact,
             }
             :: scope.essAuthorities.value
         others
@@ -562,13 +575,14 @@ closeSummaryScope : SummarySolver c ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   (List (Ref Effvar) -> Ref Effvar) ->
   (Int -> Ref Effvar) ->
+  (Int -> Authority -> Authority) ->
   List (SummaryFailure c)
-closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual =
+closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual widen =
   let scope = currentScope solver
   -- Authorities first: an argument's lower bounds decide a callee's flexible
   -- authority before any row is compared, so a row check sees concrete atoms
   -- wherever the body determined them.
-  let _ = solveOwnedAuthorities scope rigidAuths
+  let _ = solveOwnedAuthorities scope rigidAuths widen
   let summaries = M.values scope.essNodes.value
   let untransferred =
     filter
@@ -645,7 +659,7 @@ closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin 
   let failures = validateRelations solver frozen escape unproven
   -- Row validation may have derived new authority obligations; solve the
   -- variables they bound, then decide every obligation this scope owns.
-  let _ = solveOwnedAuthorities scope rigidAuths
+  let _ = solveOwnedAuthorities scope rigidAuths widen
   let authFailures = checkAuthorities solver scope rigidAuths
   solver.essStack := match solver.essStack.value
     _ :: rest => rest
@@ -679,15 +693,25 @@ localRigidAuth _ rigid cell = match !cell
 
 -- Every owned flexible variable takes the join of its lower bounds, its
 -- least solution.  Variables bounded by each other collapse to one
--- representative first, so no solution can refer back to itself.
-solveOwnedAuthorities : SummaryScope c -> Map Int Unit -> Unit
-solveOwnedAuthorities scope rigid =
+-- representative first, so no solution can refer back to itself.  [widen]
+-- is the checker's policy for a solution that names something a variable of
+-- the given level may not see (an existential opened in a scope younger than
+-- the variable); it is applied to every solution written.
+solveOwnedAuthorities : SummaryScope c ->
+  Map Int Unit ->
+  (Int -> Authority -> Authority) ->
+  Unit
+solveOwnedAuthorities scope rigid widen =
   solveAuthorities
     (ownedFlexibleAuth scope rigid)
+    widen
     (reverseL scope.essAuthorities.value)
 
-solveAuthorities : (Ref Authvar -> Bool) -> List (AuthWanted c) -> Unit
-solveAuthorities owned wanteds =
+solveAuthorities : (Ref Authvar -> Bool) ->
+  (Int -> Authority -> Authority) ->
+  List (AuthWanted c) ->
+  Unit
+solveAuthorities owned widen wanteds =
   let lowers =
     fold
       (acc w => match authNorm w.awUpper
@@ -719,7 +743,7 @@ solveAuthorities owned wanteds =
           Tip
           ids
       fold
-        (_ members => solveClass lowers idOfName members)
+        (_ members => solveClass lowers idOfName widen members)
         ()
         (tarjanSCCs names edges)
 
@@ -753,13 +777,24 @@ dependencies owned nodes ls =
 
 solveClass : Map Int (Ref Authvar, List Authority) ->
   Map String Int ->
+  (Int -> Authority -> Authority) ->
   List String ->
   Unit
-solveClass _ _ [] = ()
-solveClass nodes idOfName (first :: rest) =
+solveClass _ _ _ [] = ()
+solveClass nodes idOfName widen (first :: rest) =
   let repId = idOfVertex idOfName first
   let (rep, _) = nodeOf repId nodes
   let members = map (idOfVertex idOfName) rest
+  -- every member will read the representative's solution, so it is widened
+  -- for the oldest of them, found before the members are linked (a linked
+  -- cell reports its target's level)
+  let oldest =
+    fold
+      (acc id =>
+        let (cell, _) = nodeOf id nodes
+        min acc (authvarLevel cell))
+      (authvarLevel rep)
+      members
   let _ =
     fold
       (_ id =>
@@ -771,7 +806,7 @@ solveClass nodes idOfName (first :: rest) =
   let kept = filter (q => not (isVar repId q)) (joinMembers (authJoinAll all))
   match kept
     [] => ()
-    _ => linkAuthvar rep (authJoinAll kept)
+    _ => linkAuthvar rep (widen oldest (authJoinAll kept))
 
 idOfVertex : Map String Int -> String -> Int
 idOfVertex idOfName name = match M.get name idOfName
@@ -816,6 +851,7 @@ checkAuthorities solver scope rigid =
                       awUpper = w.awUpper,
                       awContext = w.awContext,
                       awLabel = w.awLabel,
+                      awExact = w.awExact,
                     }
                     :: parent.essAuthorities.value
                 []
@@ -829,6 +865,7 @@ checkAuthorities solver scope rigid =
                       awUpper = w.awUpper,
                       awContext = w.awContext,
                       awLabel = w.awLabel,
+                      awExact = w.awExact,
                     }
                     :: solver.essRoot.value
                 []
@@ -839,7 +876,7 @@ checkAuthorities solver scope rigid =
 -- One obligation, one report: the same `lower ⊑ upper` pair recorded from two
 -- sites (an invariant index meeting a declared one, then the result flowing
 -- into the same declaration) is one defect, reported where it was first
--- recorded.
+-- recorded.  The two halves of one index equality are one pair, unordered.
 distinctFailures : List (SummaryFailure c) -> List (SummaryFailure c)
 distinctFailures failures = distinctFailuresGo failures []
 
@@ -849,7 +886,15 @@ distinctFailuresGo : List (SummaryFailure c) ->
 distinctFailuresGo [] _ = []
 distinctFailuresGo (f :: rest) seen = match f.esfAuthority
   Some (lo, hi) =>
-    let key = "\{renderAuthority lo}\t\{renderAuthority hi}"
+    let a = renderAuthority lo
+    let b = renderAuthority hi
+    let key =
+      if not f.esfExact then
+        "\{a}\t\{b}"
+      else if a <= b then
+        "=\{a}\t\{b}"
+      else
+        "=\{b}\t\{a}"
     if elem key seen then
       distinctFailuresGo rest seen
     else
@@ -862,10 +907,12 @@ distinctFailuresGo (f :: rest) seen = match f.esfAuthority
 export
 closeRootAuthorities : SummarySolver c ->
   Map Int Unit ->
+  (Int -> Authority -> Authority) ->
   List (SummaryFailure c)
-closeRootAuthorities solver rigid =
+closeRootAuthorities solver rigid widen =
   let wanteds = reverseL solver.essRoot.value
-  let _ = solveAuthorities (cell => not (M.has (authvarId cell) rigid)) wanteds
+  let _ =
+    solveAuthorities (cell => not (M.has (authvarId cell) rigid)) widen wanteds
   solver.essRoot := []
   distinctFailures
     (flatMap
@@ -879,7 +926,7 @@ authorityFailure : AuthWanted c -> Authority -> Authority -> SummaryFailure c
 authorityFailure w lo hi = SummaryFailure {
   esfLower = EffRow [] None,
   esfUpper = EffRow [] None,
-  esfExact = False,
+  esfExact = w.awExact,
   esfContext = w.awContext,
   esfAuthority = Some (lo, hi),
   esfWrittenUpper = Some w.awUpper,

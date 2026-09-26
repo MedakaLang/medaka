@@ -1,0 +1,5 @@
+-- PARITY CONTROL: the same import through the wildcard facade.
+import f_wild.{Logging, doLog}
+
+actWild : Int -> <Logging> Int
+actWild x = doLog x

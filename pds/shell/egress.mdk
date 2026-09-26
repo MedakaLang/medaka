@@ -271,7 +271,7 @@ decodeUpstream buffer = match parseResponse buffer
    holds, which only the caller can see. -}
 collectUpstream : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
-  Connection ->
+  Connection * ->
   Vector Int ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 collectUpstream deadline mayHold conn acc = defer
@@ -284,7 +284,7 @@ collectUpstream deadline mayHold conn acc = defer
 
 collectStep : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
-  Connection ->
+  Connection * ->
   Vector Int ->
   Result String (Array Int) ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
@@ -303,7 +303,7 @@ collectStep deadline mayHold conn acc (Ok bytes) =
 
 keepChunk : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
-  Connection ->
+  Connection * ->
   Vector Int ->
   Array Int ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
@@ -319,7 +319,7 @@ keepChunk deadline mayHold conn acc bytes =
     None => collectUpstream deadline mayHold conn acc
 
 exchange : (Int -> Async <Clock, Net | e> Bool) ->
-  Connection ->
+  Connection * ->
   Array Int ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 exchange mayHold conn bytes = defer
@@ -334,7 +334,7 @@ exchange mayHold conn bytes = defer
 -- is why the exchange's outcome is held and returned after the close rather
 -- than returned from inside it.
 opened : (Int -> Async <Clock, Net | e> Bool) ->
-  Connection ->
+  Connection * ->
   Array Int ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 opened mayHold conn bytes = defer

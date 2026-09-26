@@ -1,0 +1,35 @@
+-- Each binding tries to use a socket beyond the authority it was opened at, or
+-- to use a descriptor where a socket is required; each is refused.  The
+-- honest controls are effect_socket_ok.
+dial : (host : String) -> Int -> <Net host> Result String Unit
+dial host port = match netTcpConnect host port
+  Ok s => netClose s
+  Err e => Err e
+
+-- a dial outside the admitted host
+wrongHost : Unit -> <Net "api.example.com/*"> Result String Unit
+wrongHost _ = dial "evil.example.net/x" 443
+
+-- a socket used under a grant for a different host
+sendElsewhere : Socket "api.example.com/*" ->
+  <Net "other.example.com/*"> Result String Int
+sendElsewhere s = netSend s (arrayFromList [1])
+
+-- an accepted socket is at its listener's authority, not the caller's
+acceptElsewhere : ListenSocket "0.0.0.0/*" ->
+  <Net "127.0.0.1/*"> Result String (Socket "0.0.0.0/*")
+acceptElsewhere l = netTcpAccept l
+
+-- a listener is not a connection
+closeListenerAsSocket : ListenSocket a -> <Net a> Result String Unit
+closeListenerAsSocket l = netClose l
+
+-- a descriptor number is not a socket (the signal pipe's, say)
+recvFromPipe : Int -> <Net> Result String (Array Int)
+recvFromPipe fd = netRecv fd 16
+
+-- an index is invariant: a socket for one host is not a socket for a prefix
+widen : Socket "api.example.com/v1" -> Socket "api.example.com/*"
+widen s = s
+
+main = println 1

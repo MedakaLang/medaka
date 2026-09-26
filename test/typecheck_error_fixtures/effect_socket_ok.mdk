@@ -1,0 +1,35 @@
+-- The honest controls for effect_socket_launder (EFFECTS-SEMANTICS §4.1, the
+-- socket handles): a socket is produced only by the runtime's externs, at the
+-- authority its opening extern was granted, so an operation on it is charged
+-- there; an accepted socket is at its listener's authority; a descriptor
+-- number grants nothing, and a poll is a timed wait.
+dial : (host : String) -> Int -> <Net host> Result String Unit
+dial host port = match netTcpConnect host port
+  Ok s => match netSend s (arrayFromList [1])
+    Ok _ => netClose s
+    Err e => Err e
+  Err e => Err e
+
+-- a caller admitting one host dials within it
+cfgDial : Unit -> <Net "api.example.com/*"> Result String Unit
+cfgDial _ = dial "api.example.com/v1" 443
+
+-- a listener's accepted socket is used at the listener's own authority
+serveOne : (addr : String) -> <Net addr> Result String Unit
+serveOne addr = match netTcpListen addr 0
+  Ok lis => match netTcpAccept lis
+    Ok conn => match netRecv conn 16
+      Ok _ => netCloseListener lis
+      Err e => Err e
+    Err e => Err e
+  Err e => Err e
+
+-- a handle keeps its written index
+keep : Socket "api.example.com/*" -> Socket "api.example.com/*"
+keep s = s
+
+-- the descriptor number is read from a handle, and polling it is the clock
+pollOne : Socket h -> <Clock> Result String (Array Int)
+pollOne s = ioPoll (arrayFromList [socketFd s]) (arrayFromList [1]) 0
+
+main = println 1

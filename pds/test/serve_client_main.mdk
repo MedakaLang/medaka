@@ -122,7 +122,10 @@ parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
     len <- contentLengthOf rest
     Ok (status, contentTypeOf rest, len)
 
-recvAtLeast : Connection -> Array Int -> Int -> <Net> Result String (Array Int)
+recvAtLeast : Connection * ->
+  Array Int ->
+  Int ->
+  <Net> Result String (Array Int)
 recvAtLeast conn buf need =
   if arrayLength buf >= need then
     Ok buf
@@ -140,7 +143,7 @@ recvAtLeast conn buf need =
    declared media type, the body bytes, and whatever bytes were buffered past
    the end of this response — the next pipelined response's bytes, on a
    connection that has one. -}
-readTypedResponse : Connection ->
+readTypedResponse : Connection * ->
   Array Int ->
   <Net> Result String (Int, String, Array Int, Array Int)
 readTypedResponse conn pending = match findHeaderEnd pending 0
@@ -168,7 +171,7 @@ readTypedResponse conn pending = match findHeaderEnd pending 0
    instead of parsing only the status and content type out of it — for the
    rate-limit cases, which must assert directly on the `ratelimit-*`
    response headers no other reader keeps. -}
-readHeaderResponse : Connection ->
+readHeaderResponse : Connection * ->
   Array Int ->
   <Net> Result String (Int, String, Array Int, Array Int)
 readHeaderResponse conn pending = match findHeaderEnd pending 0
@@ -194,7 +197,7 @@ readHeaderResponse conn pending = match findHeaderEnd pending 0
         readHeaderResponse conn (appendBytes pending chunk)
 
 -- | The same read for the cases that do not care what media type came back.
-readResponse : Connection ->
+readResponse : Connection * ->
   Array Int ->
   <Net> Result String (Int, Array Int, Array Int)
 readResponse conn pending =
@@ -202,11 +205,11 @@ readResponse conn pending =
     ((status, _, body, rest) => (status, body, rest))
     (readTypedResponse conn pending)
 
-mustConnect : Int -> <Net> Connection
+mustConnect : Int -> <Net> Connection *
 mustConnect port =
   resultOrPanic "serve_client: connect failed" (connect "127.0.0.1" port)
 
-mustSend : Connection -> Array Int -> <Net> Unit
+mustSend : Connection * -> Array Int -> <Net> Unit
 mustSend conn bytes = match sendAll conn bytes
   Ok () => ()
   Err message => panic "serve_client: send failed: \{message}"
@@ -1116,7 +1119,7 @@ runWriteStatus port token did collection rkey want =
 -- | One request/response round trip over an existing connection, using
 -- whatever bytes `readHeaderResponse` already buffered past the previous
 -- response.
-floodStep : Connection ->
+floodStep : Connection * ->
   Array Int ->
   Array Int ->
   <Net> (Int, String, Array Int, Array Int)
@@ -1130,13 +1133,13 @@ floodStep conn pending requestBytes =
 -- built from its 1-based index, so a write case can hand every request a
 -- distinct record key — and reports only the LAST response, the one that
 -- observes the class's ceiling if `count` exceeds it.
-floodLoop : Connection ->
+floodLoop : Connection * ->
   Int ->
   (Int -> Array Int) ->
   <Net> (Int, String, Array Int)
 floodLoop conn count buildRequest = floodLoopGo conn count buildRequest 1 [||]
 
-floodLoopGo : Connection ->
+floodLoopGo : Connection * ->
   Int ->
   (Int -> Array Int) ->
   Int ->
@@ -1316,10 +1319,10 @@ unterminatedHeaders =
    A send may legitimately fail: past either accept-time ceiling the server
    closes the connection without reading it, which is the behavior under
    test, not an error in the driver. -}
-holdUnframed : Int -> Int -> <Net> List Connection
+holdUnframed : Int -> Int -> <Net> List (Connection *)
 holdUnframed port count = holdUnframedGo port count []
 
-holdUnframedGo : Int -> Int -> List Connection -> <Net> List Connection
+holdUnframedGo : Int -> Int -> List (Connection *) -> <Net> List (Connection *)
 holdUnframedGo port count held =
   if count <= 0 then
     held
@@ -1328,7 +1331,7 @@ holdUnframedGo port count held =
     let _ = sendAll conn unterminatedHeaders
     holdUnframedGo port (count - 1) (conn :: held)
 
-closeAll : List Connection -> <Net> Unit
+closeAll : List (Connection *) -> <Net> Unit
 closeAll [] = ()
 closeAll (conn :: rest) =
   let () = ignoreResult (close conn)
@@ -1419,10 +1422,10 @@ declaredBodyNeverSent =
   toUtf8
     "POST \{createSessionPath} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: 1048576\r\n\r\n"
 
-holdBodyStall : Int -> Int -> <Net> List Connection
+holdBodyStall : Int -> Int -> <Net> List (Connection *)
 holdBodyStall port count = holdBodyStallGo port count []
 
-holdBodyStallGo : Int -> Int -> List Connection -> <Net> List Connection
+holdBodyStallGo : Int -> Int -> List (Connection *) -> <Net> List (Connection *)
 holdBodyStallGo port count held =
   if count <= 0 then
     held
@@ -1607,8 +1610,8 @@ openProxyCalls : Int ->
   String ->
   String ->
   Int ->
-  List Connection ->
-  <Net> List Connection
+  List (Connection *) ->
+  <Net> List (Connection *)
 openProxyCalls port token service path remaining acc =
   if remaining <= 0 then
     acc
@@ -1617,7 +1620,7 @@ openProxyCalls port token service path remaining acc =
     let () = mustSend conn (proxyRequest "" token service path)
     openProxyCalls port token service path (remaining - 1) (conn :: acc)
 
-closeProxyCalls : List Connection -> <Net> Unit
+closeProxyCalls : List (Connection *) -> <Net> Unit
 closeProxyCalls [] = ()
 closeProxyCalls (conn :: rest) =
   let () = ignoreResult (close conn)
@@ -1646,7 +1649,7 @@ gradeFanout upstream (Ok (status, body, _)) =
    reports that a case failed without reporting what arrived instead; a read
    that produced no status at all shows as `0`. -}
 countFanout : Int ->
-  List Connection ->
+  List (Connection *) ->
   Int ->
   Int ->
   Int ->
@@ -1998,7 +2001,7 @@ perIdentityDerivationCeiling : Int
 perIdentityDerivationCeiling = 2
 
 -- | One login request sent on a fresh connection, not yet answered.
-sendLogin : Int -> String -> String -> <Net> Connection
+sendLogin : Int -> String -> String -> <Net> Connection *
 sendLogin port identifier password =
   let conn = mustConnect port
   let () =
@@ -2010,7 +2013,7 @@ sendLogin port identifier password =
 -- | `sendLogin`, carrying a forwarded-for identity instead of a bearer
 -- token — lets two logins be attributed to two different callers behind a
 -- trusted proxy (`kdf-flood-xff`).
-sendLoginXff : Int -> String -> String -> String -> <Net> Connection
+sendLoginXff : Int -> String -> String -> String -> <Net> Connection *
 sendLoginXff port xff identifier password =
   let conn = mustConnect port
   let () =
@@ -2455,7 +2458,7 @@ runSlowUpload port token mimeType =
 
 -- | Sends `body` from `offset` onward in `piece`-byte pieces, pausing
 -- `slowUploadGap` before every piece after the first.
-sendInPieces : Connection -> Array Int -> Int -> Int -> <Net, Clock> Unit
+sendInPieces : Connection * -> Array Int -> Int -> Int -> <Net, Clock> Unit
 sendInPieces conn body offset piece =
   if offset >= arrayLength body then
     ()

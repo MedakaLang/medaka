@@ -146,6 +146,7 @@ expectTok : Token -> ParserE <> Unit
 exprStmtFor : Expr -> Token -> ParserE <> (List DoStmt)
 exprToParams : Expr -> List Pat
 exprToPat : Expr -> Pat
+externDataEnd : Bool -> String -> List (String, Option KindAnn) -> Token -> ParserE <> Decl
 externName : ParserE <> String
 externNameFor : Token -> ParserE <> String
 extractConstraints : Ty -> List Constraint
@@ -413,6 +414,7 @@ parseErrorMessage : ParseError -> String
 parseExpr : ParserE <> Expr
 parseExprStmt : ParserE <> (List DoStmt)
 parseExtern : Bool -> ParserE <> Decl
+parseExternFor : Bool -> Token -> ParserE <> Decl
 parseField : ParserE <> Field
 parseFunOrSig : Bool -> ParserE <> Decl
 parseGuard : ParserE <> Guard
@@ -519,6 +521,8 @@ productAxisValFor : Token -> ParserE <> EffParamTy
 productParamP : ParserE <> EffParamTy
 programWithSpans : ParserE <> (List (Decl, Int, Int))
 propParam : ParserE <> PropParam
+qualJoinTail : ParserE <> (List String)
+qualJoinTailFor : Token -> ParserE <> (List String)
 rangeAfter : Expr -> Bool -> ParserE <> Expr
 recordFieldExpr : ParserE <> (List String, Expr)
 recordFieldExprRest : List String -> Token -> ParserE <> (List String, Expr)

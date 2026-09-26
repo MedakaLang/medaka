@@ -3437,11 +3437,15 @@ isNetExtern name = contains name [
   "netRecv",
   "netShutdown",
   "netClose",
+  "netCloseListener",
   "netSetTimeout",
+  "socketFd",
+  "listenSocketFd",
   "ioPoll",
   "pdsSignalStart",
   "pdsSignalRequested",
   "netSetNonblock",
+  "netSetNonblockListener",
   "netConnectStart",
   "netConnectCheck",
   "netTryAccept",
@@ -3519,6 +3523,21 @@ emitNetExtern e env "netClose" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_net_close(i64 \{fd})"
     (r, LTCon)
   _ => panic "llvm: netClose takes one argument"
+-- A listener closes through the same shim: both are descriptors to the host.
+emitNetExtern e env "netCloseListener" args = match emitArgs e env args
+  [fd] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_close(i64 \{fd})"
+    (r, LTCon)
+  _ => panic "llvm: netCloseListener takes one argument"
+-- A socket is the descriptor's tagged word (RUNTIME-DESIGN §8), so its number
+-- is the same word read as an Int.
+emitNetExtern e env "socketFd" args = match emitArgs e env args
+  [s] => (s, LTInt)
+  _ => panic "llvm: socketFd takes one argument"
+emitNetExtern e env "listenSocketFd" args = match emitArgs e env args
+  [s] => (s, LTInt)
+  _ => panic "llvm: listenSocketFd takes one argument"
 emitNetExtern e env "netSetTimeout" args = match emitArgs e env args
   [fd, ms] =>
     let r = freshReg e
@@ -3556,6 +3575,13 @@ emitNetExtern e env "netSetNonblock" args = match emitArgs e env args
       emit e "  \{r} = call i64 @mdk_net_set_nonblock(i64 \{fd}, i64 \{on})"
     (r, LTCon)
   _ => panic "llvm: netSetNonblock takes two arguments"
+emitNetExtern e env "netSetNonblockListener" args = match emitArgs e env args
+  [fd, on] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_net_set_nonblock(i64 \{fd}, i64 \{on})"
+    (r, LTCon)
+  _ => panic "llvm: netSetNonblockListener takes two arguments"
 emitNetExtern e env "netConnectStart" args = match emitArgs e env args
   [h, p] =>
     let r = freshReg e

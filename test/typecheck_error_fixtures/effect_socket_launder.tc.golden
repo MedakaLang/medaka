@@ -1,0 +1,6 @@
+TYPE ERROR: Authority index mismatch: "api.example.com/*" vs "api.example.com/v1". An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle "cfg/app"` is not a `Handle "cfg/*"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant
+TYPE ERROR: Effectful value used where <Net "127.0.0.1/*"> is allowed, but it performs <Net "0.0.0.0/*">
+TYPE ERROR: Effectful value used where <Net "api.example.com/*"> is allowed, but it performs <Net "evil.example.net/x">
+TYPE ERROR: Effectful value used where <Net "other.example.com/*"> is allowed, but it performs <Net "api.example.com/*">
+TYPE ERROR: Type mismatch: Socket h vs Int
+TYPE ERROR: Type mismatch: Socket vs ListenSocket

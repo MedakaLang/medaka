@@ -36,6 +36,7 @@
 
 import frontend.ast.{
   EffAtomTy(..),
+  qualifierSource,
   effAtomSurface,
   authTermSurface,
   ctorBindersSurface,
@@ -983,7 +984,7 @@ printType (TyTuple ts) =
   Cat (text "(") (Cat (sepBy (text ", ") (map printType ts)) (text ")"))
 printType (TyEffect es tail t) =
   let inside = effectInside es tail
-  Cat (text "<") (Cat inside (Cat (text "> ") (printTypeAppLhs t)))
+  Cat (text "<") (Cat inside (Cat (text "> ") (printRowResult t)))
 printType (TyRow [] (a :: b :: rest) _) =
   Cat (text "(") (Cat (text (joinWith " | " (a :: b :: rest))) (text ")"))
 printType (TyRow es tail _) =
@@ -995,7 +996,10 @@ printType (TyNamed n t) =
   Cat
     (text "(")
     (Cat (text n) (Cat (text " : ") (Cat (printType t) (text ")"))))
-printType (TyQual t n) = Cat (printTypeAtom t) (text " @\{n}")
+-- `Result String @a` qualifies the whole application, so an application
+-- needs no parentheses under the qualifier.
+printType (TyQual t ns _) =
+  Cat (printTypeAppLhs t) (text " \{qualifierSource ns}")
 
 constraintsDoc : List Constraint -> Doc
 constraintsDoc [c] = printConstraint c
@@ -1034,6 +1038,13 @@ effAtomDoc a = text (effAtomSurface escStringLit a)
 printConstraint : Constraint -> Doc
 printConstraint (Constraint { constraintHead = iface, constraintArgs = args }) =
   Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
+
+-- The type a row wraps: `<L p> String @p` parses as the row over the
+-- qualified type, so a qualifier needs no parentheses there (it does as the
+-- head of an application, `(Result String @a) E`).
+printRowResult : Ty -> Doc
+printRowResult (TyQual t ns l) = printType (TyQual t ns l)
+printRowResult t = printTypeAppLhs t
 
 printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon { tyConName = n }) = text (tyConSurface n)
@@ -2290,6 +2301,10 @@ printDecl (DFunDef pub n pats body) =
     (Cat (defHeader n pats) (printDefRhs body))
 printDecl (DLetGroup pub bindings) =
   Cat (if pub then text "export " else Nil) (letGroupDecl bindings)
+printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataExtern = True }) =
+  Cat
+    (visPrefix vis)
+    (Cat (text "extern data ") (Cat (text n) (tyParamsDoc params kinds)))
 printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders, dataDerives = derives }) =
   let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   Cat
@@ -2346,7 +2361,7 @@ printDecl (DUse pub path _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (text "import ") (printUsePath path !importForcedRef))
-printDecl (DEffect pub name domain axes _) =
+printDecl (DEffect pub name domain axes _ _) =
   Cat
     (effDeclHead pub)
     (Cat (text name) (Cat (effDomainDoc domain) (effAxesDoc axes)))
@@ -2488,7 +2503,7 @@ ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyAuth p _) = authTermSurface escStringLit p
 ppTyPrec _ (TyNamed n t) = "(\{n} : \{ppTyPrec 0 t})"
-ppTyPrec _ (TyQual t n) = "\{ppTyPrec 2 t} @\{n}"
+ppTyPrec _ (TyQual t ns _) = "\{ppTyPrec 2 t} \{qualifierSource ns}"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c

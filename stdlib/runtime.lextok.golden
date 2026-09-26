@@ -622,6 +622,7 @@ COLON
 UPPER "String"
 RPAREN
 ARROW
+INDENT
 UPPER "Int"
 ARROW
 LT
@@ -630,7 +631,12 @@ IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
-UPPER "Int"
+LPAREN
+UPPER "Socket"
+IDENT "host"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 EXTERN
 IDENT "netTcpListen"
@@ -641,6 +647,7 @@ COLON
 UPPER "String"
 RPAREN
 ARROW
+INDENT
 UPPER "Int"
 ARROW
 LT
@@ -649,15 +656,22 @@ IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
-UPPER "Int"
+LPAREN
+UPPER "ListenSocket"
+IDENT "host"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 EXTERN
 IDENT "netListenPort"
 COLON
-UPPER "Int"
+UPPER "ListenSocket"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
@@ -666,25 +680,32 @@ NEWLINE
 EXTERN
 IDENT "netTcpAccept"
 COLON
-UPPER "Int"
+UPPER "ListenSocket"
+IDENT "a"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
-UPPER "Int"
+LPAREN
+UPPER "Socket"
+IDENT "a"
+RPAREN
 NEWLINE
 EXTERN
 IDENT "netSend"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -693,7 +714,8 @@ NEWLINE
 EXTERN
 IDENT "netSendFrom"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
@@ -702,6 +724,7 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -710,12 +733,14 @@ NEWLINE
 EXTERN
 IDENT "netRecv"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -727,12 +752,14 @@ NEWLINE
 EXTERN
 IDENT "netShutdown"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -741,10 +768,26 @@ NEWLINE
 EXTERN
 IDENT "netClose"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+EXTERN
+IDENT "netCloseListener"
+COLON
+UPPER "ListenSocket"
+IDENT "a"
+ARROW
+LT
+UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
@@ -753,16 +796,34 @@ NEWLINE
 EXTERN
 IDENT "netSetTimeout"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
+NEWLINE
+EXTERN
+IDENT "socketFd"
+COLON
+UPPER "Socket"
+IDENT "h"
+ARROW
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "listenSocketFd"
+COLON
+UPPER "ListenSocket"
+IDENT "a"
+ARROW
+UPPER "Int"
 NEWLINE
 EXTERN
 IDENT "pdsSignalStart"
@@ -792,13 +853,15 @@ COLON
 UPPER "Array"
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Array"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
 LT
-UPPER "Net"
+UPPER "Clock"
 GT
 UPPER "Result"
 UPPER "String"
@@ -807,33 +870,61 @@ UPPER "Array"
 UPPER "Int"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 EXTERN
 IDENT "netSetNonblock"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Bool"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
 EXTERN
-IDENT "netTryAccept"
+IDENT "netSetNonblockListener"
 COLON
-UPPER "Int"
+UPPER "ListenSocket"
+IDENT "a"
+ARROW
+INDENT
+UPPER "Bool"
 ARROW
 LT
 UPPER "Net"
+IDENT "a"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+DEDENT
+NEWLINE
+EXTERN
+IDENT "netTryAccept"
+COLON
+UPPER "ListenSocket"
+IDENT "a"
+ARROW
+LT
+UPPER "Net"
+IDENT "a"
 GT
 UPPER "Result"
 UPPER "String"
 LPAREN
 UPPER "Option"
-UPPER "Int"
+LPAREN
+UPPER "Socket"
+IDENT "a"
+RPAREN
 RPAREN
 NEWLINE
 EXTERN
@@ -845,6 +936,7 @@ COLON
 UPPER "String"
 RPAREN
 ARROW
+INDENT
 UPPER "Int"
 ARROW
 LT
@@ -853,15 +945,22 @@ IDENT "host"
 GT
 UPPER "Result"
 UPPER "String"
-UPPER "Int"
+LPAREN
+UPPER "Socket"
+IDENT "host"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 EXTERN
 IDENT "netConnectCheck"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -873,12 +972,15 @@ NEWLINE
 EXTERN
 IDENT "netTryRecv"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -890,15 +992,20 @@ UPPER "Int"
 RPAREN
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 EXTERN
 IDENT "netTryRecvBytes"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -907,16 +1014,20 @@ UPPER "Option"
 UPPER "ByteBlock"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 EXTERN
 IDENT "netTrySend"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
@@ -928,7 +1039,8 @@ NEWLINE
 EXTERN
 IDENT "netTrySendFrom"
 COLON
-UPPER "Int"
+UPPER "Socket"
+IDENT "h"
 ARROW
 INDENT
 UPPER "Array"
@@ -939,6 +1051,7 @@ UPPER "Int"
 ARROW
 LT
 UPPER "Net"
+IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"

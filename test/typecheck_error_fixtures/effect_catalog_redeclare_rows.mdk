@@ -1,0 +1,22 @@
+-- A redeclared catalog extern is an instance of the catalog's type with its
+-- rows included (EFFECTS-SEMANTICS §4.1): a row inside an instantiated type
+-- variable or a callback matches exactly, and the row each arrow's result
+-- carries covers the catalog's row at the same arrow. Each declaration below
+-- is refused; effect_catalog_redeclare_rows_ok holds the honest forms.
+
+-- a cell holding an effectful function, read back as a pure one
+extern Ref : (Unit -> <IO> Unit) -> Ref (Unit -> Unit)
+
+-- the callback's row is the built-in's row, so the result cannot drop it
+extern arrayMakeWith : Int -> (Int -> <IO> a) -> <> Array a
+
+-- the write happens at the second arrow, not the first
+extern writeFile : (path : String) -> <FileWrite path> (String -> Result String Unit)
+
+data Box (e : Effect) = Box (Unit -> <e> Unit)
+
+-- a row is a set: a repeated atom is that atom once, not a stand-in for
+-- another, so the stored box cannot differ from the cell's
+extern setRef : Ref (Box <Stdout, Stdout>) -> Box <Stdout, FileWrite> -> Unit
+
+main = println 1
