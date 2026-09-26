@@ -273,7 +273,7 @@ public export data IfaceRef = IfaceRef {
 --
 -- [voIds] IS NOT REDUNDANT WITH IT, AND MUST NOT BE DERIVED FROM IT.  Two
 -- producers have only an id (`vecOblsOfSlots` lifts a `CSlot`, whose payload is
--- `csId : Int`; `superSlotVecOf` maps typaram names positionally onto ids), and a
+-- `csId : Int`; `censusSuperCloseVec` maps typaram names positionally onto ids), and a
 -- `Mono` is a `Ref Tyvar` that cannot be minted from an id.  [voIds] also remains
 -- the currency of the dict-slot cardinality (`leadInferredPred`) and of the coverage
 -- subset test (`pairsOfVecObls`), neither of which has anything to say about a
