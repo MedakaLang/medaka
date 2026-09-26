@@ -631,13 +631,12 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/i
 `scAdd`/`scSub`/`scMul`/`scNegate`/`scInverse`, canonical 32-byte
 serialization, and `scIsHigh`.
 
-**It deliberately shares no code with `pds/lib/field.mdk`.** The field module
-mirrors `libsecp256k1`'s 5×2^52 layout because design decision P10 wants
-element-by-element cross-checkability of the subtlest arithmetic in the
-project. Scalar operations run a *few times per signature, not thousands*, so
-this module optimises for being easy to argue about instead: **16 limbs of
-2^16**, uniform width, 26 bits of headroom against Medaka's silently-wrapping
-63-bit `Int`.
+**It deliberately shares no code with `pds/lib/field.mdk`.** Each module
+mirrors one `libsecp256k1` layout, so both stay element-by-element
+cross-checkable (design decision P10): the field is `field_5x52`, and this
+module is `scalar_8x32`: **8 limbs of 2^32**, stored as `Int`, with every step
+straight-line `U64` code. A 32 × 32 product fits in a `U64`, and each column
+sum stays below 2^36, 28 bits clear of 2^64.
 
 **The field's reduction does not transfer, and that is the reason the two
 modules are separate rather than shared.** `2^256 − p` is `2^32 + 977`, ~33
@@ -645,10 +644,11 @@ bits, which is what makes the field's fixed three-round carry/fold schedule
 fully reduce under its conservative raw-limb bound. `2^256 −
 n = 0x14551231950b75fc4402da1732fc9bebf` is **129 bits**: one fold of a
 512-bit product lands below 2^385, not below 2^256. `scalar.mdk` therefore
-runs exactly **four** fold/carry rounds, including zero high halves, and then
-makes one unconditional arithmetic subtract-and-select. Read the module header
-before changing anything in it — it carries that argument and the headroom
-derivation.
+runs exactly **three** folds (512 → 385 → 258 → 256 bits and a carry), including
+zero high parts, and then makes one unconditional arithmetic subtract-and-select
+that also absorbs the carry. Read the module header and
+`docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §4 before changing anything in it —
+they carry that argument and the headroom derivation.
 
 **The answer key.** `pds/test/vectors/scalar_reference_corpus.txt` (1028 rows:
 `red`/`neg`/`inv`/`high`/`ovf` over 52 inputs, `mul`/`add`/`sub` over 256
