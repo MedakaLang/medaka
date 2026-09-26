@@ -797,6 +797,59 @@ Not taken: a `Mode` axis separating dial from bind authorities (`Net
 "0.0.0.0"` reads as an endpoint); `ByteBlock` as an `extern data` (it is
 still a hard-coded primitive).
 
+*Item 7 review round (on `9966c9d87`).* Each finding was reproduced by the
+reviewer on a built binary, each refusal paired with a control.
+
+- **S0, older rule, fixed.** A redeclared catalog extern was compared to
+  the catalog by type heads only, so `extern stringIndexOf : String ->
+  String -> Option (Socket "api.example.com/*")` typed any number as a socket
+  and the built program sent on it. The same route was a general coercion
+  (`Option String` for `Option Int` segfaults natively). A redeclaration
+  must now be an instance of the catalog's signature (`ffiSigInstance`): it
+  may fix type variables and index authorities, and an argument's binder
+  matches only the declaration's binder at the same position, so a dial
+  cannot be re-indexed either. The row rule instantiates the catalog row by
+  the same match, so an honest `Socket "a.com/*" -> … <Net "a.com/*">` is
+  accepted where it was refused. One fixture had declared `writeFile` at a
+  swapped `Result` and now reads the catalog's type. Pinned by
+  `effect_socket_redeclare` and `effect_socket_redeclare_ok`.
+- **S2, fixed in the spec.** `extern data` read as a construct a program can
+  use. A foreign extern cannot return one and a redeclaration is an
+  instance, so a program's own `extern data` names a type with no values;
+  SYNTAX and §4.1 say so.
+- **S2, wording fixed.** `waitRead` and `ioPoll` claimed every descriptor
+  they watch was a socket opened under a grant; they read and write nothing,
+  which is the reason they are `<Clock>`.
+- **S3, fixed.** `public export extern …` now names the extern case, with
+  the same fix-it.
+- **CI on `9966c9d87`, fixed.** The multi-module emitter gates pass an empty
+  prelude, so the catalog's `Socket h` had no declared kind; they now pass
+  core's `extern data` lines, derived from `core.mdk`. `check_ir_floor` was
+  over: the early kind pass recorded every core head a second time
+  (`universeDataCtors` persists across the run), so every missed lookup
+  scanned duplicates. The catalog now elaborates inside
+  `withDeclParamKinds`, which records only heads with a declared non-`Type`
+  kind and restores the tables. That recovers 2.1M; the remaining 4.9M is the
+  catalog's indexed network signatures, which every run elaborates. `main`
+  itself measured 0.25% under the `check` ceiling on the runner, so the
+  ceiling was re-derived by the gate's own 20% convention, with the split
+  written beside it. **Your call:** revert that line if you would rather
+  find the Ir elsewhere first.
+
+Owed from this round, not acted on:
+
+- `pdsSignalStart`/`pdsSignalRequested` still charge `<Net>` for a signal
+  handler, which §7's reading of `Net` as an endpoint does not describe. It
+  over-charges, which is safe; the right label is a question for you.
+- A `No impl of Debug for Socket h` reject advises `deriving`, which an
+  `extern data` cannot take and which a core-owned head cannot take from user
+  code. The hint needs to know where the head is declared.
+- `Socket` and `ListenSocket` are prelude names, so a program declaring its
+  own `data Socket` fails with `Duplicate type: Socket` at no location. A
+  prelude type clash has always failed this way; these two names are new and
+  common. Renaming the heads or letting a program's type shadow a prelude
+  type are both open.
+
 *Checklist item 2, scope proposal.* (a) Residual constraints in schemes: a
 generalized binding carries its unsolved inequalities between its own
 quantified authority variables (`C ⇒ τ`), instantiated with the scheme's one

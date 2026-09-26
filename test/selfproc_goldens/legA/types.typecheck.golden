@@ -707,6 +707,7 @@ declEnvsOrdOf : String -> DeclEnvs -> Int
 declGradedScope : List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
+declKindEntry : Decl -> Option (TyConOrigin, String, List Kind)
 declMethodIdents : List Decl -> List (String, Ident)
 declMethodIdentsOf : Decl -> List (String, Ident)
 declMethodNames : List Decl -> List String
@@ -961,8 +962,9 @@ extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
-externSigsToMap : List Decl -> Map String (String, List EffAtomTy, List (String, Int)) -> Map String (String, List EffAtomTy, List (String, Int))
+externSigsToMap : List Decl -> Map String (Ty, List EffAtomTy, List (String, Int)) -> Map String (Ty, List EffAtomTy, List (String, Int))
 failureBound : SummaryFailure (Option Loc, String) -> Option Authority
+ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
 ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
 ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
@@ -983,18 +985,22 @@ ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
 ffiHasAtom : List EffAtomTy -> Bool
+ffiInstAtom : List (String, Ty) -> EffAtomTy -> EffAtomTy
+ffiInstRow : List (String, Int) -> List (String, Ty) -> List EffAtomTy -> List EffAtomTy
 ffiIsBuiltinExternName : String -> Bool
+ffiMatchTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
+ffiMatchTys : List (TabKey, (List String, Ty)) -> List Ty -> List Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
 ffiNonCrossableMsg : String -> Ty -> String
 ffiNullaryMsg : String -> String
 ffiReservedMsg : String -> String
 ffiResultRowHasFFI : Ty -> Bool
 ffiRowHasFFITy : Ty -> Option Bool
+ffiSameTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Bool
 ffiShadowMsg : String -> String -> String -> String
-ffiSigArgHeads : Ty -> List String
 ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
-ffiSigRetHead : Ty -> String
+ffiSigInstance : Ty -> Ty -> Option (List (String, Ty))
 ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
-ffiSigShapeKey : Ty -> String
+ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
 ffiStampMode : String -> Bool
 ffiStampModeOwned : String -> Bool
 ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
@@ -1597,6 +1603,7 @@ kindAnnAtom : KindAnn -> Kind
 kindAnnHasEffect : KindAnn -> Bool
 kindAnnSlots : KindAnn -> List Kind
 kindArgMono : SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
+kindIsDeclared : Kind -> Bool
 kindName : Kind -> String
 kindOfAnn : Option KindAnn -> Kind
 kindPublicDataDecl : Decl -> Bool
@@ -2220,7 +2227,9 @@ recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordCandIsType : Ident -> Ident -> String -> Bool
 recordCtors : TyConOrigin -> String -> DataVis -> List String -> List Variant -> Unit
 recordDeclKinds : Decl -> Unit
+recordDeclParamKinds : Decl -> Unit
 recordDeclaredBindingCall : CDeclared -> List (Int, Mono) -> Unit
+recordDeclaredKinds : Decl -> Unit
 recordDoMonadError : Loc -> Unit
 recordEffectBody : EffRow -> EffRow -> Unit
 recordEffectSites : EffRow -> Unit
@@ -2811,6 +2820,7 @@ widenOpenedFor : Int -> Authority -> Authority
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
+withDeclParamKinds : List Decl -> (Unit -> a) -> a
 withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenBindingForce : SigVars -> Ty -> Option EffRow

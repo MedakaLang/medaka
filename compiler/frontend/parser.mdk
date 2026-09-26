@@ -2675,6 +2675,10 @@ afterPublic = defer
 -- a `fix` that deletes exactly the `public` token at that same location.
 afterPublicFor : Int -> Token -> Parser Decl
 afterPublicFor _ TData = parseData VisPublic
+afterPublicFor pubPos TExtern =
+  fatalAtP
+    "`public` only applies to `data` declarations with constructors, and an `extern` declaration has none; write `export extern`"
+    pubPos
 afterPublicFor pubPos _ =
   fatalAtP "`public` only applies to `data` declarations" pubPos
 

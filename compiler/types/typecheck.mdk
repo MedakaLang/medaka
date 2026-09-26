@@ -7754,7 +7754,7 @@ data DriverState = DriverState {
   coherenceUserDecls : Ref (List Decl),
   stdlibOwnedModsRef : Ref (OrdMap Unit),
   flatEntryIsStdlibRef : Ref Bool,
-  builtinExternNamesRef : Ref (OrdMap (String, List EffAtomTy, List (String, Int))),
+  builtinExternNamesRef : Ref (OrdMap (Ty, List EffAtomTy, List (String, Int))),
   superDeclsRef : Ref (List Decl),
   standaloneValuesRef : Ref (OrdMap Unit),
   methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -37089,9 +37089,9 @@ externSchemes scope decls =
 --
 -- Each row records TWO projections of the catalog signature, as a pair:
 --
---   fst — its TYPE-HEAD SHAPE KEY (`ffiSigShapeKey`), so that
---         `ffiCheckExternsShadow` can ask not only "is this a catalog name" but
---         "does this local declaration claim the catalog row's shape".
+--   fst — its written SIGNATURE, so that `ffiCheckExternsShadow` can ask not
+--         only "is this a catalog name" but "is this local declaration an
+--         instance of the catalog's type".
 --   snd — its WRITTEN TERMINAL EFFECT ROW (`ffiWrittenRow`), the labels as the
 --         author spelled them, so that `ffiCheckExternsCatalogRow` can ask
 --         whether a redeclaration's row still covers what the builtin performs
@@ -37100,7 +37100,7 @@ externSchemes scope decls =
 -- ONE map with a widened value rather than a sibling map keyed the same way: the
 -- two projections are read by two rules about the same declaration, and two
 -- tables could fall out of step (the reader-prose on `ffiIsBuiltinExternName`
--- below says the same thing about the shape key).
+-- below says the same thing about the signature).
 --
 -- ⚠️ The ROW is stored as WRITTEN LABELS, not as `List Atom`.  `atomsOfWritten`
 -- resolves each bare label against `driverState.effectDomains`, and this seam can
@@ -37119,13 +37119,11 @@ noteBuiltinExternNames ds =
     externSigsToMap ds driverState.value.builtinExternNamesRef.value
 
 externSigsToMap : List Decl ->
-  OrdMap (String, List EffAtomTy, List (String, Int)) ->
-  OrdMap (String, List EffAtomTy, List (String, Int))
+  OrdMap (Ty, List EffAtomTy, List (String, Int)) ->
+  OrdMap (Ty, List EffAtomTy, List (String, Int))
 externSigsToMap [] m = m
 externSigsToMap ((DExtern _ n ty) :: rest) m =
-  externSigsToMap
-    rest
-    (omInsert n (ffiSigShapeKey ty, ffiWrittenRow ty, namedArgOrder ty) m)
+  externSigsToMap rest (omInsert n (ty, ffiWrittenRow ty, namedArgOrder ty) m)
 externSigsToMap (_ :: rest) m = externSigsToMap rest m
 
 -- Each named argument with its absolute position among the arrows: the
@@ -37400,27 +37398,27 @@ ffiCheckExternsGo (_ :: rest) = ffiCheckExternsGo rest
 -- ⚠️ It is keyed on the name set the SEED was built from, recorded once by
 -- `externSchemes` — not on a hand-copied list here, which would rot the moment
 -- `stdlib/runtime.mdk` gains a row.  `builtinExternNamesRef` maps each catalog
--- name to the PAIR (that row's TYPE-HEAD SHAPE KEY `ffiSigShapeKey`, that row's
--- WRITTEN TERMINAL EFFECT ROW `ffiWrittenRow`) rather than to `Unit`: THIS
--- predicate reads only the key set, but `ffiCheckExternsShadow` below needs the
--- catalog's own signature shape to compare a redeclaration against, and
--- `ffiCheckExternsCatalogRow` (#2163) needs its EFFECT ROW; a second or third
+-- name to that row's written signature, its written terminal effect row
+-- (`ffiWrittenRow`) and its named-argument positions rather than to `Unit`: this
+-- predicate reads only the key set, but `ffiCheckExternsShadow` below matches a
+-- redeclaration against the catalog's own signature, and
+-- `ffiCheckExternsCatalogRow` (#2163) needs its effect row; a second or third
 -- table keyed the same way could fall out of step with this one.  (The field
 -- carries no comment of its own — `DriverState`'s header forbids one, #829 /
 -- [T-PERRUN-COMMENTS] — so its prose lives here, on its reader.)
 --
 -- 🚨 AND THE MEASUREMENT ABOVE ONLY EVER COVERED A *COMPATIBLE* REDECLARATION.
--- Both measured rows (`bitAnd`, `getEnv`) claim the catalog row's own type-head
--- shape, so "the real builtin ran" is the right answer for them.  A redeclaration
--- that claims a DIFFERENT shape gets the same name-only exemption and the same
--- builtin codegen, which is then the WRONG answer, silently: `extern log : String
+-- Both measured rows (`bitAnd`, `getEnv`) are instances of the catalog row's
+-- type, so "the real builtin ran" is the right answer for them.  A redeclaration
+-- at a different type gets the same name-only exemption and the same builtin
+-- codegen, which is then the wrong answer, silently: `extern log : String
 -- -> <FFI "mylog"> Unit` compiles to `call double @mdk_log(double <String cell
 -- pointer>)` at exit 0, and the user's own C `log` is never called or even
 -- declared.  So a bare name match is not enough to say "this declaration is not a
--- foreign-call contract" — the SHAPE has to agree too, which is
+-- foreign-call contract": the type has to agree too, which is
 -- `ffiCheckExternsShadow` below.  Callers of this predicate are still exempting on
--- the name alone, and that is correct BECAUSE the shadow rule has already made a
--- shape-incompatible name match a hard error: the exemption never has to reason
+-- the name alone, and that is correct because the shadow rule has already made a
+-- name match at any other type a hard error: the exemption never has to reason
 -- about a declaration that survived.
 ffiIsBuiltinExternName : String -> Bool
 ffiIsBuiltinExternName n =
@@ -37453,11 +37451,14 @@ ffiIsBuiltinExternName n =
 -- name at any signature.  This one admits the compatible redeclaration idiom the
 -- effect-domain fixtures use on purpose, and rejects only the contradiction.
 --
--- Granularity is the type-head shape — argument heads plus the return head, with
--- effect rows and constraint prefixes walked THROUGH — the same granularity
--- `ffiExternRows` records for the emitter and the same one `FFI-ABI.md` documents
--- as this mechanism's resolution.  `Array Int` and `Array String` are one shape
--- here; §1's crossable guard is what separates them.
+-- The comparison is the whole type, not its heads: callers are typed against
+-- the local declaration while the built-in runs, so the declaration must be an
+-- INSTANCE of the catalog's type (`ffiSigInstance`). It may fix the built-in's
+-- type variables and authorities (`Array Int` for `Array a`, `Socket "a.com/*"`
+-- for `Socket h`) and nothing else. A head-only comparison let `extern
+-- stringIndexOf : String -> String -> Option (Socket "a.com/*")` type any
+-- number as a socket. Effect rows are the next rule's business, instantiated
+-- by the same match.
 ffiCheckExternsShadow : Bool -> List Decl -> Unit
 ffiCheckExternsShadow False _ = ()
 ffiCheckExternsShadow True ds = ffiCheckShadowGo (externDecls ds)
@@ -37466,30 +37467,134 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCheckShadowGo [] = ()
 ffiCheckShadowGo ((DExtern _ n ty) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some (k, _, _) if k /= ffiSigShapeKey ty =>
-      pushTypeErrorAt
-        "T-FFI-BUILTIN-SHADOW"
-        (firstTyLoc ty)
-        (ffiShadowMsg n k (ffiSigShapeKey ty))
-    _ => ()
+    Some (cat, _, _) => match ffiSigInstance cat ty
+      Some _ => ()
+      None =>
+        pushTypeErrorAt
+          "T-FFI-BUILTIN-SHADOW"
+          (firstTyLoc ty)
+          (ffiShadowMsg n (ppTy cat) (ppTy ty))
+    None => ()
   ffiCheckShadowGo rest
 ffiCheckShadowGo (_ :: rest) = ffiCheckShadowGo rest
 
 ffiShadowMsg : String -> String -> String -> String
 ffiShadowMsg n want got =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with an incompatible signature: the built-in is '\{want}', this declaration claims '\{got}' (type heads only; effect rows are not compared). A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so this declaration would silently call '\{n}' with the wrong argument and result representations rather than a foreign symbol of your own. Rename the extern to a name the runtime does not already define, or declare it with the built-in's own signature"
+  "Foreign declaration '\{n}' redeclares a built-in runtime name at a type the built-in does not have: the built-in is '\{want}', this declaration claims '\{got}'. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says, so its callers would be typed against a signature the called code does not honour. A redeclaration may fix the built-in's type variables and authorities, and must otherwise be its type. Rename the extern to a name the runtime does not already define, or declare it at the built-in's own signature"
+
+-- The substitution under which `decl` is the catalog signature `cat` with
+-- some of its type variables fixed, or `None` when it is not. A catalog
+-- variable binds to whatever the declaration writes at its first occurrence
+-- and must meet the same type at every later one; the declaration's own
+-- variables are rigid. An argument's binder (`host` in `(host : String) ->
+-- … Socket host`) is fixed by the argument's value, not by the declaration,
+-- so it is bound up front to the binder the declaration writes at the same
+-- position. Effect rows, constraint prefixes and the binders themselves are
+-- walked through: the row rule compares rows.
+ffiSigInstance : Ty -> Ty -> Option (List (String, Ty))
+ffiSigInstance cat decl =
+  ffiMatchTy
+    perRun.value.aliasTableRef.value
+    cat
+    decl
+    (Some (ffiBinderSeed (namedArgOrder cat) (namedArgOrder decl)))
+
+-- Each catalog binder against the declaration's binder at its position, or a
+-- name no declaration can write when the declaration names none there.
+ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
+ffiBinderSeed cat decl =
+  let byPos = map (p => (snd p, fst p)) decl
+  map (p => (fst p, TyVar (optionOr "" (lookupAssocI (snd p) byPos)))) cat
+
+ffiMatchTy : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  Ty ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchTy _ _ _ None = None
+ffiMatchTy aliases cat decl (Some sub) = match (
+  ffiSigStrip aliases cat,
+  ffiSigStrip aliases decl,
+)
+  (TyVar v, d) => match lookupAssoc v sub
+    Some bound => if ffiSameTy aliases bound d then Some sub else None
+    None => Some ((v, d) :: sub)
+  (TyApp a b, TyApp c d) =>
+    ffiMatchTy aliases b d (ffiMatchTy aliases a c (Some sub))
+  (TyFun a b, TyFun c d) =>
+    ffiMatchTy aliases b d (ffiMatchTy aliases a c (Some sub))
+  (TyTuple xs, TyTuple ys) => ffiMatchTys aliases xs ys (Some sub)
+  (TyQual a _ _, TyQual c _ _) => ffiMatchTy aliases a c (Some sub)
+  (c, d) => if ffiSameTy aliases c d then Some sub else None
+
+ffiMatchTys : List (TabKey, (List String, Ty)) ->
+  List Ty ->
+  List Ty ->
+  Option (List (String, Ty)) ->
+  Option (List (String, Ty))
+ffiMatchTys _ [] [] acc = acc
+ffiMatchTys aliases (c :: cs) (d :: ds) acc =
+  ffiMatchTys aliases cs ds (ffiMatchTy aliases c d acc)
+ffiMatchTys _ _ _ _ = None
+
+-- Two written types are the same type: heads by identity, variables by
+-- name, authorities and bare rows by their rendering.
+ffiSameTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Bool
+ffiSameTy aliases a b = match (ffiSigStrip aliases a, ffiSigStrip aliases b)
+  (TyCon { tyConName = n1, tyConOrigin = o1 }, TyCon { tyConName = n2, tyConOrigin = o2 }) =>
+    sameTyConHead n1 o1 n2 o2
+  (TyVar x, TyVar y) => x == y
+  (TyApp a1 b1, TyApp a2 b2) =>
+    ffiSameTy aliases a1 a2 && ffiSameTy aliases b1 b2
+  (TyFun a1 b1, TyFun a2 b2) =>
+    ffiSameTy aliases a1 a2 && ffiSameTy aliases b1 b2
+  (TyTuple xs, TyTuple ys) =>
+    listLen xs == listLen ys
+      && allList (p => ffiSameTy aliases (fst p) (snd p)) (zipL xs ys)
+  (TyQual x _ _, TyQual y _ _) => ffiSameTy aliases x y
+  (TyAuth p _, TyAuth q _) => ppTy (TyAuth p None) == ppTy (TyAuth q None)
+  (TyRow l1 t1 _, TyRow l2 t2 _) =>
+    ppTy (TyRow l1 t1 None) == ppTy (TyRow l2 t2 None)
+  _ => False
+
+ffiSigStrip : List (TabKey, (List String, Ty)) -> Ty -> Ty
+ffiSigStrip aliases t = match expandAliasHeadTyWith aliases t
+  TyEffect _ _ inner => ffiSigStrip aliases inner
+  TyConstrained _ inner => ffiSigStrip aliases inner
+  TyNamed _ inner => ffiSigStrip aliases inner
+  u => u
+
+-- The catalog row with each index binder the declaration fixed replaced by
+-- what it wrote there: `<Net h>` against `Socket "a.com/*"` is
+-- `<Net "a.com/*">`. An argument's binder is left as written, since the row
+-- rule pairs those by position.
+ffiInstRow : List (String, Int) ->
+  List (String, Ty) ->
+  List EffAtomTy ->
+  List EffAtomTy
+ffiInstRow names sub ls =
+  let free = filterList (p => isNone (lookupAssoc (fst p) names)) sub
+  map (ffiInstAtom free) ls
+
+ffiInstAtom : List (String, Ty) -> EffAtomTy -> EffAtomTy
+ffiInstAtom sub a = match a.eatParam
+  EPName n => match lookupAssoc n sub
+    Some (TyAuth p _) => { a | eatParam = p }
+    Some (TyVar m) => { a | eatParam = EPName m }
+    _ => a
+  _ => a
 
 -- ── the CATALOG-ROW rule (#2163, epic #2070 R2) ─────────────────────────────
 --
 -- 🚨 THE FIFTH DECLARATION RULE, AND IT IS ABOUT THE EFFECT ROW, NOT THE SHAPE.
 --
--- `ffiCheckExternsShadow` above compares TYPE HEADS and walks THROUGH effect rows
--- on purpose, so `<>` and `<FileWrite>` are one shape to it.  That left R2's
--- own escape-hatch sentence live for all 138 catalog names: a local
+-- `ffiCheckExternsShadow` above compares types and walks through effect rows
+-- on purpose, so `<>` and `<FileWrite>` are one type to it.  Without this rule,
+-- R2's own escape-hatch sentence stays live for every catalog name: a local
 --
---   extern writeFile : String -> String -> <> Result Unit String
+--   extern writeFile : String -> String -> <> Result String Unit
 --
--- matches the catalog's heads, passes every rule above, and types a caller as
+-- is an instance of the catalog's type, passes every rule above, and types a caller as
 -- `String -> Unit` — while the emitter, which is name-keyed and never sees a
 -- typecheck verdict (`isAnyExtern`/`ffiExternRows`), lowers the call to the REAL
 -- `writeFile` and the file is really written.  `medaka check` printed
@@ -37535,7 +37640,12 @@ ffiCheckCatalogRowGo : List Decl -> Unit
 ffiCheckCatalogRowGo [] = ()
 ffiCheckCatalogRowGo ((DExtern _ n ty) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some (_, catRow, catNames) => ffiCheckCatalogRowOne n ty catRow catNames
+    Some (cat, catRow, catNames) =>
+      ffiCheckCatalogRowOne
+        n
+        ty
+        (ffiInstRow catNames (optionOr [] (ffiSigInstance cat ty)) catRow)
+        catNames
     _ => ()
   ffiCheckCatalogRowGo rest
 ffiCheckCatalogRowGo (_ :: rest) = ffiCheckCatalogRowGo rest
@@ -37680,43 +37790,24 @@ ffiReservedMsg : String -> String
 ffiReservedMsg n =
   "Foreign declaration '\{n}' claims a reserved name: the 'mdk_' prefix is the Medaka runtime's own C symbol namespace (runtime/medaka_rt.c), and a foreign declaration's name is used verbatim as the C symbol it links to. Declaring '\{n}' would bind your calls to a compiler-internal function rather than to a symbol of your own. Rename the extern; if the C symbol you actually need is named '\{n}', it cannot be reached from Medaka in v1"
 
--- ── SIGNATURE SHAPE, at TYPE-HEAD granularity ───────────────────────────────
+-- ── signature heads, for the emitter's FFI rows ─────────────────────────────
 --
--- The `(argument heads, return head)` projection of a signature, rendered as one
--- comparable string.  It is the SAME granularity `ffiExternRows`
--- (`compiler/ir/core_ir_lower.mdk`) records for the emitter's FFI index, on
--- purpose: a rule about what the emitter will do with a declaration must not read
--- the signature at a finer grain than the emitter itself does, or it would reject
--- declarations the emitter treats as identical.
---
--- ⚠️ A TYPE VARIABLE IS NORMALISED TO `_`, not spelled.  `a -> Array a -> Unit` and
--- `x -> Array x -> Unit` are the same declaration; comparing the letters would
--- reject a catalog redeclaration for renaming its own type parameter, which is not
--- a contradiction about anything.  The cost is that `a -> a` and `a -> b` are one
--- shape here — at TYPE-HEAD granularity they already are (`Array Int` and `Array
--- String` are one shape too), so this loses nothing the projection had.
+-- The `(argument heads, return head)` projection of a signature, the granularity
+-- `ffiExternRows` (`compiler/ir/core_ir_lower.mdk`) records for the emitter's FFI
+-- index: a foreign call's representation is decided by its heads.  A type
+-- variable projects to `_`, so renaming one changes nothing.  This projection
+-- says nothing about whether a redeclaration of a catalog name is honest; that
+-- is `ffiSigInstance`, over the whole type.
 --
 -- `expandAliasHeadTy` at each step for the reason `ffiCheckExternSig` needs it: an
 -- alias-named arrow is invisible to a purely syntactic walk.  Cycles cannot recur
--- here — `rejectCyclicAliases` has emptied the table of them before the check seam,
--- and the ONLY other caller (`noteBuiltinExternNames`, which may run at seed time
--- before that) walks `stdlib/runtime.mdk`'s catalog, whose rows name primitive
--- heads literally and so never take an alias-table hit at all.
-ffiSigShapeKey : Ty -> String
-ffiSigShapeKey ty = "\{joinWith "," (ffiSigArgHeads ty)} -> \{ffiSigRetHead ty}"
-
-ffiSigArgHeads : Ty -> List String
-ffiSigArgHeads ty = ffiSigArgHeadsWith perRun.value.aliasTableRef.value ty
-
+-- here: `rejectCyclicAliases` has emptied the table of them before the check seam.
 ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
 ffiSigArgHeadsWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyConstrained _ inner => ffiSigArgHeadsWith aliases inner
   TyEffect _ _ inner => ffiSigArgHeadsWith aliases inner
   TyFun a r => ffiTyHeadNameWith aliases a :: ffiSigArgHeadsWith aliases r
   _ => []
-
-ffiSigRetHead : Ty -> String
-ffiSigRetHead ty = ffiSigRetHeadWith perRun.value.aliasTableRef.value ty
 
 ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
 ffiSigRetHeadWith aliases ty = match expandAliasHeadTyWith aliases ty
@@ -38392,11 +38483,51 @@ recordDeclKinds (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams 
   let vis = if pub then VisPublic else VisAbstract
   let _ = recordCtors o name vis params [Variant con (ConPos [fty])]
   recordParamKinds o name (declParamKinds params anns)
-recordDeclKinds (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
-  recordParamKinds o name (declParamKinds params anns)
--- only a data, newtype or alias head declares parameter kinds; every other
--- declaration has none to record
-recordDeclKinds _ = ()
+recordDeclKinds d = recordDeclParamKinds d
+
+recordDeclParamKinds : Decl -> Unit
+recordDeclParamKinds d = match declKindEntry d
+  Some (o, name, kinds) => recordParamKinds o name kinds
+  None => ()
+
+-- Only a data, newtype or alias head declares parameter kinds; every other
+-- declaration has none to record.
+declKindEntry : Decl -> Option (TyConOrigin, String, List Kind)
+declKindEntry (DAttrib _ d) = declKindEntry d
+declKindEntry (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataOrigin = o }) =
+  Some (o, name, declParamKinds params anns)
+declKindEntry (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeOrigin = o }) =
+  Some (o, name, declParamKinds params anns)
+declKindEntry (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasOrigin = o }) =
+  Some (o, name, declParamKinds params anns)
+declKindEntry _ = None
+
+-- Runs `k` with the declared kinds of `ds` in the table, then puts the table
+-- back as it was. A reader that elaborates signatures against declarations
+-- whose own pass comes later (the extern catalog against the prelude) sees
+-- their kinds, and that later pass still records each head once, so no
+-- lookup scans a duplicate row. Only a head with a parameter whose kind is
+-- not `Type` is recorded: every other head reads as it does with no entry,
+-- which is how the catalog read before any prelude head declared a kind.
+withDeclParamKinds : List Decl -> (Unit -> a) -> a
+withDeclParamKinds ds k =
+  let kinds = perRun.value.dataParamKindsRef.value
+  let names = perRun.value.dataParamNameIndexRef.value
+  let _ = fold (_ d => recordDeclaredKinds d) () ds
+  let result = k ()
+  perRun.value.dataParamKindsRef := kinds
+  perRun.value.dataParamNameIndexRef := names
+  result
+
+recordDeclaredKinds : Decl -> Unit
+recordDeclaredKinds d = match declKindEntry d
+  Some (o, name, kinds) if anyList kindIsDeclared kinds =>
+    recordParamKinds o name kinds
+  _ => ()
+
+kindIsDeclared : Kind -> Bool
+kindIsDeclared KType = False
+kindIsDeclared _ = True
 
 -- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
 -- whatever the universe/import ladder already put in the ref rather than
@@ -46717,11 +46848,9 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- NAMES, not its origins, so it is the same map either way.
   -- An extern's signature may index a prelude head by an authority
   -- (`netSend : Socket h -> … <Net h> …`), and a name in an index slot is an
-  -- authority binder only by the head's declared kind, so the prelude's
-  -- declared kinds are recorded before the catalog is elaborated (the core
-  -- pass below records them again for its own run).
-  let _ = fold (_ d => recordDeclKinds d) () coreDecls
-  let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
+  -- authority binder only by the head's declared kind.
+  let runtimeSeed = withDeclParamKinds coreDecls (u =>
+    externSchemes (externTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
   -- TREES only, WS-1b: the interfaces in scope for super expansion before the
   -- first sweep, and the user-interface gate that scopes it.  The diags arm sets

@@ -1,0 +1,20 @@
+-- The honest controls for effect_socket_redeclare: a redeclared catalog
+-- extern may fix the built-in's type variables and authorities, and is then
+-- charged at the authority it fixed.
+
+-- the index fixed at one host, charged there
+extern netRecv : Socket "api.example.com/*" -> Int -> <Net "api.example.com/*"> Result String (Array Int)
+
+-- the index binder renamed
+extern netClose : Socket k -> <Net k> Result String Unit
+
+-- the argument's binder renamed, at the same position
+extern netTcpConnect : (target : String) -> Int -> <Net target> Result String (Socket target)
+
+recvApi : Socket "api.example.com/*" -> <Net "api.example.com/*"> Result String (Array Int)
+recvApi s = netRecv s 16
+
+closeAny : Socket h -> <Net h> Result String Unit
+closeAny s = netClose s
+
+main = println 1

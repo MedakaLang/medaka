@@ -757,6 +757,12 @@ range now covers the misspelled field).
 
 ### Item 7 checkpoint: authority-indexed sockets
 
+A redeclared catalog extern types its callers while the built-in runs, so it
+is admitted only as an instance of the catalog's signature (`ffiSigInstance`,
+`compiler/types/typecheck.mdk`), and its row is compared with the catalog row
+instantiated by the same match. This is what keeps the catalog the only proof
+source for an `extern data` head.
+
 1. **`extern data`** (a head with kinded parameters and no constructors,
    `DData.dataExtern`): its values come only from externs, so extern
    signatures are its sole proof sources; a registered non-public head

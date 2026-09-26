@@ -504,14 +504,17 @@ existential binder; an atom or a qualifier naming a type variable is
 an `Authority` slot, the same code.
 
 An `extern data` head (`extern data Socket (h : Authority Net)`) has no
-constructors: its only proof sources are the extern signatures that return
-it, which are trusted as any extern row is, so its index is exactly the
+constructors: its only proof sources are the runtime catalog's signatures
+that return it, trusted as any catalog row is, so its index is exactly the
 authority the producing extern was granted (`netTcpConnect : (host : String) ->
 Int -> <Net host> Result String (Socket host)`), and every extern that consumes
 one is charged at its index (`netSend : Socket h -> … <Net h> …`). A field of
 such a type carries its parameter, since no importer can build a value of it.
 A descriptor number read from one (`socketFd`) grants nothing: no extern that
-reaches an endpoint accepts a number.
+reaches an endpoint accepts a number. A program adds no proof source: a
+redeclared catalog extern must be an instance of the catalog's signature, so it
+may fix `h` (`Socket "a.com/*"`) and is then charged at what it fixed, and a
+foreign extern's types must cross the C boundary, which an extern type does not.
 
 A constructor may bind an existential authority by a kinded group leading its
 fields, `data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)`.

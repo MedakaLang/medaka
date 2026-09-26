@@ -226,7 +226,7 @@ test "a nullary extern is rejected because it has no row for FFI" = expectCheckR
 test "a builtin name with an incompatible signature is rejected" = expectCheckReject
   (fixture "ffi_builtin_shadow_reject.mdk")
   [
-    "Foreign declaration 'log' redeclares a built-in runtime name with an incompatible signature",
+    "Foreign declaration 'log' redeclares a built-in runtime name at a type the built-in does not have",
   ]
 
 test "an extern cannot claim the runtime's mdk_ symbol namespace" = expectCheckReject

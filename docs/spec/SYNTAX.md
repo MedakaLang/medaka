@@ -1048,8 +1048,8 @@ direction.
 
 ### Extern types
 
-An `extern data` head declares an opaque type whose values only externs produce,
-as the prelude's `Socket` and `ListenSocket` are:
+An `extern data` head declares an opaque type whose values only the runtime
+catalog's externs produce, as the prelude's `Socket` and `ListenSocket` are:
 
 ```medaka
 export extern data Channel (h : Authority Net)
@@ -1061,7 +1061,10 @@ the externs that return one are its only proof sources, and an
 `Authority`-kinded parameter is the authority the opening extern was granted
 (`netTcpConnect : (host : String) -> Int -> <Net host> Result String (Socket
 host)`). At runtime a value is whatever the C side returned, one tagged word;
-nothing is boxed.
+nothing is boxed. A foreign extern cannot return one, since its types must cross
+the C boundary and an extern type does not, and a redeclared catalog extern must
+be an instance of the catalog's signature. So an `extern data` a program
+declares for itself names a type with no values.
 
 ### Linking a C library
 

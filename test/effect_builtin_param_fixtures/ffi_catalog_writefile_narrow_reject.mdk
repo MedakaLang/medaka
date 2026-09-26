@@ -11,7 +11,7 @@
 -- Kept beside ffi_catalog_narrow_reject.mdk rather than folded into it: that cell
 -- pairs with ffi_cross_builtin_name_accept.mdk on `getEnv` (a Set-domain label),
 -- this one is the Prefix-domain FileWrite case the issue was actually filed on.
-extern writeFile : String -> String -> <> Result Unit String
+extern writeFile : String -> String -> <> Result String Unit
 
 innocent : String -> <> Unit
 innocent s =

@@ -456,8 +456,8 @@ Waits until any of the descriptors is ready, or the timeout in
 milliseconds passes (`-1` waits forever). The interests are parallel to the
 descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,
 both bits on an error or hangup so a retry surfaces the error. A wait
-reaches no endpoint: every socket it can watch was opened under a grant of
-its own, so it is a timed wait, charged as the clock.
+reaches no endpoint: it reads and writes nothing on any descriptor it
+watches, so it is a timed wait, charged as the clock.
 
 ### `netSetNonblock`
 

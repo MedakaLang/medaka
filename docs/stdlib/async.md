@@ -116,7 +116,7 @@ waitRead fd
 A wait for `fd` to become readable, as a wait for `awaitAny`.
 
 A timed wait on the descriptor, so `<Clock>` joins `e`. It reaches no
-endpoint: the socket behind `fd` was opened under a grant of its own.
+endpoint: waiting reads and writes nothing on `fd`.
 
 ## `waitWrite`
 
