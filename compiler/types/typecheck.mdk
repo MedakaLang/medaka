@@ -1024,6 +1024,7 @@ finishEffectSummaryScope retained borrowed =
       summaryEscape
       joinCellOf
       freshEffvarAt
+      widenOpenedFor
   reportEffectSummaryFailures failures
 
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
@@ -11097,20 +11098,58 @@ wantAuthorityWith exact lower upper
       else
         reportAuthorityFailure !currentLoc lower upper
 
--- Outside a scope, the flexible variables the obligation raises (the
--- solver's `raisedBy`: the variable itself, or every flexible member of a
--- join its fixed members do not already cover) take the lower bound.  A
+-- Outside a scope, a flexible upper variable takes the lower bound as its
+-- solution, widened as the scoped solver widens a solution
+-- (`widenOpenedFor`).  Once solved it is no longer a variable, so a later
+-- obligation is checked against that solution; a variable is never linked to
+-- a join containing itself, which normalisation would follow forever.  A
 -- rigid or concrete upper that does not cover fails.
 solveFlexibleUpper : Authority -> Authority -> Bool
-solveFlexibleUpper lower upper =
-  let flexible =
-    cell => not (IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value)
-  match EffectSolver.raisedBy flexible lower upper
-    [] => False
-    cells =>
-      let _ =
-        fold (_ cell => linkAuthvar cell (authJoin (AVar cell) lower)) () cells
-      True
+solveFlexibleUpper lower upper = match authNorm upper
+  AVar cell =>
+    if IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value then
+      False
+    else match withoutVar cell lower
+      [] => True
+      rest =>
+        let _ = linkAuthvar cell (widenOpenedFor cell (authJoinAll rest))
+        True
+  _ => False
+
+-- A term's join members other than [cell] (`κ ⊔ x ⊑ κ` asks only `x ⊑ κ`).
+withoutVar : Ref Authvar -> Authority -> List Authority
+withoutVar cell q =
+  let members = match authNorm q
+    AJoin ms => ms
+    other => [other]
+  filterList
+    (m => match m
+      AVar c => authvarId c /= authvarId cell
+      _ => True)
+    members
+
+-- An existential a pattern opened is scoped to its arm or clause, which runs
+-- one level deeper than anything older (`openExistentialScope`).  The arm's
+-- own close checks what the arm's inference bound to it, but an authority
+-- obligation is solved later, at the binding's close, and its solution can
+-- name the opened authority for a variable older than the arm (a clause
+-- parameter's index, a binding's row).  Such a solution is widened: the
+-- opened authority becomes its domain's top, the §4 over-approximation a
+-- sourceless opened authority publishes as.  A variable as young as the arm
+-- keeps it, since it cannot leave the arm.
+widenOpenedFor : Ref Authvar -> Authority -> Authority
+widenOpenedFor var q =
+  let level = authvarLevel var
+  let asub =
+    flatMap
+      (c =>
+        if IdMap.has (authvarId c) perRun.value.openedAuthvarsRef.value
+          && authvarLevel c > level then
+          [(authvarId c, authTop (authvarDomain c))]
+        else
+          [])
+      (authVars q)
+  substAuth asub q
 
 reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
 reportAuthorityFailure loc lower upper =
@@ -38450,7 +38489,8 @@ processTopGroups env sigs defs names =
     reportEffectSummaryFailures
       (EffectSolver.closeRootAuthorities
         perRun.value.effectSummaries
-        perRun.value.rigidAuthvarsRef.value)
+        perRun.value.rigidAuthvarsRef.value
+        widenOpenedFor)
   result
 
 -- per-name dependencies: the other top-level names a binding's bodies reference

@@ -13,7 +13,7 @@ import types.effect_rows.{
   Effvar(..), effvarId, rowFlat, rowFlatMembers, rowHasSummary, linkRow,
   solveSummaryCell
 }
-import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList, filterList}
+import support.util.{reverseL, isNonEmptyL, isEmptyL, anyList}
 import support.scc.{tarjanSCCs}
 
 export data SummarySolver c = SummarySolver {
@@ -568,13 +568,14 @@ closeSummaryScope : SummarySolver c ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   (List (Ref Effvar) -> Ref Effvar) ->
   (Int -> Ref Effvar) ->
+  (Ref Authvar -> Authority -> Authority) ->
   List (SummaryFailure c)
-closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual =
+closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin makeResidual widen =
   let scope = currentScope solver
   -- Authorities first: an argument's lower bounds decide a callee's flexible
   -- authority before any row is compared, so a row check sees concrete atoms
   -- wherever the body determined them.
-  let _ = solveOwnedAuthorities scope rigidAuths
+  let _ = solveOwnedAuthorities scope rigidAuths widen
   let summaries = M.values scope.essNodes.value
   let untransferred =
     filter
@@ -651,7 +652,7 @@ closeSummaryScope solver protected rigidAuths retained borrowed escape makeJoin 
   let failures = validateRelations solver frozen escape unproven
   -- Row validation may have derived new authority obligations; solve the
   -- variables they bound, then decide every obligation this scope owns.
-  let _ = solveOwnedAuthorities scope rigidAuths
+  let _ = solveOwnedAuthorities scope rigidAuths widen
   let authFailures = checkAuthorities solver scope rigidAuths
   solver.essStack := match solver.essStack.value
     _ :: rest => rest
@@ -685,26 +686,37 @@ localRigidAuth _ rigid cell = match !cell
 
 -- Every owned flexible variable takes the join of its lower bounds, its
 -- least solution.  Variables bounded by each other collapse to one
--- representative first, so no solution can refer back to itself.
-solveOwnedAuthorities : SummaryScope c -> Map Int Unit -> Unit
-solveOwnedAuthorities scope rigid =
+-- representative first, so no solution can refer back to itself.  [widen]
+-- is the checker's policy for a solution that names something the variable
+-- may not see (an existential opened in a scope younger than the variable);
+-- it is applied to every solution written.
+solveOwnedAuthorities : SummaryScope c ->
+  Map Int Unit ->
+  (Ref Authvar -> Authority -> Authority) ->
+  Unit
+solveOwnedAuthorities scope rigid widen =
   solveAuthorities
     (ownedFlexibleAuth scope rigid)
+    widen
     (reverseL scope.essAuthorities.value)
 
-solveAuthorities : (Ref Authvar -> Bool) -> List (AuthWanted c) -> Unit
-solveAuthorities owned wanteds =
+solveAuthorities : (Ref Authvar -> Bool) ->
+  (Ref Authvar -> Authority -> Authority) ->
+  List (AuthWanted c) ->
+  Unit
+solveAuthorities owned widen wanteds =
   let lowers =
     fold
-      (acc w =>
-        fold
-          (acc2 cell =>
+      (acc w => match authNorm w.awUpper
+        AVar cell =>
+          if owned cell then
             M.set
               (authvarId cell)
-              (cell, w.awLower :: lowersOf (authvarId cell) acc2)
-              acc2)
-          acc
-          (raisedBy owned w.awLower w.awUpper))
+              (cell, w.awLower :: lowersOf (authvarId cell) acc)
+              acc
+          else
+            acc
+        _ => acc)
       Tip
       wanteds
   match M.keys lowers
@@ -724,35 +736,9 @@ solveAuthorities owned wanteds =
           Tip
           ids
       fold
-        (_ members => solveClass lowers idOfName members)
+        (_ members => solveClass lowers idOfName widen members)
         ()
         (tarjanSCCs names edges)
-
--- The owned variables an obligation `lower ⊑ upper` raises.  An owned
--- variable takes `lower` as a lower bound.  A join is covered when any of its
--- members covers `lower`, so it has no single least solution; the rule
--- chosen is the one with no choice in it: when the join's fixed members (its
--- constants and rigid or unowned variables) do not already cover `lower`,
--- every owned member takes it.  A value in `String @(p | q)` built from one
--- literal therefore lies within both indices.
-export
-raisedBy : (Ref Authvar -> Bool) -> Authority -> Authority -> List (Ref Authvar)
-raisedBy owned lower upper = match authNorm upper
-  AVar cell => if owned cell then [cell] else []
-  AJoin ms =>
-    let flexible = flatMap (m => ownedCellOf owned m) ms
-    let fixed = filterList (m => isEmptyL (ownedCellOf owned m)) ms
-    if isEmptyL flexible then
-      []
-    else if isNonEmptyL fixed && authSub lower (authJoinAll fixed) then
-      []
-    else
-      flexible
-  _ => []
-
-ownedCellOf : (Ref Authvar -> Bool) -> Authority -> List (Ref Authvar)
-ownedCellOf owned (AVar cell) = if owned cell then [cell] else []
-ownedCellOf _ _ = []
 
 lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
 lowersOf id m = match M.get id m
@@ -784,10 +770,11 @@ dependencies owned nodes ls =
 
 solveClass : Map Int (Ref Authvar, List Authority) ->
   Map String Int ->
+  (Ref Authvar -> Authority -> Authority) ->
   List String ->
   Unit
-solveClass _ _ [] = ()
-solveClass nodes idOfName (first :: rest) =
+solveClass _ _ _ [] = ()
+solveClass nodes idOfName widen (first :: rest) =
   let repId = idOfVertex idOfName first
   let (rep, _) = nodeOf repId nodes
   let members = map (idOfVertex idOfName) rest
@@ -802,7 +789,7 @@ solveClass nodes idOfName (first :: rest) =
   let kept = filter (q => not (isVar repId q)) (joinMembers (authJoinAll all))
   match kept
     [] => ()
-    _ => linkAuthvar rep (authJoinAll kept)
+    _ => linkAuthvar rep (widen rep (authJoinAll kept))
 
 idOfVertex : Map String Int -> String -> Int
 idOfVertex idOfName name = match M.get name idOfName
@@ -903,10 +890,12 @@ distinctFailuresGo (f :: rest) seen = match f.esfAuthority
 export
 closeRootAuthorities : SummarySolver c ->
   Map Int Unit ->
+  (Ref Authvar -> Authority -> Authority) ->
   List (SummaryFailure c)
-closeRootAuthorities solver rigid =
+closeRootAuthorities solver rigid widen =
   let wanteds = reverseL solver.essRoot.value
-  let _ = solveAuthorities (cell => not (M.has (authvarId cell) rigid)) wanteds
+  let _ =
+    solveAuthorities (cell => not (M.has (authvarId cell) rigid)) widen wanteds
   solver.essRoot := []
   distinctFailures
     (flatMap

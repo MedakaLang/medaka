@@ -921,15 +921,16 @@ isEmptyList [] = True
 isEmptyList _ = False
 
 -- The whole-diff review's findings, each beside its control.
-test "a joined field is built with inferred indices, a join of one name carries it, a non-String name is refused" = expectAll
+test "a joined field is built against written indices, a join of one name carries it, a non-String name is refused" = expectAll
   [
-    -- a value built into `@(p | q)` from one literal lies within both indices;
-    -- against written indices it must lie within their join (the Prefix join
-    -- is the longest common prefix, here "cfg/*")
-    expectTrue
+    -- built against written indices, a value in `@(p | q)` must lie within
+    -- their join (the Prefix join is the longest common prefix, "cfg/*")
+    -- with inferred indices a join upper has no principal solution, so the
+    -- construction is refused (a completeness gap the handoff lists)
+    expectFalse
       (accepts
         "data Two (p : Authority Store) (q : Authority Store) = Two (String @(p | q))\nmk = Two \"cfg/x\"\n"),
-    expectTrue
+    expectFalse
       (accepts
         "data AnyJ = AnyJ (p : Authority Store) (q : Authority Store) (String @(p | q))\nmk = AnyJ \"/etc/x\"\n"),
     expectTrue
@@ -967,4 +968,39 @@ test "an empty bare literal on a Product label is refused, not read as the whole
         ("effect Web Product (Host : Prefix, Method : Set)\n"
           ++ "hit : Int -> <Web Host=\"a.com/x\"> Int\nhit n = n\n"
           ++ "f : Unit -> <Web \"a.com/*\"> Int\nf _ = hit 1\n")),
+  ]
+
+-- An opened existential cannot leave its arm through the authority solve: a
+-- solution for a variable older than the arm widens it to the domain's top,
+-- so the unsigned reader publishes the top and a caller admitting only
+-- "cfg/*" is refused (as a row leak, which `rejects` does not count).
+escapeByIndex : String
+escapeByIndex =
+  handle
+    ++ "data E1 = E1 (p : Authority Store) (String @p)\n"
+    ++ "pack : Unit -> E1\npack _ = E1 \"/etc/x\"\n"
+    ++ "both : H p -> String @p -> <Store p> Int\nboth _ b = load b\n"
+    ++ "peek h e = match e\n  E1 s => both h s\n"
+
+escapeByJoin : String
+escapeByJoin =
+  "data E (q : Authority Store) = E (p : Authority Store) (String @(p | q))\n"
+    ++ "peek (E s) = load s\n"
+
+test "an opened authority does not escape through the solve of an older variable" = expectAll
+  [
+    expectFalse
+      (accepts
+        (escapeByIndex
+          ++ "only : Unit -> <Store \"cfg/*\"> Int\nonly _ = peek (H \"cfg/a\") (pack ())\n")),
+    expectTrue
+      (accepts
+        (escapeByIndex
+          ++ "anyAt : String -> H *\nanyAt s = H s\nwide : String -> <Store> Int\nwide x = peek (anyAt x) (pack ())\n")),
+    expectFalse
+      (accepts
+        (escapeByJoin
+          ++ "only : E \"cfg/*\" -> <Store \"cfg/*\"> Int\nonly e = peek e\n")),
+    expectTrue
+      (accepts (escapeByJoin ++ "wide : E q -> <Store> Int\nwide e = peek e\n")),
   ]

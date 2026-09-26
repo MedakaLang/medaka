@@ -706,11 +706,15 @@ receipts in [the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) §
 3. **Joined qualifiers.** `String @(a | b)` elaborates to the join of the
    names' cells (`qualifyByAll`); a joined field carries no single name
    (`tyCarries`; `@(p | p)` is `@p`); a join across domains is
-   `T-AUTHORITY-DOMAIN`, a non-String name `T-AUTHORITY-BINDER`. An
-   obligation whose upper bound is a join with owned flexible members raises
-   every one of them unless the join's fixed members already cover it
-   (`raisedBy`, shared by the scoped solver and `solveFlexibleUpper`), so a
-   joined field is built with inferred indices.
+   `T-AUTHORITY-DOMAIN`, a non-String name `T-AUTHORITY-BINDER`. A joined
+   field is built against determined indices; with inferred ones the join
+   upper has no principal solution and the construction is refused (owed).
+   Every solution the solver writes passes through `widenOpenedFor`: an
+   existential opened in an arm younger than the solved variable becomes its
+   domain's top, so an opened authority cannot leave its arm through the
+   solve (it could, through a clause parameter's index, before this). The
+   unscoped path (`solveFlexibleUpper`) no longer links a variable to a join
+   containing itself, which normalisation followed forever.
 4. **One domain, exactly.** A qualifier naming an argument that no atom or
    index gives a domain is `T-AUTHORITY-DOMAIN` (it was dropped silently), and
    `Authority L` over an atomic label is `T-AUTHORITY-KIND`

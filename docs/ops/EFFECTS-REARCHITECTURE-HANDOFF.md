@@ -671,9 +671,13 @@ landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE
   head (`(Result String @a) E` printed bare). The bare form is now only for
   the type a row wraps (`printRowResult`).
 - *S1/S2: a joined field could not be built with inferred indices*
-  (`Two "cfg/x"` at `@(p | q)` failed, "the caller chooses"). An upper bound
-  that is a join with flexible members raises every one of them unless its
-  fixed members cover the lower bound (`raisedBy`); semantics §4.1 states it.
+  (`Two "cfg/x"` at `@(p | q)` failed, "the caller chooses"). The first
+  answer, raising every flexible member of the join, was WITHDRAWN after the
+  second round: it tied an opened existential to the data index and a read
+  escaped its bound at runtime (`peek (E s) = readFile s` over `E (p : …)
+  (String @(p | q))`), merged independent indices of an unsigned reader, and
+  hung the unscoped path. The construction is refused loudly again; owed,
+  with semantics §4.1 saying why (no principal solution).
 - *S0, older than this branch: an empty bare literal on a Product label meant
   the whole domain*, in source (`<Web "">`) and in a policy (`Web=`). The
   literal is checked as the first axis's value before the lift canonicalises
@@ -687,6 +691,21 @@ landed is itemised in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE
 - *S3:* quoted set members in a policy never matched; they are unquoted.
   `@(p | p)` now carries `p`. SYNTAX.md said "one label's domain" where the
   rule is one domain shape.
+- *Second round (on `71d035fd9`), reproduced and answered:* besides the
+  withdrawn join rule above, an S0 that is on `main` since the data half: an
+  unsigned `peek h e = match e; E1 s => both h s` published `H p -> E1 ->
+  <FileRead p> String` over the OPENED authority, so `peek (H "cfg/a") (pack
+  ())` read `/etc/hostname` under `<FileRead "cfg/*">`. The arm's own close
+  checks escape, but the authority solve runs at the binding's close, after
+  it, and linked the clause parameter's index to the opened cell. Every
+  solution the solver writes now passes through `widenOpenedFor`: an
+  existential opened in an arm younger than the variable becomes its
+  domain's top. The unscoped path linked a variable to a join containing
+  itself (a hang in a `test` block); it now takes the lower bound. A trailing
+  `@x` after a signature is an ATTRIBUTE, not a stacked qualifier, so the
+  owed item below about `String @b @a` is really the parser and `fmt`
+  treating `@a` as an attribute (older, S0-class: `fmt` rewrites it to
+  `@inline`).
 - *Not acted on, recorded as owed (older than this branch, S2):* an alias
   `type F = (a : String) -> String @a` erases the named authority silently; a
   named argument inside a higher-order domain (`((a : String) -> String @a)

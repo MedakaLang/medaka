@@ -1,5 +1,5 @@
 # META
-source_lines=49730
+source_lines=49770
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -1028,6 +1028,7 @@ finishEffectSummaryScope retained borrowed =
       summaryEscape
       joinCellOf
       freshEffvarAt
+      widenOpenedFor
   reportEffectSummaryFailures failures
 
 reportEffectSummaryFailures : List (SummaryFailure (Option Loc, String)) -> Unit
@@ -11101,20 +11102,58 @@ wantAuthorityWith exact lower upper
       else
         reportAuthorityFailure !currentLoc lower upper
 
--- Outside a scope, the flexible variables the obligation raises (the
--- solver's `raisedBy`: the variable itself, or every flexible member of a
--- join its fixed members do not already cover) take the lower bound.  A
+-- Outside a scope, a flexible upper variable takes the lower bound as its
+-- solution, widened as the scoped solver widens a solution
+-- (`widenOpenedFor`).  Once solved it is no longer a variable, so a later
+-- obligation is checked against that solution; a variable is never linked to
+-- a join containing itself, which normalisation would follow forever.  A
 -- rigid or concrete upper that does not cover fails.
 solveFlexibleUpper : Authority -> Authority -> Bool
-solveFlexibleUpper lower upper =
-  let flexible =
-    cell => not (IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value)
-  match EffectSolver.raisedBy flexible lower upper
-    [] => False
-    cells =>
-      let _ =
-        fold (_ cell => linkAuthvar cell (authJoin (AVar cell) lower)) () cells
-      True
+solveFlexibleUpper lower upper = match authNorm upper
+  AVar cell =>
+    if IdMap.has (authvarId cell) perRun.value.rigidAuthvarsRef.value then
+      False
+    else match withoutVar cell lower
+      [] => True
+      rest =>
+        let _ = linkAuthvar cell (widenOpenedFor cell (authJoinAll rest))
+        True
+  _ => False
+
+-- A term's join members other than [cell] (`κ ⊔ x ⊑ κ` asks only `x ⊑ κ`).
+withoutVar : Ref Authvar -> Authority -> List Authority
+withoutVar cell q =
+  let members = match authNorm q
+    AJoin ms => ms
+    other => [other]
+  filterList
+    (m => match m
+      AVar c => authvarId c /= authvarId cell
+      _ => True)
+    members
+
+-- An existential a pattern opened is scoped to its arm or clause, which runs
+-- one level deeper than anything older (`openExistentialScope`).  The arm's
+-- own close checks what the arm's inference bound to it, but an authority
+-- obligation is solved later, at the binding's close, and its solution can
+-- name the opened authority for a variable older than the arm (a clause
+-- parameter's index, a binding's row).  Such a solution is widened: the
+-- opened authority becomes its domain's top, the §4 over-approximation a
+-- sourceless opened authority publishes as.  A variable as young as the arm
+-- keeps it, since it cannot leave the arm.
+widenOpenedFor : Ref Authvar -> Authority -> Authority
+widenOpenedFor var q =
+  let level = authvarLevel var
+  let asub =
+    flatMap
+      (c =>
+        if IdMap.has (authvarId c) perRun.value.openedAuthvarsRef.value
+          && authvarLevel c > level then
+          [(authvarId c, authTop (authvarDomain c))]
+        else
+          [])
+      (authVars q)
+  substAuth asub q
 
 reportAuthorityFailure : Option Loc -> Authority -> Authority -> Unit
 reportAuthorityFailure loc lower upper =
@@ -38454,7 +38493,8 @@ processTopGroups env sigs defs names =
     reportEffectSummaryFailures
       (EffectSolver.closeRootAuthorities
         perRun.value.effectSummaries
-        perRun.value.rigidAuthvarsRef.value)
+        perRun.value.rigidAuthvarsRef.value
+        widenOpenedFor)
   result
 
 -- per-name dependencies: the other top-level names a binding's bodies reference
@@ -49911,7 +49951,7 @@ isTyAuth _ = False
 (DFunDef false "summaryEscape" ((PCon "True") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsDiff") (EVar "lower")) (EVar "upper")))
 (DFunDef false "summaryEscape" ((PCon "False") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsEscape") (EVar "lower")) (EVar "upper")))
 (DTypeSig false "finishEffectSummaryScope" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit"))))
-(DFunDef false "finishEffectSummaryScope" ((PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "retained")) (EVar "borrowed")) (EVar "summaryEscape")) (EVar "joinCellOf")) (EVar "freshEffvarAt"))) (DoExpr (EApp (EVar "reportEffectSummaryFailures") (EVar "failures")))))
+(DFunDef false "finishEffectSummaryScope" ((PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "retained")) (EVar "borrowed")) (EVar "summaryEscape")) (EVar "joinCellOf")) (EVar "freshEffvarAt")) (EVar "widenOpenedFor"))) (DoExpr (EApp (EVar "reportEffectSummaryFailures") (EVar "failures")))))
 (DTypeSig false "reportEffectSummaryFailures" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) (TyCon "Unit")))
 (DFunDef false "reportEffectSummaryFailures" ((PList)) (ELit LUnit))
 (DFunDef false "reportEffectSummaryFailures" ((PCons (PVar "failure") (PVar "rest"))) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "fn") (EApp (EVar "snd") (EFieldAccess (EVar "failure") "esfContext"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EApp (EVar "effectSiteOf") (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EApp (EVar "failureBound") (EVar "failure")))) (EApp (EVar "fst") (EFieldAccess (EVar "failure") "esfContext"))))) (DoLet false false PWild (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EIf (EBinOp "||" (EApp (EVar "mentionsEscaped") (EVar "lo")) (EApp (EVar "mentionsEscaped") (EVar "hi"))) (ELit LUnit) (EIf (EFieldAccess (EVar "failure") "esfExact") (EApp (EApp (EApp (EVar "reportIndexFailure") (EUnOp "!" (EVar "currentLoc"))) (EVar "lo")) (EVar "hi")) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-AUTHORITY"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EVar "fn")) (EVar "lo")) (EVar "hi")) (EFieldAccess (EVar "failure") "esfWrittenUpper")))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rowFailureReportedRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rowFailureReportedRef") "value")))) (DoExpr (EApp (EVar "reportRowFailure") (EVar "failure"))))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved"))) (DoExpr (EApp (EVar "reportEffectSummaryFailures") (EVar "rest")))))
@@ -51417,7 +51457,11 @@ isTyAuth _ = False
 (DTypeSig false "wantAuthorityWith" (TyFun (TyCon "Bool") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
 (DFunDef false "wantAuthorityWith" ((PVar "exact") (PVar "lower") (PVar "upper")) (EIf (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.recordAuthority") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EVar "exact")) (ETuple (EUnOp "!" (EVar "currentLoc")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value"))) (EApp (EVar "authNorm") (EVar "lower"))) (EApp (EVar "authNorm") (EVar "upper"))) (EIf (EApp (EApp (EVar "authSub") (EVar "lower")) (EVar "upper")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "solveFlexibleUpper") (EVar "lower")) (EVar "upper")) (arm (PCon "True") () (ELit LUnit)) (arm (PCon "False") () (EIf (EVar "exact") (EApp (EApp (EApp (EVar "reportIndexFailure") (EUnOp "!" (EVar "currentLoc"))) (EVar "lower")) (EVar "upper")) (EApp (EApp (EApp (EVar "reportAuthorityFailure") (EUnOp "!" (EVar "currentLoc"))) (EVar "lower")) (EVar "upper"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "solveFlexibleUpper" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
-(DFunDef false "solveFlexibleUpper" ((PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "flexible") (ELam ((PVar "cell")) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "EffectSolver.raisedBy") (EVar "flexible")) (EVar "lower")) (EVar "upper")) (arm (PList) () (EVar "False")) (arm (PVar "cells") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "cell")) (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EApp (EApp (EVar "authJoin") (EApp (EVar "AVar") (EVar "cell"))) (EVar "lower"))))) (ELit LUnit)) (EVar "cells"))) (DoExpr (EVar "True"))))))))
+(DFunDef false "solveFlexibleUpper" ((PVar "lower") (PVar "upper")) (EMatch (EApp (EVar "authNorm") (EVar "upper")) (arm (PCon "AVar" (PVar "cell")) () (EIf (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "False") (EMatch (EApp (EApp (EVar "withoutVar") (EVar "cell")) (EVar "lower")) (arm (PList) () (EVar "True")) (arm (PVar "rest") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EApp (EApp (EVar "widenOpenedFor") (EVar "cell")) (EApp (EVar "authJoinAll") (EVar "rest"))))) (DoExpr (EVar "True"))))))) (arm PWild () (EVar "False"))))
+(DTypeSig false "withoutVar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyCon "Authority")))))
+(DFunDef false "withoutVar" ((PVar "cell") (PVar "q")) (EBlock (DoLet false false (PVar "members") (EMatch (EApp (EVar "authNorm") (EVar "q")) (arm (PCon "AJoin" (PVar "ms")) () (EVar "ms")) (arm (PVar "other") () (EListLit (EVar "other"))))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "AVar" (PVar "c")) () (EBinOp "/=" (EApp (EVar "authvarId") (EVar "c")) (EApp (EVar "authvarId") (EVar "cell")))) (arm PWild () (EVar "True"))))) (EVar "members")))))
+(DTypeSig false "widenOpenedFor" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "widenOpenedFor" ((PVar "var") (PVar "q")) (EBlock (DoLet false false (PVar "level") (EApp (EVar "authvarLevel") (EVar "var"))) (DoLet false false (PVar "asub") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EIf (EBinOp "&&" (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "c"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "openedAuthvarsRef") "value")) (EBinOp ">" (EApp (EVar "authvarLevel") (EVar "c")) (EVar "level"))) (EListLit (ETuple (EApp (EVar "authvarId") (EVar "c")) (EApp (EVar "authTop") (EApp (EVar "authvarDomain") (EVar "c"))))) (EListLit)))) (EApp (EVar "authVars") (EVar "q")))) (DoExpr (EApp (EApp (EVar "substAuth") (EVar "asub")) (EVar "q")))))
 (DTypeSig false "reportAuthorityFailure" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
 (DFunDef false "reportAuthorityFailure" ((PVar "loc") (PVar "lower") (PVar "upper")) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-AUTHORITY"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "lower")) (EVar "upper")) (EApp (EVar "Some") (EVar "upper")))))
 (DTypeSig false "reportIndexFailure" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
@@ -56100,7 +56144,7 @@ isTyAuth _ = False
 (DFunDef false "sigNamesToSet" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "sigNamesToSet" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "sigNamesToSet") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "m"))))
 (DTypeSig false "processTopGroups" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
-(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")))) (DoExpr (EVar "result"))))
+(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "widenOpenedFor")))) (DoExpr (EVar "result"))))
 (DTypeSig false "depsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "depsOf" ((PVar "name") (PVar "nameSet") (PVar "cbn")) (EApp (EApp (EVar "filterNonSelf") (EVar "name")) (EApp (EApp (EVar "keepGroupNames") (EVar "nameSet")) (EApp (EVar "dedup") (EApp (EVar "groupRefs") (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "cbn")))))))
 (DTypeSig false "groupRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -57766,7 +57810,7 @@ isTyAuth _ = False
 (DFunDef false "summaryEscape" ((PCon "True") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsDiff") (EVar "lower")) (EVar "upper")))
 (DFunDef false "summaryEscape" ((PCon "False") (PVar "lower") (PVar "upper")) (EApp (EApp (EVar "atomsEscape") (EVar "lower")) (EVar "upper")))
 (DTypeSig false "finishEffectSummaryScope" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit"))))
-(DFunDef false "finishEffectSummaryScope" ((PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "retained")) (EVar "borrowed")) (EVar "summaryEscape")) (EVar "joinCellOf")) (EVar "freshEffvarAt"))) (DoExpr (EApp (EVar "reportEffectSummaryFailures") (EVar "failures")))))
+(DFunDef false "finishEffectSummaryScope" ((PVar "retained") (PVar "borrowed")) (EBlock (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidEffvarsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "retained")) (EVar "borrowed")) (EVar "summaryEscape")) (EVar "joinCellOf")) (EVar "freshEffvarAt")) (EVar "widenOpenedFor"))) (DoExpr (EApp (EVar "reportEffectSummaryFailures") (EVar "failures")))))
 (DTypeSig false "reportEffectSummaryFailures" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) (TyCon "Unit")))
 (DFunDef false "reportEffectSummaryFailures" ((PList)) (ELit LUnit))
 (DFunDef false "reportEffectSummaryFailures" ((PCons (PVar "failure") (PVar "rest"))) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "fn") (EApp (EVar "snd") (EFieldAccess (EVar "failure") "esfContext"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EApp (EVar "orElseLoc") (EApp (EApp (EApp (EVar "effectSiteOf") (EVar "fn")) (EFieldAccess (EVar "failure") "esfLabel")) (EApp (EVar "failureBound") (EVar "failure")))) (EApp (EVar "fst") (EFieldAccess (EVar "failure") "esfContext"))))) (DoLet false false PWild (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EIf (EBinOp "||" (EApp (EVar "mentionsEscaped") (EVar "lo")) (EApp (EVar "mentionsEscaped") (EVar "hi"))) (ELit LUnit) (EIf (EFieldAccess (EVar "failure") "esfExact") (EApp (EApp (EApp (EVar "reportIndexFailure") (EUnOp "!" (EVar "currentLoc"))) (EVar "lo")) (EVar "hi")) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-AUTHORITY"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EVar "fn")) (EVar "lo")) (EVar "hi")) (EFieldAccess (EVar "failure") "esfWrittenUpper")))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rowFailureReportedRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rowFailureReportedRef") "value")))) (DoExpr (EApp (EVar "reportRowFailure") (EVar "failure"))))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EVar "saved"))) (DoExpr (EApp (EVar "reportEffectSummaryFailures") (EVar "rest")))))
@@ -59272,7 +59316,11 @@ isTyAuth _ = False
 (DTypeSig false "wantAuthorityWith" (TyFun (TyCon "Bool") (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
 (DFunDef false "wantAuthorityWith" ((PVar "exact") (PVar "lower") (PVar "upper")) (EIf (EApp (EVar "EffectSolver.hasSummaryScope") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EApp (EApp (EApp (EApp (EApp (EVar "EffectSolver.recordAuthority") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EVar "exact")) (ETuple (EUnOp "!" (EVar "currentLoc")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value"))) (EApp (EVar "authNorm") (EVar "lower"))) (EApp (EVar "authNorm") (EVar "upper"))) (EIf (EApp (EApp (EVar "authSub") (EVar "lower")) (EVar "upper")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "solveFlexibleUpper") (EVar "lower")) (EVar "upper")) (arm (PCon "True") () (ELit LUnit)) (arm (PCon "False") () (EIf (EVar "exact") (EApp (EApp (EApp (EVar "reportIndexFailure") (EUnOp "!" (EVar "currentLoc"))) (EVar "lower")) (EVar "upper")) (EApp (EApp (EApp (EVar "reportAuthorityFailure") (EUnOp "!" (EVar "currentLoc"))) (EVar "lower")) (EVar "upper"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "solveFlexibleUpper" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
-(DFunDef false "solveFlexibleUpper" ((PVar "lower") (PVar "upper")) (EBlock (DoLet false false (PVar "flexible") (ELam ((PVar "cell")) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "EffectSolver.raisedBy") (EVar "flexible")) (EVar "lower")) (EVar "upper")) (arm (PList) () (EVar "False")) (arm (PVar "cells") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "cell")) (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EApp (EApp (EVar "authJoin") (EApp (EVar "AVar") (EVar "cell"))) (EVar "lower"))))) (ELit LUnit)) (EVar "cells"))) (DoExpr (EVar "True"))))))))
+(DFunDef false "solveFlexibleUpper" ((PVar "lower") (PVar "upper")) (EMatch (EApp (EVar "authNorm") (EVar "upper")) (arm (PCon "AVar" (PVar "cell")) () (EIf (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "cell"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "False") (EMatch (EApp (EApp (EVar "withoutVar") (EVar "cell")) (EVar "lower")) (arm (PList) () (EVar "True")) (arm (PVar "rest") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "linkAuthvar") (EVar "cell")) (EApp (EApp (EVar "widenOpenedFor") (EVar "cell")) (EApp (EVar "authJoinAll") (EVar "rest"))))) (DoExpr (EVar "True"))))))) (arm PWild () (EVar "False"))))
+(DTypeSig false "withoutVar" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyCon "Authority")))))
+(DFunDef false "withoutVar" ((PVar "cell") (PVar "q")) (EBlock (DoLet false false (PVar "members") (EMatch (EApp (EVar "authNorm") (EVar "q")) (arm (PCon "AJoin" (PVar "ms")) () (EVar "ms")) (arm (PVar "other") () (EListLit (EVar "other"))))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "AVar" (PVar "c")) () (EBinOp "/=" (EApp (EVar "authvarId") (EVar "c")) (EApp (EVar "authvarId") (EVar "cell")))) (arm PWild () (EVar "True"))))) (EVar "members")))))
+(DTypeSig false "widenOpenedFor" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "widenOpenedFor" ((PVar "var") (PVar "q")) (EBlock (DoLet false false (PVar "level") (EApp (EVar "authvarLevel") (EVar "var"))) (DoLet false false (PVar "asub") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EIf (EBinOp "&&" (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "c"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "openedAuthvarsRef") "value")) (EBinOp ">" (EApp (EVar "authvarLevel") (EVar "c")) (EVar "level"))) (EListLit (ETuple (EApp (EVar "authvarId") (EVar "c")) (EApp (EVar "authTop") (EApp (EVar "authvarDomain") (EVar "c"))))) (EListLit)))) (EApp (EVar "authVars") (EVar "q")))) (DoExpr (EApp (EApp (EVar "substAuth") (EVar "asub")) (EVar "q")))))
 (DTypeSig false "reportAuthorityFailure" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
 (DFunDef false "reportAuthorityFailure" ((PVar "loc") (PVar "lower") (PVar "upper")) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-AUTHORITY"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "authorityFailureMsg") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "lower")) (EVar "upper")) (EApp (EVar "Some") (EVar "upper")))))
 (DTypeSig false "reportIndexFailure" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
@@ -63955,7 +64003,7 @@ isTyAuth _ = False
 (DFunDef false "sigNamesToSet" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "sigNamesToSet" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "sigNamesToSet") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "m"))))
 (DTypeSig false "processTopGroups" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
-(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")))) (DoExpr (EVar "result"))))
+(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EVar "widenOpenedFor")))) (DoExpr (EVar "result"))))
 (DTypeSig false "depsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "depsOf" ((PVar "name") (PVar "nameSet") (PVar "cbn")) (EApp (EApp (EVar "filterNonSelf") (EVar "name")) (EApp (EApp (EVar "keepGroupNames") (EVar "nameSet")) (EApp (EVar "dedup") (EApp (EVar "groupRefs") (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "cbn")))))))
 (DTypeSig false "groupRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))

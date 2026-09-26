@@ -2805,9 +2805,11 @@ walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 wantAuthority : Authority -> Authority -> Unit
 wantAuthorityWith : Bool -> Authority -> Authority -> Unit
 wantedMatches : Wanted -> Wanted -> Bool
+widenOpenedFor : Ref Authvar -> Authority -> Authority
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
+withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenBindingForce : SigVars -> Ty -> Option EffRow
 writtenParam : Param -> EffParamTy -> Param
