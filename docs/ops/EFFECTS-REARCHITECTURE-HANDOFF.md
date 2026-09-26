@@ -842,15 +842,16 @@ regressions asserting rejection, not disappear by changing their expected output
 
 ## Verification receipts and their limits
 
-Data-half head `04b66839b` (PR #3445, 2026-09-25): the `pull_request` run
-36200182399 completed green on every job — the eight gate shards each ran
+Data-half head `783d966bf` (PR #3445, 2026-09-25, the carrying rework after the
+second review round): the `pull_request` run 36207649443 completed green on
+every job, as did run 36200182399 on the first-round head `04b66839b` — the eight gate shards each ran
 their planned gates (the shard step and the timing upload both succeeded),
 `compiler-soundness` ran the must-fail suite, the whole-source typecheck and
 the emitter fixpoint, `soundness`, `wasm`, `inlang`, `seed-health`,
 `ci-gen-drift`, `gate-balance`, `gate-budget` and `gate-cost` all succeeded.
 Locally on the same head: strict closure clean, whole-source typecheck PASS,
-C3a/C3b yes, matrix 26/26, 46 gates green, `modules:typecheck` r1 2.50 r2 2.34
-quiet. A PR run is narrowed by the change→gate map; the merge queue runs the
+C3a/C3b yes, matrix 28/28, 52 gates green (perf, Ir-scaling and llvm
+included). A PR run is narrowed by the change→gate map; the merge queue runs the
 whole suite.
 
 Before the recursive carrier additions: 69 binding, 26 solver, 5 value and 3 repr
