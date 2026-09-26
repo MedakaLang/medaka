@@ -1,5 +1,5 @@
 # META
-source_lines=2563
+source_lines=2566
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -110,6 +110,8 @@ lower (ELit l) = CLit l
 lower (ENumLit n r _ _) = match !r
   Some f => CLit (LFloat f)
   None => CLit (LInt n)
+-- defensive like the `ENumLit` arm: dictPass rewrites a wide literal to `LU64`.
+lower (EWideLit hi lo _ _) = CLit (LU64 hi lo)
 lower (EVar x) = CVar x AGlobal
 -- #837: strip the resolve-only binding-id tag; lower exactly as bare EVar.
 lower (EVarId x _) = CVar x AGlobal
@@ -516,6 +518,7 @@ litKey (LFloat f) = "f" ++ floatToString (normLitZero f)
 litKey (LBool True) = "bT"
 litKey (LBool False) = "bF"
 litKey LUnit = "u"
+litKey (LU64 hi lo) = "w\{intToString hi}.\{intToString lo}"
 
 -- collapse -0.0 to +0.0 so the float key matches `Eq Lit` (which treats them
 -- equal); a no-op for every other value.
@@ -2581,6 +2584,7 @@ nodeTag _ = "?"
 (DTypeSig false "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
 (DFunDef false "lower" ((PCon "ELit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
+(DFunDef false "lower" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EVar "CLit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))
 (DFunDef false "lower" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -2752,6 +2756,7 @@ nodeTag _ = "?"
 (DFunDef false "litKey" ((PCon "LBool" (PCon "True"))) (ELit (LString "bT")))
 (DFunDef false "litKey" ((PCon "LBool" (PCon "False"))) (ELit (LString "bF")))
 (DFunDef false "litKey" ((PCon "LUnit")) (ELit (LString "u")))
+(DFunDef false "litKey" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "w")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "hi")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "lo")))) (ELit (LString ""))))
 (DTypeSig false "normLitZero" (TyFun (TyCon "Float") (TyCon "Float")))
 (DFunDef false "normLitZero" ((PVar "f")) (EIf (EBinOp "==" (EVar "f") (ELit (LFloat 0.0))) (ELit (LFloat 0.0)) (EVar "f")))
 (DTypeSig false "filterMapRows" (TyFun (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
@@ -3318,6 +3323,7 @@ nodeTag _ = "?"
 (DTypeSig false "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
 (DFunDef false "lower" ((PCon "ELit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
+(DFunDef false "lower" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EVar "CLit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))
 (DFunDef false "lower" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -3489,6 +3495,7 @@ nodeTag _ = "?"
 (DFunDef false "litKey" ((PCon "LBool" (PCon "True"))) (ELit (LString "bT")))
 (DFunDef false "litKey" ((PCon "LBool" (PCon "False"))) (ELit (LString "bF")))
 (DFunDef false "litKey" ((PCon "LUnit")) (ELit (LString "u")))
+(DFunDef false "litKey" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "w")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "hi")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "lo")))) (ELit (LString ""))))
 (DTypeSig false "normLitZero" (TyFun (TyCon "Float") (TyCon "Float")))
 (DFunDef false "normLitZero" ((PVar "f")) (EIf (EBinOp "==" (EVar "f") (ELit (LFloat 0.0))) (ELit (LFloat 0.0)) (EVar "f")))
 (DTypeSig false "filterMapRows" (TyFun (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))

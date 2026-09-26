@@ -1,5 +1,5 @@
 # META
-source_lines=385
+source_lines=387
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -69,6 +69,7 @@ litSexp (LString s) = node "LString" [escStr s]
 litSexp (LChar s) = node "LChar" [escStr s]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
+litSexp (LU64 hi lo) = node "LU64" [intToString hi, intToString lo]
 
 export
 patSexp : Pat -> String
@@ -156,6 +157,7 @@ exprSexp (ELit l) = node "ELit" [litSexp l]
 -- sexp/astdump stays byte-identical to the OCaml side (whose astdump does the
 -- same) and the parse-fixture / OCaml↔compiler sexp diff gates keep passing.
 exprSexp (ENumLit n _ _ _) = node "ELit" [node "LInt" [intToString n]]
+exprSexp (EWideLit hi lo _ _) = node "ELit" [litSexp (LU64 hi lo)]
 exprSexp (EVar x) = node "EVar" [escStr x]
 -- #837: EVarId renders as a bare EVar so every sexp/snapshot dump stays byte-identical.
 exprSexp (EVarId x _) = node "EVar" [escStr x]
@@ -406,6 +408,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "litSexp" ((PCon "LChar" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "LChar"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "litSexp" ((PCon "LBool" (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "LBool"))) (EListLit (EApp (EVar "boolStr") (EVar "b")))))
 (DFunDef false "litSexp" ((PCon "LUnit")) (ELit (LString "LUnit")))
+(DFunDef false "litSexp" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LU64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
 (DTypeSig true "patSexp" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "patSexp" ((PCon "PVar" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "PVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "patSexp" ((PCon "PWild")) (ELit (LString "PWild")))
@@ -459,6 +462,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "exprSexp") (EVar "e")))
 (DFunDef false "exprSexp" ((PCon "ELit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
 (DFunDef false "exprSexp" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EApp (EVar "node") (ELit (LString "LInt"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))))
+(DFunDef false "exprSexp" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
 (DFunDef false "exprSexp" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EVarAt is introduced by annotateProgram"))))
@@ -595,6 +599,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "litSexp" ((PCon "LChar" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "LChar"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "litSexp" ((PCon "LBool" (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "LBool"))) (EListLit (EApp (EVar "boolStr") (EVar "b")))))
 (DFunDef false "litSexp" ((PCon "LUnit")) (ELit (LString "LUnit")))
+(DFunDef false "litSexp" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LU64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
 (DTypeSig true "patSexp" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "patSexp" ((PCon "PVar" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "PVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "patSexp" ((PCon "PWild")) (ELit (LString "PWild")))
@@ -648,6 +653,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "exprSexp") (EVar "e")))
 (DFunDef false "exprSexp" ((PCon "ELit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
 (DFunDef false "exprSexp" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EApp (EVar "node") (ELit (LString "LInt"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))))
+(DFunDef false "exprSexp" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
 (DFunDef false "exprSexp" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarAt" PWild PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: programToSexp serializes pre-annotate ASTs; EVarAt is introduced by annotateProgram"))))
