@@ -1,0 +1,74 @@
+-- The data half's launders (EFFECTS-SEMANTICS §4.1), each beside its honest
+-- twin in effect_data_field_ok: a literal outside the bound at construction,
+-- a dynamic value stored into a qualified field, a literal reached where a
+-- matched field's authority is the only admitted one, an index widened as if
+-- covariant, a write of the wrong authority into a cell, and a record update
+-- that replaces the qualified field with a literal.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data Conf (p : Authority FileRead) = Conf { path : String @p, retries : Int }
+
+-- the stored literal lies outside the declared index
+cfg : Unit -> Handle "config/*"
+cfg _ = Handle "/etc/passwd"
+
+-- a runtime value abstracts to the whole domain
+dyn : String -> Handle "config/*"
+dyn s = Handle s
+
+-- the matched field's authority is `p`; an unrelated literal is not within it
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle _) = readFile "/etc/passwd"
+
+-- an index is invariant: a narrower handle is not a wider one
+widen : Handle "config/app.toml" -> Handle "config/*"
+widen h = h
+
+-- mutable storage keeps the stored index
+overwrite : (path : String) -> Ref (Handle path) -> Unit
+overwrite _ r = r := Handle "/etc/passwd"
+
+-- an update of the qualified field is a proof obligation like construction
+repoint : Conf p -> Conf p
+repoint c = { c | path = "/etc/passwd" }
+
+-- an alias over an indexed head keeps the index's bound
+type Cfg (q : Authority FileRead) = Handle q
+
+mkCfgBad : Unit -> Cfg "config/*"
+mkCfgBad _ = Handle "/etc/passwd"
+
+-- a type in an `Authority` slot of an impl head is a kind error
+impl Eq (Handle Int) where
+  eq (Handle _) (Handle _) = True
+
+-- a record read cannot open an existential: the value proves nothing about
+-- an authority the read cannot name
+data Sealed = Sealed (p : Authority FileRead) { path : String @p, n : Int }
+
+unsealAt : Sealed -> Handle "config/*"
+unsealAt s = Handle s.path
+
+-- a forwarder publishes the top, and the top is not a narrower index
+data Raw (p : Authority FileRead) = Raw Int
+
+mkRaw = Raw
+
+forgeRaw : Unit -> Raw "config/*"
+forgeRaw _ = mkRaw 3
+
+-- an impl head abstracts over the index: a written term is refused
+interface Describe a where
+  describe : a -> String
+
+impl Describe (Handle "config/*") where
+  describe _ = "config"
+
+-- an update under an existential binder replaces every field that mentions
+-- it, or none
+data Two = Two (p : Authority FileRead) { a : Handle p, b : Handle p }
+
+repointOne : Two -> Two
+repointOne t = { t | a = Handle "/etc/x" }
+
+main = println 1

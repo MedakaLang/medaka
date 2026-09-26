@@ -23,7 +23,7 @@ import frontend.ast.{
   Ty(..),
   EffAtomTy(..),
   EffParamTy(..),
-  effAtomWith,
+  effAtomAt,
   effectDeclUnstamped,
   KindAnn(..),
   Constraint(..),
@@ -48,6 +48,8 @@ import frontend.ast.{
   tyConUnresolved,
   tyConBuiltin,
   dDataUnresolved,
+  kindAnnSource,
+  kindAuthorityUnstamped,
   dTypeAliasUnresolved,
   dNewtypeUnresolved,
   dInterfaceUnresolved,
@@ -177,6 +179,9 @@ peekP = ParserE (toks pos => POk (peekTok toks pos) pos)
 -- starts a product axis.  Pure read of `pos + 1` (no advance).
 peek2P : Parser Token
 peek2P = ParserE (toks pos => POk (peekTok toks (pos + 1)) pos)
+
+peek3P : Parser Token
+peek3P = ParserE (toks pos => POk (peekTok toks (pos + 2)) pos)
 
 -- Read the current token index without consuming.  Used by the position
 -- side-channel (`parseWithPositions`) to capture per-decl / per-variant token
@@ -2132,9 +2137,11 @@ effectBodyFor _ = deferPure ([], [])
 -- (a product).  The identity is acquired by resolve.
 effAtomP : Parser EffAtomTy
 effAtomP = defer
+  s <- getPos
   l <- upperNameP
   p <- effParamP
-  deferPure (effAtomWith l p)
+  q <- getPos
+  deferPure (effAtomAt l p (locOfSpan s q))
 
 effParamP : Parser EffParamTy
 effParamP = defer
@@ -2371,7 +2378,31 @@ parseTyAtomRaw = defer
     TIdent v => emit (TyVar v)
     TLParen => parseTyParen
     TLt => parseBareEffectAtom
+    TStar => parseTyAuthTop
+    TString _ => parseTyAuthLit
+    TLBrace => parseTyAuthLit
     _ => failP "expected type atom"
+
+-- An authority term in an `Authority`-kinded type-ARGUMENT slot: `Handle *`
+-- is the domain's top (a row spells top by omitting the parameter; an index
+-- argument cannot be omitted), `Handle "config/*"` a literal, `Handle {"A"}`
+-- a set — the atom-parameter grammar (`effParamFor`), so the quoted
+-- underscore is refused here exactly as it is in a row.  Which slots are
+-- Authority-kinded is the elaborator's knowledge, not the parser's: outside
+-- one the node is diagnosed there, as a bare row in a `Type` slot is.
+parseTyAuthTop : Parser Ty
+parseTyAuthTop = defer
+  s <- getPos
+  expectTok TStar
+  q <- getPos
+  deferPure (TyAuth EPTop (Some (locOfSpan s q)))
+
+parseTyAuthLit : Parser Ty
+parseTyAuthLit = defer
+  s <- getPos
+  p <- effParamP
+  q <- getPos
+  deferPure (TyAuth p (Some (locOfSpan s q)))
 
 -- `M.Map` in type position: a module alias qualifies a TYPE name, not only a
 -- value (#2412).  The grammar has no notion of a qualified name, so the two
@@ -2650,12 +2681,21 @@ parseNewtype pub = defer
   ps <- tyParamsP
   expectTok TEqual
   con <- upperNameP
+  binders <- ctorBindersP
   fty <- parseTy
   t <- peekP
   derives <- newtypeDerives t
   skipNewlines
   deferPure
-    (dNewtypeUnresolved pub name (map fst ps) (map snd ps) con fty derives)
+    (dNewtypeUnresolved
+      pub
+      name
+      (map fst ps)
+      (map snd ps)
+      con
+      binders
+      fty
+      derives)
 
 -- top-level `let rec f a… = body` → DLetGroup with a single binding.
 -- Mutual-recursion grouping via `with` has been removed — each recursive
@@ -2994,8 +3034,34 @@ parseEffect pub = defer
   expectTok TEffect
   name <- upperNameP
   dom <- effDomainP
+  axes <- effAxesP
   skipNewlines
-  deferPure (effectDeclUnstamped pub name dom)
+  deferPure (effectDeclUnstamped pub name dom axes)
+
+-- A Product label's axis schema, `(Host : Prefix, Method : Set)`: each axis
+-- named with the domain it is drawn from, in the order written, the first
+-- being the primary axis a bare literal lifts into.  Only a Product carries
+-- one; the typechecker refuses a schema on any other domain and a Product
+-- without one.
+effAxesP : Parser (List (String, String))
+effAxesP = defer
+  t <- peekP
+  effAxesFor t
+
+effAxesFor : Token -> Parser (List (String, String))
+effAxesFor TLParen = defer
+  advance
+  axes <- sepBy1 effAxisP (expectTok TComma)
+  expectTok TRParen
+  deferPure axes
+effAxesFor _ = deferPure []
+
+effAxisP : Parser (String, String)
+effAxisP = defer
+  name <- upperNameP
+  expectTok TColon
+  dom <- upperNameP
+  deferPure (name, dom)
 
 effDomainP : Parser (Option String)
 effDomainP = defer
@@ -3480,15 +3546,26 @@ kindAtomFor : Token -> Parser KindAnn
 kindAtomFor (TUpper c)
   | c == "Type" = kindAtomEmit KindType
   | c == "Effect" = kindAtomEmit KindEffect
-  | otherwise =
-    failP "expected a kind: `Type`, `Effect`, or an arrow between them"
+  | c == "Authority" = kindAuthorityP
+  | otherwise = failP kindExpectedMsg
 kindAtomFor TLParen = defer
   advance
   k <- kindP
   expectTok TRParen
   deferPure k
-kindAtomFor _ =
-  failP "expected a kind: `Type`, `Effect`, or an arrow between them"
+kindAtomFor _ = failP kindExpectedMsg
+
+kindExpectedMsg : String
+kindExpectedMsg =
+  "expected a kind: `Type`, `Effect`, `Authority <Label>`, or an arrow between them"
+
+-- `Authority FileRead`: the parameter ranges over the declared domain of the
+-- named effect label (EFFECTS-SEMANTICS §6.1).
+kindAuthorityP : Parser KindAnn
+kindAuthorityP = defer
+  advance
+  l <- upperNameP
+  deferPure (kindAuthorityUnstamped l)
 
 kindAtomEmit : KindAnn -> Parser KindAnn
 kindAtomEmit k = defer
@@ -3511,7 +3588,8 @@ parseData vis = defer
       name
       (map fst ps)
       (map snd ps)
-      variants
+      (map fst variants)
+      (map snd variants)
       (combineDerives blockDerives outerDerives))
 -- block form may carry `deriving (…)` INSIDE the INDENT span (own line or
 -- trailing the last constructor); that is captured by dataBody.  The inline
@@ -3526,12 +3604,14 @@ combineDerives block _ = block
 -- inline (`= …`) or block (`INDENT = … DEDENT`) variant list.  Returns the
 -- variants paired with any deriving names found INSIDE a block body (empty for
 -- the inline form).
-dataBody : String -> Parser (List Variant, List DeriveRef)
+dataBody : String -> Parser (List (Variant, CtorBinders), List DeriveRef)
 dataBody tyName = defer
   t <- peekP
   dataBodyFor tyName t
 
-dataBodyFor : String -> Token -> Parser (List Variant, List DeriveRef)
+dataBodyFor : String ->
+  Token ->
+  Parser (List (Variant, CtorBinders), List DeriveRef)
 dataBodyFor tyName TEqual = defer
   advance
   t <- peekP
@@ -3561,7 +3641,9 @@ dataBodyFor _ _ = deferPure ([], [])
 -- before the first variant is optional (lenient); the formatter always emits it.
 -- `deriving (…)` inside the block is consumed before the DEDENT, mirroring the
 -- old `TIndent` block form.
-dataAfterEq : String -> Token -> Parser (List Variant, List DeriveRef)
+dataAfterEq : String ->
+  Token ->
+  Parser (List (Variant, CtorBinders), List DeriveRef)
 dataAfterEq tyName TIndent = defer
   advance
   skipNewlines
@@ -3615,30 +3697,36 @@ optPipeFor _ = deferPure ()
 -- `nameOmitted = True` so the printer round-trips the short form.  Any other
 -- shape falls through to the normal `dataVariants` path.  A leading `{` is the
 -- unambiguous trigger — no legal named/positional variant starts with `{`.
-dataVariantsN : String -> Parser (List Variant)
+-- A constructor's existential binders (EFFECTS-SEMANTICS §4.1): kinded
+-- parameters written between its name and its fields, `AnyHandle (p :
+-- Authority FileRead) (Handle p)`.  They ride beside the variant until the
+-- declaration is built, where they become `dataCtorBinders`.
+type CtorBinders = List (String, KindAnn)
+
+dataVariantsN : String -> Parser (List (Variant, CtorBinders))
 dataVariantsN tyName = defer
   t <- peekP
   dataVariantsNFor tyName t
 
-dataVariantsNFor : String -> Token -> Parser (List Variant)
+dataVariantsNFor : String -> Token -> Parser (List (Variant, CtorBinders))
 dataVariantsNFor tyName TLBrace = defer
   fields <- parseNamedFields
-  deferPure [Variant tyName (ConNamed fields True)]
+  deferPure [(Variant tyName (ConNamed fields True), [])]
 dataVariantsNFor _ _ = dataVariants
 
-dataVariants : Parser (List Variant)
+dataVariants : Parser (List (Variant, CtorBinders))
 dataVariants = defer
   v <- parseVariant
   rest <- variantsRest
   deferPure (v :: rest)
 
-variantsRest : Parser (List Variant)
+variantsRest : Parser (List (Variant, CtorBinders))
 variantsRest = defer
   skipNewlines
   t <- peekP
   variantsRestFor t
 
-variantsRestFor : Token -> Parser (List Variant)
+variantsRestFor : Token -> Parser (List (Variant, CtorBinders))
 variantsRestFor TPipe = defer
   advance
   v <- parseVariant
@@ -3646,11 +3734,51 @@ variantsRestFor TPipe = defer
   deferPure (v :: rest)
 variantsRestFor _ = deferPure []
 
-parseVariant : Parser Variant
+parseVariant : Parser (Variant, CtorBinders)
 parseVariant = defer
   name <- upperNameP
+  binders <- ctorBindersP
   payload <- parsePayload
-  deferPure (Variant name payload)
+  deferPure (Variant name payload, binders)
+
+-- `(p : Kind)` groups leading a constructor's fields.  Only an `Authority`
+-- kind is an existential Medaka can open (a match arm gives it a fresh rigid
+-- authority); any other kind here is refused with the reason, so a type or
+-- row existential cannot parse as a silent no-op.  A group that is not a
+-- kinded binder (`(String @p)`, `(p : String)`) fails softly and is read as
+-- the payload it is.
+ctorBindersP : Parser CtorBinders
+ctorBindersP = many ctorBinderP
+
+ctorBinderP : Parser (String, KindAnn)
+ctorBinderP = defer
+  t <- peekP
+  t2 <- peek2P
+  ctorBinderFor t t2
+
+ctorBinderFor : Token -> Token -> Parser (String, KindAnn)
+ctorBinderFor TLParen (TIdent _) = defer
+  t3 <- peek3P
+  ctorBinderColon t3
+ctorBinderFor _ _ = failP "expected a constructor binder"
+
+ctorBinderColon : Token -> Parser (String, KindAnn)
+ctorBinderColon TColon = defer
+  advance
+  n <- lowerNameP
+  expectTok TColon
+  k <- kindP
+  expectTok TRParen
+  ctorBinderKind n k
+ctorBinderColon _ = failP "expected a constructor binder"
+
+ctorBinderKind : String -> KindAnn -> Parser (String, KindAnn)
+ctorBinderKind n (k@(KindAuthority _ _)) = deferPure (n, k)
+ctorBinderKind n k = defer
+  pos <- getPos
+  fatalAtP
+    "a constructor may bind only an `Authority` existential: `(\{n} : \{kindAnnSource k})` names a kind a match arm cannot open. Declare `\{n}` on the type's head instead"
+    pos
 
 parsePayload : Parser ConPayload
 parsePayload = defer
@@ -4333,7 +4461,7 @@ declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DEffect _ _ _ _) i =
+declNameTokIdxAt toks (DEffect _ _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DProp _ _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))

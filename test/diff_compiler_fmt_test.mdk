@@ -357,8 +357,7 @@ methodIfaceReceipt =
    the baseline draft (diffed against its golden), and the four mutation
    controls that prove the golden's comparator can actually observe a
    copied-field mismatch rather than only ever printing MATCH. -}
-draftSemanticFixtureFailure : String ->
-  <Exec, FileRead, IO> Option String
+draftSemanticFixtureFailure : String -> <Exec, FileRead, IO> Option String
 draftSemanticFixtureFailure dir = match draftSemanticEntry dir
   Err e => Some e
   Ok entry =>
@@ -703,10 +702,7 @@ effectHoleWs2Check host rt core f = match boundedVerb host [rt, core, f]
 
 -- | `native check f` must reject: a nonzero exit, or an error/`Effectful`
 -- capability diagnostic on its combined output.
-effectHoleRejectCheck : String ->
-  String ->
-  String ->
-  <Exec, IO> Option String
+effectHoleRejectCheck : String -> String -> String -> <Exec, IO> Option String
 effectHoleRejectCheck native name f = match boundedVerb native ["check", f]
   Err e => Some "\{name}: could not spawn native check: \{e}"
   Ok (code, out, err) =>
@@ -726,7 +722,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 123
+typecheckErrorFixtureCount = 129
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -734,6 +730,12 @@ typecheckErrorFixtureCount = 123
    the prelude-aware driver; every other fixture runs through both. -}
 typecheckPreludeDep : List String
 typecheckPreludeDep = [
+  "effect_ctor_binder_shadow.mdk",
+  "effect_data_field_ok.mdk",
+  "effect_data_field_launder.mdk",
+  "effect_existential_ok.mdk",
+  "effect_existential_launder.mdk",
+  "effect_phantom_export.mdk",
   "effect_named_authority_scope_launder.mdk",
   "effect_named_authority_scope_ok.mdk",
   "effect_named_authority_method_launder.mdk",
@@ -829,8 +831,7 @@ typecheckDriverFailure driver bin args want = match boundedVerb bin args
 {- | One `typecheck_error_fixtures/*.mdk`'s driver(s), routed by
    `typecheckPreludeDep`: prelude-dependent fixtures run ONLY `check_main`;
    every other fixture runs `typecheck_main` and `check_main` both. -}
-typecheckErrorFixtureFailures : String ->
-  <Exec, FileRead, IO> List String
+typecheckErrorFixtureFailures : String -> <Exec, FileRead, IO> List String
 typecheckErrorFixtureFailures path =
   let name = basename path
   let golden = "\{dirname path}/\{stem path}.tc.golden"
@@ -1111,8 +1112,7 @@ startFailure name f want d = match d.start
    `oracle.json` is FROZEN — `test/capture_goldens.sh` has no arm for this
    corpus, and one is re-derived by hand from `./medaka check --json` and
    reviewed before being committed. -}
-analyzeProjectFixtureFailures : String ->
-  <Exec, FileRead, IO> List String
+analyzeProjectFixtureFailures : String -> <Exec, FileRead, IO> List String
 analyzeProjectFixtureFailures dir =
   let name = basename dir
   match analyzeProjectEntry dir
@@ -1232,10 +1232,7 @@ testGoldenFailure rel =
       else
         testGoldenCompare name rel (chompNewlines (stripUnitAutoPrint out))
 
-testGoldenCompare : String ->
-  String ->
-  String ->
-  <FileRead, IO> Option String
+testGoldenCompare : String -> String -> String -> <FileRead, IO> Option String
 testGoldenCompare name rel got =
   let golden = underRoot "\{dirname rel}/\{stem rel}.test.golden"
   match readFile golden

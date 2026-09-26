@@ -1,0 +1,51 @@
+-- The honest controls for effect_existential_launder (EFFECTS-SEMANTICS
+-- §4.1): a constructor's leading kinded binder is existential over its
+-- fields.  Packing takes the value's own index; a match arm opens a fresh
+-- rigid authority, relates values by it inside the arm, and an effect the arm
+-- performs at it reaches the enclosing row as the whole domain.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)
+
+readIt : Handle p -> <FileRead p> Result String String
+readIt (Handle s) = readFile s
+
+sameAs : Handle p -> String @p -> Result String String
+sameAs _ s = Ok s
+
+-- packing a handle at a named argument's authority
+pack : (path : String) -> AnyHandle
+pack path = AnyHandle (Handle path)
+
+-- packing at a literal index
+packCfg : Unit -> AnyHandle
+packCfg _ = AnyHandle (Handle "config/app.toml")
+
+-- reading through an opened existential performs the whole domain
+readAny : AnyHandle -> <FileRead> Result String String
+readAny a = match a
+  AnyHandle h => readIt h
+
+-- values related by the opened authority may meet inside the arm
+useInside : AnyHandle -> Result String String
+useInside a = match a
+  AnyHandle h => match h
+    Handle s => sameAs h s
+
+-- an opened existential may be repacked
+repack : AnyHandle -> AnyHandle
+repack a = match a
+  AnyHandle h => AnyHandle h
+
+-- an unsigned reader publishes the whole domain
+readInferred a = match a
+  AnyHandle h => readIt h
+
+-- a function clause's parameter pattern opens the existential the same way
+readClause : AnyHandle -> <FileRead> Result String String
+readClause (AnyHandle h) = readIt h
+
+repackClause : AnyHandle -> AnyHandle
+repackClause (AnyHandle h) = AnyHandle h
+
+main = println 1

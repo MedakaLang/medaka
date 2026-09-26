@@ -187,6 +187,22 @@ CEIL_test="${TEST_IR_CEIL:-680000000}"
 # ceiling but not by much. If this cell starts flaking, re-derive rather than
 # widen blindly (same discipline as every other ceiling in this file).
 #
+# RE-DERIVED 2026-09-25 (effects data half, PR #3445), same method. The verb had
+# grown to within 0.5% of the 2026-09-15 ceiling across the effects
+# rearchitecture (#3393 landed named authorities, label identity and the scoped
+# authority solver on every check), and this branch's first CI run exceeded it
+# by 0.4% (1,084,647,134 Ir) while the tree measured under it locally:
+#
+#   this tree (PR #3445 head)   CEIL (= measured x1.20, up to 5M)
+#   1,070,149,634               1,285,000,000
+#
+# The data half's own hot-path additions were trimmed before re-deriving
+# (provenance skips atom-free rows, the signature seams walk index binders
+# once, the validation pass looks a head's kinds up only for a written index
+# literal, the resolver's binder scope is one pass, and a program with no
+# existential pays nothing per pattern): each was measured, and together they
+# moved this cell by under 0.5%, so the remaining growth is #3393's.
+#
 # NOT ADDED: a cell for S-suggest-pools-lazy (resolve.mdk's on-demand did-you-mean
 # pools). Its own multi-module `check gzip/main.mdk` measurement (see
 # reports/S-suggest-pools-lazy.md §6.3, re-confirmed on this tree) is -0.99%
@@ -202,7 +218,7 @@ CEIL_test="${TEST_IR_CEIL:-680000000}"
 # resolve.mdk's snapshot/LEG-A corpus for a test-only change, outside this
 # slice's licensed sites. See the slice report's Notes.
 CEIL_lint="${LINT_IR_CEIL:-3515000000}"
-CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1080000000}"
+CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1285000000}"
 
 LINT_TARGET="$ROOT/compiler/tools/lint.mdk"
 POLICY_FILE="$ROOT/demo/plugin_good.mdk"

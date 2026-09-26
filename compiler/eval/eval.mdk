@@ -648,6 +648,7 @@ countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
 countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
+countTyvars (TyAuth _ _) = 0
 countTyvars (TyNamed _ t) = countTyvars t
 countTyvars (TyQual t _) = countTyvars t
 
@@ -777,6 +778,7 @@ tyMentions (TyQual t _) params = tyMentions t params
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
 tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentions (TyAuth _ _) _ = False
 
 -- ── environment ───────────────────────────────────────────────────────────
 export

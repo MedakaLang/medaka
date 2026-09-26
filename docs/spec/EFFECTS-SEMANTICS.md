@@ -388,9 +388,12 @@ A qualifier is written with a spaced `@`: `String @p`.
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
 labels shares a variable; incompatible-domain uses are ill-formed. Product
-domains retain their declared axis schema, including any designated primary
-axis used by an unqualified string argument. Missing axes mean top. Domain
-mismatches are errors, never proofs of containment.
+domains retain their declared axis schema, `effect L Product (Host : Prefix,
+Method : Set)`: the axes are declared in order and the first is the primary
+axis an unqualified string argument or a bare written literal lifts into; a
+written product may name only declared axes; a Product declared without axes
+is ill-formed. Missing axes mean top. Domain mismatches are errors, never
+proofs of containment.
 
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
@@ -423,9 +426,85 @@ raw handle when its controlled constructor establishes κ; an unrestricted
 constructor cannot invent κ. A constructor with type
 `∀κ. String @κ -> Handle κ` must check the stored value against that qualifier.
 Matching a `Handle q` recovers `String @q` only for a field actually declared
-with that qualifier. An ordinary `String` field remains unqualified. The proposed
-surface is `String @p` with a data parameter `(p : Authority FileRead)`; the label
-selects a declared domain rather than creating a new runtime type.
+with that qualifier. An ordinary `String` field remains unqualified.
+
+The surface (ratified 2026-09-25) is a data parameter of kind `Authority L`,
+`data Handle (p : Authority FileRead) = Handle (String @p)`: the label selects
+a declared domain rather than creating a new runtime type, and the parameter may
+appear in that declaration's fields as a qualifier (`String @p`), an atom's
+parameter (`Unit -> <FileRead p> String`) or an index of another type
+(`Other p`). A constructor is a proof source when some field of it carries the
+parameter, because applying it checks each argument against the instantiated
+field type by the directed judgment; such a constructor may be applied wherever
+it is visible. A constructor none of whose fields carries the parameter is a
+phantom index: applying it proves nothing, so it is a proof source only in its
+declaring module, trusted as an extern's row is, and a `public export data`
+with an `Authority` parameter must carry it in every constructor
+(`T-AUTHORITY-PHANTOM-EXPORT`); `export data` is the raw-handle shape. Record
+construction and update flow each supplied field into the declared field type
+as an argument (`α(value) ⊑ q`), a field read yields the declared type
+verbatim, and a record pattern binds the declared type whether punned or
+explicit. Matching recovers exactly the declared field types under the
+scrutinee's index substitution, flowing directed and never through undirected
+unification; it never refines the index.
+
+*Carrying* is decided by the field's type, not by mention. A field carries
+the parameter `p` when every value of the field's type holds a value at `p`'s
+authority: a qualifier (`String @p`), a tuple with a carrying component, or an
+index `H … p …` of a head whose every constructor carries that parameter
+(`Handle p`, by `Handle`'s own constructors; through a type parameter,
+`Box (Handle p)` when `Box`'s constructor holds its parameter). `List (Handle p)`
+mentions `p` and carries nothing, since `[]` inhabits it at every index; an
+arrow `Unit -> <FileRead p> Unit` carries nothing, since an idle closure
+inhabits it. A head whose constructors an importer cannot apply (`export data`,
+a private head) is trusted, since only its declaring module builds a value of
+it; a builtin container (`List`, `Array`) carries nothing. Recursion through
+a head assumes the head carries: a finite value bottoms out in a carrying
+constructor, or the type is empty. So `public export data Tok (p : Authority
+FileRead) = Tok Int (List (Handle p))` is refused as a phantom export, and a
+carrying head is applied anywhere and proves its index through the ordinary
+argument route, in any order of inference. Three further consequences: a
+field read outside a pattern of a field under an existential binder recovers
+the domain's top for that binder, since a read cannot open it; an update of
+such a record replaces every field that mentions the binder or none of them,
+since one binder cannot name two values at different authorities; and an
+unsigned binding whose authority variable occurs in no argument position of
+its type publishes the top for it (`mkRaw = Raw` is `Int -> Raw *`), while a
+written signature publishes as written.
+(`mkRaw = Raw` is
+`Int -> Raw *`), so a forwarder cannot republish a phantom constructor.
+
+An `Authority`-kinded type-argument slot takes an authority term, kind-directed
+as an `Effect` slot takes a row: a named argument's name (`open : (path :
+String) -> <FileRead path> Handle path`), a bare lowercase name, which is a
+universally quantified authority variable of the signature binding for
+everything to its right exactly as a type variable does (`read : Handle p ->
+<FileRead p> String`), a literal of the label's domain (`Handle "config/*"`,
+what `open "config/x"` renders as), or `*`, the domain's top (`Handle *`, what
+`open dyn` renders as; a row spells the top by omitting the parameter, an index
+argument cannot be omitted). Index slots are invariant (§6.4): `Handle
+"config/app"` is not a `Handle "config/*"`. A name is an authority binder only
+where something binds it — a named argument of type `String`, an
+`Authority`-kinded index slot, a head's `Authority` parameter, a constructor's
+existential binder; an atom or a qualifier naming a type variable is
+`T-AUTHORITY-KIND`, and an authority binder in a type position, or a type in
+an `Authority` slot, the same code.
+
+A constructor may bind an existential authority by a kinded group leading its
+fields, `data AnyHandle = AnyHandle (p : Authority FileRead) (Handle p)`.
+Packing takes the argument's own index. A match arm or a function clause whose
+pattern names such a constructor opens a fresh RIGID authority scoped to that
+arm or clause: values may be related by it inside (`sameAs h s` with `h :
+Handle κ` and `s : String @κ`), an unrelated literal does not lie within it,
+and a declared bound does not admit it. The opened authority may not occur in
+the scope's value type nor reach anything older than the scope
+(`T-AUTHORITY-ESCAPE`); a row the scope performs at it is checked against the
+enclosing declaration as any row is, so only the label bare admits it, and an
+inferred row publishes it as the domain's top — the safe over-approximation of
+§4. A `let` or `do` pattern cannot open an existential
+(`T-AUTHORITY-EXISTENTIAL-SCOPE`): it has no end at which the escape could be
+checked. Only `Authority` existentials exist; a type or row existential is a
+parse error.
 
 Each effect label has resolved declaration identity `(origin, name)`, independent
 of its printed spelling. Imports and reexports preserve that identity and its
@@ -656,7 +735,11 @@ value type. A declared but unused `Effect` parameter is legal: a phantom index
 does not itself store or discharge a computation.
 
 Effect and authority index slots are invariant. `F φ₁ a` and `F φ₂ a`
-require equal indices, not merely `φ₁ ≤ φ₂`. This remains true when ordinary
+require equal indices, not merely `φ₁ ≤ φ₂`; a flexible index variable
+takes the other side as its solution outright, as a substitution. An impl head
+abstracts over an authority index — `impl I (Handle p)` covers every index,
+since an instance is chosen by the type's head and the index is erased — so a
+written term in an impl head's `Authority` slot is refused. This remains true when ordinary
 type parameters have inferred variance. For example, covariantly widening the
 index of `Sink e = Sink ((Unit →^e Unit) → Int)` would manufacture a pure
 consumer of an effectful callback.

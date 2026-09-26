@@ -3,3 +3,9 @@ export effect Fetch
 
 get : String -> <KV> String
 get k = k
+
+-- a Product label declares its axis schema, in the order written: the first
+-- axis is the one a bare literal lifts into
+effect Fetch Product (Host : Prefix, Method : Set)
+
+export effect Db Product (Table : Prefix, Op : Set)

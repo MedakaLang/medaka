@@ -1471,7 +1471,7 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --     exists because of that split — an alias arm here would rename half of it.
 renameDecl _ (d@(DExtern _ _ _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
-renameDecl _ (d@(DEffect _ _ _ _)) = d
+renameDecl _ (d@(DEffect _ _ _ _ _)) = d
 renameDecl _ (d@(DTypeAlias { tyAliasName = _, ... })) = d
 
 -- rename a data variant's constructor name (payload types are unaffected).

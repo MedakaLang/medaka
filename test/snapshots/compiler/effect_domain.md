@@ -1,5 +1,5 @@
 # META
-source_lines=206
+source_lines=223
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -25,14 +25,31 @@ export
 canonParam : Param -> Param
 canonParam (PPrefix (Some s)) =
   if s == "" then PPrefix None else PPrefix (Some s)
+canonParam (PProduct ax) = productNorm ax
 canonParam p = p
 
+-- A Product's top keeps its declared axis SCHEMA (each axis at its own top,
+-- in declaration order), so a domain top read off a label or a variable can
+-- say which axis a bare literal lifts into and which axes a written product
+-- may name.  A VALUE normalises the top axes away (`productNorm`), so
+-- `PProduct []` and a schema top are the same element of the order.
 export
 subTopOf : Param -> Param
 subTopOf (PPrefix _) = PPrefix None
 subTopOf (PSet _) = PSet None
-subTopOf (PProduct _) = PProduct []
+subTopOf (PProduct ax) = PProduct (map (a => (fst a, subTopOf (snd a))) ax)
 subTopOf _ = PUnit
+
+-- The schema's primary axis lifted from a bare literal: a Prefix axis takes
+-- the pattern, a Set axis the singleton; a Product with no declared schema
+-- has no primary axis and the literal is the top.
+export
+productPrimaryLift : List (String, Param) -> String -> Param
+productPrimaryLift [] _ = PProduct []
+productPrimaryLift ((name, top) :: _) s = match top
+  PPrefix _ => productNorm [(name, canonParam (PPrefix (Some s)))]
+  PSet _ => productNorm [(name, PSet (Some [s]))]
+  _ => PProduct []
 
 export
 lookupAxis : String -> List (String, Param) -> Option Param
@@ -96,7 +113,7 @@ export
 isSubTop : Param -> Bool
 isSubTop (PPrefix None) = True
 isSubTop (PSet None) = True
-isSubTop (PProduct []) = True
+isSubTop (PProduct ax) = allList (a => isSubTop (snd a)) ax
 isSubTop PUnit = True
 isSubTop _ = False
 
@@ -213,12 +230,16 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
+(DFunDef false "canonParam" ((PCon "PProduct" (PVar "ax"))) (EApp (EVar "productNorm") (EVar "ax")))
 (DFunDef false "canonParam" ((PVar "p")) (EVar "p"))
 (DTypeSig true "subTopOf" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "subTopOf" ((PCon "PPrefix" PWild)) (EApp (EVar "PPrefix") (EVar "None")))
 (DFunDef false "subTopOf" ((PCon "PSet" PWild)) (EApp (EVar "PSet") (EVar "None")))
-(DFunDef false "subTopOf" ((PCon "PProduct" PWild)) (EApp (EVar "PProduct") (EListLit)))
+(DFunDef false "subTopOf" ((PCon "PProduct" (PVar "ax"))) (EApp (EVar "PProduct") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (ETuple (EApp (EVar "fst") (EVar "a")) (EApp (EVar "subTopOf") (EApp (EVar "snd") (EVar "a")))))) (EVar "ax"))))
 (DFunDef false "subTopOf" (PWild) (EVar "PUnit"))
+(DTypeSig true "productPrimaryLift" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "String") (TyCon "Param"))))
+(DFunDef false "productPrimaryLift" ((PList) PWild) (EApp (EVar "PProduct") (EListLit)))
+(DFunDef false "productPrimaryLift" ((PCons (PTuple (PVar "name") (PVar "top")) PWild) (PVar "s")) (EMatch (EVar "top") (arm (PCon "PPrefix" PWild) () (EApp (EVar "productNorm") (EListLit (ETuple (EVar "name") (EApp (EVar "canonParam") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))))) (arm (PCon "PSet" PWild) () (EApp (EVar "productNorm") (EListLit (ETuple (EVar "name") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s")))))))) (arm PWild () (EApp (EVar "PProduct") (EListLit)))))
 (DTypeSig true "lookupAxis" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "Option") (TyCon "Param")))))
 (DFunDef false "lookupAxis" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAxis" ((PVar "name") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "k")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "rest"))))
@@ -243,7 +264,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig true "isSubTop" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "isSubTop" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
 (DFunDef false "isSubTop" ((PCon "PSet" (PCon "None"))) (EVar "True"))
-(DFunDef false "isSubTop" ((PCon "PProduct" (PList))) (EVar "True"))
+(DFunDef false "isSubTop" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "allList") (ELam ((PVar "a")) (EApp (EVar "isSubTop") (EApp (EVar "snd") (EVar "a"))))) (EVar "ax")))
 (DFunDef false "isSubTop" ((PCon "PUnit")) (EVar "True"))
 (DFunDef false "isSubTop" (PWild) (EVar "False"))
 (DTypeSig true "sortAxes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))
@@ -305,12 +326,16 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
+(DFunDef false "canonParam" ((PCon "PProduct" (PVar "ax"))) (EApp (EVar "productNorm") (EVar "ax")))
 (DFunDef false "canonParam" ((PVar "p")) (EVar "p"))
 (DTypeSig true "subTopOf" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "subTopOf" ((PCon "PPrefix" PWild)) (EApp (EVar "PPrefix") (EVar "None")))
 (DFunDef false "subTopOf" ((PCon "PSet" PWild)) (EApp (EVar "PSet") (EVar "None")))
-(DFunDef false "subTopOf" ((PCon "PProduct" PWild)) (EApp (EVar "PProduct") (EListLit)))
+(DFunDef false "subTopOf" ((PCon "PProduct" (PVar "ax"))) (EApp (EVar "PProduct") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (ETuple (EApp (EVar "fst") (EVar "a")) (EApp (EVar "subTopOf") (EApp (EVar "snd") (EVar "a")))))) (EVar "ax"))))
 (DFunDef false "subTopOf" (PWild) (EVar "PUnit"))
+(DTypeSig true "productPrimaryLift" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "String") (TyCon "Param"))))
+(DFunDef false "productPrimaryLift" ((PList) PWild) (EApp (EVar "PProduct") (EListLit)))
+(DFunDef false "productPrimaryLift" ((PCons (PTuple (PVar "name") (PVar "top")) PWild) (PVar "s")) (EMatch (EVar "top") (arm (PCon "PPrefix" PWild) () (EApp (EVar "productNorm") (EListLit (ETuple (EVar "name") (EApp (EVar "canonParam") (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))))) (arm (PCon "PSet" PWild) () (EApp (EVar "productNorm") (EListLit (ETuple (EVar "name") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "s")))))))) (arm PWild () (EApp (EVar "PProduct") (EListLit)))))
 (DTypeSig true "lookupAxis" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "Option") (TyCon "Param")))))
 (DFunDef false "lookupAxis" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAxis" ((PVar "name") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "k")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "rest"))))
@@ -335,7 +360,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig true "isSubTop" (TyFun (TyCon "Param") (TyCon "Bool")))
 (DFunDef false "isSubTop" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
 (DFunDef false "isSubTop" ((PCon "PSet" (PCon "None"))) (EVar "True"))
-(DFunDef false "isSubTop" ((PCon "PProduct" (PList))) (EVar "True"))
+(DFunDef false "isSubTop" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "allList") (ELam ((PVar "a")) (EApp (EVar "isSubTop") (EApp (EVar "snd") (EVar "a"))))) (EVar "ax")))
 (DFunDef false "isSubTop" ((PCon "PUnit")) (EVar "True"))
 (DFunDef false "isSubTop" (PWild) (EVar "False"))
 (DTypeSig true "sortAxes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))

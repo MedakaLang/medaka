@@ -94,6 +94,7 @@ tySexp (TyEffect labels tail t) =
   node "TyEffect" [slist (map effAtomSexp labels), tailSexp tail, tySexp t]
 tySexp (TyRow labels tail _) =
   node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
+tySexp (TyAuth p _) = node "TyAuth" [effParamSexp p]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 tySexp (TyNamed n t) = node "TyNamed" [escStr n, tySexp t]
@@ -273,8 +274,12 @@ declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, 
     slist (map (d => escStr (deriveRefName d)) ds),
   ]
 declSexp (DUse pub path _) = node "DUse" [boolStr pub, usePathSexp path]
-declSexp (DEffect pub n dom _) =
-  node "DEffect" [boolStr pub, escStr n, optStrSexp dom]
+declSexp (DEffect pub n dom axes _) = node "DEffect" [
+  boolStr pub,
+  escStr n,
+  optStrSexp dom,
+  slist (map axisSexp axes),
+]
 declSexp (DProp pub name params body) = node "DProp" [
   boolStr pub,
   escStr name,
@@ -375,3 +380,6 @@ programToSexp prog = joinNl (map declSexp prog)
 deferNodeName : Bool -> String
 deferNodeName True = "EDefer"
 deferNodeName False = "EDo"
+
+axisSexp : (String, String) -> String
+axisSexp (name, dom) = node "axis" [escStr name, escStr dom]

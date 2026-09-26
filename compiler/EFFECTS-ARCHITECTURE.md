@@ -1,13 +1,16 @@
 # Effects within the typechecker
 
-**Status:** INCOMPLETE — implementation plan and delivered foundation. The delivery checklist below distinguishes the
-destination from code that has actually migrated. This is one implementation
-effort, not a sprint contract. Base: `c8d1ffe38`.
+**Status:** DELIVERED THROUGH ITEM 6 — the data-half checkpoint is on the
+branch; item 7 (stdlib migration of precision-dependent signatures to handles)
+and the handoff's owed items remain. The delivery checklist below
+distinguishes the destination from code that has actually migrated. This is
+one implementation effort, not a sprint contract. Base: `c8d1ffe38`.
 
-For continuation of draft PR #3393, read the
+PR #3393 merged on 2026-09-25 (`f81ff1d9d`). For what it delivered and what
+remains, read the
 [session handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) first. It records
-the exact source checkpoint, newly completed red CI, verification limits and
-the next authority implementation steps. This document describes the intended
+the decisions, the verification receipts, the adversarial review's findings and
+the open work. This document describes the intended
 architecture; neither it nor the earlier passing subsets imply merge readiness.
 
 The effects subsystem owns effect rows and authority constraints. It participates
@@ -545,10 +548,10 @@ What landed, in the order the decision record prescribed:
    position, so a binder covers the catalog's only when it names the same
    argument (`ffiCheckCatalogRowOne`).
 
-Not delivered, and stated as such in the semantics: qualified data fields,
-constructor proof sources and existentials. A destructured qualified value
-(`Some x` from `Option (String @κ)`) loses its qualifier, conservatively; a
-lambda parameter gains a qualifier only from a directed flow.
+Delivered after this checkpoint: the data-half checkpoint below. A
+destructured qualified value (`Some x` from `Option (String @κ)`) loses its
+qualifier, conservatively; a lambda parameter gains a qualifier only from a
+directed flow.
 
 Coverage: `types/effect_authority_test.mdk` (the anti-laundering matrix with
 its honest controls: literal versus dynamic, honest and dishonest wrapper,
@@ -559,6 +562,129 @@ branch join, let, Set versus Prefix concatenation, binder errors, the algebra);
 #3383 and #3391 regressions, the `Ref` invariance pair and the dynamic-path
 launder, each negative beside a control); `test/engine_fixtures/named_authority`
 with an absolute pin under eval, native and wasm.
+
+### Data-half checkpoint
+
+What landed (delivery item 6; surface ratified 2026-09-25, recorded in
+[the handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) § "Data-half
+session"):
+
+1. **Kind.** `KindAnn` gains `KindAuthority label origin` and the typechecker's
+   `Kind` gains `KAuth EffLabel`; the parser reads `(p : Authority L)` on every
+   head through the one `tyParamsP`, resolve stamps the label's declaring
+   identity as it stamps an atom's (`stampDeclKinds`) and checks it as a written
+   label, and `checkDeclaredKinds` refuses the parameter as a row tail, as a
+   type, and on an interface head (`T-AUTHORITY-KIND`).
+2. **Representation.** `Mono` gains `TAuth Authority`, the third-sort twin of
+   `TEff` for an `Authority`-kinded argument slot; every visitor (substitution,
+   free/unbound variables, levels, occurs, coherence, rendering) carries it, and
+   `unifyN`/`unifyIntoN` keep it invariant (both directions of `wantAuthority`).
+   The surface node is `TyAuth EffParamTy (Option Loc)` for a written term
+   (`*`, a literal, a set); a bare name stays a `TyVar` and is an authority
+   by the slot's declared kind.
+3. **Elaboration.** `kindArgMono` fills a `KAuth` slot through `authArgOf`;
+   `sigVarsFor` binds a name only where something binds it
+   (`authorityBinderBound`: a `String` named argument or an index slot,
+   `authArgBindersIn` being `rowArgNamesIn`'s twin) and reports a name nothing
+   binds (`reportUnboundAuthorityNames`); a signature's type variables exclude
+   the index names (`sigTyVarNames`), so `read : Handle p -> <FileRead p> a`
+   quantifies `p` as an authority. Resolve's scope for an atom or qualifier is
+   any name WRITTEN to its left (`tyVarsWritten`) plus the head's `Authority`
+   parameters and the constructor's existential binders; the kind is the
+   typechecker's question.
+4. **Constructors and records.** `registerVariants` mints one authority cell
+   per `Authority` parameter (`mintParamReprs`, named after it), threads it
+   through the field elaboration (`paramEtbl`) and quantifies it in every
+   constructor scheme, so a qualified field is `String @κ` in the scheme's
+   domain and construction proves it through the ordinary application route
+   (`argumentInto`) — no constructor-specific path. `RecordInfo` carries the
+   authority ids; record creation and update flow each field through
+   `argumentIntoOrd` (value-first wording), a field read is verbatim, and an
+   explicit record sub-pattern binds through `bindFrom`, so the punned and
+   explicit forms agree. `checkPhantomAuthorityExport` refuses a public
+   constructor that carries the parameter in no field
+   (`T-AUTHORITY-PHANTOM-EXPORT`). Polarity: an `Authority` parameter is `PInv`
+   by kind. `deriving` requires instances only of the `Type`-kinded parameters.
+5. **Existentials.** A constructor's leading `(p : Authority L)` groups are
+   `dataCtorBinders`/`newtypeCtorBinders` (positional with the constructors,
+   as `dataParamKinds` is with the parameters); their cells are quantified in
+   the scheme and their ids recorded in `perRun.ctorExistentialsRef`, keyed by
+   id so a same-named constructor elsewhere cannot answer. A pattern
+   instantiates them RIGID (`instantiateCtorPattern`,
+   `instantiateRecordOpening`) and parks them at the pattern site
+   (`takePatLits`/`settlePatLits`, the literal-pattern bracket); a match arm or
+   a function clause takes them (`openExistentialScope`: the body one level
+   deeper, the cells raised to it) and closes them (`closeExistentialScope`:
+   a cell in the value or lowered below the level is `T-AUTHORITY-ESCAPE`);
+   every other pattern site refuses them (`T-AUTHORITY-EXISTENTIAL-SCOPE`).
+   No solver scope is opened for an arm: the enclosing scope decides the
+   obligations (rigid, so a literal never satisfies one) and publication
+   defaults a sourceless opened cell to the domain's top, which is the row
+   widening §4 licenses. The alternative of an arm-owned solver scope was
+   rejected as order-dependent across arms.
+6. **Erasure.** No backend reads a kind, a binder or an index; the engine
+   fixture `test/engine_fixtures/authority_handle` runs a handle, a record and
+   an existential under eval, native and wasm against an absolute pin.
+7. **Surface tools.** Printer, formatter, doc, LSP hover (through `ppScheme`),
+   lint, sexp and route keys carry the kind, the index term (`authTermSurface`)
+   and the constructor binders (`ctorBindersSource`); `ppDomain` renders a
+   qualified domain as `(p : T)` only at the binder's first occurrence, after an
+   index it is `T @p`.
+8. **Carrying.** The export check decides whether a constructor's field
+   carries the parameter by the field's type (`tyCarries`, over
+   `crossRun.universeDataCtors`: every registered head's parameters and
+   constructors, the prelude's included): a qualifier, the parameter itself, a
+   tuple with a carrying component, or an index of a head whose every
+   constructor carries that parameter (through a type parameter the head
+   holds); `List (Handle p)` and an arrow carry nothing, a head whose
+   constructors an importer cannot apply is trusted, a builtin container has
+   no constructors and carries nothing, recursion assumes the head carries.
+   With mention
+   replaced by carrying, `T-AUTHORITY-PHANTOM-EXPORT` alone keeps an importer
+   from building a value at an index nothing proves, and the first cut's
+   dynamic "claim" (a split result index decided against the scope's
+   obligations at close) is gone: it was order-dependent across claims and
+   scopes, which the second review round showed with `Tok 1 (hsOf t)` against
+   `hsOf t |> Tok 1`. Publication counts only argument-position authorities as
+   sources (`qualifierAuthIds`), so an unsigned forwarder of an abstract
+   phantom head is `Int -> Raw *`; a written signature's binders are never
+   defaulted (`generalizeBindingDeclared`, `smDeclaredAuths`). A record read
+   outside a pattern instantiates an existential binder as the domain's top
+   (`sharedAuthority`); an update repacks a binder only when every field that
+   mentions it is replaced (`instantiateRecordUpdate`); the existential id
+   table lives with the id counter (`graphRun.ctorExistentialsRef`), so a
+   record the universe seeds into an importer still knows its binders; a
+   record's binder cells are collected from its fields (`recordAuthCells`).
+   An index slot is invariant and a flexible index variable substitutes
+   (`unifyIndex`), so a match or an improvement loop over indices makes
+   progress; an impl head takes a name in an `Authority` slot
+   (`checkImplHeadIndices`) and dispatch identity is index-blind
+   (`monoSameGiven`, as `cohEqR`). An alias's `Authority` parameter is a
+   link, never an obligation (`aliasArgBindings`); an impl head elaborates
+   under declared kinds through the one `implHeadMonos` (inference and
+   coherence); every head's kinds are recorded before any field elaborates
+   (`recordDeclKinds`, a constant-time prepend per head); a binder used at
+   two domain shapes is reported whatever binds it (`reportBinderDomains`,
+   once per signature); an effect failure is located at the first site whose
+   authority lies outside the admitted bound (`effectSiteOf`); a Product
+   label's axes are distinct and a bare literal lifts into a Set first axis
+   as a one-element set (`productPrimaryLift`, the one lift); a signature's
+   own unlocated diagnostics land on the signature (`atSignature`);
+   obligations are recorded normalised (`wantAuthority`); a qualifier at the
+   top renders as the bare type; and the LSP hover's `generalize` quantifies
+   without defaulting (`quantifyFree`), since its cells are shared with
+   published schemes.
+
+Coverage: `types/effect_authority_test.mdk` (the data-half groups beside
+the arrow half's, the review's findings each beside its control, and a
+two-module claim group through `checkModulesDiagsChain`);
+`test/typecheck_error_fixtures/effect_data_field_{ok,launder}` (extended with
+both review rounds' cases), `effect_existential_{ok,launder}`,
+`effect_phantom_export` (mention is not carrying), `effect_ctor_binder_shadow`;
+`test/check_module_fixtures/authority_handle_import` (the kind and the
+abstract handle across a module boundary); `test/parse_fixtures/declared_kinds`
+(the formatter round trip of every new spelling, the existential record
+constructor included); the engine fixture above.
 
 ### Foundation verification
 

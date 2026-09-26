@@ -34,6 +34,15 @@ test "Product treats a missing inferred Method axis as top" = expectCheckReject
 
 test "a bare Product literal lifts into the Host axis" =
   expectCheckAccept (fixture "prod_host_lift.mdk")
+test "a Product label's own axes: the literal lifts into the first declared axis" =
+  expectCheckAccept (fixture "prod_custom_axes.mdk")
+test "a Product label must declare its axes" = expectCheckReject (fixture
+  "prod_no_axes.mdk") [
+  "a Product label declares its axes",
+]
+test "a written product may name only the declared axes" = expectCheckReject
+  (fixture "prod_unknown_axis.mdk")
+  ["unknown product axis 'Host' (declared axes: Table, Op)"]
 
 test "a non-Product Prefix domain keeps its old behavior" =
   expectCheckAccept (fixture "prod_compat_prefix.mdk")

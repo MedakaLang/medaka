@@ -1,0 +1,16 @@
+-- A Product label with its OWN axis schema (no `Host`/`Method` anywhere):
+-- the bare literal `<Db "users/*">` lifts into the FIRST declared axis, and
+-- a written product names the declared axes.  Both must be confined by the
+-- caller's bound to ACCEPT; the bound leaves `Op` at its top, since the bare
+-- literal says nothing about it and a missing axis means top.
+effect Db Product (Table : Prefix, Op : Set)
+
+extern query : String -> <FFI, Db "users/*"> String
+
+extern mutate : String -> <FFI, Db Table="users/active" Op={"write"}> String
+
+run : Unit -> <Db Table="users/*", FFI> String
+run _ = query (mutate "x")
+
+main : <IO> Unit
+main = println "custom axes accept"

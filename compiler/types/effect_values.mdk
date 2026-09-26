@@ -53,6 +53,7 @@ freshShape ops (TFun _ _ _) =
 freshShape ops (TApp head _) =
   TApp (freshApplicationHead ops head) (ops.vjoFreshType ())
 freshShape ops (TEff _) = TEff (ops.vjoFreshRow ())
+freshShape ops (TAuth q) = TAuth (ops.vjoFreshAuth (authDomainTop q))
 freshShape ops (TQual inner q) =
   TQual (freshShape ops inner) (ops.vjoFreshAuth (authDomainTop q))
 freshShape _ t = t

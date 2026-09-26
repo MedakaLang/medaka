@@ -724,6 +724,7 @@ walkTy w curLoc (TyQual t _) = walkTy w curLoc t
 -- A bare row atom (#997) has no wrapped type and its labels aren't `TyCon`
 -- references (no go-to-definition target), so there is nothing to walk.
 walkTy _ _ (TyRow _ _ _) = ()
+walkTy _ _ (TyAuth _ _) = ()
 
 walkTys : W -> Loc -> List Ty -> Unit
 walkTys _ _ [] = ()

@@ -96,7 +96,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`CI-ARCHITECTURE.md`](ops/CI-ARCHITECTURE.md) | CI-ARCHITECTURE.md — target architecture for Medaka's CI | PARTLY BUILT |
 | [`CLI-CONFORMANCE.md`](ops/CLI-CONFORMANCE.md) | CLI-CONFORMANCE.md — the ratified `medaka` command-line contract | RATIFIED |
 | [`DISTRIBUTION-DESIGN.md`](ops/DISTRIBUTION-DESIGN.md) | DISTRIBUTION-DESIGN.md — shipping a native `medaka` binary to strangers | PARTIAL |
-| [`EFFECTS-REARCHITECTURE-HANDOFF.md`](ops/EFFECTS-REARCHITECTURE-HANDOFF.md) | Effects rearchitecture session handoff | INCOMPLETE |
+| [`EFFECTS-REARCHITECTURE-HANDOFF.md`](ops/EFFECTS-REARCHITECTURE-HANDOFF.md) | Effects rearchitecture session handoff | MERGED |
 | [`GATE-REGISTRY-DESIGN.md`](ops/GATE-REGISTRY-DESIGN.md) | GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver | LANDED |
 | [`MCP.md`](ops/MCP.md) | MCP.md — `medaka mcp`, the LSP-for-agents | IMPLEMENTED |
 | [`PDS-B14-ATTACK-LIST.md`](ops/PDS-B14-ATTACK-LIST.md) | PDS B14 running-instance attack list | — |
@@ -181,7 +181,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`DISPATCH-INVENTORY.md`](../compiler/DISPATCH-INVENTORY.md) | DISPATCH-INVENTORY.md | PARTIAL |
 | [`DRIVER-COLLAPSE-PLAN.md`](../compiler/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
 | [`EAGER-INIT-DESIGN.md`](../compiler/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
-| [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | INCOMPLETE |
+| [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | DELIVERED THROUGH ITEM 6 |
 | [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | RE-DERIVED 2026-09-03 |
 | [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map, re-derived 2026-09-03 at `7132909b7` |
 | [`EMITTER-GAPS.md`](../compiler/EMITTER-GAPS.md) | EMITTER-GAPS.md | PARTIAL |

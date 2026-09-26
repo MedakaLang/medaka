@@ -1,7 +1,7 @@
 -- WS-4 PRODUCT reject: HOST out of prefix.  The extern fetches host
 -- "other.com/api" (NOT under the bound's "idp.example.com/*" prefix); the method
 -- is in-set.  Host axis escapes => REJECT (performs the narrow product).
-effect Net Product
+effect Net Product (Host : Prefix, Method : Set)
 
 extern fetch : String -> <FFI, Net Host="other.com/api" Method={"GET"}> String
 

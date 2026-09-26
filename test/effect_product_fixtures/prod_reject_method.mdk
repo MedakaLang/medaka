@@ -2,9 +2,10 @@
 -- performs Method={"POST"} while the bound admits only {"GET"}.  Method axis
 -- escapes => REJECT.  This proves the Method axis confines INDEPENDENTLY of Host
 -- (Host is fine here; only Method escapes).
-effect Net Product
+effect Net Product (Host : Prefix, Method : Set)
 
-extern fetch : String -> <FFI, Net Host="idp.example.com/api" Method={"POST"}> String
+extern fetch : String ->
+  <FFI, Net Host="idp.example.com/api" Method={"POST"}> String
 
 call : Unit -> <Net Host="idp.example.com/*" Method={"GET"}> String
 call _ = fetch "x"

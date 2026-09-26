@@ -82,14 +82,14 @@ NEWLINE
 NEWLINE
 EOF
 # DESUGAR
-(DEffect false "Net" (Some "Prefix"))
+(DEffect false "Net" (Some "Prefix") ())
 (DExtern false "netGet" (TyFun (TyNamed "url" (TyCon "String")) (TyEffect ("FFI" (atom "Net" (name "url"))) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect hole ok"))))
 # MARK
-(DEffect false "Net" (Some "Prefix"))
+(DEffect false "Net" (Some "Prefix") ())
 (DExtern false "netGet" (TyFun (TyNamed "url" (TyCon "String")) (TyEffect ("FFI" (atom "Net" (name "url"))) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))

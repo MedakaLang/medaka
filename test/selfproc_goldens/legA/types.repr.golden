@@ -8,6 +8,7 @@ nameTaken : String -> List (Int, String) -> Bool
 normalize : Mono -> Mono
 normalizeLink : Ref Tyvar -> Mono -> Mono
 ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
+ppAuthArg : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppAuthority : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppAuthvarName : Ref (List (Int, String)) -> Ref Int -> Ref Authvar -> String
 ppBinding : Ref (List (Int, String)) -> Ref Int -> EffRow -> Mono -> String

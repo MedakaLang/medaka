@@ -3,7 +3,7 @@
 -- extern's bare host literal is in-prefix of the bound's Host AND the bound's
 -- Method is TOP (absent) => ACCEPT.  Proves the §3 lift keeps single-axis
 -- annotations ergonomic under an opt-in product Net.
-effect Net Product
+effect Net Product (Host : Prefix, Method : Set)
 
 extern fetch : String -> <FFI, Net "idp.example.com/api/*"> String
 

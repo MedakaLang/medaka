@@ -479,7 +479,7 @@ symbolPartsOfDecl d range childLocs = match innerDecl d
   DUse _ _ _ => None
   DProp _ name _ _ => Some (name, 12, False, [])
   DTest _ name _ => Some (name, 12, False, [])
-  DEffect _ name _ _ => Some (name, 24, False, [])
+  DEffect _ name _ _ _ => Some (name, 24, False, [])
   DAttrib _ _ => None  -- unreachable post innerDecl
 -- Variable
 -- Function
@@ -597,7 +597,7 @@ declOwnNameMatches d name = match innerDecl d
   DUse _ _ _ => False
   DProp _ n _ _ => n == name
   DTest _ n _ => n == name
-  DEffect _ n _ _ => n == name
+  DEffect _ n _ _ _ => n == name
   DAttrib _ _ => False
 
 -- `d`'s CHILD names, in the SAME order `declPosChildLocs`/`symbolPartsOfDecl`

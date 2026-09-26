@@ -1,5 +1,5 @@
 # META
-source_lines=5084
+source_lines=5086
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -652,6 +652,7 @@ countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
 countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
 countTyvars (TyRow _ _ _) = 0
+countTyvars (TyAuth _ _) = 0
 countTyvars (TyNamed _ t) = countTyvars t
 countTyvars (TyQual t _) = countTyvars t
 
@@ -781,6 +782,7 @@ tyMentions (TyQual t _) params = tyMentions t params
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
 tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentions (TyAuth _ _) _ = False
 
 -- ── environment ───────────────────────────────────────────────────────────
 export
@@ -5264,6 +5266,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PCon "TyAuth" PWild PWild)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -5304,6 +5307,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentions" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -6858,6 +6862,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PCon "TyAuth" PWild PWild)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyNamed" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyQual" (PVar "t") PWild)) (EApp (EVar "countTyvars") (EVar "t")))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -6898,6 +6903,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyNamed" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyQual" (PVar "t") PWild) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentions" ((PCon "TyAuth" PWild PWild) PWild) (EVar "False"))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))

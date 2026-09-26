@@ -21,14 +21,31 @@ export
 canonParam : Param -> Param
 canonParam (PPrefix (Some s)) =
   if s == "" then PPrefix None else PPrefix (Some s)
+canonParam (PProduct ax) = productNorm ax
 canonParam p = p
 
+-- A Product's top keeps its declared axis SCHEMA (each axis at its own top,
+-- in declaration order), so a domain top read off a label or a variable can
+-- say which axis a bare literal lifts into and which axes a written product
+-- may name.  A VALUE normalises the top axes away (`productNorm`), so
+-- `PProduct []` and a schema top are the same element of the order.
 export
 subTopOf : Param -> Param
 subTopOf (PPrefix _) = PPrefix None
 subTopOf (PSet _) = PSet None
-subTopOf (PProduct _) = PProduct []
+subTopOf (PProduct ax) = PProduct (map (a => (fst a, subTopOf (snd a))) ax)
 subTopOf _ = PUnit
+
+-- The schema's primary axis lifted from a bare literal: a Prefix axis takes
+-- the pattern, a Set axis the singleton; a Product with no declared schema
+-- has no primary axis and the literal is the top.
+export
+productPrimaryLift : List (String, Param) -> String -> Param
+productPrimaryLift [] _ = PProduct []
+productPrimaryLift ((name, top) :: _) s = match top
+  PPrefix _ => productNorm [(name, canonParam (PPrefix (Some s)))]
+  PSet _ => productNorm [(name, PSet (Some [s]))]
+  _ => PProduct []
 
 export
 lookupAxis : String -> List (String, Param) -> Option Param
@@ -92,7 +109,7 @@ export
 isSubTop : Param -> Bool
 isSubTop (PPrefix None) = True
 isSubTop (PSet None) = True
-isSubTop (PProduct []) = True
+isSubTop (PProduct ax) = allList (a => isSubTop (snd a)) ax
 isSubTop PUnit = True
 isSubTop _ = False
 

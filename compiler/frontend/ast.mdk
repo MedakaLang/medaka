@@ -712,6 +712,13 @@ public export data Ty =
   -- (a filler is print-ambiguous with a genuine wrapped type of the same
   -- shape, e.g. `Foo (<Stdout> Unit)` where `Unit` is a real payload type).
   | TyRow (List EffAtomTy) (List String) (Option Loc)
+  -- An authority term written in an `Authority`-kinded type-ARGUMENT slot:
+  -- the top `*` (`Handle *`), a domain literal (`Handle "config/*"`), a set
+  -- or a product, spelled exactly as an atom's parameter is.  A bare name in
+  -- that slot is a `TyVar`; the slot's declared kind is what makes it an
+  -- authority binder rather than a type variable, as an `Effect` slot does
+  -- for a row.  Never appears outside such a slot: elaboration diagnoses it.
+  | TyAuth EffParamTy (Option Loc)
 
 -- One written effect atom: a label, the identity of the `effect` declaration
 -- it names (acquired by resolve, `OriginBuiltin` for the language's own
@@ -723,6 +730,11 @@ public export data EffAtomTy = EffAtomTy {
   eatLabel : String,
   eatOrigin : TyConOrigin,
   eatParam : EffParamTy,
+  -- the atom's own span, so a diagnostic about the label or its parameter
+  -- (an ambiguous or unknown label, an unbound authority name) points at the
+  -- atom rather than at the enclosing expression; `None` for an atom a tool
+  -- synthesises
+  eatLoc : Option Loc,
 }
 
 -- The written parameter of an effect atom.  A bare label is the domain's top;
@@ -739,8 +751,12 @@ public export data EffParamTy =
 
 export
 effAtomBare : String -> EffAtomTy
-effAtomBare l =
-  EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = EPTop }
+effAtomBare l = EffAtomTy {
+  eatLabel = l,
+  eatOrigin = OriginUnresolved,
+  eatParam = EPTop,
+  eatLoc = None,
+}
 
 -- The names a pattern binds, in source order.
 export
@@ -761,13 +777,32 @@ recPatFieldNames (RecPatField _ _ (Some p)) = patBoundNames p
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
 export
-effectDeclUnstamped : Bool -> String -> Option String -> Decl
-effectDeclUnstamped pub name dom = DEffect pub name dom OriginUnresolved
+effectDeclUnstamped : Bool ->
+  String ->
+  Option String ->
+  List (String, String) ->
+  Decl
+effectDeclUnstamped pub name dom axes =
+  DEffect pub name dom axes OriginUnresolved
 
 export
 effAtomWith : String -> EffParamTy -> EffAtomTy
-effAtomWith l p =
-  EffAtomTy { eatLabel = l, eatOrigin = OriginUnresolved, eatParam = p }
+effAtomWith l p = EffAtomTy {
+  eatLabel = l,
+  eatOrigin = OriginUnresolved,
+  eatParam = p,
+  eatLoc = None,
+}
+
+-- An atom as the parser reads it, with its span.
+export
+effAtomAt : String -> EffParamTy -> Loc -> EffAtomTy
+effAtomAt l p loc = EffAtomTy {
+  eatLabel = l,
+  eatOrigin = OriginUnresolved,
+  eatParam = p,
+  eatLoc = Some loc,
+}
 
 -- The written spelling of an atom, given the string-literal escaper the caller
 -- prints with.  One renderer, so the formatter, the doc generator, the route
@@ -775,6 +810,30 @@ effAtomWith l p =
 export
 effAtomSurface : (String -> String) -> EffAtomTy -> String
 effAtomSurface esc a = a.eatLabel ++ effParamSurface esc a.eatParam
+
+-- An authority term as an INDEX argument spells it (`Handle *`, `Handle
+-- "config/*"`): the atom-parameter spelling without its leading space, and
+-- `*` for the top a row would spell by omission.
+export
+authTermSurface : (String -> String) -> EffParamTy -> String
+authTermSurface _ EPTop = "*"
+authTermSurface esc p =
+  let s = effParamSurface esc p
+  stringSlice 1 (stringLength s) s
+
+-- A constructor's existential binders as written, space-separated:
+-- `(p : Authority FileRead) (q : Authority Env)`.
+export
+ctorBindersSurface : List (String, KindAnn) -> String
+ctorBindersSurface binders =
+  join " " (map (b => "(\{fst b} : \{kindAnnSource (snd b)})") binders)
+
+-- The same with a trailing space when non-empty, so the fields follow
+-- directly: `AnyHandle (p : Authority FileRead) (Handle p)`.
+export
+ctorBindersSource : List (String, KindAnn) -> String
+ctorBindersSource [] = ""
+ctorBindersSource binders = ctorBindersSurface binders ++ " "
 
 -- The parameter's spelling with its leading space; `""` for a bare label.
 export
@@ -870,7 +929,20 @@ constraintUnresolved iface args = Constraint {
 -- is a parsed artefact that must round-trip through `fmt` byte-for-byte, and
 -- it exists before any kind inference has run.  The two meet where the
 -- typechecker RESOLVES a parameter's kind, not in the AST.
-public export data KindAnn = KindType | KindEffect | KindArrow KindAnn KindAnn
+public export data KindAnn =
+  | KindType
+  | KindEffect
+  -- `Authority L`: a parameter in the declared domain of the effect label
+  -- `L`.  The label's declaring origin is stamped by resolve exactly as an
+  -- `EffAtomTy`'s is; the parser leaves it unresolved.
+  | KindAuthority String TyConOrigin
+  | KindArrow KindAnn KindAnn
+
+-- The kind as the parser produces it: the label's origin is resolve's to
+-- stamp, so before resolve it carries none.
+export
+kindAuthorityUnstamped : String -> KindAnn
+kindAuthorityUnstamped l = KindAuthority l OriginUnresolved
 
 -- The SOURCE spelling of a kind, and of a whole declaration head's parameter
 -- list.  It lives HERE, beside the node, for the reason `firstTyLoc` below
@@ -882,6 +954,7 @@ export
 kindAnnSource : KindAnn -> String
 kindAnnSource KindType = "Type"
 kindAnnSource KindEffect = "Effect"
+kindAnnSource (KindAuthority l _) = "Authority \{l}"
 kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
 
 -- The arrow associates right, so only a LEFT operand that is itself an arrow
@@ -948,6 +1021,7 @@ firstTyLoc (TyNamed _ t) = firstTyLoc t
 firstTyLoc (TyQual t _) = firstTyLoc t
 firstTyLoc (TyConstrained _ t) = firstTyLoc t
 firstTyLoc (TyRow _ _ l) = l
+firstTyLoc (TyAuth _ l) = l
 
 -- The same walk across a LIST of types, left to right — an impl head's args
 -- (`impl Iface Ty1 Ty2…`), a tuple's elements, a method's signature parts.
@@ -1569,15 +1643,24 @@ public export data Decl =
     dataParams : List String,
     dataParamKinds : List (Option KindAnn),
     dataCtors : List Variant,
+    dataCtorBinders : List (List (String, KindAnn)),
     dataDerives : List DeriveRef,
     dataOrigin : TyConOrigin,
   }
+  -- Each constructor's EXISTENTIAL binders (EFFECTS-SEMANTICS §4.1), written
+  -- as kinded parameters leading its fields: `AnyHandle (p : Authority
+  -- FileRead) (Handle p)`.  Positional with `dataCtors`, the same length,
+  -- `[]` for a constructor that binds none, on the same footing as the
+  -- head's `dataParamKinds` beside `dataParams`.
   | DUse Bool UsePath Loc
-  -- pub? name domain? origin.  `effect Foo` (atomic host capability),
-  -- `effect Net Prefix` (domain-carrying).  The origin is the declaration's
-  -- own identity, stamped by resolve exactly like `dataOrigin`; an occurrence
-  -- of the label carries the same identity on its `EffAtomTy`.
-  | DEffect Bool String (Option String) TyConOrigin
+  -- pub? name domain? axes origin.  `effect Foo` (atomic host capability),
+  -- `effect Net Prefix` (domain-carrying), `effect Fetch Product (Host :
+  -- Prefix, Method : Set)` (a Product's declared axis schema, in declaration
+  -- order: the first axis is the PRIMARY one a bare string literal lifts
+  -- into; empty for every other domain).  The origin is the declaration's own
+  -- identity, stamped by resolve exactly like `dataOrigin`; an occurrence of
+  -- the label carries the same identity on its `EffAtomTy`.
+  | DEffect Bool String (Option String) (List (String, String)) TyConOrigin
   | DProp Bool String (List PropParam) Expr
   | DTest Bool String Expr
   | DInterface {
@@ -1630,10 +1713,12 @@ public export data Decl =
     newtypeParams : List String,
     newtypeParamKinds : List (Option KindAnn),
     newtypeCtor : String,
+    newtypeCtorBinders : List (String, KindAnn),
     newtypeFieldTy : Ty,
     newtypeDerives : List DeriveRef,
     newtypeOrigin : TyConOrigin,
   }
+  -- the constructor's existential binders, as `dataCtorBinders`
   -- top-level `let rec … with …` mutually-recursive group
   | DLetGroup Bool (List LetBind)
   -- `@attr…` annotations wrapping the next decl
@@ -1660,14 +1745,16 @@ dDataUnresolved : DataVis ->
   List String ->
   List (Option KindAnn) ->
   List Variant ->
+  List (List (String, KindAnn)) ->
   List DeriveRef ->
   Decl
-dDataUnresolved vis n params kinds variants derives = DData {
+dDataUnresolved vis n params kinds variants binders derives = DData {
   dataVis = vis,
   dataName = n,
   dataParams = params,
   dataParamKinds = kinds,
   dataCtors = variants,
+  dataCtorBinders = binders,
   dataDerives = derives,
   dataOrigin = OriginUnresolved,
 }
@@ -1743,15 +1830,17 @@ dNewtypeUnresolved : Bool ->
   List String ->
   List (Option KindAnn) ->
   String ->
+  List (String, KindAnn) ->
   Ty ->
   List DeriveRef ->
   Decl
-dNewtypeUnresolved pub n params kinds con fty derives = DNewtype {
+dNewtypeUnresolved pub n params kinds con binders fty derives = DNewtype {
   newtypePub = pub,
   newtypeName = n,
   newtypeParams = params,
   newtypeParamKinds = kinds,
   newtypeCtor = con,
+  newtypeCtorBinders = binders,
   newtypeFieldTy = fty,
   newtypeDerives = derives,
   newtypeOrigin = OriginUnresolved,
@@ -1811,6 +1900,7 @@ mapTyKids f (TyEffect es tail t) =
 -- like `TyCon`/`TyVar` above.  `mapTyFull`'s outer `f ty1` call still
 -- visits the node itself.
 mapTyKids _ (TyRow es tail l) = (TyRow es tail l, False)
+mapTyKids _ (TyAuth p l) = (TyAuth p l, False)
 mapTyKids f (TyNamed n t) =
   let (t2, c) = mapTyFull f t
   (TyNamed n t2, c)
@@ -1865,7 +1955,7 @@ mapTyInDecl f (d@(DData { dataCtors })) =
   let (vs2, c) = mapVariantsB f dataCtors
   (DData { d | dataCtors = vs2 }, c)
 mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
-mapTyInDecl _ (DEffect pub n dom o) = (DEffect pub n dom o, False)
+mapTyInDecl _ (DEffect pub n dom axes o) = (DEffect pub n dom axes o, False)
 mapTyInDecl f (DProp pub n params body) =
   let (params2, c1) = mapPropParamsB f params
   let (body2, c2) = mapTyInExpr f body

@@ -1,0 +1,11 @@
+-- A constructor's existential binder spelled like the head's `Authority`
+-- parameter would shadow the parameter every field's `@p` was written
+-- against, and made the phantom-export check read the existential as the
+-- head's proof.  It is a duplicate binder, reported by resolve, so this
+-- fixture holds no type error: resolve ends the check.  The honest twin is
+-- effect_existential_ok's `AnyHandle (p : Authority FileRead) (Handle p)`
+-- on a head without a parameter of that name.
+data Shadow (p : Authority FileRead) =
+  | Shadow (p : Authority FileRead) (String @p)
+
+main = println 1

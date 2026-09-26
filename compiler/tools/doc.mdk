@@ -28,10 +28,13 @@ import frontend.parser.{
   declPosLine,
 }
 import frontend.ast.{
+  KindAnn(..),
   Decl(..),
   Ty(..),
   EffAtomTy(..),
   effAtomSurface,
+  authTermSurface,
+  ctorBindersSource,
   tyParamSources,
   Constraint(..),
   DataVis(..),
@@ -52,13 +55,13 @@ import frontend.ast.{
 import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
 import support.util.{
-  joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc,
+  zipL, joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc,
   startsWith
 }
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import driver.loader.{moduleIdOfPath}
-import frontend.desugar.{dataDerivers, newtypeDerivers}
+import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
 import json.{Json(..), jObject, jArray}
 import string.{toLower}
 import regex.{
@@ -129,6 +132,7 @@ ppTyP _ (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
 -- `TyEffect` above — it never needs precedence-parens at any `p`.
 ppTyP _ (TyRow effs tail _) = "<\{ppEffInsideDoc effs tail}>"
+ppTyP _ (TyAuth p _) = authTermSurface escStr p
 ppTyP _ (TyNamed n t) = "(\{n} : \{ppTyP 0 t})"
 ppTyP _ (TyQual t n) = "\{ppTyP 2 t} @\{n}"
 ppTyP _ (TyConstrained cs t) =
@@ -339,12 +343,20 @@ sectionsFrom ((l, t, b) :: rest) =
 
 -- ── signature rendering ────────────────────────────────────────────────────
 
-ppDataVariant : Variant -> String
-ppDataVariant (Variant name (ConPos [])) = name
-ppDataVariant (Variant name (ConPos tys)) =
-  "\{name} \{joinWith " " (map (ppTyP 2) tys)}"
-ppDataVariant (Variant name (ConNamed fs _)) =
-  "\{name} { \{joinWith ", " (map ppFieldDoc fs)} }"
+ppDataVariant : List (String, KindAnn) -> Variant -> String
+ppDataVariant [] (Variant name (ConPos [])) = name
+ppDataVariant binders (Variant name (ConPos tys)) =
+  "\{name} \{ctorBindersSource binders}\{joinWith " " (map (ppTyP 2) tys)}"
+ppDataVariant binders (Variant name (ConNamed fs _)) =
+  "\{name} \{ctorBindersSource binders}{ \{joinWith ", " (map ppFieldDoc fs)} }"
+
+-- positional with the variants; a short list reads as "no binders".
+padBindersDoc : List Variant ->
+  List (List (String, KindAnn)) ->
+  List (List (String, KindAnn))
+padBindersDoc [] _ = []
+padBindersDoc (_ :: vs) (b :: bs) = b :: padBindersDoc vs bs
+padBindersDoc (_ :: vs) [] = [] :: padBindersDoc vs []
 
 ppFieldDoc : Field -> String
 ppFieldDoc (Field fn ft) = "\{fn} : \{ppTyDoc ft}"
@@ -418,7 +430,7 @@ renderSig bare (DExtern pub name ty) schemes
 renderSig _ (DLetGroup True bindings) schemes = match bindings
   (LetBind name _) :: _ => Some (name, valueSig name schemes None)
   [] => None
-renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants }) _
+renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataCtorBinders = binders }) _
   | not (dataVisPrivate vis) =
     let head = joinWith " " (name :: tyParamSources params kinds)
     let body = match variants
@@ -427,7 +439,12 @@ renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataPa
         if dataVisAbstract vis then
           "  -- abstract: the constructors are not exported"
         else
-          "\n  = " ++ joinWith "\n  | " (map ppDataVariant variants)
+          "\n  = "
+            ++ joinWith
+              "\n  | "
+              (map
+                (vb => ppDataVariant (snd vb) (fst vb))
+                (zipL variants (padBindersDoc variants binders)))
     Some (name, "data \{head}\{body}")
 renderSig _ (DInterface { pub = True, name, typarams, typaramKinds, methods }) _ =
   let head = joinWith " " (name :: tyParamSources typarams typaramKinds)
@@ -439,9 +456,12 @@ renderSig _ (DInterface { pub = True, name, typarams, typaramKinds, methods }) _
 renderSig _ (DTypeAlias { tyAliasPub = True, tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = kinds, tyAliasRhs = ty }) _ =
   let head = joinWith " " (name :: tyParamSources params kinds)
   Some (name, "type \{head} = \{ppTyDoc ty}")
-renderSig _ (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = ctor, newtypeFieldTy = ty }) _ =
+renderSig _ (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = ctor, newtypeCtorBinders = binders, newtypeFieldTy = ty }) _ =
   let head = joinWith " " (name :: tyParamSources params kinds)
-  Some (name, "newtype \{head} = \{ctor} \{ppTyP 2 ty}")
+  Some (
+    name,
+    "newtype \{head} = \{ctor} \{ctorBindersSource binders}\{ppTyP 2 ty}",
+  )
 renderSig _ (DImpl { pub = True, iface, tys, reqs }) _ =
   let args = match tys
     [] => ""
@@ -617,28 +637,35 @@ letgroupEntriesGo ((LetBind name _) :: rest) schemes doc line =
 data DeriveShape = ShapeData (List Variant) | ShapeNewtype String Ty
 
 -- True when `iface` has a deriver for this shape, per the canonical tables.
-hasDeriver : String -> List String -> DeriveShape -> String -> Bool
-hasDeriver tyName params (ShapeData variants) iface =
-  elem iface (map fst (dataDerivers tyName params variants))
-hasDeriver tyName params (ShapeNewtype con fty) iface =
-  elem iface (map fst (newtypeDerivers tyName params con fty))
+hasDeriver : String ->
+  List String ->
+  List (Option KindAnn) ->
+  DeriveShape ->
+  String ->
+  Bool
+hasDeriver tyName params kinds (ShapeData variants) iface =
+  elem iface (map fst (dataDerivers tyName params kinds variants))
+hasDeriver tyName params kinds (ShapeNewtype con fty) iface =
+  elem iface (map fst (newtypeDerivers tyName params kinds con fty))
 
 derivedEntries : String ->
   List String ->
+  List (Option KindAnn) ->
   DeriveShape ->
   Int ->
   List DeriveRef ->
   List (String, DocEntry)
-derivedEntries _ _ _ _ [] = []
-derivedEntries tyName params shape line (d :: ds) =
+derivedEntries _ _ _ _ _ [] = []
+derivedEntries tyName params kinds shape line (d :: ds) =
   let iface = deriveRefName d
-  let rest = derivedEntries tyName params shape line ds
-  if not (hasDeriver tyName params shape iface) then
+  let rest = derivedEntries tyName params kinds shape line ds
+  if not (hasDeriver tyName params kinds shape iface) then
     rest
   else
     let args = derivedHead tyName params
     let name = "\{iface} \{args}"
-    let sigStr = "impl \{iface} \{args}\{derivedRequires iface params}"
+    let sigStr =
+      "impl \{iface} \{args}\{derivedRequires iface (typeKindedParams params kinds)}"
     (name, DocEntry name sigStr "" "" (KImplOn (Some tyName)) line) :: rest
 
 -- `T` with no params, `(T a b)` with them — `ppTyP 2`'s rendering of the head
@@ -647,7 +674,8 @@ derivedHead : String -> List String -> String
 derivedHead tyName [] = tyName
 derivedHead tyName params = "(\{joinWith " " (tyName :: params)})"
 
--- `requires C a, C b` — `paramRequires`, one constraint per type param.
+-- `requires C a, C b` — `paramRequires`, one constraint per TYPE-kinded
+-- param (a row or authority parameter owes none).
 derivedRequires : String -> List String -> String
 derivedRequires _ [] = ""
 derivedRequires iface params =
@@ -660,12 +688,13 @@ noDerives _ = False
 -- (typeName, params, derives) for a decl carrying a non-empty `deriving (…)`
 -- clause, else None.  A PRIVATE `data`/`newtype` is excluded here exactly as
 -- in `renderSig`: an unpublished type's instances are not part of the surface.
-derivesOf : Decl -> Option (String, List String, List DeriveRef, DeriveShape)
-derivesOf (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = variants, dataDerives = ds })
+derivesOf : Decl ->
+  Option (String, List String, List (Option KindAnn), List DeriveRef, DeriveShape)
+derivesOf (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = variants, dataDerives = ds })
   | not (dataVisPrivate vis) && not (noDerives ds) =
-    Some (n, ps, ds, ShapeData variants)
-derivesOf (DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = ds })
-  | not (noDerives ds) = Some (n, ps, ds, ShapeNewtype con fty)
+    Some (n, ps, ks, ds, ShapeData variants)
+derivesOf (DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = ds })
+  | not (noDerives ds) = Some (n, ps, ks, ds, ShapeNewtype con fty)
 derivesOf _ = None
 
 -- The type's own entry (exactly what the single-entry path would have made)
@@ -675,15 +704,15 @@ derivingEntries : Bool ->
   Int ->
   List (String, Scheme) ->
   List CommentRow ->
-  (String, List String, List DeriveRef, DeriveShape) ->
+  (String, List String, List (Option KindAnn), List DeriveRef, DeriveShape) ->
   List (String, DocEntry)
-derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
+derivingEntries bare decl line schemes tbl (tyName, params, kinds, derives, shape) =
   let doc = findDocForLine tbl line
   let own = match renderSig bare decl schemes
     None => []
     Some (name, sigStr) =>
       [(name, DocEntry name sigStr "" doc (declKind decl) line)]
-  own ++ derivedEntries tyName params shape line derives
+  own ++ derivedEntries tyName params kinds shape line derives
 
 -- ── re-exports (hole (a)) ───────────────────────────────────────────────────
 -- `export import core.{Filterable, filter, filterMap}` (`stdlib/list.mdk:8`,
