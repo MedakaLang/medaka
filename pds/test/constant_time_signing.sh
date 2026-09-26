@@ -64,41 +64,38 @@ write_source_manifest() {
 # N2 word operations), and pds/lib/field.mdk's one change is a comment that
 # stopped citing the retired bits64 module by path. Neither moves emitted
 # code; every closure and branch check below passes unchanged.
-# Re-blessed for N4 (#3427): field.mdk and scalar.mdk moved their limbs from
-# Int to U64, which brings stdlib/u64.mdk into the claim (both import it as
-# `U64`). The new stdlib row is the file as N3 left it, unchanged here; the
-# emitted-closure and control grades below were re-derived for the move and
-# say what entered.
-# Re-blessed for the Int overflow trap (#3377). stdlib/u64.mdk lost its Eq,
-# Ord and Num impls to the prelude, none of which the closure calls by name
-# (U64 operators are builtin). pds/lib/secp256k1.mdk combines its secret
-# condition bits through bitAnd/bitOr/bitXor instead of Int `+ - *`, and
-# blends the secret RFC 6979 candidate bytes on U64 (selectBytesGo), so no
-# overflow branch tests a secret; the grades below say what moved.
+# Re-blessed for N4 (#3427, #3377). field.mdk and scalar.mdk compute their
+# limb arithmetic as U64 expressions over Int storage, which brings
+# stdlib/u64.mdk into the claim (all three curve modules import it as `U64`);
+# the row is the file as the Int-trap branch leaves it. secp256k1.mdk combines
+# its secret condition bits through bitAnd/bitOr/bitXor instead of Int
+# `+ - *`, and blends the secret RFC 6979 candidate bytes as one U64
+# expression (selectBytesGo), so no overflow branch tests a secret. The
+# closure and control grades below say what moved.
 expected_internal_source_manifest() {
   cat <<'EOF'
-3367372070 26913  pds/lib/field.mdk
-3318702853 33856  pds/lib/scalar.mdk
+1538248655 30240  pds/lib/field.mdk
+2182991326 35966  pds/lib/scalar.mdk
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
-2219660738 25419  pds/lib/secp256k1.mdk
+1706692293 25394  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
 EOF
 }
 
 expected_public_source_manifest() {
   cat <<'EOF'
-3367372070 26913  pds/lib/field.mdk
-3318702853 33856  pds/lib/scalar.mdk
+1538248655 30240  pds/lib/field.mdk
+2182991326 35966  pds/lib/scalar.mdk
 1010065562 13066  stdlib/crypto/sha256.mdk
 2034797298 8367  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
 1390942859 1217  pds/lib/hmac_sha256.mdk
-2219660738 25419  pds/lib/secp256k1.mdk
+1706692293 25394  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF
@@ -604,17 +601,18 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # `bitXor`, `bitNot`, `shiftLeft`, `shiftRight`, `rotateLeft`, `rotateRight`,
 # `rotateAmount`, `truncate`, `toInt`), plus `mdk_impl_Int_display`, which only
 # the shift helpers' negative-amount panic message calls. 180 definitions.
-# Re-derived when the field and scalar limbs moved from Int to U64 (#3427),
-# symbol by symbol against the previous closure. Sixteen lazy-constant
-# thunks left, because a U64 constant, and a constructor applied only to
-# them, is emitted as static data: `mdk_force_lib_field__{feOne,feZero,foldHi,
-# foldLow,limbMask,pLimbs,r0,r1,topMask}`, `mdk_force_lib_scalar__{cLimbs,
-# limbMask,nHalfPlusOneLimbs,nLimbs,scOne,scZero}` and
-# `mdk_force_lib_secp256k1__pointInfinity`. Five u64 helpers entered:
-# `mdk_u64__{bitAnd,shiftLeft,shiftRight,toIntTruncating,truncate}`.
-# `mdk_impl_Int_display`, which the shifts' negative-amount panic calls, was
-# already present. 169 definitions.
-[ "$closure_grade" = '2702301243 4798' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when the field and scalar limb arithmetic moved to U64
+# expressions over Int storage (#3427), symbol by symbol against the grade
+# above. Seven lazy-constant thunks left, because the masks and fold constants
+# are U64 constants and a U64 constant is static data:
+# `mdk_force_lib_field__{foldHi,foldLow,limbMask,r0,r1,topMask}` and
+# `mdk_force_lib_scalar__limbMask`. One u64 helper entered,
+# `mdk_u64__shiftLeft`: the byte codecs' `limbsOfBytesGo`/`toBytesGo` in
+# field.mdk shift by the public counter `accBits`, and a non-literal shift is
+# a wrapper call (its only branches test the amount). Every other U64
+# operation is an inline kernel. `mdk_impl_Int_display`, which that wrapper's
+# negative-amount panic calls, was already present. 174 definitions.
+[ "$closure_grade" = '504140202 4996' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -653,33 +651,26 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # rotateAmount 2 (the constant 32 divisor's zero checks), rotateLeft 1
 # (amount 0). Every SHA-256 call site passes a literal amount. The bit helpers,
 # truncate and toInt have no branch, and Int_display has none either.
-# Re-derived for the U64 limb move (#3427), row by row. No existing row moved
-# in the branch, comparison, index, write, make or copy column; only call
-# totals moved. Int bit helpers became u64 ones one for one, and each read of
-# a module constant lost its thunk force (carryPassGo 13 -> 11, subPCandidate
-# 17 -> 11, feNegateCtGo 16 -> 10, and so on down the limb helpers);
-# the *Bit predicates gained a toIntTruncating and feSelect/scSelect a
-# truncate; the byte codecs gained the U64.truncate/toIntTruncating on each
-# byte (limbsOfBytesGo, toBytesGo, scanSecretBytes). The new u64 rows:
-# bitAnd, toIntTruncating and truncate have no branch; shiftLeft and
-# shiftRight have two each, on the amount (below 0 panics, then the guard
-# chain's closing `otherwise`), and every limb-path call site passes a literal
-# or the public byte-codec counter. U64 arithmetic allocates its result cell
-# inline (`call ptr @mdk_alloc_atomic`, outside these call columns); the
-# count per call is fixed by the straight-line bodies these rows pin.
-# Re-derived for the Int overflow trap (#3377), with the trap-branch column
-# added (see write_control_manifest). The closure is unchanged (169). Row by
-# row against the grade above: no row's control-branch column grew. Four fell,
-# because zero-divisor tests they already had are now counted as traps:
+# Re-derived for #3427 and the Int overflow trap (#3377), row by row against
+# the grade above, with a trap-branch column added (see
+# write_control_manifest). No row's control-branch column grew. Four fell,
+# because zero-divisor tests they already had now count as traps:
 # processTail 1 -> 0, sha256AssumeByteDomainFrom 1 -> 0, scalarLadder 3 -> 1,
-# u32 rotateAmount 2 -> 0. 61 rows carry 132 trap branches, all on counters,
-# lengths, indexes and shift/rotate amounts; the limb helpers' are proven
-# public by constant_time_reductions.sh and the ladder's by
-# constant_time_public_key.sh. The secret condition bits in signCandidate
-# (16 -> 23 calls), selectSigningCandidates (5 -> 8) and pointAddComplete
-# (39 -> 42) now combine through the Int bit helpers instead of inline `* -`
-# and carry zero trap branches. No other column moved.
-[ "$control_grade" = '2255993549 7514' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# u32 rotateAmount 2 -> 0. The index column fell by one in feSelectGo,
+# scSelectGo and the scalar toBytesGo, each now reading a limb once and
+# binding it. The trap branches are all on counters, lengths, indexes and
+# shift/rotate amounts: the limb helpers' are proven public by
+# constant_time_reductions.sh (ovf_operands_public) and the ladder's by
+# constant_time_public_key.sh (branches_public), and the memcheck arm below
+# reports any that a key byte reaches. In the call column the limb helpers
+# fell, since Int bit calls and constant forces became inline U64 kernels
+# (carryPassGo 13 -> 7, subPCandidate 17 -> 9, feZeroBorrow 7 -> 3, ...);
+# secretByteBit fell 3 -> 0. The secret condition bits combine through the
+# Int bit helpers instead of `* -` and carry zero trap branches:
+# signCandidate 17 -> 24, selectSigningCandidates 5 -> 8, pointAddComplete
+# 40 -> 43, scSecretCandidate32 7 -> 9, scHighBit 2 -> 3, secretNonzeroBit
+# 1 -> 2. U64 arithmetic allocates nothing in any of these rows.
+[ "$control_grade" = '119802175 7787' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -720,12 +711,6 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 # exact control grade over the emitted closure, which counts its branches,
 # comparisons and indexing. Its caller mdk_crypto_hmac__hmacSha256FixedBytes still
 # survives below, so the HMAC/SHA schedule is still in the link.
-#
-# mdk_lib_scalar__scInverse left this list when the limbs moved to U64 (#3427).
-# `scOne` became static data, so scInverse is now a single call to its
-# exponent ladder, and the link inlines both into signCandidate. Its row in the
-# emitted control grade above still pins the ladder's shape, and mdk_lib_scalar__scMul,
-# which every ladder step calls, is required here in its place.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
@@ -733,7 +718,7 @@ for symbol in \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
-  mdk_lib_scalar__scMul \
+  mdk_lib_scalar__scInverse \
   mdk_lib_scalar__scSelect
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains the audited HMAC/SHA, two-signature, point, inverse, and arithmetic-selection topology'
@@ -929,15 +914,12 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # internal-carrier grades above and no others: four SHA-256 definitions leave,
 # the eleven `mdk_u32__` helpers and `mdk_impl_Int_display` enter (191 -> 199),
 # and every new branch tests a public shift or rotate amount.
-# Re-derived for the U64 limb move (#3427), the same changes as the internal
-# grades above plus `mdk_u64__bitXor` (no branch; feEqualBorrow, reached by
-# verification) among the entering u64 helpers: sixteen thunks leave and six
-# u64 helpers enter (199 -> 189). No existing row moved outside the call
-# column.
-# Re-derived for the Int overflow trap (#3377): the same row changes as the
-# internal grade above, plus pointIsCanonicalInfinity (3 -> 5 calls, 0 trap
-# branches), whose bit product is now two bitAnd calls. Closure unchanged.
-if [ "$public_closure_grade" != '4166836887 5349' ] || [ "$public_control_grade" != '2364967549 8386' ]; then
+# Re-derived for #3427 and the Int trap (#3377): the same closure and row
+# changes as the internal grades above (199 -> 193), plus feEqualBorrow (calls
+# 11 -> 5) and dblGo (7 -> 6, the public scIsHigh path, three counter traps),
+# and pointIsCanonicalInfinity (5 -> 7 calls, zero traps: its bit product is
+# two bitAnd calls).
+if [ "$public_closure_grade" != '2645301472 5531' ] || [ "$public_control_grade" != '1513011610 8627' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
@@ -949,15 +931,14 @@ pass "public-root LLVM union excludes ForTest and retains the audited signing/ke
 # in this linked binary. All three stay in the public union above, whose exact
 # control grade pins their branches, comparisons and indexing; scNegateCt's
 # low-S route is pinned in source (red under M09); and rfc6979NonceSchedule is
-# still required as a linked symbol of the internal carrier. scInverse gave way
-# to scMul here for the same reason as in the internal list (#3427).
+# still required as a linked symbol of the internal carrier.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_crypto_hmac__hmacSha256FixedBytes \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
-  mdk_lib_scalar__scMul \
+  mdk_lib_scalar__scInverse \
   mdk_lib_scalar__scSelect
 do require_native_symbol "$symbol"; done
 pass 'linked public consumer retains the audited HMAC/SHA, signing, point, inverse, and arithmetic-selection leaves'
