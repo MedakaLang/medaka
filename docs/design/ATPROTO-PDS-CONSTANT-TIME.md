@@ -65,16 +65,26 @@ Field `canonicalize` has exactly four direct producer classes:
 `feSub`, `feSquare`, and `feInverse` reach those producers transitively. No
 caller-supplied raw limb array may reach `canonicalize`.
 
-Scalar `reduceWide` has exactly five direct producer classes:
+The scalar is eight limbs of 32 bits, libsecp256k1's `scalar_8x32` layout. It
+has two private reduction entry points. `reduce512` takes sixteen limbs, each
+below `2^32`, and has exactly one direct producer:
 
-- canonical and reducing byte decoders;
-- `scAdd`, below `2n < 2^257`;
-- `scNegate`, at most `n`;
-- `scMul`, below `n^2 < 2^512`.
+- `scMul`, the product of two canonical scalars, below `n^2 < 2^512`.
 
-`scSub` and `scInverse` reach them transitively. The existing `< 2^512`
-workspace precondition remains load-bearing, and on this path nothing checks it
-at run time (see §4); fixed-count reduction does not widen the accepted domain.
+`subNSelect` takes eight limbs, each below `2^32`, and a carry bit that stands
+for `2^256`, and requires the whole value to be below `2n`. It has exactly
+four direct producer classes:
+
+- `reduce512`'s third fold, below `2^256 + 2c < 2n` (§4);
+- `scAdd`, the sum of two canonical scalars, below `2n`;
+- `scNegate`/`scNegateCt`, `n - a` for a canonical `a`, in `[1, n]`, carry 0;
+- the canonical, reducing and fixed-width byte decoders through `reduce256`,
+  a 256-bit value, below `2^256 < 2n`, carry 0.
+
+`scSub` and `scInverse` reach them transitively. The `< 2^512` precondition of
+`reduce512` and the `< 2n` precondition of `subNSelect` are load-bearing, and
+nothing checks them at run time (see §4 and §5); fixed-count reduction does not
+widen the accepted domain.
 
 Any new producer or relaxed magnitude bound invalidates this contract until its
 maximum pass count and fixnum headroom are re-derived.
@@ -108,36 +118,55 @@ limbs 0 through 8 equal to `2^26 - 1` and limb 9 equal to `2^43 - 1`. That
 witness is private test access to the reduction precondition, not a fabricated
 public `Fe`.
 
-## 4. Scalar schedule: exactly four fold/carry rounds
+## 4. Scalar schedule: exactly three folds, then one subtract-and-select
 
-Replace `reduceLoop` and `highIsZero` with:
+`reduce512` is straight-line: exactly three unconditional folds, then
+`subNSelect` (§5), the same shape as libsecp256k1's `scalar_8x32`
+`reduce_512` (512 -> 385 -> 258 -> 256 bits, then a final overflow reduce).
+Each fold replaces `V = H*2^256 + L` by `H*c + L`, where `c = 2^256 - n`.
+Because `2^256 = c (mod n)` the fold preserves the value mod `n`. It is a
+fixed set of column sums whose width depends only on the fold, never on the
+value, and it runs in full when `H` is zero: that fold adds zero.
 
-1. one fixed 32-limb `carryAllUnchecked`;
-2. exactly four unconditional `foldOnce` plus `carryAllUnchecked` rounds.
+`c` is `0x14551231950b75fc4402da1732fc9bebf`, five limbs with a top limb of 1,
+and `2^128 < c < 2^128.35`, so `c^2 < 1.62 * 2^256` and `4c < 2^131`. For
+every sixteen-limb workspace `W < 2^512`, which contains every admitted
+product (`n^2 < 2^512`):
 
-`carryAllUnchecked` drops a carry out of limb 31 without testing it: every
-admitted workspace is below `2^512`, so that carry is always zero, and its only
-branch is the public limb index. `carryAll` is the checked twin, which panics
-on such a carry; the reduction gate runs the two side by side.
+1. **Fold 1** (13 output limbs): `m = W_low + W_high*c <= (2^256 - 1)(c + 1)
+   < 2^385`. Its high part `m >> 256` is at most `c`, and its top limb `m12`
+   is at most 1.
+2. **Fold 2** (9 output limbs): `p = m_low + (m >> 256)*c <= 2^256 - 1 + c^2
+   < 2^257.39`. Its high part `p8 = p >> 256` is at most 2.
+3. **Fold 3** (8 output limbs and a carry): `r = p_low + p8*c <= 2^256 - 1 +
+   2c`. The carry out of the eighth limb, `kd7 = r >> 256`, is 0 or 1.
+4. **Subtract-and-select** with that carry: the value `kd7*2^256 + R` (`R` the
+   eight limbs) is below `2^256 + 2c`, and `2^256 + 2c < 2^257 - 2c = 2n`
+   because `4c < 2^256`. That is `subNSelect`'s precondition, so the result is
+   the canonical value mod `n` (§5).
 
-`foldOnce` must reuse a fixed allocation schedule. It may allocate its current
-16-limb high-half buffer once per round because four allocations are
-input-independent; allocating it once outside the schedule is also valid. It
-must never skip a round because the high half is zero.
+Three folds is the minimum for this domain, and both halves of the final
+step are needed:
 
-Let `c = 2^256 - n`, so `c + 1 < 2^129`. For any admitted `V < 2^512`, one
-fold maps `V = H*2^256 + L` to `H*c + L`:
+- after two folds `p8` can be 2, so the value can be at least `2^257 > 2n`,
+  which no single subtraction of `n` repairs. The `3 -> 2`
+  mutation replaces fold 3's high part `p8` by zero (the fold then adds
+  nothing, exactly as if it were absent) and must be rejected by a committed
+  workspace whose `p8` is 2;
+- `kd7` is 1 only when `p8 >= 1` and `p_low >= 2^256 - p8*c`, with a
+  probability near `2^-128` for a product of random scalars, so no random
+  test reaches it. A committed workspace with `kd7 = 1` must reject the
+  mutation that drops `kd7` from the selection bit. When `kd7` is 1, `R`
+  is below `2c < n`, so the subtraction borrows and its difference
+  `R - n + 2^256` is the value minus `n`;
+- a committed workspace whose three-fold result lies in `[n, 2^256)` with
+  `kd7 = 0` exercises the subtraction itself, which a random product also
+  reaches with probability near `2^-128`.
 
-- after fold 1, the value is below `2^385`;
-- after fold 2, it is below `2^258`, so the high half is at most 3;
-- after fold 3, it is below `2^256 + 3c`, so its high half is at most 1;
-- before fold 4, if the high half is 0 the value is already below `2^256` and
-  the unconditional zero fold preserves it; if the high half is 1, its low
-  half is below `3c`, so fold 4 produces less than `4c < 2^131 < 2^256`.
-
-Four rounds therefore clear the high half for the whole admitted domain. A
-three-round mutation must be rejected by the permanent pass-count control and
-by an adversarial value witness.
+The gate's witnesses are private test access to the reduction precondition,
+not fabricated public `Sc` values. Each is graded against the same value
+computed by Horner's rule over its sixteen limbs through `scAdd` alone, a
+path with no fold.
 
 ## 5. Unconditional subtract-and-select
 
@@ -160,13 +189,20 @@ out[i] = original[i] + keepDiff * (diff[i] - original[i])
 ```
 
 For field limbs 0 through 8, `WIDTH = 26`; for the field top limb,
-`WIDTH = 22`. For scalar limbs, `WIDTH = 16`. The helper always visits all 10
-or 16 limbs and always performs the blend. It may recurse only on the public
-limb index.
+`WIDTH = 22`. For scalar limbs, `WIDTH = 32`. The helper always visits all 10
+or 8 limbs and always performs the blend. It may recurse only on the public
+limb index; the scalar's `subNSelect` is straight-line, one expression per
+limb.
+
+The scalar's input carries one more bit, a carry that stands for `2^256`
+(§2, §4), so its selection bit is `keepDiff = carry OR (1 - borrow)`, computed
+with `bitOr`. When the carry is 1 the low limbs are below `n`, the subtraction
+borrows, and the kept difference is the value minus `n`; the two terms of the
+`OR` are then never both 1.
 
 The formula intentionally avoids negative masks and comparison booleans.
 Field `t` stays below `2^27` (below `2^23` at the top limb), scalar `t` stays
-below `2^17`, and the blend remains within one limb. `diff[i] - original`
+below `2^33`, and the blend remains within one limb. `diff[i] - original`
 wraps modulo 2^64 when negative, and multiplied by `keepDiff` and added back
 it gives the exact limb.
 
@@ -218,10 +254,42 @@ Two rules follow, and hold for every secret-bearing value in `pds/`:
    byte codecs shift by a public bit counter, which calls the `u64` wrapper;
    its branches test only that counter.
 
-A `U64` bound by `let`, passed as an argument, returned, or stored in an
-array is a boxed cell (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), so the
-helpers bind only the narrowed `Int`. The reductions gate pins every audited
-helper's cell allocation count at 0.
+A `U64` stored in an array, a tuple, a list or a record is a boxed cell
+(`docs/design/INTEGER-TYPES-DESIGN.md` §6.2), which is why limbs are stored as
+`Int`. Under the N5 emitter a `U64` bound by `let` stays a register, and so do
+the `U64` parameters and result of an annotated single-clause top-level
+function; the scalar passes limbs between its helpers that way. The
+reductions gate pins every audited helper's cell allocation count at 0.
+
+**The scalar on 8 x 32.** Every scalar helper on a secret path is
+straight-line: each limb widens once through `U64.truncate` into a `let`, every
+step is `U64` `+ - *` and bit operations with literal shift amounts, and each
+result limb narrows once through `U64.toIntTruncating` into one array literal.
+There is no loop, no recursion and no index other than a literal. A 32 x 32
+product fits in 64 bits, so it is plain `U64` `*`; no 128-bit product
+(`U64.mulWide`) is needed. Column sums accumulate in one `U64`, not a
+`(hi, lo)` pair: each product is split into its low and high 32-bit halves,
+the low halves and the incoming carry sum into the column, and the outgoing
+carry is that sum shifted down 32 plus the high halves. Every carry is
+therefore a shift, never a comparison, and no sum comes near `2^64`:
+
+| Quantity | Bound | Margin |
+|---|---|---|
+| Stored limb | `< 2^32` | 30 bits below the `2^62` narrowing ceiling |
+| Product `a_i * b_j` | `<= (2^32 - 1)^2 < 2^64` | exact; the one full-width value, never narrowed |
+| `scMul` column sum (columns 7 and 8) | `< 15 * 2^32 < 2^35.91` | 28 bits below `2^64` |
+| `scMul` carry | `< 2^35` | 29 bits |
+| Fold product `w_i * c_j` | `< 2^62.34` | 1.6 bits; never summed whole |
+| Fold 1 column sum (column 5) | `< 2^34.82` | 29 bits |
+| Fold 2 column sum (column 4) | `< 2^34.64` | 29 bits |
+| Fold 3 column sum (`p8 * c_j` added whole) | `< 2^32.97` | 31 bits |
+| `scAdd` limb sum, subtract-and-select `t` | `< 2^33` | 31 bits |
+
+These are interval bounds, every input limb at `2^32 - 1` and every carry at
+its maximum, so they hold whatever the value; §4's value bounds are needed
+only for the fold count and the final selection. The only values narrowed to
+`Int` are result limbs, below `2^32`, and condition bits, 0 or 1, so every
+stored value is exact and far below `2^62`.
 
 ## 6. Verification mechanism
 
@@ -241,16 +309,18 @@ The corpora establish values, not constant-time structure.
 ### 6.2 Adversarial count witnesses
 
 Add committed inputs that need the last permitted round. Demonstrate before
-landing that field `3 -> 2` and scalar `4 -> 3` mutations make the focused
+landing that field `3 -> 2` and scalar `3 -> 2` mutations make the focused
 regression red. A pass-count grep alone is insufficient because it could
-protect a needlessly large or semantically unused number.
+protect a needlessly large or semantically unused number. The scalar also
+needs a committed workspace whose third fold carries out, which must make the
+mutation that drops that carry from the selection bit red (§4).
 
 ### 6.3 Structural anti-rot gate
 
 Add a registered POSIX-shell PDS gate scoped to the dedicated reduction
 helpers. It must:
 
-- require the exact field-three and scalar-four schedules;
+- require the exact field-three and scalar-three schedules;
 - require the unconditional borrow-and-blend helper shape for both moduli;
 - reject calls from the reduction entry points to the retired early-exit
   comparison or conditional-subtraction helpers;

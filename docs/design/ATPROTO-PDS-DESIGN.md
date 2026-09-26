@@ -227,9 +227,10 @@ it against the implementation rather than copying it from here.
 - `pds/lib/field.mdk` — arithmetic modulo the secp256k1 prime `p`: add/sub/mul/square/
   inverse/negate over the 10 × 26-bit representation, with fast reduction exploiting
   the binary structure of `p`. The hot module; essentially all of the cost lives here.
-- `pds/lib/scalar.mdk` — arithmetic modulo the group order `n`. Separate from `field`
-  on purpose: it runs a few times per signature rather than thousands, so it takes the
-  simpler, slower representation and shares no code.
+- `pds/lib/scalar.mdk` — arithmetic modulo the group order `n`, on libsecp256k1's
+  8 × 32-bit `scalar_8x32` layout. Separate from `field` on purpose: its modulus has a
+  129-bit complement where the field's has a 33-bit one, so its reduction is different,
+  and it shares no code.
 - `stdlib/crypto/sha256.mdk` — straightforward 32-bit-word FIPS 180-4. The easiest module
   in this document and the one with the best-published vectors.
 - `pds/lib/secp256k1.mdk` — field arithmetic, point add/double in Jacobian
