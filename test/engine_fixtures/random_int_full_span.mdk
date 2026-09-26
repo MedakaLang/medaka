@@ -1,0 +1,12 @@
+-- `randomInt lo hi` computes its span hi - lo + 1 unsigned (#3451): over the full
+-- Int range the span is 2^63, which still draws, where the old rule (and wasm's
+-- signed span) answered lo without consuming a draw.  `lo > hi` answers lo.  The
+-- pinned values are SplitMix64 from seed 42 as specified (runtime/medaka_rt.c),
+-- `lo + next % span` per draw.
+main =
+  setSeed 42
+  println (randomInt intMinBound intMaxBound)
+  println (randomInt intMinBound intMaxBound)
+  println (randomInt 5 3)
+  println (randomInt (-10) 10)
+  println (randomInt 0 intMaxBound)

@@ -1,0 +1,5 @@
+-- #3377: a negative `shiftLeft` amount panics with the amount in the message, on
+-- both backends; it used to be an unchecked i64.shl (amount taken modulo 64).
+main =
+  println "before"
+  println (shiftLeft 1 (-1))

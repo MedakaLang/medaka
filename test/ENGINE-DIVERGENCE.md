@@ -433,15 +433,18 @@ a `VRecord`, never a `VCon` — `evalVariantUpdate` needed a matching `VRecord` 
 Both fixed in lockstep; `wasm/w7_variant_update` now agrees on all three engines and its
 `test/engine_divergence.txt` line was deleted (promoted).
 
-### 4.4 `eval:intended-abort` — 5 fixtures
+### 4.4 `eval:intended-abort` — 17 fixtures
 
 `llvm/abort_panic` (`E-PANIC: boom`), `wasm/w7_array_oob` (`E-INDEX-OOB: index 9
 out of bounds`), `llvm/eager_global_self_cycle` (`E-CYCLIC-VALUE`, #561 PR-A+PR-B), and two
 PR-C regression-corpus additions covering other cycle shapes: `llvm/eager_global_mutual_cycle`
 (a two-node mutual cycle, `x = y + 1` / `y = x + 1`) and `llvmT/eager_global_dispatch_hidden_cycle`
 (a self-cycle whose back edge is hidden behind interface-method dispatch, `cell = mk True` /
-`mk _ = cell + 1`) — both `E-CYCLIC-VALUE`. These are the *program's own* intended aborts, not
-engine failures —
+`mk _ = cell + 1`) — both `E-CYCLIC-VALUE` — and the twelve `wasm/arith_int63_*_overflow_*`
+/ `wasm/arith_int63_div_intmin` fixtures (#3377), whose `Int` arithmetic leaves the 63-bit
+range and stops with `E-INT-OVERFLOW` on every engine (their exact stderr is pinned by
+`test/wasm/diff_wasm.sh`'s `-- expect-stderr:` line). These are the *program's own* intended
+aborts, not engine failures —
 the gate's eval-arm classifier is deliberately conservative (any interpreter-level
 `E-*` counts as n/a, because today the interpreter has no `exit` primitive, so a
 nonzero exit is never a program-level exit). Ledgered explicitly rather than

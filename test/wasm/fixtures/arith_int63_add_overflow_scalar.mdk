@@ -1,0 +1,5 @@
+-- #3377: `intMaxBound + 1` traps in SCALAR mode ($mdk_int_add): two 63-bit
+-- operands never overflow i64, so the check is that the exact i64 sum still fits
+-- 63 bits.
+-- expect-stderr: runtime error [E-INT-OVERFLOW]: 4611686018427387903 + 1 overflows Int
+main = 4611686018427387903 + 1
