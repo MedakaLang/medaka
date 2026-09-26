@@ -14606,6 +14606,10 @@ data LocalAbsState = LocalAbsState {
   lasBinders : Ref (OrdMap (Option LocalAbs)),
   -- binder key -> occurrences inferred before the binder generalized
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
+  -- binder key -> the ordinal its dictionary parameter names carry.  A tree desugar
+  -- copies (a default method specialized into an impl) repeats a binder key, and
+  -- every copy must spell the parameters the same way.
+  lasOrdinals : Ref (OrdMap Int),
   lasCounter : Ref Int,
 }
 
@@ -14615,6 +14619,7 @@ freshLocalAbsState _ = LocalAbsState {
   lasAbstractedEvs = Ref omEmpty,
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
+  lasOrdinals = Ref omEmpty,
   lasCounter = Ref 0,
 }
 
@@ -14645,8 +14650,13 @@ forgetLocalAbs key =
 openLocalScope : String -> String -> ScopeId
 openLocalScope x key =
   let st = localAbs.value
-  let k = st.lasCounter.value
-  let _ = st.lasCounter := k + 1
+  let k = match omLookup key st.lasOrdinals.value
+    Some ordinal => ordinal
+    None =>
+      let fresh = st.lasCounter.value
+      let _ = st.lasCounter := fresh + 1
+      let _ = st.lasOrdinals := omInsert key fresh st.lasOrdinals.value
+      fresh
   let parent = captureScope ()
   let sid =
     Scopes.freshScope
