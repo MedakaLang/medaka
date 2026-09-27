@@ -468,7 +468,7 @@ checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> 
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
-checkWideLiterals : List (Mono, String, Bool, Bool, Option Loc) -> Unit
+checkWideLiterals : List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
 checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
 checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
 checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
@@ -1214,6 +1214,7 @@ headTyconMono : Mono -> Option HeadKey
 headTyconNameMono : Mono -> Option String
 headTyconTy : Ty -> Option HeadKey
 headlessBucketKey : RegKey
+i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
@@ -1930,6 +1931,8 @@ narrowRowToNamed : List String -> (String, List String) -> List (String, List St
 narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
 narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
 negateOp : Mono -> Mono
+negatedI32Lit : Expr -> Option Int
+negatedInI32 : Int -> Option Int
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
 noDictHook : String -> EvId -> Unit
@@ -2309,8 +2312,8 @@ reexportedMethodsOf : List (String, List String) -> Decl -> List String
 reexportedOrigins : List Decl -> String -> List (String, String)
 reexportedOriginsOf : Decl -> String -> List (String, String)
 refStored : Mono -> Mono
+refuseBoxedLitPat : String -> String -> Option Loc -> Unit
 refuseOpenedExistentials : Unit -> Unit
-refuseU64LitPat : String -> Option Loc -> Unit
 regIfaceMonosFor : String -> List ConstraintReg -> List (IfaceRef, List Mono)
 regIfaceMonosOf : ConstraintReg -> List (IfaceRef, List Mono)
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
@@ -2834,6 +2837,8 @@ walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 wantAuthority : Authority -> Authority -> Unit
 wantAuthorityWith : Bool -> Authority -> Authority -> Unit
 wantedMatches : Wanted -> Wanted -> Bool
+wideAnnotateHelp : String -> Bool -> String
+wideFitsI64 : Int -> Int -> Bool -> Bool
 widenOpenedFor : Int -> Authority -> Authority
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
