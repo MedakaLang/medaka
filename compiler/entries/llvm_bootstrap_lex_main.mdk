@@ -40,7 +40,6 @@ import ir.core_ir_lower.{
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   validateFfiExternTypeNames,
@@ -68,7 +67,6 @@ runEmit runtimeDecls coreDecls modules =
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
-      (methodConstraintIfaces allDecls)
       (ctorFieldTypeNames allDecls)
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (mainTypeIsUnit ())

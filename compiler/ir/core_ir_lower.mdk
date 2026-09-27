@@ -136,17 +136,15 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
 -- (`ast.defaultReceiverDict`), so a sibling or superclass call inside it is routed
 -- `RDict`/`RDictFwd` to that receiver.  The receiver is not a parameter: each
 -- `InheritedDefault` row lowers the body again with the receiver's routes rewritten
--- to `RKey <word>`, the word a dictionary for the inheriting instance carries — the
--- typechecker's bare head unless that head is ambiguous, its canonical key when it
--- is — so a method of the default's own interface reaches that instance's method
--- (supplied or inherited).  A superclass method called on the receiver dispatches by
--- its OWN instance's word (`rrSuperWords`, keyed by the method's interface word):
--- under a head collision the two words differ, and the subclass word names no
--- superclass method.  The instance's `requires` dictionaries, received as the
--- specialization's own leading parameters, are supplied as the call's impl
--- dictionaries, and its supers are the instance's own (`InstanceShape.isSupers`)
--- over those parameters, so a superclass method called on the receiver projects
--- the super segment of that dictionary.
+-- to the dictionary the inheriting instance's receiver denotes: `RKey <word>`, the
+-- word such a dictionary carries — the typechecker's bare head unless that head is
+-- ambiguous, its canonical key when it is — so a method of the default's own
+-- interface reaches that instance's method (supplied or inherited).  The instance's
+-- `requires` dictionaries, received as the specialization's own leading parameters,
+-- are supplied as the call's impl dictionaries, and its supers are the instance's
+-- own (`InstanceShape.isSupers`) over those parameters, so a superclass method
+-- called on the receiver projects the super segment of that dictionary and
+-- dispatches by the super instance's own word.
 data ReceiverRemap = ReceiverRemap { rrSelf : String, rrDict : Route }
 
 receiverRemapRef : Ref (Option ReceiverRemap)

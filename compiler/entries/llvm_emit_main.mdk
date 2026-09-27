@@ -52,7 +52,6 @@ emitTarget decls =
         []
         []
         []
-        []
         False
         False
         0

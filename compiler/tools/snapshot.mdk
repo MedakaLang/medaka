@@ -174,7 +174,6 @@ import ir.core_ir_lower.{
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   ffiExternTypeNames,
@@ -632,7 +631,6 @@ llvmOf runtimeDecls allDecls cp =
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
-      (methodConstraintIfaces allDecls)
       (ctorFieldTypeNames allDecls)
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (mainTypeIsUnit ())
@@ -657,7 +655,6 @@ wasmOf runtimeDecls allDecls cp =
       False
       (declaredRecordFieldOrders allDecls)
       []
-      (ifaceImplHeadTable allDecls)
   let (text, gaps) = wasmRecord input cp
   withGaps ";;" text gaps
 

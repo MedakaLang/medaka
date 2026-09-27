@@ -56,7 +56,6 @@ import ir.core_ir_lower.{
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   validateFfiExternTypeNames,
@@ -291,7 +290,6 @@ runStaged on targetPath rsrc csrc tsrc =
       (returnsSelfTable elaborated)
       (selfFnParamTable elaborated)
       (methodIfaceTable elaborated)
-      (methodConstraintIfaces elaborated)
       (ctorFieldTypeNames elaborated)
       (declSigTypeNames rDecls ++ declSigTypeNames elaborated)
       (mainTypeIsUnit ())
@@ -505,7 +503,6 @@ wasmStage on True runtimeDecls live cprog declsOp =
       (mainTypeIsFloat ())
       (declaredRecordFieldOrders live)
       []
-      (ifaceImplHeadTable live)
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()

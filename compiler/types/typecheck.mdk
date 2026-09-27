@@ -15487,16 +15487,10 @@ inferDictAtFound name ev inst =
 
 inferDeclaredDictAt : EvId -> CDeclared -> (Mono, List (Int, Mono)) -> Mono
 inferDeclaredDictAt ev dc inst =
-  -- WS-1b: expand the callee's constraint slots with their transitive supers HERE
-  -- (the global table isn't expanded until expandSupersTable runs after inference),
-  -- so this call site applies one dict per EXPANDED slot — matching the def params
-  -- dictArityOf/dictPass will prepend from the expanded table.  Each super slot's id
-  -- equals its sub slot's id (shared type param), still pinned in [snd inst].
-  -- S-dict-arity-contract: expand carrying each slot's argument vector, so an APPENDED
-  -- super slot routes on the vector its `requires` clause names (`requires Ix a b` off
-  -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
-  -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
-  -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
+  -- One dict per distinct declared slot (`dedupSlotVecs`), each carrying its argument
+  -- vector — the same sequence `dedupPredicateSlotsTable` leaves on the define side,
+  -- so the dict params `dictArityOf`/dictPass prepend agree slot for slot.  A slot's
+  -- supers take no dict of their own: the route built for the slot carries them.
   let expandedV = dedupSlotVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
   let expanded = map fst expandedV
   let ids = map (s => s.csId) expanded
@@ -15640,9 +15634,8 @@ instantiateValueTracked name scheme =
 -- from the instantiation is skipped on both sides), so slot i of the result describes
 -- slot i of [monos].
 -- S-dict-arity-contract: each slot now arrives PAIRED with its own vector — the stored
--- signature vector for a declared slot, the `requires`-mapped one for an appended super
--- slot (`expandSupersVecs`).  A slot whose vector is empty — an inferred/promoted fn, a
--- super whose params did not all resolve — still yields the singleton `[m]`, the scalar
+-- signature vector of the declared slot.  A slot whose vector is empty — an
+-- inferred/promoted fn — still yields the singleton `[m]`, the scalar
 -- goal `routesOfMonosTop` already used.  ⚠️ A CROSS-MODULE CALLEE IS NO LONGER IN THAT
 -- LIST: S-xmod-vector-supply (#1868/#1867) gave it a real vector — see the `cdArgs`
 -- arms of `declaredConstraintFor` (`grep -n 'cdArgs = predicateSlotArgs'`).
@@ -20001,10 +19994,7 @@ monoIsTyvarId m id = match normalize m
   _ => False
 
 -- [iface] plus its transitive `requires` supers (a `Ord a =>` constraint also supplies
--- the `Eq` dict).  NOT gated on userIfaceNamesRef (unlike `expandSupersVecs`, whose gate
--- is about dict SLOTS, not about which interfaces a constraint satisfies) — a PRELUDE
--- super chain satisfies the superinterface just as much, it is simply serviced by
--- arg-tag dispatch.
+-- the `Eq` dict, which its dictionary carries).  Prelude and user super chains alike.
 -- Its callers hold interface SPELLINGS (`groupConstraintMonosRef` carries no origin), so
 -- the lookup is by spelling over `superDeclsRef`, first match; every other superclass
 -- reader looks interfaces up by identity (`superLookup`).
@@ -20550,9 +20540,9 @@ shadowDeclaredFor name key
   | otherwise = declaredConstraintFor key
 
 -- the standalone's dict ROUTE slots for this call: its declared constraint ids mapped
--- through the call's instantiation subst.  Expanded with transitive supers EXACTLY as
--- inferDictAtFound does (WS-1b) — dictArityOf sizes the DEFINITION's leading dict params
--- from the same expanded table, so call and def must agree slot-for-slot or we have
+-- through the call's instantiation subst.  Deduplicated EXACTLY as inferDictAtFound
+-- does — dictArityOf sizes the DEFINITION's leading dict params from the same
+-- declared table, so call and def must agree slot-for-slot or we have
 -- merely moved the arity disagreement.  Empty on the plain `check` path
 -- (funConstraintsRef is empty there) — check stamps no routes, so that is correct;
 -- recordStandaloneSigObligations is what gives `check` its reject direction.
@@ -40031,8 +40021,8 @@ registerFunPredGiven slot binder
     let _ = pushGiven GMPredicate DirectGiven slot binder
     registerFunPredGivenSlots (predicateSlotKnownSupers slot) binder
 
--- A signature slot's supers share its dict parameter: the flat convention passes the
--- sub-predicate's dictionary, which answers every super method by tag.
+-- A signature slot's supers share its dict parameter: the dictionary it receives
+-- carries them, and a super is answered by projecting it (`givenEvidenceBinder`).
 registerFunPredGivenSlots : List (PredicateSlot, List Int) ->
   EvidenceBinderId ->
   Unit
@@ -40043,9 +40033,9 @@ registerFunPredGivenSlots ((slot, path) :: rest) binder =
 
 -- A dictionary supplied for one predicate also supplies every transitive
 -- superinterface.  The original predicate is registered separately as direct evidence;
--- all aliases retain the SAME dict parameter, so this does not alter dict arity.  Unlike
--- `expandSupersVecs`, this closure is ungated because prelude chains (`Thenable` ->
--- `Applicative` -> `Mappable`) are evidence too.  Unknown vectors stay direct-only:
+-- all aliases retain the SAME dict parameter, so this does not alter dict arity.
+-- Prelude chains (`Thenable` -> `Applicative` -> `Mappable`) are evidence exactly as
+-- user ones are.  Unknown vectors stay direct-only:
 -- projecting a superclass argument without the sub-predicate's positional vector would
 -- invent identity.
 predicateSlotKnownSupers : PredicateSlot -> List (PredicateSlot, List Int)
@@ -40876,7 +40866,7 @@ vecOblKey o =
 -- `cslotKey` already folds the raw lead `csId` into this same key, and the non-lead ids
 -- come from the SAME predicate occurrence in the SAME signature, normalized together.
 -- Both `dedupSlotVecs` call sites compare keys only WITHIN one binding's slot list
--- (`expandSupersVecs`'s closure, `setFunConstraintEntry`'s declared prefix) and
+-- (a call's declared slots, `setFunConstraintEntry`'s declared prefix) and
 -- `vecOblKey`'s `voIds` are equally raw — so this adds no exposure the lead id did not
 -- already carry.  The G4 hazard at `registerPredGiven` is about `activeDictVars`, which
 -- no key here consults.
@@ -42734,10 +42724,9 @@ ifaceMonoName (ir, monos) = map (mono => (ir.irName, mono)) monos
 declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
 declaredPairOne (iface, monos) = map (id => (iface, id)) (abstractSlotIds monos)
 
--- UNGATED superclass closure over declared (iface, id) slots, so prelude super chains
--- (Applicative requires Mappable, Thenable requires Applicative, …) are included.  The
--- gated `expandSupersVecs` stays user-only because its slots drive dict arity; this
--- closure only feeds the read-only subset test.
+-- Superclass closure over declared (iface, id) slots, so prelude super chains
+-- (Applicative requires Mappable, Thenable requires Applicative, …) are included.  It
+-- only feeds the read-only subset test; no dict slot comes from it.
 censusSuperClose : List (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperClose declared =
   map
@@ -48222,13 +48211,6 @@ dispositionRowsOfImpl : ImplEnv ->
 dispositionRowsOfImpl ie r ce =
   let (iface, tys, reqs) = ieRowTriple r
   let inst = InstId (instRefMid (ieRowInst r)) (instRefSeq (ieRowInst r))
-  let shape = InstanceShape {
-    isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
-    isTys = tys,
-    isDictWord = predicateRouteKeyForRow ie r,
-    isSupers = instanceSuperRoutes ie iface tys reqs,
-    isReqCount = listLen reqs,
-  }
   let ifaceWord = ifaceWordOf iface.irOrigin iface.irName
   let supplied = ieRowMethodNames r
   match (ceLookupAt
@@ -48239,14 +48221,31 @@ dispositionRowsOfImpl ie r ce =
     -- `dispositionSlotsOfImpls` expects no slot for it either.
     None => []
     Some ceRow =>
-      map
-        (d => (shape, ifaceWord, d))
-        (dispositionRowsOfMethods
+      let rows =
+        dispositionRowsOfMethods
           inst
           iface
           supplied
           (ceRowRequired ceRow)
-          (ceRowMethodNames ceRow))
+          (ceRowMethodNames ceRow)
+      -- only an inheriting instance's shape is read (`inheritorsOf`), so only it
+      -- pays for solving its receiver's super segment
+      let shape = InstanceShape {
+        isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
+        isTys = tys,
+        isDictWord = predicateRouteKeyForRow ie r,
+        isSupers =
+          if anyList isInheritedRow rows then
+            instanceSuperRoutes ie iface tys reqs
+          else
+            [],
+        isReqCount = listLen reqs,
+      }
+      map (d => (shape, ifaceWord, d)) rows
+
+isInheritedRow : MethodDisposition -> Bool
+isInheritedRow (InheritedDefault { ... }) = True
+isInheritedRow _ = False
 
 -- The interface word of [r]'s interface with its direct superinterface count: the
 -- super segment every dictionary of that interface stores.
