@@ -66,6 +66,7 @@ import test.{
 import bytes as B
 import bytes.{Bytes, encodeUtf8, fromArray}
 import string.{contains, toUtf8}
+import test.fixture_support.{appendBytes}
 
 rejects : String -> Bytes -> Bool
 rejects expected input = match parseRequest input
@@ -76,12 +77,6 @@ mustRequest : Bytes -> Request
 mustRequest input = match parseRequest input
   Ok request => request
   Err message => panic message
-
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right =
-  let leftSize = arrayLength left
-  arrayMakeWith (leftSize + arrayLength right) (i =>
-    if i < leftSize then left[i] else right[i - leftSize])
 
 names : List Header -> List String
 names = map headerName

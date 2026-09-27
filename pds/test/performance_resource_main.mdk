@@ -65,6 +65,7 @@ import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
 import crypto.sha256.{sha256}
 import string.{contains, fromUtf8, toInt, toUtf8}
+import test.fixture_support.{testNonce, testSecret}
 
 mustBytes : Result String (Array Int) -> Array Int
 mustBytes (Ok bytes) = bytes
@@ -457,19 +458,13 @@ runLimits =
 -- route needs no corpus directory, and reports `allocBytes()` delta rather
 -- than wall time.
 
-inboundAccountSecret : Array Int
-inboundAccountSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
-
 inboundInstant : Int
 inboundInstant = 1700000000
-
-inboundNonce : Array Int
-inboundNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 inboundContext : RequestContext
 inboundContext = RequestContext {
   nowSeconds = inboundInstant,
-  nonce = inboundNonce,
+  nonce = testNonce,
   login = None,
 }
 
@@ -482,7 +477,7 @@ inboundHandle = "perfroute.example"
 inboundToken : String
 inboundToken =
   mintToken
-    inboundAccountSecret
+    testSecret
     perfDid
     inboundHost
     "inbound-alloc-probe-token"
@@ -539,7 +534,7 @@ mustInboundStore _ =
     Err message =>
       panic "performance_resource: inbound repo init failed: \{message}"
   let base = storeFromRepo repo
-  match storeWithServerSecret inboundAccountSecret base
+  match storeWithServerSecret testSecret base
     Ok next =>
       storeSessionOpen
         (sessionFingerprint inboundToken)

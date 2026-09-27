@@ -35,6 +35,8 @@ import string.{
   trim,
 }
 import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
+import test.request_support.{deleteBody}
+import test.response_support.{closeAll, findHeaderEnd, report}
 
 -- # Small ad-hoc helpers this test driver owns
 
@@ -61,19 +63,6 @@ toHexString n = if n == 0 then "0" else fromChars (toHexGo n [])
 
 appendBytes : Array Int -> Array Int -> Array Int
 appendBytes left right = concat [|left, right|]
-
--- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
-findHeaderEnd : Array Int -> Int -> Option Int
-findHeaderEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    findHeaderEnd buf (i + 1)
 
 statusOf : String -> Result String Int
 statusOf statusLine = match split " " statusLine
@@ -373,15 +362,6 @@ createSessionJson identifier password =
       ("password", JString password),
     ])
 
-deleteRecordJson : String -> String -> String -> String
-deleteRecordJson did collection rkey =
-  stringify
-    (jObject [
-      ("repo", JString did),
-      ("collection", JString collection),
-      ("rkey", JString rkey),
-    ])
-
 xrpcPath : String -> String
 xrpcPath nsid = "/xrpc/\{nsid}"
 
@@ -480,14 +460,6 @@ stringField name body = match parse (fromUtf8 body)
         "serve_client: response has no string field '\{name}': \{fromUtf8 body}"
 
 -- # Cases
-
-report : String -> Bool -> String -> <IO> Unit
-report label ok detail =
-  if ok then
-    println "\{label}: PASS \{detail}"
-  else
-    let () = println "\{label}: FAIL \{detail}"
-    exit 1
 
 expectStatus : String ->
   Int ->
@@ -794,7 +766,7 @@ runEndpoints port token did handle collection rkey =
     (postRequest
       token
       (xrpcPath "com.atproto.repo.deleteRecord")
-      (deleteRecordJson did collection scratch))
+      (deleteBody did collection scratch))
 
 {- | A record nested deeper than the DAG-CBOR codec can read back must be
    refused at WRITE time. The `listRecords` half is the half that matters:
@@ -1330,12 +1302,6 @@ holdUnframedGo port count held =
     let conn = mustConnect port
     let _ = sendAll conn unterminatedHeaders
     holdUnframedGo port (count - 1) (conn :: held)
-
-closeAll : List (Connection *) -> <Net> Unit
-closeAll [] = ()
-closeAll (conn :: rest) =
-  let () = ignoreResult (close conn)
-  closeAll rest
 
 -- | How long one probe waits for its own answer, and how long the retry
 -- loop pauses between probes. Both are far below the budget the gate hands

@@ -1,0 +1,135 @@
+{- | Raw HTTP/1.1 response parsing and small assertion helpers shared across
+   the pds route/handler/client tests: pulling the status line or body out
+   of response bytes, checking a header is present, and the two test-only
+   builders that hand-craft an expected wire response. -}
+
+import json.{Json(..), get, parse}
+import net.{Connection, close}
+import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
+import lib.credential.{
+  LoginCheck, LoginVerdict, loginCheckAdvance, loginCheckVerdict
+}
+
+headText : Array Int -> String
+headText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at => fromUtf8 (arrayMakeWith at (i => bytes[i]))
+  None => fromUtf8 bytes
+
+export
+statusLineOf : String -> String
+statusLineOf text = match split "\r\n" text
+  first :: _ => drop 9 first
+  [] => "no status line"
+
+export
+bodyOf : String -> String
+bodyOf text = match indexOf "\r\n\r\n" text
+  Some at => drop (at + 4) text
+  None => ""
+
+export
+rawBodyOf : Array Int -> Array Int
+rawBodyOf bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
+  Some at =>
+    let start = at + 4
+    arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
+  None => [||]
+
+-- | The response's UTF-8 text body, from a byte array response (mirrors
+-- `bodyOf`, which takes an already-decoded response).
+export
+bodyText : Array Int -> String
+bodyText bytes =
+  let start = bodyStart bytes 0
+  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
+
+bodyStart : Array Int -> Int -> Int
+bodyStart bytes i =
+  if i + 3 >= arrayLength bytes then
+    panic "response_support: response has no header terminator"
+  else if bytes[i] == 13
+    && bytes[i + 1] == 10
+    && bytes[i + 2] == 13
+    && bytes[i + 3] == 10 then
+    i + 4
+  else
+    bodyStart bytes (i + 1)
+
+export
+hasContentType : String -> Array Int -> Bool
+hasContentType value bytes =
+  contains "content-type: \{value}\r\n" (headText bytes)
+
+export
+findHeaderEnd : Array Int -> Int -> Option Int
+findHeaderEnd buf i =
+  if i + 4 > arrayLength buf then
+    None
+  else if buf[i] == 13
+    && buf[i + 1] == 10
+    && buf[i + 2] == 13
+    && buf[i + 3] == 10 then
+    Some i
+  else
+    findHeaderEnd buf (i + 1)
+
+-- The status line and, for a refusal, atproto's error code: the two things a
+-- client can act on.
+export
+outcome : Array Int -> String
+outcome bytes =
+  let text = fromUtf8 bytes
+  let status = match parse (bodyOf text)
+    Ok body => match get "error" body
+      Some (JString code) => code
+      _ => ""
+    Err _ => ""
+  if status == "" then statusLineOf text else "\{statusLineOf text} \{status}"
+
+export
+settled : LoginCheck -> LoginVerdict
+settled check = match loginCheckVerdict check
+  Some verdict => verdict
+  None => settled (loginCheckAdvance 256 check)
+
+export
+expectedTextResponse : Int -> String -> String -> Array Int
+expectedTextResponse status reason body =
+  toUtf8
+    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+
+export
+expectedError : Int -> String -> String -> String -> Array Int
+expectedError status reason code message =
+  let body = "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
+  toUtf8
+    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+
+-- | One string field of a response body, or `""` if absent.
+export
+stringField : String -> Array Int -> String
+stringField name bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get name body
+    Some (JString value) => value
+    _ => ""
+  Err _ => ""
+
+ignoreResult : Result a b -> Unit
+ignoreResult (Ok _) = ()
+ignoreResult (Err _) = ()
+
+export
+closeAll : List (Connection *) -> <Net> Unit
+closeAll [] = ()
+closeAll (conn :: rest) =
+  let () = ignoreResult (close conn)
+  closeAll rest
+
+export
+report : String -> Bool -> String -> <IO> Unit
+report label ok detail =
+  if ok then
+    println "\{label}: PASS \{detail}"
+  else
+    let () = println "\{label}: FAIL \{detail}"
+    exit 1

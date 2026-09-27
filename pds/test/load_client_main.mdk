@@ -42,6 +42,7 @@ import string.{
   trim,
 }
 import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
+import test.response_support.{findHeaderEnd}
 
 -- # The corpus this client reads
 
@@ -221,19 +222,6 @@ getRequest xff path =
 
 appendBytes : Array Int -> Array Int -> Array Int
 appendBytes left right = concat [|left, right|]
-
--- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
-findHeaderEnd : Array Int -> Int -> Option Int
-findHeaderEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    findHeaderEnd buf (i + 1)
 
 statusOf : String -> Result String Int
 statusOf statusLine = match split " " statusLine

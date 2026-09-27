@@ -3,10 +3,12 @@
 import array as A
 import hex.{decode}
 import io.{readLines}
-import string.{contains, join, repeat, split, startsWith, toInt, toUtf8}
+import string.{contains, join, repeat, split, toInt, toUtf8}
 import lib.blockstore.{BlockStore, blockStoreEmpty, blockStorePut}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import test.fixture_support.{meaningful}
+import test.vector_support.{rejectContains}
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -186,18 +188,6 @@ blockOrder : Repo -> String
 blockOrder repo = match repoExportBlocks repo
   Err message => panic "repo_vectors: export blocks failed: \{message}"
   Ok blocks => join "," (map ((cid, _) => cidToString cid) blocks)
-
-rejectContains : String -> String -> Result String a -> <IO> Int
-rejectContains label witness (Err message) =
-  if contains witness message then
-    let () = println "HOSTILE \{label} PASS route=\{witness}"
-    1
-  else
-    let () = println "HOSTILE \{label} FAIL wrong-route=\{message}"
-    0
-rejectContains label _ (Ok _) =
-  let () = println "HOSTILE \{label} FAIL accepted"
-  0
 
 acceptResult : String -> Result String a -> <IO> Int
 acceptResult label (Ok _) =
@@ -447,9 +437,6 @@ runHostile did secret repo path presentRecord =
         (repoRootCid repo)
         (repoStore repo)),
   ]
-
-meaningful : String -> Bool
-meaningful line = line /= "" && not (startsWith "#" line)
 
 main : <IO, Env, FileRead> Unit
 main = runMain (args ())

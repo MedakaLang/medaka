@@ -1,0 +1,101 @@
+{- | Deterministic byte fixtures and small record/JSON helpers shared across
+   the pds handler and route tests — secrets, nonces, per-seed contexts, byte
+   builders and JSON-field accessors that many test mains built the same way
+   under different names (#3143). -}
+
+import array.{setInPlace}
+import json.{Json(..), get}
+import string.{startsWith}
+import lib.cid.{cidToString}
+import lib.repo.{repoCommitCid, repoLatestCommit, repoRootCid}
+import lib.server_core.{RequestContext(..)}
+import lib.store.{Store, storeRepo}
+
+export
+testSecret : Array Int
+testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
+
+-- | A second fixed secret, distinct from `testSecret`, for the tests that
+-- need two accounts with different credentials in the same run.
+export
+altTestSecret : Array Int
+altTestSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
+
+export
+testNonce : Array Int
+testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
+export
+nonceAt : Int -> Array Int
+nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
+
+export
+contextAt : Int -> Int -> RequestContext
+contextAt instant seed =
+  RequestContext { nowSeconds = instant, nonce = nonceAt seed, login = None }
+
+export
+meaningful : String -> Bool
+meaningful line = line /= "" && not (startsWith "#" line)
+
+export
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right =
+  let leftSize = arrayLength left
+  arrayMakeWith (leftSize + arrayLength right) (i =>
+    if i < leftSize then left[i] else right[i - leftSize])
+
+export
+lastHex : String -> String
+lastHex text = stringSlice (stringLength text - 32) (stringLength text) text
+
+export
+storeFingerprint : Store -> String
+storeFingerprint store = match storeRepo store
+  None => "<unconfigured>"
+  Some repo =>
+    "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
+
+-- | The `i`-th element of a string list, counting from 0.
+export
+field : Int -> List String -> String
+field _ [] = panic "fixture_support: corpus row is too short"
+field i (value :: rest) = if i <= 0 then value else field (i - 1) rest
+
+export
+fieldText : String -> Json -> String
+fieldText name value = match get name value
+  Some (JString text) => text
+  _ => "<missing:\{name}>"
+
+export
+commitField : String -> Json -> String
+commitField name value = match get "commit" value
+  Some commit => fieldText name commit
+  None => "<missing:commit>"
+
+export
+bitBytes : Int -> Array Int
+bitBytes k =
+  let out = arrayMake 32 0
+  out[31 - shiftRight k 3] := shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)
+  out
+
+decGo : Array Int -> Int -> Unit
+decGo out i =
+  if i < 0 then
+    ()
+  else
+    let v = out[i]
+    if v == 0 then
+      out[i] := 255
+      decGo out (i - 1)
+    else
+      setInPlace i (v - 1) out
+
+export
+decBytes : Array Int -> Array Int
+decBytes bs =
+  let out = arrayCopy bs
+  let () = decGo out 31
+  out

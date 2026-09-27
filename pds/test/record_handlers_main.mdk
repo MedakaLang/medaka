@@ -50,6 +50,16 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse}
+import test.fixture_support.{
+  commitField,
+  fieldText,
+  meaningful,
+  storeFingerprint,
+  testNonce,
+  testSecret,
+}
+import test.request_support.{createBody, deleteBody, procedureRequest}
+import test.response_support.{bodyText}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -102,26 +112,8 @@ mustRepo did secretHex rev =
 
 -- ── the session credential every write now needs ──────────────────────────
 
-{- | A fixed session-token secret and a fixed instant. Record writes are
-   `AuthenticatedRoute`, so `lib.server_core`'s seam refuses one that
-   arrives without a verifiable bearer token — a driver that replays
-   writes must present one, and the store it replays them against must
-   carry the secret that token was minted from.
-
-   The secret is a fixture, not entropy: this file grades handler
-   behavior, and a random secret would only make the transcript
-   irreproducible. -}
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
-
 testInstant : Int
 testInstant = 1700000000
-
-{- | The per-request nonce every request in this file is placed at. Nothing
-   here drives a route that mints a token, so the value only has to be fixed;
-   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 testContext : RequestContext
 testContext =
@@ -161,67 +153,13 @@ testToken did =
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-procedureRequest : String -> String -> String -> Array Int
-procedureRequest did nsid body =
-  let bytes = toUtf8 body
-  toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
-    ++ bytes
-
--- Everything after the first CRLFCRLF is the response body.
-bodyStart : Array Int -> Int -> Int
-bodyStart bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "record_handlers: response has no body separator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i + 4
-  else
-    bodyStart bytes (i + 1)
-
-responseBodyText : Array Int -> String
-responseBodyText bytes =
-  let start = bodyStart bytes 0
-  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
-
 responseJson : Array Int -> Json
 responseJson bytes =
   resultOrPanic
     "record_handlers: response body is not JSON"
-    (parse (responseBodyText bytes))
-
-fieldText : String -> Json -> String
-fieldText name value = match get name value
-  Some (JString text) => text
-  _ => "<missing:\{name}>"
-
-commitField : String -> Json -> String
-commitField name value = match get "commit" value
-  Some commit => fieldText name commit
-  None => "<missing:commit>"
+    (parse (bodyText bytes))
 
 -- ── the transcript ──────────────────────────────────────────────────────────
-
-createBody : String -> String -> String -> Json -> String
-createBody did collection rkey record =
-  stringify
-    (jObject [
-      ("repo", JString did),
-      ("collection", JString collection),
-      ("rkey", JString rkey),
-      ("record", record),
-    ])
-
-deleteBody : String -> String -> String -> String
-deleteBody did collection rkey =
-  stringify
-    (jObject [
-      ("repo", JString did),
-      ("collection", JString collection),
-      ("rkey", JString rkey),
-    ])
 
 splitPath : String -> (String, String)
 splitPath text = match split "/" text
@@ -248,7 +186,11 @@ runStep did server store opLine commitLine = match (
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "record_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleFixture server testContext store (procedureRequest did nsid body)
+      handleFixture
+        server
+        testContext
+        store
+        (procedureRequest accountHostText (testToken did) nsid body)
     let value = responseJson responseBytes
     let expectedUri = "at://\{did}/\{collection}/\{rkey}"
     let uriOk = kind == "DELETE" || fieldText "uri" value == expectedUri
@@ -270,12 +212,6 @@ runStep did server store opLine commitLine = match (
 
 -- ── state-preservation cells ────────────────────────────────────────────────
 
-storeFingerprint : Store -> String
-storeFingerprint store = match storeRepo store
-  None => "<unconfigured>"
-  Some repo =>
-    "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
-
 {- | `validate: true` is ADMITTED and changes nothing: the record is stored and
    the response reports `validationStatus: "unknown"`, because this server
    grades nothing against a lexicon (ruling, Val, 2026-09-16).
@@ -294,7 +230,11 @@ acceptValidateCell : String ->
 acceptValidateCell label did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleFixture server testContext store (procedureRequest did nsid body)
+    handleFixture
+      server
+      testContext
+      store
+      (procedureRequest accountHostText (testToken did) nsid body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let status = fieldText "validationStatus" value
@@ -326,7 +266,11 @@ rejectCell : String ->
 rejectCell label expectedCode did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleFixture server testContext store (procedureRequest did nsid body)
+    handleFixture
+      server
+      testContext
+      store
+      (procedureRequest accountHostText (testToken did) nsid body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let code = fieldText "error" value
@@ -466,9 +410,6 @@ runRows : List String -> <IO> Unit
 runRows [meta, t0, _, _, _, _, _, op1, c1, _, _, op2, c2, op3, c3, op4, c4, _, _, "END"] =
   runTranscript (split "\t" meta) t0 op1 c1 op2 c2 op3 c3 op4 c4
 runRows _ = panic "record_handlers: unexpected corpus shape"
-
-meaningful : String -> Bool
-meaningful line = line /= "" && not (startsWith "#" line)
 
 runRead : Result String (List String) -> <IO> Unit
 runRead (Err message) = panic "record_handlers: cannot read corpus: \{message}"

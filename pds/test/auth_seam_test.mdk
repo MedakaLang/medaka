@@ -69,6 +69,7 @@ import lib.xrpc.{
   queryEndpoint,
   registryEndpoints,
 }
+import test.response_support.{bodyText}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -293,23 +294,6 @@ bearer : String -> String
 bearer token = "Authorization: Bearer \{token}\r\n"
 
 -- ── response inspection ─────────────────────────────────────────────────────
-
-bodyStart : Array Int -> Int -> Int
-bodyStart bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "auth_seam_test: response has no body separator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i + 4
-  else
-    bodyStart bytes (i + 1)
-
-bodyText : Array Int -> String
-bodyText bytes =
-  let start = bodyStart bytes 0
-  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
 
 -- The three status digits of "HTTP/1.1 NNN Reason".
 statusOf : Array Int -> String

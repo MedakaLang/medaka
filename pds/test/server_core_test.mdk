@@ -35,6 +35,8 @@ import lib.server_core.{
   makeServer,
 }
 import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
+import test.fixture_support.{testNonce}
+import test.response_support.{expectedError, expectedTextResponse}
 import lib.xrpc.{
   AuthPolicy(..),
   Endpoint,
@@ -102,9 +104,6 @@ account =
 {- | The per-request nonce every request in this file is placed at. Nothing
    here drives a route that mints a token, so the value only has to be fixed;
    `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
-
 testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = 1700000000, nonce = testNonce, login = None }
@@ -124,17 +123,6 @@ seededStore =
 seedPreserved : Store -> Bool
 seedPreserved store =
   storeSize store == 1 && storeGet (cidForRaw seedBytes) store == Some seedBytes
-
-expectedTextResponse : Int -> String -> String -> Array Int
-expectedTextResponse status reason body =
-  toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
-
-expectedError : Int -> String -> String -> String -> Array Int
-expectedError status reason code message =
-  let body = "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
-  toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
 
 fixedQuery : Bytes
 fixedQuery =
