@@ -25502,9 +25502,10 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
         (Some route)
         []
     route
-  else if tag == "Float" || isFixedIntHead tag then
-    -- a fixed-width head's arithmetic is a builtin too, stamped with its own tag
-    -- so every engine wraps the result at that width.
+  else if tag == "Float" || isFixedIntHead tag && method /= "negate" then
+    -- a fixed-width head's binary arithmetic is a builtin too, stamped with its own
+    -- tag so every engine wraps the result at that width.  Its unary negation has no
+    -- tagged builtin, so it takes the head's `Num` impl like any other instance.
     let route = RScalar tag
     let _ =
       noteNumericPredicateTrace

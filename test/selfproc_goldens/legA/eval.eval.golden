@@ -89,6 +89,7 @@ eval : EvalEnv (Value a) -> Expr -> <a> Value a
 evalAnd : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
 evalArith : String -> Value a -> Value a -> Value a
 evalArithAt : String -> String -> Value a -> Value a -> Value a
+evalArithI64 : String -> (Int, Int) -> (Int, Int) -> Value a
 evalArithU64 : String -> (Int, Int) -> (Int, Int) -> Value a
 evalBinop : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
 evalBlock : EvalEnv (Value a) -> List DoStmt -> <a> Value a
@@ -163,6 +164,7 @@ hasLaterSlot : Value a -> Bool
 hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
+i64Value : (Int, Int) -> Value a
 ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
@@ -331,6 +333,9 @@ pHashFloat : Value a -> <a> Value a
 pHashInt : Value a -> <a> Value a
 pHashString : Value a -> <a> Value a
 pHypot : Value a -> Value a -> <a> Value a
+pI32Truncate : Value a -> <a> Value a
+pI64FromBits : Value a -> <a> Value a
+pI64ToBits : Value a -> <a> Value a
 pIndexErrorAt : Value a -> <a> Value a
 pIntBitsToFloat : Value a -> <a> Value a
 pIntToFloat : Value a -> <a> Value a
@@ -447,6 +452,7 @@ selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)
 selfBind : String -> (String, String)
 seqV : Unit -> Value a -> Value a
 shadowedFun : List String -> Decl -> Bool
+signExtend32 : Int -> Int
 sliceArray : Array (Value a) -> Int -> Int -> Value a
 sortByScore : List (Int, Value a) -> List (Int, Value a)
 sortGo : List (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
