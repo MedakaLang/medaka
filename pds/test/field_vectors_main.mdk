@@ -38,6 +38,7 @@ import lib.field.{
   feInverse,
 }
 import array.{setInPlace}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import string.{split, startsWith, toInt, trim}
 import io.{readLines}
@@ -74,7 +75,7 @@ bump arr i = setInPlace i (arr[i] + 1) arr
 -- ── Row evaluation ───────────────────────────────────────────────────
 
 mustHex : String -> Array Int
-mustHex s = resultOrPanic "field_vectors: bad hex '\{s}'" (decode s)
+mustHex s = toArray (resultOrPanic "field_vectors: bad hex '\{s}'" (decode s))
 
 loadFe : String -> Fe
 loadFe s = feFromBytesReduce (mustHex s)
@@ -103,7 +104,7 @@ applyBinary op x y =
 -- one line for the cell, and update the counters.
 grade : Array Int -> Array Int -> String -> String -> Fe -> String -> <IO> Unit
 grade counts totals label op actual expected =
-  let got = encode (feToBytes actual)
+  let got = encode (fromArrayAssumeByteDomain (feToBytes actual))
   let () = bump totals 0
   if got == expected then
     let () = bump counts (opIndex op)

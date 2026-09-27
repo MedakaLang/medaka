@@ -1,6 +1,7 @@
 {- | P1-D official repository transcript and named rejection driver. -}
 
 import array as A
+import bytes.{toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{contains, join, repeat, split, toInt, toUtf8}
@@ -49,7 +50,8 @@ import lib.tid.{
 }
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "repo_vectors: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "repo_vectors: malformed hex" (decode text))
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "repo_vectors: malformed CID" (cidFromString text)

@@ -26,6 +26,7 @@
      whole-set rewrite would fail. -}
 
 import array.{drop}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
@@ -660,7 +661,7 @@ liveFrameHex =
     Err message => panic "event_log_test: event assembly failed: \{message}"
     Ok event => match syncCommitFrame event
       Err message => panic "event_log_test: frame encoding failed: \{message}"
-      Ok bytes => encode bytes
+      Ok bytes => encode (fromArrayAssumeByteDomain bytes)
 
 writtenHead : String
 writtenHead = cidToString (repoCommitCid (repoLatestCommit written))
@@ -734,7 +735,7 @@ test "a real commit's frame is stored and read back byte for byte" =
     Err message => Fail message "the frame" "an error"
     Ok () => match eventLogRead dir 0
       Err message => Fail message "the frame" "an error"
-      Ok [stored] => match decode stored.frameHex
+      Ok [stored] => match map toArray (decode stored.frameHex)
         Err message => Fail message "hex-decodable frame bytes" "an error"
         Ok frameBytes =>
           match dagCborDecode (drop (arrayLength frameHeaderBytes) frameBytes)

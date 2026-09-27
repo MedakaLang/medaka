@@ -24,6 +24,7 @@
    itself graded against an external value rather than against
    `lib.did_key`'s own output. -}
 
+import bytes.{toArray}
 import string.{join}
 import hex.{decode}
 import lib.did_key.{didKeyFromPublicKey}
@@ -33,7 +34,7 @@ import lib.sign.{SecretKey, publicKeyForSecret, secretKeyFromBytes}
 signingKey : String -> SecretKey
 signingKey value = match decode value
   Err message => panic "service_jwt_interop: malformed hex: \{message}"
-  Ok scalar => match secretKeyFromBytes scalar
+  Ok scalar => match secretKeyFromBytes (toArray scalar)
     Err message => panic "service_jwt_interop: \{message}"
     Ok key => key
 

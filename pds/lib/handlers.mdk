@@ -76,6 +76,7 @@ import http.{
   QueryParam(..),
   Response,
 }
+import bytes.{fromArrayAssumeByteDomain}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
@@ -1864,7 +1865,7 @@ refreshGraceSeconds = 7200
    other. -}
 mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
-  let tokenId = Hex.encode context.nonce
+  let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
   (
     mintToken

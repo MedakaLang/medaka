@@ -19,7 +19,7 @@
    `blobsMoved`'s comparison included — to measure. -}
 
 import bytes as B
-import bytes.{Bytes, encodeUtf8}
+import bytes.{Bytes, encodeUtf8, toArray}
 import hex.{decode}
 import json.{Json(..), jObject, stringify}
 import string.{fromUtf8, toInt, toUtf8}
@@ -63,7 +63,7 @@ handleText : String
 handleText = "synth.example"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "cost_curve: malformed hex" (decode text)
+mustHex text = toArray (resultOrPanic "cost_curve: malformed hex" (decode text))
 
 corpusSecret : SecretKey
 corpusSecret =

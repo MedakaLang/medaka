@@ -99,6 +99,7 @@
    signatures carry no `Repo` and no `SecretKey`, so no signing key can reach a
    file through it. -}
 
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import string.{endsWith, stripSuffix, take}
 import fs.{isDir, mkdirAllDurably}
@@ -123,11 +124,12 @@ blobDir : String -> String
 blobDir dir = "\{dir}/blobs"
 
 cidKey : Cid -> String
-cidKey cid = encode (cidToBytes cid)
+cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
 
 -- | Directory holding one blob's shard.
 blobShardDir : String -> Cid -> String
-blobShardDir dir cid = "\{blobDir dir}/\{take 2 (encode (cidDigest cid))}"
+blobShardDir dir cid =
+  "\{blobDir dir}/\{take 2 (encode (fromArrayAssumeByteDomain (cidDigest cid)))}"
 
 -- | Absolute path of one blob's bytes.
 blobFilePath : String -> Cid -> String
@@ -202,7 +204,7 @@ blobFileWrite dir rows = do
   writeRows dir rows
 
 cidForName : String -> String -> Result String Cid
-cidForName path name = match decode name
+cidForName path name = match map toArray (decode name)
   Err message => Err "blobfile: \{path}: file name is not hex: \{message}"
   Ok bytes =>
     mapErr

@@ -5,6 +5,7 @@
 
 import test.{expectEach, expectEqual, expectOkThen, expectTrue}
 import array as A
+import bytes.{toArray}
 import hex.{decode}
 import lib.sign.{
   secretKeyFromBytes,
@@ -14,7 +15,8 @@ import lib.sign.{
 }
 
 bytes : String -> Array Int
-bytes value = resultOrPanic "sign_key_test: malformed hex" (decode value)
+bytes value =
+  toArray (resultOrPanic "sign_key_test: malformed hex" (decode value))
 
 oneBytes : Array Int
 oneBytes = [|

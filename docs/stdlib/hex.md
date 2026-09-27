@@ -1,57 +1,38 @@
 # hex
 
-Hexadecimal encoding and decoding of bytes.
+Hexadecimal encoding and decoding.
 
-`encode`/`decode` take an `Array Int` with each element from `0` to `255`,
-the same form `readFileBytes` and `writeFileBytes` use; `encodeBytes`/
-`decodeBytes` take and return `Bytes` instead. Each byte becomes two hex
+`encode`/`decode` take and return `Bytes`. Each byte becomes two hex
 digits, most significant first. Encoding produces lowercase digits and
-decoding accepts either case.
-
-An element outside `0` to `255` is masked to its low eight bits on the way
-in rather than refused, so `-1` and `511` both encode as `"ff"`.
+decoding accepts either case; `encodeUpper` produces uppercase digits.
 
 ## Encoding
-
-### `encodeBytes`
-
-```
-encodeBytes : Bytes -> String
-encodeBytes b
-```
-
-The byte string as lowercase hex, two digits per byte.
-
-```medaka
-> encodeBytes (fromArrayAssumeByteDomain [|255, 0, 16|])
-"ff0010"
-```
 
 ### `encode`
 
 ```
-encode : Array Int -> String
-encode bytes
+encode : Bytes -> String
+encode b
 ```
 
 The bytes as lowercase hex, two digits per byte.
 
 ```medaka
-> encode (fromList [255, 0, 16])
+> encode (fromU8Array [|255, 0, 16|])
 "ff0010"
 ```
 
 ### `encodeUpper`
 
 ```
-encodeUpper : Array Int -> String
-encodeUpper bytes
+encodeUpper : Bytes -> String
+encodeUpper b
 ```
 
 The bytes as uppercase hex, two digits per byte.
 
 ```medaka
-> encodeUpper (fromList [255, 0, 16])
+> encodeUpper (fromU8Array [|255, 0, 16|])
 "FF0010"
 ```
 
@@ -71,11 +52,11 @@ The UTF-8 bytes of a string as lowercase hex.
 
 ## Decoding
 
-### `decodeBytes`
+### `decode`
 
 ```
-decodeBytes : String -> Result String Bytes
-decodeBytes s
+decode : String -> Result String Bytes
+decode s
 ```
 
 The bytes written in a hex string, as a `Bytes`.
@@ -84,26 +65,7 @@ The bytes written in a hex string, as a `Bytes`.
 hex digit. Whitespace is not skipped.
 
 ```medaka
-> map toArray (decodeBytes "ff0010")
-Ok [|255, 0, 16|]
-> decodeBytes "zz"
-Err "hex.decode: invalid hex digit"
-```
-
-### `decode`
-
-```
-decode : String -> Result String (Array Int)
-decode s
-```
-
-The bytes written in a hex string.
-
-`Err` when the string has an odd length or any character that is not a
-hex digit. Whitespace is not skipped.
-
-```medaka
-> decode "ff0010"
+> map toArray (decode "ff0010")
 Ok [|255, 0, 16|]
 > decode "zz"
 Err "hex.decode: invalid hex digit"

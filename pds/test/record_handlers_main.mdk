@@ -17,7 +17,7 @@
    `validationStatus: "unknown"` — this server grades nothing against a
    lexicon and says so rather than claiming a check it never ran. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, toArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
 import io.{readLines}
@@ -84,7 +84,8 @@ collectionText : String
 collectionText = "app.bsky.feed.post"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "record_handlers: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "record_handlers: malformed hex" (decode text))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "record_handlers: malformed TID" (tidParse text)

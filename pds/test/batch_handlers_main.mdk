@@ -23,7 +23,7 @@
    rkey-less `createRecord` does not propose one again; and a batch deleting a
    record that is not there is the same idempotent no-op `deleteRecord` is. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jArray, jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -101,7 +101,8 @@ scratchCollection : String
 scratchCollection = "app.medaka.scratch"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "batch_handlers: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "batch_handlers: malformed hex" (decode text))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "batch_handlers: malformed TID" (tidParse text)
@@ -350,7 +351,7 @@ runBatch lines =
       (procedureRequest did (batchBody did writes))
   let value = responseJson responseBytes
   let carHex = match repoExportCar (storeMustRepo applied)
-    Ok bytes => encode bytes
+    Ok bytes => encode (fromArrayAssumeByteDomain bytes)
     Err message => panic "batch_handlers: repoExportCar failed: \{message}"
   let external =
     check

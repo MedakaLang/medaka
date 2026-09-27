@@ -14,6 +14,7 @@
 
 import test.{Expectation, expectEach, expectEqual}
 import array.{take}
+import bytes.{toArray}
 import hex.{decode}
 import list.{somes}
 import string.{toInt, trim, words}
@@ -226,7 +227,7 @@ data KdfRow = KdfRow {
 kdfHexField : String -> Array Int
 kdfHexField "-" = [||]
 kdfHexField h = match decode h
-  Ok bytes => bytes
+  Ok bytes => toArray bytes
   Err e => panic "pbkdf2_test: bad hex \{debug h}: \{e}"
 
 parseKdfLine : String -> Option KdfRow

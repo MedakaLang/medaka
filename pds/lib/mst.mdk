@@ -19,6 +19,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import array.{drop, take}
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set, size}
@@ -801,7 +802,7 @@ mstValidateNodeBytes expected isRoot bytes = do
 -- ── validating a block set ──────────────────────────────────────────────────
 
 cidKey : Cid -> String
-cidKey cid = encode (cidToBytes cid)
+cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
 
 mstEmptySet : Set String
 mstEmptySet = empty

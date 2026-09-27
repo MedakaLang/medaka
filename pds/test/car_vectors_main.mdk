@@ -1,6 +1,7 @@
 {- | P1-C external CAR corpus and hostile-wire driver. -}
 
 import array.{take}
+import bytes.{toArray}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse}
@@ -17,7 +18,8 @@ data FixtureState =
   | FixtureState String (List Cid) (List (Cid, Array Int)) (Option (Array Int))
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "car_vectors: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "car_vectors: malformed hex" (decode text))
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "car_vectors: malformed CID" (cidFromString text)

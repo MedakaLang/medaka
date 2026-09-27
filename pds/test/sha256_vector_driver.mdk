@@ -30,6 +30,7 @@
    Exit 1 if any record failed, or if zero records were checked across all
    files (vacuous-green guard). Exit 0 otherwise. -}
 
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import crypto.sha256.{sha256}
 import hex.{decode, encode}
 import array.{take, make, blit, concat}
@@ -123,7 +124,7 @@ expandMsg : Int -> String -> Int -> Array Int
 expandMsg lenBits msgHex repeatN =
   let lenBytes = lenBits / 8
   let decoded = match decode msgHex
-    Ok bytes => bytes
+    Ok bytes => toArray bytes
     Err e => panic "sha256_vector_driver: bad hex in Msg: \{e}"
   let oneRep = take lenBytes decoded
   let n = if repeatN <= 0 then 1 else repeatN
@@ -213,9 +214,10 @@ checkMonte path maxBytes lns =
         (0, 0, n)
       else
         let seedBytes = match decode seedHex
-          Ok b => b
+          Ok b => toArray b
           Err e => panic "sha256_vector_driver: bad hex in Seed: \{e}"
-        let actual = map encode (monteRun seedBytes n)
+        let actual =
+          map (x => encode (fromArrayAssumeByteDomain x)) (monteRun seedBytes n)
         let failed = countMonteMismatches path 0 expected actual
         (n, failed, 0)
 
@@ -241,7 +243,10 @@ checkRecords path maxBytes (r :: rest) =
     let (c, f, s) = checkRecords path maxBytes rest
     (c, f, s + 1)
   else
-    let actual = encode (sha256 (expandMsg r.lenBits r.msgHex r.repeatN))
+    let actual =
+      encode
+        (fromArrayAssumeByteDomain
+          (sha256 (expandMsg r.lenBits r.msgHex r.repeatN)))
     let (c, f, s) = checkRecords path maxBytes rest
     if actual == r.mdHex then
       (c + 1, f, s)

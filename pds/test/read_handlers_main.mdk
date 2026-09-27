@@ -33,7 +33,7 @@
    OWN `did:web` carries the repository's signing key, so that arm needs a
    repository and is graded here, against the corpus's key. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -94,7 +94,8 @@ collectionText : String
 collectionText = "app.bsky.feed.post"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "read_handlers: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "read_handlers: malformed hex" (decode text))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "read_handlers: malformed TID" (tidParse text)
@@ -295,8 +296,10 @@ carCell server store did corpusHex =
     Ok bytes => bytes
     Err message => panic "read_handlers: repoExportCar failed: \{message}"
   let corpus = mustHex corpusHex
-  let servedHex = encode served
-  let ok = servedHex == encode exported && servedHex == encode corpus
+  let servedHex = encode (fromArrayAssumeByteDomain served)
+  let ok =
+    servedHex == encode (fromArrayAssumeByteDomain exported)
+      && servedHex == encode (fromArrayAssumeByteDomain corpus)
   check
     "sync-getRepo-car-bytes"
     ok

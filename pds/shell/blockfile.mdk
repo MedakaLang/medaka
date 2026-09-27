@@ -67,6 +67,8 @@
    signatures carry no `Repo` and no `SecretKey`, so no signing key can reach a
    file through it. -}
 
+import bytes as B
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import string.{take}
 import fs.{isDir, mkdirAllDurably}
@@ -78,11 +80,12 @@ stagingName : String
 stagingName = ".staging"
 
 cidKey : Cid -> String
-cidKey cid = encode (cidToBytes cid)
+cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
 
 -- | Directory holding one block's shard.
 blockShardDir : String -> Cid -> String
-blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
+blockShardDir dir cid =
+  "\{dir}/\{take 2 (encode (fromArrayAssumeByteDomain (cidDigest cid)))}"
 
 -- | Absolute path of one block's file.
 blockFilePath : String -> Cid -> String
@@ -150,7 +153,7 @@ blockFileWrite dir rows = do
   fsyncShards shards
 
 cidForName : String -> String -> Result String Cid
-cidForName path name = match decode name
+cidForName path name = match map toArray (decode name)
   Err message =>
     Err "blockfile: \{path}: block file name is not hex: \{message}"
   Ok bytes => match cidFromBytes bytes
@@ -171,7 +174,7 @@ export
 isShardName : String -> Bool
 isShardName name = match decode name
   Err _ => False
-  Ok bytes => arrayLength bytes == 1 && encode bytes == name
+  Ok bytes => B.length bytes == 1 && encode bytes == name
 
 {- | The entries of one shard that are plain files. Every block is promoted
    into a shard as a leaf FILE (`writeOne`), so a directory among a shard's

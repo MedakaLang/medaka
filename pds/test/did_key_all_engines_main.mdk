@@ -2,6 +2,7 @@
    `did:key` corpus and the public decoder's malformed-input boundary. -}
 
 import array as A
+import bytes.{toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{split, stripPrefix, toInt, trim}
@@ -18,7 +19,8 @@ import lib.sign.{publicKeyCompressed, publicKeyFromCompressed}
 
 mustHex : String -> Array Int
 mustHex text =
-  resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text)
+  toArray
+    (resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text))
 
 mustInt : String -> Int
 mustInt text =

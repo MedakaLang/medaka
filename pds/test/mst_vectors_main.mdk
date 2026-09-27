@@ -1,6 +1,7 @@
 {- | P1-B external MST corpus and hostile-structure driver. -}
 
 import array.{drop}
+import bytes.{toArray}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse, sortBy}
@@ -31,7 +32,8 @@ data ProofRow = ProofRow (List (Array Int)) (List String)
 data ProofCase = ProofCase String Mst (Option Cid) Int (List ProofRow)
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "mst_vectors: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "mst_vectors: malformed hex" (decode text))
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "mst_vectors: malformed CID" (cidFromString text)
