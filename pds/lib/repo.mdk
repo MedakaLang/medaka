@@ -264,6 +264,29 @@ blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
 blockRowsToBytesDoor =
   map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
 
+-- Door: `mst` speaks `Bytes` blocks and this module's block lists are
+-- `Array Int`. `toArray` is total, so nothing is checked or masked.
+blockRowsFromBytesDoor : List (Cid, Bytes) -> List (Cid, Array Int)
+blockRowsFromBytesDoor = map ((cid, bytes) => (cid, toArray bytes))
+
+-- Door: the same total `toArray` crossing for `mst`'s `(key, value)` entries.
+entriesFromBytesDoor : List (Bytes, Cid) -> List (Array Int, Cid)
+entriesFromBytesDoor = map ((key, cid) => (toArray key, cid))
+
+-- Door, checked: MST keys are `Bytes` and this module's paths are `Array Int`.
+-- An out-of-range element is refused with the message `mstKeyDepth` returned
+-- for it when it took `Array Int`.
+mstKeyDoor : Array Int -> Result String Bytes
+mstKeyDoor path =
+  toResult "mst: key element outside byte range 0..255" (fromArray path)
+
+-- Door, checked: a path with an out-of-range element names no entry, which is
+-- the answer `mstLookup` gave for it when it took `Array Int`.
+mstLookupDoor : Array Int -> Mst -> Option Cid
+mstLookupDoor path tree = match fromArray path
+  None => None
+  Some key => mstLookup key tree
+
 blockElementRangeMessage : String
 blockElementRangeMessage = "blockstore: block element outside byte range 0..255"
 
@@ -311,7 +334,7 @@ buildCommit did secret rev tree store = do
   let commitCid = cidForDagCborDoor signed
   withTree <- mapErr
     (message => "repo: storing MST failed: \{message}")
-    (blockStoreAddMany (blockRowsToBytesDoor (mstNodeBlocks tree)) store)
+    (blockStoreAddMany (mstNodeBlocks tree) store)
   -- Masked: `signed` is `dagCborEncode`'s output, in range by construction.
   complete <- mapErr
     (message => "repo: storing commit failed: \{message}")
@@ -466,7 +489,7 @@ export
 repoRecordCid : Array Int -> Repo -> Result String (Option Cid)
 repoRecordCid path (Repo _ _ _ tree _ _) = do
   () <- validatePath path
-  Ok (mstLookup path tree)
+  Ok (mstLookupDoor path tree)
 
 -- ── writes ──────────────────────────────────────────────────────────────────
 
@@ -514,7 +537,7 @@ repoCreate path record rev (Repo did secret publicKey tree store prior) = do
   (recordCid, withRecord) <- stageRecord record store
   nextTree <- mapErr
     (message => "repo: duplicate create: \{message}")
-    (mstInsert path recordCid tree)
+    (andThen (mstKeyDoor path) (key => mstInsert key recordCid tree))
   finishMutation did secret publicKey rev nextTree withRecord
 
 -- | Replace an existing record.
@@ -527,7 +550,7 @@ repoUpdate path record rev (Repo did secret publicKey tree store prior) = do
   (recordCid, withRecord) <- stageRecord record store
   nextTree <- mapErr
     (message => "repo: missing update: \{message}")
-    (mstReplace path recordCid tree)
+    (andThen (mstKeyDoor path) (key => mstReplace key recordCid tree))
   finishMutation did secret publicKey rev nextTree withRecord
 
 -- | Delete an existing record.
@@ -538,7 +561,7 @@ repoDelete path rev (Repo did secret publicKey tree store prior) = do
   () <- ensureNewer rev prior
   nextTree <- mapErr
     (message => "repo: missing delete: \{message}")
-    (mstDelete path tree)
+    (andThen (mstKeyDoor path) (key => mstDelete key tree))
   finishMutation did secret publicKey rev nextTree store
 
 {- | One batch element against the intermediate tree and blocks.
@@ -559,7 +582,7 @@ applyWrite (RepoWriteCreate path record) tree store = do
   (recordCid, withRecord) <- stageRecord record store
   nextTree <- mapErr
     (message => "repo: duplicate create: \{message}")
-    (mstInsert path recordCid tree)
+    (andThen (mstKeyDoor path) (key => mstInsert key recordCid tree))
   Ok (nextTree, withRecord)
 applyWrite (RepoWriteUpdate path record) tree store = do
   () <- validatePath path
@@ -567,13 +590,13 @@ applyWrite (RepoWriteUpdate path record) tree store = do
   (recordCid, withRecord) <- stageRecord record store
   nextTree <- mapErr
     (message => "repo: missing update: \{message}")
-    (mstReplace path recordCid tree)
+    (andThen (mstKeyDoor path) (key => mstReplace key recordCid tree))
   Ok (nextTree, withRecord)
 applyWrite (RepoWriteDelete path) tree store = do
   () <- validatePath path
-  match mstLookup path tree
+  match mstLookupDoor path tree
     None => Ok (tree, store)
-    Some _ => match mstDelete path tree
+    Some _ => match andThen (mstKeyDoor path) (key => mstDelete key tree)
       Err message => Err "repo: missing delete: \{message}"
       Ok nextTree => Ok (nextTree, store)
 
@@ -643,7 +666,7 @@ export
 repoLookup : Array Int -> Repo -> Result String (Option DagCbor)
 repoLookup path (Repo _ _ _ tree store _) = do
   () <- validatePath path
-  match mstLookup path tree
+  match mstLookupDoor path tree
     None => Ok None
     Some cid => map Some (decodeAt cid store)
 
@@ -655,7 +678,7 @@ repoLookup path (Repo _ _ _ tree store _) = do
    repository; `repoList` is this plus a decode of every entry. -}
 export
 repoEntries : Repo -> List (Array Int, Cid)
-repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
+repoEntries (Repo _ _ _ tree _ _) = entriesFromBytesDoor (mstEntries tree)
 
 {- | The entries one bounded key range names, in the direction the query asks
    for, without reading or decoding a record.
@@ -665,7 +688,8 @@ repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
    page does not grow with the repository behind it. -}
 export
 repoEntriesRange : MstRangeQuery -> Repo -> List (Array Int, Cid)
-repoEntriesRange query (Repo _ _ _ tree _ _) = mstRange query tree
+repoEntriesRange query (Repo _ _ _ tree _ _) =
+  entriesFromBytesDoor (mstRange query tree)
 
 -- | Strictly decode the record one `repoEntries` entry names.
 export
@@ -675,7 +699,8 @@ repoDecodeEntry cid (Repo _ _ _ _ store _) = decodeAt cid store
 -- | List canonical path order with decoded current records.
 export
 repoList : Repo -> Result String (List (Array Int, Cid, DagCbor))
-repoList (Repo _ _ _ tree store _) = listRecords (mstEntries tree) store []
+repoList (Repo _ _ _ tree store _) =
+  listRecords (entriesFromBytesDoor (mstEntries tree)) store []
 
 listRecords : List (Array Int, Cid) ->
   BlockStore ->
@@ -745,10 +770,10 @@ nodeLinks bytes = match dagCborDecode bytes
 
 walkNodes : List Cid ->
   BlockStore ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   CidSeq ->
   Int ->
-  Result String (List (Cid, Array Int), List Cid)
+  Result String (List (Cid, Bytes), List Cid)
 walkNodes [] _ blocks leaves _ = Ok (reverse blocks, cidSeqList leaves)
 walkNodes frontier store blocks leaves traversal = do
   _ <- checkMstTraversalDepth traversal
@@ -762,8 +787,8 @@ walkLayer : List Cid ->
   BlockStore ->
   CidSeq ->
   CidSeq ->
-  List (Cid, Array Int) ->
-  Result String (List Cid, CidSeq, List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  Result String (List Cid, CidSeq, List (Cid, Bytes))
 walkLayer [] _ next leaves blocks = Ok (cidSeqList next, leaves, blocks)
 walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
   None => Err "repo: missing graph MST block"
@@ -773,12 +798,7 @@ walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
       let mergedChildren = fold (acc child => cidSeqAdd child acc) next children
       let mergedLeaves =
         fold (acc leaf => cidSeqAdd leaf acc) leaves foundLeaves
-      walkLayer
-        rest
-        store
-        mergedChildren
-        mergedLeaves
-        ((cid, toArray bytes) :: blocks)
+      walkLayer rest store mergedChildren mergedLeaves ((cid, bytes) :: blocks)
 
 recordBlocks : List Cid ->
   BlockStore ->
@@ -817,7 +837,8 @@ repoExportGraph commitCid commitBytes dataRoot store =
                 Err message => Err message
                 Ok records =>
                   let blocks =
-                    (commitCid, arrayCopy commitBytes) :: nodes ++ records
+                    (commitCid, arrayCopy commitBytes)
+                      :: blockRowsFromBytesDoor nodes ++ records
                   match carEncode [commitCid] (blockRowsToBytesDoor blocks)
                     Err message => Err "repo: CAR export failed: \{message}"
                     Ok bytes => Ok (blocks, toArray bytes)
@@ -840,31 +861,38 @@ hasField : String -> List (String, DagCbor) -> Bool
 hasField _ [] = False
 hasField name ((key, _) :: rest) = name == key || hasField name rest
 
--- Checked: `repoValidateCommit` passes caller bytes here, and `dagCborDecode`
--- refused an out-of-range element when it took `Array Int`.
+-- Door, checked: `repoValidateCommit` passes caller bytes here, and
+-- `dagCborDecode` refused an out-of-range element when it took `Array Int`.
 decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
-decodeSignedCommit bytes = match dagCborDecodeChecked bytes
-  Err message => Err "repo: invalid commit CBOR: \{message}"
-  Ok (DcMap fields) =>
-    if not (hasField "prev" fields) then
-      Err "repo: required prev field is missing"
-    else match fields
-      [("did", DcString did), ("rev", DcString revText), ("sig", DcBytes compact), ("data", DcLink dataCid), ("prev", DcNull), ("version", DcInt version)] =>
-        if version /= 3 then
-          Err "repo: commit version mismatch"
-        else do
-          () <- validateDid did
-          rev <- mapErr
-            (message => "repo: invalid commit TID: \{message}")
-            (tidParse revText)
-          signature <- mapErr
-            (message => "repo: invalid compact signature: \{message}")
-            (signatureFromCompact compact)
-          Ok (did, dataCid, rev, signature)
-      _ =>
-        Err
-          "repo: commit must contain exactly did, rev, sig, data, prev, version"
-  Ok _ => Err "repo: commit must be a map"
+decodeSignedCommit bytes =
+  let decoded =
+    andThen
+      (toResult
+        "dagcbor: input element outside byte range 0..255"
+        (fromArray bytes))
+      dagCborDecodeChecked
+  match decoded
+    Err message => Err "repo: invalid commit CBOR: \{message}"
+    Ok (DcMap fields) =>
+      if not (hasField "prev" fields) then
+        Err "repo: required prev field is missing"
+      else match fields
+        [("did", DcString did), ("rev", DcString revText), ("sig", DcBytes compact), ("data", DcLink dataCid), ("prev", DcNull), ("version", DcInt version)] =>
+          if version /= 3 then
+            Err "repo: commit version mismatch"
+          else do
+            () <- validateDid did
+            rev <- mapErr
+              (message => "repo: invalid commit TID: \{message}")
+              (tidParse revText)
+            signature <- mapErr
+              (message => "repo: invalid compact signature: \{message}")
+              (signatureFromCompact compact)
+            Ok (did, dataCid, rev, signature)
+        _ =>
+          Err
+            "repo: commit must contain exactly did, rev, sig, data, prev, version"
+    Ok _ => Err "repo: commit must be a map"
 
 {- | Strictly validate signed v3 commit bytes against expected state and
    return the admitted compact signature. -}

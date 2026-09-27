@@ -1,11 +1,11 @@
 {- | P1-B external MST corpus and hostile-structure driver. -}
 
-import array.{drop}
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse, sortBy}
-import string.{contains, join, split, startsWith, toInt, toUtf8}
+import string.{contains, join, split, startsWith, toInt}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import test.vector_support.{rejectContains}
@@ -25,15 +25,14 @@ import lib.mst.{
   mstValidateNodeBytes,
 }
 
-data CaseState = CaseState String Mst (Option Cid) (List (Cid, Array Int))
+data CaseState = CaseState String Mst (Option Cid) (List (Cid, Bytes))
 
-data ProofRow = ProofRow (List (Array Int)) (List String)
+data ProofRow = ProofRow (List Bytes) (List String)
 
 data ProofCase = ProofCase String Mst (Option Cid) Int (List ProofRow)
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "mst_vectors: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "mst_vectors: malformed hex" (decode text)
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "mst_vectors: malformed CID" (cidFromString text)
@@ -43,14 +42,14 @@ mustTree (Ok tree) = tree
 mustTree (Err message) =
   panic "mst_vectors: fixture operation failed: \{message}"
 
-blockPresent : (Cid, Array Int) -> List (Cid, Array Int) -> Bool
+blockPresent : (Cid, Bytes) -> List (Cid, Bytes) -> Bool
 blockPresent (cid, bytes) actual =
   any
     ((candidate, candidateBytes) =>
       cidEqual cid candidate && bytes == candidateBytes)
     actual
 
-sameBlocks : List (Cid, Array Int) -> List (Cid, Array Int) -> Bool
+sameBlocks : List (Cid, Bytes) -> List (Cid, Bytes) -> Bool
 sameBlocks expected actual =
   length expected == length actual
     && all (expectedBlock => blockPresent expectedBlock actual) expected
@@ -159,41 +158,31 @@ runCorpus (line :: rest) current passed total =
       Some state => runCorpus rest None (passed + gradeCase state) (total + 1)
     _ => panic "mst_vectors: malformed corpus row: \{line}"
 
-mustNode : DagCbor -> Array Int
+mustNode : DagCbor -> Bytes
 mustNode value =
-  toArray
-    (resultOrPanic
-      "mst_vectors: hostile node encoding failed"
-      (dagCborEncode value))
+  resultOrPanic
+    "mst_vectors: hostile node encoding failed"
+    (dagCborEncode value)
 
-entryValueWithTree : Array Int -> Int -> Cid -> DagCbor -> DagCbor
+entryValueWithTree : Bytes -> Int -> Cid -> DagCbor -> DagCbor
 entryValueWithTree key prefix value tree = DcMap [
   ("p", DcInt prefix),
-  ("k", DcBytes (fromArrayAssumeByteDomain key)),
+  ("k", DcBytes key),
   ("v", DcLink value),
   ("t", tree),
 ]
 
-entryValue : Array Int -> Int -> Cid -> DagCbor
+entryValue : Bytes -> Int -> Cid -> DagCbor
 entryValue key prefix value = entryValueWithTree key prefix value DcNull
 
-nodeBytes : DagCbor -> List DagCbor -> Array Int
+nodeBytes : DagCbor -> List DagCbor -> Bytes
 nodeBytes left entries = mustNode (DcMap [("l", left), ("e", DcArray entries)])
 
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
-cidForDagCborDoor : Array Int -> Cid
-cidForDagCborDoor bytes =
-  cidForDagCbor
-    (optionOrPanic
-      "cidForDagCbor: every element must be a byte in 0..255"
-      (fromArray bytes))
+nodeBlock : Bytes -> (Cid, Bytes)
+nodeBlock bytes = (cidForDagCbor bytes, bytes)
 
-nodeBlock : Array Int -> (Cid, Array Int)
-nodeBlock bytes = (cidForDagCborDoor bytes, bytes)
-
-nodeCid : Array Int -> Cid
-nodeCid bytes = cidForDagCborDoor bytes
+nodeCid : Bytes -> Cid
+nodeCid bytes = cidForDagCbor bytes
 
 accepts : String -> Result String Unit -> <IO> Int
 accepts label (Ok ()) =
@@ -209,20 +198,20 @@ runHostile =
     mustHex "6170702e62736b792e666565642e706f73742f7072656669782d612d31"
   let keyB =
     mustHex "6170702e62736b792e666565642e706f73742f7072656669782d622d30"
-  let rootLow = toUtf8 "app.bsky.feed.post/range-2"
-  let rootHigh = toUtf8 "app.bsky.feed.post/range-3"
-  let leftKey = toUtf8 "app.bsky.feed.post/range-1"
-  let betweenKey = toUtf8 "app.bsky.feed.post/range-20"
-  let rightKey = toUtf8 "app.bsky.feed.post/range-4"
-  let depthTwo = toUtf8 "app.bsky.feed.post/medaka-depth-2-31"
-  let depthOne = toUtf8 "app.bsky.feed.post/medaka-depth-1-5"
+  let rootLow = encodeUtf8 "app.bsky.feed.post/range-2"
+  let rootHigh = encodeUtf8 "app.bsky.feed.post/range-3"
+  let leftKey = encodeUtf8 "app.bsky.feed.post/range-1"
+  let betweenKey = encodeUtf8 "app.bsky.feed.post/range-20"
+  let rightKey = encodeUtf8 "app.bsky.feed.post/range-4"
+  let depthTwo = encodeUtf8 "app.bsky.feed.post/medaka-depth-2-31"
+  let depthOne = encodeUtf8 "app.bsky.feed.post/medaka-depth-1-5"
   let value =
     mustCid "bafyreifqadjijwueiii3uzghmdqx4u7zbodkcyfyjvgpaalgp4ck32rmfa"
   let validTree = mustTree (mstInsert keyA value mstEmpty)
   let emptyRoot = mstRootCid mstEmpty
   let badOrder = nodeBytes DcNull [
     entryValue keyB 0 value,
-    entryValue (drop 26 keyA) 26 value,
+    entryValue (B.drop 26 keyA) 26 value,
   ]
   let badPrefix = nodeBytes DcNull [entryValue keyA 1 value]
   let undercompressed =
@@ -234,7 +223,7 @@ runHostile =
   let misplacedBetweenChild = nodeBytes DcNull [entryValue rightKey 0 value]
   let misplacedBetweenRoot = nodeBytes DcNull [
     entryValueWithTree rootLow 0 value (DcLink (nodeCid misplacedBetweenChild)),
-    entryValue (drop 25 rootHigh) 25 value,
+    entryValue (B.drop 25 rootHigh) 25 value,
   ]
   let misplacedRightChild = nodeBytes DcNull [entryValue leftKey 0 value]
   let misplacedRightRoot = nodeBytes DcNull [
@@ -247,7 +236,10 @@ runHostile =
   let transitiveRoot =
     nodeBytes (DcLink (nodeCid transitiveMiddle)) [entryValue depthTwo 0 value]
   sum [
-    rejectContains "empty-key" "empty key" (mstInsert [||] value mstEmpty),
+    rejectContains
+      "empty-key"
+      "empty key"
+      (mstInsert (fromU8Array [||]) value mstEmpty),
     rejectContains
       "duplicates"
       "duplicate key"
@@ -298,7 +290,7 @@ runHostile =
     rejectContains
       "truncation"
       "truncated"
-      (mstValidateNodeBytes 0 True [|0xa2|]),
+      (mstValidateNodeBytes 0 True (fromU8Array [|0xa2|])),
     rejectContains
       "unreachable"
       "unreachable"
@@ -313,11 +305,11 @@ runHostile =
 
 runControls : <IO> Int
 runControls =
-  let rootLow = toUtf8 "app.bsky.feed.post/range-2"
-  let rootHigh = toUtf8 "app.bsky.feed.post/range-3"
-  let leftKey = toUtf8 "app.bsky.feed.post/range-1"
-  let betweenKey = toUtf8 "app.bsky.feed.post/range-20"
-  let rightKey = toUtf8 "app.bsky.feed.post/range-4"
+  let rootLow = encodeUtf8 "app.bsky.feed.post/range-2"
+  let rootHigh = encodeUtf8 "app.bsky.feed.post/range-3"
+  let leftKey = encodeUtf8 "app.bsky.feed.post/range-1"
+  let betweenKey = encodeUtf8 "app.bsky.feed.post/range-20"
+  let rightKey = encodeUtf8 "app.bsky.feed.post/range-4"
   let value =
     mustCid "bafyreifqadjijwueiii3uzghmdqx4u7zbodkcyfyjvgpaalgp4ck32rmfa"
   let leftChild = nodeBytes DcNull [entryValue leftKey 0 value]
@@ -326,7 +318,7 @@ runControls =
   let betweenChild = nodeBytes DcNull [entryValue betweenKey 0 value]
   let betweenRoot = nodeBytes DcNull [
     entryValueWithTree rootLow 0 value (DcLink (nodeCid betweenChild)),
-    entryValue (drop 25 rootHigh) 25 value,
+    entryValue (B.drop 25 rootHigh) 25 value,
   ]
   let rightChild = nodeBytes DcNull [entryValue rightKey 0 value]
   let rightRoot = nodeBytes DcNull [
@@ -353,12 +345,12 @@ runControls =
       ]),
   ]
 
-proofCids : List (Cid, Array Int) -> List String
+proofCids : List (Cid, Bytes) -> List String
 proofCids blocks = sortBy compare (map ((cid, _) => cidToString cid) blocks)
 
 gradeProofRow : String ->
   Mst ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   ProofRow ->
   <IO> (Int, Int)
 gradeProofRow name tree nodes (ProofRow keys expected) =
@@ -385,7 +377,7 @@ gradeProofRow name tree nodes (ProofRow keys expected) =
 
 gradeProofRows : String ->
   Mst ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   List ProofRow ->
   (Int, Int) ->
   <IO> (Int, Int)

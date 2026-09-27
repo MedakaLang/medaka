@@ -21,7 +21,7 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
 import lib.blob.{blobCid}
@@ -121,11 +121,11 @@ cidForDagCborDoor bytes =
 -- One row: the record's path bytes, its content CID, and its encoded bytes —
 -- built once per record so the entry (for the MST) and the block (for the
 -- store) never re-derive each other.
-buildRow : String -> Int -> Int -> Int -> (Array Int, Cid, Array Int)
+buildRow : String -> Int -> Int -> Int -> (Bytes, Cid, Array Int)
 buildRow shape seed count i =
   let path = pathFor shape count i
   let bytes = mustEncode (recordFor seed i)
-  (toUtf8 path, cidForDagCborDoor bytes, bytes)
+  (encodeUtf8 path, cidForDagCborDoor bytes, bytes)
 
 -- Builds descending so the ascending final list falls out of plain consing —
 -- no `++` accumulation over thousands of records.
@@ -133,26 +133,26 @@ buildRowsGo : String ->
   Int ->
   Int ->
   Int ->
-  List (Array Int, Cid, Array Int) ->
-  List (Array Int, Cid, Array Int)
+  List (Bytes, Cid, Array Int) ->
+  List (Bytes, Cid, Array Int)
 buildRowsGo shape seed count i acc =
   if i < 0 then
     acc
   else
     buildRowsGo shape seed count (i - 1) (buildRow shape seed count i :: acc)
 
-buildRows : String -> Int -> Int -> List (Array Int, Cid, Array Int)
+buildRows : String -> Int -> Int -> List (Bytes, Cid, Array Int)
 buildRows shape seed count = buildRowsGo shape seed count (count - 1) []
 
-entriesOf : List (Array Int, Cid, Array Int) -> List (Array Int, Cid)
+entriesOf : List (Bytes, Cid, Array Int) -> List (Bytes, Cid)
 entriesOf [] = []
 entriesOf ((path, cid, _) :: rest) = (path, cid) :: entriesOf rest
 
-recordBlocksOf : List (Array Int, Cid, Array Int) -> List (Cid, Array Int)
+recordBlocksOf : List (Bytes, Cid, Array Int) -> List (Cid, Array Int)
 recordBlocksOf [] = []
 recordBlocksOf ((_, cid, bytes) :: rest) = (cid, bytes) :: recordBlocksOf rest
 
-mustTree : List (Array Int, Cid) -> Mst
+mustTree : List (Bytes, Cid) -> Mst
 mustTree entries =
   resultOrPanic "synth_repo: mst build failed" (mstFromEntries entries)
 
@@ -229,7 +229,9 @@ runBuild shape dir count blobCount seed =
   let (commitCid, signed) =
     signedCommit corpusDid corpusSecret corpusRev dataCid
   let allBlocks =
-    (commitCid, signed) :: mstNodeBlocks tree ++ recordBlocksOf rows
+    (commitCid, signed)
+      :: map ((cid, bytes) => (cid, toArray bytes)) (mstNodeBlocks tree)
+        ++ recordBlocksOf rows
   match persistSave dir commitCid allBlocks
     Err message => panic "synth_repo: persist failed: \{message}"
     Ok () =>

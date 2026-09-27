@@ -271,7 +271,7 @@ addedRecordsOf (op :: rest) = match (op.recordCid, op.recordBytes)
   (Some cid, Some bytes) => (cid, bytes) :: addedRecordsOf rest
   _ => addedRecordsOf rest
 
-cidKeys : List (Cid, Array Int) -> List String
+cidKeys : List (Cid, a) -> List String
 cidKeys blocks = map ((cid, _) => cidToString cid) blocks
 
 {- | How many blocks this event ships that are MST nodes present in BOTH the
