@@ -26,9 +26,8 @@
 -- neither aliases.
 
 import core.{Debug, Index, Option}
-import bytes.{
-  Bytes, adoptByteBlockUnsafe, encodeUtf8, lendByteBlockUnsafe, toArray
-}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, toArray}
 import u8 as U8
 
 {- | The mutable byte-string type.
@@ -175,7 +174,7 @@ blit (src@(MutBytes sb)) srcOff (dst@(MutBytes db)) dstOff len =
 export
 freeze : MutBytes -> Bytes
 freeze (mb@(MutBytes bb)) =
-  adoptByteBlockUnsafe (byteBlockCopyUnsafe (byteBlockLength bb) bb)
+  B.adoptByteBlockUnsafe (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 
 {- | A mutable copy of `b`.
 
@@ -186,8 +185,42 @@ freeze (mb@(MutBytes bb)) =
 export
 thaw : Bytes -> MutBytes
 thaw b =
-  let bb = lendByteBlockUnsafe b
+  let bb = B.lendByteBlockUnsafe b
   MutBytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
+
+-- # Runtime interop
+
+-- The two exports with a `ByteBlock` in their signature, the counterparts of
+-- `bytes`' `adoptByteBlockUnsafe` and `lendByteBlockUnsafe`. Both alias: the
+-- `MutBytes` and the block share storage, so a write through either reaches
+-- the other, which is what the `Unsafe` suffix names. Call them only from a
+-- module that already holds a `ByteBlock` of its own -- `bytebuilder.mdk`
+-- handing out its live buffer, `http.mdk` reading one in place -- never to
+-- route around this module's own operations.
+
+{- | The mutable byte string holding `bb` itself, with no copy.
+
+   The byte string and `bb` share storage, so a write through either is seen
+   by the other. The whole block becomes the byte string.
+
+   > let bb = byteBlockFromString "hi" in let mb = adoptByteBlockUnsafe bb in let _ = setInPlace 0 72 mb in byteBlockGetUnsafe 0 bb
+   72 -}
+export
+adoptByteBlockUnsafe : ByteBlock -> MutBytes
+adoptByteBlockUnsafe bb = MutBytes bb
+
+{- | The block `mb` is built on, with no copy.
+
+   The counterpart of `adoptByteBlockUnsafe`, for a caller that reads the
+   bytes in place without paying for `freeze`'s copy. A write to the block
+   changes `mb`, and a later write to `mb` changes what the block holds, so
+   read it before `mb` is written again.
+
+   > byteBlockLength (lendByteBlockUnsafe (make 5))
+   5 -}
+export
+lendByteBlockUnsafe : MutBytes -> ByteBlock
+lendByteBlockUnsafe (mb@(MutBytes bb)) = bb
 
 {- | Renders as `MutBytes "<hex>"`, in the lowercase hex form `Debug Bytes`
    uses, from the buffer's current contents.
@@ -197,7 +230,7 @@ thaw b =
    > let mb = make 2 in let _ = setInPlace 0 255 mb in debug mb
    "MutBytes \"ff00\"" -}
 export impl Debug MutBytes where
-  -- `adoptByteBlockUnsafe` aliases rather than copies, so the digits are the
+  -- `B.adoptByteBlockUnsafe` aliases rather than copies, so the digits are the
   -- buffer's current bytes; the `Bytes` it builds is read here and dropped,
   -- and the byte-to-hex walk is not written a second time.
-  debug (MutBytes bb) = "Mut\{debug (adoptByteBlockUnsafe bb)}"
+  debug (MutBytes bb) = "Mut\{debug (B.adoptByteBlockUnsafe bb)}"

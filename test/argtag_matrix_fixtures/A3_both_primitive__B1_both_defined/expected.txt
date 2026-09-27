@@ -1,6 +1,6 @@
-class: undecidable-by-construction
+class: decidable
 correct: int|bool
 check: 0
 run: 0 | int|bool
-build: 1 | error: emitter failed compiling main.mdk\nruntime error [E-PANIC]: arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)\n
-exec: n/a
+build: 0 | built main.mdk -> <BIN>
+exec: 0 | int|bool

@@ -1,0 +1,22 @@
+-- A DIRECT call, at a concrete type, of a default inherited ACROSS modules by a
+-- parameterised instance with `requires`.  The instance's specialization of the
+-- default takes the `requires` dictionary like any of its supplied methods, so the
+-- call site must pass it: `both (P Q)` needs `Sub Q` to reach `own v`, and `tag`
+-- takes the dictionary it does not read.
+-- Must print +op(oq) / +op(op(oq)) / tt.
+import rsub.{Sub(..), own, both, tag}
+
+data P a = P a
+data Q = Q
+
+impl Sub Q where
+  own _ = "oq"
+
+impl Sub (P a) requires Sub a where
+  own (P v) = "op(" ++ own v ++ ")"
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (both (P Q))
+  let _ = putStrLn (both (P (P Q)))
+  putStrLn (tag (P Q) ++ tag Q)

@@ -174,12 +174,16 @@ writerExpectedLines = [
   "3|Carol|-5",
   "7|Dave|1000000",
   "42|Eve|127",
+  "43|Fay|9223372036854775807",
+  "44|Gus|-9223372036854775808",
   "# medaka reader",
   "1|Alice|30",
   "2|Bob|",
   "3|Carol|-5",
   "7|Dave|1000000",
   "42|Eve|127",
+  "43|Fay|9223372036854775807",
+  "44|Gus|-9223372036854775808",
 ]
 
 writerResult : <Exec, IO> Result String WriterRun

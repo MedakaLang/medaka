@@ -35,6 +35,7 @@
    base58btc, Base58 Bitcoin, final"). -}
 
 import array.{get}
+import bytes.{fromArray, toArray}
 import string.{stripPrefix}
 import lib.base58.{base58btcEncode, base58btcDecode}
 import base32.{base32Encode, base32Decode}
@@ -253,7 +254,12 @@ multibaseBase58btcDecode s = match stripPrefix "z" s
    "b" -}
 export
 multibaseBase32Lower : Array Int -> String
-multibaseBase32Lower bytes = "b" ++ base32Encode bytes
+multibaseBase32Lower bytes =
+  "b"
+    ++ base32Encode
+      (optionOrPanic
+        "multibaseBase32Lower: byte value out of range"
+        (fromArray bytes))
 
 {- | The exact inverse of `multibaseBase32Lower`. `Err` when the leading `b`
    is missing, or when the remainder is not canonical base32.
@@ -263,6 +269,6 @@ multibaseBase32Lower bytes = "b" ++ base32Encode bytes
 export
 multibaseBase32LowerDecode : String -> Result String (Array Int)
 multibaseBase32LowerDecode s = match stripPrefix "b" s
-  Some rest => base32Decode rest
+  Some rest => map toArray (base32Decode rest)
   None =>
     Err "multibaseBase32LowerDecode: missing 'b' (base32) multibase prefix"

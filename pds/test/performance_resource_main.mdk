@@ -2,7 +2,7 @@
 
 import array.{drop}
 import bytes as B
-import bytes.{Bytes, encodeUtf8}
+import bytes.{Bytes, encodeUtf8, toArray}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 import hex.{decode}
@@ -65,6 +65,7 @@ import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
 import crypto.sha256.{sha256}
 import string.{contains, fromUtf8, toInt, toUtf8}
+import test.fixture_support.{testNonce, testSecret}
 
 mustBytes : Result String (Array Int) -> Array Int
 mustBytes (Ok bytes) = bytes
@@ -122,7 +123,7 @@ perfSecretHex =
 
 mustHexBytes : String -> Array Int
 mustHexBytes text =
-  resultOrPanic "performance_resource: malformed hex" (decode text)
+  toArray (resultOrPanic "performance_resource: malformed hex" (decode text))
 
 perfSecret : SecretKey
 perfSecret =
@@ -186,7 +187,13 @@ perfUnsignedValue dataCid = DcMap [
 perfSignedCommit : Cid -> (Cid, Array Int)
 perfSignedCommit dataCid =
   let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
-  let signature = match signDigest perfSecret (sha256 unsigned)
+  let digest =
+    B.toArray
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (B.fromArray unsigned)))
+  let signature = match signDigest perfSecret digest
     Ok value => value
     Err message => panic "performance_resource: signing failed: \{message}"
   let signed =
@@ -457,19 +464,13 @@ runLimits =
 -- route needs no corpus directory, and reports `allocBytes()` delta rather
 -- than wall time.
 
-inboundAccountSecret : Array Int
-inboundAccountSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
-
 inboundInstant : Int
 inboundInstant = 1700000000
-
-inboundNonce : Array Int
-inboundNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 inboundContext : RequestContext
 inboundContext = RequestContext {
   nowSeconds = inboundInstant,
-  nonce = inboundNonce,
+  nonce = testNonce,
   login = None,
 }
 
@@ -482,7 +483,7 @@ inboundHandle = "perfroute.example"
 inboundToken : String
 inboundToken =
   mintToken
-    inboundAccountSecret
+    testSecret
     perfDid
     inboundHost
     "inbound-alloc-probe-token"
@@ -539,7 +540,7 @@ mustInboundStore _ =
     Err message =>
       panic "performance_resource: inbound repo init failed: \{message}"
   let base = storeFromRepo repo
-  match storeWithServerSecret inboundAccountSecret base
+  match storeWithServerSecret testSecret base
     Ok next =>
       storeSessionOpen
         (sessionFingerprint inboundToken)
@@ -560,7 +561,7 @@ repeatInbound server store request n acc =
     acc
   else
     let (_, responseBytes) = handleBytes server inboundContext store request
-    repeatInbound server store request (n - 1) (acc + arrayLength responseBytes)
+    repeatInbound server store request (n - 1) (acc + B.length responseBytes)
 
 {- | `retainedBytes` is not printed: this tree has no GC-forcing extern to
    read a steady-state figure cheaply (checked: no `gc`/`collect` entry in
@@ -580,7 +581,7 @@ runInboundAlloc n bodyBytes =
   let checksum = repeatInbound server store request n 0
   let a1 = allocBytes ()
   println
-    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine first}"
+    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine (toArray first)}"
 
 main : <IO, Env> Unit
 main = match args ()

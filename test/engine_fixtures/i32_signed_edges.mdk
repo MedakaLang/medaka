@@ -1,0 +1,123 @@
+-- I32 (N6, #3430, epic #3417), the signed tagged tier, at its edges: minBound,
+-- maxBound, -1, 0, minBound / -1, minBound % -1, negate and abs of minBound, and
+-- shifts of w - 1, w and past it.  I32 shares Int's word, held sign-extended, so
+-- a wrong sign extension shows as a value outside -2^31 .. 2^31 - 1.
+--
+-- The `bystanders` lines are [T-GLOBAL-TABLE]: U32 and Int in the same program
+-- keep their own semantics.
+--
+-- Generated with its pin by test/engine_fixtures/gen_signed_edges.py, which
+-- computes every expected value in Python; edit the generator, not this file.
+
+import i32 as I32
+import u32
+import list.{sort, reverse}
+
+classify : I32 -> String
+classify x = match x
+  0 => "zero"
+  2147483647 => "max"
+  65535 => "ffff"
+  _ => "other"
+
+vs : List I32
+vs = [
+  -2147483648,
+  -2147483647,
+  -65536,
+  -7,
+  -1,
+  0,
+  1,
+  7,
+  65535,
+  2147483647,
+]
+
+main =
+  println "i32 literals"
+  println vs
+  println "+ 1"
+  println (map (x => x + 1) vs)
+  println "- 1"
+  println (map (x => x - 1) vs)
+  println "* 3"
+  println (map (x => x * 3) vs)
+  println "* -1"
+  println (map (x => x * (-1)) vs)
+  println "* self"
+  println (map (x => x * x) vs)
+  println "negate"
+  println (map negate vs)
+  println "abs"
+  println (map abs vs)
+  println "signum"
+  println (map signum vs)
+  println "/ 7"
+  println (map (x => x / 7) vs)
+  println "% 7"
+  println (map (x => x % 7) vs)
+  println "/ -7"
+  println (map (x => x / (-7)) vs)
+  println "% -7"
+  println (map (x => x % (-7)) vs)
+  println "/ -1"
+  println (map (x => x / (-1)) vs)
+  println "% -1"
+  println (map (x => x % (-1)) vs)
+  println "/ minBound"
+  println (map (x => x / minBound) vs)
+  println "% minBound"
+  println (map (x => x % minBound) vs)
+  println "< 0"
+  println (map (x => x < 0) vs)
+  println "> -1"
+  println (map (x => x > (-1)) vs)
+  println "<= minBound"
+  println (map (x => x <= minBound) vs)
+  println "== -1"
+  println (map (x => x == (-1)) vs)
+  println "shiftRight 1"
+  println (map (x => I32.shiftRight x 1) vs)
+  println "shiftRight w-1"
+  println (map (x => I32.shiftRight x 31) vs)
+  println "shiftRight w"
+  println (map (x => I32.shiftRight x 32) vs)
+  println "shiftRight 100"
+  println (map (x => I32.shiftRight x 100) vs)
+  println "shiftLeft 1"
+  println (map (x => I32.shiftLeft x 1) vs)
+  println "shiftLeft w-1"
+  println (map (x => I32.shiftLeft x 31) vs)
+  println "shiftLeft w"
+  println (map (x => I32.shiftLeft x 32) vs)
+  println "bitNot"
+  println (map I32.bitNot vs)
+  println "bitAnd -256"
+  println (map (x => I32.bitAnd x (-256)) vs)
+  println "bitXor minBound"
+  println (map (x => I32.bitXor x minBound) vs)
+  println "sorted"
+  println (sort (reverse vs))
+  println "compare"
+  println (map (x => compare x 0) vs)
+  println "min max bounds"
+  println (minBound : I32, maxBound : I32)
+  println "toInt"
+  println (map I32.toInt vs)
+  println "toBits"
+  println (map I32.toBits vs)
+  println "truncate"
+  println (map I32.truncate [2147483648, 4294967295, -2147483649, 1099511627775])
+  println "tryFromInt"
+  println (map I32.tryFromInt [2147483648, -2147483648, -2147483649, 0])
+  println "fromBits"
+  println (map I32.fromBits [0, 1, 2147483647, 2147483648, 4294967295])
+  println "hash agrees with Int"
+  println (map (x => hash x == hash (I32.toInt x)) vs)
+  println "literal patterns"
+  println (map classify vs)
+  println "bystanders"
+  println ((4294967295 : U32) + 1, (7 : U32) / 2, (0 : U32) - 1)
+  println ((-7) / 2, (-7) % 2, shiftRight (-16) 2)
+  println (hash 5 == hash (5 : U32))

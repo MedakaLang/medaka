@@ -38,11 +38,14 @@ public export data PrerequisiteEvidence = PrerequisiteEvidence {
   prerequisiteArguments : List Mono,
 }
 
--- Request evidence forms a DAG: prerequisite and superclass edges name other
--- request nodes by `EvId`.  No constructor embeds a recursively copied proof
--- tree.  `Mono` is permitted here because this value is request-owned; a later
+-- Request evidence forms a DAG: a superclass edge names the binder it projects
+-- from, and a prerequisite names only its predicate.  No constructor embeds a
+-- recursively copied proof tree.  `Mono` is permitted here because this value is request-owned; a later
 -- frozen contract must translate it to immutable templates before publication.
 public export data SolverEvidence =
   | GivenEvidence EvidenceBinderId
   | InstanceEvidence RequestInstanceId (List Mono) (List PrerequisiteEvidence)
-  | SuperclassEvidence EvId (List Int)
+  -- The dictionary bound at a formal evidence binder, projected onto one of its
+  -- interface's transitive supers.  The path indexes successive DIRECT-super lists,
+  -- starting at the bound predicate's own interface.
+  | SuperclassEvidence EvidenceBinderId (List Int)

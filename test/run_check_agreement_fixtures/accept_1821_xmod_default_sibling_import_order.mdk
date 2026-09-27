@@ -1,0 +1,19 @@
+-- #1821: `dflt` is imported from rca1821_amod only.  IA's default `dflt x = sib x + 1`
+-- reaches T's own `sib` (7 * 10) through the default's receiver, so the answer is 71
+-- whichever import comes first; this is the order that printed IB's 9000 before
+-- per-instance defaults.
+import lib.rca1821_bmod.{IB, other}
+import lib.rca1821_amod.{Sup, IA, sup, sib, dflt}
+
+data T = T Int
+
+impl Sup T where
+  sup (T n) = n
+
+impl IA T where
+  sib x = sup x * 10
+
+impl IB T where
+  other _ = 1
+
+main = println (dflt (T 7))

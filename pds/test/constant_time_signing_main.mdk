@@ -13,15 +13,19 @@ import lib.secp256k1.{
   ecdsaVerifyRawForTest,
   pointFromUncompressedForTest,
 }
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 
 bytes : String -> Array Int
 bytes value = match decode value
-  Ok decoded => decoded
+  Ok decoded => toArray decoded
   Err message => panic "constant_time_signing: invalid fixture: \{message}"
 
 scalar : String -> Sc
 scalar value = scFromBytesReduce (bytes value)
+
+hexOf : Array Int -> String
+hexOf x = encode (fromArrayAssumeByteDomain x)
 
 zero32 : Array Int
 zero32 =
@@ -69,8 +73,8 @@ main =
     scalar "0000000000000000000000000000000000000000000000000000000000000001"
   let (validBit, _, _, _, _, compact) = ecdsaSignDigestForTest key zero32
   let () =
-    if validBit == 1 && encode compact == expectedCompact then
-      println "sign:\{encode compact}"
+    if validBit == 1 && hexOf compact == expectedCompact then
+      println "sign:\{hexOf compact}"
     else
       panic "constant_time_signing: exact signature drifted"
   let ((normal0, normal1), (candidate0Valid, candidate0R, candidate0RawS, candidate0LowS), (candidate1Valid, candidate1R, candidate1RawS, candidate1LowS), (selected1, selected1Compact)) =
@@ -81,11 +85,11 @@ main =
       && candidate1Valid == 1
       && selected1 == 1
       && candidate0R /= candidate1R
-      && encode selected1Compact == encode candidate1R ++ encode candidate1LowS
+      && hexOf selected1Compact == hexOf candidate1R ++ hexOf candidate1LowS
   let () =
     if candidate1Ok then
       println
-        "candidate-1:computations=2:c0.valid=0:c0.r=\{encode candidate0R}:c0.raw_s=\{encode candidate0RawS}:c0.low_s=\{encode candidate0LowS}:c1.valid=1:c1.r=\{encode candidate1R}:c1.raw_s=\{encode candidate1RawS}:c1.low_s=\{encode candidate1LowS}"
+        "candidate-1:computations=2:c0.valid=0:c0.r=\{hexOf candidate0R}:c0.raw_s=\{hexOf candidate0RawS}:c0.low_s=\{hexOf candidate0LowS}:c1.valid=1:c1.r=\{hexOf candidate1R}:c1.raw_s=\{hexOf candidate1RawS}:c1.low_s=\{hexOf candidate1LowS}"
     else
       panic "constant_time_signing: complete candidate-1 seam disconnected"
   let ((exhaustNormal0, exhaustNormal1), (exhaust0Valid, exhaust0R, exhaust0RawS, exhaust0LowS), (exhaust1Valid, exhaust1R, exhaust1RawS, exhaust1LowS), (exhausted, exhaustedCompact)) =
@@ -100,7 +104,7 @@ main =
   let () =
     if exhaustionOk then
       println
-        "exhaustion:computations=2:c0.valid=0:c0.r=\{encode exhaust0R}:c0.raw_s=\{encode exhaust0RawS}:c0.low_s=\{encode exhaust0LowS}:c1.valid=0:c1.r=\{encode exhaust1R}:c1.raw_s=\{encode exhaust1RawS}:c1.low_s=\{encode exhaust1LowS}:aggregate=0"
+        "exhaustion:computations=2:c0.valid=0:c0.r=\{hexOf exhaust0R}:c0.raw_s=\{hexOf exhaust0RawS}:c0.low_s=\{hexOf exhaust0LowS}:c1.valid=0:c1.r=\{hexOf exhaust1R}:c1.raw_s=\{hexOf exhaust1RawS}:c1.low_s=\{hexOf exhaust1LowS}:aggregate=0"
     else
       panic "constant_time_signing: complete exhaustion seam disconnected"
   let () =

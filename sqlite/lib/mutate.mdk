@@ -83,6 +83,7 @@ import lib.sqlite.{
 import lib.btree.{Row, rowRowid}
 import lib.dbwriter.{buildDatabaseMultiExplicit}
 import lib.recordfmt.{Cell(..)}
+import lib.wideint as W
 import lib.schemadef.{
   CreateTable,
   ColDef,
@@ -660,6 +661,7 @@ rowWithRowid ct (Some i) next cells = match get i cells
   None => Err "internal: IPK column \{intToString i} missing from row"
   Some CNull => Ok (next, applyCellAssigns [(i, CInt next)] cells)
   Some (CInt v) => Ok (v, cells)
+  Some (CInt64 x) => Err (W.rowidRangeMessage x)
   Some _ =>
     Err
       "datatype mismatch: the INTEGER PRIMARY KEY column '\{ipkName ct i}' of \{ctTable ct} must be an integer or NULL"

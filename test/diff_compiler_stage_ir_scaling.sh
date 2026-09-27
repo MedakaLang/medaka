@@ -576,10 +576,13 @@ typecheck=mdk_types_typecheck__checkModules"
 # NO FRONTEND ROW IS LEDGERED EITHER, and that is a measurement, not an omission:
 # none of the six frontend stages reddens on `xref`, `match` or `vchain` at the
 # shipped bands (margins in the STAGE_SYMS block above). The frontend quadratic this
-# arm was scoped around (#2030, `localPinPairs`) needs a shape none of the three
-# carries; it is pinned on diff_compiler_perf_scaling.sh's OP arm instead
+# arm was scoped around (#2030, `localPinPairs`) needed a shape none of the three
+# carries and was pinned on diff_compiler_perf_scaling.sh's OP arm instead
 # (`conlocal:typecheck` / `conlocal:mark`), for 33x less machine time on the same
-# band. Do not add it here without re-reading the cost note in STAGE_SYMS.
+# band. HISTORICAL: `localPinPairs` and the local-dict pin it served are deleted
+# tree-wide under #1082 (2026-09-26), and `conlocal:typecheck`'s ledger row there
+# self-drained the same run (`ops typecheck: ok r1=1.41 r2=1.58`) — there is no
+# longer a frontend quadratic of this shape to pin anywhere.
 #
 # ── modules:typecheck — #1879, LEDGERED 2026-08-28. THE ARM OF RECORD FOR IT. ──
 #

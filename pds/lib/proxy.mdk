@@ -52,6 +52,7 @@ import http.{
   makeResponse,
   Response,
 }
+import bytes as B
 import list.{filter}
 import string.{fromUtf8, startsWith, toLower, toUtf8}
 import lib.atsyntax.{stripDidFragment, validateDid}
@@ -217,7 +218,7 @@ proxyHeaderGo [] 1 (Some value) = ProxyHeaderValue (fromUtf8 value)
 proxyHeaderGo [] _ _ = ProxyHeaderRepeated
 proxyHeaderGo (header :: rest) count value =
   if headerName header == "atproto-proxy" then
-    proxyHeaderGo rest (count + 1) (Some (headerValue header))
+    proxyHeaderGo rest (count + 1) (Some (B.toArray (headerValue header)))
   else
     proxyHeaderGo rest count value
 
@@ -403,7 +404,7 @@ pickFields : List String -> List Header -> List (String, String)
 pickFields [] _ = []
 pickFields (name :: rest) headers = match soleField name headers
   Some header =>
-    let value = headerValue header
+    let value = B.toArray (headerValue header)
     if printableAscii value 0 then
       (name, fromUtf8 value) :: pickFields rest headers
     else
@@ -521,13 +522,15 @@ jsonContentType : Header
 jsonContentType =
   resultOrPanic
     "proxy: internal response header error"
-    (makeHeader "content-type" (toUtf8 "application/json"))
+    (makeHeader "content-type" (B.encodeUtf8 "application/json"))
 
 relayedContentType : Option (Array Int) -> Header
 relayedContentType None = jsonContentType
-relayedContentType (Some value) = match makeHeader "content-type" value
-  Ok header => header
-  Err _ => jsonContentType
+relayedContentType (Some value) = match B.fromArray value
+  None => jsonContentType
+  Some packed => match makeHeader "content-type" packed
+    Ok header => header
+    Err _ => jsonContentType
 
 -- A field the upstream sent in a shape `makeHeader` will not build is dropped,
 -- not fatal: it is negotiation the client can do without, and refusing the
@@ -535,9 +538,11 @@ relayedContentType (Some value) = match makeHeader "content-type" value
 -- reads by sending one odd byte.
 relayedFields : List (String, Array Int) -> List Header
 relayedFields [] = []
-relayedFields ((name, value) :: rest) = match makeHeader name value
-  Ok header => header :: relayedFields rest
-  Err _ => relayedFields rest
+relayedFields ((name, value) :: rest) = match B.fromArray value
+  None => relayedFields rest
+  Some packed => match makeHeader name packed
+    Ok header => header :: relayedFields rest
+    Err _ => relayedFields rest
 
 {- | Turn the appview's answer into this server's own response.
 
@@ -555,6 +560,8 @@ proxyUpstreamResponse : UpstreamAnswer -> Result String Response
 proxyUpstreamResponse (UpstreamAnswer status reason contentType relayed body) =
   let headers =
     allowOriginHeader :: relayedContentType contentType :: relayedFields relayed
-  match makeResponse status reason headers body
-    Ok response => Ok response
-    Err _ => makeResponse status "Upstream Response" headers body
+  match B.fromArray body
+    None => Err "http: response body element outside byte range 0..255"
+    Some packed => match makeResponse status reason headers packed
+      Ok response => Ok response
+      Err _ => makeResponse status "Upstream Response" headers packed

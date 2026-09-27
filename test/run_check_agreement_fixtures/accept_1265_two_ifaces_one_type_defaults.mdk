@@ -1,0 +1,11 @@
+-- #1265: two interfaces declare a same-spelled method `speak` with different
+-- defaults, and `Dog` inherits both through method-less impls.  Each slot is filled by
+-- the default of the interface the impl implements (DICT-SEMANTICS §5 / §5.1 M1), so
+-- the answer is A-default|B-default on every verb -- with the `cb` import first, the
+-- order that printed B-default|B-default before per-instance defaults.
+import lib.rca1265_cb.{sayB}
+import lib.rca1265_ca.{sayA}
+import lib.rca1265_dog.{Dog(..)}
+
+main : <IO> Unit
+main = putStrLn (sayA Dog ++ "|" ++ sayB Dog)

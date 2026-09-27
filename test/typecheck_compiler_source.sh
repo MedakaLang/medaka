@@ -290,8 +290,7 @@ originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
-compiler/types/typecheck.mdk
-compiler/types/typecheck_test.mdk"
+compiler/types/typecheck.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
   echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
@@ -411,20 +410,17 @@ if [ "$originun_actual" != "$originun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved constructor site(s)"
 
-# Keep the sibling test's filename allowance restricted to its read-only observer.
-# A new sentinel-producing expression in the same file must still fail the gate.
-tctest_originun_allowed='OriginUnresolved => "<unresolved>"'
+# The sibling test mints no unresolved sentinel and observes none.
 tctest_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck_test.mdk" \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
   | LC_ALL=C sort)
-if [ "$tctest_originun_actual" != "$tctest_originun_allowed" ]; then
-  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck_test.mdk changed."
-  echo "  Only the default-origin observer's pattern is allowed; no sentinel mint."
+if [ -n "$tctest_originun_actual" ]; then
+  echo "FAIL: compiler/types/typecheck_test.mdk names OriginUnresolved; no sentinel mint."
   printf '%s\n' "$tctest_originun_actual" | sed 's/^/    /'
   exit 1
 fi
-echo "  ok: typecheck_test.mdk only observes OriginUnresolved"
+echo "  ok: typecheck_test.mdk names no OriginUnresolved"
 
 # The extracted scope service has its own total default-origin observer.
 scopetest_originun_allowed='OriginUnresolved =>'
@@ -879,15 +875,14 @@ data PendingMethodDict = PendingMethodDict {
 registerReqSlots : ScopeId ->
   List (String, Mono) ->
   Int ->
-  Int ->
-  List Require ->
+  List (Require, List Int) ->
   Unit
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
-expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
+expandPredicateSlots : List PredicateSlot -> List PredicateSlot
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
@@ -897,6 +892,9 @@ data GivenEntry = GivenEntry {
 data GivenMatch =
   | GMPredicate
   | GMIdWitnessed
+data GivenProvenance =
+  | DirectGiven
+  | ProjectedGiven EvidenceBinderId (List Int)
 gGiven : Ref (OrdMap (List GivenEntry)),
 givensForScope : ScopeId -> List GivenEntry
 pushGiven : GivenMatch ->
@@ -906,20 +904,20 @@ data GivenScope =
   | GSImplRequires
 givenInScope : GivenScope -> GivenEntry -> Bool
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
-activeFunDictPredOf : PredicateRequest ->
-activeFunDictPredOf request _ useScope =
+activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
+activeFunDictPredOf request useScope =
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOfOp : String -> Option PredicateRequest
 activeDictVarOfEncl : Option PredicateRequest ->
 activeDictVarOfEncl None m encl useScope =
-map LegacyScalar (activeDictVarForEncl m encl useScope)
+map LegacyScalar (activeDictVarForEncl m useScope)
 activeDictVarOfEncl (Some request) m encl useScope =
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
 enclSlotIndex (Some request) target encl =
 implReqDictVarOf : Option PredicateRequest ->
-implReqDictVarOf (Some request) m encl useScope
+implReqDictVarOf (Some request) m useScope
 firstPredForEnclAt : GivenScope ->
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
@@ -960,13 +958,18 @@ done || exit 1
 # Match the whole condition inside its owning function. Embedded newlines in a
 # grep pattern are alternatives, so a multiline pattern would accept any one
 # surviving argument even if the visibility call itself had been removed.
-any_given_scope_guard='&& Scopes.givenVisibleFrom (currentScopeStore ()) scope (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'
+# The scan reads the use scope's ancestor chain once (`visibleChain`) and tests
+# each given's binder scope against it, so both halves are pinned.
 any_given_scope_body=$(sed -n '/^anyGivenMatches :/,/^isSemanticGivenAnswer :/p' "$predicate_slot_src" \
   | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
-if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
-  echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
-  exit 1
-fi
+for any_given_scope_guard in \
+  'anyGivenOnChain request (Scopes.visibleChain (currentScopeStore ()) scope) givens' \
+  '&& Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'; do
+  if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
+    echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
+    exit 1
+  fi
+done
 
 # #2549 method-row preparation: declaration identity, scheme, and method-level slots
 # are built in one row walk.  The Module-only driver reads its visible rows from
@@ -1083,7 +1086,6 @@ require_typecheck_arm() {
 }
 
 require_typecheck_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
-require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
 require_typecheck_arm numObligIds finalizeNumBoundary 'OpNumLit occ => monoUnboundIds occ'
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
@@ -1116,7 +1118,7 @@ fi
 ordinary_return_solver_body="$(sed -n '/^solveExactReturnOnce :/,/^exactReturnDefers :/p' "$predicate_slot_src")"
 ordinary_return_solver_required='solveExactReturnOnce request = match request.mrrResolution.value
     request.mrrResolution := Some resolution
-        mrrOutcome = Solved (GivenEvidence (assumAnswerBinder answer))
+        mrrOutcome = Solved (assumAnswerEvidence answer)
         mrrOutcome =
           Solved
             (InstanceEvidence'
@@ -1126,6 +1128,12 @@ printf '%s\n' "$ordinary_return_solver_required" | while IFS= read -r required; 
     exit 1
   fi
 done || exit 1
+# A superclass of a given is that given's projection (`ProjectedGiven` →
+# `SuperclassEvidence`), never a separately registered alias answering on its own.
+if grep -rqE 'LegacySuperclassAlias|LegacySuperAlias|ATLegacySuperclass' "$ROOT/compiler"; then
+  echo "FAIL: a retired superclass-alias given kind is back; supers are projections of their given"
+  exit 1
+fi
 if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then
   echo "FAIL: ordinary return one-outcome solver must contain exactly one instance selector"
   exit 1
@@ -1148,7 +1156,6 @@ require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelS
 
 # The other projection readers retain their own policies; presence in one reader
 # cannot cover an omitted arm in another reader.
-require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'request.mrrTyparams'
 require_typecheck_arm numObligIds finalizeNumBoundary 'monoUnboundIds request.mrrOccurrence'
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
@@ -1314,7 +1321,7 @@ done || exit 1
 # Eval sizes an elaborated impl definition from its leading dictionary patterns and
 # registers both route words.  Interface declaration arity was a second, colliding
 # authority and must not return.
-eval_req_count_required='buildMethodReqCounts prog = flatMap implMethodReqCounts prog
+eval_req_count_required='flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
 DImpl { iface, tys, methods, implOrigin, ... }
 let key = implRouteKeyWord implOrigin iface tys None
 [((mname, tag), count), ((mname, key), count)]
@@ -1368,12 +1375,14 @@ printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
 done || exit 1
 
 # Deferred operator routes keep their lexical evidence owner through the concrete-head
-# stamper. The scalar registry is graph-lived, so an empty owner or nominal-scope
-# miss must not borrow another method's dict. The direct in-impl operator path
-# retains its legacy scalar classification but now checks the same scope boundary.
+# stamper. The scalar registry is graph-lived, so a site must not borrow another
+# body's dict: every hit is gated on the binder's scope being visible from the site
+# (`firstDictForEncl`'s `givenVisibleFrom`), which is what also lets a test or prop
+# body -- no enclosing declaration name -- read a local binding's own givens.
 lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
-printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
-  echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
+first_dict_block="$(sed -n '/^firstDictForEncl :/,/^$/p' "$predicate_slot_src")"
+printf '%s\n' "$first_dict_block" | grep -Fq 'Scopes.givenVisibleFrom' || {
+  echo "FAIL: firstDictForEncl must gate every hit on lexical scope visibility"
   exit 1
 }
 printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {

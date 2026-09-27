@@ -1,25 +1,14 @@
--- An element outside the byte domain is refused rather than reduced modulo
--- 256: reducing it would map two different messages onto one digest, which a
--- content-addressing caller cannot detect.
-{- | SHA-256 hashing of a byte array (FIPS 180-4).
+{- | SHA-256 hashing of a byte string (FIPS 180-4).
 
-   A message is an `Array Int` with each element from `0` to `255`, the same
-   form `readFileBytes` and `hex.decode` use. The digest is 32 bytes, most
-   significant byte of each word first.
+   A message is `Bytes` and so is the digest, 32 bytes, most significant byte
+   of each word first.
 
-   `sha256` panics when any element is outside `0` to `255`. `sha256FixedBytes`
-   is the same hash without that check, for a caller whose bytes are already
-   known to be in range.
-
-   There is no incremental form. A message is hashed in one call.
-
-   Under the interpreter (`medaka run`, `medaka test`), `sha256` overflows the
-   stack on a message longer than about 25 kilobytes. `sha256FixedBytes` and
-   native builds hash messages of a megabyte and more. -}
+   There is no incremental form. A message is hashed in one call. -}
 
 -- Arithmetic contract. Every word is a `U32`, so `+` is addition modulo 2^32
 -- and every bit operation, shift and rotate stays within 32 bits. Bytes stay
--- `Int`. A word is assembled from four bytes in `Int` and enters `U32`
+-- `Int`, read straight from the message's packed block. A word is
+-- assembled from four bytes in `Int` and enters `U32`
 -- through `U32.truncate`, and a digest byte leaves through `U32.toInt`.
 -- Neither conversion branches. Under HMAC every word derives from secret
 -- bytes, so the checked conversions (`fromInt`, `tryFromInt`), which branch
@@ -30,14 +19,19 @@
 -- H0..H7 order.
 --
 -- No padded copy of the whole message is ever materialized: full 64-byte
--- blocks are read directly from the input by offset, and only the final one
--- or two blocks are synthesized to hold the 0x80 marker, the zero padding and
--- the 64-bit big-endian bit length.
+-- blocks are read directly from the input's block by offset, and only the
+-- final one or two blocks are synthesized to hold the 0x80 marker, the zero
+-- padding and the 64-bit big-endian bit length.
 --
--- Writes go through `array.setInPlace` rather than the `arr[i] := v` sugar.
--- The two now emit and inline identically, so migrating is mechanical;
--- re-measure the hot loops when you do.
-import array.{setInPlace, make, blit}
+-- Every byte is read with `byteBlockGetUnsafe` from a block this module
+-- either lent from a `Bytes` or made itself, at an offset below a length it
+-- has already computed, so no read carries a bounds test.
+--
+-- Writes to the word schedule go through `array.setInPlace` rather than the
+-- `arr[i] := v` sugar. The two now emit and inline identically, so migrating
+-- is mechanical; re-measure the hot loops when you do.
+import array.{setInPlace, make}
+import bytes.{Bytes, adoptByteBlockUnsafe, lendByteBlockUnsafe}
 import u32 as U32
 
 -- ── Constants ────────────────────────────────────────────────────────
@@ -107,9 +101,6 @@ smallSigma1 x =
 -- In-bounds indexing via the panicking `arr[i]` form: every call site below
 -- only ever indexes within a known length, so the panic is unreachable, and
 -- unlike `Array.get` it allocates no `Option` per call.
-byteAt : Array Int -> Int -> Int
-byteAt arr i = arr[i]
-
 wordAt : Array U32 -> Int -> U32
 wordAt arr i = arr[i]
 
@@ -195,7 +186,7 @@ compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
 
 -- Fold every FULL 64-byte block of `msg` directly by offset — no copy of
 -- the message is ever made.
-processFullBlocks : Array Int -> Int -> State -> Int -> State
+processFullBlocks : ByteBlock -> Int -> State -> Int -> State
 processFullBlocks msg numFull st blockIdx =
   if blockIdx >= numFull then
     st
@@ -204,18 +195,21 @@ processFullBlocks msg numFull st blockIdx =
     processFullBlocks
       msg
       numFull
-      (compressBlock (j => byteAt msg (base + j)) st)
+      (compressBlock (j => byteBlockGetUnsafe (base + j) msg) st)
       (blockIdx + 1)
 
 -- The length, in bits, of `padLength`-byte messages fits big-endian into
 -- the last 8 bytes of the padded block: writes it there.
-writeLenGo : Array Int -> Int -> Int -> Int -> Unit
+writeLenGo : ByteBlock -> Int -> Int -> Int -> Unit
 writeLenGo out offset bitLen i =
   if i >= 8 then
     ()
   else
     let shiftAmt = (7 - i) * 8
-    setInPlace (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
+    byteBlockSetUnsafe
+      (offset + i)
+      (bitAnd (shiftRight bitLen shiftAmt) 255)
+      out
     writeLenGo out offset bitLen (i + 1)
 
 -- The number of bytes in the final, padded region (one block if the tail
@@ -224,111 +218,80 @@ padLength : Int -> Int
 padLength tailLen = if tailLen + 1 + 8 <= 64 then 64 else 128
 
 -- Synthesize the final one-or-two padded blocks: `tailLen` message bytes
--- (copied via `blit`, never the whole message), then `0x80`, then zero
--- bytes, then the 64-bit big-endian bit length of `totalLen`. `totalLen` is
--- the FULL count the length field must record, which is `len` at offset
--- zero but includes bytes folded earlier when resuming from a saved state.
-buildTailWithTotal : Array Int -> Int -> Int -> Int -> Array Int
+-- (copied via `byteBlockBlit`, never the whole message), then `0x80`, then
+-- zero bytes, then the 64-bit big-endian bit length of `totalLen`.
+-- `totalLen` is the FULL count the length field must record, which is `len`
+-- at offset zero but includes bytes folded earlier when resuming from a saved
+-- state.
+buildTailWithTotal : ByteBlock -> Int -> Int -> Int -> ByteBlock
 buildTailWithTotal msg len tailLen totalLen =
   let size = padLength tailLen
-  let out = make size 0
-  blit msg (len - tailLen) out 0 tailLen
-  setInPlace tailLen 0x80 out
+  let out = byteBlockMake size
+  byteBlockBlit msg (len - tailLen) out 0 tailLen
+  byteBlockSetUnsafe tailLen 0x80 out
   writeLenGo out (size - 8) (totalLen * 8) 0
   out
 
-processTail : Array Int -> State -> State
+processTail : ByteBlock -> State -> State
 processTail tail st =
-  let numBlocks = arrayLength tail / 64
+  let numBlocks = byteBlockLength tail / 64
   processFullBlocks tail numBlocks st 0
 
 -- ── Public entry point ───────────────────────────────────────────────
 
--- Is every element of `msg[0 .. len)` inside the `0..255` byte domain? A
--- tail-recursive index scan over safe indexing, allocating nothing.
---
--- This must stay a full-arity self tail call. Native lowers that shape to
--- `musttail`, and callers hash messages of a megabyte and more, so a
--- non-tail rewrite here is a million-frame stack overflow rather than a
--- slowdown. The tree-walking interpreter does not TCO at all, so this same
--- checked entry overflows its stack around tens of kilobytes under `run`/
--- `test` even though native handles a megabyte-plus.
-byteDomainOk : Array Int -> Int -> Int -> Bool
-byteDomainOk msg len i =
-  if i >= len then
-    True
-  else
-    let b = msg[i]
-    if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)
-
 -- Folds `msg` into a hash already carrying `priorState`, which reflects
 -- `priorBytes` bytes folded earlier outside `msg` (the final length field
--- must record the total, not just `arrayLength msg`). Internal machinery
--- for `hmac`'s keyed entry point, which folds each padded key block once
--- via `sha256FoldKeyBlock` and resumes from there for every message under
--- that key; not part of the digest API — reach for `sha256`/
--- `sha256FixedBytes` to hash an ordinary message.
+-- must record the total, not just the length of `msg`). Internal machinery
+-- for `hmac`'s keyed entry point, which folds each padded key block once via
+-- `sha256FoldKeyBlock` and resumes from there for every message under that
+-- key; not part of the digest API — reach for `sha256` to hash an ordinary
+-- message.
 export
 sha256AssumeByteDomainFrom : (U32, U32, U32, U32, U32, U32, U32, U32) ->
   Int ->
-  Array Int ->
-  Array Int
+  Bytes ->
+  Bytes
 sha256AssumeByteDomainFrom priorState priorBytes msg =
-  let len = arrayLength msg
+  let block = lendByteBlockUnsafe msg
+  let len = byteBlockLength block
   let numFull = len / 64
   let tailLen = len - numFull * 64
-  let afterFull = processFullBlocks msg numFull priorState 0
-  let tail = buildTailWithTotal msg len tailLen (priorBytes + len)
+  let afterFull = processFullBlocks block numFull priorState 0
+  let tail = buildTailWithTotal block len tailLen (priorBytes + len)
   let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
   digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
-
-sha256AssumeByteDomain : Array Int -> Array Int
-sha256AssumeByteDomain msg = sha256AssumeByteDomainFrom h0Init 0 msg
 
 -- Folds one already-padded 64-byte block (an HMAC ipad/opad block) starting
 -- from the initial hash state, giving the resume state
 -- `sha256AssumeByteDomainFrom` continues from. Internal machinery for
 -- `hmac`'s keyed entry point; not part of the digest API.
 export
-sha256FoldKeyBlock : Array Int -> (U32, U32, U32, U32, U32, U32, U32, U32)
-sha256FoldKeyBlock block = compressBlock (byteAt block) h0Init
+sha256FoldKeyBlock : Bytes -> (U32, U32, U32, U32, U32, U32, U32, U32)
+sha256FoldKeyBlock block =
+  let bb = lendByteBlockUnsafe block
+  compressBlock (j => byteBlockGetUnsafe j bb) h0Init
 
--- This entry exists for `hmac`, whose every input byte comes from a fixed
--- pad, a SHA-256 digest or caller-canonical scalar bytes. Running the
--- byte-domain scan over those would put a secret-derived early exit inside
--- the signing closure.
-{- | The 32-byte SHA-256 digest of `msg`, without checking the byte domain.
-
-   Every element of `msg` must be in `0` to `255`. An element outside that
-   range is not detected and yields the digest of some other message. Use
-   `sha256` unless the bytes are already known to be in range. -}
+-- Every input is a byte by its type, so nothing here scans the message
+-- before hashing it. `hmac` relies on that: its key and message bytes are
+-- secret on the signing path, and a scan would branch on them.
+{- | The 32-byte SHA-256 digest of `msg`. -}
 export
-sha256FixedBytes : Array Int -> Array Int
-sha256FixedBytes msg = sha256AssumeByteDomain msg
+sha256 : Bytes -> Bytes
+sha256 msg = sha256AssumeByteDomainFrom h0Init 0 msg
 
-{- | The 32-byte SHA-256 digest of `msg`.
-
-   Panics when any element of `msg` is outside `0` to `255`. -}
-export
-sha256 : Array Int -> Array Int
-sha256 msg =
-  let len = arrayLength msg
-  if not (byteDomainOk msg len 0) then
-    panic "sha256: every element must be a byte in 0..255"
-  else
-    sha256AssumeByteDomain msg
-
-digestWord : Array Int -> Int -> U32 -> Unit
+digestWord : ByteBlock -> Int -> U32 -> Unit
 digestWord out i h =
   let word = U32.toInt h
-  setInPlace (i * 4) (bitAnd (shiftRight word 24) 255) out
-  setInPlace (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
-  setInPlace (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
-  setInPlace (i * 4 + 3) (bitAnd word 255) out
+  byteBlockSetUnsafe (i * 4) (bitAnd (shiftRight word 24) 255) out
+  byteBlockSetUnsafe (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
+  byteBlockSetUnsafe (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
+  byteBlockSetUnsafe (i * 4 + 3) (bitAnd word 255) out
 
-digestBytes : State -> Array Int
+-- The block is fresh and nothing else holds it, so adopting it as the
+-- digest's storage without a copy leaves the digest immutable.
+digestBytes : State -> Bytes
 digestBytes (h0, h1, h2, h3, h4, h5, h6, h7) =
-  let out = make 32 0
+  let out = byteBlockMake 32
   digestWord out 0 h0
   digestWord out 1 h1
   digestWord out 2 h2
@@ -337,4 +300,4 @@ digestBytes (h0, h1, h2, h3, h4, h5, h6, h7) =
   digestWord out 5 h5
   digestWord out 6 h6
   digestWord out 7 h7
-  out
+  adoptByteBlockUnsafe out

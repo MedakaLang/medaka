@@ -1,0 +1,18 @@
+-- #866 / #1082 — A DICTIONARY-ABSTRACTED `where` LOCAL AT TWO RIGID VARIABLES.
+--
+-- `useTwo` declares two independent variables (`Ord a, Ord b`) and calls the
+-- `where`-local `h` once at each.  `h` generalizes to `Ord c => c -> c -> Bool` and
+-- takes its own dictionary, so each call is applied to the declared given for its own
+-- variable: the two variables are never unified, and `useTwo` keeps two dictionary
+-- parameters.  Ground truth: `1 < 2` and `"a" < "b"`, so `True`.
+--
+-- Verdict: ACCEPT.
+needsOrd : Ord a => a -> a -> Bool
+needsOrd x y = x < y
+
+useTwo : (Ord a, Ord b) => a -> a -> b -> b -> Bool
+useTwo w x y z = h w x && h y z
+  where
+    h p q = needsOrd p q
+
+main = println (useTwo 1 2 "a" "b")

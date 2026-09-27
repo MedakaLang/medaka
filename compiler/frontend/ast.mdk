@@ -19,6 +19,11 @@ public export data Lit =
   -- written in a binding (`exprToPat`), and the typechecker refuses it there
   -- (`inferU64LitPat`), so no engine ever matches against one.
   | LU64 Int Int
+  -- An `I64` constant, as the high and low 32-bit halves of its 64-bit two's
+  -- complement pattern, minted exactly where `LU64` is for a literal whose type
+  -- grounded to `I64`.  It is a pattern nowhere: a literal pattern on an `I64` is
+  -- refused as one on a `U64` is.
+  | LI64 Int Int
   | LString String
   | LChar String
   | LBool Bool
@@ -147,6 +152,16 @@ ifaceIdentity OriginBuiltin _ = ""
 export
 ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
+
+-- The dictionary name an interface default body's RECEIVER evidence renders to: a
+-- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` to
+-- it.  It is not a parameter of the lowered body.  Each engine rebinds it to the
+-- instance the body is running for — lowering rewrites it to that instance's route
+-- (`core_ir_lower`), eval binds it in the specialized body's frame — so the body is
+-- inferred once and selects nothing.  `$` keeps it out of every user namespace.
+export
+defaultReceiverDict : String -> String
+defaultReceiverDict method = "$self_\{method}"
 
 -- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
@@ -1149,6 +1164,42 @@ export
 isUnsignedHead : String -> Bool
 isUnsignedHead h = isFixedWidthHead h || isU64Head h
 
+-- The signed heads (INTEGER-TYPES-DESIGN §2).  `I32` shares `Int`'s tagged word
+-- and holds its value sign-extended, so the word compare is its order and an
+-- in-range literal is its word; an arithmetic result is sign-extended from bit 31.
+-- `I64` is a boxed cell like `U64`, with a header of its own.
+export
+isI32Head : String -> Bool
+isI32Head h = h == "I32"
+
+export
+isI64Head : String -> Bool
+isI64Head h = h == "I64"
+
+-- The heads whose value is a 64-bit cell rather than `Int`'s word.
+export
+isBoxed64Head : String -> Bool
+isBoxed64Head h = isU64Head h || isI64Head h
+
+-- The heads that share `Int`'s tagged word: a comparison is the word compare and a
+-- literal pattern is a constant compare on the word.
+export
+isTaggedFixedHead : String -> Bool
+isTaggedFixedHead h = isFixedWidthHead h || isI32Head h
+
+-- Every builtin fixed-width integer head, unsigned or signed: an arithmetic or
+-- comparison operand grounded to one is lowered as a builtin rather than
+-- dispatched through its `Num`/`Ord` impl.
+export
+isFixedIntHead : String -> Bool
+isFixedIntHead h = isUnsignedHead h || isI32Head h || isI64Head h
+
+-- The value range of a tagged fixed-width head, for the literal range check.
+export
+taggedFixedRange : String -> Option (Int, Int)
+taggedFixedRange "I32" = Some (-2147483648, 2147483647)
+taggedFixedRange h = map (mask => (0, mask)) (fixedWidthMask h)
+
 -- The diagnostic for a positive 2^62 where an `Int` is wanted.  The parser raises
 -- it for a pattern and the typechecker for an expression (where 2^62 is a wide
 -- literal refused at `Int`); `driver/diagnostics.mdk` attaches the help to the
@@ -1190,10 +1241,16 @@ public export data EvId = EvId String Int
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
--- `EMethodAt` node's selected denotation pre-use arrow arity and three route
--- answers (its dispatch route, the selected impl's `requires` dicts, and the
--- method's own `=>` dicts) in the order the solver's `EvCell` route refs hold
--- them (`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).  The node
+-- `EMethodAt` node's interface identity (the `ifaceWordOf` word of the
+-- interface whose method the occurrence resolved to — `""` when the occurrence
+-- denotes no interface method, such as a standalone shadow), its selected
+-- denotation pre-use arrow arity and three route answers (its dispatch route,
+-- the selected impl's `requires` dicts, and the method's own `=>` dicts) in the
+-- order the solver's `EvCell` refs hold them
+-- (`ecIface`/`ecArity`/`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).
+-- The identity is what lets every engine keep two interfaces' same-spelled
+-- methods apart at one dispatch tag (#1265, #1619): the route alone names a
+-- type, never an interface.  The node
 -- itself carries no route: its three cells are the method name, the pre-pass seed
 -- and the `EvId` that addresses that cell, and a reader reaches the routes by
 -- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
@@ -1209,7 +1266,7 @@ public export data EvId = EvId String Int
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
-  | EvMethod Int Route (List Route) (List Route)
+  | EvMethod String Int Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 
@@ -1487,8 +1544,8 @@ public export data Expr =
   -- §3.2 item 4): the value's high and low 32-bit halves, the `fromInt`-route cell
   -- (as `ENumLit`'s third field), and the source lexeme.  The lexer mints it for a
   -- magnitude in `2^62 .. 2^64 - 1`; the typechecker accepts it only where the
-  -- literal's type grounds to `U64` (`checkWideLiterals`) and rewrites it to
-  -- `ELit (LU64 hi lo)`, so eval/emit never see it.
+  -- literal's type grounds to `U64` or `I64` (`checkWideLiterals`) and rewrites it
+  -- to `ELit (LU64 hi lo)` or `ELit (LI64 hi lo)`, so eval/emit never see it.
   | EWideLit Int Int (Ref Route) String
 
 -- import paths: `import q.{members}`, `import q.path`, `import q.*`, `import q as A`

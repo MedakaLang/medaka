@@ -1,5 +1,5 @@
 # META
-source_lines=2242
+source_lines=2244
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -797,7 +797,9 @@ export impl Num Float where
   sub a b = a - b
   mul a b = a * b
   div a b = a / b
-  negate a = 0.0 - a
+  -- the builtin negation (a primitive operand is never dispatched), which flips
+  -- the sign of `0.0` where `0.0 - a` would not
+  negate a = -a
   abs a = if a < 0.0 then 0.0 - a else a
   signum a = if a > 0.0 then 1.0 else if a < 0.0 then 0.0 - 1.0 else 0.0
   fromInt x = intToFloat x

@@ -279,7 +279,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- have no consumer here: this driver measures stages and throws its emitted IR
   -- away, so it has no diagnostic surface to route them to — entry_support's own
   -- `emitModulesWith` names the same slots `_`.
-  let (coreE, modulesE, _, _, _) =
+  let (coreE, modulesE, _, _, _, _) =
     elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let elaborated = coreD ++ flatMap snd modules2

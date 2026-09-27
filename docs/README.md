@@ -137,6 +137,8 @@ What's in the standard library, what's planned, module-by-module status.
 | [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |
 | [`hex.md`](stdlib/hex.md) | hex | — |
 | [`http.md`](stdlib/http.md) | http | — |
+| [`i32.md`](stdlib/i32.md) | i32 | — |
+| [`i64.md`](stdlib/i64.md) | i64 | — |
 | [`index.md`](stdlib/index.md) | Library Index | — |
 | [`io.md`](stdlib/io.md) | io | — |
 | [`json.md`](stdlib/json.md) | json | — |

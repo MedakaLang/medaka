@@ -24,6 +24,8 @@ import types.scopes.{
   scopeFrame,
   scopeFrameStats,
   scopeOwnerLabel,
+  visibleChain,
+  visibleOnChain,
 }
 
 data FrameView = FrameView {
@@ -133,6 +135,27 @@ test "frames preserve identity ancestry level module owner and lexical visibilit
         not (givenVisibleFrom store right left),
         binderAt left 0 /= binderAt right 0,
       ],
+    )
+
+test "the read-once chain answers every pair as the per-given walk does" =
+  let store = freshScopeStore ()
+  let root = freshScope store None 0 "chain-test" ModuleOwner
+  let left = freshScope store (Some root) 1 "chain-test" (BindingOwner "left")
+  let inner = freshScope store (Some left) 2 "chain-test" (BindingOwner "inner")
+  let right = freshScope store (Some root) 1 "chain-test" (BindingOwner "right")
+  let other = freshScope store None 0 "chain-other" ModuleOwner
+  let scopes = [root, left, inner, right, other]
+  let pairs = flatMap (u => map (b => (u, b)) scopes) scopes
+  expectEqual
+    (
+      [2, 1, 0],
+      map (pair => givenVisibleFrom store (fst pair) (snd pair)) pairs,
+    )
+    (
+      visibleChain store inner,
+      map
+        (pair => visibleOnChain (visibleChain store (fst pair)) (snd pair))
+        pairs,
     )
 
 test "copy owns a detached counter and backing array" =

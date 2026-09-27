@@ -32,6 +32,8 @@
 -- flexible reads (e.g. accepting both `CInt` and `CFloat` for a NUMERIC column).
 
 import lib.recordfmt.{Cell(..), cellToString}
+import lib.wideint as W
+import i64
 import list.{take, drop}
 
 -- | A row decoder: how wide a slice of columns it consumes, and the closure
@@ -68,6 +70,7 @@ tInt = mkRowType 1 decodeInt
 
 decodeInt : List Cell -> Result String Int
 decodeInt ((CInt n) :: []) = Ok n
+decodeInt ((CInt64 x) :: []) = Err "tInt: \{x} does not fit Int"
 decodeInt (c :: []) = Err "tInt: expected integer column, got \{debug c}"
 decodeInt _ = Err "tInt: expected exactly 1 column"
 
@@ -94,6 +97,7 @@ decodeBool ((CInt n) :: []) =
     Ok True
   else
     Err "tBool: expected 0 or 1, got \{n}"
+decodeBool ((CInt64 x) :: []) = Err "tBool: expected 0 or 1, got \{x}"
 decodeBool (c :: []) = Err "tBool: expected integer column, got \{debug c}"
 decodeBool _ = Err "tBool: expected exactly 1 column"
 
@@ -117,6 +121,7 @@ tFloat = mkRowType 1 decodeFloat
 decodeFloat : List Cell -> Result String Float
 decodeFloat ((CFloat f) :: []) = Ok f
 decodeFloat ((CInt n) :: []) = Ok (intToFloat n)
+decodeFloat ((CInt64 x) :: []) = Ok (W.toFloat x)
 decodeFloat (c :: []) = Err "tFloat: expected numeric column, got \{debug c}"
 decodeFloat _ = Err "tFloat: expected exactly 1 column"
 

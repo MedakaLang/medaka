@@ -1,0 +1,9 @@
+-- A method-less `impl Tag Box` of di's `Tag`: its slot is filled by di's default.
+import di.{Tag(..), tag}
+
+public export data Box = Box
+
+impl Tag Box where
+
+export dtag : Box -> Int
+dtag b = tag b

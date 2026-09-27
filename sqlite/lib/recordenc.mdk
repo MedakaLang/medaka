@@ -53,7 +53,9 @@
 
 import byteparser.{runByteParser}
 import bytebuilder.{newBuilder, emitBeSint, buildArray}
+import bytes.{fromArrayAssumeByteDomain}
 import lib.varint.{sqVarintBytes, sqVarintSize}
+import lib.wideint as W
 import lib.recordfmt.{
   Cell(..),
   parseRecord,
@@ -87,6 +89,7 @@ cellSerial (CBlob a) = Ok (2 * arrayLength a + 12)
 cellSerial (CText s) = Ok (2 * utf8ByteLength s + 13)
 cellSerial (CInt 0) = Ok 8
 cellSerial (CInt 1) = Ok 9
+cellSerial (CInt64 _) = Ok 6
 cellSerial (CInt n) =
   if n >= -128 && n <= 127 then
     Ok 1
@@ -119,6 +122,7 @@ cellBodyBytes (CInt n) =
     beSintBytes 4 n
   else
     beSintBytes 8 n
+cellBodyBytes (CInt64 x) = W.bytesBE x
 cellBodyBytes (CText s) = toList (toUtf8 s)
 cellBodyBytes (CBlob a) = toList a
 cellBodyBytes (CFloat f) = toList (floatToBytes64 f)
@@ -175,7 +179,7 @@ encodeToList cells = map toList (encodeRecord cells)
 roundTripShow : List Cell -> String
 roundTripShow cells = match encodeRecord cells
   Err e => "Err: " ++ e
-  Ok bs => showCells (runByteParser parseRecord bs)
+  Ok bs => showCells (runByteParser parseRecord (fromArrayAssumeByteDomain bs))
 
 -- ---------------------------------------------------------------------------
 -- Doctests

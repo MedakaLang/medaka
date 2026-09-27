@@ -1,0 +1,121 @@
+-- I64 (N6, #3430, epic #3417), the signed boxed tier, at its edges: minBound,
+-- maxBound, -1, 0, the magnitudes past Int (2^62, -2^62 - 1), minBound / -1,
+-- minBound % -1, negate and abs of minBound, and shifts of 63, 64 and past it.
+-- An I64 read as a U64 anywhere (order, division, rendering) shows as a wrong
+-- line here.
+--
+-- The `bystanders` lines are [T-GLOBAL-TABLE]: U64 and Int in the same program
+-- keep their own semantics.
+--
+-- Generated with its pin by test/engine_fixtures/gen_signed_edges.py, which
+-- computes every expected value in Python; edit the generator, not this file.
+
+import i64 as I64
+import i32 as I32
+import u32
+import u64
+import list.{sort, reverse}
+
+vs : List I64
+vs = [
+  -9223372036854775808,
+  -9223372036854775807,
+  -4611686018427387905,
+  -4611686018427387904,
+  -4294967296,
+  -7,
+  -1,
+  0,
+  1,
+  7,
+  4294967296,
+  4611686018427387903,
+  4611686018427387904,
+  9223372036854775807,
+]
+
+main =
+  println "i64 literals"
+  println vs
+  println "+ 1"
+  println (map (x => x + 1) vs)
+  println "- 1"
+  println (map (x => x - 1) vs)
+  println "* 3"
+  println (map (x => x * 3) vs)
+  println "* -1"
+  println (map (x => x * (-1)) vs)
+  println "* self"
+  println (map (x => x * x) vs)
+  println "negate"
+  println (map negate vs)
+  println "abs"
+  println (map abs vs)
+  println "signum"
+  println (map signum vs)
+  println "/ 7"
+  println (map (x => x / 7) vs)
+  println "% 7"
+  println (map (x => x % 7) vs)
+  println "/ -7"
+  println (map (x => x / (-7)) vs)
+  println "% -7"
+  println (map (x => x % (-7)) vs)
+  println "/ -1"
+  println (map (x => x / (-1)) vs)
+  println "% -1"
+  println (map (x => x % (-1)) vs)
+  println "/ minBound"
+  println (map (x => x / minBound) vs)
+  println "% minBound"
+  println (map (x => x % minBound) vs)
+  println "< 0"
+  println (map (x => x < 0) vs)
+  println "> -1"
+  println (map (x => x > (-1)) vs)
+  println "<= minBound"
+  println (map (x => x <= minBound) vs)
+  println "== -1"
+  println (map (x => x == (-1)) vs)
+  println "shiftRight 1"
+  println (map (x => I64.shiftRight x 1) vs)
+  println "shiftRight w-1"
+  println (map (x => I64.shiftRight x 63) vs)
+  println "shiftRight w"
+  println (map (x => I64.shiftRight x 64) vs)
+  println "shiftRight 100"
+  println (map (x => I64.shiftRight x 100) vs)
+  println "shiftLeft 1"
+  println (map (x => I64.shiftLeft x 1) vs)
+  println "shiftLeft w-1"
+  println (map (x => I64.shiftLeft x 63) vs)
+  println "shiftLeft w"
+  println (map (x => I64.shiftLeft x 64) vs)
+  println "bitNot"
+  println (map I64.bitNot vs)
+  println "bitAnd -256"
+  println (map (x => I64.bitAnd x (-256)) vs)
+  println "bitXor minBound"
+  println (map (x => I64.bitXor x minBound) vs)
+  println "sorted"
+  println (sort (reverse vs))
+  println "compare"
+  println (map (x => compare x 0) vs)
+  println "min max bounds"
+  println (minBound : I64, maxBound : I64)
+  println "toInt"
+  println (map I64.toInt vs)
+  println "toBits"
+  println (map I64.toBits vs)
+  println "fromBits"
+  println (map I64.fromBits [0, 1, 0x7FFFFFFFFFFFFFFF, 0x8000000000000000, 0xFFFFFFFFFFFFFFFF])
+  println "fromI32 fromU32"
+  println (I64.fromI32 (-2147483648 : I32), I64.fromU32 (4294967295 : U32))
+  println "hash agrees with Int in range"
+  println (map (x => hash (I64.fromI32 x) == hash (I32.toInt x)) [-7, 0, 7])
+  println "wide literals"
+  println (-9223372036854775808 : I64, 9223372036854775807 : I64, -4611686018427387905 : I64)
+  println "bystanders"
+  println ((18446744073709551615 : U64) / 3, (9223372036854775808 : U64) > 1, (0 : U64) - 1)
+  println ((-7) / 2, (-7) % 2, shiftRight (-16) 2)
+  println (hash 5 == hash (5 : U64))

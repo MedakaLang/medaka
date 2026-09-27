@@ -3,6 +3,7 @@
    Every mutation returns a fresh state.  Record, MST, and commit blocks cross
    the verified blockstore boundary before the state becomes observable. -}
 
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{encode}
 import list.{reverse}
 import regex.{Regex, isFullMatchBytes, mustCompile}
@@ -255,7 +256,13 @@ buildCommit did secret rev tree store = do
   unsigned <- encodeCommit "unsigned" (unsignedValue did (mstRootCid tree) rev)
   signature <- mapErr
     (message => "repo: signing failed: \{message}")
-    (signDigest secret (sha256 unsigned))
+    (signDigest
+      secret
+      (toArray
+        (sha256
+          (optionOrPanic
+            "sha256: every element must be a byte in 0..255"
+            (fromArray unsigned)))))
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
@@ -652,7 +659,7 @@ cidSeqEmpty = CidSeq Tip []
 -- The key is the CID's byte encoding in hex, so key equality is `cidEqual`.
 cidSeqAdd : Cid -> CidSeq -> CidSeq
 cidSeqAdd cid (CidSeq seen values) =
-  let key = encode (cidToBytes cid)
+  let key = encode (fromArrayAssumeByteDomain (cidToBytes cid))
   if has key seen then
     CidSeq seen values
   else
@@ -835,4 +842,11 @@ repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signatu
     Err _ => False
     Ok parsed =>
       signatureCompact parsed == signatureCompact signature
-        && verifyDigest publicKey (sha256 unsigned) signature
+        && verifyDigest
+          publicKey
+          (toArray
+            (sha256
+              (optionOrPanic
+                "sha256: every element must be a byte in 0..255"
+                (fromArray unsigned))))
+          signature

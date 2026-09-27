@@ -175,10 +175,17 @@ suites = [
   ("fs", (8, NativeCapability)),
   ("hash_map", (24, EvalAndNative)),
   ("hash_set", (13, EvalAndNative)),
-  ("hex", (23, EvalAndNative)),
+  -- `encodeBytes`/`decodeBytes` merged into `encode`/`decode` (S-codecs-
+  -- bytes), taking their doctests and prop with them; the floor fell from
+  -- 23 to the assertions the surviving names still carry.
+  ("hex", (17, EvalAndNative)),
   -- The resource-limit examples. Neither of the two vehicles named in the
   -- header reaches this module, so without this row nothing would run them.
   ("http", (6, EvalAndNative)),
+  -- The signed fixed-width types: two's complement wrapping, truncating
+  -- division, arithmetic shifts, each lowered by its own engine.
+  ("i32", (32, EvalAndNative)),
+  ("i64", (31, EvalAndNative)),
   ("io", (8, NativeCapability)),
   ("json", (55, EvalAndNative)),
   ("list", (158, EvalAndNative)),
@@ -378,9 +385,13 @@ test "stdlib/hash_map.mdk executed >= 24 assertions" =
 test "stdlib/hash_set.mdk executed >= 13 assertions" =
   floorExpectation "hash_set"
 
-test "stdlib/hex.mdk executed >= 23 assertions" = floorExpectation "hex"
+test "stdlib/hex.mdk executed >= 17 assertions" = floorExpectation "hex"
 
 test "stdlib/http.mdk executed >= 6 assertions" = floorExpectation "http"
+
+test "stdlib/i32.mdk executed >= 32 assertions" = floorExpectation "i32"
+
+test "stdlib/i64.mdk executed >= 31 assertions" = floorExpectation "i64"
 
 test "stdlib/io.mdk executed >= 8 assertions" = floorExpectation "io"
 

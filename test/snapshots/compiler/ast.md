@@ -1,5 +1,5 @@
 # META
-source_lines=2408
+source_lines=2465
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -23,6 +23,11 @@ public export data Lit =
   -- written in a binding (`exprToPat`), and the typechecker refuses it there
   -- (`inferU64LitPat`), so no engine ever matches against one.
   | LU64 Int Int
+  -- An `I64` constant, as the high and low 32-bit halves of its 64-bit two's
+  -- complement pattern, minted exactly where `LU64` is for a literal whose type
+  -- grounded to `I64`.  It is a pattern nowhere: a literal pattern on an `I64` is
+  -- refused as one on a `U64` is.
+  | LI64 Int Int
   | LString String
   | LChar String
   | LBool Bool
@@ -151,6 +156,16 @@ ifaceIdentity OriginBuiltin _ = ""
 export
 ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
+
+-- The dictionary name an interface default body's RECEIVER evidence renders to: a
+-- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` to
+-- it.  It is not a parameter of the lowered body.  Each engine rebinds it to the
+-- instance the body is running for — lowering rewrites it to that instance's route
+-- (`core_ir_lower`), eval binds it in the specialized body's frame — so the body is
+-- inferred once and selects nothing.  `$` keeps it out of every user namespace.
+export
+defaultReceiverDict : String -> String
+defaultReceiverDict method = "$self_\{method}"
 
 -- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
@@ -1153,6 +1168,42 @@ export
 isUnsignedHead : String -> Bool
 isUnsignedHead h = isFixedWidthHead h || isU64Head h
 
+-- The signed heads (INTEGER-TYPES-DESIGN §2).  `I32` shares `Int`'s tagged word
+-- and holds its value sign-extended, so the word compare is its order and an
+-- in-range literal is its word; an arithmetic result is sign-extended from bit 31.
+-- `I64` is a boxed cell like `U64`, with a header of its own.
+export
+isI32Head : String -> Bool
+isI32Head h = h == "I32"
+
+export
+isI64Head : String -> Bool
+isI64Head h = h == "I64"
+
+-- The heads whose value is a 64-bit cell rather than `Int`'s word.
+export
+isBoxed64Head : String -> Bool
+isBoxed64Head h = isU64Head h || isI64Head h
+
+-- The heads that share `Int`'s tagged word: a comparison is the word compare and a
+-- literal pattern is a constant compare on the word.
+export
+isTaggedFixedHead : String -> Bool
+isTaggedFixedHead h = isFixedWidthHead h || isI32Head h
+
+-- Every builtin fixed-width integer head, unsigned or signed: an arithmetic or
+-- comparison operand grounded to one is lowered as a builtin rather than
+-- dispatched through its `Num`/`Ord` impl.
+export
+isFixedIntHead : String -> Bool
+isFixedIntHead h = isUnsignedHead h || isI32Head h || isI64Head h
+
+-- The value range of a tagged fixed-width head, for the literal range check.
+export
+taggedFixedRange : String -> Option (Int, Int)
+taggedFixedRange "I32" = Some (-2147483648, 2147483647)
+taggedFixedRange h = map (mask => (0, mask)) (fixedWidthMask h)
+
 -- The diagnostic for a positive 2^62 where an `Int` is wanted.  The parser raises
 -- it for a pattern and the typechecker for an expression (where 2^62 is a wide
 -- literal refused at `Int`); `driver/diagnostics.mdk` attaches the help to the
@@ -1194,10 +1245,16 @@ public export data EvId = EvId String Int
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
--- `EMethodAt` node's selected denotation pre-use arrow arity and three route
--- answers (its dispatch route, the selected impl's `requires` dicts, and the
--- method's own `=>` dicts) in the order the solver's `EvCell` route refs hold
--- them (`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).  The node
+-- `EMethodAt` node's interface identity (the `ifaceWordOf` word of the
+-- interface whose method the occurrence resolved to — `""` when the occurrence
+-- denotes no interface method, such as a standalone shadow), its selected
+-- denotation pre-use arrow arity and three route answers (its dispatch route,
+-- the selected impl's `requires` dicts, and the method's own `=>` dicts) in the
+-- order the solver's `EvCell` refs hold them
+-- (`ecIface`/`ecArity`/`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).
+-- The identity is what lets every engine keep two interfaces' same-spelled
+-- methods apart at one dispatch tag (#1265, #1619): the route alone names a
+-- type, never an interface.  The node
 -- itself carries no route: its three cells are the method name, the pre-pass seed
 -- and the `EvId` that addresses that cell, and a reader reaches the routes by
 -- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
@@ -1213,7 +1270,7 @@ public export data EvId = EvId String Int
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
-  | EvMethod Int Route (List Route) (List Route)
+  | EvMethod String Int Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 
@@ -1491,8 +1548,8 @@ public export data Expr =
   -- §3.2 item 4): the value's high and low 32-bit halves, the `fromInt`-route cell
   -- (as `ENumLit`'s third field), and the source lexeme.  The lexer mints it for a
   -- magnitude in `2^62 .. 2^64 - 1`; the typechecker accepts it only where the
-  -- literal's type grounds to `U64` (`checkWideLiterals`) and rewrites it to
-  -- `ELit (LU64 hi lo)`, so eval/emit never see it.
+  -- literal's type grounds to `U64` or `I64` (`checkWideLiterals`) and rewrites it
+  -- to `ELit (LU64 hi lo)` or `ELit (LI64 hi lo)`, so eval/emit never see it.
   | EWideLit Int Int (Ref Route) String
 
 -- import paths: `import q.{members}`, `import q.path`, `import q.*`, `import q as A`
@@ -2412,8 +2469,8 @@ mapKvsB f ((k, v) :: rest) =
   ((k2, v2) :: rest2, c1 || c2 || c3)
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "join" false))))
-(DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
-(DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LU64" (PVar "__a0") (PVar "__a1")) (PCon "LU64" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LU64" (PVar "__a0") (PVar "__a1")) (PCon "LU64" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LI64" (PVar "__a0") (PVar "__a1")) (PCon "LI64" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
 (DTypeSig true "ifaceIdentity" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2422,6 +2479,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
 (DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "/=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
+(DTypeSig true "defaultReceiverDict" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "defaultReceiverDict" ((PVar "method")) (EBinOp "++" (EBinOp "++" (ELit (LString "$self_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DData Public "Ns" () ((variant "NsType" (ConPos)) (variant "NsIface" (ConPos)) (variant "NsMethod" (ConPos)) (variant "NsCtor" (ConPos)) (variant "NsField" (ConPos)) (variant "NsValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "True")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "True")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "True")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "True")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Ord" ((TyCon "Ns")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "Eq")) (arm (PTuple (PCon "NsType") (PCon "NsIface")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "Eq")) (arm (PTuple (PCon "NsIface") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "Eq")) (arm (PTuple (PCon "NsMethod") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "Eq")) (arm (PTuple (PCon "NsCtor") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsField") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "Eq")) (arm (PTuple (PCon "NsField") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsValue") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsField")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "Eq"))))))
@@ -2574,12 +2633,25 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "isU64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "U64"))))
 (DTypeSig true "isUnsignedHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isUnsignedHead" ((PVar "h")) (EBinOp "||" (EApp (EVar "isFixedWidthHead") (EVar "h")) (EApp (EVar "isU64Head") (EVar "h"))))
+(DTypeSig true "isI32Head" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isI32Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "I32"))))
+(DTypeSig true "isI64Head" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isI64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "I64"))))
+(DTypeSig true "isBoxed64Head" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isBoxed64Head" ((PVar "h")) (EBinOp "||" (EApp (EVar "isU64Head") (EVar "h")) (EApp (EVar "isI64Head") (EVar "h"))))
+(DTypeSig true "isTaggedFixedHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isTaggedFixedHead" ((PVar "h")) (EBinOp "||" (EApp (EVar "isFixedWidthHead") (EVar "h")) (EApp (EVar "isI32Head") (EVar "h"))))
+(DTypeSig true "isFixedIntHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isFixedIntHead" ((PVar "h")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnsignedHead") (EVar "h")) (EApp (EVar "isI32Head") (EVar "h"))) (EApp (EVar "isI64Head") (EVar "h"))))
+(DTypeSig true "taggedFixedRange" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "taggedFixedRange" ((PLit (LString "I32"))) (EApp (EVar "Some") (ETuple (EUnOp "-" (ELit (LInt 2147483648))) (ELit (LInt 2147483647)))))
+(DFunDef false "taggedFixedRange" ((PVar "h")) (EApp (EApp (EVar "map") (ELam ((PVar "mask")) (ETuple (ELit (LInt 0)) (EVar "mask")))) (EApp (EVar "fixedWidthMask") (EVar "h"))))
 (DTypeSig true "intMinLiteralMsg" (TyCon "String"))
 (DFunDef false "intMinLiteralMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
 (DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
-(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
@@ -2780,8 +2852,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "mapKvsB" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "k2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "k"))) (DoLet false false (PTuple (PVar "v2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "v"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c3")) (EApp (EApp (EVar "mapKvsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "k2") (EVar "v2")) (EVar "rest2")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
 # MARK
 (DUse false (UseGroup ("string") ((mem "join" false))))
-(DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
-(DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LU64" (PVar "__a0") (PVar "__a1")) (PCon "LU64" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LU64" (PVar "__a0") (PVar "__a1")) (PCon "LU64" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LI64" (PVar "__a0") (PVar "__a1")) (PCon "LI64" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
 (DTypeSig true "ifaceIdentity" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2790,6 +2862,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
 (DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "/=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
+(DTypeSig true "defaultReceiverDict" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "defaultReceiverDict" ((PVar "method")) (EBinOp "++" (EBinOp "++" (ELit (LString "$self_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DData Public "Ns" () ((variant "NsType" (ConPos)) (variant "NsIface" (ConPos)) (variant "NsMethod" (ConPos)) (variant "NsCtor" (ConPos)) (variant "NsField" (ConPos)) (variant "NsValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "True")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "True")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "True")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "True")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Ord" ((TyCon "Ns")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "Eq")) (arm (PTuple (PCon "NsType") (PCon "NsIface")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "Eq")) (arm (PTuple (PCon "NsIface") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "Eq")) (arm (PTuple (PCon "NsMethod") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "Eq")) (arm (PTuple (PCon "NsCtor") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsField") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "Eq")) (arm (PTuple (PCon "NsField") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsValue") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsField")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "Eq"))))))
@@ -2942,12 +3016,25 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "isU64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "U64"))))
 (DTypeSig true "isUnsignedHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isUnsignedHead" ((PVar "h")) (EBinOp "||" (EApp (EVar "isFixedWidthHead") (EVar "h")) (EApp (EVar "isU64Head") (EVar "h"))))
+(DTypeSig true "isI32Head" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isI32Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "I32"))))
+(DTypeSig true "isI64Head" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isI64Head" ((PVar "h")) (EBinOp "==" (EVar "h") (ELit (LString "I64"))))
+(DTypeSig true "isBoxed64Head" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isBoxed64Head" ((PVar "h")) (EBinOp "||" (EApp (EVar "isU64Head") (EVar "h")) (EApp (EVar "isI64Head") (EVar "h"))))
+(DTypeSig true "isTaggedFixedHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isTaggedFixedHead" ((PVar "h")) (EBinOp "||" (EApp (EVar "isFixedWidthHead") (EVar "h")) (EApp (EVar "isI32Head") (EVar "h"))))
+(DTypeSig true "isFixedIntHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isFixedIntHead" ((PVar "h")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isUnsignedHead") (EVar "h")) (EApp (EVar "isI32Head") (EVar "h"))) (EApp (EVar "isI64Head") (EVar "h"))))
+(DTypeSig true "taggedFixedRange" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "taggedFixedRange" ((PLit (LString "I32"))) (EApp (EVar "Some") (ETuple (EUnOp "-" (ELit (LInt 2147483648))) (ELit (LInt 2147483647)))))
+(DFunDef false "taggedFixedRange" ((PVar "h")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "mask")) (ETuple (ELit (LInt 0)) (EVar "mask")))) (EApp (EVar "fixedWidthMask") (EVar "h"))))
 (DTypeSig true "intMinLiteralMsg" (TyCon "String"))
 (DFunDef false "intMinLiteralMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
 (DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
-(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())

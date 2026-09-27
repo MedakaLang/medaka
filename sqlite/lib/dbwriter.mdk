@@ -107,7 +107,9 @@ import lib.overflow.{
   indexMaxLocalPayload as ovflIndexMaxLocalPayload,
 }
 import lib.recordenc.{encodeRecord}
-import lib.recordfmt.{Cell(..)}
+import lib.recordfmt.{Cell(..), cellI64}
+import lib.wideint as W
+import i64
 
 -- ---------------------------------------------------------------------------
 -- Constants
@@ -535,6 +537,7 @@ rowidFor None autoRowid _ = Ok autoRowid
 rowidFor (Some p) _ cells = match get p cells
   None => Err "IPK column index out of range for row"
   Some (CInt v) => Ok v
+  Some (CInt64 x) => Err (W.rowidRangeMessage x)
   Some CNull => Err "INTEGER PRIMARY KEY column must be a non-NULL integer"
   Some _ => Err "INTEGER PRIMARY KEY column must be an integer"
 
@@ -994,6 +997,7 @@ export
 cellClassRank : Cell -> Int
 cellClassRank CNull = 0
 cellClassRank (CInt _) = 1
+cellClassRank (CInt64 _) = 1
 cellClassRank (CFloat _) = 1
 cellClassRank (CText _) = 2
 cellClassRank (CBlob _) = 3
@@ -1012,11 +1016,17 @@ compareSameClass : Cell -> Cell -> Ordering
 compareSameClass CNull CNull = Eq
 compareSameClass (CInt x) (CInt y) = compare x y
 compareSameClass (CFloat x) (CFloat y) = compare x y
-compareSameClass (CInt x) (CFloat y) = compare (intToFloat x) y
-compareSameClass (CFloat x) (CInt y) = compare x (intToFloat y)
+-- An integer against a REAL is SQLite's exact comparison; through a `Float` two
+-- different values past 2^53 would tie, and the index would be out of order.
+compareSameClass (CInt x) (CFloat y) = W.compareFloat (W.widen x) y
+compareSameClass (CFloat x) (CInt y) = W.compareRealInt x (W.widen y)
+compareSameClass (CInt64 x) (CFloat y) = W.compareFloat x y
+compareSameClass (CFloat x) (CInt64 y) = W.compareRealInt x y
 compareSameClass (CText x) (CText y) = compareBytesLex (toUtf8 x) (toUtf8 y)
 compareSameClass (CBlob x) (CBlob y) = compareBytesLex x y
-compareSameClass _ _ = Eq
+compareSameClass a b = match (cellI64 a, cellI64 b)
+  (Some x, Some y) => compare x y
+  _ => Eq
 
 -- | Lexicographic (memcmp) comparison of two byte arrays: shorter-prefix wins a
 --   tie, exactly as SQLite's BINARY collation compares text/blob bodies.

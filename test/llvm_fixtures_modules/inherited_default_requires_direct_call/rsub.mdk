@@ -1,0 +1,7 @@
+-- A default that dispatches on its receiver (`both`) and one that ignores it (`tag`).
+export interface Sub a where
+  own : a -> String
+  both : a -> String
+  both x = "+" ++ own x
+  tag : a -> String
+  tag _ = "t"

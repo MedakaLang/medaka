@@ -23,7 +23,7 @@
    rkey-less `createRecord` does not propose one again; and a batch deleting a
    record that is not there is the same idempotent no-op `deleteRecord` is. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jArray, jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -58,6 +58,16 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse, tidToString}
+import test.fixture_support.{
+  commitField,
+  field,
+  fieldText,
+  lastHex,
+  meaningful,
+  storeFingerprint,
+  testNonce,
+  testSecret,
+}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -69,7 +79,9 @@ handleFixture : Server ->
   Array Int ->
   (Store, Array Int)
 handleFixture httpServer context store request = match fromArray request
-  Some packed => handleBytes httpServer context store packed
+  Some packed =>
+    let (next, response) = handleBytes httpServer context store packed
+    (next, toArray response)
   None => panic "batch_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
@@ -91,7 +103,8 @@ scratchCollection : String
 scratchCollection = "app.medaka.scratch"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "batch_handlers: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "batch_handlers: malformed hex" (decode text))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "batch_handlers: malformed TID" (tidParse text)
@@ -122,14 +135,8 @@ mustRepo did secretHex rev =
 -- A fixed secret and instant, for the reason `pds/test/record_handlers_main.mdk`
 -- gives at length: this file grades handler behavior, and a random secret would
 -- only make the transcript irreproducible.
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
-
 testInstant : Int
 testInstant = 1700000000
-
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 testContext : RequestContext
 testContext =
@@ -188,16 +195,6 @@ responseJson bytes =
     Ok value => value
     Err message => panic "batch_handlers: response is not JSON: \{message}"
 
-fieldText : String -> Json -> String
-fieldText name value = match get name value
-  Some (JString text) => text
-  _ => "<missing:\{name}>"
-
-commitField : String -> Json -> String
-commitField name value = match get "commit" value
-  Some commit => fieldText name commit
-  None => "<missing:commit>"
-
 resultCidsAt : Array Json -> Int -> List String
 resultCidsAt rows i =
   if i >= arrayLength rows then
@@ -227,10 +224,6 @@ taggedOne : String -> List String -> List String
 taggedOne tag lines = match tagged tag lines
   [fields] => fields
   _ => panic "batch_handlers: expected exactly one \{tag} row"
-
-field : Int -> List String -> String
-field _ [] = panic "batch_handlers: corpus row is too short"
-field i (value :: rest) = if i <= 0 then value else field (i - 1) rest
 
 -- ── the batch request ───────────────────────────────────────────────────────
 
@@ -281,12 +274,6 @@ batchBodyWithSwap did writes swap =
 
 -- ── grading ─────────────────────────────────────────────────────────────────
 
-storeFingerprint : Store -> String
-storeFingerprint store = match storeRepo store
-  None => "<unconfigured>"
-  Some repo =>
-    "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
-
 storeMustRepo : Store -> Repo
 storeMustRepo store =
   optionOrPanic "batch_handlers: store carries no repository" (storeRepo store)
@@ -319,9 +306,6 @@ rejectCell label expectedCode did server store body =
 
 firstHex : String -> String
 firstHex text = stringSlice 0 32 text
-
-lastHex : String -> String
-lastHex text = stringSlice (stringLength text - 32) (stringLength text) text
 
 -- ── driver ──────────────────────────────────────────────────────────────────
 
@@ -369,7 +353,7 @@ runBatch lines =
       (procedureRequest did (batchBody did writes))
   let value = responseJson responseBytes
   let carHex = match repoExportCar (storeMustRepo applied)
-    Ok bytes => encode bytes
+    Ok bytes => encode (fromArrayAssumeByteDomain bytes)
     Err message => panic "batch_handlers: repoExportCar failed: \{message}"
   let external =
     check
@@ -520,9 +504,6 @@ absentDeleteCell did server store before =
       && commitField "cid" value == cidToString (repoCommitCid current)
       && commitField "rev" value == tidToString (repoCommitTid current))
     "state=\{stateWord (storeFingerprint after == before)} error=\{fieldText "error" value} rev=\{commitField "rev" value}"
-
-meaningful : String -> Bool
-meaningful line = line /= "" && not (startsWith "#" line)
 
 runRead : Result String (List String) -> <IO> Unit
 runRead (Err message) = panic "batch_handlers: cannot read corpus: \{message}"

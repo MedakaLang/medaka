@@ -1,10 +1,8 @@
-{- | Base64 encoding and decoding of bytes, per RFC 4648.
+{- | Base64 encoding and decoding, per RFC 4648.
 
-   Bytes are an `Array Int` with each element from `0` to `255`, the same
-   form `readFileBytes` and `writeFileBytes` use. `encode` and `decode` use
-   the standard alphabet with `=` padding; `encodeUrlSafe` and
-   `decodeUrlSafe` use the URL and filename safe alphabet, with `-` and `_`
-   in place of `+` and `/`, still padded.
+   `encode` and `decode` use the standard alphabet with `=` padding;
+   `encodeUrlSafe` and `decodeUrlSafe` use the URL and filename safe
+   alphabet, with `-` and `_` in place of `+` and `/`, still padded.
 
    Decoding is strict: the length must be a multiple of four, only the
    alphabet and trailing padding are accepted, and whitespace is not
@@ -18,17 +16,22 @@
 -- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
 -- lint-disable-file rule-stdlib-reimpl
 
-import array.{get, fromList}
+import array.{get}
+import bytes as B
+import bytes.{
+  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
+}
 import list.{reverse}
-import string.{toUtf8, fromUtf8, toChars}
+import string.{fromUtf8, toChars}
+import u8 as U8
 
--- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
--- call site below only ever indexes within the array's own known length, so
--- the `None` arm is unreachable; this avoids the internal-only
--- `arrayGetUnsafe` primitive.
-byteAt : Int -> Array Int -> Int
-byteAt i arr = match get i arr
-  Some b => b
+-- In-bounds indexing via the safe `bytes.get`, panicking on a miss.  Every
+-- call site below only ever indexes within the byte string's own known
+-- length, so the `None` arm is unreachable; this avoids the internal-only
+-- unsafe accessor.
+byteAt : Int -> Bytes -> Int
+byteAt i bs = match B.get i bs
+  Some b => U8.toInt b
   None => panic "base64: index out of bounds"
 
 charAt : Int -> Array Char -> Char
@@ -77,14 +80,14 @@ b64Val c urlSafe =
 -- Characters are consed on and reversed once at the end: appending each
 -- quad to the accumulator instead would be linear in the characters already
 -- emitted, making the whole encode quadratic in the input's length.
-encodeGo : Array Int -> Int -> Int -> Bool -> List Char -> List Char
-encodeGo bytes i n urlSafe acc
+encodeGo : Bytes -> Int -> Int -> Bool -> List Char -> List Char
+encodeGo bs i n urlSafe acc
   | i >= n = reverse acc
   | otherwise =
     let remain = n - i
-    let b0 = byteAt i bytes
-    let b1 = if remain > 1 then byteAt (i + 1) bytes else 0
-    let b2 = if remain > 2 then byteAt (i + 2) bytes else 0
+    let b0 = byteAt i bs
+    let b1 = if remain > 1 then byteAt (i + 1) bs else 0
+    let b2 = if remain > 2 then byteAt (i + 2) bs else 0
     let c0 = shiftRight b0 2
     let c1 = bitOr (shiftLeft (bitAnd b0 3) 4) (shiftRight b1 4)
     let c2 = bitOr (shiftLeft (bitAnd b1 15) 2) (shiftRight b2 6)
@@ -93,40 +96,39 @@ encodeGo bytes i n urlSafe acc
     let ch1 = b64Char c1 urlSafe
     let ch2 = if remain > 1 then b64Char c2 urlSafe else '='
     let ch3 = if remain > 2 then b64Char c3 urlSafe else '='
-    encodeGo bytes (i + 3) n urlSafe (ch3 :: ch2 :: ch1 :: ch0 :: acc)
+    encodeGo bs (i + 3) n urlSafe (ch3 :: ch2 :: ch1 :: ch0 :: acc)
 
 {- | The bytes as standard base64, padded with `=`.
 
-   > encode (toUtf8 "foobar")
+   > encode (encodeUtf8 "foobar")
    "Zm9vYmFy"
-   > encode (toUtf8 "fo")
+   > encode (encodeUtf8 "fo")
    "Zm8=" -}
 export
-encode : Array Int -> String
-encode bytes =
-  stringFromChars
-    (arrayFromList (encodeGo bytes 0 (arrayLength bytes) False []))
+encode : Bytes -> String
+encode bs =
+  stringFromChars (arrayFromList (encodeGo bs 0 (B.length bs) False []))
 
 -- RFC 4648 test vectors.
--- > encode (toUtf8 "")
+-- > encode (encodeUtf8 "")
 -- ""
--- > encode (toUtf8 "f")
+-- > encode (encodeUtf8 "f")
 -- "Zg=="
--- > encode (toUtf8 "foo")
+-- > encode (encodeUtf8 "foo")
 -- "Zm9v"
--- > encode (toUtf8 "foob")
+-- > encode (encodeUtf8 "foob")
 -- "Zm9vYg=="
--- > encode (toUtf8 "fooba")
+-- > encode (encodeUtf8 "fooba")
 -- "Zm9vYmE="
 
 {- | The bytes as URL and filename safe base64, padded with `=`.
 
-   > encodeUrlSafe (fromList [255, 239, 191])
+   > encodeUrlSafe (fromU8Array [|255, 239, 191|])
    "_--_" -}
 export
-encodeUrlSafe : Array Int -> String
-encodeUrlSafe bytes =
-  stringFromChars (arrayFromList (encodeGo bytes 0 (arrayLength bytes) True []))
+encodeUrlSafe : Bytes -> String
+encodeUrlSafe bs =
+  stringFromChars (arrayFromList (encodeGo bs 0 (B.length bs) True []))
 
 {- | The UTF-8 bytes of a string as standard base64.
 
@@ -134,7 +136,7 @@ encodeUrlSafe bytes =
    "Zm9v" -}
 export
 encodeString : String -> String
-encodeString s = encode (toUtf8 s)
+encodeString s = encode (encodeUtf8 s)
 
 -- # Decoding
 
@@ -212,45 +214,50 @@ decodeGo chars i n urlSafe acc
       Err e => Err e
       Ok bytes => decodeGo chars (i + 4) n urlSafe (reverse bytes ++ acc)
 
-decodeWith : String -> Bool -> Result String (Array Int)
+decodeWith : String -> Bool -> Result String Bytes
 decodeWith s urlSafe =
   let chars = toChars s
   let n = arrayLength chars
   if n % 4 /= 0 then
     Err "base64.decode: length not a multiple of 4"
   else
-    map arrayFromList (decodeGo chars 0 n urlSafe [])
+    -- Each decoded byte is built from bit-shifts of the 6-bit alphabet
+    -- values, so the byte domain holds by construction and the checked door
+    -- would only add a scan.
+    map
+      (xs => fromArrayAssumeByteDomain (arrayFromList xs))
+      (decodeGo chars 0 n urlSafe [])
 
-{- | The bytes written in standard base64.
+{- | The bytes written in standard base64, as a `Bytes`.
 
    `Err` when the length is not a multiple of four, a character is outside
    the alphabet, or padding appears anywhere but the end.
 
-   > decode "Zm9vYmFy"
+   > map toArray (decode "Zm9vYmFy")
    Ok [|102, 111, 111, 98, 97, 114|]
    > decode "Zg="
    Err "base64.decode: length not a multiple of 4" -}
 export
-decode : String -> Result String (Array Int)
+decode : String -> Result String Bytes
 decode s = decodeWith s False
 
--- > decode ""
+-- > map toArray (decode "")
 -- Ok [||]
--- > decode "Zg=="
+-- > map toArray (decode "Zg==")
 -- Ok [|102|]
--- > decode "Zm8="
+-- > map toArray (decode "Zm8=")
 -- Ok [|102, 111|]
--- > decode "Zm9v"
+-- > map toArray (decode "Zm9v")
 -- Ok [|102, 111, 111|]
 -- > decode "Z@=="
 -- Err "base64.decode: invalid character or padding"
 
-{- | The bytes written in URL and filename safe base64.
+{- | The bytes written in URL and filename safe base64, as a `Bytes`.
 
-   > decodeUrlSafe "_--_"
+   > map toArray (decodeUrlSafe "_--_")
    Ok [|255, 239, 191|] -}
 export
-decodeUrlSafe : String -> Result String (Array Int)
+decodeUrlSafe : String -> Result String Bytes
 decodeUrlSafe s = decodeWith s True
 
 {- | The string whose UTF-8 bytes are written in standard base64.
@@ -259,21 +266,23 @@ decodeUrlSafe s = decodeWith s True
    Ok "foo" -}
 export
 decodeString : String -> Result String String
-decodeString s = map fromUtf8 (decode s)
+decodeString s = map (bs => fromUtf8 (toArray bs)) (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 
-toByteArray : List Int -> Array Int
-toByteArray xs = arrayFromList (map (b => (b % 256 + 256) % 256) xs)
+toBytes : List Int -> Bytes
+toBytes xs =
+  fromArrayAssumeByteDomain
+    (arrayFromList (map (b => (b % 256 + 256) % 256) xs))
 
-prop "base64 round-trip: decode (encode bs) == Ok bs" (xs : List Int) =
-  let bs = toByteArray xs
-  decode (encode bs) == Ok bs
+prop "base64 round-trip: decode (encode b) == Ok b" (xs : List Int) =
+  let b = toBytes xs
+  decode (encode b) == Ok b
 
-prop "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe bs) == Ok bs" (xs : List Int) =
-  let bs = toByteArray xs
-  decodeUrlSafe (encodeUrlSafe bs) == Ok bs
+prop "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe b) == Ok b" (xs : List Int) =
+  let b = toBytes xs
+  decodeUrlSafe (encodeUrlSafe b) == Ok b
 
 prop "base64 encoded length is a multiple of 4" (xs : List Int) =
-  let bs = toByteArray xs
-  stringLength (encode bs) % 4 == 0
+  let b = toBytes xs
+  stringLength (encode b) % 4 == 0

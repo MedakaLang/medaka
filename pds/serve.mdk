@@ -83,6 +83,7 @@ import args.{
 }
 import array as A
 import async.{Async, liftIO, sleep, spawn}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import fs.{isDir}
 import hex.{decode, encode}
 import io.{isPrivateMode, writeFilePrivate}
@@ -480,7 +481,7 @@ readHexBytes label path = do
   text <- match readFile path
     Err message => Err "unreadable \{label} \{path}: \{message}"
     Ok given => Ok given
-  match decode (trim text)
+  match map toArray (decode (trim text))
     Err message => Err "\{label} \{path} is not hex: \{message}"
     Ok bytes => Ok bytes
 
@@ -535,7 +536,8 @@ admitSessionSecret path bytes =
 generateSessionSecret : String -> <FileWrite, Rand> Result String (Array Int)
 generateSessionSecret dir = do
   let bytes = osEntropyBytes serverSecretBytes
-  () <- match writeFilePrivate (sessionSecretPath dir) "\{encode bytes}\n"
+  let line = "\{encode (fromArrayAssumeByteDomain bytes)}\n"
+  () <- match writeFilePrivate (sessionSecretPath dir) line
     Err message =>
       Err "unwritable session secret \{sessionSecretPath dir}: \{message}"
     Ok () => Ok ()
@@ -619,8 +621,8 @@ loadCredential dir = do
           Err
             "credential \{credentialPath dir}: first line is not an iteration count"
         Some given => Ok given
-      salt <- decode saltText
-      digest <- decode digestText
+      salt <- map toArray (decode saltText)
+      digest <- map toArray (decode digestText)
       credentialFromParts salt iterations digest
     _ =>
       Err

@@ -6,6 +6,25 @@ IDENT "setInPlace"
 RBRACE
 NEWLINE
 IMPORT
+IDENT "bytes"
+AS
+UPPER "B"
+NEWLINE
+IMPORT
+IDENT "bytes"
+DOT_LBRACE
+UPPER "Bytes"
+COMMA
+IDENT "fromArrayAssumeByteDomain"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "list"
+DOT_LBRACE
+IDENT "reverse"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "vector"
 DOT_LBRACE
 UPPER "Vector"
@@ -32,6 +51,11 @@ UPPER "Duration"
 COMMA
 IDENT "toMillis"
 RBRACE
+NEWLINE
+IMPORT
+IDENT "u8"
+AS
+UPPER "U8"
 NEWLINE
 IMPORT
 TEST
@@ -221,8 +245,7 @@ COLON
 UPPER "Connection"
 IDENT "h"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 LT
 UPPER "Net"
@@ -238,7 +261,12 @@ IDENT "bs"
 EQUAL
 IDENT "netSend"
 IDENT "conn"
+LPAREN
+UPPER "B"
+DOT
+IDENT "toArray"
 IDENT "bs"
+RPAREN
 NEWLINE
 EXPORT
 NEWLINE
@@ -255,22 +283,51 @@ IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "recv"
 IDENT "conn"
 IDENT "n"
 EQUAL
+IDENT "map"
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "netRecv"
 IDENT "conn"
 IDENT "n"
+RPAREN
 NEWLINE
 EXPORT
 NEWLINE
 IDENT "sendAll"
+COLON
+UPPER "Connection"
+IDENT "h"
+ARROW
+UPPER "Bytes"
+ARROW
+LT
+UPPER "Net"
+IDENT "h"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "sendAll"
+IDENT "conn"
+IDENT "bs"
+EQUAL
+IDENT "sendArray"
+IDENT "conn"
+LPAREN
+UPPER "B"
+DOT
+IDENT "toArray"
+IDENT "bs"
+RPAREN
+NEWLINE
+IDENT "sendArray"
 COLON
 UPPER "Connection"
 IDENT "h"
@@ -286,7 +343,7 @@ UPPER "Result"
 UPPER "String"
 UPPER "Unit"
 NEWLINE
-IDENT "sendAll"
+IDENT "sendArray"
 IDENT "conn"
 IDENT "bs"
 EQUAL
@@ -1028,8 +1085,8 @@ COLON
 UPPER "Connection"
 IDENT "h"
 ARROW
-UPPER "Vector"
-UPPER "Int"
+UPPER "List"
+UPPER "Bytes"
 ARROW
 LT
 UPPER "Net"
@@ -1037,14 +1094,11 @@ IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "recvAllLoop"
 IDENT "conn"
-IDENT "buf"
+IDENT "chunks"
 EQUAL
 MATCH
 IDENT "recv"
@@ -1062,45 +1116,33 @@ IDENT "chunk"
 FAT_ARROW
 INDENT
 IF
-IDENT "arrayLength"
+UPPER "B"
+DOT
+IDENT "isEmpty"
 IDENT "chunk"
-EQ_EQ
-INT 0
 THEN
 INDENT
 UPPER "Ok"
 LPAREN
-IDENT "toArray"
-IDENT "buf"
+UPPER "B"
+DOT
+IDENT "concat"
+LPAREN
+IDENT "reverse"
+IDENT "chunks"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT
 ELSE
 INDENT
-LET
-UNDERSCORE
-EQUAL
-IDENT "fold"
-LPAREN
-IDENT "acc"
-IDENT "b"
-FAT_ARROW
-LET
-UNDERSCORE
-EQUAL
-IDENT "push"
-IDENT "b"
-IDENT "buf"
-IN
-IDENT "acc"
-RPAREN
-LPAREN
-RPAREN
-IDENT "chunk"
-NEWLINE
 IDENT "recvAllLoop"
 IDENT "conn"
-IDENT "buf"
+LPAREN
+IDENT "chunk"
+CONS
+IDENT "chunks"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -1121,21 +1163,15 @@ IDENT "h"
 GT
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "recvAll"
 IDENT "conn"
 EQUAL
 IDENT "recvAllLoop"
 IDENT "conn"
-LPAREN
-IDENT "new"
-LPAREN
-RPAREN
-RPAREN
+LBRACKET
+RBRACKET
 NEWLINE
 EXPORT
 NEWLINE
@@ -1158,7 +1194,7 @@ IDENT "sendString"
 IDENT "conn"
 IDENT "s"
 EQUAL
-IDENT "sendAll"
+IDENT "sendArray"
 IDENT "conn"
 LPAREN
 IDENT "toUtf8"
@@ -1184,7 +1220,17 @@ IDENT "recvString"
 IDENT "conn"
 EQUAL
 IDENT "map"
+LPAREN
+IDENT "bs"
+FAT_ARROW
 IDENT "fromUtf8"
+LPAREN
+UPPER "B"
+DOT
+IDENT "toArray"
+IDENT "bs"
+RPAREN
+RPAREN
 LPAREN
 IDENT "recvAll"
 IDENT "conn"
@@ -1261,10 +1307,10 @@ IDENT "chunk"
 FAT_ARROW
 INDENT
 IF
-IDENT "arrayLength"
+UPPER "B"
+DOT
+IDENT "isEmpty"
 IDENT "chunk"
-EQ_EQ
-INT 0
 THEN
 INDENT
 IF
@@ -1292,9 +1338,13 @@ INDENT
 LET
 IDENT "b"
 EQUAL
-IDENT "arrayGetUnsafe"
-INT 0
+UPPER "U8"
+DOT
+IDENT "toInt"
 IDENT "chunk"
+LBRACKET_TIGHT
+INT 0
+RBRACKET
 NEWLINE
 IF
 IDENT "b"

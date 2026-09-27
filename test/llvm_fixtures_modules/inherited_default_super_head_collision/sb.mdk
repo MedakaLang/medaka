@@ -1,0 +1,3 @@
+-- A same-spelled `Shape` with an unrelated method.
+export interface Shape a where
+  other : a -> String

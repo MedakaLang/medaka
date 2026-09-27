@@ -1,0 +1,123 @@
+-- Sibling test module for `compiler/types/disposition.mdk` (#1112 A-3). See
+-- `registry_test.mdk`'s own header for why a `*_test.mdk` sibling exists at
+-- all: excluded from both build fingerprints and the snapshot corpus, so this
+-- file never makes `./medaka` warn stale and never owes a golden.
+--
+-- The producer (`buildDispositions`, `types/typecheck.mdk`) is exercised end
+-- to end in `typecheck_test.mdk` against real compiled programs; what lives
+-- here is the carrier's own logic in isolation — the map index, the
+-- duplicate-detection fold, and the validator — none of which needs a
+-- typechecked program to exercise.
+--
+-- Comparisons below go through hand-written boolean predicates rather than
+-- `expectEqual` on a `MethodDisposition`/`Option MethodDisposition` value:
+-- neither `IfaceRef` nor `MethodDisposition` derives `Eq`/`Debug`, and adding
+-- either only for this file would be exactly the kind of instance a real
+-- reader (`types.repr`'s own callers) never asked for.
+import test.{expectTrue, expectEqual, expectAll}
+import frontend.ast.{TyConOrigin(..)}
+import types.repr.{IfaceRef(..)}
+import types.disposition.{
+  InstId(..),
+  MethodDisposition(..),
+  buildDispositionTable,
+  dispositionKey,
+  dispositionLookup,
+  dispositionRows,
+  emptyDispositionTable,
+  instIdMid,
+  instIdSeq,
+  dispositionProblems,
+}
+
+speakIface : IfaceRef
+speakIface = IfaceRef { irName = "Speak", irOrigin = OriginModule "ifa" }
+
+greetIface : IfaceRef
+greetIface = IfaceRef { irName = "Greet", irOrigin = OriginModule "ifb" }
+
+dogInst : InstId
+dogInst = InstId "ca" 0
+
+catInst : InstId
+catInst = InstId "cb" 1
+
+sameInst : InstId -> InstId -> Bool
+sameInst a b = instIdMid a == instIdMid b && instIdSeq a == instIdSeq b
+
+isNoneRow : Option MethodDisposition -> Bool
+isNoneRow None = True
+isNoneRow (Some _) = False
+
+isSuppliedFor : InstId -> String -> Option MethodDisposition -> Bool
+isSuppliedFor wantInst wantMethod (Some (Supplied { instance = i, method = m })) =
+  sameInst i wantInst && m == wantMethod
+isSuppliedFor _ _ _ = False
+
+isInheritedDefaultFor : InstId -> String -> Option MethodDisposition -> Bool
+isInheritedDefaultFor wantInst wantMethod (Some (InheritedDefault { instance = i, method = m })) =
+  sameInst i wantInst && m == wantMethod
+isInheritedDefaultFor _ _ _ = False
+
+test "dispositionKey renders instance identity and method as one string" =
+  expectEqual "ca#0@speak" (dispositionKey dogInst "speak")
+
+test "an empty table answers every lookup with None" =
+  expectTrue
+    (isNoneRow (dispositionLookup dogInst "speak" emptyDispositionTable))
+
+test "buildDispositionTable answers a supplied row by exact key" =
+  let table = buildDispositionTable [
+    Supplied { instance = dogInst, iface = speakIface, method = "speak" },
+  ]
+  expectTrue
+    (isSuppliedFor dogInst "speak" (dispositionLookup dogInst "speak" table))
+
+-- #1265's shape: the SAME method spelling, inherited on the SAME underlying
+-- type, but under two impls of two differently-named interfaces — two
+-- separate instance identities (separate `impl` declarations), so the table
+-- must keep both rows distinct rather than collapsing them onto one
+-- (method, tag)-shaped key.
+test "two same-named methods of two different interfaces stay distinct rows" =
+  let table = buildDispositionTable [
+    InheritedDefault {
+      instance = dogInst,
+      iface = speakIface,
+      method = "speak",
+    },
+    InheritedDefault {
+      instance = catInst,
+      iface = greetIface,
+      method = "speak",
+    },
+  ]
+  expectAll [
+    expectTrue
+      (isInheritedDefaultFor
+        dogInst
+        "speak"
+        (dispositionLookup dogInst "speak" table)),
+    expectTrue
+      (isInheritedDefaultFor
+        catInst
+        "speak"
+        (dispositionLookup catInst "speak" table)),
+    expectEqual 2 (length (dispositionRows table)),
+  ]
+
+test "an exact table has no disposition problems" =
+  let table = buildDispositionTable [
+    Supplied { instance = dogInst, iface = speakIface, method = "speak" },
+  ]
+  expectEqual [] (dispositionProblems [(dogInst, speakIface, "speak")] table)
+
+test "a dropped slot is a disposition problem" =
+  let table = buildDispositionTable [
+    Supplied { instance = dogInst, iface = speakIface, method = "speak" },
+  ]
+  expectEqual
+    1
+    (length
+      (dispositionProblems
+        [(dogInst, speakIface, "speak"), (catInst, speakIface, "speak")]
+        table))

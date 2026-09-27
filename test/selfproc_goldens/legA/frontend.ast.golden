@@ -7,6 +7,7 @@ dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -
 dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List (Option KindAnn) -> List Super -> List IfaceMethod -> Decl
 dNewtypeUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> String -> List (String, KindAnn) -> Ty -> List DeriveRef -> Decl
 dTypeAliasUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Ty -> Decl
+defaultReceiverDict : String -> String
 deriveRefName : DeriveRef -> String
 effAtomAt : String -> EffParamTy -> Loc -> EffAtomTy
 effAtomBare : String -> EffAtomTy
@@ -27,7 +28,12 @@ ifaceIdMatches : String -> String -> Bool
 ifaceIdentity : TyConOrigin -> String -> String
 intMinLiteralHelp : String
 intMinLiteralMsg : String
+isBoxed64Head : String -> Bool
+isFixedIntHead : String -> Bool
 isFixedWidthHead : String -> Bool
+isI32Head : String -> Bool
+isI64Head : String -> Bool
+isTaggedFixedHead : String -> Bool
 isU64Head : String -> Bool
 isUnsignedHead : String -> Bool
 kindAnnArg : KindAnn -> String
@@ -73,6 +79,7 @@ tabHasName : String -> List (TabKey, a) -> Bool
 tabKeyEq : TabKey -> TabKey -> Bool
 tabKeyName : TabKey -> String
 tabKeyOf : Ns -> TyConOrigin -> String -> TabKey
+taggedFixedRange : String -> Option (Int, Int)
 tyConBuiltin : String -> Option Loc -> Ty
 tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
 tyConUnresolved : String -> Option Loc -> Ty

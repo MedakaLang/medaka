@@ -5,6 +5,7 @@
    decode-and-reencode, CID calculation, and CID text parse/render. -}
 
 import array as A
+import bytes.{toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{contains, split, startsWith, toUpper}
@@ -19,7 +20,8 @@ import lib.cid.{
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "dagcbor_cid_vectors: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "dagcbor_cid_vectors: malformed hex" (decode text))
 
 mustCid : String -> Cid
 mustCid text =

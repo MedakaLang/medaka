@@ -1,0 +1,7 @@
+-- #1619: `dtag` reaches rca1619_di's inherited default (7); `otag` reaches
+-- rca1619_other's explicit impl (100) of its own same-spelled `Tag`, a different class
+-- by DICT-SEMANTICS §8 I4.  The explicit impl is never a candidate for di's slot.
+import lib.rca1619_dimpl.{Box(..), dtag}
+import lib.rca1619_other.{otag}
+
+main = println (dtag Box, otag Box)

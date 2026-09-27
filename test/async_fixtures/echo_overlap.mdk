@@ -12,6 +12,7 @@ import net_async as A
 import list.{reverse}
 import time.{millis}
 import string.{fromUtf8, join}
+import bytes.{Bytes, isEmpty, toArray}
 
 log : Ref (List String)
 log = Ref []
@@ -19,9 +20,9 @@ log = Ref []
 note : String -> Async e Unit
 note s = liftIO (u => log := s :: !log)
 
-showBytes : Result String (Array Int) -> String
+showBytes : Result String Bytes -> String
 showBytes r = match r
-  Ok bs => fromUtf8 bs
+  Ok bs => fromUtf8 (toArray bs)
   Err e => "Err " ++ e
 
 -- Every helper is row-polymorphic (`<… | e>`): an effect row in a type
@@ -32,9 +33,9 @@ showBytes r = match r
 echo : Connection * -> Async <Clock, Net | e> (Result String Unit)
 echo conn = deferThen (A.recv conn 64) (r => echoStep conn r)
 
-echoStep : Connection * -> Result String (Array Int) -> Async <Clock, Net | e> (Result String Unit)
+echoStep : Connection * -> Result String Bytes -> Async <Clock, Net | e> (Result String Unit)
 echoStep conn (Ok bs) =
-  if length bs == 0 then deferPure (Ok ())
+  if isEmpty bs then deferPure (Ok ())
   else deferThen (A.sendAll conn bs) (_ => echo conn)
 echoStep _ (Err e) = deferPure (Err e)
 
