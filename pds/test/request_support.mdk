@@ -1,0 +1,69 @@
+{- | Raw HTTP/1.1 request builders and their small JSON-body helpers, shared
+   across the pds route/handler tests that drive `handleBytes` with hand-
+   built wire bytes rather than a real socket. The caller passes its own
+   `accountHostText` explicitly, since different test files name different
+   literal hosts. -}
+
+import json.{Json(..), jObject, stringify}
+import string.{toUtf8}
+
+export
+pathRequest : String -> String -> Array Int
+pathRequest host target =
+  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{host}\r\n\r\n"
+
+export
+queryRequest : String -> String -> Array Int
+queryRequest host target =
+  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{host}\r\n\r\n"
+
+-- | `token` is the caller's already-minted bearer token (each caller mints
+-- it its own way — the label and validity window are test-specific).
+export
+procedureRequest : String -> String -> String -> String -> Array Int
+procedureRequest host token nsid body =
+  let bytes = toUtf8 body
+  toUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{host}\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+    ++ bytes
+
+export
+authOf : String -> String
+authOf "" = ""
+authOf token = "Authorization: Bearer \{token}\r\n"
+
+export
+postJson : String -> String -> String -> String -> Array Int
+postJson host token nsid bodyJson =
+  toUtf8
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{host}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength (toUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
+
+export
+loginJson : String -> String -> String
+loginJson identifier passwordText =
+  stringify
+    (jObject [
+      ("identifier", JString identifier),
+      ("password", JString passwordText),
+    ])
+
+export
+createBody : String -> String -> String -> Json -> String
+createBody did collection rkey record =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+      ("record", record),
+    ])
+
+export
+deleteBody : String -> String -> String -> String
+deleteBody did collection rkey =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+    ])

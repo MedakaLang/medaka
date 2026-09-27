@@ -86,6 +86,9 @@ import lib.store.{
   storeSize,
   storeWithServerSecret,
 }
+import test.fixture_support.{testNonce}
+import test.request_support.{pathRequest}
+import test.response_support.{hasContentType}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -130,18 +133,11 @@ mustServer =
 {- | The per-request nonce every request in this file is placed at. Nothing
    here drives a route that mints a token, so the value only has to be fixed;
    `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
-
 testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = 1700000000, nonce = testNonce, login = None }
 
 -- ── request framing ─────────────────────────────────────────────────────────
-
-getRequest : String -> Array Int
-getRequest target =
-  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
 
 -- A read route takes no request body, and one that carries bytes is refused.
 getWithBody : String -> Array Int
@@ -202,10 +198,6 @@ statusText : Array Int -> String
 statusText bytes = match split " " (headText bytes)
   _ :: code :: _ => code
   _ => "<no-status>"
-
-hasContentType : String -> Array Int -> Bool
-hasContentType value bytes =
-  contains "content-type: \{value}\r\n" (headText bytes)
 
 errorCode : Array Int -> String
 errorCode bytes = match parse (bodyText bytes)
@@ -714,7 +706,7 @@ runProxyCells =
     proxyCell
       "proxy-header-absent-no-appview"
       noPolicy
-      (getRequest followsTarget)
+      (pathRequest accountHostText followsTarget)
       notProxiedLine
   let admitted =
     proxyCell
@@ -847,7 +839,7 @@ runProxyCells =
     proxyCell
       "proxy-out-of-namespace-header-absent"
       configuredAudiences
-      (getRequest outOfNamespaceTarget)
+      (pathRequest accountHostText outOfNamespaceTarget)
       notProxiedLine
   let wellKnown =
     proxyCell
@@ -1155,13 +1147,13 @@ runCells corpus =
   let didJson =
     okCell
       "wellknown-did-json"
-      (getRequest "/.well-known/did.json")
+      (pathRequest accountHostText "/.well-known/did.json")
       "application/json"
       expectedDidDocument
   let atprotoDid =
     okCell
       "wellknown-atproto-did"
-      (getRequest "/.well-known/atproto-did")
+      (pathRequest accountHostText "/.well-known/atproto-did")
       "text/plain; charset=utf-8"
       accountDidText
   let wellKnownPost =
@@ -1183,47 +1175,56 @@ runCells corpus =
       "text/plain; charset=utf-8"
       accountDidText
   let favicon =
-    failCell "non-xrpc-still-404" (getRequest "/favicon.ico") "404" "NotFound"
+    failCell
+      "non-xrpc-still-404"
+      (pathRequest accountHostText "/favicon.ico")
+      "404"
+      "NotFound"
   let sibling =
     failCell
       "well-known-sibling-still-404"
-      (getRequest "/.well-known/openid-configuration")
+      (pathRequest accountHostText "/.well-known/openid-configuration")
       "404"
       "NotFound"
   let resolve =
     okCell
       "resolve-handle"
-      (getRequest (identityRoute "?handle=\{accountHandleText}"))
+      (pathRequest
+        accountHostText
+        (identityRoute "?handle=\{accountHandleText}"))
       "application/json"
       "{\"did\":\"\{accountDidText}\"}"
   let resolveUnknown =
     failCell
       "resolve-handle-unknown"
-      (getRequest (identityRoute "?handle=stranger.example"))
+      (pathRequest accountHostText (identityRoute "?handle=stranger.example"))
       "400"
       "HandleNotFound"
   let resolveRepeated =
     failCell
       "resolve-handle-repeated-param"
-      (getRequest (identityRoute "?handle=a.example&handle=b.example"))
+      (pathRequest
+        accountHostText
+        (identityRoute "?handle=a.example&handle=b.example"))
       "400"
       "InvalidRequest"
   let resolveMissing =
     failCell
       "resolve-handle-missing-param"
-      (getRequest (identityRoute ""))
+      (pathRequest accountHostText (identityRoute ""))
       "400"
       "InvalidRequest"
   let describeServer =
     okCell
       "describe-server"
-      (getRequest (xrpc "com.atproto.server.describeServer"))
+      (pathRequest accountHostText (xrpc "com.atproto.server.describeServer"))
       "application/json"
       "{\"did\":\"\{accountDidText}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false,\"blobUploadLimit\":5242880}"
   let getRecord =
     failCell
       "get-record-unconfigured"
-      (getRequest
+      (pathRequest
+        accountHostText
         (xrpc
           "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a"))
       "400"
@@ -1231,7 +1232,8 @@ runCells corpus =
   let listRecords =
     failCell
       "list-records-unconfigured"
-      (getRequest
+      (pathRequest
+        accountHostText
         (xrpc
           "com.atproto.repo.listRecords?repo=\{accountDidText}&collection=app.bsky.feed.post"))
       "400"
@@ -1239,32 +1241,39 @@ runCells corpus =
   let describeRepo =
     failCell
       "describe-repo-unconfigured"
-      (getRequest (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}"))
+      (pathRequest
+        accountHostText
+        (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}"))
       "400"
       "RepoNotFound"
   let getRepo =
     failCell
       "get-repo-unconfigured"
-      (getRequest (xrpc "com.atproto.sync.getRepo?did=\{accountDidText}"))
+      (pathRequest
+        accountHostText
+        (xrpc "com.atproto.sync.getRepo?did=\{accountDidText}"))
       "400"
       "RepoNotFound"
   let latestCommit =
     failCell
       "get-latest-commit-unconfigured"
-      (getRequest
+      (pathRequest
+        accountHostText
         (xrpc "com.atproto.sync.getLatestCommit?did=\{accountDidText}"))
       "400"
       "RepoNotFound"
   let listRepos =
     okCell
       "list-repos-empty"
-      (getRequest (xrpc "com.atproto.sync.listRepos"))
+      (pathRequest accountHostText (xrpc "com.atproto.sync.listRepos"))
       "application/json"
       "{\"repos\":[]}"
   let getRepoStatus =
     failCell
       "get-repo-status-unconfigured"
-      (getRequest (xrpc "com.atproto.sync.getRepoStatus?did=\{accountDidText}"))
+      (pathRequest
+        accountHostText
+        (xrpc "com.atproto.sync.getRepoStatus?did=\{accountDidText}"))
       "400"
       "RepoNotFound"
   let syncGetRecordPath =
@@ -1272,7 +1281,7 @@ runCells corpus =
   let syncGetRecord =
     failCell
       "sync-get-record-unconfigured"
-      (getRequest (xrpc syncGetRecordPath))
+      (pathRequest accountHostText (xrpc syncGetRecordPath))
       "400"
       "RepoNotFound"
   let syncGetBlocksPath =
@@ -1280,7 +1289,7 @@ runCells corpus =
   let syncGetBlocks =
     failCell
       "sync-get-blocks-unconfigured"
-      (getRequest (xrpc syncGetBlocksPath))
+      (pathRequest accountHostText (xrpc syncGetBlocksPath))
       "400"
       "RepoNotFound"
   let readNeedsGet =
@@ -1293,7 +1302,7 @@ runCells corpus =
   let unregistered =
     failCell
       "unregistered-xrpc-still-404"
-      (getRequest (xrpc "com.atproto.repo.listMissingBlobs"))
+      (pathRequest accountHostText (xrpc "com.atproto.repo.listMissingBlobs"))
       "404"
       "NotFound"
   let preflightTimeline =
@@ -1313,15 +1322,18 @@ runCells corpus =
   let originOnly200 =
     originOnlyCell
       "origin-only-on-200"
-      (getRequest "/.well-known/atproto-did")
+      (pathRequest accountHostText "/.well-known/atproto-did")
       "200"
   let originOnly401 =
     originOnlyCell
       "origin-only-on-401"
-      (getRequest (xrpc "com.atproto.server.getSession"))
+      (pathRequest accountHostText (xrpc "com.atproto.server.getSession"))
       "401"
   let originOnly404 =
-    originOnlyCell "origin-only-on-404" (getRequest "/favicon.ico") "404"
+    originOnlyCell
+      "origin-only-on-404"
+      (pathRequest accountHostText "/favicon.ico")
+      "404"
   let proxied = runProxyCells
   let serviceAuth = runServiceAuthCells corpus
   let cells =

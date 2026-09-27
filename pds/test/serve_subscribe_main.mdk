@@ -39,6 +39,7 @@ import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
 import string.{contains, fromUtf8, join, lines, split, toInt, toUtf8, trim}
 import time.{Duration, elapsedSince, monotonic, seconds, sleep}
+import test.response_support.{closeAll, findHeaderEnd, report}
 
 -- # The handshake
 
@@ -74,19 +75,6 @@ handshakeRequest cursor =
 
 appendBytes : Array Int -> Array Int -> Array Int
 appendBytes left right = concat [|left, right|]
-
--- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
-findHeaderEnd : Array Int -> Int -> Option Int
-findHeaderEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    findHeaderEnd buf (i + 1)
 
 {- | Read one response HEADER SECTION and answer its status code, its header
    text, and whatever bytes arrived past it.
@@ -288,14 +276,6 @@ eventKind header =
   if intField header "op" == 0 - 1 then "!error" else textField header "t"
 
 -- # Reporting
-
-report : String -> Bool -> String -> <IO> Unit
-report label ok detail =
-  if ok then
-    println "\{label}: PASS \{detail}"
-  else
-    let () = println "\{label}: FAIL \{detail}"
-    exit 1
 
 mustConnect : Int -> <Net> Connection *
 mustConnect port =
@@ -769,12 +749,6 @@ describeRepoStatus port did =
     Ok (status, _, _) => status
   let () = ignoreResult (close conn)
   status
-
-closeAll : List (Connection *) -> <Net> Unit
-closeAll [] = ()
-closeAll (conn :: rest) =
-  let () = ignoreResult (close conn)
-  closeAll rest
 
 {- | A subscriber that says nothing for longer than the whole-request budget
    is still there afterwards.

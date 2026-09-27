@@ -7,6 +7,7 @@ import list.{reverse, sortBy}
 import string.{contains, join, split, startsWith, toInt, toUtf8}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
+import test.vector_support.{rejectContains}
 import lib.mst.{
   Mst,
   mstCoveringProofBlocks,
@@ -155,18 +156,6 @@ runCorpus (line :: rest) current passed total =
       None => panic "mst_vectors: END outside CASE"
       Some state => runCorpus rest None (passed + gradeCase state) (total + 1)
     _ => panic "mst_vectors: malformed corpus row: \{line}"
-
-rejectContains : String -> String -> Result String a -> <IO> Int
-rejectContains label witness (Err message) =
-  if contains witness message then
-    let () = println "HOSTILE \{label} PASS route=\{witness}"
-    1
-  else
-    let () = println "HOSTILE \{label} FAIL wrong-route=\{message}"
-    0
-rejectContains label _ (Ok _) =
-  let () = println "HOSTILE \{label} FAIL accepted"
-  0
 
 mustNode : DagCbor -> Array Int
 mustNode value =

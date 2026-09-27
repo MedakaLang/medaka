@@ -25,6 +25,7 @@
 
 import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
+import test.fixture_support.{bitBytes, decBytes}
 import array as A
 import lib.scalar.{
   Sc,
@@ -49,33 +50,6 @@ import lib.scalar.{
 }
 
 -- ── Input construction (inputs, not answer keys) ──────────────────────
-
--- 32 big-endian bytes with exactly bit `k` set.
-bitBytes : Int -> Array Int
-bitBytes k =
-  let out = arrayMake 32 0
-  out[31 - shiftRight k 3] := shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)
-  out
-
--- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
--- reaches).
-decBytes : Array Int -> Array Int
-decBytes bs =
-  let out = arrayCopy bs
-  let () = decGo out 31
-  out
-
-decGo : Array Int -> Int -> Unit
-decGo out i =
-  if i < 0 then
-    ()
-  else
-    let v = out[i]
-    if v == 0 then
-      out[i] := 255
-      decGo out (i - 1)
-    else
-      A.setInPlace i (v - 1) out
 
 -- 32 big-endian bytes, incremented by one.
 incBytes : Array Int -> Array Int

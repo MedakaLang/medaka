@@ -81,6 +81,7 @@ import lib.server_core.{
 }
 import lib.store.{Store, storeFromRepo}
 import lib.tid.{Tid, tidClockId, tidEncode, tidMicros, tidParse}
+import test.request_support.{queryRequest}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -245,10 +246,6 @@ fixtureRepo did records rev =
 
 -- ── the seam ────────────────────────────────────────────────────────────────
 
-queryRequest : String -> Array Int
-queryRequest target =
-  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
-
 headerEnd : Array Int -> Int -> Int
 headerEnd bytes i =
   if i + 3 >= arrayLength bytes then
@@ -279,7 +276,8 @@ responseStatus bytes = match split " " (responseHead bytes)
 -- it, so the successor store is discarded rather than threaded.
 call : Server -> Store -> String -> Array Int
 call server store target =
-  let (_, bytes) = handleFixture server testContext store (queryRequest target)
+  let (_, bytes) =
+    handleFixture server testContext store (queryRequest accountHostText target)
   bytes
 
 hasCarMediaType : Array Int -> Bool
