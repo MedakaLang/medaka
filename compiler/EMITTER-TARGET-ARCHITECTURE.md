@@ -157,6 +157,15 @@ open-bug pressure, not by layer.
 | F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | typechecker M2 (#2549) for evidence; B-1 (#993) for default-body evidence | route-word hedges, `emitDefaultRKey`, Wasm `implEntryRouteKeyW` recomputation, default synthesis | #1068, #1020, the route half of #1265, #1046 | BLOCKED on M2 and #993. `RNone` stays until #993 lands (ruling 4). X-E (#1403) is the consumer issue and does nothing before M2 |
 | F7 | Capability manifest | a Core-level manifest field extracted before row erasure | effects checker | the reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | the effects manifest producer (EFFECTS sections 7-8) |
 
+**F5 and the N5 scalar slice (2026-09-26).** N5 of the integer epic (#3428)
+took only the scalar slice of #353, by Val's ruling: the LLVM backend keeps a
+`U64` or `U32` raw across `let`, parameter and result, reading the positions
+from the declared signature (`declSigIndex`) into a per-function raw worker
+(`rawWorkerOf` in `backend/llvm_emit.mdk`). That is an LLVM-only table built
+from what the typechecker checked, not the Core carrier F5 describes; it
+retires no heuristic, and `Float` keeps `__fw`. When F5 lands, the worker
+positions come from the Core stamp and the declared-signature table goes.
+
 Every row owes the L7 fixture: centralizing a fact makes all engines agree, so a
 wrong centralized fact is a unanimity no differential can see. The fixture is
 derived from the spec before the PR is cut, never captured from an engine.

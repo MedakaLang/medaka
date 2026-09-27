@@ -41,14 +41,14 @@ a real social identity, so the correctness bar is higher than the compiler's.
 | **P1** | **Own top-level project `pds/`**, with its own `medaka.toml`, mirroring `sqlite/` and `gzip/`. Not stdlib. | Those two are the precedent for a substantial Medaka subproject that consumes stdlib without joining it. Keeps the prelude blast radius at zero: a change to a stdlib module **that the compiler imports** and **that perturbs emitted IR** forces a seed re-mint plus fixpoint re-validation — both conditions required — while a `pds/` change forces neither. Graduation of individual modules to `stdlib/` is a later question — see P11. |
 | **P2** | **`did:web` first; `did:plc` migration deferred to Phase 6.** | `did:web` is a static JSON document at `/.well-known/did.json` — no PLC directory, no genesis operation, no rotation-key management. It cuts an entire crypto+protocol subsystem out of the critical path. A DID is immutable, so the existing `did:plc:…` identifier can never *become* a `did:web` one: standing up a did:web account and moving the handle across is possible, but it abandons the original DID and with it the social graph. Phase 6 therefore remains genuinely necessary to reach the real handle *with its history intact*; it is deferred, not cancelled. |
 | **P3** | **Standalone repo first; firehose (`com.atproto.sync.subscribeRepos`) deferred to Phase 5.** | Full network participation is a strict superset of a correct repo, and it is additive: WebSocket framing and event emission bolt onto a repo layer that already produces correct CIDs. Sequencing it second means the highest-risk work (MST, DAG-CBOR determinism) gets validated against an oracle before anything depends on it being right. |
-| **P4** | **Crypto is pure Medaka — SHA-256 and secp256k1 both.** Field arithmetic on 10 × 26-bit limbs (P10). | Chosen for the dogfooding, not merely accepted despite the cost: this is the most numerically demanding code anyone would have written in Medaka, and it arrives with an external oracle that says immediately when the *compiler* is wrong (§4.1). Made tractable by one property: **atproto requires deterministic signing behaviour and low-S normalization, and RFC 6979 makes ECDSA output byte-reproducible** — so signing is gradeable by *golden diff against published vectors*, not by a probabilistic property test. That converts the scariest part of this project into precisely the kind of differential gate this repo is built around. See §4. |
+| **P4** | **Crypto is pure Medaka — SHA-256 and secp256k1 both.** Field arithmetic on 5 × 52-bit limbs (P10). | Chosen for the dogfooding, not merely accepted despite the cost: this is the most numerically demanding code anyone would have written in Medaka, and it arrives with an external oracle that says immediately when the *compiler* is wrong (§4.1). Made tractable by one property: **atproto requires deterministic signing behaviour and low-S normalization, and RFC 6979 makes ECDSA output byte-reproducible** — so signing is gradeable by *golden diff against published vectors*, not by a probabilistic property test. That converts the scariest part of this project into precisely the kind of differential gate this repo is built around. See §4. |
 | **P5** | **TLS is never implemented in Medaka. Caddy terminates.** | Caddy obtains and renews the Let's Encrypt certificate automatically and reverse-proxies plaintext HTTP to the Medaka process on localhost — which is what the official self-hosting guidance recommends regardless of implementation language. Cost to us: approximately zero. Writing TLS would be a larger and far more dangerous project than the entire rest of this document. |
 | **P6** | **Do NOT build a bespoke event loop. The PDS is a *consumer* of the #500 arc, not a fork of it.** | `docs/design/ASYNC-RUNTIME-DESIGN.md` already specifies the reactor, and its A2 extern set (`ioPoll` over `poll(2)`, `netSetNonblock`, `netTry{Accept,Recv,Send}`) is exactly and only what a server needs. Duplicating it inside `pds/` would produce a second scheduler with none of the guarantees G1–G9 that design carries, and would make the PDS the reason the real one can never land. **What one reactor thread costs is measured rather than assumed (2026-09-14):** a handler that does not yield stalls every other caller for its whole duration, which for `sync.getRepo` is +586 ms on an unrelated read of an 800-record repository and for a 2,674/s `sync.getBlob` burst is +1.19 ms. Both are accepted with their numbers in §6 under `com.atproto.sync.getRepo`; neither is fixable at the shell, and the `getRepo` figure is dominated by a quadratic in `pds/lib/repo.mdk` that is tracked separately. |
 | **P7** | **Block store is flat sharded files on disk**, CID → bytes, not `sqlite/`. | A block store is a pure key/value map with content-addressed immutable keys — the one workload where a filesystem is already the right database. Pressing the in-tree SQLite engine into service would add a large dependency, a write-path risk, and a schema, in exchange for nothing. |
 | **P8** | **Pinned official atproto/PDS code is the oracle; library reproduction and live-service evidence are distinct.** Every CID, CAR byte, and signature is diffed against exact official repo/crypto libraries. | Phase 1 pins the complete npm graph and independently reproduces the corpora with libraries installed in the digest-pinned official image. That applies the repo's differential methodology without starting a service. A live XRPC transcript is a separate manual tier: account creation stays disabled unless an isolated PLC endpoint is chosen, because the public default makes an irreversible identity write (§5). |
 | **P9** | **The running server is native-only**; the pure core stays all-engine **by design, not by luck**. | The interpreter implements zero net externs (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`) and wasm rejects net as PERMANENT. ⚠️ **The same is true of every file extern** — `stdlib/fs.mdk` says so in its own header: *"Scope: NATIVE/LLVM … not the tree-walking interpreter."* So effectful storage code is native-bound exactly like sockets, and a core that *performed* its own I/O would not be portable or doctestable at all. P14 is the structural response; without it, this row's "costs less than it sounds" would be unsupported. |
 | **P14** | **The pure core performs NO I/O. State transitions are explicit immutable values.** Phase 2's opaque `Store` wraps the verified immutable `BlockStore`; a configured `Server` owns the XRPC registry and injected pure handler. | This is what makes P9's claim true rather than aspirational. Both file and net externs are native-only, so any core module that touches storage directly is native-bound and undoctestable. The seam is `handle : Server -> Store -> Request -> (Store, Response)`, or `Store -> Request -> (Store, Response)` after configuring the server, with **no effect row at all**. Reads and protocol failures return the input store; successful writes return a successor. Phase 3 owns persistence adapters; Phase 4 owns multi-repository and blob-storage policy. |
-| **P10** | **Field arithmetic uses `libsecp256k1`'s 32-bit field layout: 10 limbs in base 2^26, limbs 0–8 holding 26 bits and limb 9 holding 22.** | Resolved from §7 Q2. Decided on *cross-checkability against an audited implementation of the same representation*, not on speed. ⚠️ Note the limit of that: the reference's **overflow proof does not transfer** — `fe_mul_inner` assumes magnitude ≤ 8 and its accumulator reaches a full 64 bits, which does not fit Medaka's 62-bit non-negative range. Eager normalization (§4) is what makes it fit, and the magnitude-1 bounds must be derived by us. What the reference buys is a diffable oracle for element-level outputs and the shape of the reduction — not a transplantable safety argument. ~2.5× fewer partial products than a 16-bit layout, ~6 bits of headroom under 2^62. |
+| **P10** | **Field arithmetic uses `libsecp256k1`'s 64-bit field layout: 5 limbs in base 2^52, limbs 0–3 holding 52 bits and limb 4 holding 48.** | Resolved from §7 Q2 on the 32-bit layout (10 limbs in base 2^26), and moved to 5 × 52 at integer milestone N5 (Val, 2026-09-26), once `U64` registers and `U64.mulWide` made the reference's 128-bit accumulators expressible without allocation. Decided on *cross-checkability against an audited implementation of the same representation*: `feMul` is a straight-line port of `field_5x52_int128_impl.h`'s `secp256k1_fe_mul_inner`. ⚠️ Its bounds are still ours to derive: the reference proves them up to magnitude 8, this module admits only canonical operands, and eager normalization (§4) is what its one-round reduction relies on. The derivation is [`ATPROTO-PDS-CONSTANT-TIME.md`](ATPROTO-PDS-CONSTANT-TIME.md) §3.1: the widest accumulator stays below 2^106.03, 21.97 bits under a 128-bit register pair, and every stored limb is below 2^52. 25 partial products per multiply against 10 × 26's 100. |
 | **P11** | **The crypto modules graduate to `stdlib/` once proven, not before.** | Val's call. SHA-256 and base58 are plainly general-purpose. The reason to wait is **API churn against a compatibility promise**, not seed re-mints: placing a module in `stdlib/` does not by itself make the compiler import it, and only a change to a module the compiler *does* import, *and* which perturbs emitted IR, forces a re-mint (see P1). Graduation criteria, so "proven" is not a vibe: the full G1 vector suites pass, the API has been stable across a release, and a deliberate decision has been taken about which of `field`/`scalar` stay private to `pds/`. |
 | **P12** | **Firehose events are persisted to a bounded append-only log, sized to a 259200s (72h) default sweep window** (landed, sprint `pds-a-relay-can-read-us`, `pds/lib/event_log_record.mdk` + `pds/shell/eventlog.mdk`). | Resolved from §7 Q3 by looking at what the ecosystem does rather than deciding a priori — the number stayed soft on purpose: 259200s (72h) is the **configurable default of the relay generation introduced in January 2026**, not a spec requirement and not a historical invariant (`atproto.com/specs/sync` states no retention window at all). The retention window is a parameter to the sweep, not baked into the record format or cursor arithmetic — demonstrated with an arbitrary 5000s bound in the slice's own acceptance run, independent of the shipped 259200s default. `getRepo` still covers full resynchronization independently of the log's retention. On-disk rather than in-memory specifically so a process restart does not invalidate a connected relay's cursor; startup recovery (`eventLogPlanRecovery` then `eventLogApplyRecovery`) closes the crash window between staging and promoting an entry. Operators can tune the default down (or up) with no code change. |
 | **P13** | **Phase 4.5 ships a read-only web view of the repo**, served from the same process. | Val's call. Cheap on top of Phase 2 (the router and the repo reader already exist; it adds templates and no new protocol), and it makes the system inspectable in a browser during the long stretch when Phase 5 is unbuilt and no Bluesky client can see it. Also the natural place to surface health and the block-store state. |
@@ -188,12 +188,11 @@ explicitly in its header: a limb < 2^16, a 16×16 partial product < 2^32, a colu
 of *four* such plus carry < 2^35. The style transfers; that particular bound does not,
 because it is computed for a 4-limb column.
 
-**Field representation: 10 limbs in base 2^26 — limbs 0–8 hold 26 bits and limb 9
-holds 22** (9×26 + 22 = 256, non-redundant). This is the layout `libsecp256k1` uses in
-its 32-bit field implementation, and the asymmetric top limb is part of it: normalized,
-`n[0..8] <= 2^26 - 1` and `n[9] <= 2^22 - 1`. **A uniform 10 × 26 would be a 260-bit
-redundant representation with a different reduction** — a distinct design, not a
-rounding of this one. See §7 Q2 for the alternatives weighed.
+**Field representation: 5 limbs in base 2^52 — limbs 0–3 hold 52 bits and limb 4
+holds 48** (4×52 + 48 = 256, non-redundant). This is the layout `libsecp256k1` uses in
+its 64-bit field implementation, and the asymmetric top limb is part of it: normalized,
+`n[0..3] <= 2^52 - 1` and `n[4] <= 2^48 - 1`. The field used the reference's 32-bit
+layout, 10 limbs in base 2^26, until integer milestone N5 moved it (§7 Q2).
 
 **What the reference does and does not buy us.** It gives the layout, the structure of
 the reduction modulo `p = 2^256 - 2^32 - 977`, and — most valuably — an audited
@@ -201,35 +200,37 @@ implementation of the *same* representation whose element-level outputs we can d
 against. It does **not** give us a transplantable overflow proof, and assuming it does
 is the trap this paragraph exists to prevent:
 
-`secp256k1_fe_mul_inner` is written for inputs of **magnitude up to 8**, and under that
-precondition its own accumulator genuinely reaches a full 64 bits — several of its
-`VERIFY_BITS(c, 64)` assertions are commented out precisely because at 64 bits the
-check is vacuous. **Medaka has 62 bits of non-negative range, so that chain does not
-fit, and a literal transcription of it wraps silently.** That is S0 crypto wrongness of
-exactly the kind §5 says neither self-consistency nor engine agreement can see.
+`secp256k1_fe_mul_inner` is written for inputs of **magnitude up to 8**, and its
+accumulators are 128-bit integers. In Medaka each is a `(hi, lo)` pair of `U64`
+registers, filled by `U64.mulWide` and added with an explicit carry, and a stored limb is
+an `Int` that narrows exactly only below 2^62. A literal transcription that stored an
+intermediate, or that trusted the reference's magnitude-8 slack while reducing in one
+round, would wrap or mis-reduce silently. That is S0 crypto wrongness of exactly the
+kind §5 says neither self-consistency nor engine agreement can see.
 
 **Therefore eager normalization is load-bearing, not a simplification.** Holding every
-field element at magnitude 1 is what makes the arithmetic fit at all. The bounds that
+field element at magnitude 1 is what the one-round reduction assumes. The bounds that
 follow are ours to derive and to state, and they are not in the reference:
 
-- a limb < 2^26, so a partial product < 2^52;
-- the largest column of a 10×10 schoolbook multiply takes exactly 10 partial products,
-  so the column sum < 2^55.32;
-- the reduction terms are small at magnitude 1 (`u_i * R0` with `R0 = 0x3D10 ≈ 2^13.9`,
-  so ≈ 2^40) and do not disturb that bound;
-- with carry propagation the worst case is ≈ 2^56, leaving **~6 bits under 2^62**.
+- a limb < 2^52 (limb 4 < 2^48), so a partial product < 2^104;
+- the widest 128-bit accumulator stays below 2^106.03, 21.97 bits under 2^128;
+- only the five result limbs are stored, each < 2^52, 10 bits under 2^62;
+- the raw limbs that reach the reduction are < 2^53 (limb 4 < 2^49), and one fold/carry
+  round then leaves a value below 2p for the unconditional subtract-and-select.
 
-**State this argument in the module header**, in `bits64`'s style, and derive
-it against the implementation rather than copying it from here.
+The derivation, against the implementation, is
+[`ATPROTO-PDS-CONSTANT-TIME.md`](ATPROTO-PDS-CONSTANT-TIME.md) §3 and §3.1; the module
+header states it in short.
 
 **Modules.**
 
 - `pds/lib/field.mdk` — arithmetic modulo the secp256k1 prime `p`: add/sub/mul/square/
-  inverse/negate over the 10 × 26-bit representation, with fast reduction exploiting
+  inverse/negate over the 5 × 52-bit representation, with fast reduction exploiting
   the binary structure of `p`. The hot module; essentially all of the cost lives here.
-- `pds/lib/scalar.mdk` — arithmetic modulo the group order `n`. Separate from `field`
-  on purpose: it runs a few times per signature rather than thousands, so it takes the
-  simpler, slower representation and shares no code.
+- `pds/lib/scalar.mdk` — arithmetic modulo the group order `n`, on libsecp256k1's
+  8 × 32-bit `scalar_8x32` layout. Separate from `field` on purpose: its modulus has a
+  129-bit complement where the field's has a 33-bit one, so its reduction is different,
+  and it shares no code.
 - `stdlib/crypto/sha256.mdk` — straightforward 32-bit-word FIPS 180-4. The easiest module
   in this document and the one with the best-published vectors.
 - `pds/lib/secp256k1.mdk` — field arithmetic, point add/double in Jacobian
@@ -1287,6 +1288,15 @@ draft of this section claimed the magnitude analysis could simply be followed; t
 wrong, and it was the most dangerous sentence in the document.
 
 The instinct toward fewer partial products was right; it just isn't what settles it.
+
+**Revised at integer milestone N5 (2026-09-26): 5 × 52.** The table above measures
+headroom against a 62-bit `Int`, the only carrier the language had. `U64` registers and
+`U64.mulWide` removed that constraint: a 104-bit product is two registers, and the
+reference's 64-bit layout, whose accumulators are 128 bits wide, fits without
+allocation. The tiebreaker is unchanged — `field_5x52_impl.h` is the same library's
+64-bit build, so cross-checkability survives the move — and the corpus rows are values,
+so they grade either layout. Val's ruling moved the field to 5 × 52 limbs; the bounds
+are derived in [`ATPROTO-PDS-CONSTANT-TIME.md`](ATPROTO-PDS-CONSTANT-TIME.md) §3.1.
 
 **Q3 — Durable firehose event storage? RESOLVED → P12**, landed in sprint
 `pds-a-relay-can-read-us`, by observation rather than decision: the ecosystem's relay

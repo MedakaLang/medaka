@@ -161,22 +161,34 @@ buildSchedule byteOf =
 
 type State = (U32, U32, U32, U32, U32, U32, U32, U32)
 
-compressRounds : Array U32 -> State -> Int -> State
-compressRounds w (a, b, c, d, e, f, g, h) t =
+-- The eight working variables are separate parameters rather than one
+-- `State` tuple, so the 64 rounds are a self tail call on words and allocate
+-- nothing; the tuple is built once, after the last round.
+compressRounds : Array U32 ->
+  U32 ->
+  U32 ->
+  U32 ->
+  U32 ->
+  U32 ->
+  U32 ->
+  U32 ->
+  U32 ->
+  Int ->
+  State
+compressRounds w a b c d e f g h t =
   if t >= 64 then
     (a, b, c, d, e, f, g, h)
   else
     let t1 = h + bigSigma1 e + ch e f g + wordAt k t + wordAt w t
     let t2 = bigSigma0 a + maj a b c
-    compressRounds w (t1 + t2, a, b, c, d + t1, e, f, g) (t + 1)
+    compressRounds w (t1 + t2) a b c (d + t1) e f g (t + 1)
 
 -- One 64-byte block, addressed via `byteOf` (offsets 0..63 relative to the
 -- block start), folded into the running hash state.
 compressBlock : (Int -> Int) -> State -> State
 compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
   let w = buildSchedule byteOf
-  let (a, b, c, d, e, f, g, h) =
-    compressRounds w (h0, h1, h2, h3, h4, h5, h6, h7) 0
+  let (a, b, c, d, e, f, g, h) = compressRounds w h0 h1 h2 h3 h4 h5 h6 h7 0
   (h0 + a, h1 + b, h2 + c, h3 + d, h4 + e, h5 + f, h6 + g, h7 + h)
 
 -- ── Driving the blocks ───────────────────────────────────────────────
