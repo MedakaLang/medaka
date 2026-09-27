@@ -97,14 +97,14 @@ Implementation adds:
 the following semantic surface (exact constructor names are private):
 
 ```text
-secretKeyFromBytes       : Array Int -> Result String SecretKey
-publicKeyFromCompressed  : Array Int -> Result String PublicKey
-publicKeyCompressed      : PublicKey -> Array Int
+secretKeyFromBytes       : Bytes -> Result String SecretKey
+publicKeyFromCompressed  : Bytes -> Result String PublicKey
+publicKeyCompressed      : PublicKey -> Bytes
 publicKeyForSecret       : SecretKey -> PublicKey
-signatureFromCompact     : Array Int -> Result String Signature
-signatureCompact         : Signature -> Array Int
-signDigest               : SecretKey -> Array Int -> Result String Signature
-verifyDigest             : PublicKey -> Array Int -> Signature -> Bool
+signatureFromCompact     : Bytes -> Result String Signature
+signatureCompact         : Signature -> Bytes
+signDigest               : SecretKey -> Bytes -> Result String Signature
+verifyDigest             : PublicKey -> Bytes -> Signature -> Bool
 ```
 
 Every PDS consumer imports `sign.mdk`, never `secp256k1.mdk`. `signDigest`
@@ -151,16 +151,18 @@ Equivalent scalar helpers are `scZeroBit`, `scEqualBit`, `scSelect`, and
 non-negative borrow formula and returns `1 - borrow`; it does not call
 Bool-returning `scIsHigh`.
 
-`secretKeyFromBytes` first checks the public length, then scans all 32
-elements. For each `Int`, fixed-width subtraction produces arithmetic bits for
-`>= 0` and `<= 255`; the scan combines all 32 byte-validity bits without an
-early return and builds the big-endian scalar from masked byte values. It then
-unconditionally computes both (a) the borrow from subtracting `n`, which proves
-`< n`, and (b) the borrow from subtracting one, which proves nonzero. It
-combines byte-domain, range, and nonzero bits into one `validBit`. Construction
-of `SecretKey` or `Err` may branch only once on that declassified aggregate
-after the scan; there is no per-element, zero, or range early return. The
-native closure includes this parser and its helpers.
+`secretKeyFromBytes` takes `Bytes`, whose type already guarantees every
+element is a byte in `0..255` — checked where the `Bytes` is built, by
+`bytes.fromArray`, or at compile time for a `U8` literal — so there is no
+byte-domain scan left to run here. `scSecretCandidate` first checks the
+public length (`/= 32` short-circuits to an invalid candidate), then
+unconditionally computes both (a) the borrow from subtracting `n`, which
+proves `< n`, and (b) the borrow from subtracting one, which proves
+nonzero, and builds the big-endian scalar from the limbs. It combines the
+range and nonzero bits into one `validBit`. Construction of `SecretKey` or
+`Err` may branch only once on that declassified aggregate; there is no
+per-limb, zero, or range early return. The native closure includes this
+parser and its helpers.
 
 All loops use only public fixed limb indices. These helpers join the existing
 constant-time source/IR/final-code closure gate; a wrapper is not accepted

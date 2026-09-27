@@ -239,6 +239,25 @@ test "a claims segment that is not JSON is rejected" =
     (check (tokenOf honestHeaderSeg (b64uSeg "not json")))
     (Err JwtMalformed)
 
+-- Base64url without padding over raw `Bytes`, for a segment whose content
+-- is not valid UTF-8 and so cannot be built through `b64uSeg`'s `String`.
+b64uSegBytes : Bytes -> String
+b64uSegBytes bs = dropEq (encodeUrlSafe bs)
+
+-- An overlong two-byte encoding of NUL (`0xc0 0x80`) appended after an
+-- otherwise well-formed header: invalid under strict UTF-8, so
+-- `decodeUtf8` refuses the whole segment before JSON parsing ever runs.
+invalidUtf8HeaderBytes : Bytes
+invalidUtf8HeaderBytes = B.concat [
+  encodeUtf8 "{\"alg\":\"HS256\",\"typ\":\"JWT\"}",
+  fromU8Array [|0xc0, 0x80|],
+]
+
+test "a header segment that is not valid UTF-8 is rejected" =
+  expectEqual
+    (check (tokenOf (b64uSegBytes invalidUtf8HeaderBytes) (b64uSeg claimsText)))
+    (Err JwtMalformed)
+
 test "a claims object missing exp is rejected" =
   let noExp =
     "{\"sub\":\"did:plc:s-jwt-test-account\",\"aud\":\"did:web:pds.example\","

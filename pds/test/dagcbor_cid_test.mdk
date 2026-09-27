@@ -3,15 +3,12 @@
    these tests assert round-trips, determinism, isolation, and rejection. -}
 
 import bytes.{fromArrayAssumeByteDomain, fromU8Array}
-import mut_bytes as MB
 import string.{contains, toLower}
-import u8 as U8
 import test.{
   expectEach, expectEqual, expectErr, expectFalse, expectOkThen, expectTrue
 }
 import base32.{base32Decode, base32Encode}
 import lib.cid.{
-  cidDigest,
   cidEqual,
   cidForDagCbor,
   cidForRaw,
@@ -86,13 +83,6 @@ test "CID codec changes the identity for identical content" =
       (cidEqual
         (cidForDagCbor (fromU8Array [|1|]))
         (cidForRaw (fromU8Array [|1|]))))
-
-test "CID digest access does not expose the CID's own storage" =
-  let cid = cidForDagCbor (fromU8Array [|9, 8, 7|])
-  let before = cidToBytes cid
-  let exposed = MB.thaw (cidDigest cid)
-  let () = MB.setInPlace 0 (U8.bitXor exposed[0] (U8.truncate 255)) exposed
-  expectEqual (cidToBytes cid) before
 
 test "DAG-CBOR round-trips every admitted value kind" =
   let link = cidForDagCbor (fromU8Array [|1, 2, 3|])

@@ -8,14 +8,15 @@
    `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
 
    The resource test builds `performance_resource_main.mdk` once, checks
-   the `limits` controls, then times one decode of a 1000-block and a
-   2000-block CAR. A doubled input may take at most 3.2 times as long, and
-   the larger at most 12 seconds: a reader that went quadratic fails the
-   ratio, one that is linear but slow fails the ceiling. Each time is the
-   wall clock around the spawn, so it includes process start-up. While
-   both decodes take tens of milliseconds, start-up is a large share of
-   each, and the ratio can only catch a decode that has grown well past
-   it. -}
+   the `limits` controls, then times one encode of a 1000-block and a
+   2000-block CAR (`runCar`, `performance_resource_main.mdk`, calls
+   `carEncode`; the route was never a decode). A doubled input may take at
+   most 3.2 times as long, and the larger at most 12 seconds: an encoder
+   that went quadratic fails the ratio, one that is linear but slow fails
+   the ceiling. Each time is the wall clock around the spawn, so it
+   includes process start-up. While both encodes take tens of
+   milliseconds, start-up is a large share of each, and the bound is weak:
+   at these sizes it cannot catch a real quadratic regression. -}
 
 import test.vector_runner.{
   Arm(..),
@@ -108,15 +109,15 @@ limitsArm = Arm {
   lastLine = Some "LIMITS: PASS",
 }
 
--- The bound a 2000-block decode must meet, in seconds, and against the
--- 1000-block decode.
+-- The bound a 2000-block encode must meet, in seconds, and against the
+-- 1000-block encode.
 largeCeiling : Float
 largeCeiling = 12.0
 
 ratioCeiling : Float
 ratioCeiling = 3.2
 
--- The findings against one timed `car <size>` decode, and its wall time.
+-- The findings against one timed `car <size>` encode, and its wall time.
 timedCar : String -> Int -> <Clock, Exec> (Float, List String)
 timedCar bin size =
   let label = "\{gate} (native car \{intToString size})"
@@ -165,7 +166,7 @@ resourceFindings scratch =
 test "CAR: 1 official-atproto fixture, 4 success routes, 12 hostile routes, eval == native == Wasm" =
   expectRow row
 
-test "CAR: 7/7 resource ceilings; a doubled CAR decodes in at most 3.2x the time" = expectNoFindings
+test "CAR: 7/7 resource ceilings; a doubled CAR encodes in at most 3.2x the time" = expectNoFindings
   gate
   (match freshScratch ()
     Err e => Err "could not make a scratch directory: \{e}"
