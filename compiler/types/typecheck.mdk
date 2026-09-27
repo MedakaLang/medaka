@@ -21994,8 +21994,86 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = processLetGroup env binds
+  let deferred = Ref []
+  let env2 = fold (processLetGroup deferred) env (letGroupComponents binds)
+  let _ = groundDeferredNum !deferred
   infer env2 body
+
+-- A `where` block is checked one dependency component at a time, a
+-- component's dependencies first, as a module's top level is: a binding that
+-- only USES a sibling sees it generalized, rather than sharing its type
+-- variables as a member of one recursive group would, so a helper may be used
+-- at two types and keeps its own authority residual (#3487).  Members keep
+-- their source order inside a component.  A block that repeats a name stays
+-- one group: its components are not well defined.
+letGroupComponents : List LetBind -> List (List LetBind)
+letGroupComponents binds =
+  let names = map letBindNameTc binds
+  let nameSet = namesToSet names omEmpty
+  if omSize nameSet < listLen names then
+    [binds]
+  else
+    let grouped =
+      fold
+        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
+        omEmpty
+        binds
+    map
+      (component =>
+        let members = namesToSet component omEmpty
+        filterList (b => omHasKey (letBindNameTc b) members) binds)
+      (tarjanSCCs names (depGraphMap names grouped))
+
+-- A split block decides a Num-only type once, at its end, as one group would:
+-- a component's ambiguous Num variables are neither defaulted nor generalized
+-- at the component's boundary but handed to the block, so a later sibling can
+-- still fix one (`scale = 100` beside `go y = y / scale`).  Only the variables
+-- the component itself owns are deferred, and at the block's end only those
+-- are defaulted, and only where no member of the block reaches one from an
+-- argument, the rule one group applies to all its members; an enclosing
+-- binding's variable is never grounded here.
+deferGroupNum : Ref (List (List Int, List UObligation, List Mono)) ->
+  Int ->
+  List UObligation ->
+  List Mono ->
+  Unit
+deferGroupNum deferred owner obls monos =
+  let argIds = flatMap monoArgUnboundIds monos
+  let ids =
+    filterList
+      (id => not (containsI id argIds))
+      (unprotectedNumCandidates omEmpty obls)
+  let owned =
+    filterList
+      (id => match liveNumVarGo id obls
+        Some m => numDefaultOwnerAllows (Some owner) m
+        None => False)
+      ids
+  let _ =
+    fold
+      (_ id => match liveNumVarGo id obls
+        Some m => lowerTyvarLevel (owner - 1) m
+        None => ())
+      ()
+      owned
+  deferred := (owned, obls, monos) :: !deferred
+
+groundDeferredNum : List (List Int, List UObligation, List Mono) -> Unit
+groundDeferredNum entries =
+  let argIds =
+    flatMap
+      (e => match e
+        (_, _, monos) => flatMap monoArgUnboundIds monos)
+      entries
+  fold
+    (_ e => match e
+      (ids, obls, _) =>
+        groundNumVarsWith
+          None
+          obls
+          (filterList (id => not (containsI id argIds)) ids))
+    ()
+    entries
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -23247,9 +23325,13 @@ groupNames ((n, _) :: rest) seen = match omLookup n seen
   Some _ => groupNames rest seen
   None => n :: groupNames rest (omInsert n () seen)
 
--- process a let-group (where clauses): bind names, infer, generalize
-processLetGroup : TcEnv -> List LetBind -> TcEnv
-processLetGroup env binds =
+-- process one dependency component of a where block: bind names, infer,
+-- generalize.  Its ambiguous Num variables go to [deferred] (`deferGroupNum`).
+processLetGroup : Ref (List (List Int, List UObligation, List Mono)) ->
+  TcEnv ->
+  List LetBind ->
+  TcEnv
+processLetGroup deferred env binds =
   let _ = enterLevel ()
   let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
@@ -23273,6 +23355,12 @@ processLetGroup env binds =
   -- group generalizes.  Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
   let memberMonos = map (p => schemeMono (snd p)) placeholders
+  let _ =
+    deferGroupNum
+      deferred
+      (perRun.value.currentLevel.value + 1)
+      addedObls
+      memberMonos
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition = NumBoundaryOwnedGroup (perRun.value.currentLevel.value + 1),
     nbMembers = memberMonos,

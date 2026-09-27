@@ -363,6 +363,14 @@ classify x
     limit = 100
 ```
 
+A `where` block's bindings may refer to each other in any order, recursively
+or not. They are typed in dependency order, as top-level definitions are: a
+binding its siblings only use is generalized first, so two siblings may use it
+at two types (`a = g 1` beside `b = g True`); only bindings that reach each
+other share one group. A numeric literal's type is still decided once for the
+whole block: `scale = 100` beside `go y = y / scale` makes `scale` a `Float`,
+and it defaults to `Int` only if nothing in the block fixes it.
+
 ## Lambdas
 
 ```medaka

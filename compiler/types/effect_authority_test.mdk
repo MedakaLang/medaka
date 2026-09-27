@@ -1311,6 +1311,18 @@ test "an exported authority nothing in its module determines is refused" = expec
         "export\npartial : Dir \"cfg/app\" -> Dir \"cfg/*\"\npartial = subIn cfg\n"),
   ]
 
+-- A `where` block is checked one dependency component at a time (#3487), so
+-- a helper a sibling only calls is generalized first and keeps its residual;
+-- the sibling instantiates it.  The launder is the same program fed a handle
+-- outside the bound.
+test "a where helper a sibling calls keeps its residual" =
+  let block =
+    "outer h ds = go ds\n  where\n    rd (Dir p) = sub h p\n    go xs = match xs\n      [] => []\n      d :: rest => rd d :: go rest\n"
+  expectAll [
+    expectTrue (accepts (residual (block ++ "use _ = outer cfg [app]\n"))),
+    expectTrue (rejects (residual (block ++ "use _ = outer cfg [etc]\n"))),
+  ]
+
 test "an authority bounded below by the top is solved, not kept" =
   expectEqual
     "Bool -> String -> String -> Dir * -> Dir *"

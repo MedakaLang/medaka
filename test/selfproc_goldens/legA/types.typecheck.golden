@@ -774,6 +774,7 @@ defaultSourcelessAuthorities : Map Int Unit -> EffRow -> Mono -> Unit
 defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 deferEffectRelation : Bool -> EffRow -> EffRow -> Unit
+deferGroupNum : Ref (List (List Int, List UObligation, List Mono)) -> Int -> List UObligation -> List Mono -> Unit
 deferJoin : ValueJoinOps (Option Loc) -> List (Option Loc, Mono) -> Option Mono
 deferRequiresMonadMsg : String
 definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
@@ -1195,6 +1196,7 @@ graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
 groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
+groundDeferredNum : List (List Int, List UObligation, List Mono) -> Unit
 groundMultiParamObligations : List Decl -> List UObligation -> Unit
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -1675,6 +1677,7 @@ letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono
 letBindName : LetBind -> String
 letBindNameTc : LetBind -> String
 letBindSites : LetBind -> List (Ref Route)
+letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letPatRename : Pat -> Expr -> Map String String -> (Pat, Map String String)
 letRecNonFunctionMsg : String -> String
@@ -2179,7 +2182,7 @@ prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
 prerequisiteObligation : PrerequisiteEvidence -> (IfaceRef, List Mono)
 preunifySigsEx : List (String, Ty) -> List ScopedMember -> (List ConstraintReg, List (String, Ty, List (String, Mono)))
 primaryLiteralProblems : List (String, Param) -> String -> List String
-processLetGroup : TcEnv -> List LetBind -> TcEnv
+processLetGroup : Ref (List (List Int, List UObligation, List Mono)) -> TcEnv -> List LetBind -> TcEnv
 processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List String -> (TcEnv, List (String, Scheme), Map String (List (List Pat, Expr)))
 processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (List String) -> (List (String, Scheme), Map String (List (List Pat, Expr)))
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> Map String Unit -> (List (String, Scheme), Map String (List (List Pat, Expr)))
