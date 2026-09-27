@@ -1,5 +1,5 @@
 # META
-source_lines=1674
+source_lines=1711
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
@@ -16,8 +16,8 @@ stages=DESUGAR,MARK
    ASCII only, matching `string.isDigit` and `string.toUpper`.
 
    A subject may also be a UTF-8 byte buffer rather than a `String`:
-   `isFullMatchBytes` and `findBytes` match a window of an `Array Int`, with
-   each byte a code from `0` to `255`.
+   `isFullMatchBytes` and `findBytes` match a window of a `Bytes`, with each
+   byte a code from `0` to `255`.
 
    `compile` reports a bad pattern as an `Err`; `mustCompile` panics, which
    suits a pattern written as a literal. A top-level binding is evaluated
@@ -62,8 +62,11 @@ stages=DESUGAR,MARK
 -- front door onto the same engine with each byte a code 0..255.
 
 import array.{sliceClamped as sliceBytes}
+import bytes.{Bytes}
+import bytes as B
 import list.{get, reverse}
 import string.{fromChars, fromUtf8, isDigit, repeat, sliceClamped, toChars}
+import u8 as U8
 
 -- # Types
 
@@ -1037,10 +1040,8 @@ searchFrom re codes startAt anchorStart anchorEnd steps =
     anchorEnd
     steps
 
--- The window is what the byte front door needs: a validator holding one
--- buffer grades a slice of it without copying, and `^`, `$` and `\b` mean the
--- ends of the WINDOW, not of the buffer, so a slice grades the same as that
--- slice standing alone.
+-- `^`, `$` and `\b` mean the ends of the WINDOW, not of the buffer, so a
+-- slice grades the same as that slice standing alone.
 searchWindow : Regex ->
   Array Int ->
   (Int, Int) ->
@@ -1063,13 +1064,26 @@ searchWindow re codes (lo, hi) startAt anchorStart anchorEnd steps =
   }
   vmSearch vm startAt anchorStart
 
--- `[lo, hi)` narrowed to the array, with `lo` never past `hi`, so no caller
--- can hand the VM a window that indexes outside the buffer.
-clampWindow : Array Int -> Int -> Int -> (Int, Int)
-clampWindow codes start end =
-  let n = arrayLength codes
+-- `[start, end)` narrowed to a buffer of `n` bytes, with `lo` never past
+-- `hi`, so no caller can read a window outside the buffer.
+clampWindow : Int -> Int -> Int -> (Int, Int)
+clampWindow n start end =
   let hi = max 0 (min end n)
   (max 0 (min start hi), hi)
+
+-- The clamped window of `bytes` unpacked once into the codes the VM reads,
+-- with the buffer offset of its first byte. Only the window is copied.
+windowCodes : Bytes -> Int -> Int -> (Int, Array Int)
+windowCodes bytes start end =
+  let (lo, hi) = clampWindow (B.length bytes) start end
+  (lo, arrayMakeWith (hi - lo) (i => U8.toInt bytes[lo + i]))
+
+-- Slots found over an unpacked window, moved back to buffer offsets. A group
+-- that took no part in the match keeps its negative slot.
+shiftSlots : Int -> Array Int -> Array Int
+shiftSlots lo slots = arrayMakeWith (arrayLength slots) (i =>
+  let slot = arrayGetUnsafe i slots
+  if slot < 0 then slot else slot + lo)
 
 -- Threads added to a list over one `find`.  The linear-time doctest at the
 -- bottom of this module is the only caller; it exists so the bound can be
@@ -1400,40 +1414,52 @@ findAllGo re s codes pos prevEnd acc =
 {- | Whether the pattern matches the whole of `bytes[start..end)`, each byte
    taken as a code from 0 to 255.
 
-   The window is matched in place, without copying, and a bound in the
-   pattern counts bytes rather than codepoints. `start` and `end` are clamped
-   to the buffer, and `^`, `$` and `\b` refer to the ends of the window.
+   Only the window is read, and it is copied once; the rest of `bytes` is
+   not. A bound in the pattern counts bytes rather than codepoints. `start`
+   and `end` are clamped to the buffer, and `^`, `$` and `\b` refer to the
+   ends of the window.
 
    A pattern applied to bytes should name only ASCII: `[a-z]` matches the
    byte 97, and a non-ASCII codepoint arrives as two or more UTF-8 bytes, none
-   of which any ASCII class matches. `toUtf8 "abc"` is `[|97, 98, 99|]`.
+   of which any ASCII class matches. `B.encodeUtf8 "abc"` is the bytes 97, 98
+   and 99.
 
-   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
+   > isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "abc") 0 3
    True
-   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
+   > isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "abc.") 0 3
    True
-   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
+   > isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "abc.") 0 4
    False -}
 export
-isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+isFullMatchBytes : Regex -> Bytes -> Int -> Int -> Bool
 isFullMatchBytes re bytes start end =
-  let (lo, hi) = clampWindow bytes start end
-  match searchWindow re bytes (lo, hi) lo True True (Ref 0)
+  let (_, codes) = windowCodes bytes start end
+  match searchWindow re codes (0, arrayLength codes) 0 True True (Ref 0)
     Some _ => True
     None => False
 
 -- An out-of-range window is shorter, never a panic, and an empty one matches
 -- only a pattern that can match nothing.
--- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 0 99
+-- > isFullMatchBytes (mustCompile "[a-z]*") (B.encodeUtf8 "a") 0 99
 -- True
--- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 5 1
+-- > isFullMatchBytes (mustCompile "[a-z]*") (B.encodeUtf8 "a") 5 1
 -- True
--- > isFullMatchBytes (mustCompile "[a-z]+") [|97|] 5 1
+-- > isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "a") 5 1
 -- False
+-- > isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "a") (-3) 1
+-- True
 
 -- `^` and `$` are the ends of the WINDOW, so a slice grades as that slice
--- standing alone.
--- > isFullMatchBytes (mustCompile "^b$") [|97, 98, 99|] 1 2
+-- standing alone, and so does `\b`.
+-- > isFullMatchBytes (mustCompile "^b$") (B.encodeUtf8 "abc") 1 2
+-- True
+-- > isFullMatchBytes (mustCompile "\\bb\\b") (B.encodeUtf8 "abc") 1 2
+-- True
+
+-- A byte outside ASCII is a code above 127, which no ASCII class matches.
+-- > isFullMatchBytes (mustCompile "[a-z]+") (B.encodeUtf8 "aé") 0 3
+-- False
+-- > isFullMatchBytes (mustCompile "a..") (B.encodeUtf8 "aé") 0 3
 -- True
 
 {- | The leftmost match in `bytes[start..end)`, or `None`.
@@ -1444,19 +1470,30 @@ isFullMatchBytes re bytes start end =
    codepoint decodes as `string.fromUtf8` decodes malformed input. An
    ASCII-only pattern never produces such a span.
 
-   > map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   > map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b") 0 4)
    Some "12"
-   > map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   > map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b") 0 4)
    Some 1
-   > findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
+   > findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b") 0 1
    None -}
 export
-findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+findBytes : Regex -> Bytes -> Int -> Int -> Option Match
 findBytes re bytes start end =
-  let (lo, hi) = clampWindow bytes start end
+  let (lo, codes) = windowCodes bytes start end
   map
-    (mkMatchWith (from to => fromUtf8 (sliceBytes from to bytes)) re)
-    (searchWindow re bytes (lo, hi) lo False False (Ref 0))
+    (slots =>
+      mkMatchWith
+        (from to => fromUtf8 (sliceBytes (from - lo) (to - lo) codes))
+        re
+        (shiftSlots lo slots))
+    (searchWindow re codes (0, arrayLength codes) 0 False False (Ref 0))
+
+-- Offsets are into the whole buffer when the window starts past 0, and so
+-- are a group's; a group that did not take part is still `None`.
+-- > map (m => ((m : Match).start, (m : Match).end, (m : Match).text)) (findBytes (mustCompile "[0-9]+") (B.encodeUtf8 "a12b34") 3 6)
+-- Some (4, 6, "34")
+-- > map (m => map (g => map (g2 => ((g2 : Group).start, (g2 : Group).text)) g) (m : Match).groups) (findBytes (mustCompile "(x)|([0-9])") (B.encodeUtf8 "ab7") 1 3)
+-- Some [None, Some (2, "7")]
 
 -- Groups
 
@@ -1678,8 +1715,11 @@ spansOrdered (m :: rest) floor =
   m.start >= floor && m.end >= m.start && spansOrdered rest m.end
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false "sliceBytes"))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false))))
+(DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("list") ((mem "get" false) (mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromChars" false) (mem "fromUtf8" false) (mem "isDigit" false) (mem "repeat" false) (mem "sliceClamped" false) (mem "toChars" false))))
+(DUse false (UseAlias ("u8") "U8"))
 (DData Abstract "Regex" () ((variant "Regex" (ConNamed (field "src" (TyCon "String")) (field "prog" (TyApp (TyCon "Array") (TyCon "Inst"))) (field "ngroups" (TyCon "Int")) (field "multiline" (TyCon "Bool"))))) ())
 (DData Public "RegexError" () ((variant "RegexError" (ConNamed (field "message" (TyCon "String")) (field "position" (TyCon "Int"))))) ())
 (DImpl true "Eq" ((TyCon "RegexError")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "RegexError" ((rf "message" (PVar "__a0")) (rf "position" (PVar "__a1"))) false) (PRec "RegexError" ((rf "message" (PVar "__b0")) (rf "position" (PVar "__b1"))) false)) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))))))))
@@ -1898,8 +1938,12 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "searchFrom" ((PVar "re") (PVar "codes") (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (EVar "startAt")) (EVar "anchorStart")) (EVar "anchorEnd")) (EVar "steps")))
 (DTypeSig false "searchWindow" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))))))
 (DFunDef false "searchWindow" ((PVar "re") (PVar "codes") (PTuple (PVar "lo") (PVar "hi")) (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EBlock (DoLet false false (PVar "vm") (ERecordCreate "Vm" ((fa "prog" (EFieldAccess (EVar "re") "prog")) (fa "codes" (EVar "codes")) (fa "subjStart" (EVar "lo")) (fa "subjEnd" (EVar "hi")) (fa "multi" (EFieldAccess (EVar "re") "multiline")) (fa "anchorEnd" (EVar "anchorEnd")) (fa "nslots" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EFieldAccess (EVar "re") "ngroups") (ELit (LInt 1))))) (fa "steps" (EVar "steps")) (fa "found" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EApp (EVar "vmSearch") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")))))
-(DTypeSig false "clampWindow" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "clampWindow" ((PVar "codes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "codes"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "end")) (EVar "n")))) (DoExpr (ETuple (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "start")) (EVar "hi"))) (EVar "hi")))))
+(DTypeSig false "clampWindow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "clampWindow" ((PVar "n") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "end")) (EVar "n")))) (DoExpr (ETuple (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "start")) (EVar "hi"))) (EVar "hi")))))
+(DTypeSig false "windowCodes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DFunDef false "windowCodes" ((PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EApp (EVar "B.length") (EVar "bytes"))) (EVar "start")) (EVar "end"))) (DoExpr (ETuple (EVar "lo") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "bytes")) (EBinOp "+" (EVar "lo") (EVar "i"))))))))))
+(DTypeSig false "shiftSlots" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "shiftSlots" ((PVar "lo") (PVar "slots")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "slots"))) (ELam ((PVar "i")) (EBlock (DoLet false false (PVar "slot") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "slots"))) (DoExpr (EIf (EBinOp "<" (EVar "slot") (ELit (LInt 0))) (EVar "slot") (EBinOp "+" (EVar "slot") (EVar "lo"))))))))
 (DTypeSig false "findSteps" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "findSteps" ((PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "steps") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EVar "steps"))) (DoExpr (EUnOp "!" (EVar "steps")))))
 (DTypeSig false "mkMatchWith" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Match")))))
@@ -1938,10 +1982,10 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "findAll" ((PVar "re") (PVar "s")) (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EListLit))))
 (DTypeSig false "findAllGo" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "List") (TyCon "Match")))))))))
 (DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EVar "codes")) (EVar "next")) (EVar "hi")) (EVar "acc2"))))))))
-(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
-(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
-(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EVar "from")) (EVar "to")) (EVar "bytes"))))) (EVar "re"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
+(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple PWild (PVar "codes")) (EApp (EApp (EApp (EVar "windowCodes") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (ELit (LInt 0))) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
+(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
+(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "codes")) (EApp (EApp (EApp (EVar "windowCodes") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "slots")) (EApp (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EBinOp "-" (EVar "from") (EVar "lo"))) (EBinOp "-" (EVar "to") (EVar "lo"))) (EVar "codes"))))) (EVar "re")) (EApp (EApp (EVar "shiftSlots") (EVar "lo")) (EVar "slots"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "replace" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replace" ((PVar "re") (PVar "repl") (PVar "s")) (EMatch (EApp (EApp (EVar "find") (EVar "re")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (EFieldAccess (EVar "m") "start")) (EVar "s")) (EApp (EApp (EVar "expandRepl") (EVar "repl")) (EVar "m"))) (EApp (EApp (EApp (EVar "sliceClamped") (EFieldAccess (EVar "m") "end")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -1977,8 +2021,11 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "spansOrdered" ((PCons (PVar "m") (PVar "rest")) (PVar "floor")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "m") "start") (EVar "floor")) (EBinOp ">=" (EFieldAccess (EVar "m") "end") (EFieldAccess (EVar "m") "start"))) (EApp (EApp (EVar "spansOrdered") (EVar "rest")) (EFieldAccess (EVar "m") "end"))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "sliceClamped" false "sliceBytes"))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false))))
+(DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("list") ((mem "get" false) (mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromChars" false) (mem "fromUtf8" false) (mem "isDigit" false) (mem "repeat" false) (mem "sliceClamped" false) (mem "toChars" false))))
+(DUse false (UseAlias ("u8") "U8"))
 (DData Abstract "Regex" () ((variant "Regex" (ConNamed (field "src" (TyCon "String")) (field "prog" (TyApp (TyCon "Array") (TyCon "Inst"))) (field "ngroups" (TyCon "Int")) (field "multiline" (TyCon "Bool"))))) ())
 (DData Public "RegexError" () ((variant "RegexError" (ConNamed (field "message" (TyCon "String")) (field "position" (TyCon "Int"))))) ())
 (DImpl true "Eq" ((TyCon "RegexError")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "RegexError" ((rf "message" (PVar "__a0")) (rf "position" (PVar "__a1"))) false) (PRec "RegexError" ((rf "message" (PVar "__b0")) (rf "position" (PVar "__b1"))) false)) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))))))))
@@ -2197,8 +2244,12 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "searchFrom" ((PVar "re") (PVar "codes") (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (EVar "startAt")) (EVar "anchorStart")) (EVar "anchorEnd")) (EVar "steps")))
 (DTypeSig false "searchWindow" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))))))
 (DFunDef false "searchWindow" ((PVar "re") (PVar "codes") (PTuple (PVar "lo") (PVar "hi")) (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EBlock (DoLet false false (PVar "vm") (ERecordCreate "Vm" ((fa "prog" (EFieldAccess (EVar "re") "prog")) (fa "codes" (EVar "codes")) (fa "subjStart" (EVar "lo")) (fa "subjEnd" (EVar "hi")) (fa "multi" (EFieldAccess (EVar "re") "multiline")) (fa "anchorEnd" (EVar "anchorEnd")) (fa "nslots" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EFieldAccess (EVar "re") "ngroups") (ELit (LInt 1))))) (fa "steps" (EVar "steps")) (fa "found" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EApp (EVar "vmSearch") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")))))
-(DTypeSig false "clampWindow" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "clampWindow" ((PVar "codes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "codes"))) (DoLet false false (PVar "hi") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "end")) (EVar "n")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "start")) (EVar "hi"))) (EVar "hi")))))
+(DTypeSig false "clampWindow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "clampWindow" ((PVar "n") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "end")) (EVar "n")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "start")) (EVar "hi"))) (EVar "hi")))))
+(DTypeSig false "windowCodes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))))
+(DFunDef false "windowCodes" ((PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EApp (EVar "B.length") (EVar "bytes"))) (EVar "start")) (EVar "end"))) (DoExpr (ETuple (EVar "lo") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "bytes")) (EBinOp "+" (EVar "lo") (EVar "i"))))))))))
+(DTypeSig false "shiftSlots" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DFunDef false "shiftSlots" ((PVar "lo") (PVar "slots")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "slots"))) (ELam ((PVar "i")) (EBlock (DoLet false false (PVar "slot") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "slots"))) (DoExpr (EIf (EBinOp "<" (EVar "slot") (ELit (LInt 0))) (EVar "slot") (EBinOp "+" (EVar "slot") (EVar "lo"))))))))
 (DTypeSig false "findSteps" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "findSteps" ((PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "steps") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EVar "steps"))) (DoExpr (EUnOp "!" (EVar "steps")))))
 (DTypeSig false "mkMatchWith" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Match")))))
@@ -2237,10 +2288,10 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "findAll" ((PVar "re") (PVar "s")) (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EListLit))))
 (DTypeSig false "findAllGo" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "List") (TyCon "Match")))))))))
 (DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EVar "codes")) (EVar "next")) (EVar "hi")) (EVar "acc2"))))))))
-(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
-(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
-(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EVar "from")) (EVar "to")) (EVar "bytes"))))) (EVar "re"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
+(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple PWild (PVar "codes")) (EApp (EApp (EApp (EVar "windowCodes") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (ELit (LInt 0))) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
+(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
+(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "codes")) (EApp (EApp (EApp (EVar "windowCodes") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "slots")) (EApp (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EBinOp "-" (EVar "from") (EVar "lo"))) (EBinOp "-" (EVar "to") (EVar "lo"))) (EVar "codes"))))) (EVar "re")) (EApp (EApp (EVar "shiftSlots") (EVar "lo")) (EVar "slots"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "replace" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replace" ((PVar "re") (PVar "repl") (PVar "s")) (EMatch (EApp (EApp (EVar "find") (EVar "re")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (EFieldAccess (EVar "m") "start")) (EVar "s")) (EApp (EApp (EVar "expandRepl") (EVar "repl")) (EVar "m"))) (EApp (EApp (EApp (EVar "sliceClamped") (EFieldAccess (EVar "m") "end")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
