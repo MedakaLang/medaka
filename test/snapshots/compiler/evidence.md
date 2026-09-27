@@ -1,5 +1,5 @@
 # META
-source_lines=48
+source_lines=51
 stages=DESUGAR,MARK
 # SOURCE
 -- Request-owned identities and semantic evidence for the scoped solver.
@@ -42,14 +42,17 @@ public export data PrerequisiteEvidence = PrerequisiteEvidence {
   prerequisiteArguments : List Mono,
 }
 
--- Request evidence forms a DAG: prerequisite and superclass edges name other
--- request nodes by `EvId`.  No constructor embeds a recursively copied proof
--- tree.  `Mono` is permitted here because this value is request-owned; a later
+-- Request evidence forms a DAG: a superclass edge names the binder it projects
+-- from, and a prerequisite names only its predicate.  No constructor embeds a
+-- recursively copied proof tree.  `Mono` is permitted here because this value is request-owned; a later
 -- frozen contract must translate it to immutable templates before publication.
 public export data SolverEvidence =
   | GivenEvidence EvidenceBinderId
   | InstanceEvidence RequestInstanceId (List Mono) (List PrerequisiteEvidence)
-  | SuperclassEvidence EvId (List Int)
+  -- The dictionary bound at a formal evidence binder, projected onto one of its
+  -- interface's transitive supers.  The path indexes successive DIRECT-super lists,
+  -- starting at the bound predicate's own interface.
+  | SuperclassEvidence EvidenceBinderId (List Int)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvId" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false))))
@@ -72,7 +75,7 @@ public export data SolverEvidence =
 (DImpl true "Ord" ((TyCon "RequestInstanceId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RequestInstanceId" (PVar "__a0")) (PCon "RequestInstanceId" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Debug" ((TyCon "RequestInstanceId")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RequestInstanceId" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RequestInstanceId ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
 (DData Public "PrerequisiteEvidence" () ((variant "PrerequisiteEvidence" (ConNamed (field "prerequisiteInterface" (TyCon "IfaceRef")) (field "prerequisiteArguments" (TyApp (TyCon "List") (TyCon "Mono")))))) ())
-(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
+(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvidenceBinderId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "EvId" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false))))
@@ -95,4 +98,4 @@ public export data SolverEvidence =
 (DImpl true "Ord" ((TyCon "RequestInstanceId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RequestInstanceId" (PVar "__a0")) (PCon "RequestInstanceId" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Debug" ((TyCon "RequestInstanceId")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RequestInstanceId" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RequestInstanceId ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
 (DData Public "PrerequisiteEvidence" () ((variant "PrerequisiteEvidence" (ConNamed (field "prerequisiteInterface" (TyCon "IfaceRef")) (field "prerequisiteArguments" (TyApp (TyCon "List") (TyCon "Mono")))))) ())
-(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
+(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvidenceBinderId") (TyApp (TyCon "List") (TyCon "Int"))))) ())

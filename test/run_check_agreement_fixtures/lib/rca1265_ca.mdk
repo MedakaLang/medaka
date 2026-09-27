@@ -1,0 +1,7 @@
+import lib.rca1265_ifa.{Speak(..), speak}
+import lib.rca1265_dog.{Dog(..)}
+
+impl Speak Dog where
+
+export sayA : Dog -> String
+sayA d = speak d

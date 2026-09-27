@@ -153,6 +153,16 @@ export
 ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
 
+-- The dictionary name an interface default body's RECEIVER evidence renders to: a
+-- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` to
+-- it.  It is not a parameter of the lowered body.  Each engine rebinds it to the
+-- instance the body is running for — lowering rewrites it to that instance's route
+-- (`core_ir_lower`), eval binds it in the specialized body's frame — so the body is
+-- inferred once and selects nothing.  `$` keeps it out of every user namespace.
+export
+defaultReceiverDict : String -> String
+defaultReceiverDict method = "$self_\{method}"
+
 -- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
 -- TYPE head" to "which module declared this declaration, IN WHICH
@@ -1231,10 +1241,16 @@ public export data EvId = EvId String Int
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
--- `EMethodAt` node's selected denotation pre-use arrow arity and three route
--- answers (its dispatch route, the selected impl's `requires` dicts, and the
--- method's own `=>` dicts) in the order the solver's `EvCell` route refs hold
--- them (`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).  The node
+-- `EMethodAt` node's interface identity (the `ifaceWordOf` word of the
+-- interface whose method the occurrence resolved to — `""` when the occurrence
+-- denotes no interface method, such as a standalone shadow), its selected
+-- denotation pre-use arrow arity and three route answers (its dispatch route,
+-- the selected impl's `requires` dicts, and the method's own `=>` dicts) in the
+-- order the solver's `EvCell` refs hold them
+-- (`ecIface`/`ecArity`/`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).
+-- The identity is what lets every engine keep two interfaces' same-spelled
+-- methods apart at one dispatch tag (#1265, #1619): the route alone names a
+-- type, never an interface.  The node
 -- itself carries no route: its three cells are the method name, the pre-pass seed
 -- and the `EvId` that addresses that cell, and a reader reaches the routes by
 -- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
@@ -1250,7 +1266,7 @@ public export data EvId = EvId String Int
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
-  | EvMethod Int Route (List Route) (List Route)
+  | EvMethod String Int Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 

@@ -1,5 +1,5 @@
 # META
-source_lines=2449
+source_lines=2465
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -156,6 +156,16 @@ ifaceIdentity OriginBuiltin _ = ""
 export
 ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
+
+-- The dictionary name an interface default body's RECEIVER evidence renders to: a
+-- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` to
+-- it.  It is not a parameter of the lowered body.  Each engine rebinds it to the
+-- instance the body is running for — lowering rewrites it to that instance's route
+-- (`core_ir_lower`), eval binds it in the specialized body's frame — so the body is
+-- inferred once and selects nothing.  `$` keeps it out of every user namespace.
+export
+defaultReceiverDict : String -> String
+defaultReceiverDict method = "$self_\{method}"
 
 -- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
@@ -1235,10 +1245,16 @@ public export data EvId = EvId String Int
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
--- `EMethodAt` node's selected denotation pre-use arrow arity and three route
--- answers (its dispatch route, the selected impl's `requires` dicts, and the
--- method's own `=>` dicts) in the order the solver's `EvCell` route refs hold
--- them (`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).  The node
+-- `EMethodAt` node's interface identity (the `ifaceWordOf` word of the
+-- interface whose method the occurrence resolved to — `""` when the occurrence
+-- denotes no interface method, such as a standalone shadow), its selected
+-- denotation pre-use arrow arity and three route answers (its dispatch route,
+-- the selected impl's `requires` dicts, and the method's own `=>` dicts) in the
+-- order the solver's `EvCell` refs hold them
+-- (`ecIface`/`ecArity`/`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).
+-- The identity is what lets every engine keep two interfaces' same-spelled
+-- methods apart at one dispatch tag (#1265, #1619): the route alone names a
+-- type, never an interface.  The node
 -- itself carries no route: its three cells are the method name, the pre-pass seed
 -- and the `EvId` that addresses that cell, and a reader reaches the routes by
 -- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
@@ -1254,7 +1270,7 @@ public export data EvId = EvId String Int
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
-  | EvMethod Int Route (List Route) (List Route)
+  | EvMethod String Int Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 
@@ -2463,6 +2479,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
 (DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "/=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
+(DTypeSig true "defaultReceiverDict" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "defaultReceiverDict" ((PVar "method")) (EBinOp "++" (EBinOp "++" (ELit (LString "$self_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DData Public "Ns" () ((variant "NsType" (ConPos)) (variant "NsIface" (ConPos)) (variant "NsMethod" (ConPos)) (variant "NsCtor" (ConPos)) (variant "NsField" (ConPos)) (variant "NsValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "True")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "True")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "True")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "True")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Ord" ((TyCon "Ns")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "Eq")) (arm (PTuple (PCon "NsType") (PCon "NsIface")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "Eq")) (arm (PTuple (PCon "NsIface") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "Eq")) (arm (PTuple (PCon "NsMethod") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "Eq")) (arm (PTuple (PCon "NsCtor") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsField") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "Eq")) (arm (PTuple (PCon "NsField") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsValue") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsField")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "Eq"))))))
@@ -2633,7 +2651,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
 (DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
-(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
@@ -2844,6 +2862,8 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
 (DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "/=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
+(DTypeSig true "defaultReceiverDict" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "defaultReceiverDict" ((PVar "method")) (EBinOp "++" (EBinOp "++" (ELit (LString "$self_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DData Public "Ns" () ((variant "NsType" (ConPos)) (variant "NsIface" (ConPos)) (variant "NsMethod" (ConPos)) (variant "NsCtor" (ConPos)) (variant "NsField" (ConPos)) (variant "NsValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "True")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "True")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "True")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "True")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Ord" ((TyCon "Ns")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "Eq")) (arm (PTuple (PCon "NsType") (PCon "NsIface")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "Eq")) (arm (PTuple (PCon "NsIface") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "Eq")) (arm (PTuple (PCon "NsMethod") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "Eq")) (arm (PTuple (PCon "NsCtor") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsField") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "Eq")) (arm (PTuple (PCon "NsField") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsValue") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsField")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "Eq"))))))
@@ -3014,7 +3034,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
 (DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
-(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())

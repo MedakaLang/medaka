@@ -58,12 +58,15 @@ isDoLoweredAndThenCalleeExpr	Expr	2/42
 isNonexpansive	Expr	14/42
 isSyntacticLambda	Expr	1/42
 lamUnderLoc	Expr	2/42
+localAbsCandidate	Expr	14/42
+localAbsCtorSpine	Expr	5/42
 markTailDecl	Decl	1/14
 methodConstraintNamesOfDecl	Decl	2/14
 negatedI32Lit	Expr	3/42
 overlayScanOne	Decl	1/14
-plainAppHead	Expr	1/42
+plainAppHead	Expr	2/42
 prePassDeclScoped	Decl	5/14
+prependLocalDicts	Expr	2/42
 recordDeclKinds	Decl	1/14
 recordNegatedLitRange	Expr	3/42
 reexportedCtorIdentsOf	Decl	2/14
@@ -77,6 +80,7 @@ renderCallArg	Expr	10/42
 returnPosOfDecl	Decl	1/14
 rewriteArgScoped	Expr	33/42
 rewriteBinopExpr	Expr	4/42
+rewriteLocalDictExpr	Expr	4/42
 rewriteRPDict	Expr	1/42
 shadowStandaloneHead	Expr	4/42
 sourceBindingArity	Expr	6/42

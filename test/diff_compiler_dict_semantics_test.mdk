@@ -2292,6 +2292,127 @@ table = [
     pinned = "7\n21\n",
     codes = [],
   },
+  Row {
+    entry = "g4-where-multi-type.mdk",
+    label =
+      "§4.1 G4 (#2095, #1082): #1052's `where` spelling. `g` generalizes over `Sz v` and is dictionary-abstracted, so its uses at Int and Bool solve their own instances: 1 + 2 = 3. A dictionary shared between the uses would print 2 or 4",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "g4-let-multi-type.mdk",
+    label =
+      "§4.1 G4 (#2095, #1052): the `let` spelling of the row above. Every local binding site abstracts the same way, so the binder form cannot change the answer: 3",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "g4-default-body-local-two-types.mdk",
+    label =
+      "§4.1 G4 (#1082): the abstracted `let` sited in an interface DEFAULT body, used at the receiver and at Cat. The receiver use is answered by the default body's receiver given (it was rejected T-AMBIGUOUS-INSTANCE once two impls existed), the Cat use by its impl, directly and through a `Tagged a =>` wrapper. A dictionary shared by the two uses would print dog!dog! or cat!cat! for Dog",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "cat!cat!|dog!cat!|dog!cat!\n",
+    codes = [],
+  },
+  Row {
+    entry = "g4-multi-type-control.mdk",
+    label =
+      "§4.1 G4 (#2095) control for the two rows above: the same abstracted `where` helper used at ONE type, so both applications forward `both`'s single given: 1 + 1 = 2",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "g4-ground-type-local-two-types.mdk",
+    label =
+      "§4.1 G4 (#2095, #2032): a local forwarding to the prelude's `debug`, used at two ground types with no enclosing polymorphic signature. It generalizes over `Debug a` and each use solves its own instance: `1` then `True`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\nTrue\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-super-projected-not-reselected.mdk",
+    label =
+      "§3 `super` (#2095): #1127's shape (a THIRD overlapping instance makes a re-selection value-observable) under different names from `s6-1-4-supers-per-construction-goal.mdk`, which pins the same shape for §6.1.4/C2. `Boxed`'s `requires Sz a` super slot at `useSz`'s construction goal and the top-level `sizeOf` goal on the next line both reach the min-⊑ winner among three overlapping `Sz` instances (`Sz (Box Int)`, 77). Both goals are solved by the one judgment (§3: an instance's super is solved at its construction goal), so they agree by construction: 77/77",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "77\n77\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-two-ifaces-one-type-defaults/main.mdk",
+    label =
+      "§5 (#1265, drained from its must-fail pin): two interfaces declare a same-spelled method with different defaults and one type inherits both. Each inherited slot has its own per-instance entry, keyed by the interface that declared the default, so `sayA` answers `Speak`'s default and `sayB` `Greet`'s",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A-default|B-default\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-two-ifaces-one-type-defaults-swapped/main.mdk",
+    label =
+      "§5 (#1265) the row above with its first two imports exchanged: the answer must not move with import order (it printed B-default|B-default here, A-default|A-default above, before per-instance defaults)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A-default|B-default\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-xmod-default-sibling-amod-first/main.mdk",
+    label =
+      "§5 (#1821, drained from its must-fail pin): IA's cross-module default `dflt x = sib x + 1` calls its sibling through the default's receiver, so it reaches T's own `sib`, never the same-spelled `dflt` default of an interface imported under no name. 7 * 10 + 1",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "71\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-xmod-default-sibling-bmod-first/main.mdk",
+    label =
+      "§5 (#1821) the row above with its two import lines exchanged -- the order that printed IB's 9000 before per-instance defaults",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "71\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-xmod-default-same-spelled-iface/main.mdk",
+    label =
+      "§5/§8 I4 (#1619, drained from its must-fail pin): a method-less impl of di's `Tag` inherits di's default (7) while other's same-spelled `Tag` has an explicit impl at the same head (100). The occurrence's interface identity keeps the explicit impl out of di's slot",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(7, 100)\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2303,7 +2424,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 197
+tableRows = 208
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

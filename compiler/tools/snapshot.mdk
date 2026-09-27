@@ -611,7 +611,7 @@ emitBoth root sel runtimeDecls userDecls =
   -- `entry_support.emitModulesWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below (`ifaceImplHeadTable`, …) sees the
   -- same stamped names a real build's tables do.
-  let (coreE, modulesE, _, _, _) =
+  let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls [] [("__user__", userDecls)]
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2

@@ -1,0 +1,8 @@
+export interface Base a where
+  base : a -> String
+
+-- `describe`'s default calls the SUPERCLASS method `base` on its receiver.
+export interface Shape a requires Base a where
+  size : a -> String
+  describe : a -> String
+  describe x = base x ++ ":" ++ size x

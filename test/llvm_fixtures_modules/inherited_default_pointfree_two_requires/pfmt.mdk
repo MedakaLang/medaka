@@ -1,0 +1,8 @@
+export interface Named a where
+  nm : a -> String
+
+-- A POINT-FREE default: its value parameter is a lambda, not a clause pattern.
+export interface Fmt a requires Named a where
+  fmt : a -> String
+  loud : a -> String
+  loud = x => fmt x ++ "!"

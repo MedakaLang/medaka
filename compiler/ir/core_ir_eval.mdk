@@ -42,6 +42,7 @@ import ir.core_ir.{
   CHead(..),
 }
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith}
+import types.disposition.{DispositionTable, installedDispositionsOpt}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import backend.private_mangle.{mangleCtorCollisions}
 import eval.eval.{
@@ -87,6 +88,7 @@ import eval.eval.{
   implMethodNames,
   methodCellsOf,
   importFrameOf,
+  narrowToIface,
   pubReexports,
   ModExports(..),
   ctorsByTypeOf,
@@ -95,7 +97,6 @@ import eval.eval.{
   ctorFieldOrdersRef,
   methodAtNarrow,
   applyValues,
-  defaultCellName,
   preludeShadowNames,
   globalFramesWith,
   coreImportExports,
@@ -155,8 +156,9 @@ ceval env (CRangeArray lo hi incl) =
 -- methodReqCountRef state initialized by installDispatchTables (derives both
 -- tables from one decl list). See .claude/dossier/traps.md § "[T-EVAL-LOCKSTEP]
 -- evalModules / cevalModules lockstep".
-ceval env (CMethod name _ route implRoutes methRoutes) =
-  let (narrowed, fwdReqs) = methodAtNarrow env name (lookupEnv env name) route
+ceval env (CMethod name iface _ route implRoutes methRoutes) =
+  let (narrowed, fwdReqs) =
+    methodAtNarrow env name (narrowToIface iface (lookupEnv env name)) route
   applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes
 ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes
 ceval _ _ = panic "core_ir ceval: unsupported node"
@@ -377,16 +379,30 @@ cevalLet env pat e1 e2 = match matchPat pat (ceval env e1)
 cevalBlock : EvalEnv (Value e) -> List CStmt -> <e> Value e
 cevalBlock _ [] = VUnit
 cevalBlock env [CSExpr e] = ceval env e
+cevalBlock env [CSLet True (PVar f _) e] =
+  let _ = cBlockRecEnv env f e
+  VUnit
 cevalBlock env [CSLet _ pat e] = cBlockLetLast env pat e
 cevalBlock env ((CSExpr e) :: rest) =
   let _ = ceval env e
   cevalBlock env rest
+cevalBlock env ((CSLet True (PVar f _) e) :: rest) =
+  cevalBlock (cBlockRecEnv env f e) rest
 cevalBlock env ((CSLet _ pat e) :: rest) = cBlockLet env pat e rest
 cevalBlock env [CSAssign _ e] =
   let _ = ceval env e
   VUnit
 cevalBlock env ((CSAssign x e) :: rest) =
   cevalBlock (extendEnv env [(x, ceval env e)]) rest
+
+-- A recursive block binding sees itself, exactly as `cevalRecLet` does for an
+-- expression `let rec`.
+cBlockRecEnv : EvalEnv (Value e) -> String -> CExpr -> <e> EvalEnv (Value e)
+cBlockRecEnv env f e =
+  let cell = Ref VUnit
+  let recEnv = pushFrame env [(f, cell)]
+  cell := ceval recEnv e
+  recEnv
 
 cBlockLetLast : EvalEnv (Value e) -> Pat -> CExpr -> <e> Value e
 cBlockLetLast env pat e = match matchPat pat (ceval env e)
@@ -470,21 +486,11 @@ ctorBinding (name, arity) = (name, makeCtor name arity)
 cImplMethodNames : List CImplEntry -> List String
 cImplMethodNames entries = dedup (flatMap cImplEntryNames entries)
 
--- #1047: an entry contributes the qualified default cell name too, in LOCKSTEP
--- with `cImplEntryValue` — a name with no entry is a dead `VUnit` cell, an entry
--- with no name panics in `findCell`.  Peer of eval.mdk's `defaultNamesOf`.
 cImplEntryNames : CImplEntry -> List String
-cImplEntryNames (CImplEntry n _ (CImplDefault ifaceId _ _)) =
-  n :: qualifiedDefaultNameC ifaceId n
 cImplEntryNames (CImplEntry n _ _) = [n]
 
-qualifiedDefaultNameC : String -> String -> List String
-qualifiedDefaultNameC "" _ = []
-qualifiedDefaultNameC ifaceId n = [defaultCellName ifaceId n]
-
--- One entry, or TWO for an identified interface default (#1047): the same value
--- bound under both the bare method name and `<ifaceId>#<method>`.  Peer of
--- eval.mdk's `defaultEntry`.
+-- An inherited default's per-instance entry installs exactly as a supplied method
+-- does: tagged with the instance's head and key, so dispatch reaches it the same way.
 cImplEntryValue : EvalEnv (Value e) -> CImplEntry -> (String, (Int, Value e))
 cImplEntryValue env (CImplEntry name score body) =
   (name, (score, cImplBodyValue env body))
@@ -492,16 +498,13 @@ cImplEntryValue env (CImplEntry name score body) =
 cImplEntryValues : EvalEnv (Value e) ->
   CImplEntry ->
   List (String, (Int, Value e))
-cImplEntryValues env (CImplEntry name score (CImplDefault ifaceId pats body)) =
-  let scored = (score, cImplMethodValue env [] pats body)
-  (name, scored) :: map (q => (q, scored)) (qualifiedDefaultNameC ifaceId name)
 cImplEntryValues env ent = [cImplEntryValue env ent]
 
 cImplBodyValue : EvalEnv (Value e) -> CImplBody -> Value e
-cImplBodyValue env (CImplTagged tag key iface positions pats body) =
+cImplBodyValue env (CImplTagged tag key _ positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
-cImplBodyValue env (CImplDefault _ pats body) =
-  cImplMethodValue env [] pats body
+cImplBodyValue env (CImplDefault _ tag key positions pats body) =
+  VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
 
 -- A point-free (no-param) impl/default body: defer a return-position method as a
 -- VThunk; otherwise eta-expand so the discriminating arg still reaches the body
@@ -620,7 +623,8 @@ cevalModules preludeDecls0 modules0 =
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = lowerGroups preludeDecls
-  let preludeImpls = lowerImplsWith disp preludeDecls
+  let dispositions = installedDispositionsOpt ()
+  let preludeImpls = lowerImplsWith disp dispositions preludeDecls
   -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModules/cevalModules
   -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
   -- eval.mdk's `preludeShadowNames`.
@@ -641,6 +645,7 @@ cevalModules preludeDecls0 modules0 =
   let mods =
     cBuildModInfos
       disp
+      dispositions
       globalCells
       (coreImportExports privateCells globalCells preludeDecls)
       []
@@ -663,15 +668,16 @@ cevalModules preludeDecls0 modules0 =
 -- The `globalCells`/`coreExports` split is eval.mdk's, for eval.mdk's reason — see
 -- `coreImportExports` there.
 cBuildModInfos : List ((String, String, String), List Int) ->
+  Option DispositionTable ->
   List (String, Ref (Value e)) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos _ _ _ _ [] = []
-cBuildModInfos disp globalCells coreExports exportsMap ((mid, decls) :: rest) =
+cBuildModInfos _ _ _ _ _ [] = []
+cBuildModInfos disp dispositions globalCells coreExports exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroups decls
-  let cimpls = lowerImplsWith disp decls
+  let cimpls = lowerImplsWith disp dispositions decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
   -- live in its LOCAL frame — they stay in the shared global too (see
   -- cevalModules) for by-name / `Type(..)` cross-module ctor imports.  The local
@@ -704,6 +710,7 @@ cBuildModInfos disp globalCells coreExports exportsMap ((mid, decls) :: rest) =
   CModInfo mid decls cbinds cimpls localCells menv
     :: cBuildModInfos
       disp
+      dispositions
       globalCells
       coreExports
       ((mid, exports) :: exportsMap)

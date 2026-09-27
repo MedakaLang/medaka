@@ -1,0 +1,10 @@
+-- §5 (#1265): two interfaces declare a same-spelled method with different defaults,
+-- and one type inherits both.  §5 / §5.1 M1: a default fills the slot the SELECTED
+-- instance omits, so `sayA` answers ifa's default and `sayB` ifb's.  Correct, derived
+-- before running: A-default|B-default.
+import ca.{sayA}
+import cb.{sayB}
+import dog.{Dog(..)}
+
+main : <IO> Unit
+main = putStrLn (sayA Dog ++ "|" ++ sayB Dog)

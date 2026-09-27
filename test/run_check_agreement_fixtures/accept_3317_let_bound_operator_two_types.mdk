@@ -1,0 +1,20 @@
+-- #3317 — A LET-BOUND OPERATOR USED AT TWO TYPES.
+--
+-- An operator on the method seam (`==`) is a method occurrence, so `let e = (==)`
+-- carries `Eq a` and is dictionary-abstracted.  Each use reaches its own instance:
+-- `e 1 1` the Int instance, `e (K 1 9) (K 1 8)` the user `impl Eq K`, which compares
+-- only the first field.  Ground truth: `(True, True)`.  A shallow structural
+-- comparison would answer `False` for the second, disagreeing with the infix
+-- `K 1 9 == K 1 8`.
+--
+-- Verdict: ACCEPT.
+data K = K Int Int
+
+impl Eq K where
+  eq (K a _) (K b _) = a == b
+
+main =
+  let e = (==)
+  let onInts = e 1 1
+  let onK = e (K 1 9) (K 1 8)
+  println (debug (onInts, onK))
