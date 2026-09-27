@@ -121,15 +121,14 @@ perfSecretHex : String
 perfSecretHex =
   "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
-mustHexBytes : String -> Array Int
-mustHexBytes text =
-  toArray (resultOrPanic "performance_resource: malformed hex" (decode text))
-
 perfSecret : SecretKey
 perfSecret =
   resultOrPanic
     "performance_resource: bad signing key"
-    (secretKeyFromBytes (mustHexBytes perfSecretHex))
+    (secretKeyFromBytes
+      (resultOrPanic
+        "performance_resource: malformed hex"
+        (decode perfSecretHex)))
 
 perfDid : String
 perfDid = "did:plc:perfrouteidentity0000000"
@@ -188,11 +187,10 @@ perfSignedCommit : Cid -> (Cid, Array Int)
 perfSignedCommit dataCid =
   let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
   let digest =
-    B.toArray
-      (sha256
-        (optionOrPanic
-          "sha256: every element must be a byte in 0..255"
-          (B.fromArray unsigned)))
+    sha256
+      (optionOrPanic
+        "sha256: every element must be a byte in 0..255"
+        (B.fromArray unsigned))
   let signature = match signDigest perfSecret digest
     Ok value => value
     Err message => panic "performance_resource: signing failed: \{message}"
@@ -205,7 +203,7 @@ perfSignedCommit dataCid =
           ("data", DcLink dataCid),
           ("rev", DcString (tidToString perfRev)),
           ("prev", DcNull),
-          ("sig", DcBytes (signatureCompact signature)),
+          ("sig", DcBytes (toArray (signatureCompact signature))),
         ]))
   (cidForDagCbor signed, signed)
 

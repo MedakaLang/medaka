@@ -14,6 +14,7 @@ import lib.multiformats.{
   uvarintDecode,
 }
 import lib.sign.{PublicKey, publicKeyCompressed, publicKeyFromCompressed}
+import bytes as B
 
 secp256k1Prefix : Array Int
 secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
@@ -28,7 +29,8 @@ secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
 export
 didKeyMultibase : PublicKey -> String
 didKeyMultibase publicKey =
-  multibaseBase58btc (secp256k1Prefix ++ publicKeyCompressed publicKey)
+  multibaseBase58btc
+    (secp256k1Prefix ++ B.toArray (publicKeyCompressed publicKey))
 
 -- | Encode a secp256k1 public key as its canonical `did:key` identifier.
 export
@@ -49,5 +51,8 @@ publicKeyFromDidKey did = match stripPrefix "did:key:" did
         if codec /= multicodecSecp256k1Pub then
           Err "did_key.publicKeyFromDidKey: expected secp256k1-pub multicodec"
         else
-          let keyBytes = drop consumed payload
+          let keyBytes =
+            optionOrPanic
+              "sign.publicKeyFromCompressed: every element must be a byte in 0..255"
+              (B.fromArray (drop consumed payload))
           publicKeyFromCompressed keyBytes

@@ -138,7 +138,8 @@ mustSecret : SecretKey
 mustSecret =
   resultOrPanic
     "store_persistence: malformed secret"
-    (secretKeyFromBytes (mustHex secretHex))
+    (secretKeyFromBytes
+      (resultOrPanic "store_persistence: malformed hex" (decode secretHex)))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "store_persistence: malformed TID" (tidParse text)

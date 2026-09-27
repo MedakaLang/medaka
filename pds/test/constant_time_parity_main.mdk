@@ -7,22 +7,22 @@
 import lib.field.{feFromBytesReduce, feMul, feInverse, feToBytes}
 import lib.scalar.{scFromBytesReduce, scMul, scInverse, scToBytes}
 import lib.sign.{secretKeyFromBytes, publicKeyCompressed, publicKeyForSecret}
-import array.{setInPlace}
+import bytes.{Bytes, fromU8Array, length}
+import u8 as U8
 
-renderBytes : Array Int -> Int -> String -> String
+renderBytes : Bytes -> Int -> String -> String
 renderBytes bs i acc =
-  if i >= arrayLength bs then
+  if i >= length bs then
     acc
   else
-    renderBytes bs (i + 1) "\{acc}\{intToString bs[i]},"
+    renderBytes bs (i + 1) "\{acc}\{intToString (U8.toInt bs[i])},"
 
-emit : String -> Array Int -> <IO> Unit
+emit : String -> Bytes -> <IO> Unit
 emit label bs = println "\{label}:\{renderBytes bs 0 ""}"
 
 main =
-  let maxBytes = arrayMake 32 255
-  let oneBytes = arrayMake 32 0
-  let () = setInPlace 31 1 oneBytes
+  let maxBytes = fromU8Array (arrayMake 32 255)
+  let oneBytes = fromU8Array (arrayMakeWith 32 (i => if i == 31 then 1 else 0))
   let fieldMax = feFromBytesReduce maxBytes
   let scalarMax = scFromBytesReduce maxBytes
   let () = emit "field-mul" (feToBytes (feMul fieldMax fieldMax))

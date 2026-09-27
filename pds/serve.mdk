@@ -819,7 +819,7 @@ configure parsed = do
   let version = versionString ()
   server <- pdsServer account links version
   keyBytes <- readHexBytes "signing key" keyPath
-  secret <- secretKeyFromBytes keyBytes
+  secret <- secretKeyFromBytes (fromArrayAssumeByteDomain keyBytes)
   -- Admitted here, beside the other flag-supplied configuration and ahead of
   -- every generated secret, for the same reason `requireTrustedBind` is: a run
   -- refused for a malformed appview DID must leave no session secret on disk

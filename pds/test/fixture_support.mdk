@@ -3,7 +3,10 @@
    builders and JSON-field accessors that many test mains built the same way
    under different names. -}
 
-import array.{setInPlace}
+import bytes.{Bytes}
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
+import u8 as U8
 import json.{Json(..), get}
 import string.{startsWith}
 import lib.cid.{cidToString}
@@ -75,27 +78,31 @@ commitField name value = match get "commit" value
   None => "<missing:commit>"
 
 export
-bitBytes : Int -> Array Int
+bitBytes : Int -> Bytes
 bitBytes k =
-  let out = arrayMake 32 0
-  out[31 - shiftRight k 3] := shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)
-  out
+  let out = MB.make 32
+  let () =
+    MB.setInPlace
+      (31 - shiftRight k 3)
+      (U8.truncate (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)))
+      out
+  MB.freeze out
 
-decGo : Array Int -> Int -> Unit
+decGo : MutBytes -> Int -> Unit
 decGo out i =
   if i < 0 then
     ()
   else
-    let v = out[i]
+    let v = U8.toInt out[i]
     if v == 0 then
-      out[i] := 255
+      let () = MB.setInPlace i 255 out
       decGo out (i - 1)
     else
-      setInPlace i (v - 1) out
+      MB.setInPlace i (U8.truncate (v - 1)) out
 
 export
-decBytes : Array Int -> Array Int
+decBytes : Bytes -> Bytes
 decBytes bs =
-  let out = arrayCopy bs
+  let out = MB.thaw bs
   let () = decGo out 31
-  out
+  MB.freeze out

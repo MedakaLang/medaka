@@ -42,14 +42,12 @@ import shell.persist.{persistSave}
 secretHex : String
 secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
-mustHex : String -> Array Int
-mustHex text = toArray (resultOrPanic "synth_repo: malformed hex" (decode text))
-
 corpusSecret : SecretKey
 corpusSecret =
   resultOrPanic
     "synth_repo: bad signing key"
-    (secretKeyFromBytes (mustHex secretHex))
+    (secretKeyFromBytes
+      (resultOrPanic "synth_repo: malformed hex" (decode secretHex)))
 
 corpusDid : String
 corpusDid = "did:plc:synthrepocorpus000000000"
@@ -163,11 +161,10 @@ signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Array Int)
 signedCommit did secret rev dataCid =
   let unsigned = mustEncode (unsignedValue did dataCid rev)
   let digest =
-    toArray
-      (sha256
-        (optionOrPanic
-          "sha256: every element must be a byte in 0..255"
-          (fromArray unsigned)))
+    sha256
+      (optionOrPanic
+        "sha256: every element must be a byte in 0..255"
+        (fromArray unsigned))
   let signature = match signDigest secret digest
     Ok value => value
     Err message => panic "synth_repo: signing failed: \{message}"
@@ -179,7 +176,7 @@ signedCommit did secret rev dataCid =
         ("data", DcLink dataCid),
         ("rev", DcString (tidToString rev)),
         ("prev", DcNull),
-        ("sig", DcBytes (signatureCompact signature)),
+        ("sig", DcBytes (toArray (signatureCompact signature))),
       ])
   (cidForDagCbor signed, signed)
 

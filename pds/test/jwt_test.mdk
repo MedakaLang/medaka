@@ -24,7 +24,7 @@
 
 import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
 import base64.{decodeUrlSafe, encodeUrlSafe}
-import bytes.{encodeUtf8, toArray}
+import bytes.{Bytes, encodeUtf8, fromArray, toArray}
 import hex.{decode}
 import string.{fromUtf8, split, stripSuffix}
 import lib.jwt.{
@@ -284,11 +284,10 @@ test "verification reads no clock: the same token verifies at any instant in its
 -- Scalar 1, whose public key is G. Its `did:key` is row 0 of the
 -- reference-derived pds/test/vectors/pds_did_key_corpus.txt, which is what
 -- lets the interop driver hand that verifier an externally graded key.
-hexBytes : String -> Array Int
-hexBytes value =
-  toArray (resultOrPanic "jwt_test: malformed hex" (decode value))
+hexBytes : String -> Bytes
+hexBytes value = resultOrPanic "jwt_test: malformed hex" (decode value)
 
-serviceScalar : Array Int
+serviceScalar : Bytes
 serviceScalar =
   hexBytes "0000000000000000000000000000000000000000000000000000000000000001"
 
@@ -415,7 +414,9 @@ test "a #serviceId fragment is stripped before aud is signed" =
 test "the emitted signature is canonical nonzero low-S P1363 r||s" =
   let (_, _, sigSeg) = segmentsOf withLxmToken
   let raw = segmentBytes sigSeg
-  let canonical = match signatureFromCompact raw
+  let compact =
+    optionOrPanic "jwt_test: signature segment is not bytes" (fromArray raw)
+  let canonical = match signatureFromCompact compact
     Ok _ => True
     Err _ => False
   expectEach [

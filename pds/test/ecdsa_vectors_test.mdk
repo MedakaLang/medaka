@@ -50,7 +50,7 @@ row = Row {
         "signing: 80/80 exact rows ok",
         "public signing: 80/80 exact rows; self-verify=80/80",
         "PUBLIC compact-boundary: PASS len63=reject len65=reject zero=reject range=reject high-S=reject",
-        "PUBLIC malformed-digest: PASS sign=4/4 reject verify=4/4 false",
+        "PUBLIC malformed-digest: PASS sign=2/2 reject verify=2/2 false",
         "Wycheproof: 94 accepts / 148 rejects; 242 unique tcIds",
         "public verification: 242/242 Wycheproof rows",
         "Wycheproof Bitcoin: 68 accepts / 6 rejects; 74 unique tcIds; public verification: 74/74",

@@ -66,7 +66,8 @@ mustSecret : String -> SecretKey
 mustSecret text =
   resultOrPanic
     "repo_vectors: malformed secret"
-    (secretKeyFromBytes (mustHex text))
+    (secretKeyFromBytes
+      (resultOrPanic "repo_vectors: malformed hex" (decode text)))
 
 mustRecord : String -> DagCbor
 mustRecord text =
@@ -124,7 +125,8 @@ gradeCommit _ line _ commit = match split "\t" line
         && cidEqual commitCid (repoCommitCid commit)
         && repoCommitUnsignedBytes commit == mustHex unsignedHex
         && repoCommitSignedBytes commit == mustHex signedHex
-        && signatureCompact (repoCommitSignature commit) == mustHex signatureHex
+        && toArray (signatureCompact (repoCommitSignature commit))
+          == mustHex signatureHex
     if ok then
       let () =
         println

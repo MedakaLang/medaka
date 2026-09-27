@@ -55,6 +55,7 @@ import string.{fromUtf8, split, stripSuffix, toUtf8}
 import lib.atsyntax.{stripDidFragment}
 import lib.hmac_sha256.{hmacSha256FixedKey}
 import lib.sign.{SecretKey, signDigest, signatureCompact}
+import bytes.{fromArrayAssumeByteDomain}
 
 {- | The claim set this server mints and accepts. `iat`, `nbf`, and `exp` are
      seconds since the Unix epoch (RFC 7519 §2 "NumericDate").
@@ -135,7 +136,11 @@ hs256Signature secret signingInput =
   if arrayLength secret /= serverSecretBytes then
     panic "jwt: expected a 32-byte server secret"
   else
-    b64uEncode (hmacSha256FixedKey secret (toUtf8 signingInput))
+    b64uEncode
+      (toArray
+        (hmacSha256FixedKey
+          (fromArrayAssumeByteDomain secret)
+          (encodeUtf8 signingInput)))
 
 headerJson : Json
 headerJson = jObject [("alg", JString "HS256"), ("typ", JString "JWT")]
@@ -356,8 +361,8 @@ export
 es256kSignature : SecretKey -> String -> Result String String
 es256kSignature key signingInput =
   map
-    (signature => b64uEncode (signatureCompact signature))
-    (signDigest key (toArray (sha256 (encodeUtf8 signingInput))))
+    (signature => b64uEncode (toArray (signatureCompact signature)))
+    (signDigest key (sha256 (encodeUtf8 signingInput)))
 
 {- | A service-auth token for `request`, signed with the issuing account's own
      repo key.

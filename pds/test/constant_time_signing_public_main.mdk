@@ -5,6 +5,7 @@
    carrier fixes the public values at compressed G and the RFC 6979 signature
    for secret key 1 and the all-zero SHA-256 digest. -}
 
+import bytes.{Bytes, fromU8Array}
 import lib.sign.{
   publicKeyCompressed,
   publicKeyForSecret,
@@ -16,28 +17,28 @@ import lib.sign.{
   verifyDigest,
 }
 
-secretBytes : Array Int
-secretBytes = arrayFromList [
+secretBytes : Bytes
+secretBytes = fromU8Array [|
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 1
-]
+|]
 
-digestBytes : Array Int
-digestBytes = arrayMake 32 0
+digestBytes : Bytes
+digestBytes = fromU8Array (arrayMake 32 0)
 
-generatorCompressed : Array Int
-generatorCompressed = arrayFromList [
+generatorCompressed : Bytes
+generatorCompressed = fromU8Array [|
   2, 121, 190, 102, 126, 249, 220, 187, 172, 85, 160, 98, 149, 206, 135, 11, 7,
   2, 155, 252, 219, 45, 206, 40, 217, 89, 242, 129, 91, 22, 248, 23, 152
-]
+|]
 
-expectedCompact : Array Int
-expectedCompact = arrayFromList [
+expectedCompact : Bytes
+expectedCompact = fromU8Array [|
   160, 179, 127, 143, 186, 104, 60, 198, 143, 101, 116, 205, 67, 179, 159, 3,
   67, 165, 0, 8, 191, 108, 206, 169, 209, 50, 49, 217, 231, 226, 225, 228, 17,
   237, 200, 211, 7, 37, 66, 150, 38, 74, 235, 252, 61, 199, 108, 216, 182, 104,
   55, 58, 7, 47, 214, 70, 101, 181, 0, 0, 233, 252, 206, 82
-]
+|]
 
 main =
   let secret = match secretKeyFromBytes secretBytes
