@@ -24981,23 +24981,21 @@ uniqueMethodTemplateGiven : MethodPredicateTemplate ->
   List GivenEntry ->
   Option GivenEntry
 uniqueMethodTemplateGiven template useScope givens =
-  match methodTemplateGivenScan template useScope givens MethodTemplateGivenNone
+  let chain = Scopes.visibleChain (currentScopeStore ()) useScope
+  match methodTemplateGivenScan template chain givens MethodTemplateGivenNone
     MethodTemplateGivenOne given => Some given
     _ => None
 
 methodTemplateGivenScan : MethodPredicateTemplate ->
-  ScopeId ->
+  List Int ->
   List GivenEntry ->
   MethodTemplateGivenResult ->
   MethodTemplateGivenResult
 methodTemplateGivenScan _ _ [] result = result
-methodTemplateGivenScan template useScope (given :: rest) result =
+methodTemplateGivenScan template chain (given :: rest) result =
   let result2 =
     if givenInScope GSPredicateOnly given
-      && Scopes.givenVisibleFrom
-        (currentScopeStore ())
-        useScope
-        (Scopes.binderScope given.geBinder)
+      && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
       && methodPredicateTemplateMatchesSlot
         template
         given.geSlot then match result
@@ -25007,7 +25005,7 @@ methodTemplateGivenScan template useScope (given :: rest) result =
       result
   match result2
     MethodTemplateGivenMany => MethodTemplateGivenMany
-    _ => methodTemplateGivenScan template useScope rest result2
+    _ => methodTemplateGivenScan template chain rest result2
 
 methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
   PredicateSlot ->
@@ -36790,16 +36788,23 @@ firstPredForEncl : PredicateRequest ->
   ScopeId ->
   List GivenEntry ->
   Option AssumAnswer
-firstPredForEncl _ _ [] = None
-firstPredForEncl request useScope (g :: rest)
+firstPredForEncl request useScope givens =
+  firstPredOnChain
+    request
+    (Scopes.visibleChain (currentScopeStore ()) useScope)
+    givens
+
+firstPredOnChain : PredicateRequest ->
+  List Int ->
+  List GivenEntry ->
+  Option AssumAnswer
+firstPredOnChain _ _ [] = None
+firstPredOnChain request chain (g :: rest)
   | givenInScope GSPredicateOnly g
-    && Scopes.givenVisibleFrom
-      (currentScopeStore ())
-      useScope
-      (Scopes.binderScope g.geBinder)
+    && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
     && predicateRequestMatchesSlot request g.geSlot =
     Some (givenAnswerForRequest request g)
-  | otherwise = firstPredForEncl request useScope rest
+  | otherwise = firstPredOnChain request chain rest
 
 -- Semantic given evidence requires predicate-only eligibility, complete matched
 -- vectors, and resolved declaration identities.  Id-witnessed, unknown-vector,
@@ -36838,17 +36843,28 @@ firstPredForEnclAt : GivenScope ->
   ScopeId ->
   List GivenEntry ->
   Option AssumAnswer
-firstPredForEnclAt _ _ _ _ [] = None
-firstPredForEnclAt scope target request useScope (g :: rest)
+firstPredForEnclAt scope target request useScope givens =
+  firstPredAtOnChain
+    scope
+    target
+    request
+    (Scopes.visibleChain (currentScopeStore ()) useScope)
+    givens
+
+firstPredAtOnChain : GivenScope ->
+  Int ->
+  PredicateRequest ->
+  List Int ->
+  List GivenEntry ->
+  Option AssumAnswer
+firstPredAtOnChain _ _ _ _ [] = None
+firstPredAtOnChain scope target request chain (g :: rest)
   | givenInScope scope g
     && containsI target g.geSlot.psBoundIds
-    && Scopes.givenVisibleFrom
-      (currentScopeStore ())
-      useScope
-      (Scopes.binderScope g.geBinder)
+    && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
     && predicateRequestMatchesSlot request g.geSlot =
     Some (givenAnswerForRequest request g)
-  | otherwise = firstPredForEnclAt scope target request useScope rest
+  | otherwise = firstPredAtOnChain scope target request chain rest
 
 -- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
 -- for a producer that can still supply OriginUnresolved.  Complete method requests do
@@ -40920,15 +40936,19 @@ goalMatchesGiven scope iface args =
     (givensForScope scope)
 
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
-anyGivenMatches _ _ [] = False
-anyGivenMatches request scope (g :: rest) =
+anyGivenMatches request scope givens =
+  anyGivenOnChain
+    request
+    (Scopes.visibleChain (currentScopeStore ()) scope)
+    givens
+
+anyGivenOnChain : PredicateRequest -> List Int -> List GivenEntry -> Bool
+anyGivenOnChain _ _ [] = False
+anyGivenOnChain request chain (g :: rest) =
   givenInScope GSPredicateOnly g
-      && Scopes.givenVisibleFrom
-        (currentScopeStore ())
-        scope
-        (Scopes.binderScope g.geBinder)
+      && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
       && predicateRequestMatchesSlot request g.geSlot
-    || anyGivenMatches request scope rest
+    || anyGivenOnChain request chain rest
 
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
