@@ -11,7 +11,7 @@
    two public values derived from it, and no other output; the failure paths
    name the file and the rule and never the value. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain}
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
@@ -30,11 +30,27 @@ keygenAttempts = 8
 
 {- | Door, checked: `lib.sign` admits `Bytes` and this module's candidates
    are `Array Int`. An element outside 0..255 gets `secretKeyFromBytes`'s own
-   refusal, which is what the `Array Int` ingress this replaces answered. -}
+   refusal, which is what the `Array Int` ingress this replaces answered.
+
+   The candidate is a secret scalar, so the range check reads every element
+   and branches once on the aggregate: an early-exit scan would let the
+   position of the first bad element decide how many elements are read. -}
 secretKeyDoor : Array Int -> Result String SecretKey
-secretKeyDoor raw = match fromArray raw
-  None => Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
-  Some bytes => secretKeyFromBytes bytes
+secretKeyDoor raw =
+  if outOfByteRange raw 0 0 == 0 then
+    secretKeyFromBytes (fromArrayAssumeByteDomain raw)
+  else
+    Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+-- Zero exactly when every element of `raw` from `i` on is a byte: shifted
+-- right by 8, a byte is 0, a larger value is positive, and a negative value
+-- stays negative.
+outOfByteRange : Array Int -> Int -> Int -> Int
+outOfByteRange raw i acc =
+  if i >= arrayLength raw then
+    acc
+  else
+    outOfByteRange raw (i + 1) (bitOr acc (shiftRight raw[i] 8))
 
 {- | A fresh secp256k1 secret scalar, admitted by the same
    `lib.sign.secretKeyFromBytes` the server admits `--key` with — so
