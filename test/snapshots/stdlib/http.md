@@ -1,5 +1,5 @@
 # META
-source_lines=2463
+source_lines=2474
 stages=DESUGAR,MARK
 # SOURCE
 {- | HTTP/1.1 message framing: request parsing, response building, and
@@ -1975,10 +1975,21 @@ responseScanEnd input avail = do
    ends only when the connection closes.
 
    Bytes at or past `avail` are never read. The offset is less than `avail`
-   when another message follows the response. -}
+   when another message follows the response. An `avail` outside the buffer
+   answers `None`.
+
+   `input` is a buffer still being written, such as the block
+   `bytebuilder.builderParts` hands out, and it is read in place, so a
+   response whose header declares its length costs the header, not the body.
+
+   > responseBoundaryWithin (MB.thaw (encodeUtf8 "HTTP/1.1 204 No Content\r\n\r\nX")) 27
+   Some 27 -}
 export
-responseBoundaryWithin : Bytes -> Int -> Option Int
-responseBoundaryWithin input avail =
+responseBoundaryWithin : MutBytes -> Int -> Option Int
+responseBoundaryWithin input avail = responseBoundaryIn (liveView input) avail
+
+responseBoundaryIn : Bytes -> Int -> Option Int
+responseBoundaryIn input avail =
   if avail < 0 || avail > B.length input then
     None
   else match responseScanEnd input avail
@@ -1988,7 +1999,7 @@ responseBoundaryWithin input avail =
 -- | `responseBoundaryWithin` over all bytes in `input`.
 export
 responseBoundary : Bytes -> Option Int
-responseBoundary input = responseBoundaryWithin input (B.length input)
+responseBoundary input = responseBoundaryIn input (B.length input)
 
 -- # Response building
 
@@ -2834,10 +2845,12 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "responseScanBodyEnd" ((PCon "UntilCloseBody") PWild PWild PWild) (EApp (EVar "responseMalformed") (ELit (LString "http: close-delimited response ends only at the close"))))
 (DTypeSig false "responseScanEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))
 (DFunDef false "responseScanEnd" ((PVar "input") (PVar "avail")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "responseParseStatusLine") (EVar "input")) (EVar "avail"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "ResponseStatusLine" (PVar "status") PWild (PVar "lineEnd")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "lineEnd")) (EVar "lineEnd")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PTuple (PVar "headers") (PVar "headerEnd") PWild)) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "responseSelectBodyMode") (EVar "status")) (EVar "headers"))) (ELam ((PVar "mode")) (EApp (EApp (EApp (EApp (EVar "responseScanBodyEnd") (EVar "mode")) (EVar "input")) (EVar "avail")) (EVar "headerEnd"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig true "responseBoundaryWithin" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "responseBoundaryWithin" ((PVar "input") (PVar "avail")) (EIf (EBinOp "||" (EBinOp "<" (EVar "avail") (ELit (LInt 0))) (EBinOp ">" (EVar "avail") (EApp (EVar "B.length") (EVar "input")))) (EVar "None") (EMatch (EApp (EApp (EVar "responseScanEnd") (EVar "input")) (EVar "avail")) (arm (PCon "Ok" (PVar "end")) () (EApp (EVar "Some") (EVar "end"))) (arm (PCon "Err" PWild) () (EVar "None")))))
+(DTypeSig true "responseBoundaryWithin" (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "responseBoundaryWithin" ((PVar "input") (PVar "avail")) (EApp (EApp (EVar "responseBoundaryIn") (EApp (EVar "liveView") (EVar "input"))) (EVar "avail")))
+(DTypeSig false "responseBoundaryIn" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "responseBoundaryIn" ((PVar "input") (PVar "avail")) (EIf (EBinOp "||" (EBinOp "<" (EVar "avail") (ELit (LInt 0))) (EBinOp ">" (EVar "avail") (EApp (EVar "B.length") (EVar "input")))) (EVar "None") (EMatch (EApp (EApp (EVar "responseScanEnd") (EVar "input")) (EVar "avail")) (arm (PCon "Ok" (PVar "end")) () (EApp (EVar "Some") (EVar "end"))) (arm (PCon "Err" PWild) () (EVar "None")))))
 (DTypeSig true "responseBoundary" (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "responseBoundary" ((PVar "input")) (EApp (EApp (EVar "responseBoundaryWithin") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))))
+(DFunDef false "responseBoundary" ((PVar "input")) (EApp (EApp (EVar "responseBoundaryIn") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))))
 (DData Abstract "Response" () ((variant "Response" (ConPos (TyCon "Int") (TyCon "String") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Bytes")))) ())
 (DTypeSig false "validResponseValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "validResponseValue" ((PVar "value") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "<=" (EVar "byte") (ELit (LInt 126)))) (EApp (EApp (EVar "validResponseValue") (EVar "value")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
@@ -3271,10 +3284,12 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "responseScanBodyEnd" ((PCon "UntilCloseBody") PWild PWild PWild) (EApp (EVar "responseMalformed") (ELit (LString "http: close-delimited response ends only at the close"))))
 (DTypeSig false "responseScanEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))
 (DFunDef false "responseScanEnd" ((PVar "input") (PVar "avail")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "responseParseStatusLine") (EVar "input")) (EVar "avail"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "ResponseStatusLine" (PVar "status") PWild (PVar "lineEnd")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "responseParseFields") (EVar "input")) (EVar "avail")) (EVar "lineEnd")) (EVar "lineEnd")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))) (ELam ((PTuple (PVar "headers") (PVar "headerEnd") PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "responseSelectBodyMode") (EVar "status")) (EVar "headers"))) (ELam ((PVar "mode")) (EApp (EApp (EApp (EApp (EVar "responseScanBodyEnd") (EVar "mode")) (EVar "input")) (EVar "avail")) (EVar "headerEnd"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig true "responseBoundaryWithin" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "responseBoundaryWithin" ((PVar "input") (PVar "avail")) (EIf (EBinOp "||" (EBinOp "<" (EVar "avail") (ELit (LInt 0))) (EBinOp ">" (EVar "avail") (EApp (EVar "B.length") (EVar "input")))) (EVar "None") (EMatch (EApp (EApp (EVar "responseScanEnd") (EVar "input")) (EVar "avail")) (arm (PCon "Ok" (PVar "end")) () (EApp (EVar "Some") (EVar "end"))) (arm (PCon "Err" PWild) () (EVar "None")))))
+(DTypeSig true "responseBoundaryWithin" (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "responseBoundaryWithin" ((PVar "input") (PVar "avail")) (EApp (EApp (EVar "responseBoundaryIn") (EApp (EVar "liveView") (EVar "input"))) (EVar "avail")))
+(DTypeSig false "responseBoundaryIn" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "responseBoundaryIn" ((PVar "input") (PVar "avail")) (EIf (EBinOp "||" (EBinOp "<" (EVar "avail") (ELit (LInt 0))) (EBinOp ">" (EVar "avail") (EApp (EVar "B.length") (EVar "input")))) (EVar "None") (EMatch (EApp (EApp (EVar "responseScanEnd") (EVar "input")) (EVar "avail")) (arm (PCon "Ok" (PVar "end")) () (EApp (EVar "Some") (EVar "end"))) (arm (PCon "Err" PWild) () (EVar "None")))))
 (DTypeSig true "responseBoundary" (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "responseBoundary" ((PVar "input")) (EApp (EApp (EVar "responseBoundaryWithin") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))))
+(DFunDef false "responseBoundary" ((PVar "input")) (EApp (EApp (EVar "responseBoundaryIn") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))))
 (DData Abstract "Response" () ((variant "Response" (ConPos (TyCon "Int") (TyCon "String") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Bytes")))) ())
 (DTypeSig false "validResponseValue" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "validResponseValue" ((PVar "value") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "value"))) (EVar "True") (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "byteAt") (EVar "value")) (EVar "i"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "byte") (ELit (LInt 32))) (EBinOp "<=" (EVar "byte") (ELit (LInt 126)))) (EApp (EApp (EVar "validResponseValue") (EVar "value")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))

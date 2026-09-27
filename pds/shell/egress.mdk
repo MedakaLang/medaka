@@ -47,7 +47,9 @@
    closed only by the second. -}
 
 import async.{Async, Wait, deadlineAfter, expired}
+import bytebuilder.{Builder, buildBytes, builderParts, emitBytes, newBuilder}
 import bytes as B
+import bytes.{Bytes}
 import http.{Header}
 import lib.httpclient.{
   findHeader,
@@ -74,8 +76,6 @@ import lib.sign.{SecretKey}
 import net.{Connection}
 import net_async as A
 import time.{Duration, seconds}
-import vector.{Vector}
-import vector as V
 
 {- | The loopback address every outbound call this shell makes is reached at.
    See the module header for why this is a constant and not a flag — it holds
@@ -240,14 +240,10 @@ relayedAnswerFields headers (name :: rest) = match findHeader name headers
    bound it adds is on the buffer it accumulates BEFORE the parser can see it
    (`maxHttpClientWireBytes`), which is a quantity no decoded ceiling can
    express. -}
-decodeUpstream : Array Int -> Result String UpstreamAnswer
-decodeUpstream buffer = match map parseResponse (B.fromArray buffer)
-  None =>
-    Err
-      "egress: upstream response was not decodable: an element is outside 0..255"
-  Some (Err message) =>
-    Err "egress: upstream response was not decodable: \{message}"
-  Some (Ok response) =>
+decodeUpstream : Bytes -> Result String UpstreamAnswer
+decodeUpstream buffer = match parseResponse buffer
+  Err message => Err "egress: upstream response was not decodable: \{message}"
+  Ok response =>
     Ok
       (UpstreamAnswer
         (responseStatus response)
@@ -269,6 +265,9 @@ decodeUpstream buffer = match map parseResponse (B.fromArray buffer)
    in hand (#3097). The boundary is what ends such an exchange, and the
    silence budget is left to the peer that really has stopped.
 
+   The boundary is read from the accumulating buffer in place, so each chunk
+   costs the response's header section, not everything received so far.
+
    `mayHold` is asked, before each chunk is kept, whether the call may hold
    the total that chunk would bring its buffer to, and `False` abandons the
    call with nothing more read. Whether a total is affordable is not this
@@ -277,7 +276,7 @@ decodeUpstream buffer = match map parseResponse (B.fromArray buffer)
 collectUpstream : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
-  Vector Int ->
+  Builder ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 collectUpstream deadline mayHold conn acc = defer
   late <- expired deadline
@@ -285,22 +284,22 @@ collectUpstream deadline mayHold conn acc = defer
     deferPure (Err "egress: the upstream call exceeded its budget")
   else defer
     received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
-    collectStep deadline mayHold conn acc (map B.toArray received)
+    collectStep deadline mayHold conn acc received
 
 collectStep : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
-  Vector Int ->
-  Result String (Array Int) ->
+  Builder ->
+  Result String Bytes ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 collectStep _ _ _ _ (Err message) =
   deferPure (Err "egress: upstream read failed: \{message}")
 collectStep deadline mayHold conn acc (Ok bytes) =
-  if arrayLength bytes == 0 then
-    deferPure (decodeUpstream (V.toArray acc))
+  if B.length bytes == 0 then
+    deferPure (decodeUpstream (buildBytes acc))
   else defer
-    let (_, collected) = V.rawParts acc
-    held <- mayHold (collected + arrayLength bytes)
+    let (_, collected) = builderParts acc
+    held <- mayHold (collected + B.length bytes)
     if not held then
       deferPure (Err "egress: no headroom to hold a larger upstream answer")
     else
@@ -309,26 +308,19 @@ collectStep deadline mayHold conn acc (Ok bytes) =
 keepChunk : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
-  Vector Int ->
-  Array Int ->
+  Builder ->
+  Bytes ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 keepChunk deadline mayHold conn acc bytes =
-  let () = V.pushArray bytes acc
-  let (backing, collected) = V.rawParts acc
+  let () = emitBytes bytes acc
+  let (wire, collected) = builderParts acc
   if collected > maxHttpClientWireBytes then
     deferPure
       (Err
         "egress: upstream response exceeds the \{intToString maxHttpClientWireBytes}-byte wire ceiling")
-  else match wireBoundary backing collected
-    Some _ => deferPure (decodeUpstream (V.toArray acc))
+  else match responseBoundaryWithin wire collected
+    Some _ => deferPure (decodeUpstream (buildBytes acc))
     None => collectUpstream deadline mayHold conn acc
-
--- `responseBoundaryWithin` over the first `collected` accumulated bytes,
--- which `lib.httpclient` reads as `Bytes`.
-wireBoundary : Array Int -> Int -> Option Int
-wireBoundary backing collected = match B.fromArray (slice backing 0 collected)
-  Some wire => responseBoundaryWithin wire collected
-  None => None
 
 exchange : (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
@@ -343,7 +335,7 @@ exchange mayHold conn bytes = defer
   match sent
     Err message =>
       deferPure (Err "egress: upstream request could not be sent: \{message}")
-    Ok () => collectUpstream deadline mayHold conn (V.new ())
+    Ok () => collectUpstream deadline mayHold conn (newBuilder ())
 
 -- The connection is closed on every path out, success and failure alike, which
 -- is why the exchange's outcome is held and returned after the close rather

@@ -14,7 +14,7 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import http.{parseRequestClassified}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, fromUtf8, toUtf8}
@@ -208,11 +208,13 @@ fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
   Some packed =>
-    handleBytes
-      server
-      { context | login = verdictAgainst noUpgradeSalt store packed }
-      store
-      packed
+    let (next, response) =
+      handleBytes
+        server
+        { context | login = verdictAgainst noUpgradeSalt store packed }
+        store
+        packed
+    (next, toArray response)
   None => panic "session_routes: request fixture holds a non-byte element"
 
 -- The salt a login that earns an upgrade re-derives the credential under.
@@ -243,11 +245,13 @@ sendWithVerdict : Option LoginVerdict ->
   (Store, Array Int)
 sendWithVerdict verdict store bytes = match fromArray bytes
   Some packed =>
-    handleBytes
-      server
-      { contextAt testInstant 40 | login = verdict }
-      store
-      packed
+    let (next, response) =
+      handleBytes
+        server
+        { contextAt testInstant 40 | login = verdict }
+        store
+        packed
+    (next, toArray response)
   None => panic "session_routes: request fixture holds a non-byte element"
 
 createSessionNsid : String

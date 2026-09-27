@@ -688,7 +688,7 @@ True
 ### `responseBoundaryWithin`
 
 ```
-responseBoundaryWithin : Bytes -> Int -> Option Int
+responseBoundaryWithin : MutBytes -> Int -> Option Int
 responseBoundaryWithin input avail
 ```
 
@@ -697,7 +697,17 @@ or `None` when that prefix is incomplete, malformed, or a response that
 ends only when the connection closes.
 
 Bytes at or past `avail` are never read. The offset is less than `avail`
-when another message follows the response.
+when another message follows the response. An `avail` outside the buffer
+answers `None`.
+
+`input` is a buffer still being written, such as the block
+`bytebuilder.builderParts` hands out, and it is read in place, so a
+response whose header declares its length costs the header, not the body.
+
+```medaka
+> responseBoundaryWithin (MB.thaw (encodeUtf8 "HTTP/1.1 204 No Content\r\n\r\nX")) 27
+Some 27
+```
 
 ### `responseBoundary`
 

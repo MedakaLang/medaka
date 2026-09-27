@@ -397,7 +397,7 @@ handleRouted (Server account registry handler) context store request =
 
    It exists because a subscription leaves the request/response lifecycle
    permanently and nothing downstream of `handle` can express that — `handle`
-   returns a complete `Response` and `handleBytes` a complete `Array Int`. So
+   returns a complete `Response` and `handleBytes` its complete `Bytes`. So
    the shell asks this question first, and only a `NotAnUpgrade` answer
    reaches the ordinary path. Every DECISION in it is taken here rather than
    in the shell: routing, NSID admission, the handshake's own well-formedness,
@@ -1184,16 +1184,12 @@ resourceExcessResponse =
 -- | Handle one complete buffered request. Both HTTP failure classes preserve
 -- the exact input Store; successful calls expose the handler's successor.
 export
-handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Array Int)
+handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Bytes)
 handleBytes server context store bytes = match parseRequestClassified bytes
   Err (HttpMalformed _) =>
-    (store, serializedArray (withAllowOrigin malformedHttpResponse))
+    (store, serializeResponse (withAllowOrigin malformedHttpResponse))
   Err (HttpResourceExcess _) =>
-    (store, serializedArray (withAllowOrigin resourceExcessResponse))
+    (store, serializeResponse (withAllowOrigin resourceExcessResponse))
   Ok request =>
     let (next, response) = handle server context store request
-    (next, serializedArray response)
-
--- `handleBytes` still answers an `Array Int`; the serializer writes `Bytes`.
-serializedArray : Response -> Array Int
-serializedArray response = toArray (serializeResponse response)
+    (next, serializeResponse response)

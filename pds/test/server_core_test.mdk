@@ -252,7 +252,10 @@ test "fixed raw request returns successor Store and exact response bytes" =
     ),
     (
       "the response is the exact 201 Created wire form",
-      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
+      expectEqual
+        (fromArrayAssumeByteDomain
+          (expectedTextResponse 201 "Created" "stored"))
+        bytes,
     ),
   ]
 
@@ -271,7 +274,10 @@ test "chunked raw request returns successor Store and exact response bytes" =
     ),
     (
       "the response is the exact 201 Created wire form",
-      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
+      expectEqual
+        (fromArrayAssumeByteDomain
+          (expectedTextResponse 201 "Created" "stored"))
+        bytes,
     ),
   ]
 
@@ -283,11 +289,12 @@ test "malformed framing returns exact 400 and preserves Store" =
     (
       "the response is the exact 400 Bad Request wire form",
       expectEqual
-        (expectedError
-          400
-          "Bad Request"
-          "InvalidRequest"
-          "Malformed HTTP request")
+        (fromArrayAssumeByteDomain
+          (expectedError
+            400
+            "Bad Request"
+            "InvalidRequest"
+            "Malformed HTTP request"))
         bytes,
     ),
   ]
@@ -299,11 +306,12 @@ test "unknown route returns exact 404 and preserves Store" =
     (
       "the response is the exact 404 Not Found wire form",
       expectEqual
-        (expectedError
-          404
-          "Not Found"
-          "NotFound"
-          "Unknown XRPC method: com.example.query.unknown")
+        (fromArrayAssumeByteDomain
+          (expectedError
+            404
+            "Not Found"
+            "NotFound"
+            "Unknown XRPC method: com.example.query.unknown"))
         bytes,
     ),
   ]
@@ -315,11 +323,12 @@ test "resource excess returns exact 413 and preserves Store" =
     (
       "the response is the exact 413 Payload Too Large wire form",
       expectEqual
-        (expectedError
-          413
-          "Payload Too Large"
-          "PayloadTooLarge"
-          "HTTP request exceeds resource limits")
+        (fromArrayAssumeByteDomain
+          (expectedError
+            413
+            "Payload Too Large"
+            "PayloadTooLarge"
+            "HTTP request exceeds resource limits"))
         bytes,
     ),
   ]

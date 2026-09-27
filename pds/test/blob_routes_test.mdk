@@ -8,7 +8,7 @@
    session secret and credential but no repository, the same shape
    `pds/test/session_routes_test.mdk` already uses. -}
 
-import bytes.{Bytes, fromArray}
+import bytes.{Bytes, fromArray, toArray}
 import http.{parseRequestClassified}
 import json.{Json(..), get, parse}
 import list.{sort}
@@ -151,11 +151,13 @@ stringEntries (_ :: rest) = stringEntries rest
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
   Some packed =>
-    handleBytes
-      server
-      { context | login = verdictAgainst store packed }
-      store
-      packed
+    let (next, response) =
+      handleBytes
+        server
+        { context | login = verdictAgainst store packed }
+        store
+        packed
+    (next, toArray response)
   None => panic "blob_routes: request fixture holds a non-byte element"
 
 verdictAgainst : Store -> Bytes -> Option LoginVerdict

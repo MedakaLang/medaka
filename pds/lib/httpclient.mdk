@@ -16,6 +16,7 @@ import http.{
   headerValue,
   isTokenByte,
 }
+import mut_bytes.{MutBytes}
 import string.{stripPrefix, toUtf8}
 
 -- # Request bytes
@@ -246,9 +247,9 @@ parseResponse input = match parseResponseClassified input
   Err failure => Err (httpClientParseFailureMessage failure)
 
 -- | The boundary of a complete declared-length or chunked response inside
--- `input[0, avail)`.
+-- the live buffer `input[0, avail)`, read in place.
 export
-responseBoundaryWithin : Bytes -> Int -> Option Int
+responseBoundaryWithin : MutBytes -> Int -> Option Int
 responseBoundaryWithin = H.responseBoundaryWithin
 
 -- | `responseBoundaryWithin` over all bytes of `input`.

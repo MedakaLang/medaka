@@ -180,7 +180,7 @@ repeatRequest server store request n acc =
     acc
   else
     let (_, responseBytes) = handleBytes server benchContext store request
-    repeatRequest server store request (n - 1) (acc + arrayLength responseBytes)
+    repeatRequest server store request (n - 1) (acc + B.length responseBytes)
 
 micros : Float -> Int -> Int
 micros elapsed reps = floatToInt (elapsed * 1000000.0 / intToFloat reps)
@@ -192,7 +192,7 @@ measure label server store request reps =
   let checksum = repeatRequest server store request reps 0
   let elapsed = monotonicSec () - start
   println
-    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{statusLine first}"
+    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{statusLine (toArray first)}"
 
 run : String -> String -> Int -> <IO, Clock, FileRead> Unit
 run dir collection reps =

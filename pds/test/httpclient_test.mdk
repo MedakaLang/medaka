@@ -19,6 +19,7 @@
 
 import bytes as B
 import bytes.{Bytes, encodeUtf8, sliceClamped, toArray}
+import mut_bytes.{thaw}
 import string.{fromUtf8, repeat}
 import test.{
   expectAtMost,
@@ -126,11 +127,11 @@ test "a response that declares its length ends where it said it would" =
   expectEqual (Some (B.length bytes)) (responseBoundary bytes)
 
 test "a declared body one byte short of its length has not ended" =
-  -- The missing byte is PRESENT in the array and outside `avail`, which is
-  -- what a still-filling backing array looks like: a scan that read it would
+  -- The missing byte is PRESENT in the buffer and outside `avail`, which is
+  -- what a still-filling buffer looks like: a scan that read it would
   -- report a response its caller has not received.
   let bytes = encodeUtf8 (declaredResponse "hello")
-  expectEqual None (responseBoundaryWithin bytes (B.length bytes - 1))
+  expectEqual None (responseBoundaryWithin (thaw bytes) (B.length bytes - 1))
 
 test "a header section that has not arrived has not ended" =
   expectEqual
@@ -158,7 +159,7 @@ test "a chunked response still short of its terminator has not ended" =
   let bytes = encodeUtf8 chunkedBody
   -- Everything but the trailer section's final CRLF: the terminating chunk
   -- has arrived and the message has not.
-  expectEqual None (responseBoundaryWithin bytes (B.length bytes - 2))
+  expectEqual None (responseBoundaryWithin (thaw bytes) (B.length bytes - 2))
 
 test "a chunked response missing its terminating chunk has not ended" =
   let bytes =
