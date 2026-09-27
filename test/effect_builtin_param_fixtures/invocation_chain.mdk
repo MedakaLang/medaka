@@ -1,0 +1,15 @@
+-- #3463 review: check-policy's chain follows what calling a callee performs.
+-- `aHelper` takes callbacks and performs nothing; `reader` reads.
+aHelper : Array (Unit -> <FileRead "q/*"> Result String String) -> Int
+aHelper _ = 0
+
+reader : String -> <FileRead "q/*"> Result String String
+reader _ = readFile "q/x"
+
+transform : String -> <FileRead "q/*"> Result String String
+transform req =
+  let _ = aHelper [||]
+  reader req
+
+main : <IO> Unit
+main = println "invocation chain"

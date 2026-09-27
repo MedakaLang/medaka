@@ -1,0 +1,10 @@
+-- #3463 review round 4: a flip cycle through four types.  Every slot in the
+-- cycle is invariant; the summary relies on the checker's variance table
+-- reaching that, which needs a converged fixpoint (#3512).
+public export data T1 x = T1 (T2 x)
+
+public export data T2 x = T2 (T3 x)
+
+public export data T3 x = T3 (T4 x)
+
+public export data T4 y = TA (y -> Unit) | TB (T1 (y -> Unit))

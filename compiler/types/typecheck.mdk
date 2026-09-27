@@ -289,6 +289,7 @@ import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes,
   resolveDeferredJoin
 }
+import types.effect_invocation.{InvocationOps(..), Variance(..)}
 import map as IdMap
 import map.{Map(..)}
 
@@ -7895,6 +7896,9 @@ data DriverState = DriverState {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
+  -- The last checked module's constructors and variance table, read by
+  -- `lastInvocationOps` — see `InvocationView`.
+  invocationViewRef : Ref InvocationView,
 }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -7930,6 +7934,7 @@ freshDriverState _ = DriverState {
   sigTyMapRef = Ref omEmpty,
   currentModuleRef = Ref "",
   markSetsRef = Ref None,
+  invocationViewRef = Ref (InvocationView [] [] []),
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -11645,6 +11650,125 @@ paramPolaritiesIn tab key
   | tabKeyEq key (tyTabKey OriginBuiltin "Ref") = Some [PInv]
   | tabKeyEq key (tyTabKey OriginBuiltin "Array") = Some [PInv]
   | otherwise = lookupTab key tab
+
+-- ── the invocation summary's view (#3463) ─────────────────────────────────
+-- What `types/effect_invocation.mdk` reads of a checked program, as the last
+-- module `checkBodyImpl` checked saw it (the entry of a single drive):
+-- every constructor it can name, from its own environment and from the
+-- identity-keyed universe (so two same-spelled constructors both count), and
+-- its variance and kind tables, its own declarations over everything it
+-- imports.  Written once per module, right after its data environment is
+-- built; a drive's caller reads it through `lastInvocationOps`.
+data InvocationView =
+  | InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
+
+recordInvocationView : TcEnv -> Unit
+recordInvocationView (TcEnv _ ctors _ _) =
+  let universe =
+    flatMap
+      (cands =>
+        map
+          (c => match c
+            (_, _, sch) => sch)
+          cands)
+      (IdMap.values crossRun.value.universeCtorIdentsRef.value)
+  driverState.value.invocationViewRef :=
+    InvocationView
+      (IdMap.values ctors ++ universe)
+      perRun.value.dataParamPolarityRef.value
+      perRun.value.dataParamKindsRef.value
+
+-- The summary's operations over the view of the entry the last drive checked.
+export
+lastInvocationOps : Unit -> InvocationOps
+lastInvocationOps _ = match driverState.value.invocationViewRef.value
+  InvocationView ctors pols kinds =>
+    let byHead = ctorsByHead ctors
+    InvocationOps {
+      headVariances =
+        h => match headTyconMono h
+          Some (HkDecl key) =>
+            slotVariances (paramPolaritiesIn pols key) (lookupTab key kinds)
+          _ => None,
+      appliedFields =
+        applied =>
+          let (h, args) = spineParts applied
+          flatMap
+            (c => instantiateFields args c)
+            (optionOr [] (omLookup (invocationHeadKey h) byHead)),
+      headKey = invocationHeadKey,
+    }
+
+invocationHeadKey : Mono -> String
+invocationHeadKey h = match headTyconMono h
+  Some hk => headKeyTag hk
+  None => "?"
+
+-- A slot's variance, read as invariant where its parameter is an effect row
+-- or an authority: an index is invariant (EFFECTS-SEMANTICS §6.4), whatever
+-- the variance table computed for it.
+slotVariances : Option (List Polarity) ->
+  Option (List Kind) ->
+  Option (List Variance)
+slotVariances None None = None
+slotVariances pols kinds =
+  let ps = optionOr [] pols
+  let ks = optionOr [] kinds
+  Some
+    (map
+      (i => slotVariance (nthOpt i ps) (nthOpt i ks))
+      (rangeFromCount 0 (maxI (listLen ps) (listLen ks))))
+
+slotVariance : Option Polarity -> Option Kind -> Variance
+slotVariance _ (Some KRow) = VInv
+slotVariance _ (Some (KAuth _)) = VInv
+slotVariance (Some p) _ = varianceOf p
+slotVariance None _ = VInv
+
+varianceOf : Polarity -> Variance
+varianceOf PCo = VCo
+varianceOf PContra = VContra
+varianceOf PInv = VInv
+-- never published (`publishedPolarity`); read as the phantom it means
+varianceOf PPhantom = VCo
+
+-- Every constructor under its result head: the head's arguments as the
+-- constructor declares them, and its field types.
+ctorsByHead : List Scheme -> OrdMap (List (List Mono, List Mono))
+ctorsByHead schemes =
+  fold
+    (acc sch => match sch
+      Forall _ _ _ _ _ mono =>
+        let (fieldTys, result) = arrowParts mono
+        let (h, params) = spineParts result
+        let key = invocationHeadKey h
+        omInsert key ((params, fieldTys) :: optionOr [] (omLookup key acc)) acc)
+    omEmpty
+    schemes
+
+-- A constructor's fields at an application's authority arguments: each
+-- declared authority parameter is replaced by the argument in its slot.  A
+-- type or row argument is left as the declaration's variable; the summary
+-- charges it where it lands, by the slot's variance.
+instantiateFields : List Mono -> (List Mono, List Mono) -> List Mono
+instantiateFields args (params, fieldTys) =
+  let asub = authorityParamSubst params args
+  map (substMono [] [] asub) fieldTys
+
+authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
+authorityParamSubst (p :: ps) (a :: rest) = match (normalize p, normalize a)
+  (TAuth q, TAuth actual) => match authNorm q
+    AVar cell => (authvarId cell, actual) :: authorityParamSubst ps rest
+    _ => authorityParamSubst ps rest
+  _ => authorityParamSubst ps rest
+authorityParamSubst _ _ = []
+
+arrowParts : Mono -> (List Mono, Mono)
+arrowParts m = match normalize m
+  TFun dom _ res =>
+    let (rest, result) = arrowParts res
+    (dom :: rest, result)
+  other => ([], other)
 
 -- #2110: the ATOM-GUARANTEE read, sibling of `paramPolaritiesOf`.  No builtin
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
@@ -32835,6 +32959,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides prog0
     applyCtorScopeOverrides prog0 env0
+  let _ = recordInvocationView dataEnv
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -47218,6 +47343,7 @@ copyDriverState d = DriverState {
   sigTyMapRef = Ref d.sigTyMapRef.value,
   currentModuleRef = Ref d.currentModuleRef.value,
   markSetsRef = Ref d.markSetsRef.value,
+  invocationViewRef = Ref d.invocationViewRef.value,
 }
 
 -- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)

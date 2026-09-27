@@ -1,0 +1,9 @@
+-- #3468: an entry whose effects sit in an `Async` index, not on an arrow.
+-- The host runs the computation, so the index is charged.
+import async.{Async, liftIO}
+
+transform : String -> Async <FileRead "x/*"> (Result String String)
+transform _ = liftIO (_ => readFile "x/a")
+
+main : <IO> Unit
+main = println "invocation async index"

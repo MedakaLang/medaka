@@ -1,0 +1,37 @@
+-- #3463 review round 2: a nested data type instantiates its own head at
+-- ever-larger arguments; the summary opens it once generically and ends.
+-- A record of nine same-typed readers is nine siblings, each instantiated.
+data W a = WNil | W (W (a, a, a, a, a, a, a, a))
+
+useW : W Int -> Int
+useW _ = 0
+
+data Rd (p : Authority FileRead) = Rd (Unit -> <FileRead p> Result String String)
+
+data Caps = Caps {
+  aDir : Rd "srv/a/*",
+  bDir : Rd "srv/b/*",
+  cDir : Rd "srv/c/*",
+  dDir : Rd "srv/d/*",
+  eDir : Rd "srv/e/*",
+  fDir : Rd "srv/f/*",
+  gDir : Rd "srv/g/*",
+  hDir : Rd "srv/h/*",
+  iDir : Rd "srv/i/*",
+}
+
+caps : String -> Caps
+caps _ = Caps {
+  aDir = Rd (_ => readFile "srv/a/x"),
+  bDir = Rd (_ => readFile "srv/b/x"),
+  cDir = Rd (_ => readFile "srv/c/x"),
+  dDir = Rd (_ => readFile "srv/d/x"),
+  eDir = Rd (_ => readFile "srv/e/x"),
+  fDir = Rd (_ => readFile "srv/f/x"),
+  gDir = Rd (_ => readFile "srv/g/x"),
+  hDir = Rd (_ => readFile "srv/h/x"),
+  iDir = Rd (_ => readFile "srv/i/x"),
+}
+
+main : <IO> Unit
+main = println "invocation nested"
