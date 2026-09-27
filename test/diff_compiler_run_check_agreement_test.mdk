@@ -339,6 +339,10 @@ compileRefusals = [
     "pattern_u64_literal",
     ["pattern_u64_literal.mdk:", "a literal pattern cannot match a U64"],
   ),
+  (
+    "byteparser_non_byte_element",
+    literalRefused "byteparser_non_byte_element.mdk:8:" "300" "U8 (0..255)",
+  ),
 ]
 
 u64Range : String
@@ -358,10 +362,6 @@ runtimeRefusals = [
   ("generic_literal_u8_300", fromIntRefused "300" "U8 (0..255)"),
   ("emitu8_computed_300", fromIntRefused "300" "U8 (0..255)"),
   ("setinplace_computed_256", fromIntRefused "256" "U8 (0..255)"),
-  (
-    "byteparser_non_byte_element",
-    Aborts "E-PANIC" "byteparser: element 300 at 1 is not a byte in 0..255",
-  ),
   (
     "bytes_in_range_control",
     Prints "[|255, 200|]\n[|255, 7|]\nBytes \"1fff\"",

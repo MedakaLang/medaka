@@ -1,16 +1,16 @@
 # byteparser
 
-Parser combinators over byte arrays.
+Parser combinators over `Bytes`.
 
-A `ByteParser a` reads an `Array Int` of bytes, each `0` to `255`, from a
-position and produces a value or a positioned error. The single-byte
-primitives hand out a `U8`. An input element outside `0` to `255` is not a
-byte at all, so reading one panics, as `takeBytes` does, rather than
-failing the parse. Build a parser from the
+A `ByteParser a` reads a `Bytes` value from a position and produces a
+value or a positioned error. The single-byte primitives hand out a `U8`;
+every element of `Bytes` is a byte by construction, so there is nothing
+for a single-byte read to reject. Build a parser from the
 primitives (`byte`, `satisfy`, `takeBytes`, the integer and float
 readers) and the combinators (`many`, `orElse`, `choice`, `between`),
 sequence parsers with `defer` notation, and run the result with
-`runByteParser`.
+`runByteParser`, or `runByteParserWithin` to parse a sub-range
+`[start, end)` of a larger `Bytes` value without copying it.
 
 Parsers backtrack: a failed parser never advances the position, and
 `orElse p q` runs `q` from the position where `p` started. The integer
@@ -45,14 +45,14 @@ Instances: `Mappable`
 
 ```
 data ByteParserE (e : Effect) a
-  = ByteParserE (Array Int -> Int -> <e> BResult a)
+  = ByteParserE (Bytes -> Int -> Int -> <e> BResult a)
 ```
 
 A parser indexed by the effect row `e` its steps may perform.
 
-The wrapped function takes the input and a start position and returns a
-`BResult`. `ByteParser` fixes `e` to the empty row, and every parser in
-this module has that type.
+The wrapped function takes the input, a start position and an exclusive
+end position, and returns a `BResult`. `ByteParser` fixes `e` to the empty
+row, and every parser in this module has that type.
 
 Instances: `DeferredMappable`, `DeferredApplicative`, `DeferredThenable`
 
@@ -68,7 +68,7 @@ exports has this type.
 ### `runBP`
 
 ```
-runBP : ByteParserE e a -> Array Int -> Int -> <e> BResult a
+runBP : ByteParserE e a -> Bytes -> Int -> <e> BResult a
 runBP _ input pos
 ```
 
@@ -108,7 +108,7 @@ orElse p q
 Tries `p`, and when it fails, runs `q` from the same starting position.
 
 ```medaka
-> runByteParser (orElse (byte 1) (byte 2)) (arrayFromList [2])
+> runByteParser (orElse (byte 1) (byte 2)) (fromU8Array [|2|])
 Ok 2
 ```
 
@@ -132,12 +132,10 @@ satisfy pred
 
 One byte that satisfies `pred`.
 
-Panics when the element at the position is outside `0` to `255`.
-
 ```medaka
-> runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
+> runByteParser (satisfy (b => b == 65)) (fromU8Array [|65, 66, 67|])
 Ok 65
-> runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
+> runByteParser (satisfy (b => b == 65)) (fromU8Array [|99|])
 Err "unexpected byte at byte 0"
 ```
 
@@ -150,7 +148,7 @@ anyByte : ByteParser U8
 Any one byte.
 
 ```medaka
-> runByteParser anyByte (arrayFromList [42])
+> runByteParser anyByte (fromU8Array [|42|])
 Ok 42
 ```
 
@@ -164,9 +162,9 @@ byte b
 Exactly the byte `b`.
 
 ```medaka
-> runByteParser (byte 0xFF) (arrayFromList [255, 0])
+> runByteParser (byte 0xFF) (fromU8Array [|255, 0|])
 Ok 255
-> runByteParser (byte 0x00) (arrayFromList [1])
+> runByteParser (byte 0x00) (fromU8Array [|1|])
 Err "unexpected byte at byte 0"
 ```
 
@@ -179,9 +177,9 @@ eof : ByteParser Unit
 Succeeds at the end of the input, consuming nothing.
 
 ```medaka
-> runByteParser eof (arrayFromList [])
+> runByteParser eof (fromU8Array [||])
 Ok ()
-> runByteParser eof (arrayFromList [1])
+> runByteParser eof (fromU8Array [|1|])
 Err "expected end of input at byte 0"
 ```
 
@@ -192,7 +190,7 @@ peek : ByteParser U8
 ```
 
 The byte at the current position, without consuming it. Fails at the
-end of the input, and panics on an element outside `0` to `255`.
+end of the input.
 
 ## Combinators
 
@@ -209,7 +207,7 @@ Also stops when `p` succeeds without consuming anything, so `many` of
 such a parser terminates.
 
 ```medaka
-> runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
+> runByteParser (many (byte 1)) (fromU8Array [|1, 1, 1, 2|])
 Ok [1, 1, 1]
 ```
 
@@ -223,9 +221,9 @@ some p
 One or more `p`.
 
 ```medaka
-> runByteParser (some (byte 2)) (arrayFromList [2, 2, 3])
+> runByteParser (some (byte 2)) (fromU8Array [|2, 2, 3|])
 Ok [2, 2]
-> runByteParser (some (byte 2)) (arrayFromList [3])
+> runByteParser (some (byte 2)) (fromU8Array [|3|])
 Err "unexpected byte at byte 0"
 ```
 
@@ -257,9 +255,9 @@ optional p
 `Some` the result of `p`, or `None` when `p` fails, consuming nothing.
 
 ```medaka
-> runByteParser (optional (byte 5)) (arrayFromList [5])
+> runByteParser (optional (byte 5)) (fromU8Array [|5|])
 Ok Some 5
-> runByteParser (optional (byte 5)) (arrayFromList [9])
+> runByteParser (optional (byte 5)) (fromU8Array [|9|])
 Ok None
 ```
 
@@ -305,18 +303,9 @@ Exactly `n` bytes, as a `Bytes`.
 Fails when fewer than `n` bytes remain.
 
 ```medaka
-> runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
+> runByteParser (takeBytes 3) (fromU8Array [|10, 20, 30, 40|])
 Ok Bytes "0a141e"
 ```
-
-### `takeSlice`
-
-```
-takeSlice : Int -> ByteParser (Array Int)
-takeSlice n
-```
-
-Exactly `n` bytes, as an `Array Int`.
 
 ## Integers and floats
 
@@ -333,13 +322,13 @@ Fails when fewer than `n` bytes remain, and when the value is larger than
 `Int` holds, which needs eight bytes or more; `beU64` reads any eight.
 
 ```medaka
-> runByteParser (beUint 2) (arrayFromList [1, 2])
+> runByteParser (beUint 2) (fromU8Array [|1, 2|])
 Ok 258
-> runByteParser (beUint 1) (arrayFromList [255])
+> runByteParser (beUint 1) (fromU8Array [|255|])
 Ok 255
-> runByteParser (beUint 4) (arrayFromList [0, 0, 1, 0])
+> runByteParser (beUint 4) (fromU8Array [|0, 0, 1, 0|])
 Ok 256
-> runByteParser (beUint 8) (arrayFromList [64, 0, 0, 0, 0, 0, 0, 0])
+> runByteParser (beUint 8) (fromU8Array [|64, 0, 0, 0, 0, 0, 0, 0|])
 Err "integer does not fit Int (read a U64 with beU64 or leU64) at byte 7"
 ```
 
@@ -354,15 +343,15 @@ A signed two's-complement integer of `n` bytes, most significant byte
 first.
 
 ```medaka
-> runByteParser (beSint 1) (arrayFromList [255])
+> runByteParser (beSint 1) (fromU8Array [|255|])
 Ok -1
-> runByteParser (beSint 1) (arrayFromList [127])
+> runByteParser (beSint 1) (fromU8Array [|127|])
 Ok 127
-> runByteParser (beSint 2) (arrayFromList [255, 255])
+> runByteParser (beSint 2) (fromU8Array [|255, 255|])
 Ok -1
-> runByteParser (beSint 2) (arrayFromList [0, 1])
+> runByteParser (beSint 2) (fromU8Array [|0, 1|])
 Ok 1
-> runByteParser (beSint 9) (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255, 254])
+> runByteParser (beSint 9) (fromU8Array [|255, 255, 255, 255, 255, 255, 255, 255, 254|])
 Ok -2
 ```
 
@@ -375,9 +364,9 @@ beFloat64 : ByteParser Float
 A 64-bit IEEE 754 float from eight bytes, most significant byte first.
 
 ```medaka
-> runByteParser beFloat64 (arrayFromList [63, 248, 0, 0, 0, 0, 0, 0])
+> runByteParser beFloat64 (fromU8Array [|63, 248, 0, 0, 0, 0, 0, 0|])
 Ok 1.5
-> runByteParser beFloat64 (arrayFromList [192, 0, 0, 0, 0, 0, 0, 0])
+> runByteParser beFloat64 (fromU8Array [|192, 0, 0, 0, 0, 0, 0, 0|])
 Ok -2.0
 ```
 
@@ -394,11 +383,11 @@ Fails when fewer than `n` bytes remain, and when the value is larger than
 `Int` holds, which needs eight bytes or more; `leU64` reads any eight.
 
 ```medaka
-> runByteParser (leUint 2) (arrayFromList [2, 1])
+> runByteParser (leUint 2) (fromU8Array [|2, 1|])
 Ok 258
-> runByteParser (leUint 1) (arrayFromList [255])
+> runByteParser (leUint 1) (fromU8Array [|255|])
 Ok 255
-> runByteParser (leUint 4) (arrayFromList [0, 1, 0, 0])
+> runByteParser (leUint 4) (fromU8Array [|0, 1, 0, 0|])
 Ok 256
 ```
 
@@ -413,13 +402,13 @@ A signed two's-complement integer of `n` bytes, least significant byte
 first.
 
 ```medaka
-> runByteParser (leSint 1) (arrayFromList [255])
+> runByteParser (leSint 1) (fromU8Array [|255|])
 Ok -1
-> runByteParser (leSint 1) (arrayFromList [127])
+> runByteParser (leSint 1) (fromU8Array [|127|])
 Ok 127
-> runByteParser (leSint 2) (arrayFromList [255, 255])
+> runByteParser (leSint 2) (fromU8Array [|255, 255|])
 Ok -1
-> runByteParser (leSint 2) (arrayFromList [1, 0])
+> runByteParser (leSint 2) (fromU8Array [|1, 0|])
 Ok 1
 ```
 
@@ -432,9 +421,9 @@ leFloat64 : ByteParser Float
 A 64-bit IEEE 754 float from eight bytes, least significant byte first.
 
 ```medaka
-> runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 248, 63])
+> runByteParser leFloat64 (fromU8Array [|0, 0, 0, 0, 0, 0, 248, 63|])
 Ok 1.5
-> runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 192])
+> runByteParser leFloat64 (fromU8Array [|0, 0, 0, 0, 0, 0, 0, 192|])
 Ok -2.0
 ```
 
@@ -450,7 +439,7 @@ A `U16` from two bytes, most significant byte first. The inverse of
 `bytebuilder.emitU16BE`.
 
 ```medaka
-> runByteParser beU16 (arrayFromList [1, 2])
+> runByteParser beU16 (fromU8Array [|1, 2|])
 Ok 258
 ```
 
@@ -464,7 +453,7 @@ A `U32` from four bytes, most significant byte first. The inverse of
 `bytebuilder.emitU32BE`.
 
 ```medaka
-> runByteParser beU32 (arrayFromList [255, 255, 255, 255])
+> runByteParser beU32 (fromU8Array [|255, 255, 255, 255|])
 Ok 4294967295
 ```
 
@@ -479,7 +468,7 @@ A `U64` from eight bytes, most significant byte first. The inverse of
 fails for want of range.
 
 ```medaka
-> runByteParser beU64 (arrayFromList [255, 255, 255, 255, 255, 255, 255, 255])
+> runByteParser beU64 (fromU8Array [|255, 255, 255, 255, 255, 255, 255, 255|])
 Ok 18446744073709551615
 ```
 
@@ -493,7 +482,7 @@ A `U16` from two bytes, least significant byte first. The inverse of
 `bytebuilder.emitU16LE`.
 
 ```medaka
-> runByteParser leU16 (arrayFromList [2, 1])
+> runByteParser leU16 (fromU8Array [|2, 1|])
 Ok 258
 ```
 
@@ -507,7 +496,7 @@ A `U32` from four bytes, least significant byte first. The inverse of
 `bytebuilder.emitU32LE`.
 
 ```medaka
-> runByteParser leU32 (arrayFromList [4, 3, 2, 1])
+> runByteParser leU32 (fromU8Array [|4, 3, 2, 1|])
 Ok 16909060
 ```
 
@@ -521,7 +510,7 @@ A `U64` from eight bytes, least significant byte first. The inverse of
 `bytebuilder.emitU64LE`.
 
 ```medaka
-> runByteParser leU64 (arrayFromList [21, 124, 74, 127, 185, 121, 55, 158])
+> runByteParser leU64 (fromU8Array [|21, 124, 74, 127, 185, 121, 55, 158|])
 Ok 11400714819323198485
 ```
 
@@ -530,7 +519,7 @@ Ok 11400714819323198485
 ### `runByteParser`
 
 ```
-runByteParser : ByteParser a -> Array Int -> Result String a
+runByteParser : ByteParser a -> Bytes -> Result String a
 runByteParser p bytes
 ```
 
@@ -541,9 +530,31 @@ happened. Bytes left over after `p` succeeds are not an error; sequence
 `p` with `eof` to require that the whole input is consumed.
 
 ```medaka
-> runByteParser (byte 42) (arrayFromList [42])
+> runByteParser (byte 42) (fromU8Array [|42|])
 Ok 42
-> runByteParser (byte 42) (arrayFromList [7])
+> runByteParser (byte 42) (fromU8Array [|7|])
 Err "unexpected byte at byte 0"
+```
+
+### `runByteParserWithin`
+
+```
+runByteParserWithin : Int -> Int -> ByteParser a -> Bytes -> Result String a
+runByteParserWithin start end p bytes
+```
+
+The result of running `p` on the half-open sub-range `[start, end)` of
+`bytes`, without copying it.
+
+Behaves as running `p` on `bytes.[start..end]` would, but every length
+check inside `p` sees `end` rather than `bytes`' own length, so a parser
+that reads to the end of its input stops at `end`, not at the end of the
+larger `bytes` value it was carved from.
+
+```medaka
+> runByteParserWithin 1 3 (many anyByte) (fromU8Array [|10, 20, 30, 40|])
+Ok [20, 30]
+> runByteParserWithin 0 1 beU16 (fromU8Array [|1, 2|])
+Err "unexpected end of input at byte 1"
 ```
 

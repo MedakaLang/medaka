@@ -12,7 +12,11 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
-IDENT "fromArray"
+IDENT "fromU8Array"
+COMMA
+IDENT "length"
+AS
+IDENT "bytesLength"
 COMMA
 IDENT "toArray"
 RBRACE
@@ -72,7 +76,8 @@ INDENT
 PIPE
 UPPER "ByteParserE"
 LPAREN
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -104,8 +109,7 @@ UPPER "ByteParserE"
 IDENT "e"
 IDENT "a"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
@@ -126,6 +130,42 @@ EQUAL
 IDENT "f"
 IDENT "input"
 IDENT "pos"
+LPAREN
+IDENT "bytesLength"
+IDENT "input"
+RPAREN
+NEWLINE
+IDENT "runBPWithin"
+COLON
+UPPER "ByteParserE"
+IDENT "e"
+IDENT "a"
+ARROW
+UPPER "Bytes"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+LT
+IDENT "e"
+GT
+UPPER "BResult"
+IDENT "a"
+NEWLINE
+IDENT "runBPWithin"
+LPAREN
+UPPER "ByteParserE"
+IDENT "f"
+RPAREN
+IDENT "input"
+IDENT "pos"
+IDENT "end"
+EQUAL
+IDENT "f"
+IDENT "input"
+IDENT "pos"
+IDENT "end"
 NEWLINE
 EXPORT
 IMPL
@@ -221,33 +261,35 @@ IDENT "deferMap"
 IDENT "g"
 IDENT "p"
 EQUAL
-INDENT
 UPPER "ByteParserE"
 LPAREN
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 RPAREN
 LPAREN
 IDENT "a"
 IDENT "p2"
 FAT_ARROW
+INDENT
 UPPER "BOk"
 LPAREN
 IDENT "g"
 IDENT "a"
 RPAREN
 IDENT "p2"
-RPAREN
-RPAREN
 NEWLINE
 DEDENT
+RPAREN
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -264,6 +306,7 @@ UPPER "ByteParserE"
 LPAREN
 UNDERSCORE
 IDENT "pos"
+UNDERSCORE
 FAT_ARROW
 UPPER "BOk"
 IDENT "a"
@@ -278,13 +321,15 @@ UPPER "ByteParserE"
 LPAREN
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "pf"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 RPAREN
 LPAREN
 IDENT "f"
@@ -292,10 +337,11 @@ IDENT "p2"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "pa"
 IDENT "input"
 IDENT "p2"
+IDENT "end"
 RPAREN
 LPAREN
 IDENT "a"
@@ -327,26 +373,29 @@ UPPER "ByteParserE"
 LPAREN
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 RPAREN
 LPAREN
 IDENT "a"
 IDENT "p2"
 FAT_ARROW
 INDENT
-IDENT "runBP"
+IDENT "runBPWithin"
 LPAREN
 IDENT "k"
 IDENT "a"
 RPAREN
 IDENT "input"
 IDENT "p2"
+IDENT "end"
 NEWLINE
 DEDENT
 RPAREN
@@ -368,6 +417,7 @@ UPPER "ByteParserE"
 LPAREN
 UNDERSCORE
 IDENT "pos"
+UNDERSCORE
 FAT_ARROW
 UPPER "BErr"
 STRING "noMatch"
@@ -398,12 +448,14 @@ UPPER "ByteParserE"
 LPAREN
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 FAT_ARROW
 MATCH
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 UPPER "BOk"
 IDENT "a"
@@ -417,10 +469,11 @@ UPPER "BErr"
 UNDERSCORE
 UNDERSCORE
 FAT_ARROW
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "q"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 NEWLINE
 DEDENT
 RPAREN
@@ -441,6 +494,7 @@ UPPER "ByteParserE"
 LPAREN
 UNDERSCORE
 IDENT "pos"
+UNDERSCORE
 FAT_ARROW
 UPPER "BErr"
 IDENT "msg"
@@ -477,7 +531,8 @@ ARROW
 UPPER "Bool"
 RPAREN
 ARROW
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -489,12 +544,12 @@ IDENT "satisfyStep"
 IDENT "pred"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
@@ -507,9 +562,10 @@ INDENT
 LET
 IDENT "b"
 EQUAL
-IDENT "elementByte"
 IDENT "input"
+LBRACKET_TIGHT
 IDENT "pos"
+RBRACKET
 NEWLINE
 IF
 IDENT "pred"
@@ -526,50 +582,6 @@ ELSE
 UPPER "BErr"
 STRING "unexpected byte"
 IDENT "pos"
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "elementByte"
-COLON
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "U8"
-NEWLINE
-IDENT "elementByte"
-IDENT "input"
-IDENT "pos"
-EQUAL
-MATCH
-UPPER "U8"
-DOT
-IDENT "tryFromInt"
-IDENT "input"
-LBRACKET_TIGHT
-IDENT "pos"
-RBRACKET
-INDENT
-UPPER "Some"
-IDENT "b"
-FAT_ARROW
-IDENT "b"
-NEWLINE
-UPPER "None"
-FAT_ARROW
-INDENT
-IDENT "panic"
-INTERP_OPEN "byteparser: element "
-IDENT "input"
-LBRACKET_TIGHT
-IDENT "pos"
-RBRACKET
-INTERP_MID " at "
-IDENT "pos"
-INTERP_END " is not a byte in 0..255"
 NEWLINE
 DEDENT
 NEWLINE
@@ -623,7 +635,8 @@ IDENT "eofStep"
 NEWLINE
 IDENT "eofStep"
 COLON
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -632,14 +645,14 @@ UPPER "BResult"
 UPPER "Unit"
 NEWLINE
 IDENT "eofStep"
-IDENT "input"
+UNDERSCORE
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 EQUAL
 UPPER "BOk"
 LPAREN
@@ -668,31 +681,24 @@ UPPER "ByteParserE"
 LPAREN
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 FAT_ARROW
 INDENT
 IF
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 THEN
-INDENT
 UPPER "BErr"
 STRING "unexpected end of input"
 IDENT "pos"
-NEWLINE
-DEDENT
 ELSE
-INDENT
 UPPER "BOk"
-LPAREN
-IDENT "elementByte"
 IDENT "input"
+LBRACKET_TIGHT
 IDENT "pos"
-RPAREN
+RBRACKET
 IDENT "pos"
-NEWLINE
-DEDENT
 NEWLINE
 DEDENT
 RPAREN
@@ -717,11 +723,13 @@ UPPER "ByteParserE"
 LPAREN
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 FAT_ARROW
 IDENT "manyGo"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 LBRACKET
 RBRACKET
 RPAREN
@@ -731,7 +739,8 @@ COLON
 UPPER "ByteParser"
 IDENT "a"
 ARROW
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -749,13 +758,15 @@ IDENT "manyGo"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 IDENT "acc"
 EQUAL
 MATCH
-IDENT "runBP"
+IDENT "runBPWithin"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 UPPER "BErr"
 UNDERSCORE
@@ -793,6 +804,7 @@ IDENT "manyGo"
 IDENT "p"
 IDENT "input"
 IDENT "pos2"
+IDENT "end"
 LPAREN
 IDENT "a"
 CONS
@@ -1127,59 +1139,30 @@ NEWLINE
 IDENT "takeBytes"
 IDENT "n"
 EQUAL
-INDENT
-IDENT "deferMap"
-LPAREN
-IDENT "xs"
-FAT_ARROW
-INDENT
-IDENT "optionOrPanic"
-STRING "takeBytes: every element must be a byte in 0..255"
-LPAREN
-IDENT "fromArray"
-LPAREN
-IDENT "arrayFromList"
-IDENT "xs"
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
-RPAREN
-LPAREN
 UPPER "ByteParserE"
 LPAREN
-IDENT "takeBytesGo"
+IDENT "takeBytesStep"
 IDENT "n"
-LBRACKET
-RBRACKET
-RPAREN
 RPAREN
 NEWLINE
-DEDENT
-NEWLINE
-IDENT "takeBytesGo"
+IDENT "takeBytesStep"
 COLON
 UPPER "Int"
 ARROW
-UPPER "List"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
-UPPER "Array"
 UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
 UPPER "BResult"
-LPAREN
-UPPER "List"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
-IDENT "takeBytesGo"
+IDENT "takeBytesStep"
 IDENT "n"
-IDENT "acc"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "n"
@@ -1188,16 +1171,19 @@ INT 0
 EQUAL
 UPPER "BOk"
 LPAREN
-IDENT "reverse"
-IDENT "acc"
+IDENT "slice"
+IDENT "input"
+IDENT "pos"
+IDENT "pos"
 RPAREN
 IDENT "pos"
 NEWLINE
 PIPE
 IDENT "pos"
-GEQ
-IDENT "arrayLength"
-IDENT "input"
+PLUS
+IDENT "n"
+GT
+IDENT "end"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
@@ -1206,50 +1192,24 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
-IDENT "takeBytesGo"
+UPPER "BOk"
 LPAREN
-IDENT "n"
-MINUS
-INT 1
-RPAREN
-LPAREN
+IDENT "slice"
 IDENT "input"
-LBRACKET_TIGHT
 IDENT "pos"
-RBRACKET
-CONS
-IDENT "acc"
-RPAREN
-IDENT "input"
 LPAREN
 IDENT "pos"
 PLUS
-INT 1
+IDENT "n"
+RPAREN
+RPAREN
+LPAREN
+IDENT "pos"
+PLUS
+IDENT "n"
 RPAREN
 NEWLINE
 DEDENT
-NEWLINE
-EXPORT
-NEWLINE
-IDENT "takeSlice"
-COLON
-UPPER "Int"
-ARROW
-UPPER "ByteParser"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
-NEWLINE
-IDENT "takeSlice"
-IDENT "n"
-EQUAL
-IDENT "deferMap"
-IDENT "toArray"
-LPAREN
-IDENT "takeBytes"
-IDENT "n"
-RPAREN
 NEWLINE
 EXPORT
 NEWLINE
@@ -1276,7 +1236,8 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -1289,6 +1250,7 @@ IDENT "n"
 IDENT "acc"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "n"
@@ -1302,8 +1264,7 @@ NEWLINE
 PIPE
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
@@ -1336,11 +1297,10 @@ PLUS
 UPPER "U8"
 DOT
 IDENT "toInt"
-LPAREN
-IDENT "elementByte"
 IDENT "input"
+LBRACKET_TIGHT
 IDENT "pos"
-RPAREN
+RBRACKET
 RPAREN
 IDENT "input"
 LPAREN
@@ -1348,6 +1308,7 @@ IDENT "pos"
 PLUS
 INT 1
 RPAREN
+IDENT "end"
 NEWLINE
 DEDENT
 NEWLINE
@@ -1574,15 +1535,18 @@ IDENT "beFloat64"
 EQUAL
 DEFER
 INDENT
-IDENT "arr"
+IDENT "bs"
 LARROW
-IDENT "takeSlice"
+IDENT "takeBytes"
 INT 8
 NEWLINE
 IDENT "deferPure"
 LPAREN
 IDENT "bytesToFloat64"
-IDENT "arr"
+LPAREN
+IDENT "toArray"
+IDENT "bs"
+RPAREN
 INT 0
 RPAREN
 NEWLINE
@@ -1616,7 +1580,8 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -1630,6 +1595,7 @@ IDENT "shift"
 IDENT "acc"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "n"
@@ -1643,8 +1609,7 @@ NEWLINE
 PIPE
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
@@ -1660,11 +1625,10 @@ EQUAL
 UPPER "U8"
 DOT
 IDENT "toInt"
-LPAREN
-IDENT "elementByte"
 IDENT "input"
+LBRACKET_TIGHT
 IDENT "pos"
-RPAREN
+RBRACKET
 NEWLINE
 IF
 IDENT "shift"
@@ -1705,6 +1669,7 @@ IDENT "pos"
 PLUS
 INT 1
 RPAREN
+IDENT "end"
 NEWLINE
 DEDENT
 ELSE
@@ -1732,6 +1697,7 @@ IDENT "pos"
 PLUS
 INT 1
 RPAREN
+IDENT "end"
 NEWLINE
 DEDENT
 ELSE
@@ -1939,7 +1905,8 @@ UPPER "Int"
 ARROW
 UPPER "U64"
 ARROW
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -1952,6 +1919,7 @@ IDENT "n"
 IDENT "acc"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "n"
@@ -1965,8 +1933,7 @@ NEWLINE
 PIPE
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
@@ -1990,11 +1957,10 @@ PLUS
 UPPER "U64"
 DOT
 IDENT "fromU8"
-LPAREN
-IDENT "elementByte"
 IDENT "input"
+LBRACKET_TIGHT
 IDENT "pos"
-RPAREN
+RBRACKET
 RPAREN
 IDENT "input"
 LPAREN
@@ -2002,6 +1968,7 @@ IDENT "pos"
 PLUS
 INT 1
 RPAREN
+IDENT "end"
 NEWLINE
 DEDENT
 NEWLINE
@@ -2084,7 +2051,8 @@ UPPER "Int"
 ARROW
 UPPER "U64"
 ARROW
-UPPER "Array"
+UPPER "Bytes"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Int"
@@ -2098,6 +2066,7 @@ IDENT "shift"
 IDENT "acc"
 IDENT "input"
 IDENT "pos"
+IDENT "end"
 INDENT
 PIPE
 IDENT "n"
@@ -2111,8 +2080,7 @@ NEWLINE
 PIPE
 IDENT "pos"
 GEQ
-IDENT "arrayLength"
-IDENT "input"
+IDENT "end"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
@@ -2128,11 +2096,10 @@ EQUAL
 UPPER "U64"
 DOT
 IDENT "fromU8"
-LPAREN
-IDENT "elementByte"
 IDENT "input"
+LBRACKET_TIGHT
 IDENT "pos"
-RPAREN
+RBRACKET
 NEWLINE
 IDENT "leU64Go"
 LPAREN
@@ -2164,6 +2131,7 @@ IDENT "pos"
 PLUS
 INT 1
 RPAREN
+IDENT "end"
 NEWLINE
 DEDENT
 NEWLINE
@@ -2176,8 +2144,7 @@ COLON
 UPPER "ByteParser"
 IDENT "a"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Result"
 UPPER "String"
@@ -2192,6 +2159,56 @@ IDENT "runBP"
 IDENT "p"
 IDENT "bytes"
 INT 0
+INDENT
+UPPER "BOk"
+IDENT "a"
+UNDERSCORE
+FAT_ARROW
+UPPER "Ok"
+IDENT "a"
+NEWLINE
+UPPER "BErr"
+IDENT "m"
+IDENT "pos"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN ""
+IDENT "m"
+INTERP_MID " at byte "
+IDENT "pos"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "runByteParserWithin"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ByteParser"
+IDENT "a"
+ARROW
+UPPER "Bytes"
+ARROW
+UPPER "Result"
+UPPER "String"
+IDENT "a"
+NEWLINE
+IDENT "runByteParserWithin"
+IDENT "start"
+IDENT "end"
+IDENT "p"
+IDENT "bytes"
+EQUAL
+MATCH
+IDENT "runBPWithin"
+IDENT "p"
+IDENT "bytes"
+IDENT "start"
+IDENT "end"
 INDENT
 UPPER "BOk"
 IDENT "a"
