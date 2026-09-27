@@ -77,9 +77,9 @@ checkedDiv a b
 --   rounding is the final addition.
 --
 -- > toFloat 9223372036854775807
--- 9.223372036854776e18
+-- 9.223372036854776e+18
 -- > toFloat (-9223372036854775808)
--- -9.223372036854776e18
+-- -9.223372036854776e+18
 export
 toFloat : I64 -> Float
 toFloat x =

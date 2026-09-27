@@ -110,6 +110,7 @@ libSuites = [
   ("sqlstmt", 41),
   ("sqltoken", 11),
   ("varint", 11),
+  ("wideint", 14),
   ("writer", 4),
 ]
 
@@ -206,6 +207,9 @@ test "sqlite/lib/sqltoken.mdk executed >= 11 assertions" =
 
 test "sqlite/lib/varint.mdk executed >= 11 assertions" =
   libFloorExpectation "varint"
+
+test "sqlite/lib/wideint.mdk executed >= 14 assertions" =
+  libFloorExpectation "wideint"
 
 test "sqlite/lib/writer.mdk executed >= 4 assertions" =
   libFloorExpectation "writer"
