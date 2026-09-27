@@ -8,6 +8,7 @@ import frontend.ast.{TyConOrigin(..)}
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffRow(..), atomBuiltin, renderAtoms}
 import types.repr.{Scheme(..), Mono(..)}
+import types.effect_authority.{Authority(..)}
 
 net : String -> EffRow
 net path = EffRow [atomBuiltin "Net" (PPrefix (Some path))] None
@@ -23,8 +24,8 @@ con n = TCon n (OriginModule "m")
 
 -- `Sink a` is contravariant in `a`; `Box a` covariant; `Cell a` invariant;
 -- `Api` has one monomorphic field performing `Net "api/"`; `Loop` names
--- itself; `Holder t` holds a callback whose authority is its argument's
--- name; `Grow a` holds a `Grow (Box a)`, ever larger; any other head is
+-- itself; `Holder p` holds a callback under its authority argument;
+-- `Grow a` holds a callback and a `Grow (Box a)`, ever larger; any other head is
 -- unknown to the summary.
 ops : InvocationOps
 ops = InvocationOps {
@@ -42,12 +43,9 @@ ops = InvocationOps {
     applied => match applied
       TCon "Api" _ => [callback "api/"]
       TCon "Loop" _ => [con "Loop", callback "loop/"]
-      TApp (TCon "Holder" _) (TCon t _) => [callback "h/\{t}/"]
-      TApp (TCon "Grow" _) x => [TApp (con "Grow") (TApp (con "Box") x)]
-      _ => [],
-  genericFields =
-    h => match h
-      TCon "Grow" _ => [callback "grow/"]
+      TApp (TCon "Holder" _) (TAuth (AConst (PPrefix (Some p)))) => [callback p]
+      TApp (TCon "Grow" _) x =>
+        [TApp (con "Grow") (TApp (con "Box") x), callback "grow/"]
       _ => [],
   headKey =
     h => match h
@@ -55,11 +53,13 @@ ops = InvocationOps {
       _ => "?",
 }
 
--- A right-nested tuple of one `Holder` per name.
+holder : String -> Mono
+holder p = TApp (con "Holder") (TAuth (AConst (PPrefix (Some p))))
+
+-- A right-nested tuple of one `Holder` per path.
 holders : List String -> Mono
 holders [] = unit
-holders (n :: rest) =
-  TApp (TApp (con "__tuple2__") (TApp (con "Holder") (con n))) (holders rest)
+holders (p :: rest) = TApp (TApp (con "__tuple2__") (holder p)) (holders rest)
 
 summary : EffRow -> Mono -> String
 summary force mono =
@@ -117,18 +117,20 @@ test "tuple elements and constructor fields are read at their position" = expect
     expectEqual "Net \"loop/\"" (summary pure (con "Loop")),
   ]
 
-test "each instantiation of a head is opened, and a growing one ends generically" = expectAll
+test "each authority instantiation of a head is opened, and a growing type ends" = expectAll
   [
     expectEqual
       "Net \"h/*\""
       (summary
         pure
-        (TApp
-          (TApp (con "__tuple2__") (TApp (con "Holder") (con "a")))
-          (TApp (con "Holder") (con "b")))),
+        (TApp (TApp (con "__tuple2__") (holder "h/a/")) (holder "h/b/"))),
     expectEqual "Net \"grow/\"" (summary pure (TApp (con "Grow") unit)),
-    -- nine sibling instantiations are each opened; only recursion goes generic
+    -- nine sibling authority instantiations are each opened
     expectEqual
       "Net \"h/*\""
-      (summary pure (holders ["a", "b", "c", "d", "e", "f", "g", "h", "i"])),
+      (summary
+        pure
+        (holders [
+          "h/a/", "h/b/", "h/c/", "h/d/", "h/e/", "h/f/", "h/g/", "h/h/", "h/i/"
+        ])),
   ]

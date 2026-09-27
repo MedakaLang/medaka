@@ -221,6 +221,7 @@ authorityNamesWritten : Ty -> List (String, Option Loc)
 authorityParamAsRowMsg : String -> String -> String
 authorityParamAsTypeMsg : String -> String -> String
 authorityParamNames : List String -> List (Option KindAnn) -> List String
+authorityParamSubst : List Mono -> List Mono -> List (Int, Authority)
 authorityTermAsTypeMsg : EffParamTy -> String
 authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
@@ -2088,7 +2089,6 @@ paramPolaritiesOf : TabKey -> Option (List Polarity)
 paramRowAtomOccs : String -> Ty -> List (List Atom)
 paramRowAtomsFor : String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsOf : TabKey -> Option (List (List Atom))
-paramSubst : List Mono -> List Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
 paramVarianceGuard : Mono -> Mono -> Mono -> Unit
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
 parkOpenedExistentials : Unit -> Unit

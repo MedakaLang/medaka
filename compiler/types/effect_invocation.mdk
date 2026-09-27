@@ -8,9 +8,13 @@
 -- one, which is both. A head whose variance the summary cannot see is read
 -- as invariant, so an unknown slot is charged rather than skipped.
 --
--- A data head is also opened: every constructor field of its declaration,
--- instantiated at the head's arguments, is read at the head's own position,
--- so a row written inside a monomorphic field is charged as well. An
+-- A data head is also opened: every constructor field of its declaration is
+-- read at the head's own position, so a row written inside a monomorphic
+-- field is charged as well. Only the head's authority arguments are
+-- substituted into its fields, and an opening is done once per (head,
+-- position, authority arguments): a type or row argument is already
+-- charged where it lands, by the argument walk at the slot's variance, so
+-- substituting it would add nothing but a key that grows with the type. An
 -- abstract or builtin head has no visible fields and is read through its
 -- variance only.
 import types.repr.{
@@ -28,10 +32,9 @@ public export data InvocationOps = InvocationOps {
   -- `None` when the summary cannot see the declaration.
   headVariances : Mono -> Option (List Variance),
   -- The field types of every constructor of an applied head's declaration,
-  -- instantiated at its arguments; empty for an abstract or builtin head.
+  -- its authority parameters instantiated at the head's authority
+  -- arguments; empty for an abstract or builtin head.
   appliedFields : Mono -> List Mono,
-  -- The same fields with the declaration's parameters left as variables.
-  genericFields : Mono -> List Mono,
   -- A key naming the head's declaration.
   headKey : Mono -> String,
 }
@@ -41,38 +44,35 @@ public export data InvocationOps = InvocationOps {
 export
 invocationSummary : InvocationOps -> Scheme -> List Atom
 invocationSummary ops (Forall _ _ _ _ force mono) =
-  let st = reach ops Tip VCo mono (Walk [] Tip)
+  let st = reach ops VCo mono (Walk [] Tip)
   atomsUnion (effrowLabels force) (walkAtoms st)
 
 -- The walk's state: the atoms charged so far, and the openings done, each
--- keyed by head, position and arguments.  The (head, position) pairs on the
--- current opening path travel beside it, not in it: they are the path, not
--- the history.
+-- keyed by head, position and authority arguments.
 data Walk = Walk (List Atom) (Map String Unit)
 
 walkAtoms : Walk -> List Atom
 walkAtoms (Walk atoms _) = atoms
 
-reach : InvocationOps -> Map String Unit -> Variance -> Mono -> Walk -> Walk
-reach ops path pol m st = match normalize m
+reach : InvocationOps -> Variance -> Mono -> Walk -> Walk
+reach ops pol m st = match normalize m
   TFun dom row res =>
     let charged = chargeRow pol row st
-    reach ops path pol res (reach ops path (flipV pol) dom charged)
+    reach ops pol res (reach ops (flipV pol) dom charged)
   TEff row => chargeRow pol row st
-  TQual inner _ => reach ops path pol inner st
+  TQual inner _ => reach ops pol inner st
   TApp a b => match tupleSpine (TApp a b)
-    Some elems => reachAll ops path pol elems st
+    Some elems => reachAll ops pol elems st
     None =>
       let (h, args) = spineParts (TApp a b)
       openHead
         ops
-        path
         pol
         (TApp a b)
         h
         args
-        (reachArgs ops path pol (ops.headVariances h) 0 args st)
-  h@(TCon _ _) => openHead ops path pol h h [] st
+        (reachArgs ops pol (ops.headVariances h) 0 args st)
+  h@(TCon _ _) => openHead ops pol h h [] st
   _ => st
 
 chargeRow : Variance -> EffRow -> Walk -> Walk
@@ -80,65 +80,51 @@ chargeRow VContra _ st = st
 chargeRow _ row (Walk atoms done) =
   Walk (atomsUnion atoms (effrowLabels row)) done
 
-reachAll : InvocationOps ->
-  Map String Unit ->
-  Variance ->
-  List Mono ->
-  Walk ->
-  Walk
-reachAll _ _ _ [] st = st
-reachAll ops path pol (m :: rest) st =
-  reachAll ops path pol rest (reach ops path pol m st)
+reachAll : InvocationOps -> Variance -> List Mono -> Walk -> Walk
+reachAll _ _ [] st = st
+reachAll ops pol (m :: rest) st = reachAll ops pol rest (reach ops pol m st)
 
 -- Each argument at the head's variance for its slot, composed with the
 -- context; a slot the head does not declare is invariant.
 reachArgs : InvocationOps ->
-  Map String Unit ->
   Variance ->
   Option (List Variance) ->
   Int ->
   List Mono ->
   Walk ->
   Walk
-reachArgs _ _ _ _ _ [] st = st
-reachArgs ops path pol vs i (arg :: rest) st =
+reachArgs _ _ _ _ [] st = st
+reachArgs ops pol vs i (arg :: rest) st =
   let slot = match vs
     Some known => varianceAt known i
     None => VInv
-  reachArgs ops path pol vs (i + 1) rest (reach ops path (mulV pol slot) arg st)
+  reachArgs ops pol vs (i + 1) rest (reach ops (mulV pol slot) arg st)
 
--- Open an applied head once per distinct instantiation at a position.  A
--- head met again inside its own opening at other arguments (a nested data
--- type grows them without end) is opened once generically instead: its
--- fields' rows are all charged, each declaration variable left unresolved.
+-- Open an applied head once per (position, authority arguments).
 openHead : InvocationOps ->
-  Map String Unit ->
   Variance ->
   Mono ->
   Mono ->
   List Mono ->
   Walk ->
   Walk
-openHead ops path pol applied h args (Walk atoms done) =
-  let site = "\{ops.headKey h}@\{varianceTag pol}"
-  let key = "\{site}:\{joinWith "," (map ppMono args)}"
-  let generic = "\{site}:*"
-  if M.has key done || M.has generic done then
+openHead ops pol applied h args (Walk atoms done) =
+  let key =
+    "\{ops.headKey h}@\{varianceTag pol}:\{joinWith "," (authorityArgs args)}"
+  if M.has key done then
     Walk atoms done
-  else if M.has site path then
-    reachAll
-      ops
-      path
-      pol
-      (ops.genericFields h)
-      (Walk atoms (M.set generic () done))
   else
     reachAll
       ops
-      (M.set site () path)
       pol
       (ops.appliedFields applied)
       (Walk atoms (M.set key () done))
+
+authorityArgs : List Mono -> List String
+authorityArgs [] = []
+authorityArgs (a :: rest) = match normalize a
+  TAuth q => ppMono (TAuth q) :: authorityArgs rest
+  _ => authorityArgs rest
 
 varianceAt : List Variance -> Int -> Variance
 varianceAt [] _ = VInv

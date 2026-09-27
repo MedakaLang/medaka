@@ -1066,11 +1066,11 @@ declared variance (§6.4). Starting positive at the entry's type:
 - an effect index (`Async <Net> a`) in a positive position is charged.
 - a tuple's elements keep the position.
 - a data type whose constructors the entry's module can name is also
-  opened: each constructor field, instantiated at the type's arguments, is
-  read at the type's own position, so a row written inside a monomorphic
-  field is charged. A type opened again inside its own opening at other
-  arguments (a nested data type) is opened once with its parameters left as
-  variables. A builtin type, and a type whose constructors another module
+  opened: each constructor field is read at the type's own position, so a
+  row written inside a monomorphic field is charged. Only the type's
+  authority arguments are substituted into its fields, once per distinct
+  authority arguments; a type or row argument is charged where it lands, by
+  the slot's variance, so the opening need not see it. A builtin type, and a type whose constructors another module
   keeps (an abstract or private type, or any newtype declared elsewhere), is
   read through its variance only: the host holds such a value but cannot
   apply anything inside it, though the declaring module's own functions

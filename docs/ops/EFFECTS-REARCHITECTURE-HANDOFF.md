@@ -1168,12 +1168,14 @@ through it.
   argument takes the slot's variance composed with the position; a slot the
   checker cannot see is invariant, and a slot whose parameter is an effect row
   or an authority is an index, invariant by §6.4. Tuples keep the position. A
-  data head visible to the entry is opened: each constructor field,
-  instantiated at the head's arguments (types, rows and authorities
-  substituted), is read at the head's position, once per (head, position,
-  arguments). A head met again inside its own opening at other arguments (a
-  nested data type) is opened once with the declaration's variables left in
-  place, so siblings stay precise and recursion ends.
+  data head visible to the entry is opened: each constructor field is read at
+  the head's position, once per (head, position, authority arguments), with
+  only the authority parameters substituted. Type and row arguments are
+  charged where they land by the argument walk at the slot's variance, so
+  substituting them adds nothing; keying on them made the opening count and
+  the key size grow exponentially with nested and fanned-out types (review
+  rounds 2 and 3). Authorities cannot grow structurally, so the walk is
+  bounded.
 - **Its inputs:** `typecheck.lastInvocationOps` reads `InvocationView`, written
   once per module by `checkBodyImpl` right after its data environment is built:
   the constructors the module can name (its own environment plus the
