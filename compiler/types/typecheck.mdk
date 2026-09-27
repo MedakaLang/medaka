@@ -459,6 +459,7 @@ import types.registry.{
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{
+  typeTagOf,
   implRouteKeyWord,
   ifaceWordOf,
   funHeadTag,
@@ -486,17 +487,17 @@ import types.disposition.{
 -- layer answers from `tyOriginScope`, a LAST-WINS fold in which the builtin layer
 -- has the LOWEST precedence (`frontend/resolve.mdk`) — so membership alone would
 -- not stop an own/prelude/import layer from overriding a name this mint still
--- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO the
--- duplicate-type seed: `duplicateErrors`'s `typeSeed = primitiveTypes ++ …`
--- (unconditionally, `programIsCore` gates only the prelude term), so NO module —
--- not even `stdlib/core.mdk` — can declare a TYPE of that name.  Measured:
--- `data List a = …`, `data Int = Foo`, `data Ref a = …` each give `Duplicate
--- type: <N>`.  The higher layers are therefore empty at these keys, which is
+-- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO
+-- refused as a type name: `duplicateErrors`'
+-- `reservedClashes "built-in type" primitiveTypes` (unconditionally, whatever
+-- `programIsCore` says), so NO module — not even `stdlib/core.mdk` — can
+-- declare a TYPE of that name.  `data List a = …`, `data Int = Foo`,
+-- `data Ref a = …` each give "'<N>' is a built-in type".  The higher layers are therefore empty at these keys, which is
 -- exactly what resolve's own comment means by *"the prelude beats builtins only
 -- vacuously (they are disjoint today)"*.
 --
 -- ⚠️ "A TYPE of that name" is the load-bearing narrowing, and it needs a SECOND
--- leg.  `primitiveTypes` seeds only `typeSeed`, not `ifaceSeed` — so an
+-- leg.  `primitiveTypes` is refused only as a TYPE name, not as an interface's — so an
 -- `interface Int a where …` is ACCEPTED (measured: exit 0, no diagnostic).  It
 -- cannot reach this key anyway, because interfaces are keyed `iface:<Name>`
 -- (`ifaceKey`/`ownIfaceOrigin`) while the builtin layer holds the BARE name, and
@@ -3335,13 +3336,19 @@ collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n }) :: r
 collectAbstractRecordTypes (_ :: rest) = collectAbstractRecordTypes rest
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.
+-- the prelude/core decls), once, before checking begins.  Keyed by the type
+-- word (`typeTagOf`), so a program's own type that shares an abstract export's
+-- name is not mistaken for it.
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAbstractRecordTypes coreDecls modules =
   let abstracts =
     collectAbstractRecordTypes coreDecls
-      ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules
+      ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   driverState.value.abstractRecordTypesRef := namesToSet abstracts omEmpty
+
+abstractTypeWords : String -> List Decl -> List String
+abstractTypeWords mid decls =
+  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
 
 -- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
 -- tuple/record shapes (return-position sites, arg-position stamps, operator sites,
@@ -5210,6 +5217,7 @@ deKindAbstractFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindPrivateFixture : Decl
@@ -5223,6 +5231,7 @@ deKindPrivateFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindNewtypeFixture : Decl
@@ -5236,6 +5245,7 @@ deKindNewtypeFixture = DNewtype {
   newtypeCtorBinders = [],
   newtypeDerives = [],
   newtypeOrigin = OriginModule "m",
+  newtypeNameLoc = None,
 }
 
 deKindFixtureDecls : List Decl
@@ -5392,6 +5402,7 @@ deNameIdxAlpha = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedA : Decl
@@ -5405,6 +5416,7 @@ deNameIdxSharedA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxBeta : Decl
@@ -5418,6 +5430,7 @@ deNameIdxBeta = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedB : Decl
@@ -5431,6 +5444,7 @@ deNameIdxSharedB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxModA : DeclEnvModule
@@ -5902,6 +5916,7 @@ aliasFixturePubCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePrivCore : Decl
@@ -5912,6 +5927,7 @@ aliasFixturePrivCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePubM : Decl
@@ -5922,6 +5938,7 @@ aliasFixturePubM = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "m",
+  tyAliasNameLoc = None,
 }
 
 -- PUBLIC, but wrapped in an attribute.  ⚠️ SINCE #1228/#1586 THIS ROW IS VISIBLE:
@@ -5939,6 +5956,7 @@ aliasFixtureAttribCore =
       tyAliasParamKinds = [],
       tyAliasRhs = tyConBuiltin "Int" None,
       tyAliasOrigin = OriginModule "core",
+      tyAliasNameLoc = None,
     }
 
 aliasFixtureEnv : DataEnv
@@ -5997,6 +6015,7 @@ deFieldOwnerFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerFixtureB : Decl
@@ -6011,6 +6030,7 @@ deFieldOwnerFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
@@ -6034,6 +6054,7 @@ deFieldOwnerFixtureC = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerCollisionEnv : DataEnv
@@ -6082,6 +6103,7 @@ deRecordOrderFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deRecordOrderFixtureB : Decl
@@ -6096,6 +6118,7 @@ deRecordOrderFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
@@ -7520,6 +7543,7 @@ ceSameDeclIn m methods = DInterface {
   supers = [ceSuperEq],
   methods = methods,
   ifaceOrigin = OriginModule m,
+  ifaceNameLoc = None,
 }
 
 -- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
@@ -7734,6 +7758,7 @@ ceGradedIface = DInterface {
   supers = [],
   methods = [ceGradedMethod],
   ifaceOrigin = OriginModule "gmod",
+  ifaceNameLoc = None,
 }
 
 ceGradedEnv : ClassEnv
@@ -7776,6 +7801,7 @@ ceFunctorIface = DInterface {
   supers = [],
   methods = [ceFunctorMethod],
   ifaceOrigin = OriginModule "fmod",
+  ifaceNameLoc = None,
 }
 
 ceFunctorEnv : ClassEnv
@@ -11784,22 +11810,46 @@ typeMismatchReportRest a b = match !currentDoOrigin
 -- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
 -- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
 -- yields `None` here and its message is untouched.  That residual is #1243.)
+-- A program's own type may shadow a prelude type (#3465), so two sides whose
+-- heads share a spelling but not an identity can also differ in shape
+-- (`Result vs Result a b`): their heads are compared as well.
 sameSpellingHint : Mono -> Mono -> Option String
 sameSpellingHint a b
-  | ppMono a /= ppMono b = None
+  | ppMono a /= ppMono b = map idConflictHelp (headIdConflict a b)
   | otherwise = map idConflictHelp (firstIdConflict a b)
 
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idConflictHelp (name, o1, o2) =
-  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — import the one you mean rather than declaring a second type of the same name"
+  let remedy =
+    if isPreludeOrigin o1 || isPreludeOrigin o2 then
+      "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects"
+    else
+      "import the one you mean rather than declaring a second type of the same name"
+  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — \{remedy}"
+
+isPreludeOrigin : TyConOrigin -> Bool
+isPreludeOrigin (OriginModule m) = m == "core"
+isPreludeOrigin _ = False
 
 -- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
 -- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
 -- present identities) and is answered rather than omitted so this stays total.
 originPhrase : TyConOrigin -> String
+originPhrase (OriginModule "core") = "the prelude"
+originPhrase (OriginModule "__user__") = "this program"
 originPhrase (OriginModule m) = "module '\{m}'"
 originPhrase OriginBuiltin = "the language itself"
 originPhrase OriginUnresolved = "an unknown module"
+
+-- The two sides' application heads, when they are same-spelled type
+-- constructors of different declarations.
+headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+headIdConflict a b = tconIdConflict (spineHead a) (spineHead b)
+
+spineHead : Mono -> Mono
+spineHead t = match normalize t
+  TApp f _ => spineHead f
+  other => other
 
 -- The FIRST head, in a parallel structural walk of the two monos, whose name
 -- agrees while its identity does not.  Parallel and shape-guarded on purpose:
@@ -11808,15 +11858,21 @@ originPhrase OriginUnresolved = "an unknown module"
 -- with its counterpart rather than reporting some unrelated head.
 firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstIdConflict a b = match (normalize a, normalize b)
+  (TApp f1 x1, TApp f2 x2) =>
+    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
+  (TFun d1 _ r1, TFun d2 _ r2) =>
+    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
+  (x, y) => tconIdConflict x y
+
+-- Two same-spelled type constructors of different declarations: the one
+-- place a conflict of identities is read off a pair of heads.
+tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+tconIdConflict a b = match (normalize a, normalize b)
   (TCon n1 o1, TCon n2 o2) =>
     if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
       Some (n1, o1, o2)
     else
       None
-  (TApp f1 x1, TApp f2 x2) =>
-    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
-  (TFun d1 _ r1, TFun d2 _ r2) =>
-    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
   _ => None
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
@@ -16329,7 +16385,9 @@ resolveFieldRecord te fname = match headTyconNameMono te
     None => match lookupRecordByMangledHead te r fname
       Some pair => Some pair
       None =>
-        if omHasKey r driverState.value.abstractRecordTypesRef.value then
+        if omHasKey
+          (receiverTypeWord te r)
+          driverState.value.abstractRecordTypesRef.value then
           let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
           None
         else
@@ -16403,7 +16461,22 @@ resolveFieldRecord te fname = match headTyconNameMono te
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
 lookupRecordForReceiver te r = match recordForReceiverIdent te r
   Some ri => Some ri
-  None => lookupRecordByName r
+  None => match lookupRecordByName r
+    Some ri => if recordOfOtherType te ri then None else Some ri
+    None => None
+
+-- The floor answers by the record's NAME, and a program's own type may share a
+-- prelude record's name (#3465: a program's `RField` beside the prelude's).  A
+-- receiver whose type carries an identity is never given a record of a
+-- different type; it falls to the field-owner path, which finds its own.  With
+-- no identity on either side (the flat path) the floor stands.
+recordOfOtherType : Mono -> RecordInfo -> Bool
+recordOfOtherType te (RecordInfo _ _ res _ _) = match (
+  receiverTypeIdent te,
+  receiverTypeIdent res,
+)
+  (Some (Ident _ wo wn), Some (Ident _ ro rn)) => not (wn == rn && wo == ro)
+  _ => False
 
 -- The identity half.  `universeRecordIdentsRef`'s outer key is the bare registry
 -- key — an INDEX into a candidate list, not the selector; the selector is the
@@ -16431,6 +16504,12 @@ recordForReceiverIdent te r =
 -- `headKeyIdent` (`types/registry.mdk`) is the accessor; its `None` collapses
 -- "rigid" and "no module id yet" because at a ROW lookup both mean the same
 -- thing — the derivation is written at that function.
+-- The receiver's type word (`headKeyTag`), else its bare head name.
+receiverTypeWord : Mono -> String -> String
+receiverTypeWord te r = match headTyconMono te
+  Some hk => headKeyTag hk
+  None => r
+
 receiverTypeIdent : Mono -> Option Ident
 receiverTypeIdent te = match headTyconMono te
   Some hk => headKeyIdent hk
@@ -21709,7 +21788,7 @@ checkMatchRedundant scrutTy arms =
 -- Reversing the rows is sound because `useful` is a PREDICATE OVER THE SET of
 -- matrix rows ("does some value match the query and no row?"): `specializeCon` /
 -- `specializeLit` / `defaultMatrix` are row-wise filters, and the only decision
--- that reads rows in order is `inferCol0Type`, which just needs SOME column-0
+-- that reads rows in order is `columnCtors`, which just needs SOME column-0
 -- constructor to name the column's type — and it is consulted only when `col0`
 -- is `None`, i.e. when the scrutinee type has no concrete head, in which case no
 -- arm carries a constructor pattern and there is no head constructor to find in
@@ -21837,7 +21916,7 @@ nonGuardedRows ((Arm _ _ _) :: rest) = nonGuardedRows rest
 -- ⚠️ ANSWER-PRESERVING CLASSIFICATION, and it is a REQUIRED property rather
 -- than a style choice.  `headTyconNameMono` is the gate — it decides `Some` vs
 -- `None` on exactly the `Mono` head nodes it decided them on before, so `TFun`
--- stays `None` (#1617, deliberate) and falls through to `inferCol0Type`, and a
+-- stays `None` (#1617, deliberate) and falls through to `columnCtors`, and a
 -- rigid head still produces a key that MISSES the table exactly as today's
 -- bare `Some n` missed it.  `headTyconMono` is consulted only to UPGRADE a key
 -- that is already going to be `Some`, never to change whether it is `Some`.
@@ -41650,6 +41729,7 @@ methodRowTestIface moduleId name typarams methods = DInterface {
   supers = [],
   methods = methods,
   ifaceOrigin = OriginModule moduleId,
+  ifaceNameLoc = None,
 }
 
 methodRowTestConstraint : String -> String -> List Ty -> Constraint

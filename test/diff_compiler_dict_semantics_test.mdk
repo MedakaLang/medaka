@@ -706,7 +706,7 @@ table = [
   Row {
     entry = "s-self-prelude-ordering-only.mdk",
     label =
-      "SELF-PRELUDE SINGLETON NEGATIVE CONTROL: declaring only `Ordering` is an ordinary user module, not core; the separately seeded prelude still makes the duplicate declaration reject",
+      "SELF-PRELUDE SINGLETON NEGATIVE CONTROL: declaring only `Ordering` is an ordinary user module, not core; the separately seeded prelude still rejects its reuse of the prelude constructor `Lt` (the type name alone may shadow the prelude's, #3465)",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",

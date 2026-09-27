@@ -1,0 +1,11 @@
+-- A program's own record type named like the prelude's record `RField`
+-- (#3465).  Field access and update resolve by the receiver's type, so they
+-- reach this declaration, not the prelude's record of the same name.
+-- Expected, derived from the source: `n`, `3`, then the updated record.
+data RField = MyRF { label : String, weight : Int } deriving (Debug)
+
+main =
+  let r = MyRF { label = "n", weight = 3 }
+  println r.label
+  println (intToString r.weight)
+  println (debug { r | weight = 4 })

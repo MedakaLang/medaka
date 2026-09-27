@@ -1,5 +1,6 @@
 abstractFieldMsg : String -> String -> String
 abstractSlotIds : List Mono -> List Int
+abstractTypeWords : String -> List Decl -> List String
 activeDictPredOf : PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
 activeDictVarForEncl : Mono -> ScopeId -> Option EvidenceBinderId
 activeDictVarOf : Mono -> ScopeId -> Option EvidenceBinderId
@@ -1220,6 +1221,7 @@ hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
 headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
+headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 headKeyTagOr : String -> Option HeadKey -> String
 headL : List String -> String
 headMonoNode : Mono -> Mono
@@ -1613,6 +1615,7 @@ isMonoScheme : Scheme -> Bool
 isNonexpansive : TcEnv -> Expr -> Bool
 isOuterVariable : Int -> Mono -> Bool
 isPreludeMid : String -> Bool
+isPreludeOrigin : TyConOrigin -> Bool
 isRigidCell : Ref Effvar -> Bool
 isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
@@ -2262,6 +2265,7 @@ recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
 recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
 recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
 receiverTypeIdent : Mono -> Option Ident
+receiverTypeWord : Mono -> String -> String
 recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
@@ -2310,6 +2314,7 @@ recordNumlitLoc : Mono -> Unit
 recordNumlitRange : Mono -> Int -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
 recordOblAt : Predicate -> Int -> Provenance -> Option Loc -> ScopeId -> Unit
+recordOfOtherType : Mono -> RecordInfo -> Bool
 recordOwnerModule : RecordInfo -> Option String
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit
@@ -2645,6 +2650,7 @@ sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
 sourceBindingArity : Expr -> Int
 spellCtxOf : List Decl -> SpellCtx
+spineHead : Mono -> Mono
 spineHeadMono : Mono -> Mono
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
@@ -2731,6 +2737,7 @@ tcLoc : TcDiag -> Option Loc
 tcMsg : TcDiag -> String
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
+tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 third3 : (a, b, c) -> c

@@ -1,0 +1,8 @@
+data Result a = Good a | Bad
+
+describe : Result Int -> Int
+describe r = match r
+  Good n => n
+  Bad => 0
+
+main = println (intToString (describe (Good 1) + resultOr 2 (Err "e")))
