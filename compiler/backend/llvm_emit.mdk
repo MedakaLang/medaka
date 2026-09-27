@@ -6697,7 +6697,9 @@ emitDictValue : Emit ->
   List Route ->
   (String, LTy)
 emitDictValue e env name routes =
-  if isKnownFn e name then
+  if isLocal env name then
+    emitLocalDictApp e env name routes []
+  else if isKnownFn e name then
     let valArity = match defArityOf e name
       Some n => maxInt 0 (n - listLen routes)
       None => fnArity e name - listLen routes
@@ -8733,7 +8735,9 @@ emitDictApp : Emit ->
   List String ->
   (String, LTy)
 emitDictApp e env name routes argOps =
-  if isKnownFn e name then
+  if isLocal env name then
+    emitLocalDictApp e env name routes argOps
+  else if isKnownFn e name then
     let dictWords = dictWordsOf e env routes
     let allWords = dictWords ++ argOps
     -- E22: measure a constrained call against the RECORDED define arity.  A short
@@ -8744,6 +8748,19 @@ emitDictApp e env name routes argOps =
       None => emitDictAppDirect e name allWords
   else
     gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
+
+-- A dictionary-abstracted LOCAL binding is a closure whose leading parameters are
+-- its dictionaries: apply it to the dict words, then the argument words.
+emitLocalDictApp : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List Route ->
+  List String ->
+  (String, LTy)
+emitLocalDictApp e env name routes argOps =
+  let (cw, _) = lookupVarG e env name
+  let dictWords = dictWordsOf e env routes
+  emitIndirectArity e cw (dictWords ++ argOps) (CVar name AGlobal)
 
 -- the plain direct constrained-fn call: dict words followed by the real arg words,
 -- in the order dict_pass bound `name`'s leading dict params (the historical lowering).

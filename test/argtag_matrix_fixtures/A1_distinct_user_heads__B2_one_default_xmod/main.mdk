@@ -1,0 +1,13 @@
+-- #1046's repro: a cross-module interface with a DEFAULT method, `Dog`'s impl
+-- method-less (inherits the default) and `Cat`'s impl overriding it, reached through
+-- a local lambda used at both types.  The local is dictionary-abstracted, so each use
+-- reaches its own instance: the default for `Dog`, the override for `Cat`.
+import iface.{Speak(..), speak}
+data Dog = Dog
+data Cat = Cat
+impl Speak Dog where              -- METHOD-LESS: inherits the default
+impl Speak Cat where
+  speak _ = "meow"
+main =
+  let f = v => speak v
+  println (f Dog ++ "|" ++ f Cat)

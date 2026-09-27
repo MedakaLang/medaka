@@ -107,7 +107,9 @@ freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CMethod _ _ route implRoutes methRoutes) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
-freeVars b (CDict _ routes) = routeDictNames b routes
+-- The head names a local closure when a let binder abstracted dictionaries.
+freeVars b (CDict n routes) =
+  (if contains n b then [] else [n]) ++ routeDictNames b routes
 freeVars _ _ = []
 
 -- collect the captured dict-param names (RDict/RDictFwd) from a list of Routes.

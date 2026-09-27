@@ -5563,7 +5563,9 @@ emitDictRef : Prog ->
   List CExpr ->
   List String
 emitDictRef prog env d name routes args =
-  if progFnMemberW prog name then
+  if contains name env then
+    emitLocalDictRef prog env d name routes args
+  else if progFnMemberW prog name then
     -- P2 (over/under-application, #729): the direct `call` is only legal when the
     -- application EXACTLY saturates the define's VALUE arity — `progFnArity` (which the
     -- dict-pass already widened by the leading dict params) minus the dict routes we
@@ -5585,6 +5587,26 @@ emitDictRef prog env d name routes args =
       emitIndirectApp prog env d (CDict name routes) args
   else
     gapLP prog ("wasm W5: CDict over unknown function '" ++ name ++ "'")
+
+-- A dictionary-abstracted LOCAL binding is a closure whose leading parameters are
+-- its dictionaries: apply it to the dict witnesses, then the arguments.
+emitLocalDictRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  List Route ->
+  List CExpr ->
+  List String
+emitLocalDictRef prog env d name routes args =
+  let dictWords = flatMap (routeWitness prog env d) routes
+  let argInstrs = flatMap (a => emitRefExpr prog env d a) args
+  emitVarRef prog env d name
+    ++ dictWords
+    ++ argInstrs
+    ++ [
+      "array.new_fixed $argarr " ++ intToString (listLen routes + listLen args),
+      "call $__mdk_apply",
+    ]
 
 -- ── EMITTER-GAPS E23 (wasm peer): CMethod / CDict in VALUE position ───────────
 -- A typeclass METHOD (`map negate xs`, `filter isEv xs`) or a `=>`-constrained NAMED
@@ -5669,7 +5691,9 @@ emitDictValueRef : Prog ->
   List Route ->
   List String
 emitDictValueRef prog env d name routes =
-  if progFnMemberW prog name then
+  if contains name env then
+    emitLocalDictRef prog env d name routes []
+  else if progFnMemberW prog name then
     let valArity = progFnArity prog name - listLen routes
     if valArity <= 0 then
       emitDictRef prog env d name routes []
@@ -10868,7 +10892,9 @@ freeVarsExpr bound (CSlice e lo hi _) =
 -- args of their own — args arrive via the surrounding CApp, already handled.)
 freeVarsExpr bound (CMethod _ _ route implRoutes methRoutes) =
   flatMap (freeVarsRoute bound) (route :: implRoutes ++ methRoutes)
-freeVarsExpr bound (CDict _ routes) = flatMap (freeVarsRoute bound) routes
+freeVarsExpr bound (CDict name routes) =
+  (if contains name bound then [] else [name])
+    ++ flatMap (freeVarsRoute bound) routes
 freeVarsExpr bound _ = []
 
 -- the dict-param names a Route reads: RDict/RDictFwd name a leading dict param (free

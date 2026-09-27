@@ -1670,7 +1670,9 @@ renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
 --     `EMethodAt` in `frontend/ast.mdk`), which `marker.collectVars` reports to
 --     `dce.declRefs` as a reference; the FIRST field is an interface METHOD name, which
 --     this pass never renames.  `""` is the sentinel for "no standalone", not a name.
-renameScoped rm _ (EDictAt n ev) = EDictAt (renameDefName rm n) ev
+renameScoped rm bound (EDictAt n ev)
+  | omHasKey n bound = EDictAt n ev
+  | otherwise = EDictAt (renameDefName rm n) ev
 renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
 -- ── LEAVES, AS AN EXPLICIT LIST ───────────────────────────────────────────────
 -- Not a `_ => e` catch-all: this pass now consumes elaborated trees, so a new `Expr`

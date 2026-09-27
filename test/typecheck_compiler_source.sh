@@ -1085,7 +1085,6 @@ require_typecheck_arm() {
 }
 
 require_typecheck_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
-require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
 require_typecheck_arm numObligIds finalizeNumBoundary 'OpNumLit occ => monoUnboundIds occ'
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
@@ -1156,7 +1155,6 @@ require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelS
 
 # The other projection readers retain their own policies; presence in one reader
 # cannot cover an omitted arm in another reader.
-require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'request.mrrTyparams'
 require_typecheck_arm numObligIds finalizeNumBoundary 'monoUnboundIds request.mrrOccurrence'
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
@@ -1376,12 +1374,14 @@ printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
 done || exit 1
 
 # Deferred operator routes keep their lexical evidence owner through the concrete-head
-# stamper. The scalar registry is graph-lived, so an empty owner or nominal-scope
-# miss must not borrow another method's dict. The direct in-impl operator path
-# retains its legacy scalar classification but now checks the same scope boundary.
+# stamper. The scalar registry is graph-lived, so a site must not borrow another
+# body's dict: every hit is gated on the binder's scope being visible from the site
+# (`firstDictForEncl`'s `givenVisibleFrom`), which is what also lets a test or prop
+# body -- no enclosing declaration name -- read a local binding's own givens.
 lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
-printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
-  echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
+first_dict_block="$(sed -n '/^firstDictForEncl :/,/^$/p' "$predicate_slot_src")"
+printf '%s\n' "$first_dict_block" | grep -Fq 'Scopes.givenVisibleFrom' || {
+  echo "FAIL: firstDictForEncl must gate every hit on lexical scope visibility"
   exit 1
 }
 printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {

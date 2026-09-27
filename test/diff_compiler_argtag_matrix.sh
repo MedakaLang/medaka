@@ -3,20 +3,13 @@
 #
 # ── WHAT THIS GATE IS FOR ─────────────────────────────────────────────────────
 #
-# `T-LOCAL-CONSTRAINED-MONO` (docs/KNOWN-GAPS.md, "Known over-reject") rejects a whole
-# REGION of programs at check time: any local binding whose body reaches a constrained
-# method call and which is then used at two types. Because the region is rejected, what
-# the compiler WOULD do with those programs is unobservable — and #2032's whole question
-# ("can the pin be narrowed?") is a question ABOUT that unobservable region. The prior
-# sprint answered it with a hand-picked sample and its reviewer correctly called that
-# "a lower bound, not closed."
-#
-# This gate makes the region observable and BOUNDED. `MEDAKA_ARGTAG_UNPIN=1` arms the
-# test-only hatch (`setLocalPinDisabled`, driver/medaka_cli.mdk → `localPinPairs`,
-# types/typecheck.mdk), which drops every pin channel so the region typechecks; the
-# fixtures below then drive a head-shape x impl-shape MATRIX through it and grade what
-# each cell actually does on `check`, on `run` (eval) and on `build` + execute (the
-# native arg-tag chain).
+# A local binding that forwards a class dictionary and is used at two types is
+# dictionary-abstracted: each use applies it to the dictionary solved at that use
+# (#1082). The fixtures drive a head-shape x impl-shape MATRIX of such locals
+# (test/argtag_matrix_fixtures/CENSUS.md) through `check`, `run` (eval) and `build` +
+# execute (native), and grade each against the answer written from its semantics. The
+# shapes are the ones a run-time argument tag cannot decide (one head at two argument
+# types, two primitives), so a regression to tag dispatch is value-observable.
 #
 # ── ⚠️ THIS IS A PIN, NOT A GOLDEN. A CELL THAT FLIPS MUST BE RE-CLASSIFIED ────
 #
@@ -197,15 +190,15 @@ transcript() {
   printf 'class: %s\n' "$_cls"
   printf 'correct: %s\n' "$(sed -n 's/^correct:[[:space:]]*//p' "$_dir/expected.txt" | head -1)"
 
-  MEDAKA_ARGTAG_UNPIN=1 bound "$MEDAKA" check "$_dir/main.mdk" >"$TMP/o" 2>"$TMP/e"
+  bound "$MEDAKA" check "$_dir/main.mdk" >"$TMP/o" 2>"$TMP/e"
   printf 'check: %s\n' "$?"
 
-  MEDAKA_ARGTAG_UNPIN=1 bound "$MEDAKA" run "$_dir/main.mdk" >"$TMP/o" 2>"$TMP/e"
+  bound "$MEDAKA" run "$_dir/main.mdk" >"$TMP/o" 2>"$TMP/e"
   _rc=$?
   cat "$TMP/e" >>"$TMP/o"
   printf 'run: %s | %s\n' "$_rc" "$(norm "$TMP/o" "$_dir")"
 
-  MEDAKA_ARGTAG_UNPIN=1 bound "$MEDAKA" build "$_dir/main.mdk" -o "$TMP/$_name.bin" >"$TMP/o" 2>&1
+  bound "$MEDAKA" build "$_dir/main.mdk" -o "$TMP/$_name.bin" >"$TMP/o" 2>&1
   _brc=$?
   printf 'build: %s | %s\n' "$_brc" "$(norm "$TMP/o" "$_dir")"
 
@@ -214,7 +207,7 @@ transcript() {
     # from any exit code — a build that starts succeeding cannot masquerade as a match.
     printf 'exec: n/a\n'
   else
-    MEDAKA_ARGTAG_UNPIN=1 bound "$TMP/$_name.bin" >"$TMP/o" 2>"$TMP/e"
+    bound "$TMP/$_name.bin" >"$TMP/o" 2>"$TMP/e"
     _erc=$?
     cat "$TMP/e" >>"$TMP/o"
     printf 'exec: %s | %s\n' "$_erc" "$(norm_native_exec "$TMP/o" "$_dir" "$_erc")"
