@@ -550,6 +550,19 @@ round state still a tuple (#3369's shape), 4% fewer instructions; the state
 carried as eight parameters on top of it, 50%; those parameters passed as
 `i32` to the raw worker, 56%.
 
+N6's measurement (2026-09-26, shared box, each arm built by its own tree's
+compiler, main at `343a4b6ad`, instructions:u unless stated): hello-world
+`check`, `run` and `build` are flat in cachegrind `Ir` (−0.01%, +0.02%,
++0.13%), since no signed impl is in `core.mdk`; `medaka check` of the
+compiler is +0.53%, all of it the larger source (the new binary checks main's
+source in the same instructions, +0.007%); the interpreter's per-step cost
+on an `Int` loop is +0.9% (7,921 to 7,993 instructions), after `Int`
+comparisons were given their own arms ahead of the `U64`/`I64` shape arms;
+and `sqlite/` over 100,000 rows is +0.3% for a filtered aggregate, +0.1% for
+an ORDER BY and +1.0% for `sum(v * 3 + 1)`, whose arithmetic is now checked
+so an overflow becomes a REAL rather than a trap.  Wall time is inside the
+noise on every workload.
+
 N1 precedes N2 because the family's conversion names must be fixed before
 `U8` ships (#3415, point 1). N2 precedes N3 so the tagged mechanism is
 measured before the boxed one is built. N3 precedes N4 because the
