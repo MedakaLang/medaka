@@ -790,8 +790,8 @@ for required in \
   'let savedImplSelf = (progEmit prog).implSelfCtx.value' \
   'let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag key fnName arity)' \
   'let _ = setRef (progEmit prog).implSelfCtx savedImplSelf' \
-  'implSelfReturnCall prog env name siteArity route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
-  'if implEntryCanonicalKeyW entry == key then' \
+  'implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
+  'if implEntryKeyW entry == key then' \
   'let i = !emit.nextStringSegmentId' \
   'setRef emit.nextStringSegmentId (i + 1)' \
   'setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)' \
