@@ -4265,7 +4265,7 @@ coreChildren (CLet _ _ e1 e2) = Some [e1, e2]
 coreChildren (CBlock stmts) = Some (stmtExprs stmts)
 coreChildren (CIndex a i) = Some [a, i]
 coreChildren (CTuple es) = Some es
-coreChildren (CMethod _ _ _ _ _) = Some []
+coreChildren (CMethod _ _ _ _ _ _) = Some []
 coreChildren (CDict _ _) = Some []
 coreChildren _ = None
 
