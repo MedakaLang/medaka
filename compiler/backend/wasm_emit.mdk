@@ -840,7 +840,7 @@ arityOfIndexW fnArs f = match omLookup f fnArs
 -- ── impl INDEX by method name (perf #382 — the #350/#349 twins) ───────────────
 -- The `Prog` carries every impl clause as one flat `List CImplEntry` (`progImpls`),
 -- and the emitter scans the WHOLE list per RKey/RDict dispatch site: `implForW`,
--- `methodImpls`, `implArityFor`,
+-- `methodImpls`, `implReqDictCount`,
 -- `methodReturnsBoolW`, and the `emitImplFns`/`gatherImplGroup` group builder all do
 -- `findByTagW`/`flatMap implClauseFor`/`flatMap methodImplKey` over one method bucket.
 -- EVERY one of those first filters by the METHOD name (`n == method`) — so restricting
@@ -5438,20 +5438,29 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
       (idt + 1)
     ++ indentBy idt ["end"]
 
--- The primary word and its canonical alias select one implementation. Keep the
+-- The words that select one implementation: its route word, and — the peer of
+-- llvm_emit's `implEntryRouteWords` — its canonical key and its bare head tag when
+-- some dictionary in the program carries them.  The arms are already narrowed to the
+-- site's interface (`methodImpls`), so the bare head names one of them even where the
+-- route word is canonical because another interface implements a same-spelled
+-- method at the head: a dictionary whose own interface sees no such collision (an
+-- instance inheriting that method's default) carries the bare head.  Keep the
 -- argument code in one arm: it may itself contain another dictionary dispatch.
 dispatchKeyTestW : Prog -> ImplArmW -> List String -> List String
 dispatchKeyTestW prog arm tagRead =
   let key = armRouteKeyW arm
-  let canonical = armKeyW arm
-  let primary = tagRead ++ ["i32.const " ++ intToString (dictTag key), "i32.eq"]
-  if key == canonical
-    || not (omHasKey canonical !(progEmit prog).usedDictRouteKeys) then
-    primary
-  else
-    primary
-      ++ tagRead
-      ++ ["i32.const " ++ intToString (dictTag canonical), "i32.eq", "i32.or"]
+  let used = !(progEmit prog).usedDictRouteKeys
+  let aliases =
+    filterList
+      (w => w /= key && omHasKey w used)
+      (dedupBy (w => w) [armKeyW arm, armHeadTagW arm])
+  tagRead
+    ++ ["i32.const " ++ intToString (dictTag key), "i32.eq"]
+    ++ flatMap
+      (w =>
+        tagRead
+          ++ ["i32.const " ++ intToString (dictTag w), "i32.eq", "i32.or"])
+      aliases
 
 -- load nested req dict `i` from the dict param $dpar's $dictcell (field 1 = $dictarr).
 -- Only reached for a constrained impl arm, where the in-scope dict IS a $dictcell.
@@ -5477,24 +5486,19 @@ loadReqDict dpar i =
     ]
     ++ ["end"]
 
--- leading `requires`-dict count for a method's impl at `tag`: the impl's SOURCE
--- clause pattern count (the dict-pass injects leading $dict_* params, BEFORE the
--- user args) minus the method's DECLARED user arity (methodArityOf).  This is the
--- llvm_emit `implReqCount` separation (listLen implPats - methodArityOf), NOT the
--- pre-W9b `arity - userArgs` heuristic: a point-free impl (`length`, raw pats 0,
--- method arity 1) now yields 0 (no requires) rather than a spurious count, and a
--- genuinely-constrained impl yields exactly its requires-dict count regardless of
--- how many args the call site supplies.  >= 0; 0 for the unconstrained impls.
+-- leading dictionary count for a method's impl at `tag`: the `$dict_*` patterns
+-- the dict-pass put at the front of the impl's clause, counted DIRECTLY — the peer of
+-- llvm_emit's `implReqCount` (`leadingDictPats (implPats ent)`), the same ruler the
+-- define is minted with.  Not the clause's pattern count less the method's declared
+-- arity: that is a different quantity for a POINT-FREE clause, whose value
+-- parameters are not patterns (an inherited `loud = x => …` at an instance with two
+-- expanded `requires` has two patterns and arity 1, and the difference loaded one
+-- dictionary where the define takes two).  0 when no impl answers [tag].
 implReqDictCount : Prog -> String -> String -> Int -> Int
 implReqDictCount prog method tag _userArgs =
-  let raw = implArityFor prog method tag
-  let ua = methodArityOfTagW prog method tag
-  if raw > ua then raw - ua else 0
-
-implArityFor : Prog -> String -> String -> Int
-implArityFor prog method tag =
-  implGroupArity
-    (flatMap (implClauseFor method tag) (methodEntriesW prog method))
+  match findByTagW method tag (methodEntriesW prog method)
+    Some ent => implLeadingDictCountOfEntryW ent
+    None => 0
 
 implLeadingDictCountOfEntryW : CImplEntry -> Int
 implLeadingDictCountOfEntryW ent = wLeadingDictPats (implEntryPatsW ent)
@@ -6040,8 +6044,8 @@ applyEtaArgsW body (_ :: rest) = applyEtaArgsW body rest
 
 -- clauses of (method, tag) where [tag] is EITHER the head tycon OR the canonical key
 -- (#324): the def-side grouping passes a canonical key (selecting exactly one impl's
--- clauses even when it shares a head with an overlapping sibling), while arity probes
--- (implArityFor) pass a route's head tag.  Matching on `t == tag || k == tag` (as
+-- clauses even when it shares a head with an overlapping sibling), while a route's
+-- probes (`findByTagW`) pass its head tag.  Matching on `t == tag || k == tag` (as
 -- findByTagW does) serves both; a canonical key contains `|` so it never spuriously
 -- equals a bare head, and vice versa.
 implClauseFor : String -> String -> CImplEntry -> List CClause
@@ -6252,20 +6256,24 @@ emitClausesImpl prog fnName params arity clauses =
   emitClausesRef prog fnName params arity clauses
 
 -- One dispatch arm: the entry's symbol tag (memo naming), the route word its
--- dictionary witness carries, its canonical key, and the function the arm calls.
-data ImplArmW = ImplArmW String String String String
+-- dictionary witness carries, its canonical key, the function the arm calls, and
+-- its head tag.
+data ImplArmW = ImplArmW String String String String String
 
 armSymTagW : ImplArmW -> String
-armSymTagW (ImplArmW symTag _ _ _) = symTag
+armSymTagW (ImplArmW symTag _ _ _ _) = symTag
 
 armRouteKeyW : ImplArmW -> String
-armRouteKeyW (ImplArmW _ routeKey _ _) = routeKey
+armRouteKeyW (ImplArmW _ routeKey _ _ _) = routeKey
 
 armKeyW : ImplArmW -> String
-armKeyW (ImplArmW _ _ key _) = key
+armKeyW (ImplArmW _ _ key _ _) = key
 
 armFnSymW : ImplArmW -> String
-armFnSymW (ImplArmW _ _ _ fnSym) = fnSym
+armFnSymW (ImplArmW _ _ _ fnSym _) = fnSym
+
+armHeadTagW : ImplArmW -> String
+armHeadTagW (ImplArmW _ _ _ _ tag) = tag
 
 -- The candidate implementations of the interface a site resolved to ([iface]; `""`
 -- narrows nothing), one arm per implementation, first-seen order.  A sibling method's
@@ -6291,6 +6299,7 @@ methodImplArm prog entries method ent =
     (implEntryRouteKeyW entries method t k)
     k
     (implEntrySymW prog method ent)
+    t
 
 -- one arm per called function, first-seen order
 dedupArmsW : List ImplArmW -> OrdMap Unit -> List ImplArmW

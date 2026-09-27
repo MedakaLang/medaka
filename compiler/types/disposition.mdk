@@ -86,8 +86,14 @@ public export data InstanceShape = InstanceShape {
   isTys : List Ty,
   -- the word a dictionary for this instance carries (the typechecker's
   -- predicate route word: the bare head unless the head collides), which a
-  -- superclass call projected from the receiver dispatches by
+  -- call of a method of the instance's own interface through the receiver
+  -- dispatches by
   isDictWord : String,
+  -- the same word for each superclass instance at these type arguments, keyed
+  -- by the superclass's interface word: a superclass method reached through the
+  -- receiver dispatches by its own instance's word, which differs from
+  -- `isDictWord` whenever either head collides
+  isSuperWords : List (String, String),
   -- how many `requires` dictionaries the instance's methods take after their
   -- method-level ones (the expanded requires list's length)
   isReqCount : Int,
@@ -248,8 +254,11 @@ installedDispositions _ = match !dispositionsRef
   Some table => table
 
 -- For a lowering driver that may run without an elaboration (the untyped Core-IR
--- probes): `None` there means the program was never typechecked, so it has no
--- inherited slot a specialization could serve.
+-- and eval probes): `None` there means the program was never typechecked, so no
+-- instance's inherited defaults are known and none is specialized — an impl that
+-- leaves another module's interface method to its default has no body for it on
+-- that path (see `core_ir_lower.lowerProgram`).  A typechecked driver reads
+-- `installedDispositions`, which refuses a missing table.
 export
 installedDispositionsOpt : Unit -> Option DispositionTable
 installedDispositionsOpt _ = !dispositionsRef
