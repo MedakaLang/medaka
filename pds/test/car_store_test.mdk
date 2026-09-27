@@ -1,8 +1,7 @@
 {- | Structural tests for the pure verified blockstore and strict CARv1. The
    independent expected CAR bytes remain exclusively in the vector corpus. -}
 
-import array as A
-import bytes.{fromU8Array}
+import bytes.{Bytes, fromU8Array}
 import test.{expectEach, expectEqual, expectErr, expectFalse, expectTrue, fail}
 import lib.blockstore.{
   BlockStore,
@@ -23,7 +22,7 @@ mustStore : Result String BlockStore -> BlockStore
 mustStore (Ok store) = store
 mustStore (Err message) = panic message
 
-mustBytes : Result String (Array Int) -> Array Int
+mustBytes : Result String Bytes -> Bytes
 mustBytes (Ok bytes) = bytes
 mustBytes (Err message) = panic message
 
@@ -31,14 +30,14 @@ mustCar : Result String Car -> Car
 mustCar (Ok car) = car
 mustCar (Err message) = panic message
 
-rootBytes : Array Int
-rootBytes = [|0xa1, 0x61, 0x6e, 1|]
+rootBytes : Bytes
+rootBytes = fromU8Array [|0xa1, 0x61, 0x6e, 1|]
 
 rootCid : Cid
 rootCid = cidForDagCbor (fromU8Array [|0xa1, 0x61, 0x6e, 1|])
 
-extraBytes : Array Int
-extraBytes = [|109, 101, 100, 97, 107, 97|]
+extraBytes : Bytes
+extraBytes = fromU8Array [|109, 101, 100, 97, 107, 97|]
 
 extraCid : Cid
 extraCid = cidForRaw (fromU8Array [|109, 101, 100, 97, 107, 97|])
@@ -69,9 +68,6 @@ test "verified put stores and retrieves a block" =
 
 test "put rejects CID and content mismatch" =
   expectTrue (isErr (blockStorePut rootCid extraBytes blockStoreEmpty))
-
-test "put rejects non-byte array elements" =
-  expectTrue (isErr (blockStorePut extraCid [|256|] blockStoreEmpty))
 
 test "identical duplicate put is idempotent" =
   let once = mustStore (blockStorePut rootCid rootBytes blockStoreEmpty)
@@ -106,14 +102,6 @@ test "merge preserves both immutable inputs" =
     ),
     ("the merge holds both blocks", expectEqual 2 (blockStoreSize merged)),
   ]
-
-test "input and lookup arrays cannot alias store contents" =
-  let source = arrayCopy extraBytes
-  let store = mustStore (blockStorePut extraCid source blockStoreEmpty)
-  let (Some shown) = blockStoreGet extraCid store
-  let () = A.setInPlace 0 0 source
-  let () = A.setInPlace 0 0 shown
-  expectEqual (blockStoreGet extraCid store) (Some extraBytes)
 
 test "CAR encodes and strictly round-trips explicit block order" =
   let blocks = [(rootCid, rootBytes), (extraCid, extraBytes)]

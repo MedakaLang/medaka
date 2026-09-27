@@ -10,10 +10,9 @@
    the representable range `[-2^62, 2^62-1]`, and loudly rejects the remaining
    spec-legal 64-bit integer values rather than wrapping them. -}
 
-import array.{drop}
 import bytebuilder.{
   Builder,
-  buildArray,
+  buildBytes,
   emitBeUint,
   emitBytes,
   emitU8,
@@ -21,10 +20,10 @@ import bytebuilder.{
 }
 import bytes.{
   Bytes,
+  decodeUtf8,
   drop as bytesDrop,
-  fromArrayAssumeByteDomain,
+  encodeUtf8,
   length as bytesLength,
-  toArray,
 }
 import byteparser.{
   BResult(..),
@@ -34,7 +33,6 @@ import byteparser.{
   takeBytes,
 }
 import list.{reverse, sortBy}
-import string.{fromUtf8, toUtf8}
 import u8 as U8
 import lib.cid.{Cid, cidFromBytes, cidToBytes}
 import lib.resource_limits.{checkDagCborDepth}
@@ -44,18 +42,11 @@ public export data DagCbor =
   | DcNull
   | DcBool Bool
   | DcInt Int
-  | DcBytes (Array Int)
+  | DcBytes Bytes
   | DcString String
   | DcArray (List DagCbor)
   | DcMap (List (String, DagCbor))
   | DcLink Cid
-
-validBytes : Array Int -> Int -> Bool
-validBytes bytes i =
-  if i < arrayLength bytes then
-    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
-  else
-    True
 
 emitArgument : Int -> Int -> Builder -> Unit
 emitArgument major value out =
@@ -76,18 +67,10 @@ emitArgument major value out =
 
 keyCompare : String -> String -> Ordering
 keyCompare left right =
-  let a = toUtf8 left
-  let b = toUtf8 right
-  match compare (arrayLength a) (arrayLength b)
-    Eq => compareKeyBytes a b 0
-    order => order
-
-compareKeyBytes : Array Int -> Array Int -> Int -> Ordering
-compareKeyBytes left right i =
-  if i >= arrayLength left then
-    Eq
-  else match compare left[i] right[i]
-    Eq => compareKeyBytes left right (i + 1)
+  let a = encodeUtf8 left
+  let b = encodeUtf8 right
+  match compare (bytesLength a) (bytesLength b)
+    Eq => compare a b
     order => order
 
 {- | The depth gate, split from the constructor dispatch exactly as
@@ -116,16 +99,13 @@ emitValueAt (DcInt value) _ out =
     emitArgument 1 (0 - 1 - value) out
   Ok ()
 emitValueAt (DcBytes bytes) _ out =
-  if not (validBytes bytes 0) then
-    Err "dagcbor: byte string element outside byte range 0..255"
-  else
-    emitArgument 2 (arrayLength bytes) out
-    emitBytes (fromArrayAssumeByteDomain bytes) out
-    Ok ()
+  emitArgument 2 (bytesLength bytes) out
+  emitBytes bytes out
+  Ok ()
 emitValueAt (DcString text) _ out =
-  let bytes = toUtf8 text
-  emitArgument 3 (arrayLength bytes) out
-  emitBytes (fromArrayAssumeByteDomain bytes) out
+  let bytes = encodeUtf8 text
+  emitArgument 3 (bytesLength bytes) out
+  emitBytes bytes out
   Ok ()
 emitValueAt (DcArray values) depth out =
   emitArgument 4 (length values) out
@@ -169,10 +149,10 @@ firstDuplicate ((key, _) :: rest) (Some prior) =
 
 -- | Encode one value to its unique canonical byte representation.
 export
-dagCborEncode : DagCbor -> Result String (Array Int)
+dagCborEncode : DagCbor -> Result String Bytes
 dagCborEncode value =
   let out = newBuilder ()
-  map (_ => buildArray out) (emitValue value 0 out)
+  map (_ => buildBytes out) (emitValue value 0 out)
 
 foldUInt : Bytes -> Int -> Int
 foldUInt bytes i = foldUIntGo bytes i 0
@@ -254,7 +234,7 @@ parseBytes input pos additional = match readArgument input pos additional
   BOk count endPos =>
     match runBP (takeBytes count) input endPos (bytesLength input)
       BErr _ errorPos => BErr "dagcbor: truncated byte string" errorPos
-      BOk bytes finalPos => BOk (DcBytes (toArray bytes)) finalPos
+      BOk bytes finalPos => BOk (DcBytes bytes) finalPos
 
 parseString : Bytes -> Int -> Int -> BResult DagCbor
 parseString input pos additional = match readArgument input pos additional
@@ -262,67 +242,9 @@ parseString input pos additional = match readArgument input pos additional
   BOk count endPos =>
     match runBP (takeBytes count) input endPos (bytesLength input)
       BErr _ errorPos => BErr "dagcbor: truncated UTF-8 string" errorPos
-      BOk bytes finalPos =>
-        let arr = toArray bytes
-        if not (validUtf8 arr 0) then
-          BErr "dagcbor: invalid UTF-8 string" endPos
-        else
-          BOk (DcString (fromUtf8 arr)) finalPos
-
-continuation : Int -> Bool
-continuation byte = byte >= 0x80 && byte <= 0xbf
-
-validUtf8 : Array Int -> Int -> Bool
-validUtf8 bytes i =
-  if i >= arrayLength bytes then
-    True
-  else
-    let first = bytes[i]
-    if first <= 0x7f then
-      validUtf8 bytes (i + 1)
-    else if first >= 0xc2 && first <= 0xdf then
-      i + 1 < arrayLength bytes
-        && continuation bytes[i + 1]
-        && validUtf8 bytes (i + 2)
-    else if first >= 0xe0 && first <= 0xef then
-      validUtf8Three bytes i first
-    else if first >= 0xf0 && first <= 0xf4 then
-      validUtf8Four bytes i first
-    else
-      False
-
-validUtf8Three : Array Int -> Int -> Int -> Bool
-validUtf8Three bytes i first =
-  if i + 2 >= arrayLength bytes then
-    False
-  else
-    let second = bytes[i + 1]
-    let secondOk =
-      if first == 0xe0 then
-        second >= 0xa0 && second <= 0xbf
-      else if first == 0xed then
-        second >= 0x80 && second <= 0x9f
-      else
-        continuation second
-    secondOk && continuation bytes[i + 2] && validUtf8 bytes (i + 3)
-
-validUtf8Four : Array Int -> Int -> Int -> Bool
-validUtf8Four bytes i first =
-  if i + 3 >= arrayLength bytes then
-    False
-  else
-    let second = bytes[i + 1]
-    let secondOk =
-      if first == 0xf0 then
-        second >= 0x90 && second <= 0xbf
-      else if first == 0xf4 then
-        second >= 0x80 && second <= 0x8f
-      else
-        continuation second
-    secondOk
-      && continuation bytes[i + 2]
-      && continuation bytes[i + 3]
-      && validUtf8 bytes (i + 4)
+      BOk bytes finalPos => match decodeUtf8 bytes
+        None => BErr "dagcbor: invalid UTF-8 string" endPos
+        Some text => BOk (DcString text) finalPos
 
 parseArray : Bytes -> Int -> Int -> Int -> List DagCbor -> BResult DagCbor
 parseArray _ pos _ 0 acc = BOk (DcArray (reverse acc)) pos
@@ -405,17 +327,12 @@ dagParser = ByteParserE (input pos _ => parseValueAt input pos 0)
 {- | Strictly decode exactly one canonical value. Trailing bytes are an
    error; no relaxed historical mode is provided. -}
 export
-dagCborDecode : Array Int -> Result String DagCbor
-dagCborDecode rawBytes =
-  if not (validBytes rawBytes 0) then
-    Err "dagcbor: input element outside byte range 0..255"
-  else
-    let bytes = fromArrayAssumeByteDomain rawBytes
-    match runBP dagParser bytes 0 (bytesLength bytes)
-      BErr message pos => Err "\{message} at byte \{intToString pos}"
-      BOk value pos =>
-        if pos /= bytesLength bytes then
-          Err
-            "dagcbor: trailing bytes after top-level value at byte \{intToString pos}"
-        else
-          Ok value
+dagCborDecode : Bytes -> Result String DagCbor
+dagCborDecode bytes = match runBP dagParser bytes 0 (bytesLength bytes)
+  BErr message pos => Err "\{message} at byte \{intToString pos}"
+  BOk value pos =>
+    if pos /= bytesLength bytes then
+      Err
+        "dagcbor: trailing bytes after top-level value at byte \{intToString pos}"
+    else
+      Ok value

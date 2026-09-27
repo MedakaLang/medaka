@@ -2,47 +2,30 @@
 
    Insertion looks up the CID first: an already-present CID is idempotent and
    recomputes nothing, while a new CID is verified against the blessed atproto
-   CID recomputed from the supplied bytes. Views return defensive copies, and
-   entries are exposed in canonical binary-CID order so callers never inherit
-   mutation or insertion-order state. -}
+   CID recomputed from the supplied bytes. Views return the store's own
+   `Bytes` values directly, and entries are exposed in canonical binary-CID
+   order so callers never inherit insertion-order state. -}
 
--- The byte-range validator is intentionally local at each untrusted boundary.
--- lint-disable-file rule-duplicate-body
-
-import bytes.{fromArray}
+import bytes.{Bytes}
 import hex.{encode}
 import map.{Map(..), get, set, size, entries}
 import lib.cid.{Cid, cidCodec, cidEqual, cidForDagCbor, cidForRaw, cidToBytes}
 import lib.multiformats.{multicodecDagCbor}
 
 -- | An immutable verified CID-to-bytes map. Its representation is private.
-export data BlockStore = BlockStore (Map String (Cid, Array Int))
-
-validBytes : Array Int -> Int -> Bool
-validBytes bytes i =
-  if i >= arrayLength bytes then
-    True
-  else
-    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
+export data BlockStore = BlockStore (Map String (Cid, Bytes))
 
 cidKey : Cid -> String
 cidKey cid = encode (cidToBytes cid)
 
--- Door: `blockstore` is not itself retyped this slice (its own `Array Int`
--- moves in `S-b-cbor-car-bytes`). `bytes` is checked into `Bytes` here,
--- matching `cidForDagCbor`/`cidForRaw`'s old callee behaviour.
-expectedCid : Cid -> Array Int -> Cid
+expectedCid : Cid -> Bytes -> Cid
 expectedCid cid bytes =
-  let checked =
-    optionOrPanic
-      "cidForDagCbor/cidForRaw: every element must be a byte in 0..255"
-      (fromArray bytes)
   if cidCodec cid == multicodecDagCbor then
-    cidForDagCbor checked
+    cidForDagCbor bytes
   else
-    cidForRaw checked
+    cidForRaw bytes
 
-findBytes : Cid -> Map String (Cid, Array Int) -> Option (Array Int)
+findBytes : Cid -> Map String (Cid, Bytes) -> Option Bytes
 findBytes cid entries = map ((_, bytes) => bytes) (get (cidKey cid) entries)
 
 -- | The empty store.
@@ -62,18 +45,16 @@ blockStoreHas cid (BlockStore entries) = match findBytes cid entries
   Some _ => True
   None => False
 
--- | Look up a block, returning a defensive copy.
+-- | Look up a block's bytes.
 export
-blockStoreGet : Cid -> BlockStore -> Option (Array Int)
-blockStoreGet cid (BlockStore entries) = map arrayCopy (findBytes cid entries)
+blockStoreGet : Cid -> BlockStore -> Option Bytes
+blockStoreGet cid (BlockStore entries) = findBytes cid entries
 
 {- | Verify and immutably insert one block. An identical duplicate is
-   idempotent; a CID collision with different bytes fails loudly, whether
-   the differing bytes are in-range ("duplicate CID has different bytes")
-   or themselves out of the valid byte range (same message — the
-   present-CID branch never calls the byte-range validator). -}
+   idempotent; a CID collision with different bytes fails loudly
+   ("duplicate CID has different bytes"). -}
 export
-blockStorePut : Cid -> Array Int -> BlockStore -> Result String BlockStore
+blockStorePut : Cid -> Bytes -> BlockStore -> Result String BlockStore
 blockStorePut cid bytes (BlockStore entries) = match get (cidKey cid) entries
   Some (_, prior) =>
     if prior == bytes then
@@ -81,14 +62,12 @@ blockStorePut cid bytes (BlockStore entries) = match get (cidKey cid) entries
     else
       Err "blockstore: duplicate CID has different bytes"
   None =>
-    if not (validBytes bytes 0) then
-      Err "blockstore: block element outside byte range 0..255"
-    else if not (cidEqual cid (expectedCid cid bytes)) then
+    if not (cidEqual cid (expectedCid cid bytes)) then
       Err "blockstore: block content does not match CID"
     else
-      Ok (BlockStore (set (cidKey cid) (cid, arrayCopy bytes) entries))
+      Ok (BlockStore (set (cidKey cid) (cid, bytes) entries))
 
-addRows : List (Cid, Array Int) -> BlockStore -> Result String BlockStore
+addRows : List (Cid, Bytes) -> BlockStore -> Result String BlockStore
 addRows [] store = Ok store
 addRows ((cid, bytes) :: rest) store = match blockStorePut cid bytes store
   Err message => Err message
@@ -96,28 +75,22 @@ addRows ((cid, bytes) :: rest) store = match blockStorePut cid bytes store
 
 -- | Verify and insert every row without mutating the input store.
 export
-blockStoreAddMany : List (Cid, Array Int) ->
-  BlockStore ->
-  Result String BlockStore
+blockStoreAddMany : List (Cid, Bytes) -> BlockStore -> Result String BlockStore
 blockStoreAddMany rows store = addRows rows store
 
 -- | Construct a verified immutable store from arbitrary input order.
 export
-blockStoreFromBlocks : List (Cid, Array Int) -> Result String BlockStore
+blockStoreFromBlocks : List (Cid, Bytes) -> Result String BlockStore
 blockStoreFromBlocks rows = addRows rows blockStoreEmpty
 
-copyEntries : List (Cid, Array Int) -> List (Cid, Array Int)
-copyEntries [] = []
-copyEntries ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyEntries rest
-
-entryValues : List (String, (Cid, Array Int)) -> List (Cid, Array Int)
+entryValues : List (String, (Cid, Bytes)) -> List (Cid, Bytes)
 entryValues [] = []
 entryValues ((_, entry) :: rest) = entry :: entryValues rest
 
--- | Canonical CID-sorted defensive entry view.
+-- | Canonical CID-sorted entry view.
 export
-blockStoreEntries : BlockStore -> List (Cid, Array Int)
-blockStoreEntries (BlockStore m) = copyEntries (entryValues (entries m))
+blockStoreEntries : BlockStore -> List (Cid, Bytes)
+blockStoreEntries (BlockStore m) = entryValues (entries m)
 
 {- | Canonical CID-sorted view of which CIDs are present, carrying no bytes.
 

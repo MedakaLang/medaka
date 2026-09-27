@@ -199,7 +199,7 @@ summary label repo =
   let records = match repoList repo
     Ok rows => length rows
     Err message => panic "store_persistence: listing failed: \{message}"
-  let roots = match carDecode car
+  let roots = match carDecode (fromArrayAssumeByteDomain car)
     Ok _ => "decodes"
     Err message =>
       panic "store_persistence: exported CAR does not decode: \{message}"
@@ -312,7 +312,8 @@ verifiedBlobs : String ->
   <FileRead> Result String (List (Cid, String, Array Int))
 verifiedBlobs dir = do
   rows <- blobFileRead dir
-  _ <- blockStoreFromBlocks (map ((cid, _, bytes) => (cid, bytes)) rows)
+  _ <- blockStoreFromBlocks
+    (map ((cid, _, bytes) => (cid, fromArrayAssumeByteDomain bytes)) rows)
   Ok rows
 
 -- Each fixture is reported in FIXTURE order, not disk order (`blobFileRead`

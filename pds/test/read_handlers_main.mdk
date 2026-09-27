@@ -103,9 +103,10 @@ mustTid : String -> Tid
 mustTid text = resultOrPanic "read_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text = match dagCborDecode (mustHex text)
-  Ok value => dagCborToLexJson value
-  Err message => panic "read_handlers: malformed record: \{message}"
+mustRecordJson text =
+  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
+    Ok value => dagCborToLexJson value
+    Err message => panic "read_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =

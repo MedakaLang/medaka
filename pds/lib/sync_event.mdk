@@ -15,6 +15,7 @@
    write was is the caller's job, encoding it is this module's. -}
 
 import array
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set}
 import string.{fromUtf8}
@@ -171,12 +172,20 @@ createdNodes None after = mstNodeBlocks after
 createdNodes (Some before) after =
   missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
 
+-- Door: `car` speaks `Bytes` blocks; this module's own block lists are still
+-- `Array Int` (`lib.sync_event` moves in a later slice). One conversion
+-- helper covers every whole-block-list call into `carEncode`.
+blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
+blockRowsToBytesDoor =
+  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
+
 {- | Wrap a block set as the CAR file the `blocks` field carries. The commit
    CID is the sole root, which is the one ordering constraint the lexicon
    states. -}
 export
 syncCommitCar : Cid -> List (Cid, Array Int) -> Result String (Array Int)
-syncCommitCar commitCid blocks = carEncode [commitCid] blocks
+syncCommitCar commitCid blocks =
+  map toArray (carEncode [commitCid] (blockRowsToBytesDoor blocks))
 
 opValue : SyncRepoOp -> DagCbor
 opValue (SyncOpCreate path cid) = DcMap [
@@ -236,7 +245,7 @@ syncCommitBody event =
         ("commit", DcLink event.commitCid),
         ("rev", DcString (tidToString event.rev)),
         ("since", nullableRev event.since),
-        ("blocks", DcBytes event.blocksCar),
+        ("blocks", DcBytes (fromArrayAssumeByteDomain event.blocksCar)),
         ("ops", DcArray (if tooBig then [] else map opValue event.ops)),
         ("blobs", DcArray []),
         ("time", DcString event.time),
@@ -256,7 +265,7 @@ frameBytes : String -> DagCbor -> Result String (Array Int)
 frameBytes messageType bodyValue = do
   header <- dagCborEncode (messageHeader messageType)
   body <- dagCborEncode bodyValue
-  Ok (header ++ body)
+  Ok (toArray header ++ toArray body)
 
 export
 syncCommitFrame : SyncCommitEvent -> Result String (Array Int)
@@ -334,7 +343,9 @@ syncAccountFrame seq time did =
 export
 syncSyncBody : String -> Tid -> Cid -> Array Int -> Result String DagCbor
 syncSyncBody did rev commitCid commitBytes = do
-  car <- carEncode [commitCid] [(commitCid, commitBytes)]
+  car <- carEncode
+    [commitCid]
+    [(commitCid, fromArrayAssumeByteDomain commitBytes)]
   Ok
     (DcMap [
       ("did", DcString did),
@@ -381,7 +392,7 @@ syncErrorFrame error message =
   do
     header <- dagCborEncode (DcMap [("op", DcInt (0 - 1))])
     body <- dagCborEncode bodyValue
-    Ok (header ++ body)
+    Ok (toArray header ++ toArray body)
 
 indexEntries : List (Array Int, Cid) -> Map String Cid -> Map String Cid
 indexEntries [] index = index
@@ -443,7 +454,7 @@ addedRecordBlocks (op :: rest) store acc = match opRecordCid op
     None =>
       Err
         "sync_event: record block \{cidToString cid} is absent from the post-write block store"
-    Some bytes => addedRecordBlocks rest store ((cid, bytes) :: acc)
+    Some bytes => addedRecordBlocks rest store ((cid, toArray bytes) :: acc)
 
 optionalCommit : Option Repo -> Option RepoCommit
 optionalCommit None = None

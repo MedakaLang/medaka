@@ -21,7 +21,7 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{fromArray, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
 import lib.blob.{blobCid}
@@ -106,7 +106,8 @@ recordFor seed i = DcMap [
 
 mustEncode : DagCbor -> Array Int
 mustEncode value =
-  resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value))
 
 -- Door: this driver is not itself retyped this slice (its own `Array Int`
 -- moves in sprint C). `bytes` is checked into `Bytes` here, matching
@@ -186,7 +187,7 @@ signedCommit did secret rev dataCid =
         ("data", DcLink dataCid),
         ("rev", DcString (tidToString rev)),
         ("prev", DcNull),
-        ("sig", DcBytes (toArray (signatureCompact signature))),
+        ("sig", DcBytes (signatureCompact signature)),
       ])
   (cidForDagCborDoor signed, signed)
 

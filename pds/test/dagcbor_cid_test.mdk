@@ -2,8 +2,7 @@
    Published expected bytes and CIDs stay in the provenance-ledgered corpus;
    these tests assert round-trips, determinism, isolation, and rejection. -}
 
-import array as A
-import bytes.{fromU8Array}
+import bytes.{fromArrayAssumeByteDomain, fromU8Array}
 import mut_bytes as MB
 import string.{contains, toLower}
 import u8 as U8
@@ -100,7 +99,7 @@ test "DAG-CBOR round-trips every admitted value kind" =
   let value = DcMap [
     ("link", DcLink link),
     ("array", DcArray [DcNull, DcBool False, DcBool True, DcInt (-25)]),
-    ("bytes", DcBytes [|0, 255|]),
+    ("bytes", DcBytes (fromArrayAssumeByteDomain [|0, 255|])),
     ("text", DcString "水"),
   ]
   expectTrue (roundTrip value)
@@ -112,9 +111,6 @@ test "DAG-CBOR map encoding is insertion-order independent" =
 
 test "DAG-CBOR encoder rejects duplicate map keys" =
   expectErr (dagCborEncode (DcMap [("x", DcInt 1), ("x", DcInt 2)]))
-
-test "DAG-CBOR encoder rejects non-byte array elements" =
-  expectErr (dagCborEncode (DcBytes [|0, 256|]))
 
 test "DAG-CBOR encoder admits the deepest nesting its decoder reads back" =
   expectTrue (roundTrip (nest maxDagCborDepth))
@@ -128,28 +124,37 @@ test "DAG-CBOR encoder refuses nesting one level past the decoder's ceiling" =
    would pass an encoder bound set anywhere at or below the decoder's. -}
 test "DAG-CBOR decoder refuses exactly what the encoder now refuses" =
   expectOkThen
-    (bytes => expectTrue (isErr (dagCborDecode (A.concat [|[|0x81|], bytes|]))))
+    (bytes =>
+      expectTrue
+        (isErr (dagCborDecode (fromArrayAssumeByteDomain [|0x81|] ++ bytes))))
     (dagCborEncode (nest maxDagCborDepth))
 
 test "DAG-CBOR decoder rejects non-shortest and trailing encodings" = expectEach
   [
     (
       "a non-shortest integer encoding is rejected",
-      expectTrue (isErr (dagCborDecode [|0x18, 0x17|])),
+      expectTrue
+        (isErr (dagCborDecode (fromArrayAssumeByteDomain [|0x18, 0x17|]))),
     ),
     (
       "trailing bytes after a complete value are rejected",
-      expectTrue (isErr (dagCborDecode [|0xf6, 0|])),
+      expectTrue (isErr (dagCborDecode (fromArrayAssumeByteDomain [|0xf6, 0|]))),
     ),
   ]
 
 test "DAG-CBOR decoder rejects unordered and duplicate map keys" = expectEach [
   (
     "map keys out of canonical order are rejected",
-    expectTrue (isErr (dagCborDecode [|0xa2, 0x61, 0x62, 1, 0x61, 0x61, 2|])),
+    expectTrue
+      (isErr
+        (dagCborDecode
+          (fromArrayAssumeByteDomain [|0xa2, 0x61, 0x62, 1, 0x61, 0x61, 2|]))),
   ),
   (
     "a duplicate map key is rejected",
-    expectTrue (isErr (dagCborDecode [|0xa2, 0x61, 0x61, 1, 0x61, 0x61, 2|])),
+    expectTrue
+      (isErr
+        (dagCborDecode
+          (fromArrayAssumeByteDomain [|0xa2, 0x61, 0x61, 1, 0x61, 0x61, 2|]))),
   ),
 ]
