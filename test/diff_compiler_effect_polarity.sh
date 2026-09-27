@@ -115,6 +115,13 @@ expected_verdict() {
     #   argument span — so nothing but these two rows separates them here.
     write-workaround-accept)                                                            echo accept ;;
     write-launder-reject)                                                               echo reject ;;
+    # ── #3512: the variance fixpoint converges ─────────────────────────────────
+    # reject: a flip cycle through four imported types, whose invariance the
+    #   old capped iteration (started at the lenient PCo) never reached.
+    # accept: two flips are covariant; iterating from the bottom must not read
+    #   them as invariant.
+    flip-cycle-export)                                                                  echo reject ;;
+    control-double-flip)                                                                echo accept ;;
     *) echo unknown ;;
   esac
 }
