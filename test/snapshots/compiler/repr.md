@@ -1,5 +1,5 @@
 # META
-source_lines=821
+source_lines=816
 stages=DESUGAR,MARK
 # SOURCE
 -- The type REPRESENTATION of the typechecker and its renderers: the monotype
@@ -72,20 +72,15 @@ public export data Mono =
   --     single seam `sameTyConHead` (`frontend/ast.mdk`), whose doc-comment owns
   --     the absent-origin rule and its derivation.  Two modules' same-named
   --     types no longer unify (#1208, #1209).
-  --   * THE DISPATCH KEY STILL DOES NOT.  `headTyconMono`'s `TCon n o` arm hands
-  --     `o` to `headKeyOfCon`, so every goal-side `HeadKey` CARRIES the
-  --     identity — and every consumer of that `HeadKey` then projects it BACK to
-  --     the bare spelling before comparing: `dispHeadTab` (the bucket key,
-  --     `implExistsForHeadGo`'s retest, `countHeadGo` / `ieCountHeadByIfaceGo`,
-  --     the obligation universes) or `headKeyName` / `headKeyNameOr` (the
-  --     emitted route word).  `headTyconNameMono`, the name-only residual, still
-  --     hands out a bare name outright.  (A-2.10's draft of this paragraph also
-  --     named `monoHeadCon`; A-2.2b DELETED that projection on `main` — see its
-  --     obituary above `mainTypeIsAsync` — and the merge of the two units is
-  --     where that was caught.)  The discard is LEDGERED, not incidental:
-  --     `dispHeadTab` IS the list of sites whose answer would move the day the
-  --     goal side becomes supplied and canonical
-  --     (`grep -nw dispHeadTab compiler/types/typecheck.mdk`).
+  --   * The dispatch key reads it too, through its module (#1397).
+  --     `headTyconMono`'s `TCon n o` arm hands `o` to `headKeyOfCon`, and every
+  --     consumer of that `HeadKey` renders it with `headKeyTag`
+  --     (`route_key.typeTagOf`): a prelude type keeps its bare spelling, any
+  --     other type is `<module id>.<name>`.  That word is the bucket key
+  --     (`dispHeadTab`) and the emitted route word, and eval and the core IR's
+  --     constructor-to-type table spell a value's type the same way.  The word
+  --     is injective over type identities; a backend escapes it into a symbol
+  --     with `injectiveIdent`, never the many-to-one `sanitizeId`.
   --
   -- SO A LEDGERED RETEST IS STILL NOT AN IDENTITY COMPARISON, AND PROMOTING
   -- ONE AS A TIDY-UP STILL CHANGES ACCEPTANCE — that is exactly what A-2.2b did

@@ -407,7 +407,7 @@ import support.util.{
 import types.registry.{
   HeadKey(..),
   headKeyOfCon,
-  headKeyName,
+  headKeyTag,
   -- A-2.13 (#1319 unit 3): the IDENTITY inside a projected head, for the one
   -- record lookup that selects a row by the receiver rather than by a spelling.
   headKeyIdent,
@@ -6829,19 +6829,24 @@ ieRowsOwnedBy cur env = filterList (r => ieRowOrd r == cur) env.ieRows
 -- `AGENTS.md` names the program-global table as this tree's most expensive shape
 -- and demands the key's scope be PROVEN.  The corpus below is the adversarial
 -- case: TWO UNRELATED MODULES that declare the same-spelled interface `Same` and
--- each impl it at the same-spelled type `Blob`.  Under a bare-name key the two
+-- each impl it at ONE type, `amod`'s `Blob`.  Under a bare-name key the two
 -- collapse into one bucket and one index — which is exactly the collapse A-3 is
 -- removing — so every assertion here is fail-capable in the direction that
--- matters.
-ieTyBlob : String -> Ty
-ieTyBlob m =
-  TyCon { tyConName = "Blob", tyConLoc = None, tyConOrigin = OriginModule m }
+-- matters.  The type is shared on purpose: a head's key carries the TYPE's
+-- module (`headKeyTag`, #1397), so two modules' own `Blob`s are two heads and
+-- would test nothing about the interface half.
+ieTyBlob : Ty
+ieTyBlob = TyCon {
+  tyConName = "Blob",
+  tyConLoc = None,
+  tyConOrigin = OriginModule "amod",
+}
 
 ieSameImplIn : String -> Decl
 ieSameImplIn m = DImpl {
   pub = True,
   iface = "Same",
-  tys = [ieTyBlob m],
+  tys = [ieTyBlob],
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
@@ -6853,12 +6858,12 @@ ieSameImplIn m = DImpl {
 ieProbeKey : String -> RegKey
 ieProbeKey m = regKeyNTab [
   oblIfaceKey IfaceRef { irName = "Same", irOrigin = OriginModule m },
-  dispHeadTab (headKeyOfCon (OriginModule m) "Blob"),
+  dispHeadTab (headKeyOfCon (OriginModule "amod") "Blob"),
 ]
 
--- The COMPATIBILITY leg's key: bare interface spelling, and a head that is bare
--- anyway (`dispHeadTab` is spelling-keyed by the #1317 T1 rule), so it is the
--- SAME key for both modules — which is exactly why both rows land in it.
+-- The COMPATIBILITY leg's key: bare interface spelling over the one shared head,
+-- so it is the SAME key for both modules — which is exactly why both rows land
+-- in it.
 ieProbeBareKey : RegKey
 ieProbeBareKey = regKeyNTab [
   TkBare NsIface "Same",
@@ -6988,7 +6993,7 @@ ieOtherImplIn : String -> Decl
 ieOtherImplIn m = DImpl {
   pub = True,
   iface = "Other",
-  tys = [ieTyBlob m],
+  tys = [ieTyBlob],
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
@@ -7014,7 +7019,7 @@ ieLooseImplIn : String -> Decl
 ieLooseImplIn m = DImpl {
   pub = True,
   iface = "Loose",
-  tys = [ieTyBlob m],
+  tys = [ieTyBlob],
   reqs = [],
   methods = [],
   implOrigin = OriginUnresolved,
@@ -7062,7 +7067,8 @@ ieHeadProbeEnv = buildImplEnv [
 --    6d. IMMUNE TO THE ARM-KEYING ASYMMETRY (RUN-B-025 F1).  Seq 4's interface mints
 --        ONE `oblIfaceKeys` leg where 0/1/2 mint two, and it is in the bucket all the
 --        same — because this key has no interface component.  An index that grew one
---        (or that keyed the head through anything origin-bearing) drops seq 4 here.
+--        drops seq 4 here.  (The head itself carries the TYPE's module, `amod`'s
+--        `Blob` for every row, #1397; an interface's origin never enters it.)
 -- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows (Some ieProbeBlobHead) ieHeadProbeEnv)
 -- [0, 1, 2, 4]
 --
@@ -29112,7 +29118,7 @@ implMethodNameTc (ImplMethod n _ _) = n
 -- tie-break the rest of this file already documents AND the one that gate can see.
 -- A-2.2b (#1111): the second field is the entry's PROJECTED HEAD, not its head
 -- tycon NAME.  `keyEntryOf` already computed a `HeadKey` (A-2.2) and threw it
--- away with `headKeyNameOr noneHeadTag`; keeping it is what lets this registry
+-- away by projecting it to a bare name; keeping it is what lets this registry
 -- be keyed by the head's IDENTITY instead of its spelling, so two same-named
 -- types declared in two modules no longer share a bucket.
 --
@@ -29322,7 +29328,7 @@ methodRouteKeyForRow name env (ImplRow _ _ ir tys _ _) =
   if ieHeadCollidesByMethod env name (univReceiverTag tys) then
     implRouteKeyWord ir.irOrigin ir.irName tys None
   else
-    headKeyNameOr noneHeadTag (univReceiverTag tys)
+    headKeyTagOr noneHeadTag (univReceiverTag tys)
 
 -- the head tycon that buckets a goal vector: the spine head of its FIRST component
 -- (the receiver).  Unchanged from the pre-#609 scalar bucketing — widening the
@@ -30081,7 +30087,7 @@ predicateRouteKeyForRow env (row@(ImplRow _ _ iface tys _ _)) =
     || ieRowMethodHeadCollides env row then
     implRouteKeyWord iface.irOrigin iface.irName tys None
   else
-    headKeyNameOr noneHeadTag (univReceiverTag tys)
+    headKeyTagOr noneHeadTag (univReceiverTag tys)
 
 -- Scan one indexed head bucket, skipping the selected InstRef.  Method names are
 -- ABI spellings here; aliases are normalized before membership.  The selected-row
@@ -30462,32 +30468,22 @@ censusHeadNameTy t = match headTySpineNode t
   TyTuple ts => Some (tupleHeadTagTc (listLen ts))
   _ => None
 
--- The bare name of a head key, with [dflt] when there is NO head type
--- constructor — the `optionOr <placeholder> (headTycon… …)` shape the
--- dispatch-key sites already used, now spelled once so the projection happens
--- exactly once per call (Medaka is strict: `map headKeyName` over the `Option`
--- would allocate a second `Option` to throw away).  HOW MANY such sites there
--- are is a command, not a number written here — the same shape spelled
--- `optionOr` on the commit before A-2.2 is
--- `git show <pre-A-2.2>:compiler/types/typecheck.mdk
---  | grep -nE 'optionOr[^(]*\(headTycon'`, and the sites this covers now are:
+-- The dispatch word of an optional head (`headKeyTag`), with [dflt] when there
+-- is NO head type constructor -- the `optionOr <placeholder> (headTycon… …)`
+-- shape the dispatch-key sites use, spelled once so the projection happens
+-- exactly once per call (Medaka is strict: `map headKeyTag` over the `Option`
+-- would allocate a second `Option` to throw away).  The sites it covers:
 --
---   grep -nw headKeyNameOr compiler/types/typecheck.mdk \
---     | grep -vE '^[0-9]+:[[:space:]]*--' \
---     | grep -vE '^[0-9]+:headKeyNameOr'
+--   grep -nw headKeyTagOr compiler/types/typecheck.mdk
 --
--- (the two filters drop the comments that name it — including this one — and
--- this definition's own signature and clauses).  Neither count is copied down,
--- because a count copied down has no derivation and no expiry.
---
--- ⚠️ The [dflt] is a PLACEHOLDER for "this position has no head", NOT a name,
--- and it is a DIFFERENT fact from `TkBare` ("a head with no identity yet") —
+-- The [dflt] is a PLACEHOLDER for "this position has no head", NOT a name,
+-- and it is a DIFFERENT fact from `TkBare` ("a head with no identity yet") --
 -- `types/registry.mdk`'s `HeadKey` derives the distinction, and
 -- `checkCallObligationsU`'s `""` is the row where collapsing the two would lose
--- a diagnostic (#607).  Both are preserved verbatim here.
-headKeyNameOr : String -> Option HeadKey -> String
-headKeyNameOr _ (Some hk) = headKeyName hk
-headKeyNameOr dflt None = dflt
+-- a diagnostic (#607).
+headKeyTagOr : String -> Option HeadKey -> String
+headKeyTagOr _ (Some hk) = headKeyTag hk
+headKeyTagOr dflt None = dflt
 
 -- Exact prerequisite routing consumes the complete predicate vector and the row
 -- already selected for the route word.  The checker uses the same row matcher.
@@ -30842,7 +30838,7 @@ entail name m encl useScope kind = match entailAssum m encl name useScope kind
     let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
     result
   None => match headTyconMono m
-    Some hk => entailInst name m encl useScope (headKeyName hk) kind
+    Some hk => entailInst name m encl useScope (headKeyTag hk) kind
     None =>
       let result = (entailFallback useScope kind, [])
       let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
@@ -31726,8 +31722,8 @@ recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
 
 resolveRecMono : String -> ScopeId -> Mono -> Route
-resolveRecMono encl scope m = match headTyconNameMono m
-  Some tag => RKey tag []
+resolveRecMono encl scope m = match headTyconMono m
+  Some hk => RKey (headKeyTag hk) []
   None => match enclSlot encl m
     Some slot => RDict (renderEvidenceBinder (Scopes.binderAt scope slot))
     None => routeOf ifaceRefNone "" scope KeepNone m
@@ -34048,7 +34044,7 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 --
 --   grep -nw dispHeadTab compiler/types/typecheck.mdk
 dispHeadTab : HeadKey -> TabKey
-dispHeadTab hk = TkBare NsType (headKeyName hk)
+dispHeadTab hk = TkBare NsType (headKeyTag hk)
 
 -- the receiver-position head tycon tag of an impl's head types (None for a headless
 -- receiver or an empty head list) — the SAME tag `headTyconMono` computes for a
@@ -34468,7 +34464,7 @@ solveExactReturn request = match methodReturnWanted request
 
 methodReturnFallbackTag : MethodReturnRequest -> Option String
 methodReturnFallbackTag request =
-  map headKeyName (headTyconMono (stripArrows request.mrrOccurrence))
+  map headKeyTag (headTyconMono (stripArrows request.mrrOccurrence))
 
 solveExactReturnInstance : MethodReturnRequest ->
   Wanted ->

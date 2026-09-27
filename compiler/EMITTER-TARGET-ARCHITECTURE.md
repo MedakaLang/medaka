@@ -151,11 +151,20 @@ open-bug pressure, not by layer.
 |---|---|---|---|---|---|---|
 | F1 | Record field ordinals, and update evaluation order | ordinal on `CRecord`, `CFieldAccess`, `CRecordUpdate`, `CVariantUpdate` fields; update overrides canonicalized at lower time (bind in written order, store by ordinal) | `core_ir_lower` from `declaredRecordFieldOrders` (already an emit input) | LLVM `Emit.recByName`/`recByLabel`/`recFields`, Wasm record-name and label indexes in `WasmEmitInput` | #1518 (update order diverges across engines); the residual of the #1306 family | none |
 | F2 | Call mode | `CApp` stamped exact / partial / over with the residual arity (a new `CCall`/`CPap` pair is acceptable if the stamp reads worse) | `core_ir_lower` from the one arity table both backends already share plus the impl clause's own pattern count (the #1034 rule) | the ten `methodArityOf*` functions, `emitApp`/`emitOverApp` classification, Wasm `$mdk_apply` arity branches | #2078; the #1034/#1101/#826 family stays drained by construction | none now; consumes the typechecker's per-binding arity when M2 (#2549) publishes it (E-5) |
-| F3 | Interface and type identity on dispatch nodes | the existing `ifaceIdentity` string (`module::Iface`) on `CImplDefault`, extended to `CMethod`, `CDict`, `CImplEntry`, `CImplTagged`; the head type carries its owner module the same way | `core_ir_lower` from declaration identity (`Ident` is already in the AST) | bare-spelling keys in `defaultFnName`/`defaultFnNameW`, `implFnSym`, `distinctKeysAtHead`, `headTagUniqueW` | emitted-symbol half of #1397; #1619; #2055; #1973; the symbol-keying half of #1265 | none for the string form; SC-1 (#2563) upgrades it to the typed key |
+| F3 | Interface and type identity on dispatch nodes | the existing `ifaceIdentity` string (`module::Iface`) on `CImplDefault`, extended to `CMethod`, `CDict`, `CImplEntry`, `CImplTagged`; the head type carries its owner module the same way | `core_ir_lower` from declaration identity (`Ident` is already in the AST) | bare-spelling keys in `defaultFnName`/`defaultFnNameW`, `implFnSym`, `distinctKeysAtHead`, `headTagUniqueW` | #1619 (#1397 drained: `route_key.typeTagOf` puts the owner module in the head type's tag); #2055; #1973; the symbol-keying half of #1265 | none for the string form; SC-1 (#2563) upgrades it to the typed key |
 | F4 | Semantic tail sites | tail flag on `CApp`/`CMethod` in tail position, computed once | `core_ir_lower` (the position is syntactic) | per-backend tail rediscovery in `emitAppTail` and its Wasm peer | #1349, #2577 | none |
 | F5 | Runtime types on binders, parameters, and returns | `RTInt`/`RTFloat`/`RTValue` (never `LTy`, never `(ref eq)`) on `CLam` params, `CLet` binders, `CBind` clauses | the #353 plan, unchanged: stamp what typecheck knew at lower time | `inferSigs`, `typeOf`, `paramUseTy`, `staticIsFloat`, `bodyFloatRet`, Wasm `cexprIsFloat`/`refMainKind` | #2545 and the N8 family (EMITTER-SEMANTICS section 9) | none; #353 is adopted as written |
 | F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | typechecker M2 (#2549) for evidence; B-1 (#993) for default-body evidence | route-word hedges, `emitDefaultRKey`, Wasm `implEntryRouteKeyW` recomputation, default synthesis | #1068, #1020, the route half of #1265, #1046 | BLOCKED on M2 and #993. `RNone` stays until #993 lands (ruling 4). X-E (#1403) is the consumer issue and does nothing before M2 |
 | F7 | Capability manifest | a Core-level manifest field extracted before row erasure | effects checker | the reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | the effects manifest producer (EFFECTS sections 7-8) |
+
+**F5 and the N5 scalar slice (2026-09-26).** N5 of the integer epic (#3428)
+took only the scalar slice of #353, by Val's ruling: the LLVM backend keeps a
+`U64` or `U32` raw across `let`, parameter and result, reading the positions
+from the declared signature (`declSigIndex`) into a per-function raw worker
+(`rawWorkerOf` in `backend/llvm_emit.mdk`). That is an LLVM-only table built
+from what the typechecker checked, not the Core carrier F5 describes; it
+retires no heuristic, and `Float` keeps `__fw`. When F5 lands, the worker
+positions come from the Core stamp and the declared-signature table goes.
 
 Every row owes the L7 fixture: centralizing a fact makes all engines agree, so a
 wrong centralized fact is a unanimity no differential can see. The fixture is
@@ -981,8 +990,8 @@ populates `DraftSemanticProgram` with records, fields, constructors, methods,
 imports/re-exports, and authoritative ordinals. X-0V/X-A carry those facts into
 V/A/AP; only then does X-I.C migrate identity/visibility consumers. Method
 dispositions belong only to X-E. `private_mangle` becomes a renderer of resolver
-decisions. Live direct consumer family: #1359, #1306, and #1397's emitted-symbol
-half; closed #1300 remains a binding-set regression control. #1305 first
+decisions. Live direct consumer family: #1359 and #1306 (#1397's emitted-symbol half drained by `route_key.typeTagOf`);
+closed #1300 remains a binding-set regression control. #1305 first
 requires an upstream decision: resolve publishes the newtype constructor,
 typecheck resolves the occurrence from a bare-name universe to another module's
 constructor, eval follows typecheck, and the post-#1393 mangler refuses to

@@ -2,188 +2,88 @@
 
      n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 
-   on **16 limbs in base 2^16** (16 * 16 = 256, non-redundant, every limb the
-   same width), least-significant limb first. `n` is the published curve
-   parameter from SEC 2 v2 §2.4.1; it is not justified here, and it is pinned
-   EXECUTABLY by the reference corpus's `red n -> 0` and `red (n+1) -> 1` rows
-   (an inline `.mdk` literal is invisible to `pds/test/VECTOR-PROVENANCE.txt`
-   by construction, which is exactly why those rows exist).
+   on **8 limbs in base 2^32** (8 * 32 = 256, non-redundant, every limb the
+   same width), least-significant limb first: libsecp256k1's `scalar_8x32`
+   layout. `n` is the published curve parameter from SEC 2 v2 §2.4.1; it is
+   not justified here, and it is pinned EXECUTABLY by the reference corpus's
+   `red n -> 0` and `red (n+1) -> 1` rows (an inline `.mdk` literal is
+   invisible to `pds/test/VECTOR-PROVENANCE.txt` by construction, which is
+   exactly why those rows exist).
 
-   ── Why this representation is NOT `pds/lib/field.mdk`'s ─────────────
-   Deliberate: this module shares no code with `field.mdk` and does not
-   import it. Scalar operations run a few times per signature, not thousands,
-   so this is correctness-first code and the simplest representation that is
-   easy to argue about wins. 16 x 2^16 gives a uniform limb width (no 26/22
-   seam), 26 bits of headroom (below), and a trivial byte serialization —
-   each limb is exactly two of the 32 big-endian bytes.
-
-   **`field.mdk`'s reduction does not transfer, and that is the single most
-   important structural difference.** The field prime's complement
-   `2^256 - p = 2^32 + 977` is ~33 bits, which is what makes a SINGLE fold
-   pass fully reduce there. The group order's complement
+   This module shares no code with `pds/lib/field.mdk` and does not import
+   it. The field's prime has a 33-bit complement `2^256 - p`; the group
+   order's complement
 
      c = 2^256 - n = 0x14551231950b75fc4402da1732fc9bebf
 
-   is **129 bits**. Folding a 512-bit product once by `c` yields a value
-   below 2^385, not below 2^256: one pass does not reduce mod `n`. Porting
-   the field's single-fold shape here would be silently wrong.
-
-   ── The reduction actually implemented ───────────────────────────────
-   `reduceWide` (the one reduction path every public operation ends in):
-
-     1. carry-propagate the whole 32-limb workspace so every limb < 2^16;
-     2. run exactly FOUR folds replacing `H * 2^256 + L` by `H * c + L`
-        (using `2^256 = c (mod n)`), with a carry pass after each fold;
-     3. unconditionally subtract `n` and arithmetically select the difference
-        or original value from the final borrow.
-
-   **Why it terminates, and why it terminates CANONICAL.** Each fold replaces
-   `V = H*2^256 + L` (with `H >= 1`) by `V - H*n`, which is congruent mod `n`
-   and STRICTLY smaller; the values are non-negative integers, so the loop
-   must stop. Concretely it converges fast — from below 2^512 the bounds run
-   2^512 -> 2^385 -> 2^258.4 -> just over 2^256 -> below 2^256. The fixed
-   fourth fold handles the last case without inspecting the high half. Then
-   `V < 2^256`; since `n > 2^255`, `2^256 < 2n`, so one unconditional
-   subtract-and-select lands in `[0, n)`.
-
-   The rejected alternative was shift-and-subtract on the 512-bit product:
-   simplest to argue, but ~256 compare-and-subtract passes per multiply,
-   which the tree-walking interpreter arm of `pds/test/scalar_vectors_test.mdk`
-   could not run in any reasonable time.
-
-   ── The canonical invariant, EAGER ───────────────────────────────────
-   Every value handed out by every public operation is CANONICAL: fully
-   reduced, `0 <= v < n`, hence every limb `< 2^16`. No wider or weakly
-   reduced value is ever exposed. That is what makes `scEqual` limb-wise
-   equality, and it is what the reference corpus grades.
-
-   `Array` is mutable, so every operation allocates a fresh workspace and
-   result and NEVER writes into an argument. `Sc` is an abstract data type:
-   only this module can unwrap the limb array, so callers cannot mutate the
-   `scZero`/`scOne` sentinels or fabricate non-canonical raw limbs. The private
-   `nLimbs` / `cLimbs` / `expNMinus2` remain module-owned work data.
+   is **129 bits** (five limbs, the top one 1). Folding a 512-bit value
+   `H * 2^256 + L` once to `H * c + L` leaves it below 2^385, not below
+   2^256, so the reduction is three folds, not the field's one.
 
    ── Stored as Int, computed as U64 ───────────────────────────────────
-   Limbs, columns and carries are stored as non-negative `Int`s. Each
-   arithmetic step on them is one `U64` expression: its operands widen
-   through `U64.truncate`, it computes modulo 2^64 with no overflow check and
-   no branch, and its result narrows through `U64.toIntTruncating` before it
-   is stored or bound. An `Int` `+ - *` would check for overflow, and that
-   check is a branch on its operands, so no limb value ever meets one; the
-   only `Int` arithmetic on the secret paths is on public loop counters and
-   indexes. A narrowing keeps 63 bits and is exact only below 2^62, so that
-   is the ceiling every stored value is bounded against below. Inside one
-   expression an intermediate may exceed it, or wrap below zero, and the
-   narrowed result is still exact.
+   A limb is stored as an `Int` below 2^32, in `Array Int`. Every step on
+   limbs is straight-line `U64` code: each limb widens once through
+   `U64.truncate` into a `let`, 32 x 32 products are plain `U64` `*` (they
+   fit in 64 bits, so no 128-bit product is needed), and each result limb
+   narrows through `U64.toIntTruncating` into one array literal. A `U64`
+   `let`, parameter or result stays a register (the helpers that pass limbs
+   between them are annotated single-clause functions), so the arithmetic
+   allocates only the result array. No limb value meets `Int` `+ - *`, whose
+   overflow check is a branch.
 
-   ── The headroom chain (derived against THIS code) ───────────────────
+   ── The reduction ────────────────────────────────────────────────────
+   `scMul` forms the 512-bit product as sixteen 32-bit limbs and hands them
+   to `reduce512`, which runs exactly three folds by `c` and then the
+   unconditional subtract-and-select `subNSelect`:
 
-     limb                a_i <= 2^16 - 1, uniformly (no seam limb)
-     partial product     a_i * b_j < 2^32
-     WORST COLUMN        `scMul`'s schoolbook column k has
-                         `min(k,15) - max(0,k-15) + 1` terms, maximised at
-                         k = 15 with SIXTEEN terms:
-                           c_15 <= 16 * (2^16 - 1)^2 < 2^36.
-                         The NEIGHBOURS WERE CHECKED, not assumed: k = 14 and
-                         k = 16 have FIFTEEN terms each, < 2^35.907, and every
-                         limb has the same bound (unlike the field's 26/22
-                         layout, no narrow limb can make a wider column
-                         cheaper). So k = 15 is the unique peak.
-     plus its carry      the carry pass runs a running carry < 2^36 / 2^16 =
-                         2^20, so column-plus-carry < 2^36 + 2^20 < 2^36.0001.
-     fold column         `foldOnce` accumulates `h_i * c_j` with `c` only
-                         NINE limbs wide, so at most 9 terms < 9 * 2^32 <
-                         2^35.170, plus the existing limb (< 2^16):
-                         < 2^35.171 — strictly below the schoolbook peak, so
-                         the schoolbook column IS the peak intermediate of
-                         the whole operation.
-     HEADROOM            2^62 / 2^36.0001 = 2^25.9999 — about **26 bits clear**.
+     512 bits -> fold 1 -> below 2^385 (13 limbs)
+              -> fold 2 -> at most 2^256 - 1 + c^2 < 2^257.39 (9 limbs)
+              -> fold 3 -> below 2^256 + 2c (8 limbs and a carry bit)
+              -> subtract n once, select by `carry OR no borrow`.
 
-   ── The bound is not a tripwire: read before skipping a reduce ───────
-   With 26 bits of headroom, a missed reduction neither overflows nor fails
-   fast. Feed `scMul` limbs of up to 2^17 (one doubling past the
-   invariant) and the worst column is `16 * (2^17)^2 = 2^38` — still 24 bits
-   clear of 2^62. The wrong answer therefore surfaces several operations
-   later, with no visible relationship to the site that caused it.
-   Reduction is consequently enforced STRUCTURALLY — every public operation
-   ends in `reduceWide`, and the reference corpus grades the result — and
-   must NEVER be left to overflow to catch a violation. What breaks the
-   chain: folding before carrying; and any
-   "accumulate several products, reduce once" restructuring.
+   `scAdd`, `scNegateCt` and the byte decoders produce a value below 2n
+   directly (eight limbs and a carry bit) and call `subNSelect` alone.
+   Every value this module hands out is therefore canonical, `0 <= v < n`.
+   The proof that three folds suffice for every workspace below 2^512, and
+   the headroom of every column, are
+   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §4 and §5.1; the column bounds
+   are summarised at `scMul` and `reduce512`.
 
-   A carry out of limb 31 would mean an internal arithmetic workspace held a
-   value >= 2^512. A CANONICAL product of two values < n is < 2^512, so no
-   public path produces one. `reduceFixed` therefore carries with
-   `carryAllUnchecked`, whose top-limb case is a no-op rather than a branch on
-   the secret carry. `carryAll` is its checked twin: it panics on such a carry,
-   and `pds/test/constant_time_reductions.sh` runs the two side by side.
-
-   ── Bounds-checked array API, deliberately ───────────────────────────
-   This module reads with `arr[i]` and writes with `Array.setInPlace` — the
-   bounds-checked PUBLIC API — never the restricted `*Unsafe` internal
-   externs. (Spelled that way on purpose: a grep for the restricted names
-   over this slice's `.mdk` files must come back EMPTY, and a prose mention
-   here would be the one false positive.)
-   That is a standing project ruling: reach
-   for an unsafe primitive only after MEASURING that bounds-checking's cost
-   is too severe. This is explicitly not a hot path (a few operations per
-   signature), so no such measurement could license it and the question does
-   not arise.
+   `Array` is mutable, so every operation builds a fresh result and never
+   writes into an argument. `Sc` is an abstract data type: only this module
+   can unwrap the limb array, so callers cannot mutate the `scZero`/`scOne`
+   sentinels or fabricate non-canonical raw limbs.
 
    ── Constant-time boundary ───────────────────────────────────────────
-   The native reduction path implements the fixed-control contract in
-   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`:
-   exactly four fold/carry rounds and an unconditional arithmetic
-   subtract-and-select. `scInverse`'s exponent ladder is also fixed-shape;
-   its exponent is a public compile-time constant. Every shift of a limb or
-   key byte is by a literal amount (that document, §5.1).
-
-   This does NOT certify every exported helper or a future signing module.
-   Equality/zero tests, `scIsHigh`, and the general negation path still
-   contain value-dependent control. Their `*Bit`/`*Ct` siblings below are the
-   fixed-control building blocks for the signing path; P15 still requires
-   that path to close every transitive native callee before it ships.
-   Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
-   outside this native constant-time claim. -}
+   The native arithmetic implements the fixed-control contract in
+   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`: no branch, early exit, or
+   array index depends on a limb, and every shift is by a literal amount.
+   `scInverse`'s exponent ladder branches only on the public exponent `n-2`.
+   The Bool predicates (`scEqual`, `scIsZero`, `scIsHigh`) and the canonical
+   wire parser `scFromBytes` return a Bool or a `Result`, which is a branch
+   in the caller; secret-bearing code uses their `*Bit` siblings.
+   Eval and Wasm retain value parity; Wasm's boxed `U64` carrier is outside
+   this native constant-time claim. -}
 
 import array as A
 import u64 as U64
 
 -- ── Constants ────────────────────────────────────────────────────────
 
--- 2^16 - 1: the mask for every limb (all sixteen are the same width).
-limbMask : U64
-limbMask = 0xffff
-
--- The number of limbs in a scalar, and in the wide multiply workspace.
-nWide : Int
-nWide = 32
-
--- n, the secp256k1 group order (SEC 2 v2 §2.4.1), in this layout:
---   n = fffffffffffffffffffffffffffffffe baaedce6af48a03b bfd25e8cd0364141
--- read two bytes per limb, least-significant limb first.
-nLimbs : Array Int
-nLimbs = [|
-  0x4141, 0xd036, 0x5e8c, 0xbfd2, 0xa03b, 0xaf48, 0xdce6, 0xbaae, 0xfffe,
-  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff
-|]
-
--- floor(n/2) + 1 = (n + 1) / 2, least-significant limb first. `scHighBit`
--- subtracts this threshold with a fixed borrow chain; a non-borrow is exactly
--- the strict low-S predicate `s > floor(n/2)`.
-nHalfPlusOneLimbs : Array Int
-nHalfPlusOneLimbs = [|
-  0x20a1, 0x681b, 0x2f46, 0xdfe9, 0x501d, 0x57a4, 0x6e73, 0x5d57, 0xffff,
-  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0x7fff
-|]
-
--- c = 2^256 - n = 0x14551231950b75fc4402da1732fc9bebf, NINE limbs (129 bits).
--- `2^256 = c (mod n)` is the fold identity `reduceWide` iterates. This is the
--- 129-bit complement the module header warns about: it is NOT the field's
--- 33-bit one, and one fold pass does not reduce.
-cLimbs : Array Int
-cLimbs =
-  [|0xbebf, 0x2fc9, 0xa173, 0x402d, 0x5fc4, 0x50b7, 0x2319, 0x4551, 0x0001|]
+-- The limb constants are written as hexadecimal literals where they are used:
+-- a literal operand is a static constant that folds into the arithmetic,
+-- where a top-level `U64` binding is a boxed cell read through two loads on
+-- every use. Least-significant limb first:
+--
+--   n = order          d0364141 bfd25e8c af48a03b baaedce6
+--                      fffffffe ffffffff ffffffff ffffffff
+--   c = 2^256 - n      2fc9bebf 402da173 50b75fc4 45512319 1
+--   floor(n/2) + 1     681b20a1 dfe92f46 57a4501d 5d576e73
+--                      ffffffff ffffffff ffffffff 7fffffff
+--
+-- `2^256 = c (mod n)` is the fold identity; `c`'s top limb is 1, which the
+-- folds add as a plain term rather than a product. The limb mask is
+-- 0xffffffff and the base of the subtract-and-select formula is 0x100000000.
 
 -- n - 2, the Fermat exponent for `scInverse`, as 32 big-endian bytes. `n`
 -- ends 0x...4141 and 0x41 >= 2, so this differs from `n` in the last byte
@@ -197,7 +97,7 @@ expNMinus2 = [|
   0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x3f
 |]
 
--- | A scalar mod `n`: exactly 16 limbs, base 2^16, least-significant first.
+-- | A scalar mod `n`: exactly 8 limbs, base 2^32, least-significant first.
 --   Every value handed out by this module is canonical (`0 <= v < n`). Its
 --   constructor is private so callers obtain values only through this module's
 --   byte and arithmetic API.
@@ -209,225 +109,401 @@ rawSc (Sc limbs) = limbs
 -- | The additive identity.
 export
 scZero : Sc
-scZero = Sc [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+scZero = Sc [|0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- | The multiplicative identity.
 export
 scOne : Sc
-scOne = Sc [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+scOne = Sc [|1, 0, 0, 0, 0, 0, 0, 0|]
 
--- ── Carrying, folding, reducing ──────────────────────────────────────
+-- ── Reduction ────────────────────────────────────────────────────────
 
--- Carry-propagate the whole 32-limb workspace IN PLACE, leaving every limb
--- below 2^16. PANICS if anything carries out of limb 31: that would mean the
--- workspace held a value >= 2^512 (module header). The reduction schedule
--- runs the unchecked twin below instead; this checked pass is the reference
--- the reductions gate compares that twin against.
-carryAll : Array Int -> Unit
-carryAll w = carryGo w 0 0
-
-carryGo : Array Int -> Int -> Int -> Unit
-carryGo w i carry =
-  if i >= nWide then
-    if carry /= 0 then
-      panic "scalar.carryAll: carry out of the top limb — input was >= 2^512"
-  else
-    let v = U64.toIntTruncating (U64.truncate w[i] + U64.truncate carry)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate v) limbMask)
-    let () = A.setInPlace i masked w
-    carryGo w (i + 1) (U64.toIntTruncating (U64.shiftRight (U64.truncate v) 16))
-
--- The same pass as `carryAll`, minus the top-limb check: the final carry is
--- dropped without being inspected. Sound only under the < 2^512 workspace
--- bound in the module header; the only remaining branch is the public limb
--- index. On an admitted workspace (limb 31 zero, every other limb carrying)
--- the two passes agree limb for limb:
+-- The final reduction of every operation: the value `carry * 2^256 + r`,
+-- where every `r_i < 2^32`, `carry` is 0 or 1 and the whole is below `2n`,
+-- becomes the canonical scalar. `n` is subtracted unconditionally with a
+-- fixed borrow chain (`t` never wraps: it lies in `[0, 2^33)`), and the
+-- difference is kept exactly when the value is at least `n`: when `carry` is
+-- 1, or when the subtraction did not borrow. `keep` is used only
+-- arithmetically; `d_i - r_i` wraps modulo 2^64 when negative, and the
+-- narrowed blend is the exact limb.
 --
--- > let a = arrayMake 32 0x1ffff in let b = arrayMake 32 0x1ffff in let _ = A.setInPlace 31 0 a in let _ = A.setInPlace 31 0 b in let _ = carryAll a in let _ = carryAllUnchecked b in a == b && a[31] == 2
--- True
-carryAllUnchecked : Array Int -> Unit
-carryAllUnchecked w = carryGoUnchecked w 0 0
+-- When `carry` is 1 the low half is below `2n - 2^256 < n`, so the
+-- subtraction borrows, and the borrowed difference `r - n + 2^256` is the
+-- value minus `n`. In every case the result is below `n`, because the value
+-- is below `2n`.
+subNSelect : U64 -> U64 -> U64 -> U64 -> U64 -> U64 -> U64 -> U64 -> U64 -> Sc
+subNSelect r0 r1 r2 r3 r4 r5 r6 r7 carry =
+  let t0 = r0 + 0x100000000 - 0xd0364141
+  let d0 = U64.bitAnd t0 0xffffffff
+  let b0 = 1 - U64.shiftRight t0 32
+  let t1 = r1 + 0x100000000 - 0xbfd25e8c - b0
+  let d1 = U64.bitAnd t1 0xffffffff
+  let b1 = 1 - U64.shiftRight t1 32
+  let t2 = r2 + 0x100000000 - 0xaf48a03b - b1
+  let d2 = U64.bitAnd t2 0xffffffff
+  let b2 = 1 - U64.shiftRight t2 32
+  let t3 = r3 + 0x100000000 - 0xbaaedce6 - b2
+  let d3 = U64.bitAnd t3 0xffffffff
+  let b3 = 1 - U64.shiftRight t3 32
+  let t4 = r4 + 0x100000000 - 0xfffffffe - b3
+  let d4 = U64.bitAnd t4 0xffffffff
+  let b4 = 1 - U64.shiftRight t4 32
+  let t5 = r5 + 0x100000000 - 0xffffffff - b4
+  let d5 = U64.bitAnd t5 0xffffffff
+  let b5 = 1 - U64.shiftRight t5 32
+  let t6 = r6 + 0x100000000 - 0xffffffff - b5
+  let d6 = U64.bitAnd t6 0xffffffff
+  let b6 = 1 - U64.shiftRight t6 32
+  let t7 = r7 + 0x100000000 - 0xffffffff - b6
+  let d7 = U64.bitAnd t7 0xffffffff
+  let b7 = 1 - U64.shiftRight t7 32
+  let keep = U64.bitOr carry (1 - b7)
+  let o0 = U64.toIntTruncating (r0 + keep * (d0 - r0))
+  let o1 = U64.toIntTruncating (r1 + keep * (d1 - r1))
+  let o2 = U64.toIntTruncating (r2 + keep * (d2 - r2))
+  let o3 = U64.toIntTruncating (r3 + keep * (d3 - r3))
+  let o4 = U64.toIntTruncating (r4 + keep * (d4 - r4))
+  let o5 = U64.toIntTruncating (r5 + keep * (d5 - r5))
+  let o6 = U64.toIntTruncating (r6 + keep * (d6 - r6))
+  let o7 = U64.toIntTruncating (r7 + keep * (d7 - r7))
+  Sc [|o0, o1, o2, o3, o4, o5, o6, o7|]
 
-carryGoUnchecked : Array Int -> Int -> Int -> Unit
-carryGoUnchecked w i carry =
-  if i >= nWide then
-    ()
-  else
-    let v = U64.toIntTruncating (U64.truncate w[i] + U64.truncate carry)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate v) limbMask)
-    let () = A.setInPlace i masked w
-    carryGoUnchecked
-      w
-      (i + 1)
-      (U64.toIntTruncating (U64.shiftRight (U64.truncate v) 16))
-
--- One fold pass: `H * 2^256 + L` becomes `H * c + L`, IN PLACE, with the high
--- half zeroed. Congruent mod `n` (because `2^256 = c (mod n)`) and STRICTLY
--- smaller whenever `H > 0` (because `c < 2^256`) — that pair is the whole
--- reduction argument for the fixed four-fold schedule.
+-- Reduce a 512-bit value, given as sixteen limbs `w_i < 2^32`, to its
+-- canonical scalar: exactly three folds `H * 2^256 + L -> H * c + L`, then
+-- `subNSelect`. Each fold is a column sum: a 32 x 32 product is split into
+-- its low and high halves, the low halves and the incoming carry sum into
+-- the column, and the column's top bits plus the high halves carry into the
+-- next. The largest column sum is below 2^34.82 and the largest product
+-- below 2^62.34, so no step wraps; the output limbs are exact.
 --
--- The highest limb touched is `15 + 8 = 23`, inside the workspace. The
--- accumulated column is < 2^35.171 (module header), well under the 2^62
--- ceiling; `carryAllUnchecked` runs immediately after.
-foldOnce : Array Int -> Unit
-foldOnce w =
-  let h = arrayMake 16 0
-  let () = takeHigh w h 16
-  foldAccum w h 0
-
-takeHigh : Array Int -> Array Int -> Int -> Unit
-takeHigh w h i =
-  if i >= nWide then
-    ()
-  else
-    let () = A.setInPlace (i - 16) w[i] h
-    let () = A.setInPlace i 0 w
-    takeHigh w h (i + 1)
-
-foldAccum : Array Int -> Array Int -> Int -> Unit
-foldAccum w h i =
-  if i >= 16 then
-    ()
-  else
-    let () = foldAccumRow w h i 0
-    foldAccum w h (i + 1)
-
-foldAccumRow : Array Int -> Array Int -> Int -> Int -> Unit
-foldAccumRow w h i j =
-  if j >= 9 then
-    ()
-  else
-    let k = i + j
-    let column =
-      U64.toIntTruncating
-        (U64.truncate w[k] + U64.truncate h[i] * U64.truncate cLimbs[j])
-    let () = A.setInPlace k column w
-    foldAccumRow w h i (j + 1)
-
--- Exactly four unconditional folds after the initial carry. The proof in
--- docs/design/ATPROTO-PDS-CONSTANT-TIME.md §4 covers every admitted workspace
--- below 2^512; the fourth fold executes even when the high half is already 0.
-reduceFixed : Array Int -> Unit
-reduceFixed w =
-  let () = carryAllUnchecked w
-  let () = foldOnce w
-  let () = carryAllUnchecked w
-  let () = foldOnce w
-  let () = carryAllUnchecked w
-  let () = foldOnce w
-  let () = carryAllUnchecked w
-  let () = foldOnce w
-  carryAllUnchecked w
-
--- Is the workspace's low half >= n? Compared most-significant limb first.
--- Precondition: limbs 16..31 are zero and limbs 0..15 are each < 2^16.
-gteNLimbs : Array Int -> Bool
-gteNLimbs w = gteNGo w 15
-
--- Shared with `scIsHigh`, which calls it on a 17-limb array after checking
--- limb 16 separately: it reads limbs 0..15 only.
-gteNGo : Array Int -> Int -> Bool
-gteNGo w i =
-  if i < 0 then
-    True
-  else
-    let a = w[i]
-    let b = nLimbs[i]
-    if a > b then True else if a < b then False else gteNGo w (i - 1)
-
--- Compute w - n into `diff` with a fixed-width, branchless borrow chain.
-subNCandidate : Array Int -> Array Int -> Int -> Int -> Int
-subNCandidate w diff i borrow =
-  if i >= 16 then
-    borrow
-  else
-    let t =
-      U64.toIntTruncating
-        (U64.truncate w[i]
-          + limbMask
-          + 1
-          - U64.truncate nLimbs[i]
-          - U64.truncate borrow)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) limbMask)
-    let () = A.setInPlace i masked diff
-    subNCandidate
-      w
-      diff
-      (i + 1)
-      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))
-
--- Blend the unconditional subtraction candidate into w. The loop condition is
--- the public limb index; `keepDiff` is used only arithmetically, and
--- `diff[i] - original` wraps modulo 2^64 when negative, so the narrowed sum
--- is the exact limb.
-selectNCandidate : Array Int -> Array Int -> Int -> Int -> Unit
-selectNCandidate w diff keepDiff i =
-  if i >= 16 then
-    ()
-  else
-    let original = w[i]
-    let blended =
-      U64.toIntTruncating
-        (U64.truncate original
-          + U64.truncate keepDiff
-            * (U64.truncate diff[i] - U64.truncate original))
-    let () = A.setInPlace i blended w
-    selectNCandidate w diff keepDiff (i + 1)
-
-subNSelect : Array Int -> Unit
-subNSelect w =
-  let diff = arrayMake 16 0
-  let borrow = subNCandidate w diff 0 0
-  selectNCandidate w diff (U64.toIntTruncating (1 - U64.truncate borrow)) 0
-
--- Reduce a 32-limb workspace to the canonical scalar of its value mod `n`,
--- returning a FRESH 16-limb array. The workspace is consumed (mutated), so
--- every caller allocates its own.
+--   fold 1: m = w[0..7] + w[8..15] * c   below 2^385, m12 <= 1
+--   fold 2: p = m[0..7] + m[8..12] * c   at most 2^256 - 1 + c^2, p8 <= 2
+--   fold 3: r = p[0..7] + p8 * c         below 2^256 + 2c, carry kd7 <= 1
 --
--- Precondition: every limb non-negative, and the value below 2^512 (module
--- header: `carryAllUnchecked` drops a carry out of the top limb unchecked).
---
--- After `reduceFixed` the value is < 2^256, and `n > 2^255` gives
--- `2^256 < 2n`, so one subtract-and-select lands in `[0, n)`.
-reduceWide : Array Int -> Sc
-reduceWide w =
-  let () = reduceFixed w
-  let () = subNSelect w
-  let out = arrayMake 16 0
-  let () = copyLow w out 0
-  Sc out
+-- Every fold runs whatever the high part holds: a zero high part is a fold
+-- that adds zero. The proof that three suffice for every value below 2^512
+-- is docs/design/ATPROTO-PDS-CONSTANT-TIME.md §4.
+reduce512 : U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  U64 ->
+  Sc
+reduce512 w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 =
+  let g00 = w8 * 0x2fc9bebf
+  let g01 = w8 * 0x402da173
+  let g02 = w8 * 0x50b75fc4
+  let g03 = w8 * 0x45512319
+  let g10 = w9 * 0x2fc9bebf
+  let g11 = w9 * 0x402da173
+  let g12 = w9 * 0x50b75fc4
+  let g13 = w9 * 0x45512319
+  let g20 = w10 * 0x2fc9bebf
+  let g21 = w10 * 0x402da173
+  let g22 = w10 * 0x50b75fc4
+  let g23 = w10 * 0x45512319
+  let g30 = w11 * 0x2fc9bebf
+  let g31 = w11 * 0x402da173
+  let g32 = w11 * 0x50b75fc4
+  let g33 = w11 * 0x45512319
+  let g40 = w12 * 0x2fc9bebf
+  let g41 = w12 * 0x402da173
+  let g42 = w12 * 0x50b75fc4
+  let g43 = w12 * 0x45512319
+  let g50 = w13 * 0x2fc9bebf
+  let g51 = w13 * 0x402da173
+  let g52 = w13 * 0x50b75fc4
+  let g53 = w13 * 0x45512319
+  let g60 = w14 * 0x2fc9bebf
+  let g61 = w14 * 0x402da173
+  let g62 = w14 * 0x50b75fc4
+  let g63 = w14 * 0x45512319
+  let g70 = w15 * 0x2fc9bebf
+  let g71 = w15 * 0x402da173
+  let g72 = w15 * 0x50b75fc4
+  let g73 = w15 * 0x45512319
+  let sa0 = w0 + U64.bitAnd g00 0xffffffff
+  let m0 = U64.bitAnd sa0 0xffffffff
+  let ka0 = U64.shiftRight sa0 32 + U64.shiftRight g00 32
+  let sa1 = ka0 + w1 + U64.bitAnd g01 0xffffffff + U64.bitAnd g10 0xffffffff
+  let m1 = U64.bitAnd sa1 0xffffffff
+  let ka1 =
+    U64.shiftRight sa1 32 + U64.shiftRight g01 32 + U64.shiftRight g10 32
+  let sa2 =
+    ka1
+      + w2
+      + U64.bitAnd g02 0xffffffff
+      + U64.bitAnd g11 0xffffffff
+      + U64.bitAnd g20 0xffffffff
+  let m2 = U64.bitAnd sa2 0xffffffff
+  let ka2 =
+    U64.shiftRight sa2 32
+      + U64.shiftRight g02 32
+      + U64.shiftRight g11 32
+      + U64.shiftRight g20 32
+  let sa3 =
+    ka2
+      + w3
+      + U64.bitAnd g03 0xffffffff
+      + U64.bitAnd g12 0xffffffff
+      + U64.bitAnd g21 0xffffffff
+      + U64.bitAnd g30 0xffffffff
+  let m3 = U64.bitAnd sa3 0xffffffff
+  let ka3 =
+    U64.shiftRight sa3 32
+      + U64.shiftRight g03 32
+      + U64.shiftRight g12 32
+      + U64.shiftRight g21 32
+      + U64.shiftRight g30 32
+  let sa4 =
+    ka3
+      + w4
+      + w8
+      + U64.bitAnd g13 0xffffffff
+      + U64.bitAnd g22 0xffffffff
+      + U64.bitAnd g31 0xffffffff
+      + U64.bitAnd g40 0xffffffff
+  let m4 = U64.bitAnd sa4 0xffffffff
+  let ka4 =
+    U64.shiftRight sa4 32
+      + U64.shiftRight g13 32
+      + U64.shiftRight g22 32
+      + U64.shiftRight g31 32
+      + U64.shiftRight g40 32
+  let sa5 =
+    ka4
+      + w5
+      + w9
+      + U64.bitAnd g23 0xffffffff
+      + U64.bitAnd g32 0xffffffff
+      + U64.bitAnd g41 0xffffffff
+      + U64.bitAnd g50 0xffffffff
+  let m5 = U64.bitAnd sa5 0xffffffff
+  let ka5 =
+    U64.shiftRight sa5 32
+      + U64.shiftRight g23 32
+      + U64.shiftRight g32 32
+      + U64.shiftRight g41 32
+      + U64.shiftRight g50 32
+  let sa6 =
+    ka5
+      + w6
+      + w10
+      + U64.bitAnd g33 0xffffffff
+      + U64.bitAnd g42 0xffffffff
+      + U64.bitAnd g51 0xffffffff
+      + U64.bitAnd g60 0xffffffff
+  let m6 = U64.bitAnd sa6 0xffffffff
+  let ka6 =
+    U64.shiftRight sa6 32
+      + U64.shiftRight g33 32
+      + U64.shiftRight g42 32
+      + U64.shiftRight g51 32
+      + U64.shiftRight g60 32
+  let sa7 =
+    ka6
+      + w7
+      + w11
+      + U64.bitAnd g43 0xffffffff
+      + U64.bitAnd g52 0xffffffff
+      + U64.bitAnd g61 0xffffffff
+      + U64.bitAnd g70 0xffffffff
+  let m7 = U64.bitAnd sa7 0xffffffff
+  let ka7 =
+    U64.shiftRight sa7 32
+      + U64.shiftRight g43 32
+      + U64.shiftRight g52 32
+      + U64.shiftRight g61 32
+      + U64.shiftRight g70 32
+  let sa8 =
+    ka7
+      + w12
+      + U64.bitAnd g53 0xffffffff
+      + U64.bitAnd g62 0xffffffff
+      + U64.bitAnd g71 0xffffffff
+  let m8 = U64.bitAnd sa8 0xffffffff
+  let ka8 =
+    U64.shiftRight sa8 32
+      + U64.shiftRight g53 32
+      + U64.shiftRight g62 32
+      + U64.shiftRight g71 32
+  let sa9 = ka8 + w13 + U64.bitAnd g63 0xffffffff + U64.bitAnd g72 0xffffffff
+  let m9 = U64.bitAnd sa9 0xffffffff
+  let ka9 =
+    U64.shiftRight sa9 32 + U64.shiftRight g63 32 + U64.shiftRight g72 32
+  let sa10 = ka9 + w14 + U64.bitAnd g73 0xffffffff
+  let m10 = U64.bitAnd sa10 0xffffffff
+  let ka10 = U64.shiftRight sa10 32 + U64.shiftRight g73 32
+  let sa11 = ka10 + w15
+  let m11 = U64.bitAnd sa11 0xffffffff
+  let ka11 = U64.shiftRight sa11 32
+  let m12 = ka11
+  let h00 = m8 * 0x2fc9bebf
+  let h01 = m8 * 0x402da173
+  let h02 = m8 * 0x50b75fc4
+  let h03 = m8 * 0x45512319
+  let h10 = m9 * 0x2fc9bebf
+  let h11 = m9 * 0x402da173
+  let h12 = m9 * 0x50b75fc4
+  let h13 = m9 * 0x45512319
+  let h20 = m10 * 0x2fc9bebf
+  let h21 = m10 * 0x402da173
+  let h22 = m10 * 0x50b75fc4
+  let h23 = m10 * 0x45512319
+  let h30 = m11 * 0x2fc9bebf
+  let h31 = m11 * 0x402da173
+  let h32 = m11 * 0x50b75fc4
+  let h33 = m11 * 0x45512319
+  let h40 = m12 * 0x2fc9bebf
+  let h41 = m12 * 0x402da173
+  let h42 = m12 * 0x50b75fc4
+  let h43 = m12 * 0x45512319
+  let sb0 = m0 + U64.bitAnd h00 0xffffffff
+  let p0 = U64.bitAnd sb0 0xffffffff
+  let kb0 = U64.shiftRight sb0 32 + U64.shiftRight h00 32
+  let sb1 = kb0 + m1 + U64.bitAnd h01 0xffffffff + U64.bitAnd h10 0xffffffff
+  let p1 = U64.bitAnd sb1 0xffffffff
+  let kb1 =
+    U64.shiftRight sb1 32 + U64.shiftRight h01 32 + U64.shiftRight h10 32
+  let sb2 =
+    kb1
+      + m2
+      + U64.bitAnd h02 0xffffffff
+      + U64.bitAnd h11 0xffffffff
+      + U64.bitAnd h20 0xffffffff
+  let p2 = U64.bitAnd sb2 0xffffffff
+  let kb2 =
+    U64.shiftRight sb2 32
+      + U64.shiftRight h02 32
+      + U64.shiftRight h11 32
+      + U64.shiftRight h20 32
+  let sb3 =
+    kb2
+      + m3
+      + U64.bitAnd h03 0xffffffff
+      + U64.bitAnd h12 0xffffffff
+      + U64.bitAnd h21 0xffffffff
+      + U64.bitAnd h30 0xffffffff
+  let p3 = U64.bitAnd sb3 0xffffffff
+  let kb3 =
+    U64.shiftRight sb3 32
+      + U64.shiftRight h03 32
+      + U64.shiftRight h12 32
+      + U64.shiftRight h21 32
+      + U64.shiftRight h30 32
+  let sb4 =
+    kb3
+      + m4
+      + m8
+      + U64.bitAnd h13 0xffffffff
+      + U64.bitAnd h22 0xffffffff
+      + U64.bitAnd h31 0xffffffff
+      + U64.bitAnd h40 0xffffffff
+  let p4 = U64.bitAnd sb4 0xffffffff
+  let kb4 =
+    U64.shiftRight sb4 32
+      + U64.shiftRight h13 32
+      + U64.shiftRight h22 32
+      + U64.shiftRight h31 32
+      + U64.shiftRight h40 32
+  let sb5 =
+    kb4
+      + m5
+      + m9
+      + U64.bitAnd h23 0xffffffff
+      + U64.bitAnd h32 0xffffffff
+      + U64.bitAnd h41 0xffffffff
+  let p5 = U64.bitAnd sb5 0xffffffff
+  let kb5 =
+    U64.shiftRight sb5 32
+      + U64.shiftRight h23 32
+      + U64.shiftRight h32 32
+      + U64.shiftRight h41 32
+  let sb6 =
+    kb5 + m6 + m10 + U64.bitAnd h33 0xffffffff + U64.bitAnd h42 0xffffffff
+  let p6 = U64.bitAnd sb6 0xffffffff
+  let kb6 =
+    U64.shiftRight sb6 32 + U64.shiftRight h33 32 + U64.shiftRight h42 32
+  let sb7 = kb6 + m7 + m11 + U64.bitAnd h43 0xffffffff
+  let p7 = U64.bitAnd sb7 0xffffffff
+  let kb7 = U64.shiftRight sb7 32 + U64.shiftRight h43 32
+  let p8 = kb7 + m12
+  let sd0 = p0 + p8 * 0x2fc9bebf
+  let r0 = U64.bitAnd sd0 0xffffffff
+  let kd0 = U64.shiftRight sd0 32
+  let sd1 = kd0 + p1 + p8 * 0x402da173
+  let r1 = U64.bitAnd sd1 0xffffffff
+  let kd1 = U64.shiftRight sd1 32
+  let sd2 = kd1 + p2 + p8 * 0x50b75fc4
+  let r2 = U64.bitAnd sd2 0xffffffff
+  let kd2 = U64.shiftRight sd2 32
+  let sd3 = kd2 + p3 + p8 * 0x45512319
+  let r3 = U64.bitAnd sd3 0xffffffff
+  let kd3 = U64.shiftRight sd3 32
+  let sd4 = kd3 + p4 + p8
+  let r4 = U64.bitAnd sd4 0xffffffff
+  let kd4 = U64.shiftRight sd4 32
+  let sd5 = kd4 + p5
+  let r5 = U64.bitAnd sd5 0xffffffff
+  let kd5 = U64.shiftRight sd5 32
+  let sd6 = kd5 + p6
+  let r6 = U64.bitAnd sd6 0xffffffff
+  let kd6 = U64.shiftRight sd6 32
+  let sd7 = kd6 + p7
+  let r7 = U64.bitAnd sd7 0xffffffff
+  let kd7 = U64.shiftRight sd7 32
+  subNSelect r0 r1 r2 r3 r4 r5 r6 r7 kd7
 
-copyLow : Array Int -> Array Int -> Int -> Unit
-copyLow w out i =
-  if i >= 16 then
-    ()
-  else
-    let () = A.setInPlace i w[i] out
-    copyLow w out (i + 1)
+-- The eight limbs of a value below 2^256 (so below 2n) as a canonical scalar.
+reduce256 : Array Int -> Sc
+reduce256 v =
+  subNSelect
+    (U64.truncate v[0])
+    (U64.truncate v[1])
+    (U64.truncate v[2])
+    (U64.truncate v[3])
+    (U64.truncate v[4])
+    (U64.truncate v[5])
+    (U64.truncate v[6])
+    (U64.truncate v[7])
+    0
 
 -- ── Serialization ────────────────────────────────────────────────────
 
--- 32 big-endian bytes -> the exact 256-bit value as 16 limbs (no reduction).
--- Limb `i` is exactly bytes `31 - 2i` (low) and `30 - 2i` (high), which is
--- the whole benefit of a base-2^16 layout over the field's 26-bit one.
-limbsOfBytes : Array Int -> Array Int
-limbsOfBytes bs =
-  let out = arrayMake 16 0
-  let () = limbsOfBytesGo bs out 0
-  out
+-- Four big-endian bytes as one limb. Callers pass bytes (0..255).
+beWord : Int -> Int -> Int -> Int -> Int
+beWord b0 b1 b2 b3 =
+  U64.toIntTruncating
+    (U64.bitOr
+      (U64.bitOr
+        (U64.shiftLeft (U64.truncate b0) 24)
+        (U64.shiftLeft (U64.truncate b1) 16))
+      (U64.bitOr (U64.shiftLeft (U64.truncate b2) 8) (U64.truncate b3)))
 
-limbsOfBytesGo : Array Int -> Array Int -> Int -> Unit
-limbsOfBytesGo bs out i =
-  if i >= 16 then
-    ()
-  else
-    let low = bs[31 - 2 * i]
-    let high = bs[30 - 2 * i]
-    let limb =
-      U64.toIntTruncating
-        (U64.truncate low + U64.shiftLeft (U64.truncate high) 8)
-    let () = A.setInPlace i limb out
-    limbsOfBytesGo bs out (i + 1)
+-- 32 big-endian bytes -> the exact 256-bit value as 8 limbs (no reduction).
+-- Limb `i` is bytes `28 - 4i` (high) through `31 - 4i` (low).
+limbsOfBytes : Array Int -> Array Int
+limbsOfBytes bs = [|
+  beWord bs[28] bs[29] bs[30] bs[31],
+  beWord bs[24] bs[25] bs[26] bs[27],
+  beWord bs[20] bs[21] bs[22] bs[23],
+  beWord bs[16] bs[17] bs[18] bs[19],
+  beWord bs[12] bs[13] bs[14] bs[15],
+  beWord bs[8] bs[9] bs[10] bs[11],
+  beWord bs[4] bs[5] bs[6] bs[7],
+  beWord bs[0] bs[1] bs[2] bs[3],
+|]
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
 byteArrayOk : Array Int -> Bool
@@ -459,7 +535,7 @@ scSecretCandidate32 bs =
   let limbs = limbsOfBytes safeBytes
   let rangeBit = secretBelowNBit limbs
   let nonzeroBit = secretNonzeroBit limbs
-  let candidate = reduceWide (wideOfRaw limbs)
+  let candidate = reduce256 limbs
   (bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)
 
 -- 1 exactly when `b` is a byte, 0 otherwise, with no Bool branch.
@@ -486,52 +562,44 @@ scanSecretBytes bs safeBytes i validBit =
     let () = A.setInPlace i safe safeBytes
     scanSecretBytes bs safeBytes (i + 1) (bitAnd validBit byteBit)
 
--- Borrow after subtracting n is 1 exactly when the raw 256-bit limbs are < n.
+-- The borrow out of `limbs - n`: 1 exactly when the raw 256-bit limbs are
+-- below `n`.
 secretBelowNBit : Array Int -> Int
-secretBelowNBit limbs = secretBelowNBorrow limbs 0 0
+secretBelowNBit limbs =
+  let t0 = U64.truncate limbs[0] + 0x100000000 - 0xd0364141
+  let b0 = 1 - U64.shiftRight t0 32
+  let t1 = U64.truncate limbs[1] + 0x100000000 - 0xbfd25e8c - b0
+  let b1 = 1 - U64.shiftRight t1 32
+  let t2 = U64.truncate limbs[2] + 0x100000000 - 0xaf48a03b - b1
+  let b2 = 1 - U64.shiftRight t2 32
+  let t3 = U64.truncate limbs[3] + 0x100000000 - 0xbaaedce6 - b2
+  let b3 = 1 - U64.shiftRight t3 32
+  let t4 = U64.truncate limbs[4] + 0x100000000 - 0xfffffffe - b3
+  let b4 = 1 - U64.shiftRight t4 32
+  let t5 = U64.truncate limbs[5] + 0x100000000 - 0xffffffff - b4
+  let b5 = 1 - U64.shiftRight t5 32
+  let t6 = U64.truncate limbs[6] + 0x100000000 - 0xffffffff - b5
+  let b6 = 1 - U64.shiftRight t6 32
+  let t7 = U64.truncate limbs[7] + 0x100000000 - 0xffffffff - b6
+  U64.toIntTruncating (1 - U64.shiftRight t7 32)
 
-secretBelowNBorrow : Array Int -> Int -> Int -> Int
-secretBelowNBorrow limbs i borrow =
-  if i >= 16 then
-    borrow
-  else
-    secretBelowNBorrow
-      limbs
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate limbs[i]
-              + limbMask
-              + 1
-              - U64.truncate nLimbs[i]
-              - U64.truncate borrow)
-            16))
-
--- Borrow after subtracting one is 0 exactly when the raw limbs are nonzero.
+-- 1 exactly when the raw limbs are not all zero.
 secretNonzeroBit : Array Int -> Int
-secretNonzeroBit limbs = bitXor (secretNonzeroBorrow limbs 0 1) 1
+secretNonzeroBit limbs = bitXor (zeroLimbsBit limbs) 1
 
-secretNonzeroBorrow : Array Int -> Int -> Int -> Int
-secretNonzeroBorrow limbs i borrow =
-  if i >= 16 then
-    borrow
-  else
-    secretNonzeroBorrow
-      limbs
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate limbs[i] + limbMask + 1 - U64.truncate borrow)
-            16))
-
--- Widen internal 16 canonical limbs into a fresh 32-limb workspace.
-wideOfRaw : Array Int -> Array Int
-wideOfRaw limbs =
-  let w = arrayMake nWide 0
-  let () = copyLow limbs w 0
-  w
+-- 1 exactly when all eight limbs are zero. Their OR `z` is below 2^32, and
+-- `z - 1` wraps to 2^64 - 1, setting bit 63, only when `z` is 0.
+zeroLimbsBit : Array Int -> Int
+zeroLimbsBit v =
+  let z =
+    U64.bitOr
+      (U64.bitOr
+        (U64.bitOr (U64.truncate v[0]) (U64.truncate v[1]))
+        (U64.bitOr (U64.truncate v[2]) (U64.truncate v[3])))
+      (U64.bitOr
+        (U64.bitOr (U64.truncate v[4]) (U64.truncate v[5]))
+        (U64.bitOr (U64.truncate v[6]) (U64.truncate v[7])))
+  U64.toIntTruncating (U64.shiftRight (z - 1) 63)
 
 -- | Parse 32 big-endian bytes as a CANONICAL scalar: a value >= n is
 --   REJECTED rather than reduced. This is the entry point a wire format
@@ -550,11 +618,11 @@ scFromBytes bs =
   else if not (byteArrayOk bs) then
     Err "scalar.scFromBytes: every element must be a byte in 0..255"
   else
-    let w = wideOfRaw (limbsOfBytes bs)
-    if gteNLimbs w then
+    let limbs = limbsOfBytes bs
+    if secretBelowNBit limbs == 0 then
       Err "scalar.scFromBytes: value is not canonical (>= n)"
     else
-      Ok (reduceWide w)
+      Ok (Sc limbs)
 
 -- | Parse ANY 32 big-endian bytes, reducing mod `n`. This mirrors
 --   `secp256k1_scalar_set_b32` and is what the reference corpus's `red` rows
@@ -573,7 +641,7 @@ scFromBytesReduce bs =
   else if not (byteArrayOk bs) then
     panic "scalar.scFromBytesReduce: every element must be a byte in 0..255"
   else
-    reduceWide (wideOfRaw (limbsOfBytes bs))
+    reduce256 (limbsOfBytes bs)
 
 -- | Signing-internal reduction for bytes produced by a fixed-width canonical
 --   serializer. Those producers already establish length and byte domain, so
@@ -581,28 +649,87 @@ scFromBytesReduce bs =
 --   its branch-bearing early-exit scan.
 export
 scFromFixedBytesReduce : Array Int -> Sc
-scFromFixedBytesReduce bs = reduceWide (wideOfRaw (limbsOfBytes bs))
+scFromFixedBytesReduce bs = reduce256 (limbsOfBytes bs)
 
 -- | The canonical 32 big-endian bytes of a scalar.
 export
 scToBytes : Sc -> Array Int
 scToBytes a =
   let v = rawSc a
-  let out = arrayMake 32 0
-  let () = toBytesGo v out 0
-  out
-
-toBytesGo : Array Int -> Array Int -> Int -> Unit
-toBytesGo v out i =
-  if i >= 16 then
-    ()
-  else
-    let limb = v[i]
-    let low = U64.toIntTruncating (U64.bitAnd (U64.truncate limb) 255)
-    let high = U64.toIntTruncating (U64.shiftRight (U64.truncate limb) 8)
-    let () = A.setInPlace (31 - 2 * i) low out
-    let () = A.setInPlace (30 - 2 * i) high out
-    toBytesGo v out (i + 1)
+  let l0 = U64.truncate v[0]
+  let l1 = U64.truncate v[1]
+  let l2 = U64.truncate v[2]
+  let l3 = U64.truncate v[3]
+  let l4 = U64.truncate v[4]
+  let l5 = U64.truncate v[5]
+  let l6 = U64.truncate v[6]
+  let l7 = U64.truncate v[7]
+  let y73 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l7 24) 0xff)
+  let y72 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l7 16) 0xff)
+  let y71 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l7 8) 0xff)
+  let y70 = U64.toIntTruncating (U64.bitAnd l7 0xff)
+  let y63 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l6 24) 0xff)
+  let y62 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l6 16) 0xff)
+  let y61 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l6 8) 0xff)
+  let y60 = U64.toIntTruncating (U64.bitAnd l6 0xff)
+  let y53 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l5 24) 0xff)
+  let y52 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l5 16) 0xff)
+  let y51 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l5 8) 0xff)
+  let y50 = U64.toIntTruncating (U64.bitAnd l5 0xff)
+  let y43 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l4 24) 0xff)
+  let y42 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l4 16) 0xff)
+  let y41 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l4 8) 0xff)
+  let y40 = U64.toIntTruncating (U64.bitAnd l4 0xff)
+  let y33 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l3 24) 0xff)
+  let y32 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l3 16) 0xff)
+  let y31 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l3 8) 0xff)
+  let y30 = U64.toIntTruncating (U64.bitAnd l3 0xff)
+  let y23 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l2 24) 0xff)
+  let y22 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l2 16) 0xff)
+  let y21 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l2 8) 0xff)
+  let y20 = U64.toIntTruncating (U64.bitAnd l2 0xff)
+  let y13 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l1 24) 0xff)
+  let y12 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l1 16) 0xff)
+  let y11 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l1 8) 0xff)
+  let y10 = U64.toIntTruncating (U64.bitAnd l1 0xff)
+  let y03 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l0 24) 0xff)
+  let y02 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l0 16) 0xff)
+  let y01 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l0 8) 0xff)
+  let y00 = U64.toIntTruncating (U64.bitAnd l0 0xff)
+  [|
+    y73,
+    y72,
+    y71,
+    y70,
+    y63,
+    y62,
+    y61,
+    y60,
+    y53,
+    y52,
+    y51,
+    y50,
+    y43,
+    y42,
+    y41,
+    y40,
+    y33,
+    y32,
+    y31,
+    y30,
+    y23,
+    y22,
+    y21,
+    y20,
+    y13,
+    y12,
+    y11,
+    y10,
+    y03,
+    y02,
+    y01,
+    y00,
+  |]
 
 -- ── Comparison ───────────────────────────────────────────────────────
 
@@ -610,85 +737,65 @@ toBytesGo v out i =
 --   so this is limb-wise equality.
 export
 scEqual : Sc -> Sc -> Bool
-scEqual a b = equalGo (rawSc a) (rawSc b) 0
-
-equalGo : Array Int -> Array Int -> Int -> Bool
-equalGo a b i =
-  if i >= 16 then True else if a[i] /= b[i] then False else equalGo a b (i + 1)
+scEqual a b = scEqualBit a b == 1
 
 -- | Is this scalar zero?
 export
 scIsZero : Sc -> Bool
-scIsZero a = isZeroGo (rawSc a) 0
-
-isZeroGo : Array Int -> Int -> Bool
-isZeroGo a i =
-  if i >= 16 then True else if a[i] /= 0 then False else isZeroGo a (i + 1)
+scIsZero a = scZeroBit a == 1
 
 -- | Fixed-control zero predicate for secret-bearing arithmetic. Returns the
 --   arithmetic bit 1 exactly for zero and 0 otherwise.
 export
 scZeroBit : Sc -> Int
-scZeroBit a = scZeroBorrow (rawSc a) 0 1
-
-scZeroBorrow : Array Int -> Int -> Int -> Int
-scZeroBorrow a i borrow =
-  if i >= 16 then
-    borrow
-  else
-    scZeroBorrow
-      a
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate a[i] + limbMask + 1 - U64.truncate borrow)
-            16))
+scZeroBit a = zeroLimbsBit (rawSc a)
 
 -- | Fixed-control equality predicate for secret-bearing arithmetic. Returns
 --   1 exactly when the canonical limb arrays agree and 0 otherwise.
 export
 scEqualBit : Sc -> Sc -> Int
-scEqualBit a b = scEqualBorrow (rawSc a) (rawSc b) 0 1
-
-scEqualBorrow : Array Int -> Array Int -> Int -> Int -> Int
-scEqualBorrow a b i borrow =
-  if i >= 16 then
-    borrow
-  else
-    let x =
-      U64.toIntTruncating (U64.bitXor (U64.truncate a[i]) (U64.truncate b[i]))
-    scEqualBorrow
-      a
-      b
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate x + limbMask + 1 - U64.truncate borrow)
-            16))
+scEqualBit a b =
+  let x = rawSc a
+  let y = rawSc b
+  let d0 = U64.bitXor (U64.truncate x[0]) (U64.truncate y[0])
+  let d1 = U64.bitXor (U64.truncate x[1]) (U64.truncate y[1])
+  let d2 = U64.bitXor (U64.truncate x[2]) (U64.truncate y[2])
+  let d3 = U64.bitXor (U64.truncate x[3]) (U64.truncate y[3])
+  let d4 = U64.bitXor (U64.truncate x[4]) (U64.truncate y[4])
+  let d5 = U64.bitXor (U64.truncate x[5]) (U64.truncate y[5])
+  let d6 = U64.bitXor (U64.truncate x[6]) (U64.truncate y[6])
+  let d7 = U64.bitXor (U64.truncate x[7]) (U64.truncate y[7])
+  let z =
+    U64.bitOr
+      (U64.bitOr (U64.bitOr d0 d1) (U64.bitOr d2 d3))
+      (U64.bitOr (U64.bitOr d4 d5) (U64.bitOr d6 d7))
+  U64.toIntTruncating (U64.shiftRight (z - 1) 63)
 
 -- | Fixed-control selection. `bit` must be 0 or 1; 0 selects `a` and 1
 --   selects `b`. Every limb is visited and the inputs remain unmodified.
 export
 scSelect : Int -> Sc -> Sc -> Sc
 scSelect bit a b =
-  let out = arrayMake 16 0
-  let () = scSelectGo bit (rawSc a) (rawSc b) out 0
-  Sc out
-
-scSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
-scSelectGo bit a b out i =
-  if i >= 16 then
-    ()
-  else
-    let x = a[i]
-    let blended =
-      U64.toIntTruncating
-        (U64.truncate x
-          + U64.truncate bit * (U64.truncate b[i] - U64.truncate x))
-    let () = A.setInPlace i blended out
-    scSelectGo bit a b out (i + 1)
+  let x = rawSc a
+  let y = rawSc b
+  let m = U64.truncate bit
+  let x0 = U64.truncate x[0]
+  let x1 = U64.truncate x[1]
+  let x2 = U64.truncate x[2]
+  let x3 = U64.truncate x[3]
+  let x4 = U64.truncate x[4]
+  let x5 = U64.truncate x[5]
+  let x6 = U64.truncate x[6]
+  let x7 = U64.truncate x[7]
+  let o0 = U64.toIntTruncating (x0 + m * (U64.truncate y[0] - x0))
+  let o1 = U64.toIntTruncating (x1 + m * (U64.truncate y[1] - x1))
+  let o2 = U64.toIntTruncating (x2 + m * (U64.truncate y[2] - x2))
+  let o3 = U64.toIntTruncating (x3 + m * (U64.truncate y[3] - x3))
+  let o4 = U64.toIntTruncating (x4 + m * (U64.truncate y[4] - x4))
+  let o5 = U64.toIntTruncating (x5 + m * (U64.truncate y[5] - x5))
+  let o6 = U64.toIntTruncating (x6 + m * (U64.truncate y[6] - x6))
+  let o7 = U64.toIntTruncating (x7 + m * (U64.truncate y[7] - x7))
+  Sc [|o0, o1, o2, o3, o4, o5, o6, o7|]
 
 -- | The LOW-S PREDICATE: is `s` strictly greater than `floor(n/2)`?
 --
@@ -705,10 +812,6 @@ scSelectGo bit a b out i =
 --   floor(n/2)` is `False` and `scIsHigh (floor(n/2) + 1)` is `True`. The
 --   corpus's `high` rows are the graded answer key for that boundary.
 --
---   Implemented WITHOUT a second big constant: for integers,
---   `s > floor(n/2)` iff `2s > n - 1` iff `2s >= n` (`n` is odd). So this
---   doubles `s` into 17 limbs and compares against `n`.
---
 -- > scIsHigh (scInverse (scAdd scOne scOne))
 -- True
 --
@@ -716,122 +819,100 @@ scSelectGo bit a b out i =
 -- False
 export
 scIsHigh : Sc -> Bool
-scIsHigh s =
-  let d = arrayMake 17 0
-  let () = dblGo (rawSc s) d 0 0
-  if d[16] /= 0 then True else gteNGo d 15
+scIsHigh s = scHighBit s == 1
 
 -- | Fixed-control LOW-S predicate for secret-bearing arithmetic. Returns 1
---   exactly when `s > floor(n/2)`. The threshold subtraction visits all
---   sixteen limbs and returns `1 - borrow`; it never calls `scIsHigh` or
---   converts a secret-derived value to Bool.
+--   exactly when `s > floor(n/2)`: the threshold `floor(n/2) + 1` is
+--   subtracted with a fixed borrow chain over all eight limbs, and the result
+--   is `1 - borrow`.
 export
 scHighBit : Sc -> Int
-scHighBit s = bitXor (scHighBorrow (rawSc s) 0 0) 1
-
-scHighBorrow : Array Int -> Int -> Int -> Int
-scHighBorrow s i borrow =
-  if i >= 16 then
-    borrow
-  else
-    scHighBorrow
-      s
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate s[i]
-              + limbMask
-              + 1
-              - U64.truncate nHalfPlusOneLimbs[i]
-              - U64.truncate borrow)
-            16))
-
--- The branch-bearing public path (`scIsHigh`): `Int` arithmetic.
-dblGo : Array Int -> Array Int -> Int -> Int -> Unit
-dblGo s d i carry =
-  if i >= 16 then
-    A.setInPlace 16 carry d
-  else
-    let v = 2 * s[i] + carry
-    let () = A.setInPlace i (bitAnd v 0xffff) d
-    dblGo s d (i + 1) (shiftRight v 16)
+scHighBit s =
+  let v = rawSc s
+  let t0 = U64.truncate v[0] + 0x100000000 - 0x681b20a1
+  let b0 = 1 - U64.shiftRight t0 32
+  let t1 = U64.truncate v[1] + 0x100000000 - 0xdfe92f46 - b0
+  let b1 = 1 - U64.shiftRight t1 32
+  let t2 = U64.truncate v[2] + 0x100000000 - 0x57a4501d - b1
+  let b2 = 1 - U64.shiftRight t2 32
+  let t3 = U64.truncate v[3] + 0x100000000 - 0x5d576e73 - b2
+  let b3 = 1 - U64.shiftRight t3 32
+  let t4 = U64.truncate v[4] + 0x100000000 - 0xffffffff - b3
+  let b4 = 1 - U64.shiftRight t4 32
+  let t5 = U64.truncate v[5] + 0x100000000 - 0xffffffff - b4
+  let b5 = 1 - U64.shiftRight t5 32
+  let t6 = U64.truncate v[6] + 0x100000000 - 0xffffffff - b5
+  let b6 = 1 - U64.shiftRight t6 32
+  let t7 = U64.truncate v[7] + 0x100000000 - 0x7fffffff - b6
+  U64.toIntTruncating (U64.shiftRight t7 32)
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
 
--- | Addition mod `n`. Limb-wise into a fresh workspace (each sum < 2^17),
---   then `reduceWide`.
+-- | Addition mod `n`. Limb-wise with a carry chain (each limb sum below
+--   2^33), then `subNSelect` on the eight limbs and the carry out: the sum
+--   of two canonical scalars is below `2n`.
 export
 scAdd : Sc -> Sc -> Sc
-scAdd a b =
-  let w = arrayMake nWide 0
-  let () = addGo (rawSc a) (rawSc b) w 0
-  reduceWide w
+scAdd x y =
+  let a = rawSc x
+  let b = rawSc y
+  let s0 = U64.truncate a[0] + U64.truncate b[0]
+  let s1 = U64.truncate a[1] + U64.truncate b[1] + U64.shiftRight s0 32
+  let s2 = U64.truncate a[2] + U64.truncate b[2] + U64.shiftRight s1 32
+  let s3 = U64.truncate a[3] + U64.truncate b[3] + U64.shiftRight s2 32
+  let s4 = U64.truncate a[4] + U64.truncate b[4] + U64.shiftRight s3 32
+  let s5 = U64.truncate a[5] + U64.truncate b[5] + U64.shiftRight s4 32
+  let s6 = U64.truncate a[6] + U64.truncate b[6] + U64.shiftRight s5 32
+  let s7 = U64.truncate a[7] + U64.truncate b[7] + U64.shiftRight s6 32
+  subNSelect
+    (U64.bitAnd s0 0xffffffff)
+    (U64.bitAnd s1 0xffffffff)
+    (U64.bitAnd s2 0xffffffff)
+    (U64.bitAnd s3 0xffffffff)
+    (U64.bitAnd s4 0xffffffff)
+    (U64.bitAnd s5 0xffffffff)
+    (U64.bitAnd s6 0xffffffff)
+    (U64.bitAnd s7 0xffffffff)
+    (U64.shiftRight s7 32)
 
-addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
-addGo a b w i =
-  if i >= 16 then
-    ()
-  else
-    let sum = U64.toIntTruncating (U64.truncate a[i] + U64.truncate b[i])
-    let () = A.setInPlace i sum w
-    addGo a b w (i + 1)
-
--- | Additive inverse mod `n`, computed as `n - a` with borrow. `a` is
---   canonical so `0 <= a < n`, hence `0 < n - a <= n`; `reduceWide`'s
---   final subtract-and-select maps the `a = 0` case (`n - 0 = n`) back to 0.
+-- | Additive inverse mod `n`. The same fixed-control code as `scNegateCt`.
 export
 scNegate : Sc -> Sc
-scNegate a =
-  let w = arrayMake nWide 0
-  let () = negateGo (rawSc a) w 0 0
-  reduceWide w
+scNegate a = scNegateCt a
 
--- The branch-bearing public path: `Int` arithmetic, adding back 2^16 on a
--- borrow. Secret-bearing callers use `scNegateCt`.
-negateGo : Array Int -> Array Int -> Int -> Int -> Unit
-negateGo a w i borrow =
-  if i >= 16 then
-    ()
-  else
-    let d = nLimbs[i] - a[i] - borrow
-    if d < 0 then
-      let () = A.setInPlace i (d + 0x10000) w
-      negateGo a w (i + 1) 1
-    else
-      let () = A.setInPlace i d w
-      negateGo a w (i + 1) 0
-
--- | Fixed-control additive inverse for secret-bearing arithmetic. The full
---   modulus subtraction always runs; arithmetic selection maps the `a = 0`
---   candidate `n` to canonical zero without calling branch-bearing
---   `scNegate` or converting the zero bit to Bool.
+-- | Fixed-control additive inverse for secret-bearing arithmetic: `n - a`
+--   with a fixed borrow chain, then `subNSelect`. `a` is canonical, so
+--   `0 < n - a <= n` and the chain never borrows out; the subtract-and-select
+--   maps the `a = 0` case (`n - 0 = n`) to canonical zero.
 export
 scNegateCt : Sc -> Sc
-scNegateCt a =
-  let out = arrayMake 16 0
-  let () = scNegateCtGo (rawSc a) out 0 0
-  scSelect (scZeroBit a) (Sc out) scZero
-
-scNegateCtGo : Array Int -> Array Int -> Int -> Int -> Unit
-scNegateCtGo a out i borrow =
-  if i >= 16 then
-    ()
-  else
-    let t =
-      U64.toIntTruncating
-        (U64.truncate nLimbs[i]
-          + limbMask
-          + 1
-          - U64.truncate a[i]
-          - U64.truncate borrow)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) limbMask)
-    let () = A.setInPlace i masked out
-    scNegateCtGo
-      a
-      out
-      (i + 1)
-      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 16))
+scNegateCt x =
+  let a = rawSc x
+  let t0 = 0xd0364141 + 0x100000000 - U64.truncate a[0]
+  let b0 = 1 - U64.shiftRight t0 32
+  let t1 = 0xbfd25e8c + 0x100000000 - U64.truncate a[1] - b0
+  let b1 = 1 - U64.shiftRight t1 32
+  let t2 = 0xaf48a03b + 0x100000000 - U64.truncate a[2] - b1
+  let b2 = 1 - U64.shiftRight t2 32
+  let t3 = 0xbaaedce6 + 0x100000000 - U64.truncate a[3] - b2
+  let b3 = 1 - U64.shiftRight t3 32
+  let t4 = 0xfffffffe + 0x100000000 - U64.truncate a[4] - b3
+  let b4 = 1 - U64.shiftRight t4 32
+  let t5 = 0xffffffff + 0x100000000 - U64.truncate a[5] - b4
+  let b5 = 1 - U64.shiftRight t5 32
+  let t6 = 0xffffffff + 0x100000000 - U64.truncate a[6] - b5
+  let b6 = 1 - U64.shiftRight t6 32
+  let t7 = 0xffffffff + 0x100000000 - U64.truncate a[7] - b6
+  subNSelect
+    (U64.bitAnd t0 0xffffffff)
+    (U64.bitAnd t1 0xffffffff)
+    (U64.bitAnd t2 0xffffffff)
+    (U64.bitAnd t3 0xffffffff)
+    (U64.bitAnd t4 0xffffffff)
+    (U64.bitAnd t5 0xffffffff)
+    (U64.bitAnd t6 0xffffffff)
+    (U64.bitAnd t7 0xffffffff)
+    0
 
 -- | Subtraction mod `n`. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_scalar_sub` either.
@@ -839,38 +920,284 @@ export
 scSub : Sc -> Sc -> Sc
 scSub a b = scAdd a (scNegate b)
 
--- | Multiplication mod `n`: schoolbook columns into a 32-limb workspace,
---   then `reduceWide` (fixed carry/fold schedule by `c = 2^256 - n`, one
---   unconditional subtract-and-select).
+-- | Multiplication mod `n`: the 512-bit schoolbook product as sixteen
+--   32-bit limbs, then `reduce512`.
 --
---   The bound is the module header's headroom chain: the peak intermediate
---   is column 15, sixteen terms, < 2^36 against a 2^62 ceiling.
+--   Each product `a_i * b_j` is below 2^64 (at most `(2^32 - 1)^2`), so it
+--   is exact in a `U64`. Column `k` sums the low halves of its products and
+--   the incoming carry; the outgoing carry is that sum shifted down 32 plus
+--   the high halves. Columns 7 and 8 are the worst, below 15 * 2^32 <
+--   2^35.91, 28 bits clear of 2^64. The carry out of column 14 is the top
+--   limb, below 2^32 because the product is below 2^512.
 export
 scMul : Sc -> Sc -> Sc
-scMul a b =
-  let w = arrayMake nWide 0
-  let () = mulAccum (rawSc a) (rawSc b) w 0
-  reduceWide w
-
-mulAccum : Array Int -> Array Int -> Array Int -> Int -> Unit
-mulAccum a b w i =
-  if i >= 16 then
-    ()
-  else
-    let () = mulAccumRow a b w i 0
-    mulAccum a b w (i + 1)
-
-mulAccumRow : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
-mulAccumRow a b w i j =
-  if j >= 16 then
-    ()
-  else
-    let k = i + j
-    let column =
-      U64.toIntTruncating
-        (U64.truncate w[k] + U64.truncate a[i] * U64.truncate b[j])
-    let () = A.setInPlace k column w
-    mulAccumRow a b w i (j + 1)
+scMul x y =
+  let a = rawSc x
+  let b = rawSc y
+  let a0 = U64.truncate a[0]
+  let a1 = U64.truncate a[1]
+  let a2 = U64.truncate a[2]
+  let a3 = U64.truncate a[3]
+  let a4 = U64.truncate a[4]
+  let a5 = U64.truncate a[5]
+  let a6 = U64.truncate a[6]
+  let a7 = U64.truncate a[7]
+  let b0 = U64.truncate b[0]
+  let b1 = U64.truncate b[1]
+  let b2 = U64.truncate b[2]
+  let b3 = U64.truncate b[3]
+  let b4 = U64.truncate b[4]
+  let b5 = U64.truncate b[5]
+  let b6 = U64.truncate b[6]
+  let b7 = U64.truncate b[7]
+  let x00 = a0 * b0
+  let x01 = a0 * b1
+  let x02 = a0 * b2
+  let x03 = a0 * b3
+  let x04 = a0 * b4
+  let x05 = a0 * b5
+  let x06 = a0 * b6
+  let x07 = a0 * b7
+  let x10 = a1 * b0
+  let x11 = a1 * b1
+  let x12 = a1 * b2
+  let x13 = a1 * b3
+  let x14 = a1 * b4
+  let x15 = a1 * b5
+  let x16 = a1 * b6
+  let x17 = a1 * b7
+  let x20 = a2 * b0
+  let x21 = a2 * b1
+  let x22 = a2 * b2
+  let x23 = a2 * b3
+  let x24 = a2 * b4
+  let x25 = a2 * b5
+  let x26 = a2 * b6
+  let x27 = a2 * b7
+  let x30 = a3 * b0
+  let x31 = a3 * b1
+  let x32 = a3 * b2
+  let x33 = a3 * b3
+  let x34 = a3 * b4
+  let x35 = a3 * b5
+  let x36 = a3 * b6
+  let x37 = a3 * b7
+  let x40 = a4 * b0
+  let x41 = a4 * b1
+  let x42 = a4 * b2
+  let x43 = a4 * b3
+  let x44 = a4 * b4
+  let x45 = a4 * b5
+  let x46 = a4 * b6
+  let x47 = a4 * b7
+  let x50 = a5 * b0
+  let x51 = a5 * b1
+  let x52 = a5 * b2
+  let x53 = a5 * b3
+  let x54 = a5 * b4
+  let x55 = a5 * b5
+  let x56 = a5 * b6
+  let x57 = a5 * b7
+  let x60 = a6 * b0
+  let x61 = a6 * b1
+  let x62 = a6 * b2
+  let x63 = a6 * b3
+  let x64 = a6 * b4
+  let x65 = a6 * b5
+  let x66 = a6 * b6
+  let x67 = a6 * b7
+  let x70 = a7 * b0
+  let x71 = a7 * b1
+  let x72 = a7 * b2
+  let x73 = a7 * b3
+  let x74 = a7 * b4
+  let x75 = a7 * b5
+  let x76 = a7 * b6
+  let x77 = a7 * b7
+  let w0 = U64.bitAnd x00 0xffffffff
+  let k0 = U64.shiftRight x00 32
+  let t1 = k0 + U64.bitAnd x01 0xffffffff + U64.bitAnd x10 0xffffffff
+  let w1 = U64.bitAnd t1 0xffffffff
+  let k1 = U64.shiftRight t1 32 + U64.shiftRight x01 32 + U64.shiftRight x10 32
+  let t2 =
+    k1
+      + U64.bitAnd x02 0xffffffff
+      + U64.bitAnd x11 0xffffffff
+      + U64.bitAnd x20 0xffffffff
+  let w2 = U64.bitAnd t2 0xffffffff
+  let k2 =
+    U64.shiftRight t2 32
+      + U64.shiftRight x02 32
+      + U64.shiftRight x11 32
+      + U64.shiftRight x20 32
+  let t3 =
+    k2
+      + U64.bitAnd x03 0xffffffff
+      + U64.bitAnd x12 0xffffffff
+      + U64.bitAnd x21 0xffffffff
+      + U64.bitAnd x30 0xffffffff
+  let w3 = U64.bitAnd t3 0xffffffff
+  let k3 =
+    U64.shiftRight t3 32
+      + U64.shiftRight x03 32
+      + U64.shiftRight x12 32
+      + U64.shiftRight x21 32
+      + U64.shiftRight x30 32
+  let t4 =
+    k3
+      + U64.bitAnd x04 0xffffffff
+      + U64.bitAnd x13 0xffffffff
+      + U64.bitAnd x22 0xffffffff
+      + U64.bitAnd x31 0xffffffff
+      + U64.bitAnd x40 0xffffffff
+  let w4 = U64.bitAnd t4 0xffffffff
+  let k4 =
+    U64.shiftRight t4 32
+      + U64.shiftRight x04 32
+      + U64.shiftRight x13 32
+      + U64.shiftRight x22 32
+      + U64.shiftRight x31 32
+      + U64.shiftRight x40 32
+  let t5 =
+    k4
+      + U64.bitAnd x05 0xffffffff
+      + U64.bitAnd x14 0xffffffff
+      + U64.bitAnd x23 0xffffffff
+      + U64.bitAnd x32 0xffffffff
+      + U64.bitAnd x41 0xffffffff
+      + U64.bitAnd x50 0xffffffff
+  let w5 = U64.bitAnd t5 0xffffffff
+  let k5 =
+    U64.shiftRight t5 32
+      + U64.shiftRight x05 32
+      + U64.shiftRight x14 32
+      + U64.shiftRight x23 32
+      + U64.shiftRight x32 32
+      + U64.shiftRight x41 32
+      + U64.shiftRight x50 32
+  let t6 =
+    k5
+      + U64.bitAnd x06 0xffffffff
+      + U64.bitAnd x15 0xffffffff
+      + U64.bitAnd x24 0xffffffff
+      + U64.bitAnd x33 0xffffffff
+      + U64.bitAnd x42 0xffffffff
+      + U64.bitAnd x51 0xffffffff
+      + U64.bitAnd x60 0xffffffff
+  let w6 = U64.bitAnd t6 0xffffffff
+  let k6 =
+    U64.shiftRight t6 32
+      + U64.shiftRight x06 32
+      + U64.shiftRight x15 32
+      + U64.shiftRight x24 32
+      + U64.shiftRight x33 32
+      + U64.shiftRight x42 32
+      + U64.shiftRight x51 32
+      + U64.shiftRight x60 32
+  let t7 =
+    k6
+      + U64.bitAnd x07 0xffffffff
+      + U64.bitAnd x16 0xffffffff
+      + U64.bitAnd x25 0xffffffff
+      + U64.bitAnd x34 0xffffffff
+      + U64.bitAnd x43 0xffffffff
+      + U64.bitAnd x52 0xffffffff
+      + U64.bitAnd x61 0xffffffff
+      + U64.bitAnd x70 0xffffffff
+  let w7 = U64.bitAnd t7 0xffffffff
+  let k7 =
+    U64.shiftRight t7 32
+      + U64.shiftRight x07 32
+      + U64.shiftRight x16 32
+      + U64.shiftRight x25 32
+      + U64.shiftRight x34 32
+      + U64.shiftRight x43 32
+      + U64.shiftRight x52 32
+      + U64.shiftRight x61 32
+      + U64.shiftRight x70 32
+  let t8 =
+    k7
+      + U64.bitAnd x17 0xffffffff
+      + U64.bitAnd x26 0xffffffff
+      + U64.bitAnd x35 0xffffffff
+      + U64.bitAnd x44 0xffffffff
+      + U64.bitAnd x53 0xffffffff
+      + U64.bitAnd x62 0xffffffff
+      + U64.bitAnd x71 0xffffffff
+  let w8 = U64.bitAnd t8 0xffffffff
+  let k8 =
+    U64.shiftRight t8 32
+      + U64.shiftRight x17 32
+      + U64.shiftRight x26 32
+      + U64.shiftRight x35 32
+      + U64.shiftRight x44 32
+      + U64.shiftRight x53 32
+      + U64.shiftRight x62 32
+      + U64.shiftRight x71 32
+  let t9 =
+    k8
+      + U64.bitAnd x27 0xffffffff
+      + U64.bitAnd x36 0xffffffff
+      + U64.bitAnd x45 0xffffffff
+      + U64.bitAnd x54 0xffffffff
+      + U64.bitAnd x63 0xffffffff
+      + U64.bitAnd x72 0xffffffff
+  let w9 = U64.bitAnd t9 0xffffffff
+  let k9 =
+    U64.shiftRight t9 32
+      + U64.shiftRight x27 32
+      + U64.shiftRight x36 32
+      + U64.shiftRight x45 32
+      + U64.shiftRight x54 32
+      + U64.shiftRight x63 32
+      + U64.shiftRight x72 32
+  let t10 =
+    k9
+      + U64.bitAnd x37 0xffffffff
+      + U64.bitAnd x46 0xffffffff
+      + U64.bitAnd x55 0xffffffff
+      + U64.bitAnd x64 0xffffffff
+      + U64.bitAnd x73 0xffffffff
+  let w10 = U64.bitAnd t10 0xffffffff
+  let k10 =
+    U64.shiftRight t10 32
+      + U64.shiftRight x37 32
+      + U64.shiftRight x46 32
+      + U64.shiftRight x55 32
+      + U64.shiftRight x64 32
+      + U64.shiftRight x73 32
+  let t11 =
+    k10
+      + U64.bitAnd x47 0xffffffff
+      + U64.bitAnd x56 0xffffffff
+      + U64.bitAnd x65 0xffffffff
+      + U64.bitAnd x74 0xffffffff
+  let w11 = U64.bitAnd t11 0xffffffff
+  let k11 =
+    U64.shiftRight t11 32
+      + U64.shiftRight x47 32
+      + U64.shiftRight x56 32
+      + U64.shiftRight x65 32
+      + U64.shiftRight x74 32
+  let t12 =
+    k11
+      + U64.bitAnd x57 0xffffffff
+      + U64.bitAnd x66 0xffffffff
+      + U64.bitAnd x75 0xffffffff
+  let w12 = U64.bitAnd t12 0xffffffff
+  let k12 =
+    U64.shiftRight t12 32
+      + U64.shiftRight x57 32
+      + U64.shiftRight x66 32
+      + U64.shiftRight x75 32
+  let t13 = k12 + U64.bitAnd x67 0xffffffff + U64.bitAnd x76 0xffffffff
+  let w13 = U64.bitAnd t13 0xffffffff
+  let k13 =
+    U64.shiftRight t13 32 + U64.shiftRight x67 32 + U64.shiftRight x76 32
+  let t14 = k13 + U64.bitAnd x77 0xffffffff
+  let w14 = U64.bitAnd t14 0xffffffff
+  let k14 = U64.shiftRight t14 32 + U64.shiftRight x77 32
+  reduce512 w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 k14
 
 -- | Multiplicative inverse mod `n`, by Fermat's little theorem: `a^(n-2)`,
 --   square-and-multiply over the fixed 256-bit exponent, most-significant
@@ -889,8 +1216,8 @@ mulAccumRow a b w i j =
 --   in particular a signing routine must reject `k = 0` before inverting it,
 --   and must never treat a zero result as valid.
 --
---   Fixed-shape on the native reduction path; see the module header's P15
---   boundary for helpers outside this call graph.
+--   The ladder's only branches test the public bit counter and the public
+--   exponent `n - 2`.
 --
 -- > scEqual (scInverse scZero) scZero
 -- True

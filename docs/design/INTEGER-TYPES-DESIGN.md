@@ -8,7 +8,9 @@ index, CRC-32 and the property runner's `fmix32` on `U32`). N3 BUILT (boxed
 `addCarry` and `subBorrow`, `bits64` retired, the multi-byte codecs typed).
 N4 BUILT (the `Hashable` folds and field/scalar on `U64`, `checkedAdd`,
 `checkedSub` and `checkedMul`, and `Int` overflow trapping on all three
-engines). N5–N6 are design.
+engines). N5 BUILT (on the LLVM backend, `U64` and `U32` cross `let`,
+parameter and result in registers, `U32` is computed as native `i32`, and
+field/scalar are re-limbed). N6 is design.
 Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
@@ -45,7 +47,7 @@ tagged types first, `U64` second, the trap last.
 |---|---|---|---|---|
 | `Int` | 63, signed | tagged immediate, unchanged | **traps** (N4; it wrapped before) | N4 |
 | `U8` `U16` `U32` | 8 / 16 / 32, unsigned | tagged immediate, distinct static type; no runtime or GC change | **wraps** modulo 2^n | N1 |
-| `U64` | 64, unsigned | boxed cell, the `Float` shape, first; unboxed in monomorphic code later | wraps | N3, N5 |
+| `U64` | 64, unsigned | boxed cell, the `Float` shape; on the LLVM backend a raw register across `let`, parameter and result where the static type is known (N5) | wraps | N3, N5 |
 | `I32` `I64` | 32 / 64, signed | reserved names; built when a customer is named | wraps | N6 |
 | bignum | arbitrary | non-goal | | |
 
@@ -310,15 +312,27 @@ mask, or, once the emitter reads scalar types from Core IR (#353), a native
 same, with the caveat that #2360's boxing applies and a `U32` above 2^30
 does not fit an `i31`.
 
+As built (N5), on the LLVM backend: a `U32` stays Int's tagged word at every
+uniform boundary (a closure, an array slot, a polymorphic call), and inside
+code whose type is known it is an `i32`.  An expression computes on `i32`
+registers, so `+`, `-` and `*` wrap by themselves and need no mask; a `let`
+keeps the `i32`; an annotated function whose signature names `U32` passes it
+as an `i32` to and from its raw worker (see §6.2); and a saturated call of a
+small non-recursive `U32` function, which covers the `u32` module's
+operations, is inlined where it is emitted, so a rotate by a constant amount
+reaches LLVM as the shift pair it turns into one rotate instruction.  The
+word is truncated once where it enters and zero-extended and retagged once
+where it leaves.  Wasm is unchanged: #2360 stays its own issue, since Wasm
+treats representation as a whole-program property (Val, 2026-09-26).
+
 ### 6.2 `U64`
 
 A 64-bit value does not fit a tagged word. N3 lands it **boxed**, in the
 cell shape `Float` already uses on both native and Wasm, with the same
 emitter paths that unbox a `Float` for arithmetic. That is correct and
 already faster than a five-word `data U64` cell plus sixteen multiplies.
-Unboxing in monomorphic code is N5 and rides #353 together with `Float`;
-it is a performance step, not a correctness one, and `U64` does not wait
-for it.
+Unboxing in monomorphic code is N5; it is a performance step, not a
+correctness one, and `U64` does not wait for it.
 
 The interpreter, `compiler/eval/eval.mdk`, is a Medaka program compiled
 with a 63-bit `Int`, so it cannot hold a native `U64` until the emitter
@@ -336,6 +350,34 @@ Medaka over eight kernel externs (`u64Truncate`, `u64TruncateToInt`, the
 three bitwise operations, the two shifts and `u64MulHigh`). The compiler's own source adopts `U64` only after emitter
 support has landed and the seed has been re-minted twice, the ratchet B2
 used for `ByteBlock` (`docs/design/BYTES-DESIGN.md`).
+
+As built (N5), on the LLVM backend, and as the scalar slice of #353 rather
+than all of it (Val, 2026-09-26): `Float` keeps its own heuristics, and the
+backend-neutral runtime-type stamps #353 describes remain its scope.
+
+- A `let` whose value is statically `U64` holds the raw 64-bit payload, and
+  is boxed where it escapes (printed, stored, captured, passed to a
+  polymorphic function).  A value that would be boxed more than once in its
+  scope is boxed once at the binding instead.
+- An annotated single-clause function whose declared signature names `U64`
+  or `U32` gets a raw worker, `@mdk_<f>__rw`: those parameters and that
+  result cross the call as payloads (`U32` as `i32`), and a tail self-call is
+  a loop on registers.  A `U64` parameter is raw only where no occurrence in
+  the body would box it, so a value that only passes through stays a cell.  A
+  result is raw only where every tail call stays one: a self-call through
+  `if`, `let`, a block or a two-arm literal `match`, or a call of a worker
+  with the same raw result.  A self-call in any other `match` arm, or a tail
+  call of an ordinary function, keeps a word result, emitted as the uniform
+  define is, so a deep recursion loops exactly where it did before.
+  `@mdk_<f>` remains the uniform entry for closures and partial application,
+  a wrapper around the worker.  The positions come from the declared
+  signature, which the typechecker checked, never from a guess.
+- `let (h, l) = U64.mulWide a b`, and a destructuring `let` of any small
+  single-clause function whose body ends in a tuple, is inlined: the
+  components are bound in registers and no tuple is allocated.
+- Multi-clause functions, lambdas and dictionary-polymorphic functions still
+  box a `U64` at their boundary, and a `U64` in an array, tuple, list or
+  record is a cell.  That is why field/scalar store limbs as `Int` (§9).
 
 ### 6.3 The FFI
 
@@ -387,7 +429,7 @@ constant.
 | **N2 (the first consumers)** | `U8` is the element type of `Bytes`/`MutBytes`/`bytebuilder`/`byteparser` (#3415); `U32` carries sha256/hmac/pbkdf2/crc32 and the property-runner RNG; the round is re-measured against the figures on #3377 |
 | **N3 (U64)** | boxed `U64`, wide literals, `mulWide`/`addCarry`/`subBorrow`, the multi-byte codecs typed, the `bits64` module deleted with #2311 and #432 closed, SplitMix/FNV moved, the seed re-minted twice |
 | **N4 (Int traps)** | every wrap dependent moved (the `Hashable` folds, field/scalar), the census repeated over the emitter child and `pdsd`, the cost measured, `Int` overflow panics on all three engines, `checkedAdd` family shipped, spec updated |
-| **N5 (unboxed and lowered)** | #353, `i32` lowering, #2360, field/scalar on 64-bit limbs |
+| **N5 (unboxed and lowered)** | #353's scalar slice (U64/U32 raw across `let`, parameter and result, LLVM), `i32` lowering with rotates as rotates, `mulWide` bound in registers, field on 5x52 and scalar on 8x32 limbs (Val, 2026-09-26); #2360 stays its own issue |
 | **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opens when a customer is named |
 
 N2's measurement (2026-09-25, shared box, interleaved, both arms built by
@@ -403,6 +445,22 @@ with each bit operation a helper that ThinLTO inlines: no `i32` arithmetic and
 no rotate instruction. That gap is N5's budget. Two folds #3431 lists stay
 on `Int`: `hmac`'s `ctEqAccum` and `pbkdf2`'s xor fold combine bytes with
 `bitOr`/`bitXor`, never leave `0` to `255`, and so never wrap or trap.
+
+N5's measurement (2026-09-26, shared box, instructions:u, each arm built by
+its own tree's compiler, main at `c57f74898`): SHA-256 over 16,448 blocks
+drops from 451M to 198M instructions (0.44), about 1.0 µs per block with setup
+on a quiet box against 3.1 µs, which is under #3377's 1.24–1.35 µs for
+hand-written `i32` IR; the rotates are `rol`/`ror`.  A KDF round of 20k keyed
+HMACs drops to 0.47, 20k field multiplications to 0.15 (126.5M to 18.4M),
+50 scalar inversions to 0.033 (1.049G to 34.8M), one ECDSA signature to 0.18
+(244.7M to 45.2M), and the pdsd export/rehydrate/MST-insert workloads to
+0.64/0.59/0.82.  The hashing workload and the interpreter's per-step cost
+are unchanged; `medaka check` of the compiler is +1.7%, all of it the larger
+source (cross-loaded, the two binaries check the same source in the same
+instructions).  On SHA-256 the steps were: the `i32` lowering alone, with the
+round state still a tuple (#3369's shape), 4% fewer instructions; the state
+carried as eight parameters on top of it, 50%; those parameters passed as
+`i32` to the raw worker, 56%.
 
 N1 precedes N2 because the family's conversion names must be fixed before
 `U8` ships (#3415, point 1). N2 precedes N3 so the tagged mechanism is

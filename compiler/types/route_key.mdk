@@ -26,9 +26,11 @@
 -- space-joined>|<method name or empty>`. The interface word is qualified when
 -- origin is known (e.g., "b::Speak"), or the bare name when origin is absent.
 --
--- `routeWordFor` consumes the collision verdict and the bare head tag, both
--- computed from tables this module cannot see: unique head yields the bare
--- tag verbatim; colliding head yields the canonical impl word (see above).
+-- `routeWordFor` consumes the collision verdict and the head tag
+-- (`typeTagOf`: bare for a prelude or builtin type, module-qualified
+-- otherwise), both computed from tables this module cannot see: unique head
+-- yields the tag verbatim; colliding head yields the canonical impl word (see
+-- above).
 --
 -- `rkTy`/`rkTyFunArg`/`rkTyAtom` are one prec-2 `Ty` printer. It matches
 -- `types/typecheck.mdk`'s version, not `eval/eval.mdk`'s, because the latter is
@@ -311,10 +313,10 @@ implRouteKeyWord o iface tys nm =
 
 -- ── the route word a SITE gets ───────────────────────────────────────────
 -- [headIsUnique] is the caller's collision verdict — "is this head the head of
--- exactly ONE declared impl of this interface?" — and [tag] the bare head
--- tycon word to use when it is. Unique head ⇒ the bare tag, exactly as today;
--- otherwise the canonical impl word, which is the only thing that can tell two
--- impls at one head apart.
+-- exactly ONE declared impl of this interface?" — and [tag] the head tag
+-- (`typeTagOf`) to use when it is. Unique head ⇒ the tag verbatim; otherwise
+-- the canonical impl word, which is the only thing that can tell two impls at
+-- one head apart.
 --
 -- ⚠️ THE VERDICT IS AN ARGUMENT ON PURPOSE. Both existing spellings compute it
 -- from a table this module cannot see and must not acquire — `ifaceImplHeadsRef`
@@ -328,17 +330,59 @@ routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
 routeWordFor headIsUnique tag o iface tys =
   if headIsUnique then tag else implRouteKeyWord o iface tys None
 
+-- ── the type-head word (#1397) ───────────────────────────────────────────
+-- The word a type head contributes to every impl tag, route word, dictionary
+-- word and runtime type tag: the prelude's and the language's types by their
+-- name, every other type by its declaring module's id, a dot, and its name.
+-- Impl dispatch keys a type by this word in every engine, so two modules'
+-- same-spelled types never share an impl, and a program's own type spelled
+-- like a prelude type (`Result`) is not the prelude's.
+--
+-- The word must be INJECTIVE over type identities: a type name has no dot, so
+-- the last dot separates the module id from the name, and a word with no dot
+-- is a prelude or builtin type.  It is not an identifier; a backend spells it
+-- into a symbol through `private_mangle.injectiveIdent`, never `sanitizeId`,
+-- whose many-to-one mapping would merge `a.b.T` with `a_b.T` (#1950's lesson).
+--
+-- >>> typeTagOf (OriginModule "core") "Result"
+-- "Result"
+-- >>> typeTagOf OriginBuiltin "Int"
+-- "Int"
+-- >>> typeTagOf (OriginModule "app.dirs") "T"
+-- "app.dirs.T"
+export
+typeTagOf : TyConOrigin -> String -> String
+typeTagOf (OriginModule "core") name = name
+typeTagOf (OriginModule m) name = "\{m}.\{name}"
+typeTagOf _ name = name
+
+-- The name a type word shows a reader: the part after its last dot.  A
+-- dispatch word is internal; a message names the type as it is written.
+--
+-- >>> typeTagName "app.dirs.T"
+-- "T"
+-- >>> typeTagName "Int"
+-- "Int"
+export
+typeTagName : String -> String
+typeTagName tag = afterLastDot tag (stringLength tag - 1)
+
+afterLastDot : String -> Int -> String
+afterLastDot tag i
+  | i < 0 = tag
+  | stringSlice i (i + 1) tag == "." =
+    stringSlice (i + 1) (stringLength tag) tag
+  | otherwise = afterLastDot tag (i - 1)
+
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn
 -- mirrors the retired OCaml `pp_ty_prec`): `rkTy` is prec 0, `rkTyFunArg`
 -- prec 1 (wraps arrows), `rkTyAtom` prec 2 (wraps arrows AND applications).
 --
--- `tyConOrigin` is deliberately NOT rendered: the identity that this bite
--- threads into a route word is the INTERFACE's (see `ifaceWordOf`), and a type
--- ARGUMENT's origin is a separate question with its own consumers. Rendering
--- it here would change every word for every program at once.
+-- A type constructor renders through `typeTagOf`, so two modules' same-spelled
+-- types are two words (#1397).
 rkTy : Ty -> String
-rkTy (TyCon { tyConName = n }) = n
+rkTy (TyCon { tyConName = n, tyConOrigin = o }) = typeTagOf o n
 rkTy (TyVar n) = n
 rkTy (TyApp a b) = "\{rkTy a} \{rkTyAtom b}"
 rkTy (TyFun a b) = "\{rkTyFunArg a} -> \{rkTy b}"
@@ -484,9 +528,12 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "Show" [TyApp rkTyList rkTyInt] None == implRouteKeyWord OriginUnresolved "Show" [rkTyList, rkTyInt] None
 -- False
 
--- A type argument's own origin is NOT in the word.
+-- A type argument's declaring module IS in the word (#1397): module `m`'s own
+-- `Int` is not the builtin one.
+-- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None
+-- "Show|m.Int|"
 -- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None == implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
--- True
+-- False
 
 -- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution
 -- (NOT #1182 — see the header). Applied by `B-2.2-b1` at `keyForSite`.
@@ -495,7 +542,7 @@ rkTyList =
 -- > implRouteKeyWord (OriginModule "a") "Speak" [rkTyInt] None == implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None
 -- False
 
--- `routeWordFor`: unique head ⇒ the caller's bare tag verbatim; colliding head
+-- `routeWordFor`: unique head ⇒ the caller's head tag verbatim; colliding head
 -- ⇒ the canonical impl word, with the method slot empty.
 -- > routeWordFor True "Int" OriginUnresolved "Show" [rkTyInt]
 -- "Int"

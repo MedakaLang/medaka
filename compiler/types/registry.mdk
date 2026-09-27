@@ -168,6 +168,7 @@ import support.ordmap.{
   omSize,
 }
 import support.util.{lenKey, listLen, joinWith, filterList}
+import types.route_key.{typeTagOf}
 import map.{entries}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
@@ -826,26 +827,25 @@ headKeyOfCon origin name = HkDecl (tabKeyOf NsType origin name)
 -- The bare name inside a head key, whatever its inhabitant.  Allocation-free:
 -- it returns a `String` that already exists.
 --
--- 🚨 THIS IS THE STAGE A-2 LEDGER, AND IT IS A COMMAND RATHER THAN A NUMBER —
--- a count written here would carry no derivation and no expiry.  Every line
--- the recipe prints is a dispatch key STILL keyed by a bare name, and a later
--- unit's progress is a line LEAVING that set:
---
---   grep -nwE 'headKeyName|headKeyNameOr' compiler/types/typecheck.mdk \
---     | grep -vE '^[0-9]+:[[:space:]]*(--|import )' \
---     | grep -vE '^[0-9]+:headKeyNameOr'
---
--- ⚠️ Every filter is load-bearing, and a bare `grep -n headKeyName` answers a
--- DIFFERENT question: it also matches the substring inside `headKeyNameOr`,
--- the `import types.registry.{…}` line, and every comment that names either.
--- The last filter drops `headKeyNameOr`'s OWN signature and clauses
--- (`types/typecheck.mdk`, column 0) — that wrapper is the SPELLING of the
--- residual, not an instance of it.  Pipe to `wc -l` for the size; do not copy
--- the size back into this comment.
+-- A NAME question only: no dispatch key may read it, because two modules'
+-- same-named types share a name (#1397).  Dispatch keys read `headKeyTag`
+-- below, and `grep -nw headKeyName compiler/types/typecheck.mdk` prints
+-- nothing.
 export
 headKeyName : HeadKey -> String
 headKeyName (HkDecl k) = tabKeyName k
 headKeyName (HkRigid name) = name
+
+-- The dispatch word of a head key (`typeTagOf`): the tag every engine files
+-- an impl under and reads a value's type as, qualified by the declaring
+-- module for a type the prelude does not declare (#1397).  `headKeyName` stays
+-- the answer to a NAME question; a dispatch key is this.
+export
+headKeyTag : HeadKey -> String
+headKeyTag (HkDecl (TkIdent (Ident _ origin name))) =
+  identOriginFold name (m => typeTagOf (OriginModule m) name) origin
+headKeyTag (HkDecl k) = tabKeyName k
+headKeyTag (HkRigid name) = name
 
 -- ── Keying a table BY a projected head — Stage A-2 unit A-2.2b (#1111) ────
 -- A-2.2 widened the two head PROJECTIONS to carry identity and stopped there:
@@ -853,7 +853,7 @@ headKeyName (HkRigid name) = name
 -- moved. This is the layer that lets a table be keyed by the projection.
 --
 -- 🚨 A HEAD POSITION CARRIES ONE OF **THREE** FACTS, AND A KEY MUST KEEP ALL
--- THREE APART. `headKeyNameOr <dflt>` (`types/typecheck.mdk`) collapses them to
+-- THREE APART. `headKeyTagOr <dflt>` (`types/typecheck.mdk`) collapses them to
 -- two — a name, or the placeholder — which is exactly what this replaces:
 --
 --   ABSENT      `None` — the type has NO head type constructor (a bare tyvar;
