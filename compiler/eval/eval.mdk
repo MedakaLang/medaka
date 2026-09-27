@@ -2484,6 +2484,14 @@ evalArith "/" (VInt a) (VInt b)
 evalArith "%" (VInt a) (VInt b)
   | b == 0 = runtimePanic "E-MOD-ZERO" "modulo by zero"
   | otherwise = VInt (a % b)
+-- An `Int` comparison is answered here, ahead of the boxed-shape arms below that
+-- every other operand pair has to pass; it is `valueCompare`'s `VInt` answer.
+evalArith "==" (VInt a) (VInt b) = VBool (a == b)
+evalArith "/=" (VInt a) (VInt b) = VBool (a /= b)
+evalArith "<" (VInt a) (VInt b) = VBool (a < b)
+evalArith ">" (VInt a) (VInt b) = VBool (a > b)
+evalArith "<=" (VInt a) (VInt b) = VBool (a <= b)
+evalArith ">=" (VInt a) (VInt b) = VBool (a >= b)
 evalArith "+" (VFloat a) (VFloat b) = VFloat (a + b)
 evalArith "-" (VFloat a) (VFloat b) = VFloat (a - b)
 evalArith "*" (VFloat a) (VFloat b) = VFloat (a * b)

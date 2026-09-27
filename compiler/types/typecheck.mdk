@@ -17321,10 +17321,15 @@ checkWideLiterals ((m, lx, hi, lo, negated, loc) :: rest) =
           1
           at
           "integer literal \{shown} does not fit a type that is not known to be U64 or I64"
-          (Some
-            "only a U64 or an I64 holds a literal above 2^62; annotate it, `(\{lx} : U64)`")
+          (Some (wideAnnotateHelp shown negated))
           None)
   checkWideLiterals rest
+
+-- A negated wide literal fits only an `I64`, so that is the annotation to suggest.
+wideAnnotateHelp : String -> Bool -> String
+wideAnnotateHelp shown negated =
+  let ty = if negated then "I64" else "U64"
+  "only a U64 or an I64 holds a literal above 2^62; annotate it, `(\{shown} : \{ty})`"
 
 recordNumlitLoc : Mono -> Unit
 recordNumlitLoc a = match !currentLoc
