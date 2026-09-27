@@ -2297,6 +2297,7 @@ recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
 recordLocalBind : String -> Option Loc -> Mono -> Unit
+recordLocalQuantified : Scheme -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodDictsFromSlots : List MethodPredicateSlot -> Ref (List Route) -> List (Int, Mono) -> Unit

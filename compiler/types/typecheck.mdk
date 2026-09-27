@@ -10643,6 +10643,9 @@ resetGraphState _ =
   graphRun := freshGraphRun ()
   graphRun.value.evCounter := n
   graphRun.value.evCells := cells
+  -- The binder names survive; the quantified ids do not: they are type-variable
+  -- ids, and the fresh run restarts the counter that minted them.
+  localAbs.lasQuantified := omEmpty
   graphRun := GraphRun { graphRun.value | localAbs = localAbs }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
@@ -14920,6 +14923,9 @@ data LocalAbsState = LocalAbsState {
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
   -- monotone for the whole graph, so a binder name is never minted twice
   lasCounter : Ref Int,
+  -- every type variable a generalized local's scheme quantifies: no longer a
+  -- monomorphic variable, so no later numeric boundary may ground it (#3516)
+  lasQuantified : Ref (OrdMap Unit),
 }
 
 freshLocalAbsState : Unit -> LocalAbsState
@@ -14927,6 +14933,7 @@ freshLocalAbsState _ = LocalAbsState {
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
   lasCounter = Ref 0,
+  lasQuantified = Ref omEmpty,
 }
 
 copyLocalAbsState : LocalAbsState -> LocalAbsState
@@ -14934,6 +14941,7 @@ copyLocalAbsState st = LocalAbsState {
   lasBinders = Ref st.lasBinders.value,
   lasRecOccs = Ref st.lasRecOccs.value,
   lasCounter = Ref st.lasCounter.value,
+  lasQuantified = Ref st.lasQuantified.value,
 }
 
 freshLocalAbsName : String -> String
@@ -15025,9 +15033,23 @@ closeLocalScope (Some _) = closeScope ()
 closeLocalScope None = ()
 
 registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
-registerLocalAbsIf name (Some lscope) sch oblN0 callN0 =
-  registerLocalAbs name lscope sch oblN0 callN0
-registerLocalAbsIf _ None _ _ _ = ()
+registerLocalAbsIf name lscope sch oblN0 callN0 =
+  let _ = recordLocalQuantified sch
+  match lscope
+    Some scope => registerLocalAbs name scope sch oblN0 callN0
+    None => ()
+
+-- A generalized local's quantified variables stay in the enclosing binding's
+-- obligation window, but they are the scheme's now: each use instantiates them
+-- afresh, and the enclosing boundary's defaulting must reach those instances,
+-- never the scheme's own variables.  Grounding one would fix the local at one
+-- type behind every use and select one dictionary for two predicates (#3516).
+recordLocalQuantified : Scheme -> Unit
+recordLocalQuantified sch = match schemeIds sch
+  [] => ()
+  ids =>
+    let st = graphRun.value.localAbs
+    st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
 
 -- After a candidate local generalized: the predicates its scheme quantifies become
 -- its dictionary parameters, registered as givens of its own scope so the sites in
@@ -23889,6 +23911,9 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- Num operand monos — refs alias post-unify, grounding any grounds all).
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundNumVarsWith _ _ [] = ()
+groundNumVarsWith ownerPolicy obls (id :: rest)
+  | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
+    groundNumVarsWith ownerPolicy obls rest
 groundNumVarsWith ownerPolicy obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
