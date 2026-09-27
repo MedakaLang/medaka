@@ -26,7 +26,7 @@ import string.{fromUtf8, toInt, toUtf8}
 import lib.cid.{Cid}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
-import lib.repo.{Repo, repoFromBlocks}
+import lib.repo.{Repo, blockBytesChecked, blockRowsChecked, repoFromBlocks}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -73,9 +73,12 @@ corpusSecret =
 
 loadRepo : String -> <FileRead> Repo
 loadRepo dir =
-  let (head, blocks) = match persistLoad dir
+  let (head, rows) = match persistLoad dir
     Ok value => value
     Err message => panic "cost_curve: corpus load failed: \{message}"
+  let blocks = match blockRowsChecked rows
+    Ok checked => checked
+    Err message => panic "cost_curve: corpus block rejected: \{message}"
   match repoFromBlocks corpusDid corpusSecret head blocks
     Ok repo => repo
     Err message => panic "cost_curve: corpus repository rejected: \{message}"
@@ -83,7 +86,10 @@ loadRepo dir =
 admitBlobs : List (Cid, String, Array Int) -> Store -> Store
 admitBlobs [] store = store
 admitBlobs ((cid, mimeType, bytes) :: rest) store =
-  match storePutBlob cid mimeType bytes store
+  let stored = do
+    checked <- blockBytesChecked bytes
+    storePutBlob cid mimeType checked store
+  match stored
     Ok next => admitBlobs rest next
     Err message => panic "cost_curve: corpus blob rejected: \{message}"
 
@@ -114,7 +120,7 @@ benchContext =
 benchToken : String
 benchToken =
   mintToken
-    (B.fromArrayAssumeByteDomain testSecret)
+    testSecret
     corpusDid
     hostText
     "cost_curve-probe-token"

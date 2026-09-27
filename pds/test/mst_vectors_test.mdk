@@ -1,0 +1,412 @@
+{- | The deterministic atproto MST against the official reference, on eval,
+   native and Wasm, plus the repository's scaling and footprint bounds,
+   native only.
+
+   The value row grades the two ledgered corpora (the reference roots and
+   node bytes, and the covering proofs) and the hostile-validation routes on
+   eval, and requires native and Wasm to print the same bytes. The Wasm arm
+   is skipped on a host without the Wasm emitter, `node` or `wasm-tools`,
+   unless `MEDAKA_REQUIRE_WASM=1`.
+
+   The scaling test builds `performance_resource_main.mdk` once and times
+   four routes at 1000 and 2000 rows: `mstValidateBlocks` rejecting a
+   hostile corpus, `mstInsert`, `repoExportGraph` and `repoFromBlocks`. Each
+   time is the wall clock around the spawn, so it includes process start-up.
+   The larger run must stay under an absolute ceiling and within a ratio of
+   the smaller one; the export block counts and the rehydrated root CIDs are
+   pinned, so a walk that dropped nodes fails even when it is fast. The same
+   test measures the inbound request path's allocation (`inbound-alloc`) and
+   requires it under a fixed byte threshold.
+
+   The page-cost test builds `synth_repo_main.mdk` corpora of 1000 and 10000
+   records and reads the per-request microsecond figures
+   `cost_curve_main.mdk` prints for `listRecords`, `listBlobs` and the
+   `persistTransition` seam. Each figure must stay under an absolute cap and
+   within a ratio of the small corpus's figure.
+
+   How flaky the bounds are, measured on a shared 12-core host at load
+   average 7 to 8. The `mst-insert` ratio sits closest to its bound: six
+   runs measured 2.37 to 3.45 against 3.5, and one run measured 3.62 and
+   failed. The absolute microsecond caps are the other weak point, since a
+   loaded host inflates every request uniformly: `listBlobs` measured 307
+   against its cap of 400, `listRecords` 1142 against 6000. A red naming
+   one of these with every other bound in range is load until a rerun on a
+   quieter host says otherwise; a red on a ratio far past its bound, or on
+   a pinned count or root, is not. -}
+
+import test.vector_runner.{
+  Arm(..),
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  buildNative,
+  expectRow,
+  freshScratch,
+  reap,
+  runSeconds,
+  spawn,
+  spawnFindings,
+}
+import list.{somes}
+import string.{contains, lines, startsWith, toInt, words}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaRoot}
+import time.{elapsedSince, monotonic}
+
+gate : String
+gate = "pds/test/mst_vectors"
+
+externalCases : List String
+externalCases = [
+  "empty",
+  "leading-zero-bits-0",
+  "leading-zero-bits-2",
+  "leading-zero-bits-4",
+  "leading-zero-bits-6",
+  "prefix-compression",
+  "permutation-forward",
+  "permutation-reverse",
+  "replace",
+  "delete",
+  "delete-to-empty",
+]
+
+hostileRoutes : List String
+hostileRoutes = [
+  "empty-key",
+  "duplicates",
+  "depth",
+  "order",
+  "prefix",
+  "undercompressed",
+  "misplaced-left",
+  "misplaced-between",
+  "misplaced-right",
+  "misplaced-transitive",
+  "malformed-links",
+  "truncation",
+  "unreachable",
+  "invalid-node",
+]
+
+proofCases : List String
+proofCases = ["proof-single-node", "proof-two-layer", "proof-three-layer"]
+
+lexicalControls : List String
+lexicalControls = ["left-neighbor", "between-neighbor", "right-neighbor"]
+
+-- Every case by name, so a driver that stopped emitting one is a missing
+-- substring rather than a total that still happens to add up.
+routeNeeds : List String
+routeNeeds =
+  [
+      "external: 11/11 official-reference cases",
+      "covering proofs: 17/17 official-reference rows",
+      "narrower than the whole tree: 13/17 proof rows",
+      "hostile: 14/14 rejected on named routes",
+      "controls: 3/3 valid lexical neighbors",
+    ]
+    ++ map (n => "CASE \{n} PASS ") externalCases
+    ++ map (l => "HOSTILE \{l} PASS route=") hostileRoutes
+    ++ map (n => "PROOFCASE \{n} ") proofCases
+    ++ map (l => "MST CONTROL \{l} PASS") lexicalControls
+
+arm : Engine -> List String -> Arm
+arm e needs = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = needs,
+  lastLine = Some "TOTAL: PASS",
+}
+
+-- The driver reads the reference corpus first and the covering-proof corpus
+-- second, so the two are named in that order rather than looked up by
+-- consumer id, whose result is sorted.
+row : Row
+row = Row {
+  gate = gate,
+  driver = "pds/test/mst_vectors_main.mdk",
+  corpus = Explicit [
+    "pds/test/vectors/mst_reference_corpus.txt",
+    "pds/test/vectors/mst_covering_proof_corpus.txt",
+  ],
+  corpusCount = Exactly 2,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm EvalEngine routeNeeds, arm NativeEngine [], arm WasmEngine []],
+  parity = True,
+}
+
+-- # Spawning a built driver
+
+-- The findings against one spawn of a built binary, and its stdout. `needs`
+-- are substrings the stdout must contain.
+ranWith : String ->
+  String ->
+  List String ->
+  List String ->
+  <Exec> (String, List String)
+ranWith label bin args needs =
+  match spawnFindings label "the built driver" (spawn runSeconds [] bin args)
+    (out, []) => (out, somes (map (missing label out) needs))
+    (out, fs) => (out, fs)
+
+missing : String -> String -> String -> Option String
+missing label out needle =
+  if contains needle out then
+    None
+  else
+    Some "\{label}: output does not contain \{debug needle}"
+
+{- | The integer that follows `prefix` at the start of a line of `out`, up
+   to the next space: `figureAfter "listBlobs us=" out` reads the `57` in
+   `listBlobs us=57 reps=50 …`. -}
+figureAfter : String -> String -> Option Int
+figureAfter prefix out = match filter (startsWith prefix) (lines out)
+  [] => None
+  l :: _ => match words (stringSlice (stringLength prefix) (stringLength l) l)
+    [] => None
+    w :: _ => toInt w
+
+-- `small` and `large` against an absolute ceiling on `large` and a ceiling
+-- on `large / small`; `what` names the measurement in the finding.
+boundFindings : String -> Float -> Float -> Float -> Float -> List String
+boundFindings what small large ceiling ratio =
+  if large <= ceiling && large / small <= ratio then
+    []
+  else
+    [
+      "\{gate}: \{what} exceeded its bounds: small=\{floatToString small} large=\{floatToString large} (at most \{floatToString ceiling} and \{floatToString ratio}x)",
+    ]
+
+-- # Scaling and footprint
+
+{- | One route of `performance_resource_main.mdk` timed at two sizes.
+
+   `needs n` is what the run at `n` rows must print; `ceiling` bounds the
+   2000-row time in seconds and `ratio` the 2000-row time against the
+   1000-row time. -}
+data TimedRoute = TimedRoute {
+  mode : String,
+  needs : Int -> List String,
+  ceiling : Float,
+  ratio : Float,
+}
+
+-- `mst` times `mstValidateBlocks` REJECTING a hostile corpus. The other
+-- three reach the write path, the export path and the startup path, which
+-- the rejection never touches.
+timedRoutes : List TimedRoute
+timedRoutes = [
+  TimedRoute {
+    mode = "mst",
+    needs = n => ["MST \{intToString n} UNREACHABLE"],
+    ceiling = 3.5,
+    ratio = 3.2,
+  },
+  TimedRoute {
+    mode = "mst-insert",
+    needs = n => ["MSTINSERT \{intToString n} \{intToString n}"],
+    ceiling = 3.5,
+    ratio = 3.5,
+  },
+  TimedRoute {
+    mode = "export",
+    needs = exportNeeds,
+    ceiling = 1.5,
+    ratio = 2.5,
+  },
+  TimedRoute {
+    mode = "rehydrate",
+    needs = rehydrateNeeds,
+    ceiling = 1.5,
+    ratio = 2.5,
+  },
+]
+
+-- The block count of the fixed synthetic corpus: a graph walk that dropped
+-- or duplicated reachable nodes still prints `EXPORT <n> `, with a
+-- different count.
+exportNeeds : Int -> List String
+exportNeeds 1000 = ["EXPORT 1000 1278"]
+exportNeeds 2000 = ["EXPORT 2000 2535"]
+exportNeeds n = ["EXPORT \{intToString n} "]
+
+-- The driver already panics when the recovered commit disagrees with the
+-- graph it built; the root pin catches a rehydrate that landed on a
+-- different but still self-consistent root.
+rehydrateNeeds : Int -> List String
+rehydrateNeeds 1000 = [
+  "REHYDRATE 1000 OK root=bafyreicxu3nelkrlk4qshzzfhw5elx74sunybhcasxknazig2n7foegsyu",
+]
+rehydrateNeeds 2000 = [
+  "REHYDRATE 2000 OK root=bafyreicw3pzj4d4qkmxvx5vhtvfpyn5byiqbd4arsyufrvfk7ycjmoxe5y",
+]
+rehydrateNeeds n = ["REHYDRATE \{intToString n} OK"]
+
+-- One timed run of `route` at `n` rows: its wall time and the findings.
+timedRun : String -> TimedRoute -> Int -> <Clock, Exec> (Float, List String)
+timedRun bin route n =
+  let label = "\{gate} (native \{route.mode} \{intToString n})"
+  let t0 = monotonic ()
+  let (_, fs) = ranWith label bin [route.mode, intToString n] (route.needs n)
+  (elapsedSince t0, fs)
+
+routeFindings : String -> TimedRoute -> <Clock, Exec> List String
+routeFindings bin route = match timedRun bin route 1000
+  (small, []) => match timedRun bin route 2000
+    (large, []) =>
+      boundFindings
+        "\{route.mode} scaling (seconds, 1000 vs 2000 rows)"
+        small
+        large
+        route.ceiling
+        route.ratio
+    (_, fs) => fs
+  (_, fs) => fs
+
+-- Measured at 2.39 MB for N=4 requests of 256 body bytes when the bound was
+-- set; the threshold leaves more than 3x headroom, so it trips on a
+-- per-request allocation blow-up rather than on noise.
+inboundAllocThreshold : Int
+inboundAllocThreshold = 8000000
+
+inboundAllocFindings : String -> <Exec> List String
+inboundAllocFindings bin =
+  let label = "\{gate} (native inbound-alloc)"
+  match (ranWith
+    label
+    bin
+    ["inbound-alloc", "4", "256"]
+    ["status=HTTP/1.1 200 OK"])
+    (out, []) => match figureAfter "INBOUNDALLOC allocBytes=" out
+      None => ["\{label}: the probe printed no allocBytes figure"]
+      Some bytes =>
+        if bytes < inboundAllocThreshold then
+          []
+        else
+          [
+            "\{label}: the inbound request path allocated \{intToString bytes} bytes for 4 requests (under \{intToString inboundAllocThreshold} required)",
+          ]
+    (_, fs) => fs
+
+resourceFindings : String -> <Clock, Exec, IO> List String
+resourceFindings scratch =
+  let bin = "\{scratch}/performance_resource"
+  let driver = "\{medakaRoot}/pds/test/performance_resource_main.mdk"
+  match buildNative "\{gate} (native scaling)" driver bin
+    [] => flatMap (routeFindings bin) timedRoutes ++ inboundAllocFindings bin
+    fs => fs
+
+-- # Page cost against repository size
+
+{- | One per-request figure `cost_curve_main.mdk` prints, graded between a
+   small and a large corpus: `ceiling` bounds the large corpus's figure in
+   microseconds and `ratio` it against the small corpus's. -}
+data PageCost = PageCost { route : String, ceiling : Int, ratio : Float }
+
+-- The small corpus holds 1000 records and 200 blobs, the large one 10000
+-- records and 12800 blobs, so a route whose cost followed the repository
+-- rather than the page fails the ratio.
+pageRoutes : List PageCost
+pageRoutes = [
+  PageCost { route = "listRecords", ceiling = 6000, ratio = 3.0 },
+  PageCost { route = "listBlobs", ceiling = 400, ratio = 3.0 },
+]
+
+-- `persist` times the `persistTransition` seam with the same store on both
+-- sides, so nothing persists and only the decision, `blobsMoved`
+-- included, is measured.
+persistRoute : PageCost
+persistRoute =
+  PageCost { route = "persistTransition", ceiling = 60, ratio = 4.0 }
+
+pageCostFindings : PageCost -> String -> String -> List String
+pageCostFindings pc smallOut largeOut = match (
+  figureAfter "\{pc.route} us=" smallOut,
+  figureAfter "\{pc.route} us=" largeOut,
+)
+  (Some small, Some large) =>
+    boundFindings
+      "\{pc.route} cost (microseconds per request, small vs large corpus)"
+      (intToFloat small)
+      (intToFloat large)
+      (intToFloat pc.ceiling)
+      pc.ratio
+  _ => ["\{gate}: cost-curve output has no \{pc.route} us= figure"]
+
+-- The cost-curve binary's stdout at `args`, and the findings against it.
+costCurve : String -> List String -> <Exec, IO> (String, List String)
+costCurve bin args =
+  let label = "\{gate} (native cost-curve \{debug args})"
+  let envs = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_STRICT=1"]
+  spawnFindings label "the built driver" (spawn runSeconds envs bin args)
+
+-- Builds one synthetic corpus of `records` records and `blobs` blobs into
+-- `dir`.
+synthCorpus : String -> String -> String -> String -> <Exec> List String
+synthCorpus synth dir records blobs =
+  let label = "\{gate} (native synth-repo \{records})"
+  match spawnFindings label "mkdir -p" (spawn 60 [] "mkdir" ["-p", dir])
+    (_, []) =>
+      snd
+        (spawnFindings
+          label
+          "the built driver"
+          (spawn runSeconds [] synth [
+            "build", "one-collection", dir, records, blobs, "1"
+          ]))
+    (_, fs) => fs
+
+costCorpora : String -> String -> <Exec, IO> List String
+costCorpora scratch synth =
+  let small = "\{scratch}/cost-corpus-small"
+  let large = "\{scratch}/cost-corpus-large"
+  let cost = "\{scratch}/cost_curve"
+  match (synthCorpus synth small "1000" "200"
+    ++ synthCorpus synth large "10000" "12800")
+    [] => match (
+      costCurve cost [small, "bulk.synth.record", "50"],
+      costCurve cost [large, "bulk.synth.record", "50"],
+    )
+      ((smallOut, []), (largeOut, [])) =>
+        let pages =
+          flatMap (pc => pageCostFindings pc smallOut largeOut) pageRoutes
+        match (
+          costCurve cost ["persist", small, "1000"],
+          costCurve cost ["persist", large, "1000"],
+        )
+          ((smallP, []), (largeP, [])) =>
+            pages ++ pageCostFindings persistRoute smallP largeP
+          ((_, fs1), (_, fs2)) => pages ++ fs1 ++ fs2
+      ((_, fs1), (_, fs2)) => fs1 ++ fs2
+    fs => fs
+
+pageFindings : String -> <Exec, IO> List String
+pageFindings scratch =
+  let cost = "\{scratch}/cost_curve"
+  let synth = "\{scratch}/synth_repo"
+  let label = "\{gate} (native page cost)"
+  let built =
+    buildNative label "\{medakaRoot}/pds/test/cost_curve_main.mdk" cost
+      ++ buildNative label "\{medakaRoot}/pds/test/synth_repo_main.mdk" synth
+  match built
+    [] => costCorpora scratch synth
+    fs => fs
+
+inScratch : (String -> <Clock, Exec, IO> List String) ->
+  <Clock, Exec, IO> Result String (List String)
+inScratch check = match freshScratch ()
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok scratch => Ok (reap scratch (check scratch))
+
+test "MST: 11 official-reference cases, 17 covering-proof rows, 14 hostile routes, 3 lexical controls, eval == native == Wasm" =
+  expectRow row
+
+test "MST: validate, insert, export and rehydrate scale within their bounds; the inbound path stays under 8 MB" =
+  expectNoFindings gate (inScratch resourceFindings)
+
+test "MST: listRecords, listBlobs and persistTransition cost the page, not the repository" =
+  expectNoFindings gate (inScratch pageFindings)

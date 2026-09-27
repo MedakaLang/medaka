@@ -259,7 +259,7 @@ audienceFor account _ = accessAudience account
 
 -- Whether the session the token belongs to is still open. A refresh route
 -- asks after the refresh half, every other route after the access half.
-sessionOpen : AuthPolicy -> Int -> Array Int -> Store -> Bool
+sessionOpen : AuthPolicy -> Int -> Bytes -> Store -> Bool
 sessionOpen RefreshRoute now fingerprint store =
   storeRefreshActive now fingerprint store
 sessionOpen _ now fingerprint store = storeAccessActive now fingerprint store
@@ -292,10 +292,9 @@ verifiedCredential account policy context store token =
   match storeServerSecret store
     None => InvalidCredential
     Some secret =>
-      -- Masked, as before: the old HMAC key path masked this secret too.
       let verified =
         verifyToken
-          (fromArrayAssumeByteDomain secret)
+          secret
           (accountDid account)
           (audienceFor account policy)
           context.nowSeconds
@@ -305,7 +304,7 @@ verifiedCredential account policy context store token =
         Ok claims =>
           let fingerprint = sessionFingerprint token
           if sessionOpen policy context.nowSeconds fingerprint store then
-            GoodCredential claims.sub fingerprint
+            GoodCredential claims.sub (toArray fingerprint)
           else
             InvalidCredential
 

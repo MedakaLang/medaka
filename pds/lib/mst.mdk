@@ -1,6 +1,6 @@
 {- | Pure persistent atproto Merkle Search Trees.
 
-   Keys are arbitrary non-empty byte arrays. A mutation splices the
+   Keys are arbitrary non-empty byte strings. A mutation splices the
    authoritative sorted entry list in place and rebuilds the node structure
    from it, so only the touched key is ever hashed and the protocol's
    history-independent root and node bytes are preserved. The rebuild reuses
@@ -15,11 +15,8 @@
    that validator before reading an entry, and rejects any rebuild whose root CID
    differs from the supplied one. -}
 
--- The byte-range validator is intentionally local at each untrusted boundary.
--- lint-disable-file rule-duplicate-body
-
-import array.{drop, take}
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes}
 import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set, size}
@@ -35,22 +32,23 @@ import lib.resource_limits.{
   maxMstTraversalDepth,
 }
 import crypto.sha256.{sha256}
+import u8 as U8
 
 -- ── types ───────────────────────────────────────────────────────────────────
 
-data MstEntry = MstEntry (Array Int) Cid Int
+data MstEntry = MstEntry Bytes Cid Int
 
 -- | An immutable MST with cached canonical root and built node structure.
-export data Mst = Mst (List MstEntry) Cid (Array Int) MstNode
+export data Mst = Mst (List MstEntry) Cid Bytes MstNode
 
 {- | One built node: its CID, its canonical bytes, and its children in the
    protocol's interleaved order — the optional left subtree, then each leaf
    followed by its optional right subtree. That flat interleaving is what the
    covering-proof descent indexes into, so it is the node's authoritative shape
    here and the `l`/`e` encoding is derived from it. -}
-data MstNode = MstNode Cid (Array Int) (List NodeEntry)
+data MstNode = MstNode Cid Bytes (List NodeEntry)
 
-data NodeEntry = NodeLeaf (Array Int) Cid | NodeSubtree MstNode
+data NodeEntry = NodeLeaf Bytes Cid | NodeSubtree MstNode
 
 data LayerSplit = LayerSplit (List MstEntry) (Option (MstEntry, List MstEntry))
 
@@ -62,7 +60,7 @@ data BuiltEntries = BuiltEntries (List DagCbor) (List NodeEntry)
    left of every leaf. Bounds, not positions, are what a rebuild matches on:
    a single-key mutation leaves every other leaf key at this node alone, so a
    slot whose two bounds survive holds exactly the entries it held before. -}
-data OldLeaf = OldLeaf (Array Int) (Option MstNode)
+data OldLeaf = OldLeaf Bytes (Option MstNode)
 
 data OldShape = OldShape (Option MstNode) (List OldLeaf)
 
@@ -71,43 +69,29 @@ data OldShape = OldShape (Option MstNode) (List OldLeaf)
    built. Every child slot the touched key falls outside is reused verbatim,
    CID and canonical bytes included, so only the root-to-key path is encoded
    and hashed again. -}
-data Reuse = FreshBuild | ReuseFrom (Array Int) OldShape
+data Reuse = FreshBuild | ReuseFrom Bytes OldShape
 
-data DecodedEntry = DecodedEntry (Array Int) Cid (Option Cid)
+data DecodedEntry = DecodedEntry Bytes Cid (Option Cid)
 
 data DecodedNode = DecodedNode (Option Cid) (List DecodedEntry)
 
 -- ── key bytes and key depth ─────────────────────────────────────────────────
 
-validBytes : Array Int -> Int -> Bool
-validBytes bytes i =
-  if i >= arrayLength bytes then
-    True
-  else
-    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
+-- The MST orders keys bytewise from the front, a key before every key it is a
+-- proper prefix of. `Ord Bytes` is that order exactly.
+bytesCompare : Bytes -> Bytes -> Ordering
+bytesCompare left right = compare left right
 
-bytesCompare : Array Int -> Array Int -> Ordering
-bytesCompare left right = bytesCompareAt left right 0
+commonPrefix : Bytes -> Bytes -> Int
+commonPrefix left right =
+  commonPrefixAt left right 0 (min (B.length left) (B.length right))
 
-bytesCompareAt : Array Int -> Array Int -> Int -> Ordering
-bytesCompareAt left right i =
-  if i >= arrayLength left then
-    if i >= arrayLength right then Eq else Lt
-  else if i >= arrayLength right then
-    Gt
-  else match compare left[i] right[i]
-    Eq => bytesCompareAt left right (i + 1)
-    order => order
-
-commonPrefix : Array Int -> Array Int -> Int
-commonPrefix left right = commonPrefixAt left right 0
-
-commonPrefixAt : Array Int -> Array Int -> Int -> Int
-commonPrefixAt left right i =
-  if i >= arrayLength left || i >= arrayLength right || left[i] /= right[i] then
+commonPrefixAt : Bytes -> Bytes -> Int -> Int -> Int
+commonPrefixAt left right i n =
+  if i >= n || left[i] /= right[i] then
     i
   else
-    commonPrefixAt left right (i + 1)
+    commonPrefixAt left right (i + 1) n
 
 leadingZeroByte : Int -> Int
 leadingZeroByte byte =
@@ -130,32 +114,29 @@ leadingZeroByte byte =
   else
     8
 
-leadingZeroBits : Array Int -> Int -> Int
+leadingZeroBits : Bytes -> Int -> Int
 leadingZeroBits digest i =
-  if i >= arrayLength digest then
-    arrayLength digest * 8
+  if i >= B.length digest then
+    B.length digest * 8
   else
-    let zeros = leadingZeroByte digest[i]
+    let zeros = leadingZeroByte (U8.toInt digest[i])
     if zeros == 8 then 8 + leadingZeroBits digest (i + 1) else zeros
 
 -- | Compute the mandatory SHA-256 MST depth for one non-empty byte key.
 export
-mstKeyDepth : Array Int -> Result String Int
+mstKeyDepth : Bytes -> Result String Int
 mstKeyDepth key =
-  if arrayLength key == 0 then
+  if B.isEmpty key then
     Err "mst: empty key is not allowed"
-  else if not (validBytes key 0) then
-    Err "mst: key element outside byte range 0..255"
   else
-    Ok
-      (leadingZeroBits (toArray (sha256 (fromArrayAssumeByteDomain key))) 0 / 2)
+    Ok (leadingZeroBits (sha256 key) 0 / 2)
 
 -- ── building a tree ─────────────────────────────────────────────────────────
 
 entryCompare : MstEntry -> MstEntry -> Ordering
 entryCompare (MstEntry left _ _) (MstEntry right _ _) = bytesCompare left right
 
-prepareEntries : List (Array Int, Cid) -> Result String (List MstEntry)
+prepareEntries : List (Bytes, Cid) -> Result String (List MstEntry)
 prepareEntries entries = match prepareEntriesGo entries []
   Err message => Err message
   Ok prepared =>
@@ -164,16 +145,15 @@ prepareEntries entries = match prepareEntriesGo entries []
       Some _ => Err "mst: duplicate key is not allowed"
       None => Ok sorted
 
-prepareEntriesGo : List (Array Int, Cid) ->
+prepareEntriesGo : List (Bytes, Cid) ->
   List MstEntry ->
   Result String (List MstEntry)
 prepareEntriesGo [] acc = Ok (reverse acc)
 prepareEntriesGo ((key, value) :: rest) acc = match mstKeyDepth key
   Err message => Err message
-  Ok depth =>
-    prepareEntriesGo rest (MstEntry (arrayCopy key) value depth :: acc)
+  Ok depth => prepareEntriesGo rest (MstEntry key value depth :: acc)
 
-duplicateKey : List MstEntry -> Option (Array Int) -> Option (Array Int)
+duplicateKey : List MstEntry -> Option Bytes -> Option Bytes
 duplicateKey [] _ = None
 duplicateKey ((MstEntry key _ _) :: rest) None = duplicateKey rest (Some key)
 duplicateKey ((MstEntry key _ _) :: rest) (Some previous) =
@@ -195,10 +175,9 @@ splitLayer ((entry@(MstEntry _ _ depth)) :: rest) layer =
   else match splitLayer rest layer
     LayerSplit prefix found => LayerSplit (entry :: prefix) found
 
-mustEncodeNode : DagCbor -> Array Int
+mustEncodeNode : DagCbor -> Bytes
 mustEncodeNode value =
-  toArray
-    (resultOrPanic "mst: internal node encoding failed" (dagCborEncode value))
+  resultOrPanic "mst: internal node encoding failed" (dagCborEncode value)
 
 oldLeaves : List NodeEntry -> List OldLeaf
 oldLeaves [] = []
@@ -212,30 +191,30 @@ nodeShape (MstNode _ _ ((NodeSubtree left) :: rest)) =
   OldShape (Some left) (oldLeaves rest)
 nodeShape (MstNode _ _ entries) = OldShape None (oldLeaves entries)
 
-leadKey : List OldLeaf -> Option (Array Int)
+leadKey : List OldLeaf -> Option Bytes
 leadKey [] = None
 leadKey ((OldLeaf key _) :: _) = Some key
 
-boundEqual : Option (Array Int) -> Option (Array Int) -> Bool
+boundEqual : Option Bytes -> Option Bytes -> Bool
 boundEqual None None = True
 boundEqual (Some left) (Some right) = bytesCompare left right == Eq
 boundEqual _ _ = False
 
-descendInto : Array Int -> Option MstNode -> Reuse
+descendInto : Bytes -> Option MstNode -> Reuse
 descendInto _ None = FreshBuild
 descendInto key (Some node) = ReuseFrom key (nodeShape node)
 
-firstKey : Option (MstEntry, List MstEntry) -> Option (Array Int)
+firstKey : Option (MstEntry, List MstEntry) -> Option Bytes
 firstKey None = None
 firstKey (Some (MstEntry key _ _, _)) = Some key
 
 {- | Take the old child of a slot whose bounds the mutation left standing: as
    it is when the touched key falls outside those bounds, and otherwise as the
    starting point for the one child that still has to be rebuilt. -}
-takeSlot : Array Int ->
+takeSlot : Bytes ->
   Option MstNode ->
-  Option (Array Int) ->
-  Option (Array Int) ->
+  Option Bytes ->
+  Option Bytes ->
   List MstEntry ->
   Int ->
   Option MstNode
@@ -245,10 +224,10 @@ takeSlot key old lower upper entries layer =
   else
     old
 
-reuseSlotAfter : Array Int ->
+reuseSlotAfter : Bytes ->
   List OldLeaf ->
-  Array Int ->
-  Option (Array Int) ->
+  Bytes ->
+  Option Bytes ->
   List MstEntry ->
   Int ->
   Option MstNode
@@ -267,8 +246,8 @@ reuseSlotAfter key ((OldLeaf leafKey child) :: rest) lower upper entries layer =
    touched key was added to or removed from as a leaf — has no such old slot
    and is built afresh. -}
 childSlot : Reuse ->
-  Option (Array Int) ->
-  Option (Array Int) ->
+  Option Bytes ->
+  Option Bytes ->
   List MstEntry ->
   Int ->
   Option MstNode
@@ -305,19 +284,12 @@ buildNode reuse entries layer =
     buildWireEntries reuse first layer None
   let bytes =
     mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
-  -- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
-  -- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
-  let cid =
-    cidForDagCbor
-      (optionOrPanic
-        "cidForDagCbor: every element must be a byte in 0..255"
-        (fromArray bytes))
-  MstNode cid bytes (childEntries left ++ rightEntries)
+  MstNode (cidForDagCbor bytes) bytes (childEntries left ++ rightEntries)
 
-nodeBlocks : MstNode -> List (Cid, Array Int)
+nodeBlocks : MstNode -> List (Cid, Bytes)
 nodeBlocks (MstNode cid bytes entries) = (cid, bytes) :: subtreeBlocks entries
 
-subtreeBlocks : List NodeEntry -> List (Cid, Array Int)
+subtreeBlocks : List NodeEntry -> List (Cid, Bytes)
 subtreeBlocks [] = []
 subtreeBlocks ((NodeLeaf _ _) :: rest) = subtreeBlocks rest
 subtreeBlocks ((NodeSubtree node) :: rest) =
@@ -326,7 +298,7 @@ subtreeBlocks ((NodeSubtree node) :: rest) =
 buildWireEntries : Reuse ->
   Option (MstEntry, List MstEntry) ->
   Int ->
-  Option (Array Int) ->
+  Option Bytes ->
   BuiltEntries
 buildWireEntries _ None _ _ = BuiltEntries [] []
 buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
@@ -335,10 +307,9 @@ buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
   let prefix = match previous
     None => 0
     Some prior => commonPrefix prior key
-  -- Masked: every key was range-checked by `mstKeyDepth` on the way in.
   let wire = DcMap [
     ("p", DcInt prefix),
-    ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
+    ("k", DcBytes (B.drop prefix key)),
     ("v", DcLink value),
     ("t", childValue right),
   ]
@@ -361,7 +332,7 @@ buildMst entries = buildAt FreshBuild entries (maximumDepth entries 0)
    does not reach. A node's layer is part of what it encodes, so a promoted or
    demoted root leaves the old nodes no position to be reused in and the tree
    is rebuilt from scratch. -}
-rebuildAround : Array Int -> Mst -> List MstEntry -> Mst
+rebuildAround : Bytes -> Mst -> List MstEntry -> Mst
 rebuildAround key (Mst before _ _ node) entries =
   let layer = maximumDepth entries 0
   if layer == maximumDepth before 0 then
@@ -378,10 +349,10 @@ mstEmpty = buildMst []
 
 -- | Construct a canonical tree from an entry map in any input order.
 export
-mstFromEntries : List (Array Int, Cid) -> Result String Mst
+mstFromEntries : List (Bytes, Cid) -> Result String Mst
 mstFromEntries entries = map buildMst (prepareEntries entries)
 
-lookupEntry : Array Int -> List MstEntry -> Option Cid
+lookupEntry : Bytes -> List MstEntry -> Option Cid
 lookupEntry _ [] = None
 lookupEntry key ((MstEntry candidate value _) :: rest) =
   match bytesCompare key candidate
@@ -391,18 +362,17 @@ lookupEntry key ((MstEntry candidate value _) :: rest) =
 
 -- | Look up one exact byte key.
 export
-mstLookup : Array Int -> Mst -> Option Cid
+mstLookup : Bytes -> Mst -> Option Cid
 mstLookup key (Mst entries _ _ _) = lookupEntry key entries
 
-copyEntries : List MstEntry -> List (Array Int, Cid)
-copyEntries [] = []
-copyEntries ((MstEntry key value _) :: rest) =
-  (arrayCopy key, value) :: copyEntries rest
+entryPairs : List MstEntry -> List (Bytes, Cid)
+entryPairs [] = []
+entryPairs ((MstEntry key value _) :: rest) = (key, value) :: entryPairs rest
 
 -- | Return the authoritative entries in lexical byte order.
 export
-mstEntries : Mst -> List (Array Int, Cid)
-mstEntries (Mst entries _ _ _) = copyEntries entries
+mstEntries : Mst -> List (Bytes, Cid)
+mstEntries (Mst entries _ _ _) = entryPairs entries
 
 {- | One bounded key-range read. `start` is the inclusive key the read begins
    at — the smallest key an ascending read returns, the largest a descending
@@ -411,8 +381,8 @@ mstEntries (Mst entries _ _ _) = copyEntries entries
    entries the read may return at most. The limit ends the descent rather than
    trimming its result, so a page of a large collection costs the page. -}
 public export data MstRangeQuery = MstRangeQuery {
-  start : Option (Array Int),
-  prefix : Option (Array Int),
+  start : Option Bytes,
+  prefix : Option Bytes,
   reverse : Bool,
   limit : Option Int,
 }
@@ -420,7 +390,7 @@ public export data MstRangeQuery = MstRangeQuery {
 {- | The entries taken so far in reverse traversal order, how many more the
    limit still allows, and whether the scan has passed the far end of the
    range or filled the limit. Every later step is a no-op once it has. -}
-data RangeScan = RangeScan (List (Array Int, Cid)) (Option Int) Bool
+data RangeScan = RangeScan (List (Bytes, Cid)) (Option Int) Bool
 
 scanDone : RangeScan -> Bool
 scanDone (RangeScan _ _ done) = done
@@ -431,38 +401,38 @@ scanStart None = RangeScan [] None False
 scanStart (Some limit) = RangeScan [] (Some limit) (limit <= 0)
 
 -- Take one in-range key, ending the scan when it was the last the limit allows.
-takeKey : Array Int -> Cid -> RangeScan -> RangeScan
+takeKey : Bytes -> Cid -> RangeScan -> RangeScan
 takeKey key value (RangeScan taken remaining _) =
-  let kept = (arrayCopy key, value) :: taken
+  let kept = (key, value) :: taken
   match remaining
     None => RangeScan kept None False
     Some left => RangeScan kept (Some (left - 1)) (left <= 1)
 
-hasBytesPrefix : Array Int -> Array Int -> Bool
-hasBytesPrefix key prefix = commonPrefix key prefix == arrayLength prefix
+hasBytesPrefix : Bytes -> Bytes -> Bool
+hasBytesPrefix key prefix = B.startsWith prefix key
 
 -- The later of two inclusive lower bounds; `None` is no bound at all.
-laterBound : Option (Array Int) -> Option (Array Int) -> Option (Array Int)
+laterBound : Option Bytes -> Option Bytes -> Option Bytes
 laterBound None other = other
 laterBound bound None = bound
 laterBound (Some left) (Some right) =
   if bytesCompare left right == Lt then Some right else Some left
 
-belowBound : Array Int -> Option (Array Int) -> Bool
+belowBound : Bytes -> Option Bytes -> Bool
 belowBound _ None = False
 belowBound key (Some bound) = bytesCompare key bound == Lt
 
-aboveBound : Array Int -> Option (Array Int) -> Bool
+aboveBound : Bytes -> Option Bytes -> Bool
 aboveBound _ None = False
 aboveBound key (Some bound) = bytesCompare key bound == Gt
 
-outsidePrefix : Array Int -> Option (Array Int) -> Bool
+outsidePrefix : Bytes -> Option Bytes -> Bool
 outsidePrefix _ None = False
 outsidePrefix key (Some prefix) = not (hasBytesPrefix key prefix)
 
 -- A key that neither carries the prefix nor sorts below it sorts above every
 -- key that does, so a descending read has not reached the prefix run yet.
-abovePrefix : Array Int -> Option (Array Int) -> Bool
+abovePrefix : Bytes -> Option Bytes -> Bool
 abovePrefix _ None = False
 abovePrefix key (Some prefix) =
   not (hasBytesPrefix key prefix) && bytesCompare key prefix == Gt
@@ -470,10 +440,10 @@ abovePrefix key (Some prefix) =
 {- | Fold one key into a running ascending scan. Below the low bound the scan
    has not reached it yet; past the high bound, or past the end of the prefix
    run, every later key is out of range too, so the scan ends there. -}
-scanKey : Option (Array Int) ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Array Int ->
+scanKey : Option Bytes ->
+  Option Bytes ->
+  Option Bytes ->
+  Bytes ->
   Cid ->
   RangeScan ->
   RangeScan
@@ -488,10 +458,10 @@ scanKey lo hi prefix key value (scan@(RangeScan taken remaining _)) =
 {- | The same fold for a descending scan, with the two ends exchanged: above
    the high bound the scan has not reached the range yet, and below the low
    bound — or before the start of the prefix run — it has left it for good. -}
-scanKeyDesc : Option (Array Int) ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Array Int ->
+scanKeyDesc : Option Bytes ->
+  Option Bytes ->
+  Option Bytes ->
+  Bytes ->
   Cid ->
   RangeScan ->
   RangeScan
@@ -506,35 +476,32 @@ scanKeyDesc lo hi prefix key value (scan@(RangeScan taken remaining _)) =
 
 -- A subtree holds only keys below the leaf key bounding it on the right, so an
 -- `upper` that does not exceed the low bound puts the whole subtree below it.
-spanBelowBound : Option (Array Int) -> Option (Array Int) -> Bool
+spanBelowBound : Option Bytes -> Option Bytes -> Bool
 spanBelowBound _ None = False
 spanBelowBound None _ = False
 spanBelowBound (Some upper) (Some lo) = bytesCompare upper lo /= Gt
 
-nextLeafKey : List NodeEntry -> Option (Array Int)
+nextLeafKey : List NodeEntry -> Option Bytes
 nextLeafKey ((NodeLeaf key _) :: _) = Some key
 nextLeafKey _ = None
 
 -- A subtree holds only keys above the leaf key bounding it on the left, so a
 -- `lower` at or past the far end of a descending read puts the whole subtree
 -- past it — either above the high bound or beyond the end of the prefix run.
-spanAboveRange : Option (Array Int) ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Bool
+spanAboveRange : Option Bytes -> Option Bytes -> Option Bytes -> Bool
 spanAboveRange None _ _ = False
 spanAboveRange (Some lower) hi prefix =
   atOrAboveBound lower hi || abovePrefix lower prefix
 
-atOrAboveBound : Array Int -> Option (Array Int) -> Bool
+atOrAboveBound : Bytes -> Option Bytes -> Bool
 atOrAboveBound _ None = False
 atOrAboveBound key (Some bound) = bytesCompare key bound /= Lt
 
 {- | Walk one node's children in key order, entering a subtree only when part
    of its key span can fall inside the range. -}
-scanNode : Option (Array Int) ->
-  Option (Array Int) ->
-  Option (Array Int) ->
+scanNode : Option Bytes ->
+  Option Bytes ->
+  Option Bytes ->
   List NodeEntry ->
   RangeScan ->
   RangeScan
@@ -553,10 +520,10 @@ scanNode lo hi prefix ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
    in and a limit can end it where it stands. `lower` is the leaf key bounding
    this run of children on the left — every key under it sorts above that leaf,
    which is what lets a whole subtree above the range be stepped over. -}
-scanNodeDesc : Option (Array Int) ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Option (Array Int) ->
+scanNodeDesc : Option Bytes ->
+  Option Bytes ->
+  Option Bytes ->
+  Option Bytes ->
   List NodeEntry ->
   RangeScan ->
   RangeScan
@@ -576,7 +543,7 @@ scanNodeDesc lo hi prefix lower ((NodeSubtree (MstNode _ _ children)) :: rest) s
   else
     scanNodeDesc lo hi prefix lower children above
 
-rangeBounds : MstRangeQuery -> (Option (Array Int), Option (Array Int))
+rangeBounds : MstRangeQuery -> (Option Bytes, Option Bytes)
 rangeBounds query =
   if query.reverse then
     (query.prefix, query.start)
@@ -591,7 +558,7 @@ rangeBounds query =
    own direction rather than gathering the range and turning it round, so its
    limit bounds the descent exactly as an ascending one's does. -}
 export
-mstRange : MstRangeQuery -> Mst -> List (Array Int, Cid)
+mstRange : MstRangeQuery -> Mst -> List (Bytes, Cid)
 mstRange query (Mst _ _ _ (MstNode _ _ children)) =
   let (lo, hi) = rangeBounds query
   let start = scanStart query.limit
@@ -615,18 +582,17 @@ insertSorted (entry@(MstEntry key _ _)) ((candidate@(MstEntry other _ _)) :: res
 
 -- | Insert a previously absent key.
 export
-mstInsert : Array Int -> Cid -> Mst -> Result String Mst
+mstInsert : Bytes -> Cid -> Mst -> Result String Mst
 mstInsert key value tree = match mstKeyDepth key
   Err message => Err message
   Ok depth => match mstLookup key tree
     Some _ => Err "mst: duplicate key is not allowed"
     None =>
       let (Mst entries _ _ _) = tree
-      -- The caller still owns `key`, so the tree keeps its own copy of it.
-      let fresh = MstEntry (arrayCopy key) value depth
+      let fresh = MstEntry key value depth
       Ok (rebuildAround key tree (insertSorted fresh entries))
 
-replaceEntry : Array Int -> Cid -> List MstEntry -> List MstEntry
+replaceEntry : Bytes -> Cid -> List MstEntry -> List MstEntry
 replaceEntry _ _ [] = []
 replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
   if bytesCompare key candidate == Eq then
@@ -636,7 +602,7 @@ replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
 
 -- | Replace the value at an existing key.
 export
-mstReplace : Array Int -> Cid -> Mst -> Result String Mst
+mstReplace : Bytes -> Cid -> Mst -> Result String Mst
 mstReplace key value tree = match mstKeyDepth key
   Err message => Err message
   Ok _ => match mstLookup key tree
@@ -645,7 +611,7 @@ mstReplace key value tree = match mstKeyDepth key
       let (Mst entries _ _ _) = tree
       Ok (rebuildAround key tree (replaceEntry key value entries))
 
-deleteEntry : Array Int -> List MstEntry -> List MstEntry
+deleteEntry : Bytes -> List MstEntry -> List MstEntry
 deleteEntry _ [] = []
 deleteEntry key ((entry@(MstEntry candidate _ _)) :: rest) =
   if bytesCompare key candidate == Eq then
@@ -655,7 +621,7 @@ deleteEntry key ((entry@(MstEntry candidate _ _)) :: rest) =
 
 -- | Delete an existing key, pruning the root back to the canonical empty node.
 export
-mstDelete : Array Int -> Mst -> Result String Mst
+mstDelete : Bytes -> Mst -> Result String Mst
 mstDelete key tree = match mstKeyDepth key
   Err message => Err message
   Ok _ => match mstLookup key tree
@@ -669,19 +635,15 @@ export
 mstRootCid : Mst -> Cid
 mstRootCid (Mst _ root _ _) = root
 
--- | Defensive copy of the canonical root node bytes.
+-- | The canonical root node bytes.
 export
-mstRootBytes : Mst -> Array Int
-mstRootBytes (Mst _ _ bytes _) = arrayCopy bytes
-
-copyBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
-copyBlocks [] = []
-copyBlocks ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyBlocks rest
+mstRootBytes : Mst -> Bytes
+mstRootBytes (Mst _ _ bytes _) = bytes
 
 -- | Complete root-first reachable set of canonical MST node blocks.
 export
-mstNodeBlocks : Mst -> List (Cid, Array Int)
-mstNodeBlocks (Mst _ _ _ node) = copyBlocks (nodeBlocks node)
+mstNodeBlocks : Mst -> List (Cid, Bytes)
+mstNodeBlocks (Mst _ _ _ node) = nodeBlocks node
 
 -- ── decoding one node ───────────────────────────────────────────────────────
 
@@ -691,20 +653,19 @@ decodeOptionalLink _ (DcLink cid) = Ok (Some cid)
 decodeOptionalLink label _ = Err "mst: \{label} must be a CID link or null"
 
 decodeEntries : List DagCbor ->
-  Option (Array Int) ->
+  Option Bytes ->
   List DecodedEntry ->
   Result String (List DecodedEntry)
 decodeEntries [] _ acc = Ok (reverse acc)
 decodeEntries (value :: rest) previous acc = match value
-  DcMap [("k", DcBytes suffixBytes), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] =>
-    let suffix = toArray suffixBytes
+  DcMap [("k", DcBytes suffix), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] =>
     if prefix < 0 then
       Err "mst: prefix length must be non-negative"
     else match previous
       None =>
         if prefix /= 0 then
           Err "mst: first entry prefix length must be zero"
-        else if arrayLength suffix == 0 then
+        else if B.isEmpty suffix then
           Err "mst: empty key is not allowed"
         else match decodeOptionalLink "entry tree" tree
           Err message => Err message
@@ -714,11 +675,11 @@ decodeEntries (value :: rest) previous acc = match value
               (Some suffix)
               (DecodedEntry suffix leaf child :: acc)
       Some prior =>
-        if prefix > arrayLength prior then
+        if prefix > B.length prior then
           Err "mst: prefix length exceeds previous key"
         else
-          let key = take prefix prior ++ suffix
-          if arrayLength suffix == 0 then
+          let key = B.take prefix prior ++ suffix
+          if B.isEmpty suffix then
             Err "mst: prefix compression produced an empty suffix"
           else if prefix /= commonPrefix prior key then
             Err "mst: prefix compression is not maximal"
@@ -733,18 +694,8 @@ decodeEntries (value :: rest) previous acc = match value
             _ => Err "mst: entry order is not strictly lexical"
   _ => Err "mst: invalid node entry form"
 
-{- | `dagCborDecode` over `Array Int`, refused with the decoder's own range
-   message when an element is outside 0..255. The decoder took `Array Int`
-   and made this check itself; masking instead truncates the element into a
-   byte that can still decode. -}
-export
-dagCborDecodeChecked : Array Int -> Result String DagCbor
-dagCborDecodeChecked bytes = match fromArray bytes
-  None => Err "dagcbor: input element outside byte range 0..255"
-  Some checked => dagCborDecode checked
-
-decodeNode : Array Int -> Result String DecodedNode
-decodeNode bytes = match dagCborDecodeChecked bytes
+decodeNode : Bytes -> Result String DecodedNode
+decodeNode bytes = match dagCborDecode bytes
   Err message => Err "mst: \{message}"
   Ok value => match value
     DcMap [("e", DcArray entries), ("l", left)] =>
@@ -754,7 +705,7 @@ decodeNode bytes = match dagCborDecodeChecked bytes
           map (DecodedNode leftLink) (decodeEntries entries None [])
     _ => Err "mst: invalid node form; expected exactly fields e and l"
 
-entryKey : DecodedEntry -> Array Int
+entryKey : DecodedEntry -> Bytes
 entryKey (DecodedEntry key _ _) = key
 
 entryChild : DecodedEntry -> Option Cid
@@ -812,9 +763,9 @@ validateNodeEntries (DecodedNode _ entries) =
 
 -- | Strictly decode and validate one canonical node at a known depth.
 export
-mstValidateNodeBytes : Int -> Bool -> Array Int -> Result String Unit
+mstValidateNodeBytes : Int -> Bool -> Bytes -> Result String Unit
 mstValidateNodeBytes expected isRoot bytes = do
-  _ <- checkMstNodeBytes (arrayLength bytes)
+  _ <- checkMstNodeBytes (B.length bytes)
   node <- decodeNode bytes
   _ <- validateNodeEntries node
   validateDecoded expected isRoot node
@@ -827,21 +778,15 @@ cidKey cid = encode (cidToBytes cid)
 mstEmptySet : Set String
 mstEmptySet = empty
 
-validateBlockRows : List (Cid, Array Int) ->
-  Map String (Array Int) ->
-  Result String (Map String (Array Int))
+validateBlockRows : List (Cid, Bytes) ->
+  Map String Bytes ->
+  Result String (Map String Bytes)
 validateBlockRows [] index = Ok index
 validateBlockRows ((cid, bytes) :: rest) index =
   let key = cidKey cid
   if has key index then
     Err "mst: duplicate node block CID"
-  else if not
-    (cidEqual
-      cid
-      (cidForDagCbor
-        (optionOrPanic
-          "cidForDagCbor: every element must be a byte in 0..255"
-          (fromArray bytes)))) then
+  else if not (cidEqual cid (cidForDagCbor bytes)) then
     Err "mst: node block CID does not match bytes"
   else
     validateBlockRows rest (set key bytes index)
@@ -851,18 +796,15 @@ nodeDepth (DecodedNode _ []) = 0
 nodeDepth (DecodedNode _ (entry :: _)) =
   resultOrPanic "mst: decoded key depth failed" (mstKeyDepth (entryKey entry))
 
-keyAboveLower : Array Int -> Option (Array Int) -> Bool
+keyAboveLower : Bytes -> Option Bytes -> Bool
 keyAboveLower _ None = True
 keyAboveLower key (Some lower) = bytesCompare lower key == Lt
 
-keyBelowUpper : Array Int -> Option (Array Int) -> Bool
+keyBelowUpper : Bytes -> Option Bytes -> Bool
 keyBelowUpper _ None = True
 keyBelowUpper key (Some upper) = bytesCompare key upper == Lt
 
-entriesWithinBounds : List DecodedEntry ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Bool
+entriesWithinBounds : List DecodedEntry -> Option Bytes -> Option Bytes -> Bool
 entriesWithinBounds [] _ _ = True
 entriesWithinBounds ((DecodedEntry key _ _) :: rest) lower upper =
   keyAboveLower key lower
@@ -871,9 +813,9 @@ entriesWithinBounds ((DecodedEntry key _ _) :: rest) lower upper =
 
 walkOptionalChild : Option Cid ->
   Int ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Map String (Array Int) ->
+  Option Bytes ->
+  Option Bytes ->
+  Map String Bytes ->
   Set String ->
   Set String ->
   Int ->
@@ -895,8 +837,8 @@ walkOptionalChild (Some child) expected lower upper blocks active visited traver
 
 walkEntryChildren : List DecodedEntry ->
   Int ->
-  Option (Array Int) ->
-  Map String (Array Int) ->
+  Option Bytes ->
+  Map String Bytes ->
   Set String ->
   Set String ->
   Int ->
@@ -931,9 +873,9 @@ walkEntryChildren (entry :: rest) expected upper blocks active visited traversal
 
 walkNodeChildren : DecodedNode ->
   Int ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Map String (Array Int) ->
+  Option Bytes ->
+  Option Bytes ->
+  Map String Bytes ->
   Set String ->
   Set String ->
   Int ->
@@ -965,12 +907,12 @@ walkNodeChildren (DecodedNode left entries) expected lower upper blocks active v
         traversal
         limit
 
-walkKnownBlock : Array Int ->
+walkKnownBlock : Bytes ->
   Option Int ->
   Bool ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Map String (Array Int) ->
+  Option Bytes ->
+  Option Bytes ->
+  Map String Bytes ->
   Set String ->
   Set String ->
   String ->
@@ -979,7 +921,7 @@ walkKnownBlock : Array Int ->
   Result String (Set String)
 walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal limit =
   do
-    _ <- checkMstNodeBytes (arrayLength bytes)
+    _ <- checkMstNodeBytes (B.length bytes)
     node <- decodeNode bytes
     _ <- validateNodeEntries node
     let depth = match expected
@@ -1014,9 +956,9 @@ checkTraversalDepth limit traversal =
 walkBlock : Cid ->
   Option Int ->
   Bool ->
-  Option (Array Int) ->
-  Option (Array Int) ->
-  Map String (Array Int) ->
+  Option Bytes ->
+  Option Bytes ->
+  Map String Bytes ->
   Set String ->
   Set String ->
   Int ->
@@ -1049,7 +991,7 @@ walkBlock cid expected isRoot lower upper blocks active visited traversal limit 
 
 validateBlocksWithTraversalLimit : Int ->
   Cid ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   Result String Unit
 validateBlocksWithTraversalLimit limit root blocks = do
   if limit < 0 then
@@ -1082,27 +1024,25 @@ validateBlocksWithTraversalLimit limit root blocks = do
 export
 mstValidateBlocksWithTraversalLimit : Int ->
   Cid ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   Result String Unit
 mstValidateBlocksWithTraversalLimit limit root blocks =
   validateBlocksWithTraversalLimit limit root blocks
 
 -- | Validate content binding and prove every supplied node block is reachable.
 export
-mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
+mstValidateBlocks : Cid -> List (Cid, Bytes) -> Result String Unit
 mstValidateBlocks root blocks =
   validateBlocksWithTraversalLimit maxMstTraversalDepth root blocks
 
-blockEntryPairs : List DecodedEntry ->
-  List (Array Int, Cid) ->
-  List (Array Int, Cid)
+blockEntryPairs : List DecodedEntry -> List (Bytes, Cid) -> List (Bytes, Cid)
 blockEntryPairs [] acc = acc
 blockEntryPairs ((DecodedEntry key leaf _) :: rest) acc =
-  blockEntryPairs rest ((arrayCopy key, leaf) :: acc)
+  blockEntryPairs rest ((key, leaf) :: acc)
 
-blockEntries : List (Cid, Array Int) ->
-  List (Array Int, Cid) ->
-  Result String (List (Array Int, Cid))
+blockEntries : List (Cid, Bytes) ->
+  List (Bytes, Cid) ->
+  Result String (List (Bytes, Cid))
 blockEntries [] acc = Ok acc
 blockEntries ((_, bytes) :: rest) acc = match decodeNode bytes
   Err message => Err message
@@ -1116,7 +1056,7 @@ blockEntries ((_, bytes) :: rest) acc = match decodeNode bytes
    CID must equal `root` — so a graph that decodes to any other tree is rejected
    rather than returned. -}
 export
-mstFromBlocks : Cid -> List (Cid, Array Int) -> Result String Mst
+mstFromBlocks : Cid -> List (Cid, Bytes) -> Result String Mst
 mstFromBlocks root blocks = do
   _ <- mstValidateBlocks root blocks
   entries <- blockEntries blocks []
@@ -1128,17 +1068,17 @@ mstFromBlocks root blocks = do
 
 -- ── covering proofs ─────────────────────────────────────────────────────────
 
-entryLeafAtOrAbove : Array Int -> NodeEntry -> Bool
+entryLeafAtOrAbove : Bytes -> NodeEntry -> Bool
 entryLeafAtOrAbove key (NodeLeaf candidate _) = bytesCompare candidate key /= Lt
 entryLeafAtOrAbove _ (NodeSubtree _) = False
 
 {- | Index of the first leaf whose key is at or above `key`, or the entry count
    when every leaf sorts below it. Subtrees never match, so the index can land
    on a subtree slot or one past the end; `entryAt` is total for both. -}
-findLeafIndex : Array Int -> List NodeEntry -> Int
+findLeafIndex : Bytes -> List NodeEntry -> Int
 findLeafIndex key entries = findLeafIndexFrom key entries 0
 
-findLeafIndexFrom : Array Int -> List NodeEntry -> Int -> Int
+findLeafIndexFrom : Bytes -> List NodeEntry -> Int -> Int
 findLeafIndexFrom _ [] index = index
 findLeafIndexFrom key (entry :: rest) index =
   if entryLeafAtOrAbove key entry then
@@ -1166,7 +1106,7 @@ subtreeAt index entries = match entryAt index entries
    of the insertion point. A node with no such subtree proves nothing on its own
    and contributes no block, which is why this walk can return the empty list
    while the two sibling walks below always contribute their own node. -}
-proofForKey : Array Int -> MstNode -> List (Cid, Array Int)
+proofForKey : Bytes -> MstNode -> List (Cid, Bytes)
 proofForKey key (MstNode cid bytes entries) =
   let index = findLeafIndex key entries
   let exact = match entryAt index entries
@@ -1179,7 +1119,7 @@ proofForKey key (MstNode cid bytes entries) =
     Some previous => proofForKey key previous ++ [(cid, bytes)]
 
 -- | Nodes proving the nearest key below `key`.
-proofForLeftSib : Array Int -> MstNode -> List (Cid, Array Int)
+proofForLeftSib : Bytes -> MstNode -> List (Cid, Bytes)
 proofForLeftSib key (MstNode cid bytes entries) =
   let index = findLeafIndex key entries
   let below = match subtreeAt (index - 1) entries
@@ -1188,7 +1128,7 @@ proofForLeftSib key (MstNode cid bytes entries) =
   below ++ [(cid, bytes)]
 
 -- | Nodes proving the nearest key above `key`.
-proofForRightSib : Array Int -> MstNode -> List (Cid, Array Int)
+proofForRightSib : Bytes -> MstNode -> List (Cid, Bytes)
 proofForRightSib key (MstNode cid bytes entries) =
   let index = findLeafIndex key entries
   let found = match entryAt index entries
@@ -1208,14 +1148,14 @@ proofForRightSib key (MstNode cid bytes entries) =
         _ => []
   below ++ [(cid, bytes)]
 
-coveringProof : Array Int -> MstNode -> List (Cid, Array Int)
+coveringProof : Bytes -> MstNode -> List (Cid, Bytes)
 coveringProof key node =
   proofForKey key node ++ proofForLeftSib key node ++ proofForRightSib key node
 
-unionBlocks : List (Cid, Array Int) ->
+unionBlocks : List (Cid, Bytes) ->
   Set String ->
-  List (Cid, Array Int) ->
-  (Set String, List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  (Set String, List (Cid, Bytes))
 unionBlocks [] seen acc = (seen, acc)
 unionBlocks ((cid, bytes) :: rest) seen acc =
   let key = cidKey cid
@@ -1224,17 +1164,17 @@ unionBlocks ((cid, bytes) :: rest) seen acc =
   else
     unionBlocks rest (Set.insert key seen) ((cid, bytes) :: acc)
 
-coveringProofGo : List (Array Int) ->
+coveringProofGo : List Bytes ->
   MstNode ->
   Set String ->
-  List (Cid, Array Int) ->
-  List (Cid, Array Int)
+  List (Cid, Bytes) ->
+  List (Cid, Bytes)
 coveringProofGo [] _ _ acc = reverse acc
 coveringProofGo (key :: rest) node seen acc =
   let (nextSeen, nextAcc) = unionBlocks (coveringProof key node) seen acc
   coveringProofGo rest node nextSeen nextAcc
 
-checkProofKeys : List (Array Int) -> Result String Unit
+checkProofKeys : List Bytes -> Result String Unit
 checkProofKeys [] = Ok ()
 checkProofKeys (key :: rest) = match mstKeyDepth key
   Err message => Err message
@@ -1256,9 +1196,7 @@ checkProofKeys (key :: rest) = match mstKeyDepth key
    Keys need not be present. A relay verifying a delete proves the key's absence
    from exactly the same nodes. -}
 export
-mstCoveringProofBlocks : List (Array Int) ->
-  Mst ->
-  Result String (List (Cid, Array Int))
+mstCoveringProofBlocks : List Bytes -> Mst -> Result String (List (Cid, Bytes))
 mstCoveringProofBlocks keys (Mst _ _ _ node) = do
   _ <- checkProofKeys keys
-  Ok (copyBlocks (coveringProofGo keys node mstEmptySet []))
+  Ok (coveringProofGo keys node mstEmptySet [])

@@ -1,6 +1,8 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
-import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain}
+import bytes.{
+  Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, fromU8Array
+}
 import http.{
   Header,
   HttpParseFailure(..),
@@ -12,7 +14,6 @@ import http.{
   Response,
   serializeResponse,
 }
-import array as A
 import string.{repeat, toUtf8}
 import test.{
   expectAll,
@@ -23,7 +24,7 @@ import test.{
   fail,
   pass,
 }
-import lib.cid.{Cid, cidForRaw}
+import lib.cid.{cidForRaw}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -53,15 +54,6 @@ mustHeader name value =
   resultOrPanic
     "server_core_test: header setup failed"
     (makeHeader name (encodeUtf8 value))
-
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForRaw` did.
-cidForRawDoor : Array Int -> Cid
-cidForRawDoor bytes =
-  cidForRaw
-    (optionOrPanic
-      "cidForRaw: every element must be a byte in 0..255"
-      (fromArray bytes))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =
@@ -96,7 +88,11 @@ handler : Handler
 handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
 handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
-  match storePut (cidForRawDoor bytes) bytes store
+  let packed =
+    optionOrPanic
+      "cidForRaw: every element must be a byte in 0..255"
+      (fromArray bytes)
+  match storePut (cidForRaw packed) packed store
     Err message =>
       panic "server_core_test: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
@@ -120,19 +116,18 @@ testContext =
 server : Server
 server = makeServer account registry handler
 
-seedBytes : Array Int
-seedBytes = toUtf8 "seed"
+seedBytes : Bytes
+seedBytes = encodeUtf8 "seed"
 
 seededStore : Store
 seededStore =
   resultOrPanic
     "server_core_test: seed store setup failed"
-    (storePut (cidForRawDoor seedBytes) seedBytes storeEmpty)
+    (storePut (cidForRaw seedBytes) seedBytes storeEmpty)
 
 seedPreserved : Store -> Bool
 seedPreserved store =
-  storeSize store == 1
-    && storeGet (cidForRawDoor seedBytes) store == Some seedBytes
+  storeSize store == 1 && storeGet (cidForRaw seedBytes) store == Some seedBytes
 
 fixedQuery : Bytes
 fixedQuery =
@@ -194,29 +189,17 @@ test "an out-of-domain request array is refused at the door, not framed" = expec
   ]
 
 test "Store starts empty and delegates verified immutable insertion" =
-  let bytes = [|1, 2, 3|]
-  let cid = cidForRawDoor bytes
+  let bytes = fromU8Array [|1, 2, 3|]
+  let cid = cidForRaw bytes
   expectOkThen
     (next => expectEach [
       ("storeSize storeEmpty == 0", expectEqual 0 (storeSize storeEmpty)),
       ("storeSize next == 1", expectEqual 1 (storeSize next)),
       (
         "storeGet cid next == Some [1,2,3]",
-        expectEqual (Some [|1, 2, 3|]) (storeGet cid next),
+        expectEqual (Some (fromU8Array [|1, 2, 3|])) (storeGet cid next),
       ),
     ])
-    (storePut cid bytes storeEmpty)
-
-test "Store insertion and lookup both retain defensive copies" =
-  let bytes = [|4, 5, 6|]
-  let cid = cidForRawDoor bytes
-  expectOkThen
-    (next => match storeGet cid next
-      None => fail "expected the stored bytes to still be present"
-      Some viewed =>
-        let () = A.setInPlace 0 99 bytes
-        let () = A.setInPlace 1 98 viewed
-        expectEqual (storeGet cid next) (Some [|4, 5, 6|]))
     (storePut cid bytes storeEmpty)
 
 test "classified parser exposes malformed framing without diagnostic matching" =
@@ -257,8 +240,8 @@ test "fixed raw request returns successor Store and exact response bytes" =
     (
       "the stored block reads back as the posted bytes",
       expectEqual
-        (Some (toUtf8 "abc"))
-        (storeGet (cidForRawDoor (toUtf8 "abc")) next),
+        (Some (encodeUtf8 "abc"))
+        (storeGet (cidForRaw (encodeUtf8 "abc")) next),
     ),
     (
       "the response is the exact 201 Created wire form",
@@ -279,8 +262,8 @@ test "chunked raw request returns successor Store and exact response bytes" =
     (
       "the chunked body reassembles to the posted bytes",
       expectEqual
-        (Some (toUtf8 "abc"))
-        (storeGet (cidForRawDoor (toUtf8 "abc")) next),
+        (Some (encodeUtf8 "abc"))
+        (storeGet (cidForRaw (encodeUtf8 "abc")) next),
     ),
     (
       "the response is the exact 201 Created wire form",

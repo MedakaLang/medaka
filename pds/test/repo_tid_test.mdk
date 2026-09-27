@@ -5,9 +5,7 @@ import bytes.{fromU8Array}
 import string.{contains}
 import test.{expectEach, expectEqual, expectFalse, expectOkThen, expectTrue}
 import lib.nsid.{validateNsid}
-import lib.cid.{cidForRaw}
-import lib.repo.{repoFromBlocks, repoInitFromKeyBytes, repoValidateCommit}
-import lib.sign.{secretKeyFromByteArray}
+import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
   Tid,
   tidClockId,
@@ -96,13 +94,19 @@ test "repository rejects invalid DID before signing" =
   expectTrue
     (errContains
       "invalid DID"
-      (repoInitFromKeyBytes "not-a-did" (arrayMake 32 1) (mustTid 1 0)))
+      (repoInitFromKeyBytes
+        "not-a-did"
+        (fromU8Array (arrayMake 32 1))
+        (mustTid 1 0)))
 
 test "repository rejects invalid signing key before commit construction" =
   expectTrue
     (errContains
       "bad signing key"
-      (repoInitFromKeyBytes "did:plc:medaka" (arrayMake 32 0) (mustTid 1 0)))
+      (repoInitFromKeyBytes
+        "did:plc:medaka"
+        (fromU8Array (arrayMake 32 0))
+        (mustTid 1 0)))
 
 test "shared generic NSID authority accepts uppercase while retaining lowercase form" = expectEach
   [
@@ -115,31 +119,3 @@ test "shared generic NSID authority accepts uppercase while retaining lowercase 
       expectFalse (isErr (validateNsid "com.atproto.test")),
     ),
   ]
-
--- `0xa0 + 256` masks to `0xa0`, the empty map, which decodes; a decoder that
--- masked would refuse this commit for a missing field instead.
-test "commit validation refuses an element outside the byte range" =
-  expectEqual
-    (Err
-      "repo: invalid commit CBOR: dagcbor: input element outside byte range 0..255")
-    (map
-      (_ => ())
-      (repoValidateCommit "did:plc:medaka" (cidForRaw
-        (fromU8Array [|1|])) (mustTid 1 0) [|
-        0xa0 + 256,
-      |]))
-
--- `[256, 1]` masks to `[0, 1]`, whose raw CID this is, so the persisted-block
--- check is the only thing that can refuse it.
-test "persisted blocks are refused for an element outside the byte range" =
-  let cid = cidForRaw (fromU8Array [|0, 1|])
-  let secret =
-    resultOrPanic
-      "repo_tid_test: setup failed"
-      (secretKeyFromByteArray (arrayMake 32 1))
-  expectEqual
-    (Err
-      "repo: invalid persisted blocks: blockstore: block element outside byte range 0..255")
-    (map
-      (_ => ())
-      (repoFromBlocks "did:plc:medaka" secret cid [(cid, [|256, 1|])]))

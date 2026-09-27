@@ -18,12 +18,12 @@
    The `prefs-*` routes are the same save/load claim for the preferences half
    (`shell.persist`'s `persistPreferences`/`persistLoadPreferences`), written
    into the same data directory as the repository and blob halves so the
-   signing-key sweep in `store_persistence.sh` covers it too. `credential-save`
-   is the write half of the same claim for the account's password credential
-   (`shell.persist`'s `persistCredential`); there is no `credential-load` route
-   because reading it back is `pds/shell/server.mdk`'s job, not this shell's —
-   this route exists only so case 12's syscall trace sees the credential
-   file's promote.
+   signing-key sweep in `store_persistence_test.mdk` covers it too.
+   `credential-save` is the write half of the same claim for the account's
+   password credential (`shell.persist`'s `persistCredential`); there is no
+   `credential-load` route because reading it back is `pds/shell/server.mdk`'s
+   job, not this shell's — this route exists only so the barrier test's
+   syscall trace sees the credential file's promote.
 
    The remaining routes are for HALF-WRITTEN directories. None of them races a
    process kill: each write path here promotes with `rename`, so the states a
@@ -50,7 +50,8 @@
    three stores list has a stated disposition for an entry no write path here
    can produce. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -68,6 +69,8 @@ import lib.event_log_record.{
 }
 import lib.repo.{
   Repo,
+  blockBytesChecked,
+  blockRowsChecked,
   repoCommitCid,
   repoCreate,
   repoExportBlocks,
@@ -130,9 +133,8 @@ secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 accountDid : String
 accountDid = "did:plc:persistencefixture000000"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "store_persistence: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "store_persistence: malformed hex" (decode text)
 
 mustSecret : SecretKey
 mustSecret =
@@ -161,7 +163,7 @@ write path text rev repo =
   mustRepo
     (map
       repoMutationState
-      (repoCreate (toUtf8 path) (post text) (mustTid rev) repo))
+      (repoCreate (encodeUtf8 path) (post text) (mustTid rev) repo))
 
 {- | The generation before the one `save` persists: two records at fixed
    revisions. It exists so the crash routes have a real EARLIER head to rewind
@@ -186,7 +188,7 @@ fixtureRepo : Repo
 fixtureRepo =
   write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" olderRepo
 
-mustCar : Repo -> Array Int
+mustCar : Repo -> Bytes
 mustCar repo =
   resultOrPanic "store_persistence: CAR export failed" (repoExportCar repo)
 
@@ -199,7 +201,7 @@ summary label repo =
   let records = match repoList repo
     Ok rows => length rows
     Err message => panic "store_persistence: listing failed: \{message}"
-  let roots = match carDecode (fromArrayAssumeByteDomain car)
+  let roots = match carDecode car
     Ok _ => "decodes"
     Err message =>
       panic "store_persistence: exported CAR does not decode: \{message}"
@@ -209,12 +211,17 @@ summary label repo =
   let () = println "\{label} records \{intToString records}"
   let () =
     println
-      "\{label} car \{intToString (arrayLength car)} \{encode (sha256 (optionOrPanic "sha256: every element must be a byte in 0..255" (fromArray car)))} \{roots}"
+      "\{label} car \{intToString (B.length car)} \{encode (sha256 car)} \{roots}"
   ()
 
+-- `persistSave` writes `Array Int` rows; `toArray` is total.
 blocksOf : Repo -> List (Cid, Array Int)
 blocksOf repo =
-  resultOrPanic "store_persistence: block export failed" (repoExportBlocks repo)
+  map
+    ((cid, bytes) => (cid, toArray bytes))
+    (resultOrPanic
+      "store_persistence: block export failed"
+      (repoExportBlocks repo))
 
 runSave : String -> <IO, FileRead, FileWrite> Unit
 runSave dir =
@@ -240,7 +247,10 @@ runCrashSaveOld dir =
 
 reload : String -> <FileRead> Result String Repo
 reload dir = do
-  (head, blocks) <- persistLoad dir
+  (head, rows) <- persistLoad dir
+  blocks <- mapErr
+    (message => "repo: invalid persisted blocks: \{message}")
+    (blockRowsChecked rows)
   repoFromBlocks accountDid mustSecret head blocks
 
 runLoad : String -> <IO, FileRead> Unit
@@ -411,7 +421,8 @@ runPrefsSave dir = match persistPreferences dir fixturePrefs
 -- ── the credential half ─────────────────────────────────────────────────────
 
 -- A fixed record, persisted into the same data directory as the repository
--- and preferences halves so case 12's syscall trace covers it too.
+-- and preferences halves so the barrier test's syscall trace covers it
+-- too.
 fixtureCredentialSalt : Bytes
 fixtureCredentialSalt =
   resultOrPanic
@@ -448,10 +459,11 @@ runPrefsLoad dir = match persistLoadPreferences dir
 {- | Two open sessions of two families and one refresh token the second family
    consumed, replayed once inside the grace window into its open session,
    persisted into the same data directory as every other half so
-   the signing-key sweep in `store_persistence.sh` covers this file too. The
-   fingerprints are fixed rather than derived from tokens: these routes grade
-   the file's round trip, not `lib.store`'s `sessionFingerprint`, and a row is
-   digests plus instants whatever produced it. -}
+   the signing-key sweep in `store_persistence_test.mdk` covers this file
+   too. The fingerprints are fixed rather than derived from tokens: these
+   routes grade the file's round trip, not `lib.store`'s
+   `sessionFingerprint`, and a row is digests plus instants whatever produced
+   it. -}
 fixtureSessions : List SessionRow
 fixtureSessions = [
   OpenSessionRow
@@ -476,8 +488,9 @@ fixtureSessions = [
         "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110")),
 ]
 
--- The access and refresh fingerprints of the row `store_persistence.sh` writes
--- into a legacy sessions file, and that row's expiry.
+-- The access and refresh fingerprints of the row
+-- `store_persistence_test.mdk` writes into a legacy sessions file, and that
+-- row's expiry.
 legacyAccessHex : String
 legacyAccessHex =
   "4f4e4d4c4b4a494847464544434241404f4e4d4c4b4a49484746454443424140"
@@ -636,7 +649,10 @@ frameFor (Some _) = "a1"
 putBlobs : List (Cid, String, Array Int) -> Store -> Store
 putBlobs [] store = store
 putBlobs ((cid, mimeType, bytes) :: rest) store =
-  match storePutBlob cid mimeType bytes store
+  let stored = do
+    checked <- blockBytesChecked bytes
+    storePutBlob cid mimeType checked store
+  match stored
     Err message => panic "store_persistence: blob fixture rejected: \{message}"
     Ok next => putBlobs rest next
 
@@ -650,8 +666,8 @@ putBlobs ((cid, mimeType, bytes) :: rest) store =
    commit may name blob bytes and never the reverse, so a crash between the
    halves must be able to leave an unreferenced blob and never a committed
    record naming bytes that are not there. This route exists so
-   `store_persistence.sh` can read the order out of one trace rather than infer
-   it from five.
+   `store_persistence_test.mdk` can read the order out of one trace rather
+   than infer it from five.
 
    The gate persists the earlier generation through `crash-save-old` BEFORE it
    starts tracing, so what the trace holds is this transition alone. -}
@@ -1087,9 +1103,9 @@ mimeSuffixText = ".mime"
    third being the one a name-only rule cannot tell from its own data.
 
    The route asserts nothing. Each case prints what all four readers answered
-   and, for a refusal, the message; `store_persistence.sh` decides which of
-   those is correct, so that the expected disposition lives beside the prose
-   that states the rule rather than inside the driver. -}
+   and, for a refusal, the message; `store_persistence_test.mdk` decides
+   which of those is correct, so that the expected disposition lives beside
+   the prose that states the rule rather than inside the driver. -}
 runStrayEntries : String -> <IO, FileRead, FileWrite> Unit
 runStrayEntries root =
   let () = strayCase root "none" (_ => Ok "nothing")

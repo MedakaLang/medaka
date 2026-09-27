@@ -28,7 +28,7 @@
    reference's CAR bytes, the second by handing it our own — so neither the
    block order nor any other field is graded against itself. -}
 
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{reverse, zip}
@@ -62,8 +62,8 @@ import lib.tid.{Tid, tidParse}
 
 data Op = Op {
   action : String,
-  path : Array Int,
-  recordBytes : Option (Array Int),
+  path : Bytes,
+  recordBytes : Option Bytes,
   recordCid : Option Cid,
   prevCid : Option Cid,
 }
@@ -96,9 +96,8 @@ data Grade = Grade {
   untouched : Int,
 }
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "commit_event: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "commit_event: malformed hex" (decode text)
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "commit_event: malformed CID" (cidFromString text)
@@ -106,12 +105,12 @@ mustCid text = resultOrPanic "commit_event: malformed CID" (cidFromString text)
 mustTid : String -> Tid
 mustTid text = resultOrPanic "commit_event: malformed TID" (tidParse text)
 
-mustBlocks : Result String (List (Cid, Array Int)) -> List (Cid, Array Int)
+mustBlocks : Result String (List (Cid, Bytes)) -> List (Cid, Bytes)
 mustBlocks (Ok blocks) = blocks
 mustBlocks (Err message) =
   panic "commit_event: block assembly failed: \{message}"
 
-mustCar : Result String (Array Int) -> Array Int
+mustCar : Result String Bytes -> Bytes
 mustCar (Ok bytes) = bytes
 mustCar (Err message) = panic "commit_event: CAR encoding failed: \{message}"
 
@@ -119,7 +118,7 @@ mustInt : String -> Int
 mustInt text =
   optionOrPanic "commit_event: malformed integer: \{text}" (toInt text)
 
-optionalHex : String -> Option (Array Int)
+optionalHex : String -> Option Bytes
 optionalHex "-" = None
 optionalHex text = Some (mustHex text)
 
@@ -133,7 +132,7 @@ sameOptionCid (Some left) (Some right) = cidEqual left right
 sameOptionCid _ _ = False
 
 -- The DID and the signing key the transcript was generated with.
-metaOf : List String -> (String, Array Int)
+metaOf : List String -> (String, Bytes)
 metaOf [] = panic "commit_event: corpus has no META row"
 metaOf (line :: rest) = match split "\t" line
   ["META", did, secretHex] => (did, mustHex secretHex)
@@ -246,7 +245,7 @@ writeOf : Op -> RepoWrite
 writeOf op = match (op.action, op.recordBytes)
   ("delete", _) => RepoWriteDelete op.path
   (_, None) => panic "commit_event: \{op.action} row carries no record bytes"
-  (action, Some bytes) => match dagCborDecode (fromArrayAssumeByteDomain bytes)
+  (action, Some bytes) => match dagCborDecode bytes
     Err message => panic "commit_event: undecodable record: \{message}"
     Ok record =>
       if action == "create" then
@@ -265,26 +264,26 @@ syncOpOf op observed = match (op.action, op.recordCid, observed)
   _ =>
     panic "commit_event: \{op.action} row is missing the CIDs its shape needs"
 
-addedRecordsOf : List Op -> List (Cid, Array Int)
+addedRecordsOf : List Op -> List (Cid, Bytes)
 addedRecordsOf [] = []
 addedRecordsOf (op :: rest) = match (op.recordCid, op.recordBytes)
   (Some cid, Some bytes) => (cid, bytes) :: addedRecordsOf rest
   _ => addedRecordsOf rest
 
-cidKeys : List (Cid, Array Int) -> List String
+cidKeys : List (Cid, a) -> List String
 cidKeys blocks = map ((cid, _) => cidToString cid) blocks
 
 {- | How many blocks this event ships that are MST nodes present in BOTH the
    pre-write and the post-write tree — nodes the write did not change. A
    `blocks` rule built from a tree diff alone scores zero here. -}
-untouchedNodes : List (Cid, Array Int) -> Mst -> Mst -> Int
+untouchedNodes : List (Cid, Bytes) -> Mst -> Mst -> Int
 untouchedNodes blocks before after =
   let beforeKeys = cidKeys (mstNodeBlocks before)
   let afterKeys = cidKeys (mstNodeBlocks after)
   length
     (filter (key => elem key beforeKeys && elem key afterKeys) (cidKeys blocks))
 
-sameBlockBytes : List (Cid, Array Int) -> List (Cid, Array Int) -> Bool
+sameBlockBytes : List (Cid, Bytes) -> List (Cid, Bytes) -> Bool
 sameBlockBytes expected actual =
   length expected == length actual
     && all
@@ -296,19 +295,15 @@ sameBlockBytes expected actual =
 
 {- | The reference-ordered CAR, decoded: its sole root and its whole block set
    are graded against ours, independently of the frame comparisons. -}
-gradeReferenceCar : Step -> List (Cid, Array Int) -> Bool
-gradeReferenceCar step blocks =
-  match carDecode (fromArrayAssumeByteDomain (mustHex step.carHex))
-    Err _ => False
-    Ok car => match carRoots car
-      [root] =>
-        cidEqual root step.commitCid
-          && sameBlockBytes
-            blocks
-            (map ((cid, bytes) => (cid, toArray bytes)) (carBlocks car))
-      _ => False
+gradeReferenceCar : Step -> List (Cid, Bytes) -> Bool
+gradeReferenceCar step blocks = match carDecode (mustHex step.carHex)
+  Err _ => False
+  Ok car => match carRoots car
+    [root] =>
+      cidEqual root step.commitCid && sameBlockBytes blocks (carBlocks car)
+    _ => False
 
-eventWith : String -> Step -> List SyncRepoOp -> Array Int -> SyncCommitEvent
+eventWith : String -> Step -> List SyncRepoOp -> Bytes -> SyncCommitEvent
 eventWith did step ops car = SyncCommitEvent {
   seq = step.seq,
   time = step.time,
@@ -324,7 +319,7 @@ eventWith did step ops car = SyncCommitEvent {
 frameHex : SyncCommitEvent -> String
 frameHex event = match syncCommitFrame event
   Err message => panic "commit_event: frame encoding failed: \{message}"
-  Ok bytes => encode (fromArrayAssumeByteDomain bytes)
+  Ok bytes => encode bytes
 
 -- Each op's previous record CID, read from the repository before the write.
 observedPrevs : List Op -> Repo -> List (Option Cid)

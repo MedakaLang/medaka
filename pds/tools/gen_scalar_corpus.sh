@@ -12,7 +12,7 @@
 #
 # What IS graded is the artifact it produces:
 # pds/test/scalar_vectors_test.mdk runs the corpus against pds/lib/scalar.mdk,
-# and pds/test/vector_provenance.sh
+# and pds/test/vector_provenance_test.mdk
 # checks the corpus's ledger row and re-hashes its bytes.
 #
 # Usage:

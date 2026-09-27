@@ -3,8 +3,8 @@
 
    Native-only: the driver's positional arguments are nine PAIRS (valid
    file, invalid file), and the pairing is by FILE NAME, not by whatever
-   order the ledger happens to return them in — `pds/test/vector_provenance.sh
-   --files-for P4-A-IDENTIFIER-SYNTAX` makes no ordering promise. The
+   order the ledger happens to return them in — a lookup by the
+   `P4-A-IDENTIFIER-SYNTAX` consumer id sorts by path and knows no pairs. The
    retired script picked each of the fourteen files by name via `grep -F`;
    here the same fourteen repo-relative paths are named outright as an
    `Explicit` corpus, in the order the driver expects them — a pairing no

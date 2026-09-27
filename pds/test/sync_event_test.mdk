@@ -21,32 +21,50 @@
    shape as a property of any input, including the absence of the `status`
    field an inactive account would carry.
 
-   The last is the genesis `#commit`'s own `blocks` CAR, which has to carry
-   the empty MST root node as well as the commit. -}
+   Then the genesis `#commit`'s own `blocks` CAR, which has to carry the empty
+   MST root node as well as the commit.
 
-import array.{sliceClamped}
-import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
+   The last group is the op list itself: a record rewritten to the CID it
+   already held is not an op, two MST keys that differ only in bytes that are
+   not UTF-8 are two different paths, and a path that is not UTF-8 has no
+   text-string encoding, so the frame that would have to carry one is
+   refused. -}
+
+import bytes as B
+import bytes.{
+  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, sliceClamped
+}
+import crypto.sha256.{sha256}
+import hex.{encode}
 import list.{lookup, range, sort}
-import string.{toUtf8}
 import test.{expectEqual}
 import lib.car.{carBlocks, carDecode, carRoots}
-import lib.cid.{Cid, cidForRaw, cidToString}
-import lib.dagcbor.{DagCbor(..), dagCborDecode}
-import lib.mst.{mstEmpty, mstRootCid}
-import lib.repo.{Repo, repoCommitCid, repoInitFromKeyBytes, repoLatestCommit}
+import lib.cid.{Cid, cidForDagCbor, cidForRaw, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.mst.{mstEmpty, mstFromEntries, mstNodeBlocks, mstRootCid}
+import lib.repo.{
+  Repo,
+  RepoMutation,
+  repoCommitCid,
+  repoCreate,
+  repoFromBlocks,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoMutationState,
+  repoUpdate,
+}
+import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
 import lib.sync_event.{
   SyncCommitEvent(..),
   SyncRepoOp(..),
   syncAccountFrame,
   syncCommitBody,
-  syncCommitCar,
-  syncCommitFrame,
   syncCommitEventFor,
+  syncCommitFrame,
   syncIdentityFrame,
-  syncSyncBody,
   syncSyncFrame,
 }
-import lib.tid.{Tid, tidEncode}
+import lib.tid.{Tid, tidEncode, tidToString}
 
 recordCid : Cid
 recordCid = cidForRaw (encodeUtf8 "record")
@@ -65,7 +83,9 @@ sampleRev = mustTid (tidEncode 1 1)
 -- pass by accident.
 opAt : Int -> SyncRepoOp
 opAt i =
-  SyncOpCreate (toUtf8 ("app.bsky.feed.post/rec-" ++ intToString i)) recordCid
+  SyncOpCreate
+    (encodeUtf8 ("app.bsky.feed.post/rec-" ++ intToString i))
+    recordCid
 
 -- A commit carrying `count` creates. `blocksCar` is empty because nothing
 -- here grades the CAR: the cap under test is on `ops` alone.
@@ -78,13 +98,17 @@ eventWithOps count = SyncCommitEvent {
   rev = sampleRev,
   since = None,
   prevData = None,
-  blocksCar = [||],
+  blocksCar = fromU8Array [||],
   ops = map opAt (range 0 count),
 }
 
 bodyField : String -> DagCbor -> Option DagCbor
 bodyField name (DcMap fields) = lookup name fields
 bodyField _ _ = None
+
+mustBody : Result String DagCbor -> DagCbor
+mustBody (Ok body) = body
+mustBody (Err message) = panic "sync_event: body refused: \{message}"
 
 -- `DagCbor` derives no `Eq`, so each assertion projects the one field it is
 -- about down to a primitive rather than comparing encoded values.
@@ -99,11 +123,11 @@ arrayLen _ = 0 - 1
 
 tooBigOf : Int -> Option Bool
 tooBigOf count =
-  asBool (bodyField "tooBig" (syncCommitBody (eventWithOps count)))
+  asBool (bodyField "tooBig" (mustBody (syncCommitBody (eventWithOps count))))
 
 opsLengthOf : Int -> Int
 opsLengthOf count =
-  arrayLen (bodyField "ops" (syncCommitBody (eventWithOps count)))
+  arrayLen (bodyField "ops" (mustBody (syncCommitBody (eventWithOps count))))
 
 test "an ordinary commit reports its ops and is not tooBig" =
   expectEqual (tooBigOf 3, opsLengthOf 3) (Some False, 3)
@@ -124,8 +148,8 @@ sampleDid = "did:plc:medakaexamplerepo"
 sampleHandle : String
 sampleHandle = "gate.medaka.example.invalid"
 
-commitBytes : Array Int
-commitBytes = toUtf8 "commit"
+commitBytes : Bytes
+commitBytes = encodeUtf8 "commit"
 
 -- The position in the stream every frame below is stamped with. The builders
 -- take it rather than invent it, so these are the caller's values and the
@@ -139,21 +163,20 @@ sampleTime = "2026-09-13T18:34:14.000Z"
 {- | A frame's two objects. `dagCborDecode` decodes exactly one canonical value
    and refuses trailing bytes, so the boundary between them is the shortest
    prefix that decodes and leaves a decodable remainder. -}
-frameParts : Result String (Array Int) -> (DagCbor, DagCbor)
+frameParts : Result String Bytes -> (DagCbor, DagCbor)
 frameParts (Err message) = panic "sync_event: frame refused: \{message}"
 frameParts (Ok bytes) = partsAt bytes 1
 
-decodePart : Array Int -> Int -> Int -> Result String DagCbor
-decodePart bytes lo hi =
-  dagCborDecode (fromArrayAssumeByteDomain (sliceClamped lo hi bytes))
+decodePart : Bytes -> Int -> Int -> Result String DagCbor
+decodePart bytes lo hi = dagCborDecode (sliceClamped lo hi bytes)
 
-partsAt : Array Int -> Int -> (DagCbor, DagCbor)
+partsAt : Bytes -> Int -> (DagCbor, DagCbor)
 partsAt bytes cut =
-  if cut > arrayLength bytes then
+  if cut > B.length bytes then
     panic "sync_event: frame carries no decodable header object"
   else match decodePart bytes 0 cut
     Err _ => partsAt bytes (cut + 1)
-    Ok header => match decodePart bytes cut (arrayLength bytes)
+    Ok header => match decodePart bytes cut (B.length bytes)
       Err _ => partsAt bytes (cut + 1)
       Ok body => (header, body)
 
@@ -227,7 +250,8 @@ mustEvent (Err message) = panic "sync_event: event refused: \{message}"
 -- A repository at its first commit: created, never written to.
 genesisRepo : Repo
 genesisRepo =
-  mustRepo (repoInitFromKeyBytes sampleDid (arrayMake 32 1) sampleRev)
+  mustRepo
+    (repoInitFromKeyBytes sampleDid (fromU8Array (arrayMake 32 1)) sampleRev)
 
 {- | The genesis event. `None` for the prior repository is what
    `pds/shell/server.mdk` hands `syncCommitEventFor` when it announces a new
@@ -248,36 +272,167 @@ genesisEvent =
    varied run to run would still be a defect. -}
 test "a genesis commit's CAR carries the empty MST root beside the commit" =
   let commit = cidToString (repoCommitCid (repoLatestCommit genesisRepo))
-  expectEqual (carCidsOf (fromArrayAssumeByteDomain genesisEvent.blocksCar)) (
+  expectEqual (carCidsOf genesisEvent.blocksCar) (
     [commit],
     sort [commit, cidToString (mstRootCid mstEmpty)],
   )
 
--- # Elements outside the byte range
+-- # The op list
 
--- `commitBytes` with 256 added to its first element. It masks back to
--- `commitBytes`, whose raw CID is `commitCid`, so an encoder that masked would
--- accept it.
-outOfRangeCommit : Array Int
-outOfRangeCommit = arrayMakeWith (arrayLength commitBytes) (i =>
-  if i == 0 then commitBytes[i] + 256 else commitBytes[i])
+-- An op as text, its path in hex so a key that is not UTF-8 still reads.
+opText : SyncRepoOp -> String
+opText (SyncOpCreate path cid) = "create \{encode path} \{cidToString cid}"
+opText (SyncOpUpdate path cid prev) =
+  "update \{encode path} \{cidToString cid} prev \{cidToString prev}"
+opText (SyncOpDelete path prev) =
+  "delete \{encode path} prev \{cidToString prev}"
 
-carRangeError : String
-carRangeError = "car: blockstore: block element outside byte range 0..255"
+must : Result String a -> a
+must (Ok value) = value
+must (Err message) = panic "sync_event: \{message}"
 
-test "a #commit CAR refuses a block element outside the byte range" =
+mustState : Result String RepoMutation -> Repo
+mustState result = repoMutationState (must result)
+
+opsBetween : Repo -> Repo -> List String
+opsBetween before after =
+  map
+    opText
+    (mustEvent
+      (syncCommitEventFor 2 sampleTime sampleDid (Some before) after)).ops
+
+sampleRecord : String -> DagCbor
+sampleRecord text =
+  DcMap [("$type", DcString "app.bsky.feed.post"), ("text", DcString text)]
+
+recordCidOf : String -> Cid
+recordCidOf text = cidForDagCbor (must (dagCborEncode (sampleRecord text)))
+
+samplePath : Bytes
+samplePath = encodeUtf8 "app.bsky.feed.post/one"
+
+{- | A record rewritten to the bytes it already held leaves the MST where it
+   was, so the commit that wrote it announces nothing: an update op here
+   would claim a mutation no reader of the tree can find. -}
+test "a record rewritten to its own CID announces no op" =
+  let created =
+    mustState
+      (repoCreate
+        samplePath
+        (sampleRecord "one")
+        (mustTid (tidEncode 2 1))
+        genesisRepo)
+  let rewritten =
+    mustState
+      (repoUpdate
+        samplePath
+        (sampleRecord "one")
+        (mustTid (tidEncode 3 1))
+        created)
+  expectEqual [] (opsBetween created rewritten)
+
+sampleSecret : SecretKey
+sampleSecret = must (secretKeyFromBytes (fromU8Array (arrayMake 32 1)))
+
+{- | A signed repository whose MST holds exactly `rows`, rebuilt through
+   `repoFromBlocks`. No write path admits a key that is not UTF-8, and a
+   rebuild does not re-validate keys, so this is the route such a key takes
+   into a `Repo`. -}
+rebuiltRepo : Int -> List (Bytes, String) -> Repo
+rebuiltRepo revN rows =
+  let records =
+    map ((path, text) => (path, must (dagCborEncode (sampleRecord text)))) rows
+  let tree =
+    must
+      (mstFromEntries
+        (map ((path, bytes) => (path, cidForDagCbor bytes)) records))
+  let rev = mustTid (tidEncode (10 + revN) 1)
+  let fields = [
+    ("did", DcString sampleDid),
+    ("version", DcInt 3),
+    ("data", DcLink (mstRootCid tree)),
+    ("rev", DcString (tidToString rev)),
+    ("prev", DcNull),
+  ]
+  let unsigned = must (dagCborEncode (DcMap fields))
+  let signature = must (signDigest sampleSecret (sha256 unsigned))
+  let signed =
+    must
+      (dagCborEncode
+        (DcMap (fields ++ [("sig", DcBytes (signatureCompact signature))])))
+  let commit = cidForDagCbor signed
+  let blocks =
+    (commit, signed)
+      :: mstNodeBlocks tree
+        ++ map ((_, bytes) => (cidForDagCbor bytes, bytes)) records
+  must (repoFromBlocks sampleDid sampleSecret commit blocks)
+
+-- `a.b.c/` followed by one byte that no UTF-8 sequence starts with. A lossy
+-- decode maps both to U+FFFD, so an index keyed on text sees one path.
+keyFF : Bytes
+keyFF = fromArrayAssumeByteDomain [|97, 46, 98, 46, 99, 47, 255|]
+
+keyFE : Bytes
+keyFE = fromArrayAssumeByteDomain [|97, 46, 98, 46, 99, 47, 254|]
+
+oneAtFF : Repo
+oneAtFF = rebuiltRepo 1 [(keyFF, "one")]
+
+-- Every case below announces at least one op whose path is `keyFE` or `keyFF`,
+-- so each event's op list is exact and each event's frame is refused: the ops
+-- come from the two trees, and only the frame has to spell a path as text.
+-- `keyFE` sorts first, so its op is the one the refusal names.
+frameOutcome : SyncCommitEvent -> Result String Unit
+frameOutcome event = map (_ => ()) (syncCommitFrame event)
+
+feRefusal : Result String Unit
+feRefusal = Err "sync_event: op path 612e622e632ffe (hex) is not valid UTF-8"
+
+opsAndFrame : Repo -> Repo -> (List String, Result String Unit)
+opsAndFrame before after =
+  let event =
+    mustEvent (syncCommitEventFor 2 sampleTime sampleDid (Some before) after)
+  (map opText event.ops, frameOutcome event)
+
+test "a record renamed between two non-UTF-8 keys is a create and a delete" =
+  let one = cidToString (recordCidOf "one")
+  let expected = [
+    "create 612e622e632ffe \{one}",
+    "delete 612e622e632fff prev \{one}",
+  ]
   expectEqual
-    (Err carRangeError)
-    (syncCommitCar commitCid [(commitCid, outOfRangeCommit)])
+    (expected, feRefusal)
+    (opsAndFrame oneAtFF (rebuiltRepo 3 [(keyFE, "one")]))
 
-test "a #sync body refuses a commit element outside the byte range" =
+test "a second non-UTF-8 key beside the first is announced as a create" =
+  let one = cidToString (recordCidOf "one")
+  let after = rebuiltRepo 4 [(keyFF, "one"), (keyFE, "one")]
   expectEqual
-    (Err carRangeError)
-    (map
-      (_ => ())
-      (syncSyncBody sampleDid sampleRev commitCid outOfRangeCommit))
+    (["create 612e622e632ffe \{one}"], feRefusal)
+    (opsAndFrame oneAtFF after)
 
-test "a #commit frame refuses a CAR element outside the byte range" =
+test "a different record under a different non-UTF-8 key is not an update" =
+  let one = cidToString (recordCidOf "one")
+  let two = cidToString (recordCidOf "two")
+  let expected = [
+    "create 612e622e632ffe \{two}",
+    "delete 612e622e632fff prev \{one}",
+  ]
   expectEqual
-    (Err "dagcbor: byte string element outside byte range 0..255")
-    (syncCommitFrame { eventWithOps 0 | blocksCar = [|256|] })
+    (expected, feRefusal)
+    (opsAndFrame oneAtFF (rebuiltRepo 2 [(keyFE, "two")]))
+
+-- The path `ops[0]` carries in an encoded `#commit` frame, re-encoded.
+framedOpPath : Result String Bytes -> Bytes
+framedOpPath frame = match bodyField "ops" (snd (frameParts frame))
+  Some (DcArray (op :: _)) => match bodyField "path" op
+    Some (DcString text) => encodeUtf8 text
+    _ => panic "sync_event: op carries no text path"
+  _ => panic "sync_event: #commit body carries no op"
+
+{- | A path outside ASCII but inside UTF-8 is a text string like any other,
+   and reaches the frame as exactly the bytes the MST holds. -}
+test "a non-ASCII UTF-8 path reaches the frame byte for byte" =
+  let path = encodeUtf8 "a.b.c/é🐟"
+  let event = { eventWithOps 0 | ops = [SyncOpCreate path recordCid] }
+  expectEqual path (framedOpPath (syncCommitFrame event))

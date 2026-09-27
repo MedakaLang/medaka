@@ -72,7 +72,7 @@
 | `pds/test/serve_e2e.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 44227 | 233 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/sha256_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 16052 | 115 | DONE: was `sha256_vectors.sh`, now one `vector_runner` row |
 | `pds/test/signing_parity.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | — | 96 | WRAP: spawns ./medaka + diffs, module does the same [node] |
-| `pds/test/store_persistence.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 7958 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/store_persistence_test.mdk` | PROJECT-SUITE | native | N | YES | — | 7958 | 102 | DONE: was `store_persistence.sh`, now 13 `test` blocks that spawn the built driver |
 | `pds/test/trust_boundary_guards.sh` | OTHER | interpreter (eval only, deliberately) | N | NO | NATIVE-KIND-RUNNER | 3052 | 125 | WRAP: spawns ./medaka + diffs, module does the same |
 | `sqlite/test/aggregate_oracle.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 4491 | 71 | WRAP: spawns ./medaka + diffs, module does the same [sqlite3] |
 | `sqlite/test/delete_negative_oracle.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 4891 | 113 | WRAP: spawns ./medaka + diffs, module does the same [sqlite3] |

@@ -14,7 +14,7 @@
    three routes are graded end to end against the corpus rather than against
    each other.
 
-   The corpus path is an argument, supplied by `pds/test/repo_vectors.sh` from
+   The corpus path is an argument, supplied by `pds/test/repo_vectors_test.mdk` from
    the provenance ledger's own `S-blob-core` row — this file never names the
    corpus location itself. -}
 
@@ -89,7 +89,7 @@ server =
 accessToken : String
 accessToken =
   mintToken
-    (fromArrayAssumeByteDomain testSecret)
+    testSecret
     accountDidText
     accountHostText
     "blob_handlers-fixture-token"
