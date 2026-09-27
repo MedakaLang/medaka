@@ -262,6 +262,7 @@ binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
+bodyExtraNumObls : Int -> Int -> List UObligation
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
@@ -2299,6 +2300,7 @@ recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
 recordLocalBind : String -> Option Loc -> Mono -> Unit
+recordLocalQuantified : Scheme -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodDictsFromSlots : List MethodPredicateSlot -> Ref (List Route) -> List (Int, Mono) -> Unit

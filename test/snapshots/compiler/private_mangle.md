@@ -1,5 +1,5 @@
 # META
-source_lines=1816
+source_lines=1820
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -1711,9 +1711,13 @@ renameInterp : OrdMap String -> OrdMap Unit -> InterpPart -> InterpPart
 renameInterp _ _ (InterpStr s) = InterpStr s
 renameInterp rm bound (InterpExpr e) = InterpExpr (renameScoped rm bound e)
 
+-- A local group's binder is not the module's definition of that name, whatever
+-- the rename map says: its uses in scope are left alone (`bound`), so renaming
+-- the binder would point every use at the module-level definition (#3519:
+-- `where result = 5` bound as the prelude's `core__result`).
 renameLetBind : OrdMap String -> OrdMap Unit -> LetBind -> LetBind
 renameLetBind rm bound (LetBind n clauses) =
-  LetBind (renameDefName rm n) (map (renameFunClause rm bound) clauses)
+  LetBind n (map (renameFunClause rm bound) clauses)
 
 renameFunClause : OrdMap String -> OrdMap Unit -> FunClause -> FunClause
 renameFunClause rm bound (FunClause ps body) =
@@ -2178,7 +2182,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameInterp" (PWild PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "renameInterp" ((PVar "rm") (PVar "bound") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "renameLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
-(DFunDef false "renameLetBind" ((PVar "rm") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "bound"))) (EVar "clauses"))))
+(DFunDef false "renameLetBind" ((PVar "rm") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "bound"))) (EVar "clauses"))))
 (DTypeSig false "renameFunClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
 (DFunDef false "renameFunClause" ((PVar "rm") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DTypeSig false "renameArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
@@ -2588,7 +2592,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameInterp" (PWild PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "renameInterp" ((PVar "rm") (PVar "bound") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "renameLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
-(DFunDef false "renameLetBind" ((PVar "rm") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "bound"))) (EVar "clauses"))))
+(DFunDef false "renameLetBind" ((PVar "rm") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "bound"))) (EVar "clauses"))))
 (DTypeSig false "renameFunClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
 (DFunDef false "renameFunClause" ((PVar "rm") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DTypeSig false "renameArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Arm") (TyCon "Arm")))))

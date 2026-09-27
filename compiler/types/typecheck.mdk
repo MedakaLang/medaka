@@ -10643,6 +10643,9 @@ resetGraphState _ =
   graphRun := freshGraphRun ()
   graphRun.value.evCounter := n
   graphRun.value.evCells := cells
+  -- The binder names survive; the quantified ids do not: they are type-variable
+  -- ids, and the fresh run restarts the counter that minted them.
+  localAbs.lasQuantified := omEmpty
   graphRun := GraphRun { graphRun.value | localAbs = localAbs }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
@@ -14920,6 +14923,9 @@ data LocalAbsState = LocalAbsState {
   lasRecOccs : Ref (OrdMap (List (EvId, ScopeId))),
   -- monotone for the whole graph, so a binder name is never minted twice
   lasCounter : Ref Int,
+  -- every type variable a generalized local's scheme quantifies: no longer a
+  -- monomorphic variable, so no later numeric boundary may ground it (#3516)
+  lasQuantified : Ref (OrdMap Unit),
 }
 
 freshLocalAbsState : Unit -> LocalAbsState
@@ -14927,6 +14933,7 @@ freshLocalAbsState _ = LocalAbsState {
   lasBinders = Ref omEmpty,
   lasRecOccs = Ref omEmpty,
   lasCounter = Ref 0,
+  lasQuantified = Ref omEmpty,
 }
 
 copyLocalAbsState : LocalAbsState -> LocalAbsState
@@ -14934,6 +14941,7 @@ copyLocalAbsState st = LocalAbsState {
   lasBinders = Ref st.lasBinders.value,
   lasRecOccs = Ref st.lasRecOccs.value,
   lasCounter = Ref st.lasCounter.value,
+  lasQuantified = Ref st.lasQuantified.value,
 }
 
 freshLocalAbsName : String -> String
@@ -15025,9 +15033,23 @@ closeLocalScope (Some _) = closeScope ()
 closeLocalScope None = ()
 
 registerLocalAbsIf : String -> Option ScopeId -> Scheme -> Int -> Int -> Unit
-registerLocalAbsIf name (Some lscope) sch oblN0 callN0 =
-  registerLocalAbs name lscope sch oblN0 callN0
-registerLocalAbsIf _ None _ _ _ = ()
+registerLocalAbsIf name lscope sch oblN0 callN0 =
+  let _ = recordLocalQuantified sch
+  match lscope
+    Some scope => registerLocalAbs name scope sch oblN0 callN0
+    None => ()
+
+-- A generalized local's quantified variables stay in the enclosing binding's
+-- obligation window, but they are the scheme's now: each use instantiates them
+-- afresh, and the enclosing boundary's defaulting must reach those instances,
+-- never the scheme's own variables.  Grounding one would fix the local at one
+-- type behind every use and select one dictionary for two predicates (#3516).
+recordLocalQuantified : Scheme -> Unit
+recordLocalQuantified sch = match schemeIds sch
+  [] => ()
+  ids =>
+    let st = graphRun.value.localAbs
+    st.lasQuantified := omFromNames (map intToString ids) st.lasQuantified.value
 
 -- After a candidate local generalized: the predicates its scheme quantifies become
 -- its dictionary parameters, registered as givens of its own scope so the sites in
@@ -23717,6 +23739,16 @@ numChannelRootSet obls channels =
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
+-- A method body's Num variables that reach it only through a constrained
+-- callee's instantiation (a where helper generalized as `Num r => a -> r`,
+-- used as `debug (two ())`): their Num obligation is on the call and
+-- dictionary-application windows, not the body's own, exactly as at a
+-- top-level group (#23).  The body-local boundary grounds them like any other
+-- body-local root.
+bodyExtraNumObls : Int -> Int -> List UObligation
+bodyExtraNumObls callN0 dictN0 =
+  numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
+
 defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
 defaultBodyLocalNumWith ownerPolicy protectedIds obls =
   let candidates = unprotectedNumCandidates protectedIds obls
@@ -23935,6 +23967,9 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- Num operand monos — refs alias post-unify, grounding any grounds all).
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundNumVarsWith _ _ [] = ()
+groundNumVarsWith ownerPolicy obls (id :: rest)
+  | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
+    groundNumVarsWith ownerPolicy obls rest
 groundNumVarsWith ownerPolicy obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
@@ -33552,6 +33587,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- obligations on both channels, exactly as inferImplMethod does.
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
+  let dictN0 = goalsMark ()
   let defLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = defaultSubject iface.irName mname
   -- Read rigidity from the SAME instantiation used for the body and force.
@@ -33622,7 +33658,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
       nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
       nbMembers = [descriptor.mtiBody],
       nbSurvivingIds = monoRootIdSet [descriptor.mtiBody],
-      nbDefaultObls = addedObls,
+      nbDefaultObls = addedObls ++ bodyExtraNumObls callN0 dictN0,
       nbAmbiguityObls = addedObls,
     }
   -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
@@ -35848,6 +35884,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
       -- THIS method and can never touch an already-generalized outer var.
       let oblN0 = wMark perRun.value.implObls
       let callN0 = wMark perRun.value.obls
+      let dictN0 = goalsMark ()
       -- build the method type's tv map explicitly (instead of expectedMethodType,
       -- which hides it) so the impl method's OWN method-level constraint vars
       -- (`Thenable m => …`) can be registered into activeDictVars below.
@@ -36045,7 +36082,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
           nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
           nbMembers = [expected],
           nbSurvivingIds = survivingNumIds,
-          nbDefaultObls = addedObls,
+          nbDefaultObls = addedObls ++ bodyExtraNumObls callN0 dictN0,
           nbAmbiguityObls = addedObls,
         }
       -- Eval-path method-dict threading (parity with inferDefaultMethod's

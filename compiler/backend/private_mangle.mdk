@@ -1707,9 +1707,13 @@ renameInterp : OrdMap String -> OrdMap Unit -> InterpPart -> InterpPart
 renameInterp _ _ (InterpStr s) = InterpStr s
 renameInterp rm bound (InterpExpr e) = InterpExpr (renameScoped rm bound e)
 
+-- A local group's binder is not the module's definition of that name, whatever
+-- the rename map says: its uses in scope are left alone (`bound`), so renaming
+-- the binder would point every use at the module-level definition (#3519:
+-- `where result = 5` bound as the prelude's `core__result`).
 renameLetBind : OrdMap String -> OrdMap Unit -> LetBind -> LetBind
 renameLetBind rm bound (LetBind n clauses) =
-  LetBind (renameDefName rm n) (map (renameFunClause rm bound) clauses)
+  LetBind n (map (renameFunClause rm bound) clauses)
 
 renameFunClause : OrdMap String -> OrdMap Unit -> FunClause -> FunClause
 renameFunClause rm bound (FunClause ps body) =

@@ -1,0 +1,17 @@
+-- #3519: a where-bound value named like a prelude top-level (`result`) is the
+-- local, not the prelude's: every engine prints the local's value.  Expected,
+-- derived from the source: `5`, then `6` (1 + 2 + 3).
+plain : Unit -> String
+plain _ = debug result
+  where
+    result = 5
+
+folded : Unit -> String
+folded _ = debug result
+  where
+    step acc x = acc + x
+    result = fold step 0 [1, 2, 3]
+
+main =
+  println (plain ())
+  println (folded ())
