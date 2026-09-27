@@ -110,7 +110,7 @@ The organising principle, and the reason P9 costs little:
    native-only,     │  socket shell — accept, read, write     │  Phase 3
    thin, ~400 loc   │  over #500's async net surface          │  COMPLETE
                     └──────────────────┬──────────────────────┘
-                     Array Int ⇄ Array Int │ Store (injected)
+                         Bytes ⇄ Bytes     │ Store (injected)
                     ┌──────────────────┴──────────────────────┐
                     │  handle : Server -> Store -> Request    │
                     │           -> (Store, Response)           │
