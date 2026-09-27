@@ -55,7 +55,7 @@ reach ops pol m st = match normalize m
     None =>
       let (h, args) = spineParts (TApp a b)
       openHead ops pol h (reachArgs ops pol (ops.headVariances h) 0 args st)
-  TCon n o => openHead ops pol (TCon n o) st
+  h@(TCon _ _) => openHead ops pol h st
   _ => st
 
 chargeRow : Variance ->
