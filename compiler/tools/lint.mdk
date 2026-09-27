@@ -120,7 +120,7 @@ import regex.{
   escape,
 }
 import ir.sexp.{exprSexp, patSexp}
-import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
+import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorSiblings}
 import frontend.lexer.{
   Comment,
   collectComments,
@@ -1783,13 +1783,10 @@ recPatFieldIrrefutable orc (RecPatField _ _ (Some p)) = patIrrefutable orc p
 -- constructor — so a `c …` pattern can never fail to match.  An unknown ctor
 -- (its type isn't visible in this file) is NOT provably single → False (SKIP).
 ctorIsSingle : Oracle -> String -> Bool
-ctorIsSingle orc c = match oGetCtorType orc c
-  -- Leaf L2 deleted L1's transitional bridge mint here: `oGetCtorType` now
-  -- answers the `TabKey` the type's own decl minted, so the round trip is
-  -- identity-to-identity and this key is passed straight through.
-  Some t => match oGetCtors orc t
-    Some ctors => listLen ctors == 1
-    None => False
+ctorIsSingle orc c = match oGetCtorSiblings orc c
+  -- the constructor's OWN declaration's set, not a round trip through its
+  -- type's spelling, which two same-named types share (#3465)
+  Some ctors => listLen ctors == 1
   None => False
 
 -- ── destructure-in-param autofixer ────────────────────────────────────────────
@@ -2581,19 +2578,8 @@ irrefutablePat _ PWild = True
 irrefutablePat orc (PTuple ps) = not (anyList (refutablePat orc) ps)
 irrefutablePat orc (PRec _ fields _) = not (anyList (refutableField orc) fields)
 irrefutablePat orc (PCon c subps) =
-  ctorIsSole orc c && not (anyList (refutablePat orc) subps)
+  ctorIsSingle orc c && not (anyList (refutablePat orc) subps)
 irrefutablePat _ _ = False
-
--- the constructor `c` is the unique constructor of its datatype (single-variant
--- `data`, or a record-as-data).  Both queries are pure syntactic oracle lookups.
-ctorIsSole : Oracle -> String -> Bool
-ctorIsSole orc c = match oGetCtorType orc c
-  -- Leaf L2 deleted L1's transitional bridge mint here — see `ctorIsSingle`
-  -- above; the round trip is now identity-to-identity.
-  Some tyKey => match oGetCtors orc tyKey
-    Some ctors => listLen ctors == 1
-    None => False
-  None => False
 
 refutablePat : Oracle -> Pat -> Bool
 refutablePat orc p = not (irrefutablePat orc p)

@@ -1,0 +1,24 @@
+-- #3465: a program's own `Option`/`Result` beside the prelude's.  Clause
+-- exhaustiveness runs before resolve, so a constructor's siblings must come
+-- from its own declaration: the prelude's `Some`/`None` clauses are complete,
+-- and each partial group names its own type's missing constructor.
+data Option = Nada | Algo Int
+
+data Result = Good | Bad Int
+
+getP (Some _) = 1
+getP None = 0
+
+resC (Ok n) = n
+resC (Err _) = 0
+
+mineC : Option -> Int
+mineC Nada = 0
+mineC (Algo n) = n
+
+partialP (Some _) = 1
+
+partialM : Option -> Int
+partialM (Algo n) = n
+
+main = println (intToString (getP (Some 1) + resC (Ok 3) + mineC (Algo 2)))

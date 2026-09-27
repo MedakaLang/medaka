@@ -1,5 +1,5 @@
 # META
-source_lines=2497
+source_lines=2483
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -581,28 +581,13 @@ tabHasName n ((k, _) :: rest) = tabKeyName k == n || tabHasName n rest
 --     leg is `1280/reject-absent-origin-bridge` in
 --     `test/diff_compiler_check_cli_modules.sh`.
 --
--- ⚠️ THIS PARAGRAPH USED TO ASSERT THE OPPOSITE, AND THE ARGUMENT WAS AN
--- ENUMERATION.  It read: population (b)'s type names are `primitiveTypes` plus
--- `{Option, Ordering, Result}` from `stdlib/core.mdk`, and `duplicateErrors`'
--- `typeSeed = primitiveTypes ++ whenL seed (dataRecordNames preludeDecls)` makes
--- every one of those UNDECLARABLE elsewhere — so no name has a SECOND present
--- identity to bridge to.  The enumeration of the NAMES was right.  What it missed
--- is that `seed` is not a constant: `seed = not (programIsCore prog)`, and
--- `programIsCore` (`frontend/resolve.mdk`) is a purely SYNTACTIC SELF-TEST —
--- `hasOrdering prog && hasFoldable prog`.  A module that declares `data Ordering`
--- AND `interface Foldable` therefore collapses its OWN `typeSeed` to
--- `primitiveTypes` alone and may declare its own `Option`.  The guard was read as
--- a property of the prelude when it is a property of the DECL SHAPES in front of
--- it, and any module can write those.
---
--- ⚠️ THE SEED FLIP ITSELF IS UNTOUCHED, and saying so is the point of keeping the
--- paragraph above.  #1279 named two independent fix territories; #1280 took the
--- SUPPLY one, so `programIsCore` is still a syntactic self-test and a module that
--- writes those two decl shapes still collapses its own `typeSeed` and may still
--- declare its own `Option`.  What that no longer buys it is a bridge through an
--- extern.  Nothing here measures whether some OTHER route to an identity-less
--- middle head exists — only the one repro was run, before and after.
--- (`compiler/tools/test_cmd.mdk` carries a second copy of the predicate.)
+-- A second present identity for one of population (b)'s names is ordinary: any
+-- module may declare its own `Option`, `Ordering` or `Result`, which shadows the
+-- prelude's type where it is declared or imported (#3465).  What keeps an
+-- identity-less middle head from bridging the two is the SUPPLY side (#1280): an
+-- extern no longer lends a head without an origin.  Only the one repro was run,
+-- before and after; nothing here measures whether another route to an
+-- identity-less middle head exists.
 --
 -- ⚠️ NOT A REGRESSION FROM A-2.10, either.  Pre-A-2.10 `unifyN`'s `TCon`/`TCon`
 -- arm was `a == b`, so both forms were accepted; that unit closed the direct one
@@ -1773,9 +1758,9 @@ public export data Decl =
     dataDerives : List DeriveRef,
     dataOrigin : TyConOrigin,
     dataExtern : Bool,
-    -- the span of the type's name, `None` for a declaration a tool synthesises
     dataNameLoc : Option Loc,
   }
+  -- the span of the type's name, `None` for a declaration a tool synthesises
   -- declared `extern data`: no constructors, values produced only by
   -- externs (an opaque FFI resource such as a socket)
   -- Each constructor's EXISTENTIAL binders (EFFECTS-SEMANTICS §4.1), written
@@ -2013,7 +1998,8 @@ dNewtypeUnresolved pub n params kinds con binders fty derives = DNewtype {
 -- The span of a type or interface declaration's name, set by the parser.
 export
 setDeclNameLoc : Loc -> Decl -> Decl
-setDeclNameLoc l (d@(DData { dataName = _ })) = DData { d | dataNameLoc = Some l }
+setDeclNameLoc l (d@(DData { dataName = _ })) =
+  DData { d | dataNameLoc = Some l }
 setDeclNameLoc l (d@(DNewtype { newtypeName = _ })) =
   DNewtype { d | newtypeNameLoc = Some l }
 setDeclNameLoc l (d@(DTypeAlias { tyAliasName = _ })) =

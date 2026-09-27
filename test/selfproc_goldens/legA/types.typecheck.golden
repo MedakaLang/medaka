@@ -2294,6 +2294,7 @@ recordNumlitLoc : Mono -> Unit
 recordNumlitRange : Mono -> Int -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
 recordOblAt : Predicate -> Int -> Provenance -> Option Loc -> ScopeId -> Unit
+recordOfOtherType : Mono -> RecordInfo -> Bool
 recordOwnerModule : RecordInfo -> Option String
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit

@@ -65,7 +65,6 @@ import support.util.{
   reverseL,
   joinNl,
   joinWith,
-  orElseOpt,
   reverseL,
   splitOnChar,
 }
@@ -159,6 +158,13 @@ public export data Oracle = Oracle {
   ctorArity : OrdMap Int,
   ctorType : OrdMap TabKey,
   ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
+  -- ctor → every constructor of its OWN declaration.  An untyped column's
+  -- constructor set comes from here, never from the type's spelling: before
+  -- resolve two same-named types (a program's `Option` beside the prelude's,
+  -- #3465) share one bare type key, and a round trip through it answers with
+  -- whichever declaration came first.  Constructor names are unique (a
+  -- prelude constructor cannot be reused, #3471), so the key is.
+  ctorSiblings : OrdMap (List String),
 }
 
 export
@@ -187,6 +193,10 @@ buildOracle prog = Oracle {
       (flatMap (d => dataCtorType d ++ newtypeCtorType d) prog
         ++ builtinCtorType),
   ctorFields = oracleMap (flatMap dataCtorFields prog),
+  ctorSiblings =
+    oracleMap
+      (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
+        ++ flatMap rowSiblings builtinTypeCtors),
 }
 
 -- PERF: plain association LISTS for the oracle's four tables make every
@@ -235,6 +245,19 @@ dataTypeCtors : Decl -> List (TabKey, List String)
 dataTypeCtors (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) =
   [(tabKeyOf NsType origin tyname, map variantName variants)]
 dataTypeCtors _ = []
+
+dataSiblings : Decl -> List (String, List String)
+dataSiblings (DData { dataCtors = variants }) =
+  let names = map variantName variants
+  map (n => (n, names)) names
+dataSiblings _ = []
+
+newtypeSiblings : Decl -> List (String, List String)
+newtypeSiblings (DNewtype { newtypeCtor = c }) = [(c, [c])]
+newtypeSiblings _ = []
+
+rowSiblings : (TabKey, List String) -> List (String, List String)
+rowSiblings (_, names) = map (n => (n, names)) names
 
 dataArity : Decl -> List (String, Int)
 dataArity (DData { dataCtors = variants }) = map variantArity variants
@@ -458,25 +481,28 @@ headCtors [] = []
 headCtors (((PCon c _) :: _) :: rest) = c :: headCtors rest
 headCtors (_ :: rest) = headCtors rest
 
--- Leaf L2 deleted L1's transitional `TkBare` mint here: `ctorType`'s VALUE now
--- carries the declaration identity, so the key `tryEachType` forwards is the
--- one the type's own `data` decl minted and the round trip is
--- identity-to-identity.
---
--- ⚠️ Still FIRST-WINS BY BARE CTOR NAME, and that is a separate defect: two
--- same-named constructors from different types resolve to whichever row the
--- table saw first, so the identity forwarded here may faithfully name the
--- WRONG type.  L2 makes the round trip identity-PRESERVING, not
--- identity-CORRECT; picking the right occurrence is occurrence-scope work
--- (`S-ctor-overlay-retire`).
-inferCol0Type : Oracle -> List (List Pat) -> Option TabKey
-inferCol0Type oracle pmat = tryEachType oracle (headCtors pmat)
+-- The constructor set of a column: the given type's, or, for an untyped
+-- column, the head constructors' own declaration's (`ctorSiblings`).  The
+-- untyped arm does not round-trip through the constructor's type key: before
+-- resolve that key is the bare spelling, which two same-named types share
+-- (#3465), and a round trip answered with whichever declaration came first
+-- (a false warning, or none at all against a constructor-less `extern data`).
+columnCtors : Oracle -> Option TabKey -> List (List Pat) -> Option (List String)
+columnCtors oracle (Some t) _ = oGetCtors oracle t
+columnCtors oracle None pmat = siblingsOfHeads oracle (headCtors pmat)
 
-tryEachType : Oracle -> List String -> Option TabKey
-tryEachType _ [] = None
-tryEachType oracle (c :: cs) = match oGetCtorType oracle c
-  Some t => Some t
-  None => tryEachType oracle cs
+-- Every constructor of [c]'s own declaration (a tuple is its own set).
+export
+oGetCtorSiblings : Oracle -> String -> Option (List String)
+oGetCtorSiblings oracle c
+  | (Some _) <- tupleArityOfName c = Some [c]
+  | otherwise = omLookup c oracle.ctorSiblings
+
+siblingsOfHeads : Oracle -> List String -> Option (List String)
+siblingsOfHeads _ [] = None
+siblingsOfHeads oracle (c :: cs) = match oGetCtorSiblings oracle c
+  Some names => Some names
+  None => siblingsOfHeads oracle cs
 
 -- ── usefulness (the Maranget recursion) ───────────────────────────────────
 export
@@ -500,12 +526,7 @@ usefulHead oracle col0 pmat _ restQ = usefulWild oracle col0 pmat restQ
 
 usefulWild : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 usefulWild oracle col0 pmat restQ =
-  let col0t = orElseOpt col0 (inferCol0Type oracle pmat)
-  usefulWildCtors oracle (bindCtors oracle col0t) pmat restQ
-
-bindCtors : Oracle -> Option TabKey -> Option (List String)
-bindCtors _ None = None
-bindCtors oracle (Some t) = oGetCtors oracle t
+  usefulWildCtors oracle (columnCtors oracle col0 pmat) pmat restQ
 
 usefulWildCtors : Oracle ->
   Option (List String) ->
@@ -655,8 +676,7 @@ usefulWitness : Oracle ->
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_ :: _) 0 = None
 usefulWitness oracle col0 pmat ncols =
-  let col0t = orElseOpt col0 (inferCol0Type oracle pmat)
-  witnessWild oracle (bindCtors oracle col0t) pmat ncols
+  witnessWild oracle (columnCtors oracle col0 pmat) pmat ncols
 
 -- An unknown/open column (no signature — e.g. an Int scrutinee matched by
 -- literals): recurse on the default matrix and prepend a bare wildcard head.
@@ -1069,8 +1089,9 @@ interpBinds (InterpExpr e) = collectLetBinds e
 -- constructors WIN the oracle's first-wins bare-name tables.  Two loaded modules
 -- can define a same-named ctor at different arities (`map`'s arity-5 `Bin` vs
 -- `set`'s arity-4 `Bin`); this pass runs pre-typecheck with no scrutinee type, so
--- it infers each column's type from the pattern's ctor name (`inferCol0Type` →
--- `oGetCtorType`) and reads its arity (`oGetArity`) — both first-wins.  Without
+-- it takes each column's constructor set from the pattern's ctor
+-- (`columnCtors` → `ctorSiblings`) and reads its arity (`oGetArity`) — both
+-- first-wins by constructor name.  Without
 -- this ordering a superset would resolve the target module's own `Bin` to the
 -- OTHER module's arity/type, producing a spurious W-NONEXHAUSTIVE-CLAUSES warning
 -- against a genuinely exhaustive group.  (`buildOracle` is duplicate-tolerant, so

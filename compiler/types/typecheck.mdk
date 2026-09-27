@@ -481,17 +481,17 @@ import types.disposition.{
 -- layer answers from `tyOriginScope`, a LAST-WINS fold in which the builtin layer
 -- has the LOWEST precedence (`frontend/resolve.mdk`) — so membership alone would
 -- not stop an own/prelude/import layer from overriding a name this mint still
--- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO the
--- duplicate-type seed: `duplicateErrors`'s `typeSeed = primitiveTypes ++ …`
--- (unconditionally, `programIsCore` gates only the prelude term), so NO module —
--- not even `stdlib/core.mdk` — can declare a TYPE of that name.  Measured:
--- `data List a = …`, `data Int = Foo`, `data Ref a = …` each give `Duplicate
--- type: <N>`.  The higher layers are therefore empty at these keys, which is
+-- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO
+-- refused as a type name: `duplicateErrors`'
+-- `reservedClashes "built-in type" primitiveTypes` (unconditionally, whatever
+-- `programIsCore` says), so NO module — not even `stdlib/core.mdk` — can
+-- declare a TYPE of that name.  `data List a = …`, `data Int = Foo`,
+-- `data Ref a = …` each give "'<N>' is a built-in type".  The higher layers are therefore empty at these keys, which is
 -- exactly what resolve's own comment means by *"the prelude beats builtins only
 -- vacuously (they are disjoint today)"*.
 --
 -- ⚠️ "A TYPE of that name" is the load-bearing narrowing, and it needs a SECOND
--- leg.  `primitiveTypes` seeds only `typeSeed`, not `ifaceSeed` — so an
+-- leg.  `primitiveTypes` is refused only as a TYPE name, not as an interface's — so an
 -- `interface Int a where …` is ACCEPTED (measured: exit 0, no diagnostic).  It
 -- cannot reach this key anyway, because interfaces are keyed `iface:<Name>`
 -- (`ifaceKey`/`ownIfaceOrigin`) while the builtin layer holds the BARE name, and
@@ -16271,7 +16271,22 @@ resolveFieldRecord te fname = match headTyconNameMono te
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
 lookupRecordForReceiver te r = match recordForReceiverIdent te r
   Some ri => Some ri
-  None => lookupRecordByName r
+  None => match lookupRecordByName r
+    Some ri => if recordOfOtherType te ri then None else Some ri
+    None => None
+
+-- The floor answers by the record's NAME, and a program's own type may share a
+-- prelude record's name (#3465: a program's `RField` beside the prelude's).  A
+-- receiver whose type carries an identity is never given a record of a
+-- different type; it falls to the field-owner path, which finds its own.  With
+-- no identity on either side (the flat path) the floor stands.
+recordOfOtherType : Mono -> RecordInfo -> Bool
+recordOfOtherType te (RecordInfo _ _ res _ _) = match (
+  receiverTypeIdent te,
+  receiverTypeIdent res,
+)
+  (Some (Ident _ wo wn), Some (Ident _ ro rn)) => not (wn == rn && wo == ro)
+  _ => False
 
 -- The identity half.  `universeRecordIdentsRef`'s outer key is the bare registry
 -- key — an INDEX into a candidate list, not the selector; the selector is the
@@ -21430,7 +21445,7 @@ checkMatchRedundant scrutTy arms =
 -- Reversing the rows is sound because `useful` is a PREDICATE OVER THE SET of
 -- matrix rows ("does some value match the query and no row?"): `specializeCon` /
 -- `specializeLit` / `defaultMatrix` are row-wise filters, and the only decision
--- that reads rows in order is `inferCol0Type`, which just needs SOME column-0
+-- that reads rows in order is `columnCtors`, which just needs SOME column-0
 -- constructor to name the column's type — and it is consulted only when `col0`
 -- is `None`, i.e. when the scrutinee type has no concrete head, in which case no
 -- arm carries a constructor pattern and there is no head constructor to find in
@@ -21558,7 +21573,7 @@ nonGuardedRows ((Arm _ _ _) :: rest) = nonGuardedRows rest
 -- ⚠️ ANSWER-PRESERVING CLASSIFICATION, and it is a REQUIRED property rather
 -- than a style choice.  `headTyconNameMono` is the gate — it decides `Some` vs
 -- `None` on exactly the `Mono` head nodes it decided them on before, so `TFun`
--- stays `None` (#1617, deliberate) and falls through to `inferCol0Type`, and a
+-- stays `None` (#1617, deliberate) and falls through to `columnCtors`, and a
 -- rigid head still produces a key that MISSES the table exactly as today's
 -- bare `Some n` missed it.  `headTyconMono` is consulted only to UPGRADE a key
 -- that is already going to be `Some`, never to change whether it is `Some`.

@@ -6392,8 +6392,8 @@ stampModulesGo coreTypes known ((mid, prog) :: rest) =
 -- ⚠️ The one shape that could break the subset property is a buffer that
 -- RE-DECLARES a prelude interface name: flat would say `core` where graph says the
 -- buffer's module.  It is unreachable in an accepted program — resolve rejects it
--- outright (`Duplicate interface: Eq`, verified on the binary this was written
--- against; the type layer is identical, `Duplicate type: Option`) — so the only way
+-- outright (a prelude interface's name is refused, located at the declaration)
+-- — so the only way
 -- to reach it is a program that is already being rejected on other grounds.  Stated
 -- rather than silently relied on, because it is that property, and not the
 -- diagnostic's wording, that the subset claim rests on.
