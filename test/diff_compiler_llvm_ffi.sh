@@ -58,10 +58,11 @@
 # exit 0.  Its read-only lines are the regression floor for the copy-back being
 # unconditional: it now also runs after every array call C never wrote to.
 #
-# CELLS 14 AND 15 are the fixed-width slice (N6, #3430, #3477): every
+# CELLS 14, 15 AND 16 are the fixed-width slice (N6, #3430, #3477): every
 # fixed-width type crossing as its C twin at its edge values, with the C side
 # printing what it received, and an `int64_t` into `Int` outside 63 bits
-# trapping rather than losing its top bit.
+# trapping rather than losing its top bit, as a result (15) and as a word C
+# wrote into an `Array Int` argument (16).
 #
 # CELL 13 is the INBOUND-STRING validity slice (#2175).  It crosses real C
 # pointers through `mdk_ffi_str_in`: canonical 1/2/3/4-byte UTF-8 and NULL stay
@@ -832,6 +833,37 @@ else
   else
     printf 'FAIL ffi_inbound_int_range  exit %d, output:\n' "$rc15"; fail=$((fail+1))
     cat "$W/int_range.out" "$W/int_range.err"
+  fi
+fi
+
+# ── cell 16: an Array Int copy-back word outside 63 bits TRAPS ──────────────
+# The array half of cell 15: C writing INT64_MAX into an `Array Int` argument
+# used to come back as -1 at exit 0.
+cat > "$W/ffi_array_range.mdk" <<'CELL16'
+extern ffiFillBig : Array Int -> Int -> <FFI> Unit
+
+main : <IO, FFI> Unit
+main =
+  let xs = [|1, 2, 3|]
+  let _ = ffiFillBig xs 3
+  println xs
+CELL16
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_array_range.mdk" \
+     -o "$W/array_range.bin" >"$W/build16.log" 2>&1; then
+  echo "FAIL: array copy-back range program did not build"; cat "$W/build16.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  "$W/array_range.bin" >"$W/array_range.out" 2>"$W/array_range.err"
+  rc16=$?
+  if [ "$rc16" -ne 0 ] && [ ! -s "$W/array_range.out" ] \
+    && grep -q "runtime error" "$W/array_range.err" \
+    && grep -q "outside Int's range" "$W/array_range.err" \
+    && grep -q "Array Int argument" "$W/array_range.err"; then
+    printf 'ok   ffi_array_int_range    INT64_MAX written into an Array Int trapped (exit %d)\n' "$rc16"
+  else
+    printf 'FAIL ffi_array_int_range    exit %d, output:\n' "$rc16"; fail=$((fail+1))
+    cat "$W/array_range.out" "$W/array_range.err"
   fi
 fi
 

@@ -1330,6 +1330,19 @@ void mdk_ffi_array_int_in(long long arr, const void *buf) {
   long long *a = (long long *)arr;
   const long long *b = (const long long *)buf;
   long long n = a[0];
+  /* A word outside Int's 63 bits would lose its top bit to the tag, a different
+   * number at exit 0; the whole copy-back is checked before any element is
+   * written, so a refused call leaves the array as it was.  The same rule as an
+   * `Int` result (FFI-ABI.md section 2.1a). */
+  for (long long i = 0; i < n; i++) {
+    if (b[i] < -4611686018427387904LL || b[i] > 4611686018427387903LL) {
+      static const char msg[] =
+        "foreign call wrote an int64_t outside Int's range "
+        "-4611686018427387904..4611686018427387903 into an Array Int argument "
+        "(compiler/FFI-ABI.md section 2.4)";
+      mdk_panic(mdk_str_lit(msg, (long long)(sizeof msg - 1)));
+    }
+  }
   for (long long i = 0; i < n; i++) a[i + 1] = (b[i] << 1) | 1;
 }
 

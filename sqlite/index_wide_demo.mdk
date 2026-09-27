@@ -1,0 +1,46 @@
+-- Index write over integers and REALs past 2^53, where comparing an integer
+-- with a REAL through a Float would tie two different values and put the index
+-- out of order.  Run:
+--
+--        ./index_wide_demo <out.db>
+--
+-- Writes a table `t`, rowid `id` and integer column `x`, with an index on `x`:
+--
+--   1  2^63        (a REAL, one past int64's largest)
+--   2  2^63 - 1    (an integer past Int: a CInt64)
+--   3  2^63 - 2
+--   4  2^53        (a REAL)
+--   5  2^53 + 1    (an integer a Float cannot hold)
+--   6  2^53        (an integer, equal to row 4's REAL)
+--
+-- Graded by Gate 9b of `sqlite/test/index_write_oracle.sh`.
+
+import lib.writer.{TableSchema, Column, ColType(..), writeTableWithIndexes}
+import lib.recordfmt.{Cell(..)}
+import i64
+
+wideSchema : TableSchema
+wideSchema = TableSchema {
+  schemaTableName = "t",
+  columns = [
+    Column { colName = "id", colType = TInteger, isPrimaryKey = True },
+    Column { colName = "x", colType = TInteger, isPrimaryKey = False },
+  ],
+}
+
+wideRows : List (List Cell)
+wideRows = [
+  [CInt 1, CFloat (intToFloat intMinBound * -2.0)],
+  [CInt 2, CInt64 9223372036854775807],
+  [CInt 3, CInt64 9223372036854775806],
+  [CInt 4, CFloat (intToFloat 9007199254740992)],
+  [CInt 5, CInt 9007199254740993],
+  [CInt 6, CInt 9007199254740992],
+]
+
+main : <IO> Unit
+main = match args ()
+  [out] => match writeTableWithIndexes out wideSchema wideRows [("tx", "x")]
+    Err e => println "Error: \{e}"
+    Ok _ => println "wrote \{out} (t=6, index tx)"
+  _ => println "usage: index_wide_demo <out.db>"

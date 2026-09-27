@@ -5618,7 +5618,7 @@ ffiCheckInt e fname r =
     emitLit
       e
       (LString
-        "foreign call '\{fname}' returned an int64_t outside Int's range -4611686018427387904..4611686018427387903 (compiler/FFI-ABI.md section 2.1); declare the result I64 to receive the full int64_t range")
+        "foreign call '\{fname}' returned an int64_t outside Int's range -4611686018427387904..4611686018427387903 (compiler/FFI-ABI.md section 2.1a); declare the result I64 to receive the full int64_t range")
   let _ = emit e "  call void @mdk_panic(i64 \{msg})"
   let _ = emit e "  unreachable"
   let _ = emit e (okL ++ ":")

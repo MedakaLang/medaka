@@ -323,7 +323,8 @@ its word; `-2147483648` folds to the constant. A wide literal is accepted at
 `I64` up to `2^63 - 1`, and `-` applied to one down to `-2^63`:
 `-9223372036854775808` is two tokens the parser reads as the negation of the
 wide literal 2^63, whose `I64` bit pattern negates, wrapping, to `minBound`. A
-literal pattern is typed by an `I32` scrutinee; on an `I64` it is refused as on a
+literal pattern is typed by an `I32` scrutinee (a negative literal arm does not
+parse for any integer type, `I32` included); on an `I64` it is refused as on a
 `U64`, and #3455 stays open for both.
 
 ### 5.1 `U64`'s asymmetry

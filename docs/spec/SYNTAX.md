@@ -113,8 +113,9 @@ and `abs minBound` are `minBound`), `/` and `%` truncate toward zero as C does
 and `shiftRight` is arithmetic. A literal is range-checked like the unsigned
 types'; an `I64` literal may be a wide one down to
 `-9223372036854775808`, which the parser reads as `-` applied to the wide
-literal 2^63. A literal **pattern** is typed by an `I32` scrutinee; it cannot
-match an `I64`. Every `Int` fits an `I64`, so `fromInt` at `I64` never panics,
+literal 2^63. A literal **pattern** is typed by an `I32` scrutinee (a negative
+literal arm does not parse for any integer type; use a guard); it cannot match
+an `I64`. Every `Int` fits an `I64`, so `fromInt` at `I64` never panics,
 and `I64.toInt` answers an `Option Int`.
 
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take

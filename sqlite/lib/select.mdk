@@ -1709,8 +1709,8 @@ evalArith op a b =
   else
     evalArithNum op (coerceNumericCell a) (coerceNumericCell b)
 
--- After coercion both operands are `CInt`/`CFloat`, so the numeric arms below
--- always fire (their `_ => CNull` fall-throughs are defensive dead code).
+-- After coercion both operands are `CInt`/`CInt64`/`CFloat`, so the numeric arms
+-- below always fire (their `_ => CNull` fall-throughs are defensive dead code).
 evalArithNum : ArithOp -> Cell -> Cell -> Cell
 evalArithNum AMod a b = evalMod a b
 evalArithNum ADiv a b = evalDiv a b
@@ -1896,13 +1896,22 @@ cellIntPart64 : Cell -> Option I64
 cellIntPart64 (CFloat f) = Some (W.widen (floatToInt f))
 cellIntPart64 c = cellI64 c
 
--- Truncate a numeric cell to its integer part (toward zero).  Non-numeric ⇒ None.
+-- A numeric cell's integer part (toward zero) as a `substr` position or length,
+-- held within +-2^40.  Every string is shorter than that, so the bound changes
+-- no answer, and it keeps `substr`'s own `Int` arithmetic from overflowing on a
+-- position anywhere in SQLite's 64-bit range.  Non-numeric => None.
 cellToIntPart : Cell -> Option Int
-cellToIntPart (CInt n) = Some n
-cellToIntPart (CFloat f) = Some (floatToInt f)
--- A position past `Int` is past the end of every string.
-cellToIntPart (CInt64 x) = Some (if x < 0 then intMinBound else intMaxBound)
+cellToIntPart (CInt n) = Some (clampInt n (0 - positionBound) positionBound)
+cellToIntPart (CFloat f)
+  | f >= intToFloat positionBound = Some positionBound
+  | f <= intToFloat (0 - positionBound) = Some (0 - positionBound)
+  | otherwise = Some (floatToInt f)
+cellToIntPart (CInt64 x) =
+  Some (if x < 0 then 0 - positionBound else positionBound)
 cellToIntPart _ = None
+
+positionBound : Int
+positionBound = 1099511627776
 
 -- ---------------------------------------------------------------------------
 -- Cell / comparison helpers (used by compilePred)
@@ -1954,8 +1963,8 @@ cmpOrder : Cell -> Cell -> Option Ordering
 cmpOrder a b = match (a, b)
   (CInt x, CInt y) => Some (compare x y)
   (CFloat x, CFloat y) => Some (compare x y)
-  (CFloat x, _) => map (y => compare x (W.toFloat y)) (cellI64 b)
-  (_, CFloat y) => map (x => compare (W.toFloat x) y) (cellI64 a)
+  (CFloat x, _) => map (y => W.compareRealInt x y) (cellI64 b)
+  (_, CFloat y) => map (x => W.compareFloat x y) (cellI64 a)
   (CText x, CText y) => Some (compare x y)
   (CBlob x, CBlob y) => Some (compare (arrayLength x) (arrayLength y))
   _ => match (cellI64 a, cellI64 b)
@@ -3334,10 +3343,10 @@ cellOrder CNull _ = Lt
 cellOrder _ CNull = Gt
 cellOrder (CInt x) (CInt y) = compare x y
 cellOrder (CFloat x) (CFloat y) = compare x y
-cellOrder (CInt x) (CFloat y) = compare (intToFloat x) y
-cellOrder (CFloat x) (CInt y) = compare x (intToFloat y)
-cellOrder (CInt64 x) (CFloat y) = compare (W.toFloat x) y
-cellOrder (CFloat x) (CInt64 y) = compare x (W.toFloat y)
+cellOrder (CInt x) (CFloat y) = W.compareFloat (W.widen x) y
+cellOrder (CFloat x) (CInt y) = W.compareRealInt x (W.widen y)
+cellOrder (CInt64 x) (CFloat y) = W.compareFloat x y
+cellOrder (CFloat x) (CInt64 y) = W.compareRealInt x y
 cellOrder (CText x) (CText y) = compare x y
 cellOrder (CBlob x) (CBlob y) = compare (arrayLength x) (arrayLength y)
 cellOrder a b = match (cellI64 a, cellI64 b)

@@ -171,3 +171,10 @@ int64_t ffiFwI64Min(void) { return INT64_MIN; }
 /* Cell 15 (#3477): an int64_t that an `Int` result cannot hold, and one it can. */
 int64_t ffiIntTooBig(void) { return INT64_MAX; }
 int64_t ffiIntLowest(void) { return -((int64_t)1 << 62); }
+
+/* Cell 16: a copy-back word an `Array Int` cannot hold.  Only element 1 is out of
+ * range; the call must stop the program rather than store any of them. */
+void ffiFillBig(long long *xs, long long n) {
+  for (long long i = 0; i < n; i++) xs[i] = 7;
+  if (n > 1) xs[1] = INT64_MAX;
+}

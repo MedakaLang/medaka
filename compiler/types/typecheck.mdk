@@ -38191,7 +38191,7 @@ ffiCheckExternPos n fb t
 
 ffiNonCrossableMsg : String -> Ty -> String
 ffiNonCrossableMsg n t =
-  "Type '\{ppTy t}' cannot cross the foreign-function boundary in extern '\{n}'. A foreign declaration may only mention Int, Float, Bool, Char, String, Unit, or Array Int (compiler/FFI-ABI.md section 1). Marshal '\{ppTy t}' into one of those on the Medaka side and declare the extern in terms of it"
+  "Type '\{ppTy t}' cannot cross the foreign-function boundary in extern '\{n}'. A foreign declaration may only mention Int, Float, Bool, Char, String, Unit, U8, U16, U32, U64, I32, I64, or Array Int (compiler/FFI-ABI.md section 1). Marshal '\{ppTy t}' into one of those on the Medaka side and declare the extern in terms of it"
 
 -- ── the DECLARED-ROW HONESTY rule (F1, epic #2070) ──────────────────────────
 --

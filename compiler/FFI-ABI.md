@@ -352,7 +352,10 @@ element would need its own crossing rule).
   boundary copies the buffer's `len` words back into the caller's live cell,
   re-tagging each (`(w << 1) | 1`, exactly inverting the outbound `>> 1`). The
   count comes from the LIVE cell, the same `len` the out-copy used — C is given
-  no length channel and so cannot have grown the buffer. Without this half, the
+  no length channel and so cannot have grown the buffer. Each word must fit
+  `Int`'s 63 bits, by §2.1a's rule for an `Int` result: one that does not stops
+  the program before any element is written back, where it used to lose its top
+  bit. Without this half, the
   outbound copy alone makes a C function that fills a caller-allocated array a
   silent no-op on the Medaka side.
 

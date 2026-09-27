@@ -97,6 +97,7 @@ decodeBool ((CInt n) :: []) =
     Ok True
   else
     Err "tBool: expected 0 or 1, got \{n}"
+decodeBool ((CInt64 x) :: []) = Err "tBool: expected 0 or 1, got \{x}"
 decodeBool (c :: []) = Err "tBool: expected integer column, got \{debug c}"
 decodeBool _ = Err "tBool: expected exactly 1 column"
 

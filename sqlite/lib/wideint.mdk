@@ -87,6 +87,57 @@ toFloat x =
   let lo = I64.bitAnd x 4294967295
   intToFloat (small hi) * 4294967296.0 + intToFloat (small lo)
 
+-- 2^63, the first `Float` past every `I64`, built from `intMinBound`: a
+-- `Float` literal this large does not survive `medaka fmt` (see `intIfExact` in
+-- `lib.schemadef`).
+twoTo63 : Float
+twoTo63 = 0.0 - intToFloat intMinBound * 2.0
+
+-- | An integer and a REAL in SQLite's order, exactly, as sqlite3 compares them.
+--   Converting the integer to a `Float` rounds past 2^53, so two different
+--   values would compare equal and equality would stop being transitive; the
+--   REAL is truncated to an integer instead, and only a tie consults the
+--   fraction.  A NaN keeps `Float`'s own order.
+--
+-- > compareFloat 9223372036854775807 (toFloat 9223372036854775807)
+-- Lt
+-- > compareFloat 9007199254740993 9007199254740992.0
+-- Gt
+-- > compareFloat (-5) (-4.5)
+-- Lt
+-- > compareFloat 3 3.0
+-- Eq
+export
+compareFloat : I64 -> Float -> Ordering
+compareFloat i r
+  | r /= r = compare (toFloat i) r
+  | r < 0.0 - twoTo63 = Gt
+  | r >= twoTo63 = Lt
+  | otherwise = match compare i (truncFloat r)
+    Eq => compare (toFloat i) r
+    o => o
+
+-- | `compareFloat` with the REAL first.
+export
+compareRealInt : Float -> I64 -> Ordering
+compareRealInt r i = match compareFloat i r
+  Lt => Gt
+  Gt => Lt
+  Eq => Eq
+
+-- The integer part of a `Float` in `-2^63 .. 2^63`, toward zero.  Past 2^62 a
+-- `Float` is a whole number, taken as its two 32-bit halves, since `floatToInt`
+-- stops at `Int`'s range.
+truncFloat : Float -> I64
+truncFloat r
+  | r <= 0.0 - twoTo63 = minBound
+  | r < 0.0 = 0 - truncFloat (0.0 - r)
+  | r < twoTo63 / 2.0 = widen (floatToInt r)
+  | otherwise =
+    let hi = floatToInt (r / 4294967296.0)
+    let lo = floatToInt (r - intToFloat hi * 4294967296.0)
+    widen hi * 4294967296 + widen lo
+
 -- A value already known to fit `Int` (a half above).
 small : I64 -> Int
 small x = match I64.toInt x

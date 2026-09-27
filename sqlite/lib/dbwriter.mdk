@@ -1016,10 +1016,12 @@ compareSameClass : Cell -> Cell -> Ordering
 compareSameClass CNull CNull = Eq
 compareSameClass (CInt x) (CInt y) = compare x y
 compareSameClass (CFloat x) (CFloat y) = compare x y
-compareSameClass (CInt x) (CFloat y) = compare (intToFloat x) y
-compareSameClass (CFloat x) (CInt y) = compare x (intToFloat y)
-compareSameClass (CInt64 x) (CFloat y) = compare (W.toFloat x) y
-compareSameClass (CFloat x) (CInt64 y) = compare x (W.toFloat y)
+-- An integer against a REAL is SQLite's exact comparison; through a `Float` two
+-- different values past 2^53 would tie, and the index would be out of order.
+compareSameClass (CInt x) (CFloat y) = W.compareFloat (W.widen x) y
+compareSameClass (CFloat x) (CInt y) = W.compareRealInt x (W.widen y)
+compareSameClass (CInt64 x) (CFloat y) = W.compareFloat x y
+compareSameClass (CFloat x) (CInt64 y) = W.compareRealInt x y
 compareSameClass (CText x) (CText y) = compareBytesLex (toUtf8 x) (toUtf8 y)
 compareSameClass (CBlob x) (CBlob y) = compareBytesLex x y
 compareSameClass a b = match (cellI64 a, cellI64 b)

@@ -144,6 +144,7 @@ rows = [
   distinctRow,
   typedRow,
   wideIntRow,
+  wideRealRow,
 ]
 
 -- `sqlite/test/oracle.sh`: schema + four whole tables, through the reader's
@@ -495,6 +496,50 @@ wideIntRow = OracleRow {
   ],
 }
 
+-- Integers against REALs at magnitudes a `Float` cannot tell apart (2^53 + 1,
+-- 2^63 - 1 against the REAL 2^63): SQLite compares them exactly, so equality,
+-- ordering and GROUP BY must not merge two different values.
+wideRealRow : OracleRow
+wideRealRow = OracleRow {
+  name = "wide_real",
+  entry = "sqlite/sql_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE x (v, name TEXT); INSERT INTO x VALUES (9223372036854775807, 'maxint'), (9223372036854775807.0, 'real2^63'), (9223372036854775806, 'max-1'), (4611686018427387903, 'intmax'), (4611686018427387904.0, 'real2^62'), (4611686018427387904, 'two62'), (9007199254740993, 'p53+1'), (9007199254740992.0, 'real2^53'), (-9223372036854775808, 'min'), (-9223372036854775808.0, 'realmin'), (3, 'three'), (3.5, 'threehalf');",
+  ],
+  pieces = [
+    PRun ["SELECT name FROM x WHERE v = 9223372036854775807 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v = 9223372036854775807.0 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v > 9223372036854775806 ORDER BY name"],
+    PRun [
+      "SELECT name FROM x WHERE v < 9007199254740993 AND v > 9000000000000000 ORDER BY name",
+    ],
+    PRun ["SELECT name FROM x WHERE v = 9007199254740992.0 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v = -9223372036854775808 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v <= 3.5 AND v >= 3 ORDER BY name"],
+    PRun ["SELECT count(*) FROM x GROUP BY v ORDER BY count(*), min(name)"],
+    PRun ["SELECT name FROM x ORDER BY v, name"],
+    PRun [
+      "SELECT name FROM x WHERE v IN (9223372036854775807.0, 3) ORDER BY name",
+    ],
+  ],
+  expect = [
+    Rows "SELECT name FROM x WHERE v = 9223372036854775807 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v = 9223372036854775807.0 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v > 9223372036854775806 ORDER BY name;",
+    Rows
+      "SELECT name FROM x WHERE v < 9007199254740993 AND v > 9000000000000000 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v = 9007199254740992.0 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v = -9223372036854775808 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v <= 3.5 AND v >= 3 ORDER BY name;",
+    Rows "SELECT count(*) FROM x GROUP BY v ORDER BY count(*), min(name);",
+    Rows "SELECT name FROM x ORDER BY v, name;",
+    Rows
+      "SELECT name FROM x WHERE v IN (9223372036854775807.0, 3) ORDER BY name;",
+  ],
+}
+
 -- `sqlite/test/typed_oracle.sh`: the typed-result (RowType) layer. Its
 -- expected lines are sqlite3's own rows put through the script's `typed_line`
 -- renderer, kept as `typedUserLine` — derived from the ENGINE's answer, not
@@ -582,6 +627,9 @@ test "typed: typed query output matches sqlite3" = oracleExpectation "typed"
 
 test "wide_int: 64-bit INTEGER output matches sqlite3" =
   oracleExpectation "wide_int"
+
+test "wide_real: integers against REALs past 2^53 match sqlite3" =
+  oracleExpectation "wide_real"
 
 -- # The multipage row's premise
 
