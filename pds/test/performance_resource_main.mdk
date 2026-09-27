@@ -72,9 +72,9 @@ mustBytes (Ok bytes) = toArray bytes
 mustBytes (Err message) =
   panic "performance_resource: encoding failed: \{message}"
 
--- Door: this driver is not itself retyped this slice (its own `Array Int`
--- moves in sprint C). `bytes` is checked into `Bytes` here, matching
--- `cidForDagCbor`/`cidForRaw`'s old callee behaviour.
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` and
+-- `cidForRaw` did.
 cidForDagCborDoor : Array Int -> Cid
 cidForDagCborDoor bytes =
   cidForDagCbor

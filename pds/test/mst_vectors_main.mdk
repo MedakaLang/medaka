@@ -180,9 +180,8 @@ entryValue key prefix value = entryValueWithTree key prefix value DcNull
 nodeBytes : DagCbor -> List DagCbor -> Array Int
 nodeBytes left entries = mustNode (DcMap [("l", left), ("e", DcArray entries)])
 
--- Door: this driver is not itself retyped this slice (its own `Array Int`
--- moves in sprint C). `bytes` is checked into `Bytes` here, matching
--- `cidForDagCbor`'s old callee behaviour.
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
 cidForDagCborDoor : Array Int -> Cid
 cidForDagCborDoor bytes =
   cidForDagCbor
