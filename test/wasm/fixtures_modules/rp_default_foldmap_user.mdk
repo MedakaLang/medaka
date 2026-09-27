@@ -2,8 +2,8 @@
 -- WITHOUT overriding `foldMap`.  Because the impl is NOT co-located with the
 -- `Foldable` DInterface (which lives in core.mdk), desugar's fillImplDefaults does
 -- NOT specialize `foldMap` into a concrete `$mdk_impl_Bag_foldMap`; the call uses
--- the DEFAULT fallback (emitDefaultRKeyRef -> emitDefaultDefineW), synthesizing
--- `$mdk_default_foldMap_Bag` from the interface default body.
+-- Bag's per-instance body of the interface default (an `InheritedDefault` row),
+-- emitted as an impl entry under `defaultFnNameW` (interface, method, instance).
 --
 -- `foldMap f = fold (acc x => acc ++ f x) empty` is point-free in the container AND
 -- carries a leading `Monoid m =>` dict, so the dict-pass gives its clause pats
