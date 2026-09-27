@@ -1,5 +1,5 @@
 # META
-source_lines=5155
+source_lines=5159
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -54,7 +54,8 @@ import frontend.ast.{
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
 import types.route_key.{
-  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes
+  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes, typeTagOf,
+  typeTagName
 }
 import support.util.{
   contains,
@@ -310,11 +311,14 @@ export
 buildCtorToType : List Decl -> List (String, String)
 buildCtorToType prog = flatMap ctorTypeEntries prog
 
+-- A constructor's type is recorded by its dispatch word (`typeTagOf`), the
+-- word its impls are filed under, so two modules' same-spelled types are two
+-- runtime types (#1397).
 ctorTypeEntries : Decl -> List (String, String)
-ctorTypeEntries (DData { dataName = tyname, dataCtors = variants }) =
-  map (v => (variantName v, tyname)) variants
-ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
-  [(con, tyname)]
+ctorTypeEntries (DData { dataName = tyname, dataCtors = variants, dataOrigin = o }) =
+  map (v => (variantName v, typeTagOf o tyname)) variants
+ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con, newtypeOrigin = o }) =
+  [(con, typeTagOf o tyname)]
 ctorTypeEntries (DAttrib _ d) = ctorTypeEntries d
 ctorTypeEntries _ = []
 
@@ -631,11 +635,11 @@ runtimeTypeTag (VByteBlock _) = Some "ByteBlock"
 runtimeTypeTag (VU64 _ _) = Some "U64"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
 runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
--- #1292: a record value's head tag is its CONSTRUCTOR name, so the collision
--- rename would spell it `<mid>__<Ctor>` and stop it matching an impl's bare target
--- type name.  Demangling restores the pre-rename tag exactly — record head tags are
--- the separate TYPE-name bareness residual of #1292, deliberately not changed here.
-runtimeTypeTag (VRecord name _) = Some (displayCtorName name)
+-- A record value's type is its constructor's, from the same table (#1397); a
+-- record the table does not hold keeps its constructor's display name (#1292).
+runtimeTypeTag (VRecord name _) = match lookupAssoc name !ctorToTypeRef
+  Some t => Some t
+  None => Some (displayCtorName name)
 runtimeTypeTag (VTypedImpl t _ _ _ _) = Some t
 runtimeTypeTag _ = None
 
@@ -734,7 +738,7 @@ tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 -- side; `TyTuple`'s tag is still mirrored rather than shared (`tupleHeadTag` vs
 -- `tupleHeadTagTc`) and is the one place that can still drift.
 headTycon : Ty -> Option String
-headTycon (TyCon { tyConName = n }) = Some n
+headTycon (TyCon { tyConName = n, tyConOrigin = o }) = Some (typeTagOf o n)
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
@@ -1307,7 +1311,7 @@ reportIfUndecidable tag cands
   | twoDistinctKeys cands [] =
     runtimePanic
       "E-AMBIGUOUS-DISPATCH"
-      "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+      "arg-tag dispatch on a receiver of type '\{typeTagName tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
@@ -5159,7 +5163,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -5234,8 +5238,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "buildCtorToType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "buildCtorToType" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "ctorTypeEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EVar "tyname")))) (EVar "variants")))
-(DFunDef false "ctorTypeEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "con") (EVar "tyname"))))
+(DFunDef false "ctorTypeEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "tyname"))))) (EVar "variants")))
+(DFunDef false "ctorTypeEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeOrigin" (PVar "o"))) false)) (EListLit (ETuple (EVar "con") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "tyname")))))
 (DFunDef false "ctorTypeEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ctorTypeEntries") (EVar "d")))
 (DFunDef false "ctorTypeEntries" (PWild) (EListLit))
 (DTypeSig true "ffiExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
@@ -5328,7 +5332,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "runtimeTypeTag" ((PCon "VU64" PWild PWild)) (EApp (EVar "Some") (ELit (LString "U64"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VTuple" (PVar "vs"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "vs")))))
 (DFunDef false "runtimeTypeTag" ((PCon "VCon" (PVar "cname") PWild)) (EApp (EApp (EVar "lookupAssoc") (EVar "cname")) (EUnOp "!" (EVar "ctorToTypeRef"))))
-(DFunDef false "runtimeTypeTag" ((PCon "VRecord" (PVar "name") PWild)) (EApp (EVar "Some") (EApp (EVar "displayCtorName") (EVar "name"))))
+(DFunDef false "runtimeTypeTag" ((PCon "VRecord" (PVar "name") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EUnOp "!" (EVar "ctorToTypeRef"))) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "displayCtorName") (EVar "name"))))))
 (DFunDef false "runtimeTypeTag" ((PCon "VTypedImpl" (PVar "t") PWild PWild PWild PWild)) (EApp (EVar "Some") (EVar "t")))
 (DFunDef false "runtimeTypeTag" (PWild) (EVar "None"))
 (DTypeSig false "countTyvars" (TyFun (TyCon "Ty") (TyCon "Int")))
@@ -5351,7 +5355,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "tupleHeadTag" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleHeadTag" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tuple")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "__"))))
 (DTypeSig false "headTycon" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "headTycon" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "headTycon" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))))
 (DFunDef false "headTycon" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTycon") (EVar "a")))
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
@@ -5602,7 +5606,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
 (DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
 (DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
-(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
 (DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6800,7 +6804,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -6875,8 +6879,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "buildCtorToType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "buildCtorToType" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "ctorTypeEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EVar "tyname")))) (EVar "variants")))
-(DFunDef false "ctorTypeEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "con") (EVar "tyname"))))
+(DFunDef false "ctorTypeEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "tyname"))))) (EVar "variants")))
+(DFunDef false "ctorTypeEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeOrigin" (PVar "o"))) false)) (EListLit (ETuple (EVar "con") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "tyname")))))
 (DFunDef false "ctorTypeEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ctorTypeEntries") (EVar "d")))
 (DFunDef false "ctorTypeEntries" (PWild) (EListLit))
 (DTypeSig true "ffiExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
@@ -6969,7 +6973,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "runtimeTypeTag" ((PCon "VU64" PWild PWild)) (EApp (EVar "Some") (ELit (LString "U64"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VTuple" (PVar "vs"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "vs")))))
 (DFunDef false "runtimeTypeTag" ((PCon "VCon" (PVar "cname") PWild)) (EApp (EApp (EVar "lookupAssoc") (EVar "cname")) (EUnOp "!" (EVar "ctorToTypeRef"))))
-(DFunDef false "runtimeTypeTag" ((PCon "VRecord" (PVar "name") PWild)) (EApp (EVar "Some") (EApp (EVar "displayCtorName") (EVar "name"))))
+(DFunDef false "runtimeTypeTag" ((PCon "VRecord" (PVar "name") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EUnOp "!" (EVar "ctorToTypeRef"))) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "displayCtorName") (EVar "name"))))))
 (DFunDef false "runtimeTypeTag" ((PCon "VTypedImpl" (PVar "t") PWild PWild PWild PWild)) (EApp (EVar "Some") (EVar "t")))
 (DFunDef false "runtimeTypeTag" (PWild) (EVar "None"))
 (DTypeSig false "countTyvars" (TyFun (TyCon "Ty") (TyCon "Int")))
@@ -6992,7 +6996,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "tupleHeadTag" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleHeadTag" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tuple")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "__"))))
 (DTypeSig false "headTycon" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "headTycon" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "headTycon" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EVar "Some") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))))
 (DFunDef false "headTycon" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTycon") (EVar "a")))
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
@@ -7243,7 +7247,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
 (DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
 (DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
-(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
 (DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

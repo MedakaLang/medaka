@@ -1,2 +1,0 @@
-export interface Label a where
-  label : a -> String

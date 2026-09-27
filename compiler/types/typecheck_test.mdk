@@ -262,7 +262,7 @@ test "numeric return keeps the Num predicate through production checking and sta
         (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
         trace),
     expectEqual
-      [("Num", "core::Num|N|[]", [])]
+      [("Num", "core::Num|numeric_predicate.N|[]", [])]
       (map
         (view => (view.ntvSelected, view.ntvRoute, view.ntvPrerequisites))
         (filter (view => view.ntvStage == NPTReturn) trace)),
@@ -273,7 +273,7 @@ test "numeric return without a method collision preserves the short route ABI" =
   expectAll [
     expectEqual [] errors,
     expectEqual
-      ["N[]"]
+      ["numeric_predicate.N[]"]
       (map
         (view => view.ntvRoute)
         (filter (view => view.ntvStage == NPTReturn) trace)),
@@ -423,7 +423,7 @@ test "numeric predicates survive module and import order permutations" =
       [NPTProduced, NPTChecked, NPTReturn]
       (numericStages (snd forward)),
     expectEqual
-      [("core::Num", "Num", "core::Num|N|[]")]
+      [("core::Num", "Num", "core::Num|numeric_shape.N|[]")]
       (map
         (view => (view.ntvInterface, view.ntvSelected, view.ntvRoute))
         (filter (view => view.ntvStage == NPTReturn) (snd forward))),
@@ -857,17 +857,35 @@ test "arithmetic collision imports select the exact Num row and prerequisites" =
           "binding:remValue",
           "core::Num",
           "core::Num",
-          "core::Num|(Box a)|[]",
+          "core::Num|(arithmetic_shape.Box a)|[]",
           ["Int[]"],
         ),
-        ("binding:divValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
-        ("binding:mulValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
-        ("binding:subValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        (
+          "binding:divValue",
+          "core::Num",
+          "core::Num",
+          "arithmetic_shape.Box[]",
+          ["Int[]"],
+        ),
+        (
+          "binding:mulValue",
+          "core::Num",
+          "core::Num",
+          "arithmetic_shape.Box[]",
+          ["Int[]"],
+        ),
+        (
+          "binding:subValue",
+          "core::Num",
+          "core::Num",
+          "arithmetic_shape.Box[]",
+          ["Int[]"],
+        ),
         (
           "binding:addValue",
           "core::Num",
           "core::Num",
-          "core::Num|(Box a)|[]",
+          "core::Num|(arithmetic_shape.Box a)|[]",
           ["Int[]"],
         ),
       ]

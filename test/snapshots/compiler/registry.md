@@ -172,6 +172,7 @@ import support.ordmap.{
   omSize,
 }
 import support.util.{lenKey, listLen, joinWith, filterList}
+import types.route_key.{typeTagOf}
 import map.{entries}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
@@ -830,26 +831,25 @@ headKeyOfCon origin name = HkDecl (tabKeyOf NsType origin name)
 -- The bare name inside a head key, whatever its inhabitant.  Allocation-free:
 -- it returns a `String` that already exists.
 --
--- 🚨 THIS IS THE STAGE A-2 LEDGER, AND IT IS A COMMAND RATHER THAN A NUMBER —
--- a count written here would carry no derivation and no expiry.  Every line
--- the recipe prints is a dispatch key STILL keyed by a bare name, and a later
--- unit's progress is a line LEAVING that set:
---
---   grep -nwE 'headKeyName|headKeyNameOr' compiler/types/typecheck.mdk \
---     | grep -vE '^[0-9]+:[[:space:]]*(--|import )' \
---     | grep -vE '^[0-9]+:headKeyNameOr'
---
--- ⚠️ Every filter is load-bearing, and a bare `grep -n headKeyName` answers a
--- DIFFERENT question: it also matches the substring inside `headKeyNameOr`,
--- the `import types.registry.{…}` line, and every comment that names either.
--- The last filter drops `headKeyNameOr`'s OWN signature and clauses
--- (`types/typecheck.mdk`, column 0) — that wrapper is the SPELLING of the
--- residual, not an instance of it.  Pipe to `wc -l` for the size; do not copy
--- the size back into this comment.
+-- A NAME question only: no dispatch key may read it, because two modules'
+-- same-named types share a name (#1397).  Dispatch keys read `headKeyTag`
+-- below, and `grep -nw headKeyName compiler/types/typecheck.mdk` prints
+-- nothing.
 export
 headKeyName : HeadKey -> String
 headKeyName (HkDecl k) = tabKeyName k
 headKeyName (HkRigid name) = name
+
+-- The dispatch word of a head key (`typeTagOf`): the tag every engine files
+-- an impl under and reads a value's type as, qualified by the declaring
+-- module for a type the prelude does not declare (#1397).  `headKeyName` stays
+-- the answer to a NAME question; a dispatch key is this.
+export
+headKeyTag : HeadKey -> String
+headKeyTag (HkDecl (TkIdent (Ident _ origin name))) =
+  identOriginFold name (m => typeTagOf (OriginModule m) name) origin
+headKeyTag (HkDecl k) = tabKeyName k
+headKeyTag (HkRigid name) = name
 
 -- ── Keying a table BY a projected head — Stage A-2 unit A-2.2b (#1111) ────
 -- A-2.2 widened the two head PROJECTIONS to carry identity and stopped there:
@@ -857,7 +857,7 @@ headKeyName (HkRigid name) = name
 -- moved. This is the layer that lets a table be keyed by the projection.
 --
 -- 🚨 A HEAD POSITION CARRIES ONE OF **THREE** FACTS, AND A KEY MUST KEEP ALL
--- THREE APART. `headKeyNameOr <dflt>` (`types/typecheck.mdk`) collapses them to
+-- THREE APART. `headKeyTagOr <dflt>` (`types/typecheck.mdk`) collapses them to
 -- two — a name, or the placeholder — which is exactly what this replaces:
 --
 --   ABSENT      `None` — the type has NO head type constructor (a bare tyvar;
@@ -1614,6 +1614,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
 (DUse false (UseGroup ("map") ((mem "entries" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "type")))
@@ -1766,6 +1767,10 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "headKeyName" (TyFun (TyCon "HeadKey") (TyCon "String")))
 (DFunDef false "headKeyName" ((PCon "HkDecl" (PVar "k"))) (EApp (EVar "tabKeyName") (EVar "k")))
 (DFunDef false "headKeyName" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
+(DTypeSig true "headKeyTag" (TyFun (TyCon "HeadKey") (TyCon "String")))
+(DFunDef false "headKeyTag" ((PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "origin") (PVar "name"))))) (EApp (EApp (EApp (EVar "identOriginFold") (EVar "name")) (ELam ((PVar "m")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "m"))) (EVar "name")))) (EVar "origin")))
+(DFunDef false "headKeyTag" ((PCon "HkDecl" (PVar "k"))) (EApp (EVar "tabKeyName") (EVar "k")))
+(DFunDef false "headKeyTag" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
 (DTypeSig true "headKeyDecl" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "headKeyDecl" ((PCon "HkDecl" (PVar "key"))) (EApp (EVar "Some") (EVar "key")))
 (DFunDef false "headKeyDecl" ((PCon "HkRigid" PWild)) (EVar "None"))
@@ -1870,6 +1875,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false))))
 (DUse false (UseGroup ("map") ((mem "entries" false))))
 (DTypeSig false "nsTag" (TyFun (TyCon "Ns") (TyCon "String")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "type")))
@@ -2022,6 +2028,10 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "headKeyName" (TyFun (TyCon "HeadKey") (TyCon "String")))
 (DFunDef false "headKeyName" ((PCon "HkDecl" (PVar "k"))) (EApp (EVar "tabKeyName") (EVar "k")))
 (DFunDef false "headKeyName" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
+(DTypeSig true "headKeyTag" (TyFun (TyCon "HeadKey") (TyCon "String")))
+(DFunDef false "headKeyTag" ((PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "origin") (PVar "name"))))) (EApp (EApp (EApp (EVar "identOriginFold") (EVar "name")) (ELam ((PVar "m")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "m"))) (EVar "name")))) (EVar "origin")))
+(DFunDef false "headKeyTag" ((PCon "HkDecl" (PVar "k"))) (EApp (EVar "tabKeyName") (EVar "k")))
+(DFunDef false "headKeyTag" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
 (DTypeSig true "headKeyDecl" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "headKeyDecl" ((PCon "HkDecl" (PVar "key"))) (EApp (EVar "Some") (EVar "key")))
 (DFunDef false "headKeyDecl" ((PCon "HkRigid" PWild)) (EVar "None"))

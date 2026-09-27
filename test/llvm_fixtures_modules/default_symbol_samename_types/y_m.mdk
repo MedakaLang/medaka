@@ -1,0 +1,5 @@
+import iface.{I}
+
+public export data T = TY
+
+impl I T

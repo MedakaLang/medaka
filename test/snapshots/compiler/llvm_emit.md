@@ -1,5 +1,5 @@
 # META
-source_lines=16881
+source_lines=16887
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1785,11 +1785,11 @@ defaultIfaceIdOf _ = ""
 -- full-type key (`Speak|(Box String)|`), whose `|`/`(`/space are not legal in an
 -- LLVM identifier — clang rejects the define outright.  `injectiveIdent`
 -- (`backend.private_mangle`, the ONE shared encoding since #1950) is the identity
--- on every bare head tag (type heads are `[A-Za-z0-9_]`, tuples are `__tupleN__`),
--- so every existing symbol is byte-identical; it only ever fires on the C7 /
--- #1036 collision path, which previously emitted a LEGAL but LOSSY name — the
--- pre-#1950 sanitize collapsed distinct keys onto one identifier, silently
--- merging two defines rather than producing anything clang would reject.
+-- on a prelude or builtin head tag (`[A-Za-z0-9_]`, tuples are `__tupleN__`), so
+-- those symbols read as the type's name; it escapes a module-qualified head tag
+-- (`m.T`, #1397) and a C7 / #1036 collision key.  The pre-#1950 sanitize
+-- collapsed distinct keys onto one identifier, silently merging two defines
+-- rather than producing anything clang would reject.
 defaultFnName : String -> String -> String
 defaultFnName tag method = "mdk_default_\{method}_\{injectiveIdent tag}"
 
@@ -1797,10 +1797,11 @@ defaultFnNameAt : String -> String -> Int -> String
 defaultFnNameAt tag method siteArity =
   "\{defaultFnName tag method}_a\{intToString siteArity}"
 
--- the lifted LLVM name of a tagged impl method: `mdk_impl_<tag>_<method>`.  Type
--- heads and method names are alphanumeric identifiers (an operator like `+` is a
--- `CBinPrim`, never a method name here), so the concatenation is always a legal
--- LLVM symbol — clang would reject it loudly otherwise, which the gate catches.
+-- the lifted LLVM name of a tagged impl method: `mdk_impl_<symTag>_<method>`.
+-- [symTag] is already a legal identifier (`implFnSymTag` spells it through
+-- `injectiveIdent`), and method names are alphanumeric identifiers (an operator
+-- like `+` is a `CBinPrim`, never a method name here), so the concatenation is a
+-- legal LLVM symbol — clang would reject it loudly otherwise, which the gate catches.
 implFnName : String -> String -> String
 implFnName tag method = "mdk_impl_\{tag}_\{method}"
 
@@ -1808,8 +1809,10 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- emitted/dispatched under.  Two impls of one method that share a head tycon but
 -- differ in type args (`Def (MyPair Int Bool)` vs `Def (MyPair Bool Int)`) must NOT
 -- collide on `mdk_impl_<head>_<method>` — they need distinct bodies.  When the head
--- `tag` is the SOLE impl of `(method, head)` (the common case) → the bare head tag,
--- so every existing impl's symbol stays byte-identical (fixpoint-safe).  On a
+-- `tag` is the SOLE impl of `(method, head)` (the common case) → the head tag
+-- through `injectiveIdent`: a prelude or builtin head is an identifier and maps to
+-- itself, a module-qualified head (`app.T`, `route_key.typeTagOf`) is escaped, so
+-- two modules' same-named types never share a symbol (#1397).  On a
 -- collision → the INJECTIVELY encoded canonical full-type `key`, byte-distinct per
 -- impl.  #1950: this used to be a lossy `[^A-Za-z0-9_] → _` collapse, under which
 -- two keys differing ONLY in those positions landed on one symbol.
@@ -1819,7 +1822,10 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- so emitMethod's `implFnSymE` and emitGroup's name agree.
 implFnSymTag : List CImplEntry -> String -> String -> String -> String
 implFnSymTag entries method tag key =
-  if headTagUnique entries method tag then tag else injectiveIdent key
+  if headTagUnique entries method tag then
+    injectiveIdent tag
+  else
+    injectiveIdent key
 
 -- The exact impl symbols exported by a standalone prelude object.  A later
 -- program can add a same-(method, head) impl, changing the whole-program C7
@@ -17146,7 +17152,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DTypeSig false "implFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "implFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "implFnSymTag" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
+(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig true "preludeImplSymbols" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "preludeImplSymbols" ((PVar "entries")) (EBlock (DoLet false false (PVar "collisions") (EApp (EApp (EApp (EVar "preludeImplCollisions") (EVar "entries")) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "preludeImplSymbolsGo") (EVar "entries")) (EVar "collisions")) (EVar "omEmpty")))))
 (DTypeSig false "preludeImplCollisions" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
@@ -20123,7 +20129,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DTypeSig false "implFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "implFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "implFnSymTag" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
+(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig true "preludeImplSymbols" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "preludeImplSymbols" ((PVar "entries")) (EBlock (DoLet false false (PVar "collisions") (EApp (EApp (EApp (EVar "preludeImplCollisions") (EVar "entries")) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "preludeImplSymbolsGo") (EVar "entries")) (EVar "collisions")) (EVar "omEmpty")))))
 (DTypeSig false "preludeImplCollisions" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))

@@ -133,10 +133,10 @@ public export data GenEnv =
 -- declaration's position among the same-worded declarations, and how many of
 -- those there are.
 --
--- The word alone is not an address.  `implRouteKeyWord` renders type arguments
--- and the declaring module BARE, so `impl Arbitrary Color` in two modules mints
--- ONE word for two runtime candidates and a filter on the word yields both.
--- Position is what tells them apart: eval installs impl methods by walking the
+-- The word alone is not an address.  `implRouteKeyWord` renders each type
+-- argument by its type word (`route_key.typeTagOf`), so two modules' `impl
+-- Arbitrary Color` mint two words; declarations that still share one word are
+-- told apart by position: eval installs impl methods by walking the
 -- same `prelude ++ modules` decl list this module walks (`evalModulesWith`'s
 -- `allDecls` and `implEntries` are built from it in that order), and
 -- `coalesceImpls`' score sort is stable and scores same-worded impls equally
