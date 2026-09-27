@@ -3,14 +3,17 @@
    first: `vector_files_main <repo-root> <consumer-id>`.
 
    For a shell script that needs a ledgered corpus path. A lookup that
-   fails, including a digest that no longer matches, panics, so the script
-   sees a nonzero exit rather than an empty list. -}
+   fails, including a digest that no longer matches or a consumer id that
+   owns no file, panics, so the script sees a nonzero exit rather than an
+   empty list. -}
 
 import test.vector_ledger.{filesForConsumer}
 
 main : <Exec, FileRead, IO> Unit
 main = match args ()
   [root, consumer] => match filesForConsumer root consumer
+    Ok [] =>
+      panic "vector_files_main: consumer id '\{consumer}' owns no ledgered file"
     Ok files => printEach files
     Err e => panic "vector_files_main: \{e}"
   _ => panic "usage: vector_files_main <repo-root> <consumer-id>"

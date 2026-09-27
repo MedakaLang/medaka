@@ -15,9 +15,6 @@
    that validator before reading an entry, and rejects any rebuild whose root CID
    differs from the supplied one. -}
 
--- The byte-range validator is intentionally local at each untrusted boundary.
--- lint-disable-file rule-duplicate-body
-
 import bytes as B
 import bytes.{Bytes}
 import hex.{encode}
@@ -696,12 +693,6 @@ decodeEntries (value :: rest) previous acc = match value
                   (DecodedEntry key leaf child :: acc)
             _ => Err "mst: entry order is not strictly lexical"
   _ => Err "mst: invalid node entry form"
-
-{- | Strictly decode one DAG-CBOR value: `dagCborDecode` itself, since a
-   `Bytes` input holds no element outside 0..255 to refuse. -}
-export
-dagCborDecodeChecked : Bytes -> Result String DagCbor
-dagCborDecodeChecked bytes = dagCborDecode bytes
 
 decodeNode : Bytes -> Result String DecodedNode
 decodeNode bytes = match dagCborDecode bytes

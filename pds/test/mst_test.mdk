@@ -3,6 +3,7 @@
 
 import bytes as B
 import bytes.{Bytes, decodeUtf8Lossy, encodeUtf8, fromU8Array}
+import hex as Hex
 import list.{filter, reverse, take}
 
 import test.{Expectation, expectEach, expectEqual, expectTrue}
@@ -64,6 +65,27 @@ test "from-entries is independent of input order" =
   let left = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   let right = mustTree (mstFromEntries [(key1, value1), (key0, value0)])
   expectTrue (cidEqual (mstRootCid left) (mstRootCid right))
+
+-- `a.b.c/` then one final byte: the last ASCII byte, the first byte above
+-- it, and the largest byte.
+highByteKey : U8 -> Bytes
+highByteKey last = fromU8Array [|97, 46, 98, 46, 99, 47, last|]
+
+-- A tree's keys, in the order it holds them, as hex.
+entryKeysHex : Mst -> List String
+entryKeysHex tree = map ((key, _) => Hex.encode key) (mstEntries tree)
+
+{- | Keys are ordered as unsigned bytes, so a final byte of 0x80 or above
+   sorts after 0x7f. A compare that read bytes as signed would put 0x80 and
+   0xff first; that order still builds a valid-looking tree, so only the
+   order itself shows it. -}
+test "a key byte at or above 0x80 sorts after 0x7f" =
+  let keys = [highByteKey 255, highByteKey 128, highByteKey 127]
+  let built = mustTree (mstFromEntries (map (key => (key, value0)) keys))
+  let inserted =
+    fold (tree key => mustTree (mstInsert key value0 tree)) mstEmpty keys
+  let expected = ["612e622e632f7f", "612e622e632f80", "612e622e632fff"]
+  expectEqual (expected, expected) (entryKeysHex built, entryKeysHex inserted)
 
 test "known keys occupy adjacent protocol depths" = expectEach [
   ("mstKeyDepth key0 == Ok 0", expectEqual (Ok 0) (mstKeyDepth key0)),
