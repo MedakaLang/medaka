@@ -36,7 +36,9 @@ import string.{
   toUtf8,
   trim,
 }
-import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
+import time.{
+  Duration, elapsedSince, millis, monotonic, seconds, sleep, toMillis
+}
 import test.request_support.{deleteBody}
 import test.response_support.{closeAll, findHeaderEnd, report}
 
@@ -2020,7 +2022,13 @@ timedGetRecord port did collection rkey =
    at the stored record's count and changes nothing. The read is sent once the
    derivation has had `derivationHeadStart` to begin: a server that ran the
    derivation inside its store transition answers the read only when the
-   derivation ends, so the read would take nearly as long as the login. -}
+   derivation ends, so the read would take nearly as long as the login.
+
+   The login must still be running when the read is answered, which is what
+   makes the read a measurement taken mid-derivation. That is checked against
+   the head start and the read's own latency rather than a fixed number of
+   seconds, since how long one derivation takes depends on the machine and on
+   the KDF's speed, neither of which this case is about. -}
 runKdfYield : Int ->
   String ->
   String ->
@@ -2040,9 +2048,12 @@ runKdfYield port identifier password did collection rkey =
     "KDFYIELD"
     (readStatus == 200
       && loginStatus == 401
-      && loginSeconds >= 0.3
+      && loginSeconds >= headStartSeconds + readSeconds
       && readSeconds * 10.0 <= loginSeconds)
-    "getRecord \{intToString readStatus} in \{floatToString readSeconds}s during a login answered \{intToString loginStatus} in \{floatToString loginSeconds}s (bound: a tenth of the login, which must take at least 0.3s)"
+    "getRecord \{intToString readStatus} in \{floatToString readSeconds}s during a login answered \{intToString loginStatus} in \{floatToString loginSeconds}s (bound: a tenth of the login, which must outlast the \{floatToString headStartSeconds}s head start plus the read)"
+
+headStartSeconds : Float
+headStartSeconds = intToFloat (toMillis derivationHeadStart) / 1000.0
 
 {- | Two logins with the right password against a credential derived at an
    old count, sent together so that both are graded against that record.
