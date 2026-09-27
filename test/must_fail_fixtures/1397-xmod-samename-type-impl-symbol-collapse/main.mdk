@@ -1,4 +1,0 @@
-import aamod.{aaLbl}
-import zzmod.{zzLbl}
-
-main = putStrLn (aaLbl ++ "|" ++ zzLbl)

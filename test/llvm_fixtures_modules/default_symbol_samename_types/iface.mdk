@@ -1,0 +1,5 @@
+export interface I a where
+  x_y : a -> String
+  x_y _ = "default-x_y"
+  x : a -> String
+  x _ = "default-x"

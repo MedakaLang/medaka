@@ -1,5 +1,5 @@
 # META
-source_lines=13041
+source_lines=13050
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -5742,7 +5742,8 @@ implSymTagW prog method tag =
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
--- the bare head (existing symbols unchanged); a genuine C7 collision (≥2 distinct
+-- the head tag through `injectiveIdent` (the identity on a prelude or builtin
+-- head; a module-qualified head is escaped, #1397); a genuine C7 collision (≥2 distinct
 -- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
 -- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
 -- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
@@ -5751,7 +5752,10 @@ implSymTagW prog method tag =
 -- guard agree on the emitted symbol.
 implFnSymTagW : List CImplEntry -> String -> String -> String -> String
 implFnSymTagW entries method tag key =
-  if headTagUniqueW entries method tag then tag else injectiveIdent key
+  if headTagUniqueW entries method tag then
+    injectiveIdent tag
+  else
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct ones
 -- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl
@@ -6385,10 +6389,13 @@ ifaceNameForIdW ((ifaceId, iface, _, _) :: rest) target fallback =
   else
     ifaceNameForIdW rest target fallback
 
--- base default symbol (mirror of llvm_emit's defaultFnName, gname-mangled for wasm).
--- Every live consumer appends the selected declaration arity.
+-- base default symbol (mirror of llvm_emit's defaultFnName).  The tag goes
+-- through `injectiveIdent`, as the LLVM peer's does: a module-qualified tag
+-- (`m.T`) through `gname` let `(x_y, m.T)` and `(x, y_m.T)` meet on one name,
+-- and one default silently served both.  Every live consumer appends the
+-- selected declaration arity.
 defaultFnNameW : String -> String -> String
-defaultFnNameW tag method = "mdk_default_\{gname method}_\{gname tag}"
+defaultFnNameW tag method = "mdk_default_\{gname method}_\{injectiveIdent tag}"
 
 defaultFnNameWAt : String -> String -> Int -> String
 defaultFnNameWAt tag method siteArity =
@@ -12656,9 +12663,11 @@ reservedCtorArity _ = 0
 
 -- ── WAT type-name mangling ───────────────────────────────────────────────────
 -- a per-type root struct type name and a per-ctor struct type name.  Prefixed to
--- avoid colliding with the fixed $float / $boxint scaffolding.
+-- avoid colliding with the fixed $float / $boxint scaffolding.  The type word
+-- carries its module id (`my prog.T`, `café.T`), which need not be a WAT
+-- identifier, so it is spelled through `injectiveIdent`.
 typeRootName : String -> String
-typeRootName ty = "T_" ++ ty
+typeRootName ty = "T_" ++ injectiveIdent ty
 
 -- The per-ctor WasmGC struct type identifier.
 --
@@ -13998,7 +14007,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "implSymTagW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "implSymTagW" ((PVar "prog") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (arm (PCon "Some" (PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) () (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (EVar "method")) (EVar "t")) (EVar "k"))) (arm PWild () (EApp (EVar "injectiveIdent") (EVar "tag")))))
 (DTypeSig false "implFnSymTagW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
+(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig false "headTagUniqueW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "headTagUniqueW" ((PVar "entries") (PVar "method") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "distinctKeysAtHeadW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -14168,7 +14177,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "ifaceNameForIdW" (PWild (PLit (LString "")) (PVar "fallback")) (EVar "fallback"))
 (DFunDef false "ifaceNameForIdW" ((PCons (PTuple (PVar "ifaceId") (PVar "iface") PWild PWild) (PVar "rest")) (PVar "target") (PVar "fallback")) (EIf (EApp (EApp (EVar "ifaceIdMatches") (EVar "target")) (EVar "ifaceId")) (EVar "iface") (EApp (EApp (EApp (EVar "ifaceNameForIdW") (EVar "rest")) (EVar "target")) (EVar "fallback"))))
 (DTypeSig false "defaultFnNameW" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "defaultFnNameW" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EVar "display") (EApp (EVar "gname") (EVar "method")))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "gname") (EVar "tag")))) (ELit (LString ""))))
+(DFunDef false "defaultFnNameW" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EVar "display") (EApp (EVar "gname") (EVar "method")))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "tag")))) (ELit (LString ""))))
 (DTypeSig false "defaultFnNameWAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "defaultFnNameWAt" ((PVar "tag") (PVar "method") (PVar "siteArity")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "defaultFnNameW") (EVar "tag")) (EVar "method")))) (ELit (LString "_a"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "siteArity")))) (ELit (LString ""))))
 (DTypeSig false "emitDefaultRKeyRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))))
@@ -15287,7 +15296,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "reservedCtorArity" ((PLit (LString "Err"))) (ELit (LInt 1)))
 (DFunDef false "reservedCtorArity" (PWild) (ELit (LInt 0)))
 (DTypeSig false "typeRootName" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "typeRootName" ((PVar "ty")) (EBinOp "++" (ELit (LString "T_")) (EVar "ty")))
+(DFunDef false "typeRootName" ((PVar "ty")) (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "ty"))))
 (DTypeSig false "ctorStructName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ctorStructName" ((PVar "ctor")) (EIf (EApp (EVar "isBuiltinListHeadName") (EVar "ctor")) (EBinOp "++" (ELit (LString "CU_")) (EVar "ctor")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString "C_")) (EVar "ctor")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isBuiltinListHeadName" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -16402,7 +16411,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "implSymTagW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "implSymTagW" ((PVar "prog") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (arm (PCon "Some" (PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) () (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (EVar "method")) (EVar "t")) (EVar "k"))) (arm PWild () (EApp (EVar "injectiveIdent") (EVar "tag")))))
 (DTypeSig false "implFnSymTagW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
+(DFunDef false "implFnSymTagW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "tag")) (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig false "headTagUniqueW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "headTagUniqueW" ((PVar "entries") (PVar "method") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "distinctKeysAtHeadW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -16572,7 +16581,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "ifaceNameForIdW" (PWild (PLit (LString "")) (PVar "fallback")) (EVar "fallback"))
 (DFunDef false "ifaceNameForIdW" ((PCons (PTuple (PVar "ifaceId") (PVar "iface") PWild PWild) (PVar "rest")) (PVar "target") (PVar "fallback")) (EIf (EApp (EApp (EVar "ifaceIdMatches") (EVar "target")) (EVar "ifaceId")) (EVar "iface") (EApp (EApp (EApp (EVar "ifaceNameForIdW") (EVar "rest")) (EVar "target")) (EVar "fallback"))))
 (DTypeSig false "defaultFnNameW" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "defaultFnNameW" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EMethodRef "display") (EApp (EVar "gname") (EVar "method")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "gname") (EVar "tag")))) (ELit (LString ""))))
+(DFunDef false "defaultFnNameW" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EMethodRef "display") (EApp (EVar "gname") (EVar "method")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "tag")))) (ELit (LString ""))))
 (DTypeSig false "defaultFnNameWAt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "defaultFnNameWAt" ((PVar "tag") (PVar "method") (PVar "siteArity")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "defaultFnNameW") (EVar "tag")) (EVar "method")))) (ELit (LString "_a"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "siteArity")))) (ELit (LString ""))))
 (DTypeSig false "emitDefaultRKeyRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))))
@@ -17691,7 +17700,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "reservedCtorArity" ((PLit (LString "Err"))) (ELit (LInt 1)))
 (DFunDef false "reservedCtorArity" (PWild) (ELit (LInt 0)))
 (DTypeSig false "typeRootName" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "typeRootName" ((PVar "ty")) (EBinOp "++" (ELit (LString "T_")) (EVar "ty")))
+(DFunDef false "typeRootName" ((PVar "ty")) (EBinOp "++" (ELit (LString "T_")) (EApp (EVar "injectiveIdent") (EVar "ty"))))
 (DTypeSig false "ctorStructName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ctorStructName" ((PVar "ctor")) (EIf (EApp (EVar "isBuiltinListHeadName") (EVar "ctor")) (EBinOp "++" (ELit (LString "CU_")) (EVar "ctor")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString "C_")) (EVar "ctor")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isBuiltinListHeadName" (TyFun (TyCon "String") (TyCon "Bool")))

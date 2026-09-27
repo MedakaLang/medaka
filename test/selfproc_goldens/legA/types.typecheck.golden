@@ -1200,7 +1200,7 @@ hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
 headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
-headKeyNameOr : String -> Option HeadKey -> String
+headKeyTagOr : String -> Option HeadKey -> String
 headL : List String -> String
 headMonoNode : Mono -> Mono
 headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
@@ -1275,7 +1275,7 @@ ieSelectRowByMethod : ImplEnv -> String -> List Mono -> Option ImplRow
 ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
 ieSnapStep : List ImplRow -> (List (Int, ImplUniverse), ImplUniverse) -> (List (Int, ImplUniverse), ImplUniverse)
 ieSnapZero : (List (Int, ImplUniverse), ImplUniverse)
-ieTyBlob : String -> Ty
+ieTyBlob : Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
 ifaceAtMonoId : Int -> List Mono -> List String -> Option String

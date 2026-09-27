@@ -1298,10 +1298,10 @@ safeChar c =
 -- The encoding is two branches with DISJOINT IMAGES, which is what makes it
 -- injective on all of `String` and not merely on the keys we happen to mint today:
 --   * a string already spelled only in [A-Za-z0-9_] that does NOT start with the
---     two-character marker `zZ` maps to ITSELF.  That covers every bare head tag
---     (`Int`, `MyType`, `__tuple2__`), so every symbol the compiler and every
---     collision-free program already emits stays byte-identical — this branch is
---     what keeps the change fixpoint-neutral.
+--     two-character marker `zZ` maps to ITSELF.  That covers every prelude and
+--     builtin head tag (`Int`, `List`, `__tuple2__`), so their symbols read as
+--     the type's name.  A module-qualified head tag (`app.T`, #1397) takes the
+--     escape branch.
 --   * everything else maps to `zZ` ++ escape, where an alphanumeric character is
 --     kept verbatim and EVERY other character — `_` included, since `_` is the
 --     escape introducer — becomes `_<lowercase hex of its code>_`.  Hex digits are

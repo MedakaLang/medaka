@@ -252,8 +252,8 @@ else13:
   ret i64 3
 }
 
-; mdk-module impl:Tag_compare
-define i64 @mdk_impl_Tag_compare(i64 %arg0, i64 %arg1) {
+; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Tag_compare
+define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tag_compare(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 8589934593

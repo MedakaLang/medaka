@@ -240,7 +240,7 @@ entry:
   %t22 = getelementptr i8, ptr %t20, i64 16
   store i64 %t19, ptr %t22
   %t23 = ptrtoint ptr %t20 to i64
-  %t24 = call i64 @mdk_impl_MyList_eq(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11, i64 %t23)
+  %t24 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11, i64 %t23)
   %t25 = ashr i64 %t24, 1
   %t26 = icmp ne i64 %t25, 0
   %t28 = alloca i64
@@ -267,8 +267,8 @@ entry:
   ret i64 %t3
 }
 
-; mdk-module impl:MyList_eq
-define i64 @mdk_impl_MyList_eq(i64 %arg0, i64 %arg1, i64 %arg2) {
+; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_MyList_eq
+define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
@@ -348,7 +348,7 @@ conyes45:
   %t68 = alloca i64
   br i1 %t66, label %then67, label %else67
 then67:
-  %t69 = call i64 @mdk_impl_MyList_eq(i64 %arg0, i64 %t57, i64 %t63)
+  %t69 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %arg0, i64 %t57, i64 %t63)
   store i64 %t69, ptr %t68
   br label %end67
 else67:
@@ -389,15 +389,15 @@ dispyes7:
   store i64 %t8, ptr %t2
   br label %dispend3
 dispnext7:
-  %t9 = icmp eq i64 %t1, 6952548912359
-  %t10 = icmp eq i64 %t1, -337672215246197162
+  %t9 = icmp eq i64 %t1, 3434027973201616720
+  %t10 = icmp eq i64 %t1, 1536689363680375647
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:
   %t13 = inttoptr i64 %dict to ptr
   %t14 = getelementptr i8, ptr %t13, i64 8
   %t15 = load i64, ptr %t14
-  %t16 = call i64 @mdk_impl_MyList_eq(i64 %t15, i64 %arg0, i64 %arg1)
+  %t16 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %t15, i64 %arg0, i64 %arg1)
   store i64 %t16, ptr %t2
   br label %dispend3
 dispnext12:

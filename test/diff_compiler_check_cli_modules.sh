@@ -1518,6 +1518,154 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-build (native build failed)\n'
 fi
 
+# ── #1397, DRAINED — re-pointed here from its must-fail pin ──────────────────
+#
+# The legs above pass because their impls match on per-module (mangled)
+# constructors.  DERIVED impls have one clause over variables, and before
+# #1397 every engine filed both modules' impls under the bare head `T`: the
+# first module's clause served both, silently (`B1 == B1` read `False`), and
+# the interface-default `<` panicked.  A type's dispatch word now carries its
+# module (`route_key.typeTagOf`).  Hand-derived answers, graded on `run` and
+# on the built binary; the dictionary path (`same`) included.
+cat > "$TMP/a1397.mdk" <<'EOF'
+public export data T = A1 Int | A2 deriving (Eq, Ord, Debug)
+
+export
+aLess : T -> T -> Bool
+aLess x y = x < y
+EOF
+cat > "$TMP/b1397.mdk" <<'EOF'
+public export data T = B1 | B2 | B3 String deriving (Eq, Ord, Debug)
+
+export
+bLess : T -> T -> Bool
+bLess x y = x < y
+
+export
+bSame : T -> Bool
+bSame x = x == B1
+EOF
+cat > "$TMP/m1397.mdk" <<'EOF'
+import a1397 as A
+import b1397 as B
+
+same : Eq a => a -> a -> Bool
+same x y = x == y
+
+main =
+  println (A.aLess (A.A1 1) A.A2)
+  println (B.bLess B.B1 (B.B3 "x"))
+  println (B.bSame B.B1)
+  println (debug (B.B3 "x"))
+  println (same A.A2 A.A2)
+  println (same B.B1 B.B1)
+EOF
+want1397='True,True,True,B3 "x",True,True,'
+got1397="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/m1397.mdk" 2>/dev/null | tr '\n' ',')"
+if [ "$got1397" = "$want1397" ]; then
+  pass=$((pass+1)); printf 'ok   1397/samename-derived-run (each type reaches its own derived impl)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1397/samename-derived-run (got [%s], want [%s])\n' "$got1397" "$want1397"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/m1397.mdk" -o "$TMP/m1397.bin" >/dev/null 2>&1 && [ -x "$TMP/m1397.bin" ]; then
+  bld1397="$("$TMP/m1397.bin" 2>/dev/null | tr '\n' ',')"
+  if [ "$bld1397" = "$want1397" ]; then pass=$((pass+1)); printf 'ok   1397/samename-derived-build (native dispatch agrees)\n'
+  else fail=$((fail+1)); printf 'FAIL 1397/samename-derived-build (got [%s], want [%s])\n' "$bld1397" "$want1397"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1397/samename-derived-build (native build failed)\n'
+fi
+
+# #2320: the same collision with HAND-WRITTEN impls whose clause binds no
+# constructor (`label _ = …`), so nothing in the impl body separates the two
+# types either -- only the dispatch word does.  Before #1397's fix both
+# engines printed `amod|amod`.
+cat > "$TMP/l2320.mdk" <<'EOF'
+export interface Label a where
+  label : a -> String
+EOF
+cat > "$TMP/a2320.mdk" <<'EOF'
+import l2320.{Label, label}
+
+public export data T = ACtor
+
+impl Label T where
+  label _ = "amod"
+EOF
+cat > "$TMP/b2320.mdk" <<'EOF'
+import l2320.{Label, label}
+
+public export data T = BCtor
+
+impl Label T where
+  label _ = "bmod"
+EOF
+cat > "$TMP/m2320.mdk" <<'EOF'
+import l2320.{Label, label}
+import a2320 as A
+import b2320 as B
+
+main = println (label A.ACtor ++ "|" ++ label B.BCtor)
+EOF
+got2320="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/m2320.mdk" 2>/dev/null)"
+if [ "$got2320" = "amod|bmod" ]; then
+  pass=$((pass+1)); printf 'ok   2320/samename-wildcard-impl-run\n'
+else
+  fail=$((fail+1)); printf 'FAIL 2320/samename-wildcard-impl-run (got [%s], want [amod|bmod])\n' "$got2320"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/m2320.mdk" -o "$TMP/m2320.bin" >/dev/null 2>&1 && [ -x "$TMP/m2320.bin" ]; then
+  bld2320="$("$TMP/m2320.bin" 2>/dev/null)"
+  if [ "$bld2320" = "amod|bmod" ]; then pass=$((pass+1)); printf 'ok   2320/samename-wildcard-impl-build\n'
+  else fail=$((fail+1)); printf 'FAIL 2320/samename-wildcard-impl-build (got [%s], want [amod|bmod])\n' "$bld2320"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 2320/samename-wildcard-impl-build (native build failed)\n'
+fi
+
+# The type-head word must be injective, not merely module-qualified: `a.b`
+# and `a_b` are two module ids that `sanitizeId` merges, so a word built from
+# the sanitized id would send both `T`s to one impl again.  The word is
+# `<module id>.<T>` and a symbol spells it through `injectiveIdent`.
+mkdir -p "$TMP/san/a"
+cat > "$TMP/san/label.mdk" <<'EOF'
+export interface Label a where
+  label : a -> String
+EOF
+cat > "$TMP/san/a/b.mdk" <<'EOF'
+import label.{Label, label}
+
+public export data T = ACtor
+
+impl Label T where
+  label _ = "dotted"
+EOF
+cat > "$TMP/san/a_b.mdk" <<'EOF'
+import label.{Label, label}
+
+public export data T = BCtor
+
+impl Label T where
+  label _ = "underscored"
+EOF
+cat > "$TMP/san/main.mdk" <<'EOF'
+import label.{Label, label}
+import a.b as A
+import a_b as B
+
+main = println (label A.ACtor ++ "|" ++ label B.BCtor)
+EOF
+gotsan="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/san/main.mdk" 2>/dev/null)"
+if [ "$gotsan" = "dotted|underscored" ]; then
+  pass=$((pass+1)); printf 'ok   1397/sanitize-alike-modules-run\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1397/sanitize-alike-modules-run (got [%s], want [dotted|underscored])\n' "$gotsan"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/san/main.mdk" -o "$TMP/san/main.bin" >/dev/null 2>&1 && [ -x "$TMP/san/main.bin" ]; then
+  bldsan="$("$TMP/san/main.bin" 2>/dev/null)"
+  if [ "$bldsan" = "dotted|underscored" ]; then pass=$((pass+1)); printf 'ok   1397/sanitize-alike-modules-build\n'
+  else fail=$((fail+1)); printf 'FAIL 1397/sanitize-alike-modules-build (got [%s], want [dotted|underscored])\n' "$bldsan"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1397/sanitize-alike-modules-build (native build failed)\n'
+fi
+
 # ── #1277, DRAINED BY A-2.10 — re-pointed here rather than deleted ────────────
 #
 # `test/must_fail_fixtures/1277-xmod-head-spelling-collision-across-ifaces/` pinned
@@ -2824,11 +2972,13 @@ fi
 # the general impl's spelling, and the general impl's call also takes 2 args, so the
 # arity-1 anchor excludes it a second, independent way. Do not relax either to silence a
 # future red — a red here means the orders diverged or the general impl won, and both are
-# the S0 this leg exists for.
+# the S0 this leg exists for. Since #1397 a type in a route word carries its module
+# (`iface__Wrap`, escaped `iface_5f__5f_Wrap`), so the payload pattern allows a prefix
+# before `Wrap`; the `Int` payload and the arity-1 anchor are unchanged.
 if [ ! -f "$TMP/sa4c.main.bin.ll" ] || [ ! -f "$TMP/sa4c.control.bin.ll" ]; then
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (no IR kept — build refused, see the leg above)\n'
 elif diff "$TMP/sa4c.main.bin.ll" "$TMP/sa4c.control.bin.ll" >/dev/null 2>&1 \
-  && grep -qE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_Wrap_20_Int_29_[A-Za-z_0-9]*\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
+  && grep -qE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_[A-Za-z_0-9]*Wrap_20_Int_29_[A-Za-z_0-9]*\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
   pass=$((pass+1)); printf 'ok   SA-4c/route-word-order-invariant (both orders IR-identical; arity-1 specific impl called)\n'
 else
   sa4c_site="$(grep -oE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_Wrap_20_[A-Za-z_0-9]*_29_[A-Za-z_0-9]*\(i64[^)]*\)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
