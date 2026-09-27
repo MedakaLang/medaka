@@ -72,6 +72,23 @@ mustBytes (Ok bytes) = bytes
 mustBytes (Err message) =
   panic "performance_resource: encoding failed: \{message}"
 
+-- Door: this driver is not itself retyped this slice (its own `Array Int`
+-- moves in sprint C). `bytes` is checked into `Bytes` here, matching
+-- `cidForDagCbor`/`cidForRaw`'s old callee behaviour.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (B.fromArray bytes))
+
+cidForRawDoor : Array Int -> Cid
+cidForRawDoor bytes =
+  cidForRaw
+    (optionOrPanic
+      "cidForRaw: every element must be a byte in 0..255"
+      (B.fromArray bytes))
+
 intBytes : Int -> Array Int
 intBytes n =
   [|bitAnd (shiftRight n 16) 255, bitAnd (shiftRight n 8) 255, bitAnd n 255|]
@@ -82,7 +99,7 @@ carRows n i acc =
     reverse acc
   else
     let bytes = intBytes i
-    carRows n (i + 1) ((cidForRaw bytes, bytes) :: acc)
+    carRows n (i + 1) ((cidForRawDoor bytes, bytes) :: acc)
 
 mstRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
 mstRows n i acc =
@@ -90,7 +107,7 @@ mstRows n i acc =
     reverse acc
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    mstRows n (i + 1) ((cidForDagCbor bytes, bytes) :: acc)
+    mstRows n (i + 1) ((cidForDagCborDoor bytes, bytes) :: acc)
 
 runCar : Int -> <IO> Unit
 runCar n = match carRows n 0 []
@@ -153,7 +170,7 @@ perfRowsGo n i acc =
     reverse acc
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    perfRowsGo n (i + 1) ((intBytes i, cidForDagCbor bytes, bytes) :: acc)
+    perfRowsGo n (i + 1) ((intBytes i, cidForDagCborDoor bytes, bytes) :: acc)
 
 perfRows : Int -> List (Array Int, Cid, Array Int)
 perfRows n = perfRowsGo n 0 []
@@ -207,7 +224,7 @@ perfSignedCommit dataCid =
           ("prev", DcNull),
           ("sig", DcBytes (signatureCompact signature)),
         ]))
-  (cidForDagCbor signed, signed)
+  (cidForDagCborDoor signed, signed)
 
 -- The commit-plus-graph block list every route below shares: the record
 -- blocks, the MST node blocks over them, and a signed commit pointing at the
@@ -226,7 +243,7 @@ insertAllGo n i tree =
     tree
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    match mstInsert (intBytes i) (cidForDagCbor bytes) tree
+    match mstInsert (intBytes i) (cidForDagCborDoor bytes) tree
       Ok next => insertAllGo n (i + 1) next
       Err message => panic "performance_resource: MST insert failed: \{message}"
 
@@ -337,7 +354,7 @@ framedHeader root =
     mustBytes
       (dagCborEncode
         (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)]))
-  uvarintEncode (arrayLength header) ++ header
+  toArray (uvarintEncode (arrayLength header)) ++ header
 
 depthNode : Array Int -> Cid -> Option Cid -> (Cid, Array Int)
 depthNode key value child =
@@ -361,7 +378,7 @@ depthNode key value child =
             ],
           ),
         ]))
-  (cidForDagCbor bytes, bytes)
+  (cidForDagCborDoor bytes, bytes)
 
 depthCid : (Cid, Array Int) -> Cid
 depthCid (cid, _) = cid
@@ -422,7 +439,9 @@ runLimits =
     reject
       "car-section-over"
       "section exceeds"
-      (carDecode (framedHeader root ++ uvarintEncode (maxCarSectionBytes + 1))),
+      (carDecode
+        (framedHeader root
+          ++ toArray (uvarintEncode (maxCarSectionBytes + 1)))),
     reject
       "car-blocks-over"
       "block count exceeds"

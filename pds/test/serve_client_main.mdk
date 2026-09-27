@@ -2419,7 +2419,8 @@ slowUploadGap = seconds 3
 runSlowUpload : Int -> String -> String -> <IO, Net, Clock> Unit
 runSlowUpload port token mimeType =
   let body = arrayMakeWith slowUploadBytes (i => 65 + i % 26)
-  let wanted = cidToString (cidForRaw body)
+  -- Door: masked — every element is `65 + i % 26`, in range by construction.
+  let wanted = cidToString (cidForRaw (fromArrayAssumeByteDomain body))
   let conn = mustConnect port
   let () =
     mustSend

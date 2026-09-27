@@ -25,6 +25,7 @@
    the empty MST root node as well as the commit. -}
 
 import array.{sliceClamped}
+import bytes.{encodeUtf8}
 import list.{lookup, range, sort}
 import string.{toUtf8}
 import test.{expectEqual}
@@ -45,10 +46,10 @@ import lib.sync_event.{
 import lib.tid.{Tid, tidEncode}
 
 recordCid : Cid
-recordCid = cidForRaw (toUtf8 "record")
+recordCid = cidForRaw (encodeUtf8 "record")
 
 commitCid : Cid
-commitCid = cidForRaw (toUtf8 "commit")
+commitCid = cidForRaw (encodeUtf8 "commit")
 
 mustTid : Result String Tid -> Tid
 mustTid (Ok tid) = tid

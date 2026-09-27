@@ -1,7 +1,7 @@
 {- | P1-B external MST corpus and hostile-structure driver. -}
 
 import array.{drop}
-import bytes.{toArray}
+import bytes.{fromArray, toArray}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse, sortBy}
@@ -179,11 +179,21 @@ entryValue key prefix value = entryValueWithTree key prefix value DcNull
 nodeBytes : DagCbor -> List DagCbor -> Array Int
 nodeBytes left entries = mustNode (DcMap [("l", left), ("e", DcArray entries)])
 
+-- Door: this driver is not itself retyped this slice (its own `Array Int`
+-- moves in sprint C). `bytes` is checked into `Bytes` here, matching
+-- `cidForDagCbor`'s old callee behaviour.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
+
 nodeBlock : Array Int -> (Cid, Array Int)
-nodeBlock bytes = (cidForDagCbor bytes, bytes)
+nodeBlock bytes = (cidForDagCborDoor bytes, bytes)
 
 nodeCid : Array Int -> Cid
-nodeCid bytes = cidForDagCbor bytes
+nodeCid bytes = cidForDagCborDoor bytes
 
 accepts : String -> Result String Unit -> <IO> Int
 accepts label (Ok ()) =

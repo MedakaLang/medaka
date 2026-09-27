@@ -5,7 +5,7 @@
    decode-and-reencode, CID calculation, and CID text parse/render. -}
 
 import array as A
-import bytes.{toArray}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{contains, split, startsWith, toUpper}
@@ -86,7 +86,8 @@ runRow line = match split "\t" line
     let decodedReencoded = match dagCborDecode expectedBytes
       Err message => Err message
       Ok value => dagCborEncode value
-    let calculatedCidText = cidToString (cidForDagCbor expectedBytes)
+    let calculatedCidText =
+      cidToString (cidForDagCbor (fromArrayAssumeByteDomain expectedBytes))
     let parsedCidText = match cidFromString expectedCidText
       Err message => "ERR:\{message}"
       Ok cid => cidToString cid
@@ -203,15 +204,15 @@ runMalformed =
     rejectContains
       "cid-codec"
       "cid: codec"
-      (cidFromBytes (setAt 1 0x70 linkCidBytes)),
+      (cidFromBytes (fromArrayAssumeByteDomain (setAt 1 0x70 linkCidBytes))),
     rejectContains
       "cid-hash"
       "cid: hash code"
-      (cidFromBytes (setAt 2 0x13 linkCidBytes)),
+      (cidFromBytes (fromArrayAssumeByteDomain (setAt 2 0x13 linkCidBytes))),
     rejectContains
       "cid-length"
       "cid: SHA-256 digest length"
-      (cidFromBytes (setAt 3 0x1f linkCidBytes)),
+      (cidFromBytes (fromArrayAssumeByteDomain (setAt 3 0x1f linkCidBytes))),
     rejectContains
       "base32-padding"
       "padding is not allowed"

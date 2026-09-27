@@ -1,7 +1,7 @@
 {- | P1-D official repository transcript and named rejection driver. -}
 
 import array as A
-import bytes.{toArray}
+import bytes.{fromArray, fromU8Array, toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{contains, join, repeat, split, toInt, toUtf8}
@@ -52,6 +52,16 @@ import lib.tid.{
 mustHex : String -> Array Int
 mustHex text =
   toArray (resultOrPanic "repo_vectors: malformed hex" (decode text))
+
+-- Door: this driver is not itself retyped this slice (its own `Array Int`
+-- moves in sprint C). `bytes` is checked into `Bytes` here, matching
+-- `cidForDagCbor`'s old callee behaviour.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "repo_vectors: malformed CID" (cidFromString text)
@@ -161,7 +171,7 @@ gradeOperation line repo = gradeOperationParts (split "\t" line) repo
 observedRecord : Array Int -> Repo -> Option (Cid, Array Int)
 observedRecord path repo = match repoLookup path repo
   Ok (Some value) => match dagCborEncode value
-    Ok bytes => Some (cidForDagCbor bytes, bytes)
+    Ok bytes => Some (cidForDagCborDoor bytes, bytes)
     Err _ => None
   Ok None => None
   Err _ => None
@@ -281,7 +291,7 @@ testCommitFields did dataCid = [
 malformedBoundExport : Result String (List (Cid, Array Int), Array Int)
 malformedBoundExport =
   let recordBytes = mustEncode (DcMap [])
-  let recordCid = cidForDagCbor recordBytes
+  let recordCid = cidForDagCborDoor recordBytes
   let rootBytes =
     mustEncode
       (DcMap [
@@ -298,9 +308,9 @@ malformedBoundExport =
           ],
         ),
       ])
-  let rootCid = cidForDagCbor rootBytes
+  let rootCid = cidForDagCborDoor rootBytes
   let commitBytes = mustEncode (DcMap (testCommitFields "did:x1:a" rootCid))
-  let commitCid = cidForDagCbor commitBytes
+  let commitCid = cidForDagCborDoor commitBytes
   let store =
     mustPut
       commitCid
@@ -415,7 +425,7 @@ runHostile did secret repo path presentRecord =
       "data mismatch"
       (repoValidateCommit
         did
-        (cidForDagCbor [|1|])
+        (cidForDagCbor (fromU8Array [|1|]))
         (repoCommitTid commit)
         signed),
     rejectContains
@@ -480,8 +490,8 @@ runRepresentativeRows _ =
 
 runFinalReview : <IO> Unit
 runFinalReview =
-  let actualData = cidForDagCbor [|0|]
-  let expectedData = cidForDagCbor [|1|]
+  let actualData = cidForDagCbor (fromU8Array [|0|])
+  let expectedData = cidForDagCbor (fromU8Array [|1|])
   let rev = mustTid "3ke6kg3wk222b"
   let signed = mustEncode (DcMap (testCommitFields "did:x1:a" actualData))
   let controls = sum [
@@ -553,7 +563,7 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
   let pathPrefix = toUtf8 "app.bsky.feed.post/"
   let oldCommit = repoLatestCommit initial
   let newCommit = repoLatestCommit changed
-  let mismatchData = cidForDagCbor [|1|]
+  let mismatchData = cidForDagCbor (fromU8Array [|1|])
   let rejected = sum [
     rejectContains
       "did-fragment"

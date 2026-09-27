@@ -110,6 +110,16 @@ mustEncode : DagCbor -> Array Int
 mustEncode value =
   resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value)
 
+-- Door: this driver is not itself retyped this slice (its own `Array Int`
+-- moves in sprint C). `bytes` is checked into `Bytes` here, matching
+-- `cidForDagCbor`'s old callee behaviour.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
+
 -- One row: the record's path bytes, its content CID, and its encoded bytes —
 -- built once per record so the entry (for the MST) and the block (for the
 -- store) never re-derive each other.
@@ -117,7 +127,7 @@ buildRow : String -> Int -> Int -> Int -> (Array Int, Cid, Array Int)
 buildRow shape seed count i =
   let path = pathFor shape count i
   let bytes = mustEncode (recordFor seed i)
-  (toUtf8 path, cidForDagCbor bytes, bytes)
+  (toUtf8 path, cidForDagCborDoor bytes, bytes)
 
 -- Builds descending so the ascending final list falls out of plain consing —
 -- no `++` accumulation over thousands of records.
@@ -181,7 +191,7 @@ signedCommit did secret rev dataCid =
         ("prev", DcNull),
         ("sig", DcBytes (signatureCompact signature)),
       ])
-  (cidForDagCbor signed, signed)
+  (cidForDagCborDoor signed, signed)
 
 -- ── blobs ───────────────────────────────────────────────────────────────────
 

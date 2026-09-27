@@ -2,6 +2,7 @@
    independent expected CAR bytes remain exclusively in the vector corpus. -}
 
 import array as A
+import bytes.{fromU8Array}
 import test.{expectEach, expectEqual, expectErr, expectFalse, expectTrue, fail}
 import lib.blockstore.{
   BlockStore,
@@ -34,13 +35,13 @@ rootBytes : Array Int
 rootBytes = [|0xa1, 0x61, 0x6e, 1|]
 
 rootCid : Cid
-rootCid = cidForDagCbor rootBytes
+rootCid = cidForDagCbor (fromU8Array [|0xa1, 0x61, 0x6e, 1|])
 
 extraBytes : Array Int
 extraBytes = [|109, 101, 100, 97, 107, 97|]
 
 extraCid : Cid
-extraCid = cidForRaw extraBytes
+extraCid = cidForRaw (fromU8Array [|109, 101, 100, 97, 107, 97|])
 
 test "empty blockstore has no entries" = expectEach [
   (

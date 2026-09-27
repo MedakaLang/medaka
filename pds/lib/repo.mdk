@@ -51,6 +51,16 @@ import lib.sign.{
 }
 import lib.tid.{Tid, tidCompare, tidParse, tidToString}
 
+-- Door: `repo` is not itself retyped this slice (its own `Array Int` moves
+-- in sprint C). `bytes` is checked into `Bytes` here, matching
+-- `cidForDagCbor`'s old callee behaviour.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
+
 -- ── types ───────────────────────────────────────────────────────────────────
 
 -- | Immutable metadata for one signed repository commit.
@@ -266,7 +276,7 @@ buildCommit did secret rev tree store = do
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
-  let commitCid = cidForDagCbor signed
+  let commitCid = cidForDagCborDoor signed
   withTree <- mapErr
     (message => "repo: storing MST failed: \{message}")
     (blockStoreAddMany (mstNodeBlocks tree) store)
@@ -453,7 +463,7 @@ stageRecord record store = do
   bytes <- mapErr
     (message => "repo: record encoding failed: \{message}")
     (dagCborEncode record)
-  let recordCid = cidForDagCbor bytes
+  let recordCid = cidForDagCborDoor bytes
   withRecord <- mapErr
     (message => "repo: storing record failed: \{message}")
     (blockStorePut recordCid bytes store)
@@ -659,7 +669,7 @@ cidSeqEmpty = CidSeq Tip []
 -- The key is the CID's byte encoding in hex, so key equality is `cidEqual`.
 cidSeqAdd : Cid -> CidSeq -> CidSeq
 cidSeqAdd cid (CidSeq seen values) =
-  let key = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+  let key = encode (cidToBytes cid)
   if has key seen then
     CidSeq seen values
   else
@@ -752,7 +762,7 @@ repoExportGraph commitCid commitBytes dataRoot store =
     None => Err "repo: missing graph commit block"
     Some storedCommit =>
       if storedCommit /= commitBytes
-        || not (cidEqual commitCid (cidForDagCbor commitBytes)) then
+        || not (cidEqual commitCid (cidForDagCborDoor commitBytes)) then
         Err "repo: tampered graph commit block"
       else match decodeSignedCommit commitBytes
         Err message => Err "repo: invalid graph commit: \{message}"

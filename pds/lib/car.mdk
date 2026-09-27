@@ -11,12 +11,22 @@
 -- lint-disable-file rule-duplicate-body
 
 import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
+import bytes.{fromArray, toArray}
 import list.{reverse}
 import lib.blockstore.{BlockStore, blockStoreFromBlocks, blockStoreHas}
 import lib.cid.{Cid, cidFromBytes, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.multiformats.{uvarintEncode}
 import lib.resource_limits.{checkCarBlocks, checkCarBytes, checkCarSectionBytes}
+
+-- Door: `car` is not itself retyped this slice (its own `Array Int` moves in
+-- `S-b-cbor-car-bytes`). `cidFromBytes` no longer scans its own input for the
+-- byte domain (that was the old `Array Int`-taking form's job), so this
+-- reproduces its old `Err` — never a panic — on an out-of-range element.
+cidFromBytesDoor : Array Int -> Result String Cid
+cidFromBytesDoor arr = match fromArray arr
+  Some bs => cidFromBytes bs
+  None => Err "cid: input element outside byte range 0..255"
 
 -- | A decoded CAR preserving section order plus its verified unique store.
 export data Car = Car (List Cid) (List (Cid, Array Int)) BlockStore
@@ -97,7 +107,10 @@ readVarintGo input pos end consumed shift acc =
       if value < 0 then
         Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
       else
-        let canonical = uvarintEncode value
+        -- Door: `uvarintEncode` now returns `Bytes`; car's own varint reader
+        -- (duplicating `multiformats.uvarintDecodeGo`, deleted next slice)
+        -- still works over `Array Int`.
+        let canonical = toArray (uvarintEncode value)
         if arrayLength canonical /= used
           || not (varintPrefixEquals input pos canonical 0) then
           Err "uvarint: non-minimal encoding"
@@ -130,7 +143,7 @@ parseCidAt input start end = do
     Err "car: truncated CID digest"
   else
     let cidEnd = p4 + digestLength
-    match cidFromBytes (slice input start (cidEnd - start))
+    match cidFromBytesDoor (slice input start (cidEnd - start))
       Err message => Err "car: malformed or non-blessed CID: \{message}"
       Ok cid => Ok (cid, cidEnd)
 
@@ -197,12 +210,14 @@ emitArray bytes i out =
     emitU8 (fromInt bytes[i]) out
     emitArray bytes (i + 1) out
 
+-- Door: `cidToBytes`/`uvarintEncode` now return `Bytes`; car's own encoder
+-- (deleted next slice) still works over `Array Int`.
 emitSections : List (Cid, Array Int) -> Builder -> Unit
 emitSections [] _ = ()
 emitSections ((cid, block) :: rest) out =
-  let cidBytes = cidToBytes cid
+  let cidBytes = toArray (cidToBytes cid)
   let payloadLength = arrayLength cidBytes + arrayLength block
-  emitArray (uvarintEncode payloadLength) 0 out
+  emitArray (toArray (uvarintEncode payloadLength)) 0 out
   emitArray cidBytes 0 out
   emitArray block 0 out
   emitSections rest out
@@ -210,12 +225,14 @@ emitSections ((cid, block) :: rest) out =
 encodedSectionsSize : List (Cid, Array Int) -> Int -> Result String Int
 encodedSectionsSize [] total = Ok total
 encodedSectionsSize ((cid, block) :: rest) total =
-  let payloadLength = arrayLength (cidToBytes cid) + arrayLength block
+  let payloadLength = arrayLength (toArray (cidToBytes cid)) + arrayLength block
   match checkCarSectionBytes payloadLength
     Err message => Err message
     Ok () =>
       let next =
-        total + arrayLength (uvarintEncode payloadLength) + payloadLength
+        total
+          + arrayLength (toArray (uvarintEncode payloadLength))
+          + payloadLength
       match checkCarBytes next
         Err message => Err message
         Ok () => encodedSectionsSize rest next
@@ -236,7 +253,8 @@ carEncodeChecked roots blocks verified = match checkCarBlocks (length blocks)
   Ok () => match dagCborEncode (headerValue roots 1)
     Err message => Err "car: header encoding failed: \{message}"
     Ok header =>
-      let headerPrefix = uvarintEncode (arrayLength header)
+      -- Door: `uvarintEncode` now returns `Bytes`.
+      let headerPrefix = toArray (uvarintEncode (arrayLength header))
       let headerSize = arrayLength headerPrefix + arrayLength header
       match encodedSectionsSize blocks headerSize
         Err message => Err message

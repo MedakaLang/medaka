@@ -19,7 +19,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import array.{drop, take}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set, size}
@@ -304,7 +304,14 @@ buildNode reuse entries layer =
     buildWireEntries reuse first layer None
   let bytes =
     mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
-  let cid = cidForDagCbor bytes
+  -- Door: `mst` is not itself retyped this slice (its own `Array Int` moves
+  -- in sprint C). `bytes` is checked into `Bytes` here, matching
+  -- `cidForDagCbor`'s old callee behaviour.
+  let cid =
+    cidForDagCbor
+      (optionOrPanic
+        "cidForDagCbor: every element must be a byte in 0..255"
+        (fromArray bytes))
   MstNode cid bytes (childEntries left ++ rightEntries)
 
 nodeBlocks : MstNode -> List (Cid, Array Int)
@@ -803,7 +810,7 @@ mstValidateNodeBytes expected isRoot bytes = do
 -- ── validating a block set ──────────────────────────────────────────────────
 
 cidKey : Cid -> String
-cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+cidKey cid = encode (cidToBytes cid)
 
 mstEmptySet : Set String
 mstEmptySet = empty
@@ -816,7 +823,13 @@ validateBlockRows ((cid, bytes) :: rest) index =
   let key = cidKey cid
   if has key index then
     Err "mst: duplicate node block CID"
-  else if not (cidEqual cid (cidForDagCbor bytes)) then
+  else if not
+    (cidEqual
+      cid
+      (cidForDagCbor
+        (optionOrPanic
+          "cidForDagCbor: every element must be a byte in 0..255"
+          (fromArray bytes)))) then
     Err "mst: node block CID does not match bytes"
   else
     validateBlockRows rest (set key bytes index)

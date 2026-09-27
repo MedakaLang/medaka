@@ -9,7 +9,7 @@
 -- The byte-range validator is intentionally local at each untrusted boundary.
 -- lint-disable-file rule-duplicate-body
 
-import bytes.{fromArrayAssumeByteDomain}
+import bytes.{fromArray}
 import hex.{encode}
 import map.{Map(..), get, set, size, entries}
 import lib.cid.{Cid, cidCodec, cidEqual, cidForDagCbor, cidForRaw, cidToBytes}
@@ -26,14 +26,21 @@ validBytes bytes i =
     bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
 
 cidKey : Cid -> String
-cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+cidKey cid = encode (cidToBytes cid)
 
+-- Door: `blockstore` is not itself retyped this slice (its own `Array Int`
+-- moves in `S-b-cbor-car-bytes`). `bytes` is checked into `Bytes` here,
+-- matching `cidForDagCbor`/`cidForRaw`'s old callee behaviour.
 expectedCid : Cid -> Array Int -> Cid
 expectedCid cid bytes =
+  let checked =
+    optionOrPanic
+      "cidForDagCbor/cidForRaw: every element must be a byte in 0..255"
+      (fromArray bytes)
   if cidCodec cid == multicodecDagCbor then
-    cidForDagCbor bytes
+    cidForDagCbor checked
   else
-    cidForRaw bytes
+    cidForRaw checked
 
 findBytes : Cid -> Map String (Cid, Array Int) -> Option (Array Int)
 findBytes cid entries = map ((_, bytes) => bytes) (get (cidKey cid) entries)

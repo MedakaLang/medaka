@@ -4,7 +4,9 @@
 
 import array as A
 import bytes.{fromU8Array}
+import mut_bytes as MB
 import string.{contains, toLower}
+import u8 as U8
 import test.{
   expectEach, expectEqual, expectErr, expectFalse, expectOkThen, expectTrue
 }
@@ -62,7 +64,7 @@ test "base32 rejects padding uppercase and alien alphabet" = expectEach [
 ]
 
 test "CID binary and string forms round-trip" =
-  let cid = cidForDagCbor [|1, 2, 3, 4|]
+  let cid = cidForDagCbor (fromU8Array [|1, 2, 3, 4|])
   expectOkThen
     (binary =>
       expectOkThen
@@ -80,17 +82,21 @@ test "CID binary and string forms round-trip" =
     (cidFromBytes (cidToBytes cid))
 
 test "CID codec changes the identity for identical content" =
-  expectTrue (not (cidEqual (cidForDagCbor [|1|]) (cidForRaw [|1|])))
+  expectTrue
+    (not
+      (cidEqual
+        (cidForDagCbor (fromU8Array [|1|]))
+        (cidForRaw (fromU8Array [|1|]))))
 
-test "CID digest access is a defensive copy" =
-  let cid = cidForDagCbor [|9, 8, 7|]
+test "CID digest access does not expose the CID's own storage" =
+  let cid = cidForDagCbor (fromU8Array [|9, 8, 7|])
   let before = cidToBytes cid
-  let exposed = cidDigest cid
-  let () = A.setInPlace 0 (bitXor exposed[0] 255) exposed
+  let exposed = MB.thaw (cidDigest cid)
+  let () = MB.setInPlace 0 (U8.bitXor exposed[0] (U8.truncate 255)) exposed
   expectEqual (cidToBytes cid) before
 
 test "DAG-CBOR round-trips every admitted value kind" =
-  let link = cidForDagCbor [|1, 2, 3|]
+  let link = cidForDagCbor (fromU8Array [|1, 2, 3|])
   let value = DcMap [
     ("link", DcLink link),
     ("array", DcArray [DcNull, DcBool False, DcBool True, DcInt (-25)]),
