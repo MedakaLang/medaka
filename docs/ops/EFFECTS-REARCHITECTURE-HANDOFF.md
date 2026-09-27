@@ -3,9 +3,11 @@
 **Status:** The arrow half (PR #3393, `f81ff1d9d`) and the data half (PR
 #3445, `ea782db98`) of #3385 are on `main`. The close-out session (branch
 `effects-closeout`, § "Close-out session") answers the data half's owed list,
-fixes #3304, pins #3327 and delivers item 7 (authority-indexed sockets); the
-two remaining checklist items have proposals awaiting ratification there. Handoff first recorded
-2026-09-24.
+fixes #3304, pins #3327 and delivers item 7 (authority-indexed sockets); it
+merged as PR #3458 (`e40f4b375`) and closed #3385. The successor session (§
+"Successor session") works the four successor issues, one PR each: #3462
+residual schemes and delayed joins, #3463 the invocation summary, #3464 prefix
+sets, #3465 prelude type shadowing. Handoff first recorded 2026-09-24.
 
 ## Resume here
 
@@ -944,6 +946,215 @@ without admitting anything the host can run.
   output, so an intended wording change moves `*.tc.golden` files, which no
   capture script regenerates; regenerate from the oracle and read the diff.
 
+## Successor session (2026-09-26)
+
+Branches from `e40f4b375` (the merge of PR #3458), one per successor issue.
+Val ruled on the close-out on 2026-09-26 (§ "Close-out session", "Val's
+rulings"); the open details of each issue were brought to her as one-page
+designs, built from reproduced research, and every recommended option was
+ratified the same day:
+
+- **#3462:** a residual may relate a quantified authority to a constant as
+  well as to another quantified authority (`withApp`, `inCfg`); a residual
+  renders in the `=>` context as `(p <= d) =>`, a join as `p <= (a | b)`,
+  which is also the natural proposal for the deferred written syntax. Row
+  variables and call-site joins through a generalized function are out.
+- **#3463 (with #3468):** a polarity-directed summary in a new
+  `types/effect_invocation.mdk`; an unknown slot is invariant, so charged; a
+  positive effect index is always charged (index variance deferred);
+  monomorphic constructor fields are descended; unresolved authority renders
+  as a TOML comment in the manifest and a "not proven" line in the policy; no
+  `--json`. Charges widen on #3468's shapes, which Val accepted.
+- **#3464:** an authority keeps an antichain of constants where the domain's
+  join is inexact (Prefix, Product; two Product tuples merge only when they
+  differ in exactly one Set axis); a variable's least solution is the set of
+  its lower bounds, refining the ruling's "join when solving" example; at most
+  16 members, a written bound past that is an error; performed rows keep sets;
+  the manifest renders a TOML array and the policy collects every entry of a
+  label; `("a/*" | "b/*" | p)` is accepted where a qualifier or index is
+  written.
+- **#3465:** a program's own type shadows a prelude type; a constructor spelled
+  like a prelude constructor stays refused, located and naming the prelude,
+  and gets its own issue; an import overrides the prelude silently;
+  interfaces and builtin heads are out; type declarations gain their name's
+  location; pre-resolve exhaustiveness prefers the module's own declarations.
+
+Filed while grounding, each reproduced on `main` first: #3466 (S0, `fmt`
+rewrites an unknown attribute to `@inline`), #3467 (S0, an attribute above a
+signature discards the signature: an ill-typed program passes check, run and
+build), #3468 (S0, `manifest`/`check-policy` never charge effect-indexed
+entries, positive positions in domains, tuples, monomorphic data fields or
+host-supplied cells; #3463's PR closes it). The spurious `Text _` warnings are
+#1185.
+
+**#3462, what landed** (item by item in [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md)
+§ "Residual-scheme checkpoint"; normative text §4.1 "Residual schemes" and
+§6.8): residuals are a field of `Scheme`, kept at scope close for a constraint
+component one member quantifies, and re-emitted at every use naming the
+binding; every local binding route keeps them; pending joins are decided at
+the owning boundary. Measured on `main` and after: `subIn cfg app`, `rdSub`
+under `<FileRead "cfg/app">`, `either`, a local copy, `withApp` and `inCfg`
+were refused and are accepted, every launder variant still refused;
+`choose`/`chooseOpt`/`listBoth`/match/lambda publish what their
+statement-swapped twin published. A pre-existing S2 fixed on the way: a
+qualifier whose cell had been solved to another variable printed as a fresh
+binder.
+
+**#3462 review round 1** (whole diff on `68fbd3f76`, every finding reproduced
+on a built binary beside a control; each answered by a rule):
+
+- *S1, new here:* a join whose result a use shaped first by a closed slot was
+  refused (`sortBy (if asc then up else down)`, `fold (if c then f else g)`,
+  `runAll [f1, f2]`, an annotated `let`): resolution gave the alternatives
+  fresh caller-supplied rows and then required them below `<>`. A use that
+  shapes the result now decides the join there, by equality, as before joins
+  were delayed (`takeJoinsShapedBy` in `bindVar`), so delayed joins help only
+  where an alternative is shaped first. `pickApply` publishes its `main` type
+  again.
+- *S0, older than this branch but written into the first §4.1 text:* a local
+  helper using a captured handle (`let inner (Dir p) = readUnder h p`) handed
+  its obligation outward while it named the helper's generalized authority, so
+  it held vacuously and `/tmp` was read under `<FileRead "cfg/*">` on every
+  engine. A residual may now name an authority outside the binding's scope as
+  it stands (`outsideAuth`).
+- *S2:* a binding the value restriction keeps monomorphic had its instance
+  decided at its definition (`let p = subIn cfg` then `p app` refused); its
+  type's authorities are now outward, the enclosing scope's (`ScopeRoles`).
+- *S3:* an alias-qualified occurrence (`D.rdSub`) reported at a stale span:
+  desugar dropped the alias head's span (`qualifiedAt`). A residual forced to
+  top by a top lower bound rendered as `(* <= d)`: such a variable has no
+  freedom and is solved, `Dir *` as on `main`.
+- *Older, not acted on:* `run (Handler (x => (if c then f else g) x))` is
+  refused on `main` too: an unsigned binding's input row is not solved down to
+  a closed slot through a lambda.
+
+**#3462 review round 2** (whole diff on `cdded5101`; each finding reproduced
+on a built binary beside a control, and each answered by a rule, not a case):
+
+- *S0, new in round 1:* a signed binding's universal reached the module root
+  when its group had a monomorphic member (`g = second f readAt` beside
+  `f : Dir d -> <FileRead d>`); the root solved it as a flexible variable and
+  `/tmp` was read under `<FileRead "cfg/*">`. An obligation naming a binder of
+  the closing group (its own universal, or a variable its schemes generalize)
+  is now decided in the group, never transferred (`binderAuth`); an enclosing
+  function's universal still moves with the rest (`effect_named_authority_ref_ok`).
+- *S0, new here:* a delayed join was handed outward whenever its result was
+  outer, even with a local alternative, which the binding then generalized
+  (`h x = k (if c then f else x)`; a segfault, a garbage value, an effect
+  laundered). A join is postponed only when every alternative is an outer
+  variable (`joinOfOuterVariables`).
+- *S1, new here:* a residual instance whose variable nothing bounded below was
+  refused (`partial = subIn cfg`, unused; `map (subIn cfg) []`): the solver
+  assigns only a variable some obligation bounds above-and-below. An internal
+  variable nothing bounds below now takes the empty authority (`AJoin []`,
+  rendered `()`; `bottomUnbounded`), and `authSub` admits it under anything.
+  A variable a member's type mentions is never defaulted (`rlTyped`).
+- *Found while fixing S1, S0:* with the empty authority at the root, a
+  generalized variable's obligation that had been transferred out of its
+  group (`q1 (Dir p) = readUnder h0 p` beside a monomorphic `h0`) held
+  vacuously and `q1 etc` read a file outside `cfg/*`. The binder rule above
+  closes it. The component walk no longer links two members through an
+  outside cell (`residualEligible`), so `q1` keeps `(d <= "cfg/*") =>` and
+  the honest `q1 app` that `main` refused is accepted.
+- *S2/S3:* an effect atom solved to the empty authority lost its label in
+  `check --types` (`<, IO>`); two distinct variables with one binder name read
+  alike in a message (`needs d to lie within d`); a residual the root proved
+  printed as `(d <= *) =>`; stale `withLocOf`/`[quantifiable]` names.
+- *Open, for a ruling:* a module-root cell bounded only above takes `⊥`, so a
+  library's exported `partial = rdIn cfg` is unusable from an importer (it was
+  `Dir "cfg/*"` on `main`, whose less general `rdIn` equated the two); the
+  spelling of the empty authority (`()`).
+
+**#3462 review round 3** (whole diff on `a2e50bca7`):
+
+- *S0, since the first commit:* in a mutually recursive group
+  (`q1 n (Dir p) = … readUnder cfg p … q2 (n - 1) (Dir p)`, `q2 = q1`) the
+  first solve linked one member's authority to the other's; the component then
+  named one quantifiable variable, the residual went to one member, and the
+  other published the same variable with no relation, so `q1 2 secret` read
+  `/tmp` under `<FileRead "cfg/*">` (also a where-group over a captured handle,
+  a three-member cycle, and source-order swapped). Eligibility now counts the
+  members whose types mention a component variable after that solve
+  (`rlMemberAuths`, `mentioningMembers`); a component two members mention is
+  decided in the group, refused as on `main`.
+- *S1, for a ruling:* an honest mutually recursive pair over a captured handle
+  or a monomorphic cell (`r8`, `g1`) is refused; `main` accepted it through the
+  vacuous transfer that also let `b8x`-style launders through. Accepting it
+  needs a residual shared by every member that mentions the component: a
+  proposal, not built.
+- *Spec text:* the module root does default a monomorphic top-level binding's
+  cells (`partial`, `cell`), which §4.1 now says; the ⊥-at-root ruling stands.
+- *Open S2/S3:* `()` shows in `check-policy`'s "main requires <FileRead (), IO>"
+  (the spelling ruling); the binder-rule message uses the signed-code wording
+  for an unsigned group and names a callee's binder (`only s is admitted`).
+- *Pre-existing, not this PR:* `check-policy` crashes (`E-NOT-A-FUNCTION`) on
+  a point-free `main = touch app`, on `main` too (#3329); LSP hover on a local shows no
+  context; `stash : Dir d -> Unit` over a monomorphic cell is accepted as too
+  general.
+
+**#3462 review round 4** (whole diff on `ba7f925c2`): the eligibility rule
+held (no launder across 105 probes, impl and default methods, a three-member
+where cycle, two modules). But a `where` block is one binding group, so a
+sibling that only CALLS a residual-bearing helper
+(`readAll h ds = go ds where rd (Dir p) = readUnder h p; go …`) shares its
+authority and is refused; `main` accepts it (and, in the same shape, read
+outside the bound). Round 3's head read outside the bound there too.
+
+**#3462 review round 5** (on `c9960066b`, which split `where` blocks into
+dependency components): the split accepted round 4's honest shapes and kept
+every launder refused, but (a) it WIDENED an S0 that `main` has in the `let`
+form: a generalized helper returning a method's value (`g _ = def`) used at
+two types prints garbage from the built binary at exit 0 (#3486), and the
+split made the `where` form reach it; (b) per-component Num defaulting
+refused `where scale = 100; go y = y / scale` at Float. The split was
+reverted; dependency analysis for `where` is #3487 (after #3486 and a
+defaulting ruling), and round 4's honest shape is pinned as
+`test/must_fail_fixtures/3487-where-sibling-shares-helper-authority`. Also
+fixed from round 5: `T-EXPORT-UNSOLVED-AUTHORITY` is located at the binding's
+first located expression (`firstExprLoc`), reports each cell once, no longer
+says the value restriction holds a generalized function, and counts a cell
+named only by the residual context.
+
+**#3462 rulings** (Val, 2026-09-26, on Fable's advice; built on this branch):
+
+1. An exported binding the value restriction keeps monomorphic, whose type
+   holds an authority nothing in its module bounds below, is refused
+   (`T-EXPORT-UNSOLVED-AUTHORITY`, asking for a signature); a private one keeps
+   the empty authority. No hits across the 142 stdlib and pds modules.
+2. The empty authority prints `{}` with its label kept, has no written form,
+   and a host boundary stays conservative.
+3. The residual shared by every member of a recursive group is #3482's
+   follow-up; the honest pair is pinned as
+   `test/must_fail_fixtures/3482-mutual-recursion-shared-residual`.
+
+**Traps paid for (#3462):**
+
+- A join must be decided before the closing scope reads its roots and
+  quantifiable authorities: rows minted by a resolution done inside the close
+  looked unowned and were solved to pure (`pickApply` lost its rows).
+- A single alternative, or one variable on every branch, has nothing to join;
+  deferring it made a signature's variable bind to itself ("infinite type" in
+  the compiler's own stdlib).
+- Joins must not outlive a top-level group: method routes are fixed when it
+  closes. Postponing them to the module root built an emitter that panicked on
+  an arg-tag route with an `Int` receiver, and the seed-bootstrapped emitter
+  panicked the same way, which is what showed it was the typechecker's
+  decision and not a miscompile.
+- An emitter built by a flawed typechecker compiles the next one: after such a
+  failure, delete `./medaka` and `./medaka_emitter` so the next build
+  bootstraps from the seed.
+- A binding has three roles, not two (`BindingRole`): an unsigned binding
+  that generalizes quantifies its authorities, a monomorphic one hands them
+  outward, and a signed one does neither. The first round-1 fix counted a
+  signed member as monomorphic, so its signature's rigid authority went
+  outward, reached the module root after the rigid set was restored, and was
+  solved: `effect_named_authority_ref_launder` published `String
+  @"/etc/shadow"` and accepted. Only that existing fixture caught it; a
+  universal is now never outward (`withoutRigid`).
+- `diff_compiler_fmt`'s typecheck-error rows run the `check_main` oracle, which
+  `build_oracles.sh --for diff_compiler_fmt` rebuilds; reading a verdict from a
+  stale `test/bin/check_main` after a compiler change reads the old compiler.
+
 ## Delivered code and invariants to preserve
 
 | File under compiler/types | Responsibility at the checkpoint |
@@ -969,8 +1180,9 @@ row id 21), then passed after restoring the code.
 
 Positive joins keep function domains equal while joining results and latent
 effects. Only proved-covariant data positions join; unknown, mutable and invariant
-positions stay equal. Perform occurs checks before shaping variables. Fully
-delayed joins for unknown value shapes remain unfinished.
+positions stay equal. Perform occurs checks before shaping variables. A join
+whose alternatives have no shape yet is recorded and decided when its binding
+scope closes (#3462); only alternatives that never take a shape are equated.
 
 Recursive contracts now use a paired `ValueScheme` carrying `Scheme` and optional
 `CDeclared`. Primary and selected standalone bindings each retain their own

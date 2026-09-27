@@ -1,0 +1,27 @@
+-- The residual of an unsigned wrapper (#3462) is re-emitted at each use: a
+-- path outside the handle's authority does not satisfy `a <= d`, so the use
+-- is refused, naming the wrapper whose inferred type relates them.  The
+-- handle is pinned by its signature; a handle at a flexible index would be
+-- raised to the join instead.
+data Dir (d : Authority FileRead) = Dir (String @d)
+
+mk : (s : String) -> Dir s
+mk s = Dir s
+
+sub : Dir d -> (p : String @d) -> Dir d
+sub h _ = h
+
+readIn h (Dir p) =
+  let _ = sub h p
+  readFile p
+
+cfg : Dir "cfg/*"
+cfg = mk "cfg/*"
+
+shadow : Dir "/etc/shadow"
+shadow = mk "/etc/shadow"
+
+cfgOnly : Unit -> <FileRead> Result String String
+cfgOnly _ = readIn cfg shadow
+
+main = println 1

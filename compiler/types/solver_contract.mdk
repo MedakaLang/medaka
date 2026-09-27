@@ -164,7 +164,7 @@ instantiateQualifiedAt : ExistingInstantiationServices subst ->
   Option Instantiation
 instantiateQualifiedAt services subst scope origin targets qualified =
   match qualified.hm
-    Forall _ _ _ schemeForce schemeBody =>
+    Forall _ _ _ _ schemeForce schemeBody =>
       map
         (arguments => Instantiation {
           body = services.substituteExistingBody subst schemeBody,
@@ -186,7 +186,7 @@ instantiateQualified : InstantiationServices subst ->
   QualifiedScheme ->
   Instantiation
 instantiateQualified services scope origin qualified = match qualified.hm
-  Forall typeVariables effectVariables authorityVariables schemeForce schemeBody =>
+  Forall typeVariables effectVariables authorityVariables _ schemeForce schemeBody =>
     let subst =
       services.makeSubstitution typeVariables effectVariables authorityVariables
     Instantiation {

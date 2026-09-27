@@ -1,0 +1,32 @@
+data Dir (d : Authority FileRead) = Dir (String @d)
+
+mk : (s : String) -> Dir s
+mk s = Dir s
+
+readUnder : Dir d -> (p : String @d) -> <FileRead d> Result String String
+readUnder _ p = readFile p
+
+cfg : Dir "cfg/*"
+cfg = mk "cfg/*"
+
+app : Dir "cfg/app"
+app = mk "cfg/app"
+
+showR r = match r
+  Ok s => "READ: " ++ s
+  Err e => "ERR: " ++ e
+
+-- #3487: `go` only CALLS `rd`, but a `where` block is one binding group, so
+-- `go` shares `rd`'s authority and the block decides the relation `rd` owes
+-- the handle.  Every read is under `cfg/*`; the right answer is to accept it.
+readAll h ds = go ds
+  where
+    rd (Dir p) = readUnder h p
+    go xs = match xs
+      [] => []
+      (Dir p) :: rest => showR (rd (Dir p)) :: go rest
+
+onlyCfg : Unit -> <FileRead "cfg/*"> List String
+onlyCfg _ = readAll cfg [app, app]
+
+main = println (onlyCfg ())

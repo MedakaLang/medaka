@@ -1,5 +1,6 @@
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 commaStr : Int -> String
+contextText : List String -> List String -> String
 effStr : List Atom -> String
 letters : String
 lookupAssocI : Int -> List (Int, a) -> Option a
@@ -7,6 +8,7 @@ nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 nameTaken : String -> List (Int, String) -> Bool
 normalize : Mono -> Mono
 normalizeLink : Ref Tyvar -> Mono -> Mono
+openResiduals : List AuthResidual -> List AuthResidual
 ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
 ppAuthArg : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppAuthority : Ref (List (Int, String)) -> Ref Int -> Authority -> String
@@ -37,6 +39,7 @@ ppTyAtom : Ty -> String
 ppTyFunArg : Ty -> String
 ppVar : Ref (List (Int, String)) -> Ref Int -> Ref Tyvar -> String
 renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List VecObl -> List String
+renderResiduals : Ref (List (Int, String)) -> Ref Int -> List AuthResidual -> List String
 spineParts : Mono -> (Mono, List Mono)
 tupleHeadTagTc : Int -> String
 tupleSpine : Mono -> Option (List Mono)
