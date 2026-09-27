@@ -1,0 +1,40 @@
+-- DICT-SEMANTICS §3 `super` (#2095): #1127's shape (a THIRD overlapping
+-- instance makes a re-selection value-observable), with different names so
+-- this is not a byte-for-byte duplicate of `s6-1-4-supers-per-construction-
+-- goal.mdk`, which pins the same shape for §6.1.4/C2. `Boxed`'s `requires Sz a`
+-- super slot is filled at `useSz`'s construction goal by solving `Sz (Box
+-- Int)` against THREE overlapping `Sz` instances (`Int`, `Box a requires Sz
+-- a`, `Box Int`) -- the min-⊑ winner is the ground `Box Int` instance, `77`.
+-- `sizeOf (Box 1 : Box Int)` on the next line is the top-level goal at the
+-- same type. §3 solves an instance's super at its construction goal with the
+-- same judgment as any other goal, so the two agree by construction; inside a
+-- body whose dictionary is a given, the super is instead a projection of that
+-- given. A value other than `77\n77` means the construction goal and the
+-- top-level goal were solved by different rules.
+--
+data Box a = Box a
+
+interface Sz a where
+  sizeOf : a -> Int
+
+interface Boxed a requires Sz a where
+  label : a -> Int
+
+impl Sz Int where
+  sizeOf _ = 1
+
+impl Sz (Box a) requires Sz a where
+  sizeOf _ = 20
+
+impl Sz (Box Int) where
+  sizeOf _ = 77
+
+impl Boxed (Box a) requires Sz a where
+  label _ = 5
+
+useSz : Boxed a => a -> Int
+useSz x = sizeOf x
+
+main =
+  println (useSz (Box 1 : Box Int))
+  println (sizeOf (Box 1 : Box Int))

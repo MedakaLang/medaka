@@ -1,0 +1,2 @@
+-- The one type that implements both interfaces.
+public export data Dog = Dog

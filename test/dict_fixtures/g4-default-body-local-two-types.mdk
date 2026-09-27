@@ -1,0 +1,30 @@
+-- DICT-SEMANTICS §4.1 G4: the dictionary-abstracted local of
+-- `g4-let-multi-type.mdk`, sited in an interface DEFAULT body.  `g` generalizes
+-- over its own `Tagged b` and is used at the receiver and at `Cat`: the receiver
+-- use is answered by the default body's receiver given, the `Cat` use by
+-- `impl Tagged Cat`.  The default is reached directly and through a `Tagged a =>`
+-- wrapper.
+--
+-- `both Cat` = "cat!cat!", `both Dog` = "dog!cat!", `gen Dog` = "dog!cat!", so
+-- the program prints `cat!cat!|dog!cat!|dog!cat!`.  One dictionary shared by both
+-- uses would print `dog!dog!` or `cat!cat!` for Dog.
+interface Tagged a where
+  label : a -> String
+  both : a -> String
+  both x =
+    let g = y => label y ++ "!"
+    g x ++ g Cat
+
+data Cat = Cat
+data Dog = Dog
+
+impl Tagged Cat where
+  label _ = "cat"
+
+impl Tagged Dog where
+  label _ = "dog"
+
+gen : Tagged a => a -> String
+gen v = both v
+
+main = println (both Cat ++ "|" ++ both Dog ++ "|" ++ gen Dog)

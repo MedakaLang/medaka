@@ -1,0 +1,9 @@
+-- A method-less `impl Speak Dog`: Dog's `Speak.speak` slot is filled by ifa's default.
+-- Only `Speak` is in scope here, so `speak` names ifa's method.
+import ifa.{Speak(..), speak}
+import dog.{Dog(..)}
+
+impl Speak Dog where
+
+export sayA : Dog -> String
+sayA d = speak d

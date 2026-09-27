@@ -1,0 +1,8 @@
+-- DICT-SEMANTICS §4.1 G4 (#2095, #2032): a local forwarding to the prelude's
+-- `debug`, used at two ground types with no enclosing polymorphic signature.
+-- `s` generalizes over `Debug a`; each use solves its own instance, so the
+-- program prints 1 then True.
+main =
+  let s = v => debug v
+  println (s 1)
+  println (s True)

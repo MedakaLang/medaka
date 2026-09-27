@@ -1,0 +1,4 @@
+export interface IB a where
+  other : a -> Int
+  dflt : a -> Int
+  dflt _ = 9000

@@ -1,0 +1,4 @@
+-- A second interface spelling the same method, with its own default.
+export interface Greet x where
+  speak : x -> String
+  speak _ = "B-default"

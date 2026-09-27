@@ -32,13 +32,24 @@ import types.evidence.{
   ScopeId,
   SolverEvidence(..),
 }
-import types.repr.{Scheme(..), ppMono, ppScheme}
+import types.disposition.{
+  DispositionTable,
+  InstId(..),
+  MethodDisposition(..),
+  dispositionIface,
+  dispositionInstance,
+  dispositionMethod,
+  dispositionRows,
+  instIdMid,
+  installedDispositions,
+}
+import types.repr.{IfaceRef(..), Scheme(..), ppMono, ppScheme}
 import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
-  DefaultBodyRNoneKind(..),
-  DefaultBodyRNoneTraceEntry(..),
+  EvidenceObservationEntry(..),
+  EvidenceOutcomeKind(..),
   MethodReturnMemoView(..),
   MethodReturnTraceEntry(..),
   MethodReturnTraceStage(..),
@@ -47,16 +58,17 @@ import types.typecheck.{
   NumericPredicateTraceStage(..),
   TcDiag(..),
   beginAssumptionTrace,
-  beginDefaultBodyRNoneTrace,
+  beginEvidenceObservation,
   beginMethodReturnTrace,
   beginNumericPredicateTrace,
   checkModulesDiagsChain,
   checkModulesEntryReport,
   checkOneDiags,
   checkOneSchemeFullK,
+  elaborateModules,
   elaborateOne,
   finishAssumptionTrace,
-  finishDefaultBodyRNoneTrace,
+  finishEvidenceObservation,
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   methodReturnResolutionMutationProbe,
@@ -1232,7 +1244,7 @@ test "block recursive arithmetic retains the outer predicate and route" =
   expectAll [
     expectEqual [] errors,
     expectEqual
-      [("core::Num", ["a"], "binding:value", True, [])]
+      [("core::Num", ["a"], "local:local", True, [])]
       (map
         (view => (
           view.ntvInterface,
@@ -1244,8 +1256,8 @@ test "block recursive arithmetic retains the outer predicate and route" =
         arithmetic),
     expectEqual
       [
-        ("binding:value", "binding:value", 0),
-        ("binding:value", "binding:value", 0),
+        ("local:local", "binding:value", 0),
+        ("local:local", "binding:value", 0),
       ]
       assumptions,
   ]
@@ -1274,7 +1286,7 @@ wrappedReturnSource hasInt hasBox =
 
 returnMethodRoutes : CExpr -> Option (List String)
 returnMethodRoutes (CApp fn _) = returnMethodRoutes fn
-returnMethodRoutes (CMethod "produce" _ _ prerequisites _) =
+returnMethodRoutes (CMethod "produce" _ _ _ prerequisites _) =
   Some (map numericRouteView prerequisites)
 returnMethodRoutes _ = None
 
@@ -2305,7 +2317,7 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
 methodHeadArity : String -> CExpr -> Option Int
-methodHeadArity target (CMethod name arity _ _ _)
+methodHeadArity target (CMethod name _ arity _ _ _)
   | name == target = Some arity
   | otherwise = None
 methodHeadArity target (CApp f _) = methodHeadArity target f
@@ -2409,12 +2421,12 @@ test "value-position shadow publishes the selected standalone arity" =
 test "Core IR round-trip preserves method occurrence arity" =
   let original =
     CProgram
-      [CBind "main" [CClause [] (CMethod "probe" 7 RNone [] [])]]
+      [CBind "main" [CClause [] (CMethod "probe" "" 7 RNone [] [])]]
       []
       []
       []
   match parseCProgram (cprogramToSexp original)
-    CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
+    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])]] _ _ _ =>
       expectEqual 7 arity
     _ => fail "expected the round-tripped CProgram to keep the same shape"
 
@@ -2444,16 +2456,16 @@ localCoreExprFacts (CBinPrim op lhs rhs _) =
     addRoutes
     fromIntRoutes
     (primCount + (if op == "+" then 1 else 0))
-localCoreExprFacts (CMethod "add" _ (RDict binder) _ _) =
+localCoreExprFacts (CMethod "add" _ _ (RDict binder) _ _) =
   LocalCoreFacts False [binder] [] 0
-localCoreExprFacts (CMethod "fromInt" _ route _ _) = match route
+localCoreExprFacts (CMethod "fromInt" _ _ route _ _) = match route
   RDict binder => LocalCoreFacts False [] [binder] 0
   RDictFwd binder => LocalCoreFacts False [] [binder] 0
   _ => emptyLocalCoreFacts
 localCoreExprFacts _ = emptyLocalCoreFacts
 
 blockRecValueFacts : CBind -> LocalCoreFacts
-blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet False _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts localBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
@@ -2495,7 +2507,7 @@ lamThenGroupSource = joinNl [
 ]
 
 lamThenGroupBindFacts : CBind -> LocalCoreFacts
-lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind "g" [CClause _ gBody]] (CApp _ _))) (CApp _ _))]) =
+lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind _ [CClause _ gBody]] (CApp _ _))) (CApp _ _))]) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts gBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
@@ -2606,20 +2618,7 @@ data RequestView = RequestView {
 }
   deriving (Eq, Debug)
 
-data DefaultTraceView = DefaultTraceView {
-  dtvIfaceModule : String,
-  dtvIfaceName : String,
-  dtvMethod : String,
-  dtvCallee : String,
-  dtvKind : DefaultBodyRNoneKind,
-  dtvScopeModule : String,
-  dtvScopeOwner : String,
-  dtvStartLine : Int,
-}
-  deriving (Eq, Debug)
-
 data ModuleTraceView = ModuleTraceView {
-  mtvDefaults : List DefaultTraceView,
   mtvAssumptions : List TraceView,
   mtvErrors : Int,
 }
@@ -2654,32 +2653,9 @@ traceView entry =
 traceViewsNow : List AssumptionTraceEntry -> List TraceView
 traceViewsNow entries = map traceView entries
 
-defaultTraceView : DefaultBodyRNoneTraceEntry -> DefaultTraceView
-defaultTraceView entry =
-  let owner = entry.dbrOwner
-  let ifaceModule = match owner.dbiIface.irOrigin
-    OriginModule m => m
-    OriginBuiltin => "<builtin>"
-    OriginUnresolved => "<unresolved>"
-  let (scopeModule, scopeOwner) = scopeTraceContext entry.dbrScope
-  let startLine = match entry.dbrOrigin
-    Some (Loc _ line _ _ _) => line
-    None => 0
-  DefaultTraceView {
-    dtvIfaceModule = ifaceModule,
-    dtvIfaceName = owner.dbiIface.irName,
-    dtvMethod = owner.dbiMethod,
-    dtvCallee = entry.dbrCallee,
-    dtvKind = entry.dbrKind,
-    dtvScopeModule = scopeModule,
-    dtvScopeOwner = scopeOwner,
-    dtvStartLine = startLine,
-  }
-
 runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
   beginAssumptionTrace ()
-  beginDefaultBodyRNoneTrace ()
   let results =
     checkModulesDiagsChain
       None
@@ -2688,10 +2664,8 @@ runModulesObserved sources =
       []
       []
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
-  let defaultEntries = finishDefaultBodyRNoneTrace ()
   let assumptionEntries = finishAssumptionTrace ()
   ModuleTraceView {
-    mtvDefaults = map defaultTraceView defaultEntries,
     mtvAssumptions = traceViewsNow assumptionEntries,
     mtvErrors = modErrorCount results,
   }
@@ -2832,13 +2806,13 @@ test "direct predicate evidence keeps same-rendering binders nominal" =
       observed.rvErrors,
     )
 
-test "scalar and superclass assumption paths remain explicit legacy kinds" =
+test "a scalar assumption stays legacy and a superclass assumption is a projection" =
   let scalar = runObserved "trace_scalar" scalarSource
   let super = runObserved "trace_super" superSource
   expectEqual
     (
       [context ATLegacyScalar "trace_scalar" "binding:f"],
-      [context ATLegacySuperclass "trace_super" "binding:f"],
+      [context ATSuperclassProjection "trace_super" "binding:f"],
       0,
       0,
     )
@@ -3001,54 +2975,51 @@ mixedDefaultSource = joinNl [
   "    base y",
 ]
 
-test "genuine inherited Supply return keeps full default owner and parser origin" =
+-- A default body's receiver is registered under this ordinal (`typecheck`'s
+-- `defaultReceiverOrdinal`), below every real slot.
+receiverOrdinal : Int
+receiverOrdinal = -1
+
+receiverAnswers : List TraceView -> List TraceView
+receiverAnswers views =
+  filter (v => binderOrdinal v.tvBinder == receiverOrdinal) views
+
+test "a default body's sibling return call is answered by its receiver" =
   let observed = runModulesObserved [("supply_iface", supplySource)]
   expectEqual
     (
       [
-        DefaultTraceView {
-          dtvIfaceModule = "supply_iface",
-          dtvIfaceName = "Supply",
-          dtvMethod = "copy",
-          dtvCallee = "seed",
-          dtvKind = DBRKReturn,
-          dtvScopeModule = "supply_iface",
-          dtvScopeOwner = "default:copy",
-          dtvStartLine = 4,
-        },
+        (
+          ATDirectPredicate,
+          receiverOrdinal,
+          "default:copy",
+          "default:copy",
+          True,
+        ),
       ],
       0,
     )
-    (observed.mtvDefaults, observed.mtvErrors)
+    (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
 
-test "mixed default separates argument fallback from qualified givens" =
+test "mixed default answers its argument-position sibling by the receiver" =
   let observed = runModulesObserved [("mixed_default", mixedDefaultSource)]
   expectEqual
     (
       [
-        DefaultTraceView {
-          dtvIfaceModule = "mixed_default",
-          dtvIfaceName = "Rich",
-          dtvMethod = "mixed",
-          dtvCallee = "peer",
-          dtvKind = DBRKArg,
-          dtvScopeModule = "mixed_default",
-          dtvScopeOwner = "default:mixed",
-          dtvStartLine = 9,
-        },
-      ],
-      [
-        (ATLegacySuperclass, 0, "default:mixed", "default:mixed", True),
+        (ATSuperclassProjection, 0, "default:mixed", "default:mixed", True),
         (ATDirectPredicate, 1, "default:mixed", "default:mixed", True),
         (ATDirectPredicate, 0, "default:mixed", "default:mixed", True),
+        (
+          ATDirectPredicate,
+          receiverOrdinal,
+          "local:local",
+          "default:mixed",
+          False,
+        ),
       ],
       0,
     )
-    (
-      observed.mtvDefaults,
-      map assumptionShape observed.mtvAssumptions,
-      observed.mtvErrors,
-    )
+    (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
 
 test "same spelling retains module identity while impl bodies stay ordinary" =
   let colliding = runModulesObserved [
@@ -3089,15 +3060,17 @@ test "same spelling retains module identity while impl bodies stay ordinary" =
   expectEqual
     (
       ["owner_a", "owner_b"],
-      (1, [], []),
+      (1, 0, 0),
       [0, 0, 0, 0],
     )
     (
-      map (entry => entry.dtvIfaceModule) colliding.mtvDefaults,
+      map
+        (view => view.tvBinderModule)
+        (receiverAnswers colliding.mtvAssumptions),
       (
-        listLen synthesized.mtvDefaults,
-        explicit.mtvDefaults,
-        concrete.mtvDefaults,
+        listLen (receiverAnswers synthesized.mtvAssumptions),
+        listLen (receiverAnswers explicit.mtvAssumptions),
+        listLen (receiverAnswers concrete.mtvAssumptions),
       ),
       [
         colliding.mtvErrors,
@@ -3134,3 +3107,352 @@ test "synthesized impl copy retains ordinary binding ownership" =
       0,
     )
     (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
+
+-- #2095: production-path observation of `evidenceObservation`'s
+-- entries, one program per family the mission asks for. `elaborateOne`'s two-
+-- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
+-- numeric prelude so `intToString` and friends are the same environment those
+-- tests already exercise.
+evidenceObservationTrace : String -> List EvidenceObservationEntry
+evidenceObservationTrace source =
+  beginEvidenceObservation ()
+  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    "evidence_observation",
+    desugar (parseLocated source),
+  )
+  finishEvidenceObservation ()
+
+evidenceEntriesOfKind : String ->
+  List EvidenceObservationEntry ->
+  List EvidenceObservationEntry
+evidenceEntriesOfKind kind = filter (e => e.eoeGoalKind == kind)
+
+evidenceEntriesWithPredicate : String ->
+  List EvidenceObservationEntry ->
+  List EvidenceObservationEntry
+evidenceEntriesWithPredicate pred = filter (e => e.eoePredicate == Some pred)
+
+scopeOrdinal : ScopeId -> Int
+scopeOrdinal (ScopeId n) = n
+
+-- The comparison the pin below is built on: outcome, instance identity,
+-- prerequisite identities, and binder scope, exactly the four the mission's
+-- mutation checks name. Correct on the real entry; each mutation test shows it
+-- FALSE on one deliberately wrong field.
+evidenceEntryMatches : (EvidenceOutcomeKind, Option String, List String, Int) ->
+  EvidenceObservationEntry ->
+  Bool
+evidenceEntryMatches (outcome, instanceKey, prerequisites, scopeN) e =
+  e.eoeOutcome == outcome
+    && e.eoeInstanceKey == instanceKey
+    && e.eoePrerequisites == prerequisites
+    && scopeOrdinal e.eoeScope == scopeN
+
+test "a nested constrained call forwards the enclosing given (#2095 given forwarding)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "interface Give a where",
+        "  give : Unit -> a",
+        "callGive : Give a => Unit -> a",
+        "callGive _ = give ()",
+        "useGive : Give a => Unit -> a",
+        "useGive _ = callGive ()",
+      ])
+  let forwarded = evidenceEntriesOfKind "GKDictApp" trace
+  expectTrue (match forwarded
+    [e] =>
+      e.eoeOutcome == EOKGiven
+        && e.eoeGivenBinder == Some "$dict_useGive_0"
+        && e.eoeArity == 1
+    _ => False)
+
+test "a construction goal packs its prerequisite into the instance route (#2095 instance + prerequisites)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "data Box a = Box a",
+        "interface Need a where",
+        "  need : a -> Int",
+        "impl Need Int where",
+        "  need n = n",
+        "interface Build a where",
+        "  make : Unit -> a",
+        "impl Build (Box a) requires Need a where",
+        "  make _ = Box (need 1)",
+        "topCall : Build a => Unit -> a",
+        "topCall _ = make ()",
+        "useTop : Box Int",
+        "useTop = topCall ()",
+      ])
+  let constructed = evidenceEntriesWithPredicate "Box Int" trace
+  expectTrue (match constructed
+    [e] =>
+      e.eoeOutcome == EOKInstance
+        && e.eoeInstanceKey == Some "evidence_observation.Box"
+        && e.eoePrerequisites == ["RKey Int"]
+    _ => False)
+
+test "the construction goal's pin is sensitive to identity, prerequisites, and scope (#2095 mutation)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "data Box a = Box a",
+        "interface Need a where",
+        "  need : a -> Int",
+        "impl Need Int where",
+        "  need n = n",
+        "interface Build a where",
+        "  make : Unit -> a",
+        "impl Build (Box a) requires Need a where",
+        "  make _ = Box (need 1)",
+        "topCall : Build a => Unit -> a",
+        "topCall _ = make ()",
+        "useTop : Box Int",
+        "useTop = topCall ()",
+      ])
+  match evidenceEntriesWithPredicate "Box Int" trace
+    [e] =>
+      let scopeN = scopeOrdinal e.eoeScope
+      expectAll [
+        expectTrue
+          (evidenceEntryMatches
+            (EOKInstance, Some "evidence_observation.Box", ["RKey Int"], scopeN)
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (EOKInstance, Some "SomethingElse", ["RKey Int"], scopeN)
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (EOKInstance, Some "evidence_observation.Box", [], scopeN)
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation.Box",
+              ["RKey Int"],
+              scopeN + 1,
+            )
+            e),
+      ]
+    _ => fail "expected exactly one Box Int construction goal"
+
+test "an appended super slot at an instance construction goal is solved at that goal (#2095, DICT §3 construction)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "interface A a where",
+        "  m1 : a -> Int",
+        "interface B a requires A a where",
+        "  m2 : a -> Int",
+        "impl A Int where",
+        "  m1 _ = 1",
+        "impl B Int where",
+        "  m2 _ = 2",
+        "callB : B a => a -> Int",
+        "callB x = m2 x",
+        "useB : Int",
+        "useB = callB 5",
+      ])
+  let slots = evidenceEntriesOfKind "GKDictApp" trace
+  expectAll [
+    expectEqual 2 (listLen slots),
+    expectTrue
+      (all
+        (e =>
+          e.eoeArity == 2
+            && e.eoeOutcome == EOKInstance
+            && e.eoeInstanceKey == Some "Int")
+        slots),
+  ]
+
+test "a default body's sibling call is answered by the body's receiver (#2095)" =
+  let trace =
+    evidenceObservationTrace
+      (joinNl [
+        "interface Sz a where",
+        "  sib : a -> Int",
+        "  sz : a -> String",
+        "  sz x = \"sz=\" ++ intToString (sib x)",
+        "impl Sz Int where",
+        "  sib x = x",
+      ])
+  let abstractSibling = evidenceEntriesWithPredicate "a" trace
+  expectEqual
+    [(EOKGiven, Some "$self_sz")]
+    (map (e => (e.eoeOutcome, e.eoeGivenBinder)) abstractSibling)
+
+localUseSiteObserved : String -> (List String, List EvidenceObservationEntry)
+localUseSiteObserved source =
+  beginEvidenceObservation ()
+  let (errors, _) = checkOneDiags [] [] (
+    "local_use_site",
+    desugar (parseLocated source),
+  )
+  let entries = finishEvidenceObservation ()
+  (map tcCode errors, entries)
+
+test "a generalized local is dictionary-abstracted: each use applies it to the given its own argument needs (#1082, #2095)" =
+  let (codes, entries) =
+    localUseSiteObserved
+      (joinNl
+        [
+          "interface Sz a where",
+          "  sz : a -> Int",
+          "impl Sz Int where",
+          "  sz _ = 1",
+          "impl Sz Bool where",
+          "  sz _ = 2",
+          "both : (Sz a, Sz b) => a -> b -> Int",
+          "both x y =",
+          "  let g v = sz v",
+          "  g x + g y",
+        ])
+  -- `g x` and `g y` are dictionary applications of `g`, one per use, and each
+  -- forwards the given for its own argument's variable: two distinct binders.  One
+  -- binder shared by both uses is the #1045 wrong answer.
+  let apps = evidenceEntriesOfKind "GKDictApp" entries
+  expectAll [
+    expectEqual [] codes,
+    expectEqual 2 (listLen apps),
+    expectTrue (all (e => e.eoeOutcome == EOKGiven) apps),
+    expectTrue (match map (e => e.eoeGivenBinder) apps
+      [Some first, Some second] => first /= second
+      _ => False),
+  ]
+
+-- #1112 A-3: production-path observation of `buildDispositions`'
+-- installed table, over a real multi-module elaboration. `elaborateModules`
+-- installs the table it built via `installDispositions` before returning
+-- (`types/typecheck.mdk`'s `driveGraphK`), so a caller reads it back with
+-- `installedDispositions` exactly as X-E (#1403) will.
+--
+-- Rows are matched by MODULE ID rather than by exact `InstId` (which also
+-- carries a whole-graph-running `seq` the prelude's own impls advance), so a
+-- future prelude change that adds or removes an `impl` cannot move these
+-- numbers underneath the test.
+dispositionsAfter : List (String, String) -> DispositionTable
+dispositionsAfter sources =
+  let _ =
+    elaborateModules
+      []
+      (desugar (parse numericPreludeSource))
+      (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
+  installedDispositions ()
+
+sameIfaceSpelling : IfaceRef -> String -> Bool
+sameIfaceSpelling iface name = iface.irName == name
+
+anyMatchSupplied : String -> String -> List MethodDisposition -> Bool
+anyMatchSupplied _ _ [] = False
+anyMatchSupplied wantMid wantMethod (d :: rest) = match d
+  Supplied { instance = i, method = m } =>
+    instIdMid i == wantMid && m == wantMethod
+      || anyMatchSupplied wantMid wantMethod rest
+  InheritedDefault _ _ _ => anyMatchSupplied wantMid wantMethod rest
+
+anyMatchInheritedDefault : String ->
+  String ->
+  String ->
+  List MethodDisposition ->
+  Bool
+anyMatchInheritedDefault _ _ _ [] = False
+anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
+  InheritedDefault { instance = i, iface = ir, method = m } =>
+    instIdMid i == wantMid && sameIfaceSpelling ir wantIface && m == wantMethod
+      || anyMatchInheritedDefault wantMid wantIface wantMethod rest
+  Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
+
+-- #1265's shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
+-- `ifb::Greet`) that happen to share the bare method name `speak`, both
+-- method-less (both `InheritedDefault`). The disposition table keys on
+-- INSTANCE identity (one row per `impl` declaration), so it must keep the two
+-- rows apart by their declaring module — the (method, tag)-keyed collapse
+-- #1265 pins is a Core IR default-registry defect, not one this table can
+-- even express.
+test "#1265: two same-named methods of two different interfaces stay two rows" =
+  let table = dispositionsAfter [
+    (
+      "ifa",
+      joinNl [
+        "export interface Speak x where",
+        "  speak : x -> String",
+        "  speak _ = \"A-default\"",
+      ],
+    ),
+    (
+      "ifb",
+      joinNl [
+        "export interface Greet x where",
+        "  speak : x -> String",
+        "  speak _ = \"B-default\"",
+      ],
+    ),
+    ("dog", "public export data Dog = Dog"),
+    (
+      "ca",
+      joinNl [
+        "import ifa.{Speak(..), speak}",
+        "import dog.{Dog(..)}",
+        "impl Speak Dog where",
+      ],
+    ),
+    (
+      "cb",
+      joinNl [
+        "import ifb.{Greet(..), speak}",
+        "import dog.{Dog(..)}",
+        "impl Greet Dog where",
+      ],
+    ),
+  ]
+  expectAll [
+    expectTrue
+      (anyMatchInheritedDefault "ca" "Speak" "speak" (dispositionRows table)),
+    expectTrue
+      (anyMatchInheritedDefault "cb" "Greet" "speak" (dispositionRows table)),
+  ]
+
+-- #1020's cross-module shape: a cross-module `impl` overriding NOTHING
+-- (`Speak Dog`) is `InheritedDefault`; a sibling overriding its one method
+-- (`Loud Cat`) is `Supplied`; a second cross-module empty impl of the SAME
+-- interface (`Loud Dog`) is `InheritedDefault` alongside it.
+test "#1020: cross-module empty and overriding impls disposition correctly" =
+  let table = dispositionsAfter [
+    (
+      "dface",
+      joinNl [
+        "export interface Speak a where",
+        "  speak : a -> String",
+        "  speak _ = \"woof\"",
+        "export interface Loud a where",
+        "  loud : a -> String",
+        "  loud _ = \"WOOF\"",
+      ],
+    ),
+    (
+      "entry",
+      joinNl [
+        "import dface.{Speak(..), speak, Loud(..), loud}",
+        "data Cat = Cat",
+        "data Dog = Dog",
+        "impl Speak Dog where",
+        "impl Loud Cat where",
+        "  loud _ = \"MEOW\"",
+        "impl Loud Dog where",
+      ],
+    ),
+  ]
+  expectAll [
+    expectTrue
+      (anyMatchInheritedDefault
+        "entry"
+        "Speak"
+        "speak"
+        (dispositionRows table)),
+    expectTrue (anyMatchSupplied "entry" "loud" (dispositionRows table)),
+    expectTrue
+      (anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table)),
+  ]

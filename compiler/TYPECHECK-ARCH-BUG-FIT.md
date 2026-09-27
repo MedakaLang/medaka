@@ -672,8 +672,10 @@ mechanism is sharper than "supers are flattened".**
    `activeDictVars : Ref (List (Int, String))` (`:3139`) is keyed by **tyvar id alone**;
    `activeDictVarOf` (`:10243`) is `lookupAssocI (tyvarId cell) …` first-match and
    `firstDictForEncl` (`:10268`) adds only a `$dict_<encl>_` name-prefix filter. Because
-   `expandSupersFix` gives the appended super slot **the same tyvar id** as its sub slot
-   (`:5025-5026`: "`Sub a`/`Sup a` share `a`, so the super id == the sub id"), the body's
+   `expandSupersFix` (renamed `expandSupersVecs`, `compiler/types/typecheck.mdk:15472`,
+   as of the S2a superclass-projection landing) gives the appended super slot **the
+   same tyvar id** as its sub slot ("`Sub a`/`Sup a` share `a`, so the super id ==
+   the sub id"), the body's
    `dm x` goal on `a` resolves to whichever slot is found first — with no interface
    component anywhere in the key.
 
@@ -1187,12 +1189,11 @@ than the ambiguity arm.
 
 ### #1040 — `where`-local helper at two types · **DRAINED-BY F-1** (#1082)
 
-> ⚠️ **SUPERSEDED for the 0.1.0 floor.** Sprint `dispatch-must-not-guess`
-> (#1986) landed a located `T-LOCAL-CONSTRAINED-MONO` REJECT for this repro
-> ahead of F-1 — see `docs/KNOWN-GAPS.md`. The mechanism analysis and the
-> falsifiable prediction below remain accurate for what happens *when F-1
-> lands*; they no longer describe the *current* (interim, reject-not-drain)
-> state.
+> ✅ **F-1 LANDED (2026-09-26), draining this row.** The interim
+> `T-LOCAL-CONSTRAINED-MONO` REJECT (#1986) is deleted along with the pin it
+> guarded. The falsifiable prediction below was checked against the built
+> binary and holds: `top = d (1 : Int) ++ d True where d v = debug v` prints
+> `1True` on `medaka run` and the built native binary alike, exit 0.
 
 **Mechanism (verified).** `dict_pass` prepends `$dict_…` parameters to top-level defs and
 impl methods only; the source states it at `:8893`:
@@ -1216,15 +1217,24 @@ state to degrade from.
 debug v` must print `1True` from the built binary (today: `11`, exit 0) and from
 `medaka run` (today: `E-PANIC: intToString: not an Int`). All three engines must agree.
 
-**Sequencing note, not a gap.** F-1 sits at the end of the spine (after C-1, E-2, and
-S-2(f)). #1040, #1043 and #1052 stay live for the whole arc; the `must_fail` pins owed on
-all three are what keep them visible.
+**Sequencing note, historical.** F-1 sat at the end of the spine (after C-1, E-2, and
+S-2(f)); #1040, #1043 and #1052 stayed live for the whole arc. All three are now
+DRAINED (2026-09-26) — their visibility is the accepting `test/dict_fixtures/g4-*`
+rows and `test/run_check_agreement_fixtures/`, not a `must_fail` pin (none was ever
+filed for this family; these are wrong-answer/build-failure bugs, not accept-shape
+ones).
 
 ---
 
 ### #1043 — block-`let` local helper cannot be built · **DRAINED-BY F-1** (typecheck half) · **ENGINE-REALIZATION** (emitter half) · caveat G-2
 
-**Mechanism (verified).** Same root as #1040, different entry point. `methodConstrainedIds`
+> ✅ **F-1 LANDED (2026-09-26), draining the typecheck half.** `localAbsCandidate`
+> (`compiler/types/typecheck.mdk:23761-23795`) abstracts a block-`let` local the same
+> way as a `where`-group one — G-2's caveat is discharged, not sidestepped: F-1's
+> deliverable covers the *set* of local-binding inference paths. #1043's own repro
+> (`main = let d v = debug v; println (d 2)`) now builds and prints `2`, exit 0.
+
+**Mechanism (verified, historical — see above for the landed state).** Same root as #1040, different entry point. `methodConstrainedIds`
 is reached only via `processLetGroup` ← `inferLetGroup`; the sibling local-binding paths
 `blockLet` (`:5209`), `blockRecLet` (`:5189`), `inferRecLet` (`:7819`) and `inferLetBody`
 (`:7901`) never consult it. The emitter then panics in `emitArgDispatchChain`
@@ -1247,12 +1257,12 @@ inference paths, or #1040 drains and #1043 does not.
 
 ### #1052 — the local-dict pin is itself unsound · **DRAINED-BY F-1** (#1082)
 
-> ⚠️ **SUPERSEDED for the 0.1.0 floor.** Sprint `dispatch-must-not-guess`
-> (#1986) landed a located `T-LOCAL-CONSTRAINED-MONO` REJECT for this repro
-> ahead of F-1 — see `docs/KNOWN-GAPS.md`. The mechanism analysis and the
-> falsifiable prediction below remain accurate for what happens *when F-1
-> lands*; they no longer describe the *current* (interim, reject-not-drain)
-> state.
+> ✅ **F-1 LANDED (2026-09-26), draining this row.** #1052's own repro
+> (`useTwo`/`where d v = sizeOf v`) prints `3` on `check`/`run`/`build` alike;
+> the typed Core IR dump shows two `$dict_useTwo_0`/`$dict_useTwo_1` params on
+> `useTwo`, so the load-bearing half of the prediction (a restored dict slot,
+> not just a changed printed value) holds too. See the G4 row,
+> `docs/spec/DICT-SEMANTICS.md`.
 
 **Mechanism (verified from the issue's IR dump).** The pin declines generalization,
 monomorphising the `where`-local `d`, which merges the two **declared, rigid** signature

@@ -76,6 +76,7 @@ alphaSyntax _ _ _ (EBinOp _ _ _ _) = None
 alphaSyntax top vt lets (EVar x) = varAuthority top vt lets x
 alphaSyntax top vt lets (EVarId x _) = varAuthority top vt lets x
 alphaSyntax top vt lets (EVarAt x _) = varAuthority top vt lets x
+alphaSyntax top vt lets (EDictAt x _) = varAuthority top vt lets x
 alphaSyntax top vt lets (ELet _ _ (PVar x _) e1 e2) =
   alphaSyntax top vt ((x, ALet e1) :: lets) e2
 alphaSyntax top vt lets (ELet _ _ pat _ e2) =

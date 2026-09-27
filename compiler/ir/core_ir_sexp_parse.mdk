@@ -352,9 +352,10 @@ toCExpr (SList ((SAtom "CListIndex") :: [a, i])) =
 toCExpr (SList ((SAtom "CListSlice") :: [a, lo, hi, incl])) =
   CListSlice (toCExpr a) (toCExpr lo) (toCExpr hi) (toBool incl)
 toCExpr (SList ((SAtom "CBlock") :: stmts)) = CBlock (map toCStmt stmts)
-toCExpr (SList ((SAtom "CMethod") :: [name, arity, route, SList implRoutes, SList methRoutes])) =
+toCExpr (SList ((SAtom "CMethod") :: [name, iface, arity, route, SList implRoutes, SList methRoutes])) =
   CMethod
     (toStr name)
+    (toStr iface)
     (toInt arity)
     (toRoute route)
     (map toRoute implRoutes)
@@ -383,8 +384,14 @@ toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, SList positions, 
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)
-toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, SList pats, body])) =
-  CImplDefault (toStr ifaceId) (map toPat pats) (toCExpr body)
+toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, SList positions, SList pats, body])) =
+  CImplDefault
+    (toStr ifaceId)
+    (toStr tag)
+    (toStr key)
+    (map toInt positions)
+    (map toPat pats)
+    (toCExpr body)
 toCImplBody other =
   panic ("core_ir_sexp_parse: bad CImplBody: " ++ sexprToStr other)
 

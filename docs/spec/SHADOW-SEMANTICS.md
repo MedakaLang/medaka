@@ -2375,7 +2375,7 @@ self-draining: it goes RED the day (B) is fixed).
 > funDef is mangled (`prov__size`) — the importer shadow set came back **empty**.
 > `recordRLocalSite` therefore never recorded a site, and `resolveArgStamp`'s `RKey Int`
 > **clobbered the mark pass's correct `RLocal prov__size` seed**, landing in
-> `emitDefaultRKey`'s no-impl arm. That asymmetry is precisely why the definer shape
+> the emitter's (since-deleted) default-synthesis no-impl arm. That asymmetry is precisely why the definer shape
 > never reproduced while the importer one always did — this entry's "value-position
 > lift" theory was looking at the wrong half of the pipeline. Rows 21a/21b pin both.
 
