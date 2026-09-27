@@ -1,0 +1,9 @@
+-- #3496: a concatenation denotes its left operand plus an unknown suffix.
+-- "/etc/app/" without a trailing `*` is an exact element and admits only
+-- itself, so `"/etc/app/" ++ name` performs <FileRead "/etc/app/*">, which
+-- the exact bound <FileRead "/etc/app/"> does not admit ⇒ REJECT.
+readCfg : String -> <FileRead "/etc/app/"> Result String String
+readCfg name = readFile ("/etc/app/" ++ name)
+
+main : <IO> Unit
+main = println "fileread concat exact reject"

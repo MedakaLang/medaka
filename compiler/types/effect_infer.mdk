@@ -4,12 +4,14 @@ import types.effect_rows.{EffRow(..), Effvar, collectRows}
 import types.effect_domain.{
   Param(..), canonParam, productNorm, subTopOf, productPrimaryLift
 }
-import types.effect_authority.{Authority(..), authJoin, authTop}
+import types.effect_authority.{
+  Authority(..), authJoin, authTop, authExtend, authAppend
+}
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), patBoundNames
 }
-import support.util.{reverseL, lookupAssoc}
+import support.util.{reverseL, lookupAssoc, mapOption}
 
 export
 recordEffect : Ref (List EffRow) -> EffRow -> Unit
@@ -31,8 +33,9 @@ captureEffects ambient makeJoin body =
 
 -- ── the abstraction α ──────────────────────────────────────────────────────
 -- The authority a string-producing expression may denote, in the domain of
--- the label it flows to: a literal is that literal; a prefix-domain
--- concatenation is bounded by its left operand; `if`/`match` join their
+-- the label it flows to: a literal, or a concatenation of literals, is that
+-- literal; any other prefix-domain concatenation is its left operand extended
+-- by the suffix (`concatAuthority`); `if`/`match` join their
 -- branches; a `let`-bound name reads its definition; a value whose checked
 -- type is qualified reads the qualifier; anything else is the domain's top.
 -- Over-approximation is the only sound direction, so an unknown shape is top.
@@ -70,8 +73,10 @@ alphaSyntax top vt lets (EDoOrigin _ e) = alphaSyntax top vt lets e
 alphaSyntax top vt lets (EAnnot e _) = alphaSyntax top vt lets e
 alphaSyntax top vt lets (EHeadAnnot e _) = alphaSyntax top vt lets e
 alphaSyntax top _ _ (ELit (LString s)) = Some (literalAuthority top s)
-alphaSyntax top vt lets (EBinOp op a _ _)
-  | op == "++" = concatAuthority top vt lets a
+alphaSyntax top vt lets (e@(EBinOp op a b _))
+  | op == "++" = match exactString e
+    Some s => Some (literalAuthority top s)
+    None => concatAuthority top vt lets a b
 alphaSyntax _ _ _ (EBinOp _ _ _ _) = None
 alphaSyntax top vt lets (EVar x) = varAuthority top vt lets x
 alphaSyntax top vt lets (EVarId x _) = varAuthority top vt lets x
@@ -134,16 +139,40 @@ literalAuthority (PSet _) s = AConst (PSet (Some [s]))
 literalAuthority (PProduct schema) s = AConst (productPrimaryLift schema s)
 literalAuthority top _ = authTop top
 
--- In a prefix-shaped domain a justified left prefix bounds the whole; in the
+-- In a prefix-shaped domain a justified left prefix bounds the whole: a
+-- suffix the abstraction knows exactly is appended (`authAppend`), any other
+-- extends the left operand to the pattern it begins (`authExtend`). In the
 -- Set domain appending changes the member, so the result is top.
 concatAuthority : Param ->
   (String -> Option Mono) ->
   List (String, AlphaBinder) ->
   Expr ->
+  Expr ->
   Option Authority
-concatAuthority (top@(PPrefix _)) vt lets a = alphaSyntax top vt lets a
-concatAuthority (top@(PProduct _)) vt lets a = alphaSyntax top vt lets a
-concatAuthority _ _ _ _ = None
+concatAuthority (top@(PPrefix _)) vt lets a b =
+  mapOption (suffixed top b) (alphaSyntax top vt lets a)
+concatAuthority (top@(PProduct _)) vt lets a b =
+  mapOption (suffixed top b) (alphaSyntax top vt lets a)
+concatAuthority _ _ _ _ _ = None
+
+suffixed : Param -> Expr -> Authority -> Authority
+suffixed top b left = match exactString b
+  Some s => authAppend top s left
+  None => authExtend top left
+
+-- The string an expression denotes exactly: a literal, or a concatenation of
+-- two such.
+exactString : Expr -> Option String
+exactString (ELoc _ e) = exactString e
+exactString (EDoOrigin _ e) = exactString e
+exactString (EAnnot e _) = exactString e
+exactString (EHeadAnnot e _) = exactString e
+exactString (ELit (LString s)) = Some s
+exactString (EBinOp op a b _)
+  | op == "++" = match (exactString a, exactString b)
+    (Some x, Some y) => Some (x ++ y)
+    _ => None
+exactString _ = None
 
 -- A name reads its same-body `let` definition first, then its checked type.
 varAuthority : Param ->
