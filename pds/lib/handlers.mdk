@@ -1614,7 +1614,7 @@ applyGetRepoStatus account store params = do
    answer can name blocks the reference's does not, and names them in a
    different order, while never omitting one the reference does — omission is
    the direction that would make the proof unsound, and the gate
-   (`pds/test/repo_vectors.sh`) asserts against it on every probe. The
+   (`pds/test/repo_vectors_test.mdk`) asserts against it on every probe. The
    reference's own `verifyProofs`/`verifyRecords` accept both answers
    identically, which is what makes the difference admissible (#3007). Order is
    not part of the claim.

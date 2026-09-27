@@ -1,0 +1,335 @@
+{- | The provenance ledger, `pds/test/VECTOR-PROVENANCE.txt`, against the
+   tree, and `test.vector_ledger`'s checker against synthetic ledgers built
+   to fail it.
+
+   Each synthetic case writes a small `pds/test/` tree and ledger into a
+   scratch directory and runs the same `checkCorpus` the real-tree test
+   runs, so a checker that stopped seeing one kind of defect fails its case
+   before its verdict on the real tree is trusted. The real-tree test then
+   requires no findings. The last test runs the signing and `did:key`
+   corpus checkers under `pds/tools/`, which cross-check their corpora's
+   pinned sources.
+
+   Nothing here fetches anything: a row's `source-url` and `source-sha256`
+   are checked for shape, never against the network. -}
+
+import test.vector_ledger.{
+  CorpusCheck(..),
+  checkCorpus,
+  filesForConsumer,
+  sha256OfFile,
+}
+import test.vector_runner.{freshScratch, reap, runSeconds, spawn, spawnFindings}
+import string.{contains, unlines}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaRoot}
+
+gate : String
+gate = "pds/test/vector_provenance"
+
+-- # Synthetic trees
+
+-- Writes `content` to `<root>/<rel>`.
+put : String -> String -> String -> <FileWrite> List String
+put root rel content = match writeFile "\{root}/\{rel}" content
+  Ok _ => []
+  Err e => ["could not write \{rel}: \{e}"]
+
+-- The digest of `<root>/<rel>`, spawned the same way the checker spawns it.
+digestOf : String -> String -> <Exec> String
+digestOf root rel = match sha256OfFile "\{root}/\{rel}"
+  Ok h => h
+  Err e => "unhashable: \{e}"
+
+ledger : String -> List String -> <FileWrite> List String
+ledger root stanzas =
+  put root "pds/test/VECTOR-PROVENANCE.txt" (unlines stanzas)
+
+-- A published-artifact row for `file`, with no source digest to check.
+publishedRow : String -> String -> String -> List String
+publishedRow file digest consumer = [
+  "[vector]",
+  "file: \{file}",
+  "local-sha256: \{digest}",
+  "kind: published-artifact",
+  "source: Test Fixture",
+  "source-url: https://example.invalid/\{file}",
+  "source-sha256: UNAVAILABLE",
+  "source-note: synthetic fixture, no real artifact",
+  "extraction: hand-written fixture",
+  "retrieved: 2026-08-17",
+  "consumer: \{consumer}",
+  "",
+]
+
+implStanza : String -> String -> List String
+implStanza pin commit = [
+  "[impl]",
+  "id: \{pin}",
+  "repo: https://example.invalid/\{pin}",
+  "version: v1.0.0",
+  "commit: \{commit}",
+  "retrieved: 2026-08-17",
+  "",
+]
+
+commitA : String
+commitA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+commitB : String
+commitB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+-- Whether some finding contains every one of `needles`.
+anyFinding : List String -> CorpusCheck -> Bool
+anyFinding needles c = any (f => all (n => contains n f) needles) c.findings
+
+-- The failure of a case whose checker verdict was not what it expected.
+verdict : String -> Bool -> CorpusCheck -> List String
+verdict _ True _ = []
+verdict what False c = [
+  "\{what}: the checker answered \{intToString (length c.findings)} findings on \{intToString c.files} files and \{intToString c.rows} rows: \{debug c.findings}",
+]
+
+-- A scratch root holding an empty `pds/test/`, handed to `scenario`.
+inFixture : (String -> <Exec, FileRead, FileWrite> List String) ->
+  <Exec, FileRead, FileWrite> Result String (List String)
+inFixture scenario = match freshScratch ()
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok root =>
+    match (spawnFindings
+      gate
+      "mkdir -p"
+      (spawn 60 [] "mkdir" ["-p", "\{root}/pds/test"]))
+      (_, []) => Ok (reap root (scenario root))
+      (_, fs) => Ok (reap root fs)
+
+-- # The cases
+
+missingRow : String -> <Exec, FileRead, FileWrite> List String
+missingRow root =
+  let written = ledger root [] ++ put root "pds/test/lonely.txt" "hello"
+  let c = checkCorpus root
+  written
+    ++ verdict
+      "a file with no row"
+      (anyFinding ["MISSING ROW", "pds/test/lonely.txt"] c)
+      c
+
+digestMismatch : String -> <Exec, FileRead, FileWrite> List String
+digestMismatch root =
+  let file = "pds/test/drift.txt"
+  let first = put root file "original bytes"
+  let recorded = digestOf root file
+  let rows = ledger root (publishedRow file recorded "self-test")
+  let drifted = put root file "changed bytes after the row was written"
+  let actual = digestOf root file
+  let c = checkCorpus root
+  first
+    ++ rows
+    ++ drifted
+    ++ verdict
+      "bytes changed after their row was written"
+      (anyFinding ["DIGEST MISMATCH", recorded, actual] c)
+      c
+
+-- Both row kinds, correctly written, in one clean ledger.
+correctLedger : String -> <Exec, FileRead, FileWrite> List String
+correctLedger root =
+  let pub = "pds/test/good_pub.txt"
+  let ref = "pds/test/good_ref.txt"
+  let written =
+    put root pub "published artifact" ++ put root ref "reference impl"
+  let refRow = [
+    "[vector]",
+    "file: \{ref}",
+    "local-sha256: \{digestOf root ref}",
+    "kind: reference-impl",
+    "impl: fakeimpl",
+    "source-url: https://example.invalid/ref",
+    "extraction: hand-written fixture",
+    "retrieved: 2026-08-17",
+    "consumer: self-test",
+  ]
+  let rows =
+    ledger
+      root
+      (implStanza "fakeimpl" commitA
+        ++ publishedRow pub (digestOf root pub) "self-test"
+        ++ refRow)
+  let c = checkCorpus root
+  written
+    ++ rows
+    ++ verdict
+      "a correct ledger of both kinds"
+      (c.findings == [] && c.files == 2 && c.rows == 2)
+      c
+
+orphanRow : String -> <Exec, FileRead, FileWrite> List String
+orphanRow root =
+  let zeros = "0000000000000000000000000000000000000000000000000000000000000000"
+  let rows = ledger root (publishedRow "pds/test/ghost.txt" zeros "self-test")
+  let c = checkCorpus root
+  rows
+    ++ verdict
+      "a row naming a file that does not exist"
+      (anyFinding ["ORPHAN ROW", "pds/test/ghost.txt"] c)
+      c
+
+unpinnedImpl : String -> <Exec, FileRead, FileWrite> List String
+unpinnedImpl root =
+  let file = "pds/test/unpinned.txt"
+  let written = put root file "unpinned"
+  let rows = ledger root [
+    "[vector]",
+    "file: \{file}",
+    "local-sha256: \{digestOf root file}",
+    "kind: reference-impl",
+    "impl: nosuchimpl",
+    "source-url: https://example.invalid/unpinned",
+    "extraction: hand-written fixture",
+    "retrieved: 2026-08-17",
+    "consumer: self-test",
+  ]
+  let c = checkCorpus root
+  written
+    ++ rows
+    ++ verdict
+      "a row naming an impl no stanza pins"
+      (anyFinding ["UNPINNED IMPL", "nosuchimpl"] c)
+      c
+
+conflictingPin : String -> <Exec, FileRead, FileWrite> List String
+conflictingPin root =
+  let rows =
+    ledger root (implStanza "dupimpl" commitA ++ implStanza "dupimpl" commitB)
+  let c = checkCorpus root
+  rows
+    ++ verdict
+      "one impl id pinned to two commits"
+      (anyFinding ["CONFLICTING PIN", "dupimpl"] c)
+      c
+
+-- A symlink is rejected, and a row that names it correctly is not also
+-- reported as an orphan, which would make deleting the row the only way to
+-- clear the finding.
+symlinkRejected : String -> <Exec, FileRead, FileWrite> List String
+symlinkRejected root =
+  let link = "pds/test/linked_vector.txt"
+  let target = put root "target.txt" "symlink target bytes"
+  let linked =
+    snd
+      (spawnFindings
+        gate
+        "ln -s"
+        (spawn 60 [] "ln" ["-s", "\{root}/target.txt", "\{root}/\{link}"]))
+  let rows =
+    ledger root (publishedRow link (digestOf root "target.txt") "self-test")
+  let c = checkCorpus root
+  target
+    ++ linked
+    ++ rows
+    ++ verdict
+      "a symlinked corpus file"
+      (anyFinding ["SYMLINK REJECTED", link] c
+        && not (anyFinding ["ORPHAN ROW"] c))
+      c
+
+-- The consumer lookup follows the ledger's rows, so a file added under an
+-- existing consumer id is returned without anyone naming it.
+consumerLookup : String -> <Exec, FileRead, FileWrite> List String
+consumerLookup root =
+  let first = "pds/test/first.txt"
+  let later = "pds/test/later.txt"
+  let written = put root first "first vector" ++ put root later "later vector"
+  let rows =
+    ledger
+      root
+      (publishedRow first (digestOf root first) "S-self-test (#1729)"
+        ++ publishedRow later (digestOf root later) "S-self-test (#1729)")
+  match filesForConsumer root "S-self-test"
+    Ok [a, b] if a == first && b == later => written ++ rows
+    got =>
+      written
+        ++ rows
+        ++ [
+          "the lookup for S-self-test answered \{debug got}, expected both files in order",
+        ]
+
+-- A reference row's `impl-secondary` must be pinned too, and must differ
+-- from its `impl`.
+secondaryImpl : String -> String -> <Exec, FileRead, FileWrite> List String
+secondaryImpl secondary root =
+  let file = "pds/test/x.txt"
+  let written = put root file "x"
+  let rows =
+    ledger
+      root
+      (implStanza "primary" commitA
+        ++ [
+          "[vector]",
+          "file: \{file}",
+          "local-sha256: \{digestOf root file}",
+          "kind: reference-impl",
+          "impl: primary",
+          "impl-secondary: \{secondary}",
+          "source-url: https://example.invalid/x",
+          "extraction: hand-written fixture",
+          "retrieved: 2026-08-23",
+          "consumer: self-test",
+        ])
+  let c = checkCorpus root
+  written
+    ++ rows
+    ++ verdict "impl-secondary \{debug secondary}" (c.findings /= []) c
+
+-- # The real tree
+
+realTree : Unit -> <Exec, FileRead, IO> List String
+realTree _ = (checkCorpus medakaRoot).findings
+
+-- A corpus checker under `pds/tools/`, run over the real tree.
+toolFindings : String -> <Exec, IO> List String
+toolFindings script =
+  let label = "\{gate} (\{script})"
+  let args = ["\{medakaRoot}/pds/tools/\{script}", medakaRoot, "--provenance"]
+  snd (spawnFindings label "python3" (spawn runSeconds [] "python3" args))
+
+test "the checker reports a file with no row" =
+  expectNoFindings gate (inFixture missingRow)
+
+test "the checker reports bytes that drifted from their recorded digest" =
+  expectNoFindings gate (inFixture digestMismatch)
+
+test "the checker accepts a correct ledger of both row kinds" =
+  expectNoFindings gate (inFixture correctLedger)
+
+test "the checker reports a row naming a missing file" =
+  expectNoFindings gate (inFixture orphanRow)
+
+test "the checker reports an impl no stanza pins" =
+  expectNoFindings gate (inFixture unpinnedImpl)
+
+test "the checker reports one impl pinned to two commits" =
+  expectNoFindings gate (inFixture conflictingPin)
+
+test "the checker rejects a symlink without calling its row an orphan" =
+  expectNoFindings gate (inFixture symlinkRejected)
+
+test "the consumer lookup returns every file its rows name" =
+  expectNoFindings gate (inFixture consumerLookup)
+
+test "the checker reports an unpinned impl-secondary" =
+  expectNoFindings gate (inFixture (secondaryImpl "secondary"))
+
+test "the checker reports an impl-secondary equal to its impl" =
+  expectNoFindings gate (inFixture (secondaryImpl "primary"))
+
+test "the real ledger and pds/test/ agree" =
+  expectNoFindings gate (Ok (realTree ()))
+
+test "the signing and did:key corpora pass their own provenance checks" =
+  expectNoFindings
+    gate
+    (Ok
+      (toolFindings "signing_corpus_check.py"
+        ++ toolFindings "did_key_corpus_check.py"))

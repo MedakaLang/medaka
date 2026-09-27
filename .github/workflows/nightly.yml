@@ -533,7 +533,7 @@ jobs:
         with:
           binary: build
 
-      # MOVED HERE FROM pds/test/repo_vectors.sh in the `pds` CI shard
+      # MOVED HERE FROM the pds/test/repo_vectors gate in the `pds` CI shard
       # (2026-08-29, #2208 S-2-pds-pole): profiled arm-by-arm, this ONE
       # `medaka run` was 1091.56s of that gate's 1105.3s — 98.76% — making it
       # the 948.9s pole of the entire suite and an indivisible floor under

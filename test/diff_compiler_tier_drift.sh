@@ -71,9 +71,9 @@
 # Failing to recognise a new invocation spelling therefore makes a gate derive
 # FEWER tiers than it declares, which reds here. It cannot fail silent.
 #
-# ⚠️ A FLAG-BEARING CALL IS A TOOL CALL, NOT A RUN. `pds/nightly/repo_vectors_eval_engine.sh`
-# runs `sh pds/test/vector_provenance.sh --files-for P1-D-REPO` — it is asking
-# that gate a question, not running its checks, exactly as
+# ⚠️ A FLAG-BEARING CALL IS A TOOL CALL, NOT A RUN. A script that runs
+# `sh <gate script> --files-for <id>` is asking that gate a question, not
+# running its checks, exactly as
 # `diff_compiler_ci_shard_coverage.sh <path>` documents its own query mode.
 # Counting it would have made this gate demand `nightly` on a gate whose
 # nightly checks never run. Positional arguments do NOT disqualify a run

@@ -20,8 +20,8 @@
    shared answer is the official one). Either equality alone would be
    satisfiable by a wrong pair.
 
-   Compiled engines only, for the reason `pds/test/repo_vectors.sh`'s header
-   gives at length: the writes have to sign, and one `repoInit` under the
+   Compiled engines only, for the reason `pds/test/repo_vectors_test.mdk`'s
+   header gives: the writes have to sign, and one `repoInit` under the
    tree-walking interpreter does not complete in 600s. The repository-free
    half of this slice's surface — `resolveHandle`, every read's
    unconfigured-store refusal, and the well-knowns a `did:key` account answers

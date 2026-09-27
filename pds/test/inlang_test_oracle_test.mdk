@@ -233,6 +233,18 @@ exempt = [
     "store_persistence_test",
     "a gate-test, not a suite: it spawns `store_persistence_main.mdk` as separate processes over data directories it builds, and `test/gates.toml` runs it as `pds/test/store_persistence`",
   ),
+  (
+    "mst_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row plus scaling and page-cost bounds, and `test/gates.toml` runs it as `pds/test/mst_vectors`",
+  ),
+  (
+    "repo_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is nine `vector_runner` rows, and `test/gates.toml` runs it as `pds/test/repo_vectors`",
+  ),
+  (
+    "vector_provenance_test",
+    "a gate-test, not a suite: it checks the provenance ledger against the tree and its checker against synthetic ledgers, and `test/gates.toml` runs it as `pds/test/vector_provenance`",
+  ),
 ]
 
 exemptNames : List String

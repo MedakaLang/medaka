@@ -4,7 +4,7 @@
    commit. That is deliberate and is what makes an EVAL arm
    possible at all: one `repoInit` under the tree-walking interpreter does not
    complete in 600s on this box (measured in P4-C, and the reason
-   `pds/test/repo_vectors.sh` has no `medaka run` arm any more, #2208). The
+   `pds/test/repo_vectors_test.mdk` has no eval arm, #2208). The
    repository-bearing read routes — `getRecord`, `listRecords`, `describeRepo`,
    `sync.getRepo`, `sync.getLatestCommit` — are graded against the pinned
    Phase-1 corpus by `pds/test/read_handlers_main.mdk` on the compiled engines

@@ -20,7 +20,7 @@
 # ~31s: sampled native==Wasm value parity with all four witnesses, plus the
 # whole 322-row corpus natively.
 #
-# Same axis and same finding as pds/test/repo_vectors.sh (#2208), whose eval arm
+# Same axis and same finding as pds/test/repo_vectors_test.mdk (#2208), whose eval arm
 # runs nightly as pds/nightly/repo_vectors_eval_engine.sh.
 set -eu
 
