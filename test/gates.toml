@@ -689,11 +689,9 @@ shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-# Stays shell: embeds a wall-clock scaling-ratio assertion (small-vs-large
-# corpus timing bound) that `Row`/`Arm` cannot express.
-migration = "native-wrap"
-run = "pds/test/mst_vectors.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/mst_vectors_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -781,11 +779,9 @@ tiers = ["merge"]
 # the 1091.56s eval arm to pds/nightly/repo_vectors_eval_engine; what remains
 # measures 14.9s. See that script's header for the profile.
 cost = "cheap"
-kind = "exec"
-# Stays shell: a composite of 8 drivers exercised against 5 distinct
-# ledger consumer ids, not one row's worth of work.
-migration = "native-wrap"
-run = "pds/test/repo_vectors.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/repo_vectors_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -926,15 +922,6 @@ sources = ["pds/*"]
 corpus = []
 toolchain = []
 
-# `split-first` is still accurate (#2595, PR #3028 slice S-the-ledger-is-a-
-# library): `pds/test/vector_ledger.mdk` now reimplements the ledger lookup
-# natively for the vector_runner-driven rows, but this script's own
-# self-test, `check_corpus`, and `--files-for` CLI entry point stay
-# load-bearing — three sibling shell gates (car_vectors, repo_vectors,
-# mst_vectors) still shell out to `--files-for` rather than calling the
-# native module. The script holds a check AND a shared helper for those
-# siblings until each one migrates off it. 764 lines (not 834, #2595's
-# stated count).
 [[gate]]
 name = "pds/test/vector_provenance"
 area = "engines"
@@ -942,9 +929,9 @@ shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "split-first"
-run = "pds/test/vector_provenance.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/vector_provenance_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []

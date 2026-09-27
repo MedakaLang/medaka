@@ -458,8 +458,13 @@ runMain ["--final-review"] = runFinalReview
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain [corpusPath, "--representative"] =
   runRepresentativeRead (readLines corpusPath)
+-- The flag may also lead, which is where `test.vector_runner` puts an arm's
+-- own arguments.
+runMain ["--representative", corpusPath] =
+  runRepresentativeRead (readLines corpusPath)
 runMain _ =
-  panic "usage: repo_vectors_main <ledger-owned-corpus> [--representative]"
+  panic
+    "usage: repo_vectors_main <ledger-owned-corpus> [--representative]; the flag may also come first"
 
 runRead : Result String (List String) -> <IO, Env, FileRead> Unit
 runRead (Err message) = panic "repo_vectors: cannot read corpus: \{message}"

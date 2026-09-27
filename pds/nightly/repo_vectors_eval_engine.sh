@@ -4,7 +4,7 @@
 #
 # ── WHY THIS IS NIGHTLY AND NOT IN THE MERGE QUEUE (#2208, S-2-pds-pole) ──────
 #
-# This arm used to live inside pds/test/repo_vectors.sh, where it WAS that
+# This arm used to live inside the pds/test/repo_vectors gate, where it WAS that
 # gate: profiled arm-by-arm, `medaka run … --representative` was 1091.56s of a
 # 1105.3s run — 98.76%. The gate was the pole of the whole suite (948.9s in
 # test/gate_cost_baseline.json, 14% of the 6683s budget) and no packing could go
@@ -18,7 +18,7 @@
 #
 # so the routes themselves moved to the compiled engines, where they now run on
 # BOTH native and Wasm with a cross-engine `cmp` — see the header of
-# pds/test/repo_vectors.sh. What is left here is the one thing that genuinely
+# pds/test/repo_vectors_test.mdk. What is left here is the one thing that genuinely
 # needs the interpreter: whether `medaka run` agrees with the compiled engines
 # on this transcript.
 #
@@ -33,9 +33,9 @@
 # WasmGC arms are 82% and 16% of its cost — but keeps them in the gate behind
 # SIGNING_DEEP rather than splitting a second script out. That split is what
 # earns this file its place: the eval arm is a stronger check here than it was
-# in repo_vectors.sh, which is not true of merely gating it off.
+# in the queue gate, which is not true of merely gating it off.
 #
-# It is a STRONGER check here than it was in the queue. In repo_vectors.sh the
+# It is a STRONGER check here than it was in the queue. In the queue gate the
 # eval arm was graded by grepping four count lines out of its stdout; here its
 # bytes are `cmp`ed against the native binary's, so any divergence anywhere in
 # the 46-line transcript reds this, not just a changed count.
@@ -62,7 +62,13 @@ require_empty() {
 }
 
 [ -x "$MEDAKA" ] || fail "build medaka first (missing $MEDAKA)"
-sh "$ROOT/pds/test/vector_provenance.sh" --files-for P1-D-REPO > "$WORK/vector-files"
+# The ledger lookup is test.vector_ledger's, compiled: it spawns sha256sum to
+# check each file's digest, which the interpreter cannot do.
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$ROOT/pds/test/vector_files_main.mdk" -o "$WORK/vector-files-lookup" > "$WORK/lookup-build.log" 2>&1; then
+  cat "$WORK/lookup-build.log" >&2
+  fail 'ledger lookup build failed'
+fi
+"$WORK/vector-files-lookup" "$ROOT" P1-D-REPO > "$WORK/vector-files" || fail 'ledger lookup for P1-D-REPO failed'
 [ "$(wc -l < "$WORK/vector-files" | tr -d ' ')" = 1 ] || fail 'expected exactly one ledger-owned P1-D corpus'
 CORPUS_REL=$(sed -n '1p' "$WORK/vector-files")
 CORPUS="$ROOT/$CORPUS_REL"

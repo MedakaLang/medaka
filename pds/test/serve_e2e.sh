@@ -660,7 +660,7 @@ client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
 # 9c-9f. the two sync VERIFICATION reads over a live socket, against the
 #    repository this server actually holds. The CAR bytes are graded
 #    byte-for-byte against the oracle's own answer key in
-#    pds/test/repo_vectors.sh; what these four cases add is that the routes
+#    pds/test/repo_vectors_test.mdk; what these four cases add is that the routes
 #    answer that way over the wire, under the media type a relay reads them
 #    by, on a repository built by this gate's own writes rather than by a
 #    fixture.

@@ -35,7 +35,7 @@
 
    What is CLAIMED against the reference's block list is containment plus the
    CAR root, and the set/order/byte lines are reported beside it for
-   `pds/test/repo_vectors.sh` to assert per probe. The reference reaches
+   `pds/test/repo_vectors_test.mdk` to assert per probe. The reference reaches
    `MST.cidsForPath` — the root-down descent path — while this server answers
    `mstCoveringProofBlocks`, which covers the key's lexical neighbors too and
    walks leaf-up. That is a superset in a different order wherever the tree is
@@ -332,7 +332,7 @@ gradeRecordProbes server store did rows (tag :: rest) =
    The CLAIM is the framing, the CAR root, and containment of the reference's
    block list. Set equality, emission order and byte identity are reported
    beside it but not claimed here, because whether each holds depends on where
-   the key sits in the tree — `pds/test/repo_vectors.sh` asserts the ones that
+   the key sits in the tree — `pds/test/repo_vectors_test.mdk` asserts the ones that
    actually hold, per probe. -}
 gradeRecordShape : Server ->
   Store ->

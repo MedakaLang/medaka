@@ -229,6 +229,18 @@ exempt = [
     "did_key_all_engines_test",
     "a value-plus-mutation gate-test, not a suite: it is one `vector_runner` row plus a mutation self-test, and `test/gates.toml` runs it as `pds/test/did_key_all_engines`",
   ),
+  (
+    "mst_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row plus scaling and page-cost bounds, and `test/gates.toml` runs it as `pds/test/mst_vectors`",
+  ),
+  (
+    "repo_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is nine `vector_runner` rows, and `test/gates.toml` runs it as `pds/test/repo_vectors`",
+  ),
+  (
+    "vector_provenance_test",
+    "a gate-test, not a suite: it checks the provenance ledger against the tree and its checker against synthetic ledgers, and `test/gates.toml` runs it as `pds/test/vector_provenance`",
+  ),
 ]
 
 exemptNames : List String
