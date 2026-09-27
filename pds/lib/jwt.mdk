@@ -47,6 +47,7 @@
    here is graded only against this implementation. -}
 
 import base64.{decodeUrlSafe, encodeUrlSafe}
+import bytes.{encodeUtf8, fromArray, toArray}
 import crypto.hmac.{ctEq}
 import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
 import crypto.sha256.{sha256}
@@ -110,13 +111,16 @@ stripPadding s = match stripSuffix "=" s
 -- both — disabled for this file rather than delegated away.
 -- lint-disable-file rule-stdlib-reimpl
 b64uEncode : Array Int -> String
-b64uEncode bytes = stripPadding (encodeUrlSafe bytes)
+b64uEncode bytes =
+  stripPadding
+    (encodeUrlSafe
+      (optionOrPanic "jwt: byte value out of range" (fromArray bytes)))
 
 b64uDecode : String -> Result String (Array Int)
 b64uDecode s = match stringLength s % 4
-  0 => decodeUrlSafe s
-  2 => decodeUrlSafe "\{s}=="
-  3 => decodeUrlSafe "\{s}="
+  0 => map toArray (decodeUrlSafe s)
+  2 => map toArray (decodeUrlSafe "\{s}==")
+  3 => map toArray (decodeUrlSafe "\{s}=")
   _ => Err "jwt: segment length is not a valid unpadded base64url length"
 
 {- | The HS256 signature of a JWS Signing Input (RFC 7515 §5.1 step 5), as an
@@ -235,7 +239,7 @@ verifySegments : Array Int ->
   Result JwtError Claims
 verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg =
   let expected = hs256Signature secret "\{headerSeg}.\{claimsSeg}"
-  if not (ctEq (toUtf8 expected) (toUtf8 sigSeg)) then
+  if not (ctEq (encodeUtf8 expected) (encodeUtf8 sigSeg)) then
     Err JwtBadSignature
   else match checkAlg headerSeg
     Err algError => Err algError
@@ -353,7 +357,7 @@ es256kSignature : SecretKey -> String -> Result String String
 es256kSignature key signingInput =
   map
     (signature => b64uEncode (signatureCompact signature))
-    (signDigest key (sha256 (toUtf8 signingInput)))
+    (signDigest key (toArray (sha256 (encodeUtf8 signingInput))))
 
 {- | A service-auth token for `request`, signed with the issuing account's own
      repo key.

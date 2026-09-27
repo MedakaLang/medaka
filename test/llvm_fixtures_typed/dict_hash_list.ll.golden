@@ -219,7 +219,7 @@ entry:
   %t10 = getelementptr i8, ptr %t8, i64 16
   store i64 %t7, ptr %t10
   %t11 = ptrtoint ptr %t8 to i64
-  %t12 = call i64 @mdk_impl_MyList_hash(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11)
+  %t12 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_hash(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t11)
   %t13 = ashr i64 %t12, 1
   call void @mdk_print_int(i64 %t13)
   ret i32 0
@@ -307,8 +307,8 @@ entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:MyList_hash
-define i64 @mdk_impl_MyList_hash(i64 %arg0, i64 %arg1) {
+; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_MyList_hash
+define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_hash(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk___user____hashListItems(i64 %arg0, i64 1, i64 %arg1)
   ret i64 %t0
@@ -333,15 +333,15 @@ dispyes7:
   store i64 %t8, ptr %t2
   br label %dispend3
 dispnext7:
-  %t9 = icmp eq i64 %t1, 6952548912359
-  %t10 = icmp eq i64 %t1, -4242521352465979368
+  %t9 = icmp eq i64 %t1, 3434027973201616720
+  %t10 = icmp eq i64 %t1, -197414584256919711
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:
   %t13 = inttoptr i64 %dict to ptr
   %t14 = getelementptr i8, ptr %t13, i64 8
   %t15 = load i64, ptr %t14
-  %t16 = call i64 @mdk_impl_MyList_hash(i64 %t15, i64 %arg0)
+  %t16 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_hash(i64 %t15, i64 %arg0)
   store i64 %t16, ptr %t2
   br label %dispend3
 dispnext12:

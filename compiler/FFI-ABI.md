@@ -147,6 +147,8 @@ boundary the runtime doesn't fully control.
 | `String` | boxed `{header, byte_len, cp_count, bytes…}` | yes, copy-at-boundary |
 | `Array Int` | boxed `{header, len, Int elements…}` | yes, copy-at-boundary |
 | `Unit` | no representation (§8: zero-width) | yes, trivial |
+| `U8` `U16` `U32` `I32` | `Int`'s immediate, the value zero- or sign-extended | yes, as `uint8_t` `uint16_t` `uint32_t` `int32_t` (§2.1b) |
+| `U64` `I64` | boxed `{header, u64 payload}` | yes, as `uint64_t` `int64_t` (§2.1b) |
 
 `Unit` was omitted from the original v1 cut, which made every void-returning C
 function — the single most common FFI shape — inexpressible. Added
@@ -175,8 +177,13 @@ There is nothing to allocate and nothing to free on either side.
 
 #### 2.1a Inbound `Bool` and `Char` are NORMALISED, not merely tagged
 
-The tagging rule above is the whole story for `Int` — every `int64_t` is a valid
-`Int`. It is **not** the whole story for `Bool` and `Char`, whose native reps are
+The tagging rule above is not the whole story for `Int`: an `Int` holds 63 bits,
+so an `int64_t` outside `-2^62 .. 2^62 - 1` has no `Int`, and tagging it would
+drop its top bit and hand on a different number at exit 0 (#3477). The boundary
+checks that the value survives a one-bit shift left and back, and aborts with a
+coded runtime error naming the foreign call otherwise (`ffiCheckInt`); a C
+function that returns the full `int64_t` range declares its result `I64` (§2.1b).
+Nor is it the whole story for `Bool` and `Char`, whose native reps are
 **subsets** of the immediate space (§8.1): `False` is exactly the word `1`, `True`
 exactly `3`, and a `Char` exactly `cp * 2 + 1` for every `cp` that is a Unicode
 **scalar value** — `0 ≤ cp ≤ 1114111` (`charMinBound`/`charMaxBound`) **and**
@@ -249,6 +256,31 @@ Gated by cells 7–9 of `test/diff_compiler_llvm_ffi.sh`, against the `cTruthy`/
 `test/ffi_fixtures/ffi_abi_probe.c`; implemented by `ffiNormalizeBool` /
 `ffiNormalizeChar` in `compiler/backend/llvm_emit.mdk`.
 
+### 2.1b The fixed-width integers — `U8` `U16` `U32` `I32` `U64` `I64`
+
+Each crosses as its C twin: `uint8_t`, `uint16_t`, `uint32_t`, `int32_t`,
+`uint64_t`, `int64_t`, in both directions. There is nothing to allocate on the C
+side and nothing to free.
+
+- **Medaka → C:** a value is in its type's range by construction, so the untagged
+  word is truncated to the C width (`U64`/`I64`: the cell's 64-bit payload) and
+  nothing is checked. The LLVM parameter carries `zeroext` (the unsigned types)
+  or `signext` (`I32`), so the extension C's calling convention expects is the
+  platform's, applied once, by LLVM. An `Int` can never reach a parameter
+  declared `I32`: the declaration's type is what the caller must supply, and the
+  only doors from `Int` into a fixed-width type are a literal (range-checked at
+  compile time), `fromInt` (panics out of range) and `truncate` (masks, by name).
+- **C → Medaka:** a narrow result is read at its C width (`call zeroext i8`) and
+  extended in the emitted code, never by trusting the upper bits of the return
+  register, so every value that arrives is in range by construction and none
+  needs a check. A `U64`/`I64` result is boxed into a fresh cell on the Medaka
+  side.
+
+`Array Int` stays the crossable sequence type; an array of a fixed-width type does
+not cross. The WasmGC backend refuses every user foreign declaration, these
+included. Gated by the fixed-width cells of `test/diff_compiler_llvm_ffi.sh`,
+whose C half prints what it received at each type's edge values.
+
 ### 2.2 `Float`
 
 `Float` boxes (§8.4: boxed-first, `{i64 header, double}`), so unlike the other
@@ -320,7 +352,10 @@ element would need its own crossing rule).
   boundary copies the buffer's `len` words back into the caller's live cell,
   re-tagging each (`(w << 1) | 1`, exactly inverting the outbound `>> 1`). The
   count comes from the LIVE cell, the same `len` the out-copy used — C is given
-  no length channel and so cannot have grown the buffer. Without this half, the
+  no length channel and so cannot have grown the buffer. Each word must fit
+  `Int`'s 63 bits, by §2.1a's rule for an `Int` result: one that does not stops
+  the program before any element is written back, where it used to lose its top
+  bit. Without this half, the
   outbound copy alone makes a C function that fills a caller-allocated array a
   silent no-op on the Medaka side.
 

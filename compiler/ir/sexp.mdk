@@ -66,6 +66,7 @@ litSexp (LChar s) = node "LChar" [escStr s]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
 litSexp (LU64 hi lo) = node "LU64" [intToString hi, intToString lo]
+litSexp (LI64 hi lo) = node "LI64" [intToString hi, intToString lo]
 
 export
 patSexp : Pat -> String

@@ -1,6 +1,6 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
-import bytes.{Bytes, encodeUtf8, fromArray}
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain}
 import http.{
   Header,
   HttpParseFailure(..),
@@ -35,6 +35,8 @@ import lib.server_core.{
   makeServer,
 }
 import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
+import test.fixture_support.{testNonce}
+import test.response_support.{expectedError, expectedTextResponse}
 import lib.xrpc.{
   AuthPolicy(..),
   Endpoint,
@@ -50,7 +52,7 @@ mustHeader : String -> String -> Header
 mustHeader name value =
   resultOrPanic
     "server_core_test: header setup failed"
-    (makeHeader name (toUtf8 value))
+    (makeHeader name (encodeUtf8 value))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =
@@ -58,7 +60,7 @@ mustResponse status reason body =
     status
     reason
     [mustHeader "content-type" "text/plain"]
-    (toUtf8 body))
+    (encodeUtf8 body))
     Ok response => response
     Err message => panic "server_core_test: response setup failed: \{message}"
 
@@ -102,9 +104,6 @@ account =
 {- | The per-request nonce every request in this file is placed at. Nothing
    here drives a route that mints a token, so the value only has to be fixed;
    `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
-
 testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = 1700000000, nonce = testNonce, login = None }
@@ -124,17 +123,6 @@ seededStore =
 seedPreserved : Store -> Bool
 seedPreserved store =
   storeSize store == 1 && storeGet (cidForRaw seedBytes) store == Some seedBytes
-
-expectedTextResponse : Int -> String -> String -> Array Int
-expectedTextResponse status reason body =
-  toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
-
-expectedError : Int -> String -> String -> String -> Array Int
-expectedError status reason code message =
-  let body = "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
-  toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
 
 fixedQuery : Bytes
 fixedQuery =
@@ -243,7 +231,7 @@ test "direct configured handle preserves Store for a fixed query" =
         (
           "the response is the exact fixed-query wire form",
           expectEqual
-            (expectedTextResponse 200 "OK" "fixed")
+            (fromArrayAssumeByteDomain (expectedTextResponse 200 "OK" "fixed"))
             (serializeResponse response),
         ),
       ])
@@ -264,7 +252,10 @@ test "fixed raw request returns successor Store and exact response bytes" =
     ),
     (
       "the response is the exact 201 Created wire form",
-      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
+      expectEqual
+        (fromArrayAssumeByteDomain
+          (expectedTextResponse 201 "Created" "stored"))
+        bytes,
     ),
   ]
 
@@ -283,7 +274,10 @@ test "chunked raw request returns successor Store and exact response bytes" =
     ),
     (
       "the response is the exact 201 Created wire form",
-      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
+      expectEqual
+        (fromArrayAssumeByteDomain
+          (expectedTextResponse 201 "Created" "stored"))
+        bytes,
     ),
   ]
 
@@ -295,11 +289,12 @@ test "malformed framing returns exact 400 and preserves Store" =
     (
       "the response is the exact 400 Bad Request wire form",
       expectEqual
-        (expectedError
-          400
-          "Bad Request"
-          "InvalidRequest"
-          "Malformed HTTP request")
+        (fromArrayAssumeByteDomain
+          (expectedError
+            400
+            "Bad Request"
+            "InvalidRequest"
+            "Malformed HTTP request"))
         bytes,
     ),
   ]
@@ -311,11 +306,12 @@ test "unknown route returns exact 404 and preserves Store" =
     (
       "the response is the exact 404 Not Found wire form",
       expectEqual
-        (expectedError
-          404
-          "Not Found"
-          "NotFound"
-          "Unknown XRPC method: com.example.query.unknown")
+        (fromArrayAssumeByteDomain
+          (expectedError
+            404
+            "Not Found"
+            "NotFound"
+            "Unknown XRPC method: com.example.query.unknown"))
         bytes,
     ),
   ]
@@ -327,11 +323,12 @@ test "resource excess returns exact 413 and preserves Store" =
     (
       "the response is the exact 413 Payload Too Large wire form",
       expectEqual
-        (expectedError
-          413
-          "Payload Too Large"
-          "PayloadTooLarge"
-          "HTTP request exceeds resource limits")
+        (fromArrayAssumeByteDomain
+          (expectedError
+            413
+            "Payload Too Large"
+            "PayloadTooLarge"
+            "HTTP request exceeds resource limits"))
         bytes,
     ),
   ]

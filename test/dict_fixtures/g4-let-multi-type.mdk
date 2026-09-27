@@ -1,0 +1,19 @@
+-- DICT-SEMANTICS §4.1 G4 (#2095): #1052's `let` spelling of
+-- `g4-where-multi-type.mdk` -- same body, same predicate, only the binder form
+-- differs, so the answer is the same 3.  The two spellings once generalized
+-- differently (#1052); every local binding site now abstracts the same way.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz _ = 1
+
+impl Sz Bool where
+  sz _ = 2
+
+both : (Sz a, Sz b) => a -> b -> Int
+both x y =
+  let g = v => sz v
+  g x + g y
+
+main = println (both (1 : Int) True)

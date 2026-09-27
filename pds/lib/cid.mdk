@@ -15,6 +15,7 @@ import lib.multiformats.{
   uvarintDecode,
   uvarintEncode,
 }
+import bytes.{fromArray, toArray}
 import crypto.sha256.{sha256}
 
 -- | An admitted atproto CID. Its constructor is private to this module.
@@ -49,12 +50,26 @@ cidFromDigest codec digest =
 -- | Content-address a structured DAG-CBOR/DRISL block.
 export
 cidForDagCbor : Array Int -> Cid
-cidForDagCbor content = Cid multicodecDagCbor (sha256 content)
+cidForDagCbor content =
+  Cid
+    multicodecDagCbor
+    (toArray
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (fromArray content))))
 
 -- | Content-address a raw blob.
 export
 cidForRaw : Array Int -> Cid
-cidForRaw content = Cid multicodecRaw (sha256 content)
+cidForRaw content =
+  Cid
+    multicodecRaw
+    (toArray
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (fromArray content))))
 
 -- | The admitted codec code.
 export

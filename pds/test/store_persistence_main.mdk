@@ -50,6 +50,7 @@
    three stores list has a stated disposition for an entry no write path here
    can produce. -}
 
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -130,7 +131,8 @@ accountDid : String
 accountDid = "did:plc:persistencefixture000000"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "store_persistence: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "store_persistence: malformed hex" (decode text))
 
 mustSecret : SecretKey
 mustSecret =
@@ -206,7 +208,7 @@ summary label repo =
   let () = println "\{label} records \{intToString records}"
   let () =
     println
-      "\{label} car \{intToString (arrayLength car)} \{encode (sha256 car)} \{roots}"
+      "\{label} car \{intToString (arrayLength car)} \{encode (sha256 (optionOrPanic "sha256: every element must be a byte in 0..255" (fromArray car)))} \{roots}"
   ()
 
 blocksOf : Repo -> List (Cid, Array Int)
@@ -277,7 +279,7 @@ blobFixtures =
 blobSummary : String -> (Cid, String, Array Int) -> <IO> Unit
 blobSummary label (cid, mimeType, bytes) =
   println
-    "\{label} blob \{cidToString cid} \{mimeType} \{intToString (arrayLength bytes)} \{encode (sha256 bytes)}"
+    "\{label} blob \{cidToString cid} \{mimeType} \{intToString (arrayLength bytes)} \{encode (sha256 (optionOrPanic "sha256: every element must be a byte in 0..255" (fromArray bytes)))}"
 
 findBlob : Cid ->
   List (Cid, String, Array Int) ->
@@ -968,10 +970,10 @@ plantDir path = do
 -- stores keep this arithmetic private, and the gate has to plant INSIDE a
 -- shard that really exists for a leaf-level case to be a leaf-level case.
 shardOf : Cid -> String
-shardOf cid = take 2 (encode (cidDigest cid))
+shardOf cid = take 2 (encode (fromArrayAssumeByteDomain (cidDigest cid)))
 
 cidName : Cid -> String
-cidName cid = encode (cidToBytes cid)
+cidName cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
 
 firstBlobCid : Cid
 firstBlobCid = match blobFixtures
@@ -988,7 +990,7 @@ freeShardFrom parent n =
   if n >= 256 then
     panic "store_persistence: \{parent} occupies every shard name"
   else
-    let name = encode (arrayMakeWith 1 (_ => n))
+    let name = encode (fromArrayAssumeByteDomain (arrayMakeWith 1 (_ => n)))
     if fileExists "\{parent}/\{name}" then
       freeShardFrom parent (n + 1)
     else

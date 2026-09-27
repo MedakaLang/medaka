@@ -19,6 +19,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import array.{drop, take}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set, size}
@@ -146,7 +147,8 @@ mstKeyDepth key =
   else if not (validBytes key 0) then
     Err "mst: key element outside byte range 0..255"
   else
-    Ok (leadingZeroBits (sha256 key) 0 / 2)
+    Ok
+      (leadingZeroBits (toArray (sha256 (fromArrayAssumeByteDomain key))) 0 / 2)
 
 -- ── building a tree ─────────────────────────────────────────────────────────
 
@@ -801,7 +803,7 @@ mstValidateNodeBytes expected isRoot bytes = do
 -- ── validating a block set ──────────────────────────────────────────────────
 
 cidKey : Cid -> String
-cidKey cid = encode (cidToBytes cid)
+cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
 
 mstEmptySet : Set String
 mstEmptySet = empty

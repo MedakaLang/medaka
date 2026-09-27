@@ -1,0 +1,4 @@
+-- An interface WITH a default body.
+export interface Tag x where
+  tag : x -> Int
+  tag _ = 7

@@ -40,48 +40,28 @@ address the listener was granted.
 ## `recv`
 
 ```
-recv : Connection h -> Int -> Async <Clock, Net h | e> (Result String (Array Int))
+recv : Connection h -> Int -> Async <Clock, Net h | e> (Result String Bytes)
 recv conn n
 ```
 
-Receives up to `n` bytes, parking until some arrive. An empty array is
-end of stream.
+Receives up to `n` bytes, parking until some arrive.
+
+The result is sized to what arrived, not to `n`. An empty result is end
+of stream.
 
 ## `recvWithin`
 
 ```
-recvWithin : Duration -> Connection h -> Int -> Async <Clock, Net h | e> (Result String (Array Int))
+recvWithin : Duration -> Connection h -> Int -> Async <Clock, Net h | e> (Result String Bytes)
 recvWithin d conn n
 ```
 
 `recv` that gives up after `d` with `Err "timed out"`.
 
-## `recvBytes`
-
-```
-recvBytes : Connection h -> Int -> Async <Clock, Net h | e> (Result String Bytes)
-recvBytes conn n
-```
-
-`recv` delivering the chunk as a `Bytes`.
-
-A received byte costs the caller one byte, where `recv` holds a boxed
-word per byte. The result is sized to what arrived, not to `n`. An empty
-result is end of stream.
-
-## `recvBytesWithin`
-
-```
-recvBytesWithin : Duration -> Connection h -> Int -> Async <Clock, Net h | e> (Result String Bytes)
-recvBytesWithin d conn n
-```
-
-`recvBytes` that gives up after `d` with `Err "timed out"`.
-
 ## `send`
 
 ```
-send : Connection h -> Array Int -> Async <Clock, Net h | e> (Result String Int)
+send : Connection h -> Bytes -> Async <Clock, Net h | e> (Result String Int)
 send conn bytes
 ```
 
@@ -91,7 +71,7 @@ The count may be short; `sendAll` loops.
 ## `sendAll`
 
 ```
-sendAll : Connection h -> Array Int -> Async <Clock, Net h | e> (Result String Unit)
+sendAll : Connection h -> Bytes -> Async <Clock, Net h | e> (Result String Unit)
 sendAll conn bytes
 ```
 
@@ -100,7 +80,7 @@ Sends every byte, parking as needed.
 ## `sendAllWithin`
 
 ```
-sendAllWithin : Duration -> Connection h -> Array Int -> Async <Clock, Net h | e> (Result String Unit)
+sendAllWithin : Duration -> Connection h -> Bytes -> Async <Clock, Net h | e> (Result String Unit)
 sendAllWithin d conn bytes
 ```
 

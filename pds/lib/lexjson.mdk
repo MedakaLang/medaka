@@ -28,6 +28,7 @@
      - a `JFloat` (the atproto data model admits only integers). -}
 
 import base64.{decode, encode}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jArray, jObject}
 import lib.cid.{cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..)}
@@ -41,8 +42,12 @@ dagCborToLexJson : DagCbor -> Json
 dagCborToLexJson DcNull = JNull
 dagCborToLexJson (DcBool b) = JBool b
 dagCborToLexJson (DcInt n) = JInt n
-dagCborToLexJson (DcBytes bytes) =
-  jObject [("$bytes", JString (stripBase64Padding (encode bytes)))]
+dagCborToLexJson (DcBytes bytes) = jObject [
+  (
+    "$bytes",
+    JString (stripBase64Padding (encode (fromArrayAssumeByteDomain bytes))),
+  ),
+]
 dagCborToLexJson (DcString s) = JString s
 dagCborToLexJson (DcArray xs) = jArray (map dagCborToLexJson xs)
 dagCborToLexJson (DcMap fields) = jObject (map dagCborFieldToLexJson fields)
@@ -133,7 +138,7 @@ lexJsonBytes (JString text) = match padBase64 text
     Ok bytes =>
       let fullyPadded = encode bytes
       if text == stripBase64Padding fullyPadded || text == fullyPadded then
-        Ok (DcBytes bytes)
+        Ok (DcBytes (toArray bytes))
       else
         Err "lexjson: '$bytes' value is not canonical base64"
 lexJsonBytes _ = Err "lexjson: '$bytes' value must be a string"

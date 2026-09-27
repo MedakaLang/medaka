@@ -21,6 +21,7 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
+import bytes.{fromArray, toArray}
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
 import lib.blob.{blobCid}
@@ -42,7 +43,7 @@ secretHex : String
 secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "synth_repo: malformed hex" (decode text)
+mustHex text = toArray (resultOrPanic "synth_repo: malformed hex" (decode text))
 
 corpusSecret : SecretKey
 corpusSecret =
@@ -161,7 +162,13 @@ unsignedValue did dataCid rev = DcMap [
 signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Array Int)
 signedCommit did secret rev dataCid =
   let unsigned = mustEncode (unsignedValue did dataCid rev)
-  let signature = match signDigest secret (sha256 unsigned)
+  let digest =
+    toArray
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (fromArray unsigned)))
+  let signature = match signDigest secret digest
     Ok value => value
     Err message => panic "synth_repo: signing failed: \{message}"
   let signed =

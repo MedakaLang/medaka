@@ -20,7 +20,7 @@
 
 import hex.{decode}
 import io.{readLines}
-import bytes.{fromArray}
+import bytes.{fromArray, toArray}
 import json.{Json(..), get, parse, stringify}
 import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, startsWith, toUtf8}
@@ -40,6 +40,8 @@ import lib.store.{
   storeSessionOpen,
   storeWithServerSecret,
 }
+import test.fixture_support.{appendBytes, field, meaningful, testSecret}
+import test.response_support.{hasContentType, rawBodyOf}
 
 accountDidText : String
 accountDidText = "did:plc:s-blob-handlers-corpus"
@@ -62,9 +64,6 @@ listBlobsNsid = "com.atproto.sync.listBlobs"
 -- A fixed secret, instant and nonce, for the reason every other handler
 -- driver in this directory gives: this file grades route answers, and a
 -- random secret would only make the transcript irreproducible.
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
-
 testInstant : Int
 testInstant = 1700000000
 
@@ -111,12 +110,6 @@ authorizedStore = match storeWithServerSecret testSecret storeEmpty
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right =
-  let leftSize = arrayLength left
-  arrayMakeWith (leftSize + arrayLength right) (i =>
-    if i < leftSize then left[i] else right[i - leftSize])
-
 postRaw : String -> Array Int -> Array Int
 postRaw mimeType body =
   appendBytes
@@ -131,7 +124,9 @@ getQuery nsid query =
 
 send : Store -> Array Int -> (Store, Array Int)
 send store bytes = match fromArray bytes
-  Some packed => handleBytes server testContext store packed
+  Some packed =>
+    let (next, response) = handleBytes server testContext store packed
+    (next, toArray response)
   None => panic "blob_handlers: request fixture holds a non-byte element"
 
 -- ── response reading ────────────────────────────────────────────────────────
@@ -145,23 +140,6 @@ bodyText : Array Int -> String
 bodyText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
   Some at => drop (at + 4) (fromUtf8 bytes)
   None => ""
-
-headText : Array Int -> String
-headText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
-  Some at => fromUtf8 (arrayMakeWith at (i => bytes[i]))
-  None => fromUtf8 bytes
-
-hasContentType : String -> Array Int -> Bool
-hasContentType value bytes =
-  contains "content-type: \{value}\r\n" (headText bytes)
-
--- | The raw bytes of a non-JSON success response body.
-rawBodyOf : Array Int -> Array Int
-rawBodyOf bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
-  Some at =>
-    let start = at + 4
-    arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
-  None => [||]
 
 -- | The `blob` ref value of an `uploadBlob` response, re-rendered. The corpus
 -- column it is compared against was rendered by `@atproto/lex-json`, whose
@@ -200,14 +178,8 @@ listedCids bytes = match parse (bodyText bytes)
 -- ── corpus rows ─────────────────────────────────────────────────────────────
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "blob_handlers: malformed hex" (decode text)
-
-field : Int -> List String -> String
-field _ [] = panic "blob_handlers: corpus row is too short"
-field i (value :: rest) = if i <= 0 then value else field (i - 1) rest
-
-meaningful : String -> Bool
-meaningful line = line /= "" && not (startsWith "#" line)
+mustHex text =
+  toArray (resultOrPanic "blob_handlers: malformed hex" (decode text))
 
 -- ── grading ─────────────────────────────────────────────────────────────────
 

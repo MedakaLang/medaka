@@ -38,6 +38,7 @@
    there is no builder arm to grade them against. -}
 
 import array.{sliceClamped}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort}
@@ -74,7 +75,8 @@ syncHeaderHex : String
 syncHeaderHex = "a26174652373796e63626f7001"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "activation_event: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "activation_event: malformed hex" (decode text))
 
 mustCbor : String -> DagCbor
 mustCbor text = mustCborBytes (mustHex text)
@@ -139,7 +141,7 @@ gradeBody tag bodyHex built = match dagCborEncode built
     let () = println "\{tag}: FAIL body would not encode: \{message}"
     False
   Ok bytes =>
-    let ok = encode bytes == bodyHex
+    let ok = encode (fromArrayAssumeByteDomain bytes) == bodyHex
     let () =
       println "\{tag}: \{gradeWord ok} body byte-identical to the pinned body"
     ok
@@ -159,7 +161,7 @@ gradeFrame tag _ (Err message) =
   False
 gradeFrame tag headerHex (Ok bytes) =
   let headerBytes = arrayLength (mustHex headerHex)
-  let headed = startsWith headerHex (encode bytes)
+  let headed = startsWith headerHex (encode (fromArrayAssumeByteDomain bytes))
   let body = mustCborBytes (sliceClamped headerBytes (arrayLength bytes) bytes)
   let stamped =
     intOf body "seq" == Some sampleSeq && textOf body "time" == sampleTime

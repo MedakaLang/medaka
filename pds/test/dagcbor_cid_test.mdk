@@ -3,6 +3,7 @@
    these tests assert round-trips, determinism, isolation, and rejection. -}
 
 import array as A
+import bytes.{fromU8Array}
 import string.{contains, toLower}
 import test.{
   expectEach, expectEqual, expectErr, expectFalse, expectOkThen, expectTrue
@@ -34,13 +35,18 @@ roundTrip value = match dagCborEncode value
     Ok decoded => dagCborEncode decoded == Ok encoded
 
 test "base32 round-trips empty and partial groups" =
-  let samples =
-    [[||], [|0|], [|0, 1|], [|0, 1, 2|], [|0, 1, 2, 3|], [|0, 1, 2, 3, 4|]]
-  expectTrue
-    (all (bytes => base32Decode (base32Encode bytes) == Ok bytes) samples)
+  let samples = [
+    fromU8Array [||],
+    fromU8Array [|0|],
+    fromU8Array [|0, 1|],
+    fromU8Array [|0, 1, 2|],
+    fromU8Array [|0, 1, 2, 3|],
+    fromU8Array [|0, 1, 2, 3, 4|],
+  ]
+  expectTrue (all (bs => base32Decode (base32Encode bs) == Ok bs) samples)
 
 test "base32 encoder is lowercase and unpadded" =
-  let encoded = base32Encode [|255, 238, 221, 204, 187, 170|]
+  let encoded = base32Encode (fromU8Array [|255, 238, 221, 204, 187, 170|])
   expectEach [
     ("the encoding is lowercase", expectEqual (toLower encoded) encoded),
     ("the encoding carries no padding", expectFalse (contains "=" encoded)),

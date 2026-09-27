@@ -1,5 +1,5 @@
 # META
-source_lines=568
+source_lines=616
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -30,9 +30,11 @@ stages=DESUGAR,MARK
 -- space-joined>|<method name or empty>`. The interface word is qualified when
 -- origin is known (e.g., "b::Speak"), or the bare name when origin is absent.
 --
--- `routeWordFor` consumes the collision verdict and the bare head tag, both
--- computed from tables this module cannot see: unique head yields the bare
--- tag verbatim; colliding head yields the canonical impl word (see above).
+-- `routeWordFor` consumes the collision verdict and the head tag
+-- (`typeTagOf`: bare for a prelude or builtin type, module-qualified
+-- otherwise), both computed from tables this module cannot see: unique head
+-- yields the tag verbatim; colliding head yields the canonical impl word (see
+-- above).
 --
 -- `rkTy`/`rkTyFunArg`/`rkTyAtom` are one prec-2 `Ty` printer. It matches
 -- `types/typecheck.mdk`'s version, not `eval/eval.mdk`'s, because the latter is
@@ -194,13 +196,13 @@ evRoutesOf : EvVal -> List Route
 evRoutesOf (EvMany rs) = rs
 evRoutesOf (EvOne _) =
   panic "evidence table: a dictionary application solved to a single route"
-evRoutesOf (EvMethod _ _ _ _) =
+evRoutesOf (EvMethod _ _ _ _ _) =
   panic
     "evidence table: a dictionary application answered by a method occurrence"
 
--- The answer published for a method occurrence: its selected denotation's pre-use
--- arrow arity, dispatch route, selected impl's `requires` dicts and the method's own `=>`
--- dicts.  The arity is fixed from the selected scheme before application can
+-- The answer published for a method occurrence: the interface identity it resolved
+-- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's
+-- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can
 -- specialize its result.
 --
 -- Unlike `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
@@ -210,7 +212,7 @@ evRoutesOf (EvMethod _ _ _ _) =
 -- ordering hazard the header above describes, surfaced instead of answered with
 -- an unrouted dispatch.
 export
-evMethodRoutes : EvId -> (Int, Route, List Route, List Route)
+evMethodRoutes : EvId -> (String, Int, Route, List Route, List Route)
 evMethodRoutes (EvId m i) = match !evidenceRef
   None =>
     panic
@@ -229,8 +231,9 @@ evMethodRoutes (EvId m i) = match !evidenceRef
         else
           panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
 
-evMethodOf : EvVal -> (Int, Route, List Route, List Route)
-evMethodOf (EvMethod arity r impls meths) = (arity, r, impls, meths)
+evMethodOf : EvVal -> (String, Int, Route, List Route, List Route)
+evMethodOf (EvMethod iface arity r impls meths) =
+  (iface, arity, r, impls, meths)
 evMethodOf _ =
   panic
     "evidence table: a method occurrence answered by a dictionary application"
@@ -315,10 +318,10 @@ implRouteKeyWord o iface tys nm =
 
 -- ── the route word a SITE gets ───────────────────────────────────────────
 -- [headIsUnique] is the caller's collision verdict — "is this head the head of
--- exactly ONE declared impl of this interface?" — and [tag] the bare head
--- tycon word to use when it is. Unique head ⇒ the bare tag, exactly as today;
--- otherwise the canonical impl word, which is the only thing that can tell two
--- impls at one head apart.
+-- exactly ONE declared impl of this interface?" — and [tag] the head tag
+-- (`typeTagOf`) to use when it is. Unique head ⇒ the tag verbatim; otherwise
+-- the canonical impl word, which is the only thing that can tell two impls at
+-- one head apart.
 --
 -- ⚠️ THE VERDICT IS AN ARGUMENT ON PURPOSE. Both existing spellings compute it
 -- from a table this module cannot see and must not acquire — `ifaceImplHeadsRef`
@@ -332,17 +335,59 @@ routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
 routeWordFor headIsUnique tag o iface tys =
   if headIsUnique then tag else implRouteKeyWord o iface tys None
 
+-- ── the type-head word (#1397) ───────────────────────────────────────────
+-- The word a type head contributes to every impl tag, route word, dictionary
+-- word and runtime type tag: the prelude's and the language's types by their
+-- name, every other type by its declaring module's id, a dot, and its name.
+-- Impl dispatch keys a type by this word in every engine, so two modules'
+-- same-spelled types never share an impl, and a program's own type spelled
+-- like a prelude type (`Result`) is not the prelude's.
+--
+-- The word must be INJECTIVE over type identities: a type name has no dot, so
+-- the last dot separates the module id from the name, and a word with no dot
+-- is a prelude or builtin type.  It is not an identifier; a backend spells it
+-- into a symbol through `private_mangle.injectiveIdent`, never `sanitizeId`,
+-- whose many-to-one mapping would merge `a.b.T` with `a_b.T` (#1950's lesson).
+--
+-- >>> typeTagOf (OriginModule "core") "Result"
+-- "Result"
+-- >>> typeTagOf OriginBuiltin "Int"
+-- "Int"
+-- >>> typeTagOf (OriginModule "app.dirs") "T"
+-- "app.dirs.T"
+export
+typeTagOf : TyConOrigin -> String -> String
+typeTagOf (OriginModule "core") name = name
+typeTagOf (OriginModule m) name = "\{m}.\{name}"
+typeTagOf _ name = name
+
+-- The name a type word shows a reader: the part after its last dot.  A
+-- dispatch word is internal; a message names the type as it is written.
+--
+-- >>> typeTagName "app.dirs.T"
+-- "T"
+-- >>> typeTagName "Int"
+-- "Int"
+export
+typeTagName : String -> String
+typeTagName tag = afterLastDot tag (stringLength tag - 1)
+
+afterLastDot : String -> Int -> String
+afterLastDot tag i
+  | i < 0 = tag
+  | stringSlice i (i + 1) tag == "." =
+    stringSlice (i + 1) (stringLength tag) tag
+  | otherwise = afterLastDot tag (i - 1)
+
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn
 -- mirrors the retired OCaml `pp_ty_prec`): `rkTy` is prec 0, `rkTyFunArg`
 -- prec 1 (wraps arrows), `rkTyAtom` prec 2 (wraps arrows AND applications).
 --
--- `tyConOrigin` is deliberately NOT rendered: the identity that this bite
--- threads into a route word is the INTERFACE's (see `ifaceWordOf`), and a type
--- ARGUMENT's origin is a separate question with its own consumers. Rendering
--- it here would change every word for every program at once.
+-- A type constructor renders through `typeTagOf`, so two modules' same-spelled
+-- types are two words (#1397).
 rkTy : Ty -> String
-rkTy (TyCon { tyConName = n }) = n
+rkTy (TyCon { tyConName = n, tyConOrigin = o }) = typeTagOf o n
 rkTy (TyVar n) = n
 rkTy (TyApp a b) = "\{rkTy a} \{rkTyAtom b}"
 rkTy (TyFun a b) = "\{rkTyFunArg a} -> \{rkTy b}"
@@ -488,9 +533,12 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "Show" [TyApp rkTyList rkTyInt] None == implRouteKeyWord OriginUnresolved "Show" [rkTyList, rkTyInt] None
 -- False
 
--- A type argument's own origin is NOT in the word.
+-- A type argument's declaring module IS in the word (#1397): module `m`'s own
+-- `Int` is not the builtin one.
+-- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None
+-- "Show|m.Int|"
 -- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None == implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
--- True
+-- False
 
 -- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution
 -- (NOT #1182 — see the header). Applied by `B-2.2-b1` at `keyForSite`.
@@ -499,7 +547,7 @@ rkTyList =
 -- > implRouteKeyWord (OriginModule "a") "Speak" [rkTyInt] None == implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None
 -- False
 
--- `routeWordFor`: unique head ⇒ the caller's bare tag verbatim; colliding head
+-- `routeWordFor`: unique head ⇒ the caller's head tag verbatim; colliding head
 -- ⇒ the canonical impl word, with the method slot empty.
 -- > routeWordFor True "Int" OriginUnresolved "Show" [rkTyInt]
 -- "Int"
@@ -592,11 +640,11 @@ rkTyList =
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
-(DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
-(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
+(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evMethodRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up method ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published"))))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evMethodOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString "")))))))))))
-(DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
-(DFunDef false "evMethodOf" ((PCon "EvMethod" (PVar "arity") (PVar "r") (PVar "impls") (PVar "meths"))) (ETuple (EVar "arity") (EVar "r") (EVar "impls") (EVar "meths")))
+(DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evMethodOf" ((PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "impls") (PVar "meths"))) (ETuple (EVar "iface") (EVar "arity") (EVar "r") (EVar "impls") (EVar "meths")))
 (DFunDef false "evMethodOf" (PWild) (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by a dictionary application"))))
 (DTypeSig true "ifaceWordOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceWordOf" ((PVar "o") (PVar "name")) (EMatch (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "name")) (arm (PLit (LString "")) () (EVar "name")) (arm (PVar "ident") () (EVar "ident"))))
@@ -606,8 +654,16 @@ rkTyList =
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
 (DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
+(DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
+(DTypeSig true "typeTagName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "typeTagName" ((PVar "tag")) (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "tag")) (ELit (LInt 1)))))
+(DTypeSig false "afterLastDot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "afterLastDot" ((PVar "tag") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "tag") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "tag")) (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag")) (EIf (EVar "otherwise") (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
+(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "rkTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "rkTyAtom") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "rkTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "rkTyFunArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "rkTy") (EVar "b")))) (ELit (LString ""))))
@@ -667,11 +723,11 @@ rkTyList =
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
-(DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
-(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
+(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evMethodRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up method ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: method occurrence ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published"))))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evMethodOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString "")))))))))))
-(DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
-(DFunDef false "evMethodOf" ((PCon "EvMethod" (PVar "arity") (PVar "r") (PVar "impls") (PVar "meths"))) (ETuple (EVar "arity") (EVar "r") (EVar "impls") (EVar "meths")))
+(DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "evMethodOf" ((PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "impls") (PVar "meths"))) (ETuple (EVar "iface") (EVar "arity") (EVar "r") (EVar "impls") (EVar "meths")))
 (DFunDef false "evMethodOf" (PWild) (EApp (EVar "panic") (ELit (LString "evidence table: a method occurrence answered by a dictionary application"))))
 (DTypeSig true "ifaceWordOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceWordOf" ((PVar "o") (PVar "name")) (EMatch (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "name")) (arm (PLit (LString "")) () (EVar "name")) (arm (PVar "ident") () (EVar "ident"))))
@@ -681,8 +737,16 @@ rkTyList =
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
 (DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
+(DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
+(DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
+(DTypeSig true "typeTagName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "typeTagName" ((PVar "tag")) (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "tag")) (ELit (LInt 1)))))
+(DTypeSig false "afterLastDot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "afterLastDot" ((PVar "tag") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "tag") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "tag")) (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag")) (EIf (EVar "otherwise") (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
+(DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "rkTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "a")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "rkTyAtom") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "rkTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "rkTyFunArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "rkTy") (EVar "b")))) (ELit (LString ""))))

@@ -247,6 +247,20 @@ tested rather than reported as already observed. Both must consume the same
 qualified identity in lockstep; fixing only emitted linkage does not drain the
 evaluator path(s).
 
+**Drained by the type-head word (2026-09-26).** Every engine keys an impl by
+the word its head type renders to, `route_key.typeTagOf`: the prelude's and
+the language's types by name, every other type as `<module id>.<Type>`, which
+is injective because a type name has no dot. Typecheck's route words and collision
+counts, eval's impl tags and constructor-to-type table (which also feeds the
+Core IR's constructor table, so `cevalModules`, LLVM and WasmGC read the same
+column) all render it, so the two `Thing`s are two words in lockstep without a
+schema change. A backend spells a module-qualified tag into a symbol through
+`private_mangle.injectiveIdent`, never `sanitizeId`, so `lib_plain.T` and
+`lib.plain.T` stay apart where #1677's function symbols are only guarded. The
+legs in `test/diff_compiler_check_cli_modules.sh` (`1397/samename-derived-*`,
+`2320/samename-wildcard-impl-*`) replace the must-fail pin. This is the string-level half of F3; identity on the Core
+IR's dispatch nodes remains that row's work for the other bugs it lists.
+
 ### 3.4 Defaults share method spelling but not identity - #1265
 
 **Verdict: DRAINED-BY A-3/#1112 plus X-E.** Core retains two distinct interface IDs,

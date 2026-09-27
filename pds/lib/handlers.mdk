@@ -76,6 +76,7 @@ import http.{
   QueryParam(..),
   Response,
 }
+import bytes.{encodeUtf8, fromArray, fromArrayAssumeByteDomain}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
@@ -303,7 +304,7 @@ contentTypeHeader : String -> Header
 contentTypeHeader value =
   resultOrPanic
     "handlers: internal response header error"
-    (makeHeader "content-type" (toUtf8 value))
+    (makeHeader "content-type" (encodeUtf8 value))
 
 {- | The success counterpart of `xrpcErrorResponse`: 200 with an exact body and
    one declared media type. `http`'s serializer owns all framing. -}
@@ -311,19 +312,25 @@ bytesOkResponse : String -> Array Int -> Response
 bytesOkResponse contentType body =
   resultOrPanic
     "handlers: internal response construction error"
-    (makeResponse 200 "OK" [contentTypeHeader contentType] body)
+    (makeResponse
+      200
+      "OK"
+      [contentTypeHeader contentType]
+      (optionOrPanic
+        "makeResponse: every element must be a byte in 0..255"
+        (fromArray body)))
 
 nosniffHeader : Header
 nosniffHeader =
   resultOrPanic
     "handlers: internal response header error"
-    (makeHeader "x-content-type-options" (toUtf8 "nosniff"))
+    (makeHeader "x-content-type-options" (encodeUtf8 "nosniff"))
 
 contentDispositionAttachmentHeader : Header
 contentDispositionAttachmentHeader =
   resultOrPanic
     "handlers: internal response header error"
-    (makeHeader "content-disposition" (toUtf8 "attachment"))
+    (makeHeader "content-disposition" (encodeUtf8 "attachment"))
 
 {- | `getBlob`'s own success envelope: identical to `bytesOkResponse` plus two
    headers that stop a browser from rendering a stored blob as a live
@@ -341,7 +348,13 @@ blobOkResponse contentType body =
   ]
   resultOrPanic
     "handlers: internal response construction error"
-    (makeResponse 200 "OK" headers body)
+    (makeResponse
+      200
+      "OK"
+      headers
+      (optionOrPanic
+        "makeResponse: every element must be a byte in 0..255"
+        (fromArray body)))
 
 {- | The standard XRPC success envelope: 200 with a serialized JSON body.
    `lib.xrpc` owns the matching error envelope (`xrpcErrorResponse`) but has no
@@ -1864,7 +1877,7 @@ refreshGraceSeconds = 7200
    other. -}
 mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
-  let tokenId = Hex.encode context.nonce
+  let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
   (
     mintToken

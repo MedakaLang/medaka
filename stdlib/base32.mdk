@@ -1,10 +1,9 @@
-{- | Base32 encoding and decoding of bytes, per RFC 4648.
+{- | Base32 encoding and decoding, per RFC 4648.
 
-   Bytes are an `Array Int` with each element from `0` to `255`. `base32Encode`
-   uses the lowercase alphabet and never emits `=` padding. `base32Decode`
-   accepts exactly that canonical form: uppercase, `=` padding, non-alphabet
-   characters, non-zero residual bits, and non-canonical lengths are rejected
-   rather than normalized.
+   `base32Encode` uses the lowercase alphabet and never emits `=` padding.
+   `base32Decode` accepts exactly that canonical form: uppercase, `=`
+   padding, non-alphabet characters, non-zero residual bits, and
+   non-canonical lengths are rejected rather than normalized.
 
    Under the interpreter (`medaka run`, `medaka test`), both overflow the
    stack on inputs of more than a few kilobytes. Native builds have no such
@@ -17,12 +16,15 @@
 -- lint-disable-file rule-stdlib-reimpl
 
 -- base32/base64/hex property-test helpers share an identical
--- List Int -> Array Int clamp body by design, same precedent as those two
+-- List Int -> Bytes clamp body by design, same precedent as those two
 -- files.
 -- lint-disable-file rule-duplicate-body
 
+import bytes as B
+import bytes.{Bytes, fromArrayAssumeByteDomain, fromU8Array, toArray}
 import string.{fromChars, toChars}
 import list.{reverse}
+import u8 as U8
 
 alphabet : String
 alphabet = "abcdefghijklmnopqrstuvwxyz234567"
@@ -33,9 +35,9 @@ alphabetChars = toChars alphabet
 alphabetAt : Int -> Char
 alphabetAt i = alphabetChars[i]
 
-byteList : Array Int -> Int -> List Int
-byteList bytes i =
-  if i >= arrayLength bytes then [] else bytes[i] :: byteList bytes (i + 1)
+byteList : Bytes -> Int -> List Int
+byteList bs i =
+  if i >= B.length bs then [] else U8.toInt bs[i] :: byteList bs (i + 1)
 
 encodeGo : List Int -> Int -> Int -> List Char
 encodeGo [] bits buffer =
@@ -56,40 +58,27 @@ emitGroups rest bits buffer =
     alphabetAt (bitAnd (shiftRight buffer remaining) 31)
       :: emitGroups rest remaining (bitAnd buffer (shiftLeft 1 remaining - 1))
 
-validBytes : Array Int -> Int -> Bool
-validBytes bytes i =
-  if i >= arrayLength bytes then
-    True
-  else
-    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
-
 {- | The bytes as lowercase, unpadded base32.
 
-   Panics when an element of `bytes` is outside `0` to `255`.
-
-   > base32Encode [|102, 111, 111|]
+   > base32Encode (fromU8Array [|102, 111, 111|])
    "mzxw6" -}
 export
-base32Encode : Array Int -> String
-base32Encode bytes =
-  if not (validBytes bytes 0) then
-    panic "base32: input element outside byte range 0..255"
-  else
-    fromChars (encodeGo (byteList bytes 0) 0 0)
+base32Encode : Bytes -> String
+base32Encode bs = fromChars (encodeGo (byteList bs 0) 0 0)
 
 -- RFC 4648 test vectors, padding stripped (this module's canonical form has
 -- none).
--- > base32Encode [||]
+-- > base32Encode (fromU8Array [||])
 -- ""
--- > base32Encode [|102|]
+-- > base32Encode (fromU8Array [|102|])
 -- "my"
--- > base32Encode [|102, 111|]
+-- > base32Encode (fromU8Array [|102, 111|])
 -- "mzxq"
--- > base32Encode [|102, 111, 111, 98|]
+-- > base32Encode (fromU8Array [|102, 111, 111, 98|])
 -- "mzxw6yq"
--- > base32Encode [|102, 111, 111, 98, 97|]
+-- > base32Encode (fromU8Array [|102, 111, 111, 98, 97|])
 -- "mzxw6ytb"
--- > base32Encode [|102, 111, 111, 98, 97, 114|]
+-- > base32Encode (fromU8Array [|102, 111, 111, 98, 97, 114|])
 -- "mzxw6ytboi"
 
 digit : Char -> Result String Int
@@ -136,41 +125,45 @@ decodeChars chars i bits buffer acc =
       else
         decodeChars chars (i + 1) nextBits next acc
 
-{- | The bytes written in canonical (lowercase, unpadded) base32.
+{- | The bytes written in canonical (lowercase, unpadded) base32, as a
+   `Bytes`.
 
    `Err` when the input carries padding, an uppercase letter, a character
    outside the alphabet, non-zero trailing bits, or a length that no byte
    sequence encodes to.
 
-   > base32Decode "mzxw6"
+   > map toArray (base32Decode "mzxw6")
    Ok [|102, 111, 111|]
    > base32Decode "MZXW6"
    Err "base32: uppercase is not canonical" -}
 export
-base32Decode : String -> Result String (Array Int)
+base32Decode : String -> Result String Bytes
 base32Decode text = match decodeChars (toChars text) 0 0 0 []
   Err message => Err message
   Ok (decoded, bits, residual) =>
     if residual /= 0 then
       Err "base32: non-zero trailing bits"
     else
-      let bytes = arrayFromList decoded
+      -- Each decoded byte is `bitAnd (shiftRight next remaining) 255`, so
+      -- the byte domain holds by construction and the checked door would
+      -- only add a scan.
+      let bytes = fromArrayAssumeByteDomain (arrayFromList decoded)
       if base32Encode bytes /= text then
         Err "base32: non-canonical length"
       else
         Ok bytes
 
--- > base32Decode ""
+-- > map toArray (base32Decode "")
 -- Ok [||]
--- > base32Decode "my"
+-- > map toArray (base32Decode "my")
 -- Ok [|102|]
--- > base32Decode "mzxq"
+-- > map toArray (base32Decode "mzxq")
 -- Ok [|102, 111|]
--- > base32Decode "mzxw6yq"
+-- > map toArray (base32Decode "mzxw6yq")
 -- Ok [|102, 111, 111, 98|]
--- > base32Decode "mzxw6ytb"
+-- > map toArray (base32Decode "mzxw6ytb")
 -- Ok [|102, 111, 111, 98, 97|]
--- > base32Decode "mzxw6ytboi"
+-- > map toArray (base32Decode "mzxw6ytboi")
 -- Ok [|102, 111, 111, 98, 97, 114|]
 -- > base32Decode "a1"
 -- Err "base32: invalid alphabet character"
@@ -200,9 +193,11 @@ base32Decode text = match decodeChars (toChars text) 0 0 0 []
 -- > base32Decode "mzxw6ytboi======"
 -- Err "base32: padding is not allowed"
 
-toByteArray : List Int -> Array Int
-toByteArray xs = arrayFromList (map (b => (b % 256 + 256) % 256) xs)
+toBytes : List Int -> Bytes
+toBytes xs =
+  fromArrayAssumeByteDomain
+    (arrayFromList (map (b => (b % 256 + 256) % 256) xs))
 
-prop "base32 round-trip: decode (encode bs) == Ok bs" (xs : List Int) =
-  let bs = toByteArray xs
-  base32Decode (base32Encode bs) == Ok bs
+prop "base32 round-trip: decode (encode b) == Ok b" (xs : List Int) =
+  let b = toBytes xs
+  base32Decode (base32Encode b) == Ok b

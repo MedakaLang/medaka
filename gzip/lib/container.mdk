@@ -36,6 +36,7 @@ import byteparser.{
   ByteParser,
   BResult(..),
   runBP,
+  runByteParserWithin,
   byte,
   anyByte,
   leUint,
@@ -203,9 +204,7 @@ gzipHeaderParser = defer
 -}
 export
 parseGzipHeader : Bytes -> Result String (GzipHeader, Int)
--- `runBP` parses `Array Int` only (`stdlib/byteparser.mdk:52/58`), so the
--- `Bytes` argument is unpacked here rather than at the combinator layer.
-parseGzipHeader bytes = match runBP gzipHeaderParser (B.toArray bytes) 0
+parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0 (B.length bytes)
   BOk h pos => Ok (h, pos)
   BErr msg pos => Err "\{msg} at byte \{pos}"
 
@@ -234,12 +233,8 @@ parseGzipTrailer bytes =
     Err
       "gzip trailer: input too short (need at least 8 bytes for CRC32+ISIZE), got \{n}"
   else
-    -- `runBP` parses `Array Int` only (`stdlib/byteparser.mdk:52/58`), so
-    -- only the last 8 bytes are unpacked, not the whole member.
-    let trailer = B.sliceClamped (n - 8) n bytes
-    match runBP trailerParser (B.toArray trailer) 0
-      BOk pair _ => Ok pair
-      BErr msg pos => Err "\{msg} at byte \{pos}"
+    -- Reads only the last 8 bytes, without copying the member.
+    runByteParserWithin (n - 8) n trailerParser bytes
 
 -- ---------------------------------------------------------------------------
 -- Emit

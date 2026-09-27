@@ -992,9 +992,9 @@ writeStdoutBytes (Bytes bb) = byteBlockWriteStdout bb
 -- a write through the block reaches the `Bytes` and vice versa, which is
 -- what the `Unsafe` suffix names -- while `fromByteBlockPrefix` copies, like
 -- every other way in or out of `Bytes`, so it carries no suffix. Call these
--- only from a module that already holds a `ByteBlock` of its own --
--- `bytebuilder.mdk`, `net_async.mdk` -- never to route around `Bytes`'s own
--- operations.
+-- only from a module that already holds a `ByteBlock` of its own, to expose
+-- or adopt storage it already owns -- never to route around `Bytes`'s own
+-- operations from a module that does not.
 
 {- | The first `n` bytes of `bb`, copied into a byte string.
 

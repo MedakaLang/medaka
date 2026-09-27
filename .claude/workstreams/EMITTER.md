@@ -74,7 +74,7 @@ re-mints: `test/refresh_seed.sh` is not idempotent after a codegen change — ru
 re-mint units (`feedback_defer_seed_remint`).
 
 ### 5. Emitter perf defects are mostly PURE SCANS — the alloc gate is physically blind to them
-`findByTag`, `lookupAssoc`, `paramUseTy` allocate nothing. Grade per-stage TIME with a pinned
+`findByTagArity`/`findByTagW`, `lookupAssoc`, `paramUseTy` allocate nothing. Grade per-stage TIME with a pinned
 heap (`GC_INITIAL_HEAP_SIZE`), min-of-K — and note `perf_scaling` currently has **no lower/emit
 stage at all** (#359 adds it; land it before claiming a perf fix is regression-guarded).
 

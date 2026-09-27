@@ -34,6 +34,7 @@
    operator's directory off the cost of every commit. -}
 
 import array
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAllDurably, replaceDurably}
 import hex.{decode, encode}
 import json.{Json, asArray, jArray, parse, stringify}
@@ -72,7 +73,7 @@ credentialPath dir = "\{dir}/credential"
 -- The password is not among them and was never held here.
 credentialText : CredentialRecord -> String
 credentialText record =
-  "\{intToString (credentialIterations record)}\n\{encode (credentialSalt record)}\n\{encode (credentialDigest record)}\n"
+  "\{intToString (credentialIterations record)}\n\{encode (fromArrayAssumeByteDomain (credentialSalt record))}\n\{encode (fromArrayAssumeByteDomain (credentialDigest record))}\n"
 
 {- | Write the account's password credential beneath `dir`, at mode 0600.
 
@@ -194,13 +195,13 @@ sessionsPath dir = "\{dir}/sessions"
    opened at that instant would. -}
 sessionRowText : SessionRow -> String
 sessionRowText (OpenSessionRow access refresh expires family) =
-  "\{encode access} \{encode refresh} \{intToString expires} \{encode family}"
+  "\{encode (fromArrayAssumeByteDomain access)} \{encode (fromArrayAssumeByteDomain refresh)} \{intToString expires} \{encode (fromArrayAssumeByteDomain family)}"
 sessionRowText (ConsumedRefreshRow refresh family at ends replayed) =
   let fields =
-    "consumed \{encode refresh} \{encode family} \{intToString at} \{intToString ends}"
+    "consumed \{encode (fromArrayAssumeByteDomain refresh)} \{encode (fromArrayAssumeByteDomain family)} \{intToString at} \{intToString ends}"
   match replayed
     None => fields
-    Some session => "\{fields} \{encode session}"
+    Some session => "\{fields} \{encode (fromArrayAssumeByteDomain session)}"
 
 sessionsText : List SessionRow -> String
 sessionsText rows = join "\n" (map sessionRowText rows)
@@ -209,7 +210,7 @@ rowFingerprint : String -> Result String (Array Int)
 rowFingerprint text =
   mapErr
     (message => "persist: sessions file has an invalid fingerprint: \{message}")
-    (decode text)
+    (map toArray (decode text))
 
 rowInstant : String -> Result String Int
 rowInstant text = match toInt text

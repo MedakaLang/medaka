@@ -645,7 +645,7 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   match elaborateModules runtimeDecls coreDecls (desugaredModPairs mods)
-    (coreE, modulesE, perModule, _, _) => (
+    (coreE, modulesE, perModule, _, _, _) => (
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
       PreparedPair (uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))),
     )
@@ -665,7 +665,7 @@ forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
     (desugaredPrelude rsrc)
     (desugaredPrelude csrc)
     injected)
-    (coreE, modulesE, _, _, _) =>
+    (coreE, modulesE, _, _, _, _) =>
       uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))
 
 -- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
@@ -1169,7 +1169,7 @@ elaborateModulesMangled : List Decl ->
   (List Decl, List (String, List Decl))
 elaborateModulesMangled runtimeDecls coreDecls modules =
   match elaborateModules runtimeDecls coreDecls modules
-    (coreE, modulesE, _, _, _) => mangleCtorCollisionsPair (coreE, modulesE)
+    (coreE, modulesE, _, _, _, _) => mangleCtorCollisionsPair (coreE, modulesE)
 
 -- Evaluate the file's `prop "…"` decls in the shared elaboration's root
 -- environment.  `evalModulesRootEnv` exposes the prelude globals (eq/compare)

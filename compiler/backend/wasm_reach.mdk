@@ -239,7 +239,7 @@ refsE (CListSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
 refsE (CBlock stmts) = flatMap refsStmt stmts
 -- a method occurrence names its METHOD KEY; its routes can additionally name a
 -- shadowing standalone (RLocal).
-refsE (CMethod name _ route implRoutes methRoutes) =
+refsE (CMethod name _ _ route implRoutes methRoutes) =
   name :: flatMap refsRoute (route :: implRoutes ++ methRoutes)
 refsE (CDict name routes) = name :: flatMap refsRoute routes
 
@@ -278,4 +278,4 @@ refsField (CField _ e) = refsE e
 
 refsImplBody : CImplBody -> List String
 refsImplBody (CImplTagged _ _ _ _ _ body) = refsE body
-refsImplBody (CImplDefault _ _ body) = refsE body
+refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body

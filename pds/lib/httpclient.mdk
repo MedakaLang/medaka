@@ -4,7 +4,9 @@
    resource ceilings all live in that shared owner. -}
 
 import array.{forEachWithIndex}
-import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
+import bytebuilder.{Builder, buildArray, emitBytes, emitU8, newBuilder}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import http as H
 import http.{
   Header,
@@ -14,6 +16,7 @@ import http.{
   headerValue,
   isTokenByte,
 }
+import mut_bytes.{MutBytes}
 import string.{stripPrefix, toUtf8}
 
 -- # Request bytes
@@ -81,7 +84,7 @@ findHeader : String -> List Header -> Option (Array Int)
 findHeader _ [] = None
 findHeader wanted (header :: rest) =
   if headerName header == wanted then
-    Some (headerValue header)
+    Some (B.toArray (headerValue header))
   else
     findHeader wanted rest
 
@@ -126,14 +129,14 @@ makeRequestHeader name value =
     if not (validAsciiValue valueBytes 0 (arrayLength valueBytes)) then
       Err "httpclient: control or non-ASCII byte in request header field value"
     else
-      H.makeHeader name valueBytes
+      H.makeHeader name (encodeUtf8 value)
 
 emitHeaders : List Header -> Builder -> Unit
 emitHeaders [] _ = ()
 emitHeaders (header :: rest) out =
   emitRequestText (headerName header) out
   emitRequestText ": " out
-  emitRequestBytes (headerValue header) out
+  emitBytes (headerValue header) out
   emitRequestText "\r\n" out
   emitHeaders rest out
 
@@ -214,7 +217,7 @@ responseTrailers : Response -> List Header
 responseTrailers = H.parsedResponseTrailers
 
 export
-responseBody : Response -> Array Int
+responseBody : Response -> Bytes
 responseBody = H.parsedResponseBody
 
 export
@@ -228,7 +231,7 @@ responseBodyLength = H.parsedResponseBodyLength
    Transfer-coding tokens, including `Chunked`, are ASCII
    case-insensitive. -}
 export
-parseResponseClassified : Array Int -> Result HttpClientParseFailure Response
+parseResponseClassified : Bytes -> Result HttpClientParseFailure Response
 parseResponseClassified input = match H.parseResponseClassified input
   Ok response => Ok response
   Err (HttpMalformed message) =>
@@ -238,18 +241,18 @@ parseResponseClassified input = match H.parseResponseClassified input
 
 -- | `parseResponseClassified` collapsed to its diagnostic string.
 export
-parseResponse : Array Int -> Result String Response
+parseResponse : Bytes -> Result String Response
 parseResponse input = match parseResponseClassified input
   Ok response => Ok response
   Err failure => Err (httpClientParseFailureMessage failure)
 
 -- | The boundary of a complete declared-length or chunked response inside
--- `input[0, avail)`.
+-- the live buffer `input[0, avail)`, read in place.
 export
-responseBoundaryWithin : Array Int -> Int -> Option Int
+responseBoundaryWithin : MutBytes -> Int -> Option Int
 responseBoundaryWithin = H.responseBoundaryWithin
 
 -- | `responseBoundaryWithin` over all bytes of `input`.
 export
-responseBoundary : Array Int -> Option Int
+responseBoundary : Bytes -> Option Int
 responseBoundary = H.responseBoundary

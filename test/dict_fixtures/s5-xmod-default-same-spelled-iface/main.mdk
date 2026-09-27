@@ -1,0 +1,7 @@
+-- §5 (#1619): `dtag` reaches di's inherited default (7), `otag` other's explicit
+-- body (100).  The explicit impl of the same-spelled interface at the same head is not
+-- a candidate for di's slot.
+import dimpl.{Box(..), dtag}
+import other.{otag}
+
+main = println (dtag Box, otag Box)

@@ -24,8 +24,9 @@
 
 import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
 import base64.{decodeUrlSafe, encodeUrlSafe}
+import bytes.{encodeUtf8, toArray}
 import hex.{decode}
-import string.{fromUtf8, split, stripSuffix, toUtf8}
+import string.{fromUtf8, split, stripSuffix}
 import lib.jwt.{
   Claims,
   Claims(..),
@@ -51,7 +52,7 @@ rfcKeyB64 = "hJtXIZ2uSN5kbQfbtTNWbpdmhkV8FJG-Onbc6mxCcYg"
 -- length assertion below covers it.
 rfcKey : Array Int
 rfcKey = match decodeUrlSafe "\{rfcKeyB64}="
-  Ok bytes => bytes
+  Ok bytes => toArray bytes
   Err _ => [||]
 
 -- RFC 7520 §4.4.2 Figure 32, unwrapped.
@@ -97,7 +98,7 @@ expiresAt = 2000
 -- would never mint, so it must not borrow the library's own encoder for the
 -- header it is attacking.
 b64uSeg : String -> String
-b64uSeg s = dropEq (encodeUrlSafe (toUtf8 s))
+b64uSeg s = dropEq (encodeUrlSafe (encodeUtf8 s))
 
 dropEq : String -> String
 dropEq s = match stripSuffix "=" s
@@ -284,7 +285,8 @@ test "verification reads no clock: the same token verifies at any instant in its
 -- reference-derived pds/test/vectors/pds_did_key_corpus.txt, which is what
 -- lets the interop driver hand that verifier an externally graded key.
 hexBytes : String -> Array Int
-hexBytes value = resultOrPanic "jwt_test: malformed hex" (decode value)
+hexBytes value =
+  toArray (resultOrPanic "jwt_test: malformed hex" (decode value))
 
 serviceScalar : Array Int
 serviceScalar =
@@ -351,7 +353,7 @@ segmentBytes segment =
     3 => "\{segment}="
     _ => segment
   match decodeUrlSafe padded
-    Ok bytes => bytes
+    Ok bytes => toArray bytes
     Err message => panic "jwt_test: \{message}"
 
 segmentText : String -> String

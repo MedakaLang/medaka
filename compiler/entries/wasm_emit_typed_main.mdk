@@ -101,7 +101,7 @@ runEmit runtimeDecls preludeDecls userDecls =
 typedElaborated : List Decl -> List Decl -> List Decl -> List Decl
 typedElaborated runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let (coreE, modulesE, _, _, _) =
+  let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   coreD ++ flatMap snd modules2
@@ -1209,7 +1209,7 @@ implSelfProgram tag base depth =
   let n = CVar "n" (ALocal 0 1)
   let recurse =
     CApp
-      (CApp (CMethod "walk" 2 (RKey tag []) [] []) self)
+      (CApp (CMethod "walk" "" 2 (RKey tag []) [] []) self)
       (CBinPrim "-" n (CLit (LInt 1)) "Int")
   let body =
     CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
@@ -1300,10 +1300,10 @@ reemitStringStateU : String
 reemitStringStateU =
   "uExpr _ = \"u-expr\"\n\nuOther _ = \"u-other\"\n\nmain = 82\n"
 
--- X-W.H2b.4: synthesized defaults are physical per-emission state. P has two
--- unexecuted call sites for one inherited default, exercising membership, mark,
--- definition append, and drain without relying on interface-ID narrowing. U differs
--- in its explicit default body; its census adds one attributed gap between P runs.
+-- X-W.H2b.4: an inherited default is an instance's own per-instance entry, emitted
+-- once however many call sites reach it, and nothing about it survives from one
+-- emission into the next.  P has two unexecuted call sites for one inherited default;
+-- U differs in its default body; its census adds one attributed gap between P runs.
 reemitDefaultState : Unit -> <IO> Unit
 reemitDefaultState _ =
   let p1 = emitProgram defaultStateInputP defaultStateProgramP
@@ -1346,7 +1346,7 @@ defaultStateInputU =
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag =
-  CApp (CMethod "synthDefault" 1 (RKey tag []) [] []) (CLit LUnit)
+  CApp (CMethod "synthDefault" "DefaultFace" 1 (RKey tag []) [] []) (CLit LUnit)
 
 defaultStateProgram : String -> Int -> CProgram
 defaultStateProgram tag bodyConstant =
@@ -1368,6 +1368,9 @@ defaultStateProgram tag bodyConstant =
         0
         (CImplDefault
           "DefaultFace"
+          tag
+          "DefaultFace|\{tag}|"
+          []
           [PVar "value" defaultStateLoc]
           (CLit (LInt bodyConstant))),
     ]
@@ -1401,6 +1404,9 @@ defaultStateCensusProgramU =
         0
         (CImplDefault
           "DefaultFace"
+          "UDefault"
+          "DefaultFace|UDefault|"
+          []
           [PVar "value" defaultStateLoc]
           (CLit (LInt 29))),
     ]

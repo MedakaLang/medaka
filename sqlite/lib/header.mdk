@@ -22,7 +22,7 @@ import byteparser.{
   failWith,
   anyByte,
 }
-import bytes.{Bytes, fromArrayAssumeByteDomain}
+import bytes.{Bytes, fromArrayAssumeByteDomain, fromU8Array}
 
 -- | The parsed header fields the read path uses.
 public export data DbHeader = DbHeader {
@@ -91,12 +91,12 @@ checkMagic got =
 -- A real 100-byte header from a `sqlite3`-created DB (page size 4096, UTF-8,
 -- 2 pages, read version 1) decodes to "4096|2|1":
 --
--- > showHeader (runByteParser parseHeader (arrayFromList [83, 81, 76, 105, 116, 101, 32, 102, 111, 114, 109, 97, 116, 32, 51, 0, 16, 0, 1, 1, 12, 64, 32, 32, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 46, 141, 248]))
+-- > showHeader (runByteParser parseHeader (fromU8Array [|83, 81, 76, 105, 116, 101, 32, 102, 111, 114, 109, 97, 116, 32, 51, 0, 16, 0, 1, 1, 12, 64, 32, 32, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 46, 141, 248|]))
 -- "4096|2|1"
 --
 -- A bad magic string (16 wrong bytes) is rejected:
 --
--- > showHeader (runByteParser parseHeader (arrayFromList [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]))
+-- > showHeader (runByteParser parseHeader (fromU8Array [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16|]))
 -- "Err: not a SQLite database (bad magic string) at byte 16"
 export
 parseHeader : ByteParser DbHeader

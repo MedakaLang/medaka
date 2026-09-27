@@ -1,0 +1,19 @@
+-- `negate` on Float is IEEE negation: it flips the sign of zero.  The monomorphic
+-- `-z`, the generic `Num a =>` path, a dictionary-abstracted local and the prelude
+-- `negate` must all agree.  `0.0 - a` would answer `0.0` for the zero cases.
+neg : Num a => a -> a
+neg x = -x
+
+main =
+  let lneg = x => -x
+  let z = 0.0
+  println
+    (debug (-z)
+      ++ "|"
+      ++ debug (neg z)
+      ++ "|"
+      ++ debug (lneg z)
+      ++ "|"
+      ++ debug (negate z)
+      ++ "|"
+      ++ debug (1.0 / lneg z))

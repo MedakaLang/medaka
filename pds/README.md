@@ -579,14 +579,15 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/i
 
 ### secp256k1 field arithmetic
 
-`pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **10
-limbs in base 2^26** (limbs 0..8 hold 26 bits, limb 9 holds 22). That layout
-is design decision **P10**: it is `libsecp256k1`'s `field_10x26_impl.h`
-layout, chosen so the subtlest arithmetic here is cross-checkable element by
-element against an audited implementation of the identical representation.
-Read the module header before changing anything in it — it carries the
-headroom derivation against Medaka's silently-wrapping 63-bit `Int`, and the
-reason the reference's own overflow proof does **not** transfer.
+`pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **5
+limbs in base 2^52** (limbs 0..3 hold 52 bits, limb 4 holds 48). That layout
+is design decision **P10**: it is `libsecp256k1`'s `field_5x52_impl.h`
+layout, and `feMul` is a straight-line port of its `secp256k1_fe_mul_inner`,
+so the subtlest arithmetic here is cross-checkable against an audited
+implementation of the identical representation. Read the module header before
+changing anything in it — it summarizes the headroom derivation
+(`docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §3.1) and why the reference's own
+magnitude-8 bounds are not the ones this module relies on.
 
 **The answer key.** `pds/test/vectors/field_reference_corpus.txt` (944 rows:
 `red`/`sqr`/`neg`/`inv` over 44 inputs, `mul`/`add`/`sub` over 256 pairs) is
@@ -630,13 +631,12 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/i
 `scAdd`/`scSub`/`scMul`/`scNegate`/`scInverse`, canonical 32-byte
 serialization, and `scIsHigh`.
 
-**It deliberately shares no code with `pds/lib/field.mdk`.** The field module
-mirrors `libsecp256k1`'s 10×2^26 layout because design decision P10 wants
-element-by-element cross-checkability of the subtlest arithmetic in the
-project. Scalar operations run a *few times per signature, not thousands*, so
-this module optimises for being easy to argue about instead: **16 limbs of
-2^16**, uniform width, 26 bits of headroom against Medaka's silently-wrapping
-63-bit `Int`.
+**It deliberately shares no code with `pds/lib/field.mdk`.** Each module
+mirrors one `libsecp256k1` layout, so both stay element-by-element
+cross-checkable (design decision P10): the field is `field_5x52`, and this
+module is `scalar_8x32`: **8 limbs of 2^32**, stored as `Int`, with every step
+straight-line `U64` code. A 32 × 32 product fits in a `U64`, and each column
+sum stays below 2^36, 28 bits clear of 2^64.
 
 **The field's reduction does not transfer, and that is the reason the two
 modules are separate rather than shared.** `2^256 − p` is `2^32 + 977`, ~33
@@ -644,10 +644,11 @@ bits, which is what makes the field's fixed three-round carry/fold schedule
 fully reduce under its conservative raw-limb bound. `2^256 −
 n = 0x14551231950b75fc4402da1732fc9bebf` is **129 bits**: one fold of a
 512-bit product lands below 2^385, not below 2^256. `scalar.mdk` therefore
-runs exactly **four** fold/carry rounds, including zero high halves, and then
-makes one unconditional arithmetic subtract-and-select. Read the module header
-before changing anything in it — it carries that argument and the headroom
-derivation.
+runs exactly **three** folds (512 → 385 → 258 → 256 bits and a carry), including
+zero high parts, and then makes one unconditional arithmetic subtract-and-select
+that also absorbs the carry. Read the module header and
+`docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §4 before changing anything in it —
+they carry that argument and the headroom derivation.
 
 **The answer key.** `pds/test/vectors/scalar_reference_corpus.txt` (1028 rows:
 `red`/`neg`/`inv`/`high`/`ovf` over 52 inputs, `mul`/`add`/`sub` over 256

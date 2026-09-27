@@ -1,0 +1,17 @@
+-- #1397 review (F1): two modules each declare a type `T`, and each type takes
+-- both of `I`'s defaulted methods, `x_y` and `x`.  Their dispatch words are
+-- `m.T` and `y_m.T`; a default symbol that spelled the word without escaping
+-- it met at one name for `(x_y, m.T)` and `(x, y_m.T)`, and on wasm one
+-- default silently ran the other's body.
+--
+-- Expected, derived from the source: each call runs the default of the method
+-- it names, whatever the receiver's module, so
+--   `default-x_y|default-x` then `default-x|default-x_y`.
+import iface.{I, x_y, x}
+import m as M
+import y_m as Y
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (x_y M.TM ++ "|" ++ x Y.TY)
+  putStrLn (x Y.TY ++ "|" ++ x_y M.TM)

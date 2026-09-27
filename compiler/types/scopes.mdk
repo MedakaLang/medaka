@@ -4,6 +4,7 @@
 
 import types.evidence.{EvidenceBinderId(..), ScopeId(..)}
 import types.repr.{IfaceRef}
+import support.util.{splitOnChar}
 
 public export data DefaultBodyIdentity = DefaultBodyIdentity {
   dbiIface : IfaceRef,
@@ -13,6 +14,7 @@ public export data DefaultBodyIdentity = DefaultBodyIdentity {
 public export data ScopeOwner =
   | ModuleOwner
   | BindingOwner String
+  | LocalBindingOwner String
   | DefaultBodyOwner DefaultBodyIdentity
   | PropOwner String
   | TestOwner String
@@ -106,6 +108,25 @@ givenVisibleFrom store useScope binderScope
     Some parent => givenVisibleFrom store parent binderScope
     None => False
 
+-- `givenVisibleFrom` with the use site's side read once: the ordinals of the use
+-- scope and each of its ancestors, innermost first.  A scan testing many givens
+-- against one use site walks the parent chain once instead of once per given.
+export
+visibleChain : ScopeStore -> ScopeId -> List Int
+visibleChain store useScope = match (scopeFrame store useScope).sfParent
+  Some parent => scopeOrdinal useScope :: visibleChain store parent
+  None => [scopeOrdinal useScope]
+
+-- `givenVisibleFrom store useScope binderScope`, given `visibleChain store useScope`.
+export
+visibleOnChain : List Int -> ScopeId -> Bool
+visibleOnChain chain binderScope =
+  ordinalOnChain (scopeOrdinal binderScope) chain
+
+ordinalOnChain : Int -> List Int -> Bool
+ordinalOnChain _ [] = False
+ordinalOnChain i (s :: rest) = i == s || ordinalOnChain i rest
+
 export
 enclosingDefaultBody : ScopeStore -> ScopeId -> Option DefaultBodyIdentity
 enclosingDefaultBody store sid =
@@ -115,6 +136,18 @@ enclosingDefaultBody store sid =
     _ => match frame.sfParent
       Some parent => enclosingDefaultBody store parent
       None => None
+
+-- The nearest enclosing scope that is not a local binding's own scope: the
+-- scope whose binder owns the enclosing declaration's dictionary parameters.
+export
+declarationScope : ScopeStore -> ScopeId -> ScopeId
+declarationScope store sid =
+  let frame = scopeFrame store sid
+  match frame.sfOwner
+    LocalBindingOwner _ => match frame.sfParent
+      Some parent => declarationScope store parent
+      None => sid
+    _ => sid
 
 export
 binderAt : ScopeId -> Int -> EvidenceBinderId
@@ -144,6 +177,11 @@ export
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
+-- A local binder's owner name is its renamed binder (`f$3$lb`); the label shows the
+-- name it was written with.
+scopeOwnerLabel (LocalBindingOwner name) = match splitOnChar '$' name
+  written :: _ => "local:" ++ written
+  [] => "local:" ++ name
 scopeOwnerLabel (DefaultBodyOwner owner) = "default:" ++ owner.dbiMethod
 scopeOwnerLabel (PropOwner name) = "prop:" ++ name
 scopeOwnerLabel (TestOwner name) = "test:" ++ name

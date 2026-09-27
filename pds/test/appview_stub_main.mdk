@@ -61,9 +61,10 @@
    on stdout names it — the same contract `pds/serve.mdk` has with this gate,
    so neither side has to guess a free port. -}
 
-import array.{concat, make, sliceClamped}
+import array.{make}
 import base64.{decodeUrlSafe}
-import bytes.{fromArray, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, toArray}
 import http.{
   Header,
   HttpFrame(..),
@@ -111,9 +112,9 @@ import string.{drop, fromUtf8, split, startsWith, toInt, toUtf8}
 -- lint-disable-file rule-stdlib-reimpl
 segmentBytes : String -> Result String (Array Int)
 segmentBytes segment = match stringLength segment % 4
-  0 => decodeUrlSafe segment
-  2 => decodeUrlSafe "\{segment}=="
-  3 => decodeUrlSafe "\{segment}="
+  0 => map toArray (decodeUrlSafe segment)
+  2 => map toArray (decodeUrlSafe "\{segment}==")
+  3 => map toArray (decodeUrlSafe "\{segment}=")
   _ => Err "appview_stub: segment is not a valid unpadded base64url length"
 
 claimsJson : String -> Result String Json
@@ -142,7 +143,7 @@ findHeaderValue : String -> List Header -> Option String
 findHeaderValue _ [] = None
 findHeaderValue wanted (header :: rest) =
   if headerName header == wanted then
-    Some (fromUtf8 (headerValue header))
+    Some (fromUtf8 (toArray (headerValue header)))
   else
     findHeaderValue wanted rest
 
@@ -162,7 +163,7 @@ mustJsonHeader : Header
 mustJsonHeader =
   resultOrPanic
     "appview_stub: header error"
-    (makeHeader "content-type" (toUtf8 "application/json"))
+    (makeHeader "content-type" (encodeUtf8 "application/json"))
 
 {- | A repository revision this driver invents. Nothing interprets the value;
    what a case asserts on is that a field only the upstream could have set
@@ -174,7 +175,7 @@ mustRepoRevHeader : Header
 mustRepoRevHeader =
   resultOrPanic
     "appview_stub: header error"
-    (makeHeader "atproto-repo-rev" (toUtf8 stubRepoRev))
+    (makeHeader "atproto-repo-rev" (encodeUtf8 stubRepoRev))
 
 {- | The stub's answer, echoing the audience and method the credential it was
    handed actually named.
@@ -184,10 +185,10 @@ mustRepoRevHeader =
    thing the log cannot: that what the PDS relayed to its client is this
    service's own answer to this service's own credential, rather than something
    the PDS composed. -}
-answerBytes : Int -> String -> String -> Array Int
+answerBytes : Int -> String -> String -> Bytes
 answerBytes status aud lxm =
   let body =
-    toUtf8
+    encodeUtf8
       (stringify
         (jObject [
           ("appview", JString "stub"),
@@ -204,7 +205,7 @@ answerBytes status aud lxm =
    status it is given, so answering 400 here would make a stub-side read failure
    indistinguishable from the PDS refusing the request itself — and telling
    those two apart is the whole point of the cases this driver serves. -}
-unreadableBytes : Int -> Array Int
+unreadableBytes : Int -> Bytes
 unreadableBytes status = answerBytes status "<unreadable>" "<unreadable>"
 
 -- ── modes ───────────────────────────────────────────────────────────────────
@@ -223,23 +224,19 @@ logLine path line = match appendFile path "\{line}\n"
    forwarded call can carry a body and a driver that stopped at the header
    terminator would answer before the body it is supposed to observe had
    arrived. -}
-recvRequest : Connection * -> Array Int -> <Net> Result String Request
-recvRequest conn buffer = match fromArray buffer
-  -- `recv` hands back an `Array Int`; the framer reads a packed `Bytes`, and
-  -- `fromArray` is the only door between them.
-  None => Err "appview_stub: a byte read off the socket fell outside 0..255"
-  Some packed => match scanRequestBoundary packed 0
-    HttpFramedAt at => parseRequest (slice packed 0 at)
-    -- The framer refused what it has; parse the same bytes for the diagnostic
-    -- rather than keeping a second wording of it here.
-    HttpFrameFailed _ => parseRequest packed
-    HttpNeedMore => match recv conn 65536
-      Err message => Err "appview_stub: read failed: \{message}"
-      Ok chunk =>
-        if arrayLength chunk == 0 then
-          Err "appview_stub: call closed before its request was complete"
-        else
-          recvRequest conn (concat [|buffer, chunk|])
+recvRequest : Connection * -> Bytes -> <Net> Result String Request
+recvRequest conn buffer = match scanRequestBoundary buffer 0
+  HttpFramedAt at => parseRequest (slice buffer 0 at)
+  -- The framer refused what it has; parse the same bytes for the diagnostic
+  -- rather than keeping a second wording of it here.
+  HttpFrameFailed _ => parseRequest buffer
+  HttpNeedMore => match recv conn 65536
+    Err message => Err "appview_stub: read failed: \{message}"
+    Ok chunk =>
+      if B.isEmpty chunk then
+        Err "appview_stub: call closed before its request was complete"
+      else
+        recvRequest conn (buffer ++ chunk)
 
 observedField : String -> Request -> String
 observedField name request = match findHeaderValue name (requestHeaders request)
@@ -257,8 +254,8 @@ observedCall request =
 -- it — WITHOUT sending them. Split from `answerCall` so `batch` can hold a
 -- read call unanswered, which is the only way a mode can make the PDS keep
 -- more than one of them outstanding.
-answerFor : String -> Int -> Connection * -> <FileWrite, Net> Array Int
-answerFor path status conn = match recvRequest conn [||]
+answerFor : String -> Int -> Connection * -> <FileWrite, Net> Bytes
+answerFor path status conn = match recvRequest conn empty
   Err message =>
     let () = logLine path "unreadable \{message}"
     unreadableBytes status
@@ -444,8 +441,8 @@ holdCalls : String ->
   Int ->
   Listener * ->
   Int ->
-  List (Connection *, Array Int) ->
-  <FileWrite, Net> List (Connection *, Array Int)
+  List (Connection *, Bytes) ->
+  <FileWrite, Net> List (Connection *, Bytes)
 holdCalls path status lis remaining held =
   if remaining <= 0 then
     held
@@ -462,7 +459,7 @@ holdCalls path status lis remaining held =
 -- The order the held calls are answered in is not the order they arrived in,
 -- and nothing depends on it: the log is already written in arrival order by
 -- `answerFor`, and each answer goes back on the connection that asked for it.
-flushHeld : List (Connection *, Array Int) -> <Net> Unit
+flushHeld : List (Connection *, Bytes) -> <Net> Unit
 flushHeld [] = ()
 flushHeld ((conn, bytes) :: rest) =
   let _ = sendAll conn bytes
@@ -472,9 +469,13 @@ flushHeld ((conn, bytes) :: rest) =
 -- A `size`-byte answer. The body is filler: what a case about a large answer
 -- asserts on is its size and status, and a body that also echoed the claims
 -- would be one more thing for the PDS to relay intact without proving more.
-bulkBytes : Int -> Int -> Array Int
+bulkBytes : Int -> Int -> Bytes
 bulkBytes status size =
-  match makeResponse status "OK" [mustJsonHeader] (make size 120)
+  match (makeResponse
+    status
+    "OK"
+    [mustJsonHeader]
+    (B.fromArrayAssumeByteDomain (make size 120)))
     Ok response => serializeResponse response
     Err message => panic "appview_stub: response error: \{message}"
 
@@ -498,22 +499,22 @@ bulkTickMs = 500
 
 -- Errors are ignored: a call the PDS has already abandoned is closed on its
 -- side, and what the case asserts is what the PDS answered its own client.
-sendRange : Array Int -> Int -> Int -> Connection * -> <Net> Unit
+sendRange : Bytes -> Int -> Int -> Connection * -> <Net> Unit
 sendRange bytes lo hi conn =
   if lo >= hi then
     ()
   else
-    let _ = sendAll conn (sliceClamped lo hi bytes)
+    let _ = sendAll conn (B.sliceClamped lo hi bytes)
     ()
 
-sendPrefixes : Array Int -> Int -> List (Connection *) -> <Clock, Net> Unit
+sendPrefixes : Bytes -> Int -> List (Connection *) -> <Clock, Net> Unit
 sendPrefixes _ _ [] = ()
 sendPrefixes bytes prefix (conn :: rest) =
   let () = sendRange bytes 0 prefix conn
   let () = sleepMs bulkPrefixGapMs
   sendPrefixes bytes prefix rest
 
-sendEach : Array Int -> Int -> Int -> List (Connection *) -> <Net> Unit
+sendEach : Bytes -> Int -> Int -> List (Connection *) -> <Net> Unit
 sendEach _ _ _ [] = ()
 sendEach bytes lo hi (conn :: rest) =
   let () = sendRange bytes lo hi conn
@@ -521,7 +522,7 @@ sendEach bytes lo hi (conn :: rest) =
 
 -- One byte to every held call per tick, from `at` until `until`, and returns
 -- where it stopped.
-trickle : Array Int -> Int -> Int -> List (Connection *) -> <Clock, Net> Int
+trickle : Bytes -> Int -> Int -> List (Connection *) -> <Clock, Net> Int
 trickle bytes at until conns =
   if at >= until then
     at
@@ -530,10 +531,10 @@ trickle bytes at until conns =
     let () = sendEach bytes at (at + 1) conns
     trickle bytes (at + 1) until conns
 
-finishAll : Array Int -> Int -> List (Connection *) -> <Net> Unit
+finishAll : Bytes -> Int -> List (Connection *) -> <Net> Unit
 finishAll _ _ [] = ()
 finishAll bytes from (conn :: rest) =
-  let () = sendRange bytes from (arrayLength bytes) conn
+  let () = sendRange bytes from (B.length bytes) conn
   let _ = close conn
   finishAll bytes from rest
 
@@ -561,10 +562,10 @@ bulkAnswer path status count size prefix holdMs lis =
   let held = holdCalls path status lis count []
   let conns = reverse (map (pair => let (conn, _) = pair in conn) held)
   let bytes = bulkBytes status size
-  let sent = min prefix (arrayLength bytes)
+  let sent = min prefix (B.length bytes)
   let () = sendPrefixes bytes sent conns
   let () = logLine path "bulk prefix-sent \{intToString sent}"
-  let upTo = min (arrayLength bytes) (sent + holdMs / bulkTickMs)
+  let upTo = min (B.length bytes) (sent + holdMs / bulkTickMs)
   let from = trickle bytes sent upTo conns
   let () = finishAll bytes from conns
   let () = logLine path "bulk finished"

@@ -20,6 +20,7 @@
    line and nothing else. -}
 
 import array.{concat, make, sliceClamped}
+import bytes as B
 import list.{reverse}
 import lib.car.{Car, carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
@@ -39,6 +40,7 @@ import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
 import string.{contains, fromUtf8, join, lines, split, toInt, toUtf8, trim}
 import time.{Duration, elapsedSince, monotonic, seconds, sleep}
+import test.response_support.{closeAll, findHeaderEnd, report}
 
 -- # The handshake
 
@@ -75,19 +77,6 @@ handshakeRequest cursor =
 appendBytes : Array Int -> Array Int -> Array Int
 appendBytes left right = concat [|left, right|]
 
--- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
-findHeaderEnd : Array Int -> Int -> Option Int
-findHeaderEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    findHeaderEnd buf (i + 1)
-
 {- | Read one response HEADER SECTION and answer its status code, its header
    text, and whatever bytes arrived past it.
 
@@ -111,10 +100,10 @@ readHead conn pending = match findHeaderEnd pending 0
   None => match recv conn 4096
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_subscribe: connection closed before response headers"
       else
-        readHead conn (appendBytes pending chunk)
+        readHead conn (appendBytes pending (B.toArray chunk))
 
 statusOf : String -> Result String Int
 statusOf headerText = match lines headerText
@@ -162,10 +151,10 @@ readBodyBytes conn want have =
   else match recv conn 4096
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_subscribe: refusal body ended before its content-length"
       else
-        readBodyBytes conn want (appendBytes have chunk)
+        readBodyBytes conn want (appendBytes have (B.toArray chunk))
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -211,10 +200,10 @@ readFrame conn buffered = match decodeFrame FromServer maxFrameBytes buffered 0
   NeedMore => match recv conn 65536
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Ok None
       else
-        readFrame conn (appendBytes buffered chunk)
+        readFrame conn (appendBytes buffered (B.toArray chunk))
 
 {- | The largest server frame this client will accept. An event frame carries
    a commit's blocks, so it is bounded by the same CAR ceiling a
@@ -289,20 +278,12 @@ eventKind header =
 
 -- # Reporting
 
-report : String -> Bool -> String -> <IO> Unit
-report label ok detail =
-  if ok then
-    println "\{label}: PASS \{detail}"
-  else
-    let () = println "\{label}: FAIL \{detail}"
-    exit 1
-
 mustConnect : Int -> <Net> Connection *
 mustConnect port =
   resultOrPanic "serve_subscribe: connect failed" (connect "127.0.0.1" port)
 
 mustSend : Connection * -> Array Int -> <Net> Unit
-mustSend conn bytes = match sendAll conn bytes
+mustSend conn bytes = match sendAll conn (B.fromArrayAssumeByteDomain bytes)
   Ok () => ()
   Err message => panic "serve_subscribe: send failed: \{message}"
 
@@ -315,7 +296,11 @@ ignoreResult (Err _) = ()
 -- already read what it came for.
 sayGoodbye : Connection * -> <Net> Unit
 sayGoodbye conn =
-  ignoreResult (sendAll conn (encodeClientFrame maskKey (closeFrame 1000 "")))
+  ignoreResult
+    (sendAll
+      conn
+      (B.fromArrayAssumeByteDomain
+        (encodeClientFrame maskKey (closeFrame 1000 ""))))
 
 -- How long a case waits for a frame that must arrive. Generous: what is being
 -- graded is that the frame arrives at all, never how fast.
@@ -769,12 +754,6 @@ describeRepoStatus port did =
     Ok (status, _, _) => status
   let () = ignoreResult (close conn)
   status
-
-closeAll : List (Connection *) -> <Net> Unit
-closeAll [] = ()
-closeAll (conn :: rest) =
-  let () = ignoreResult (close conn)
-  closeAll rest
 
 {- | A subscriber that says nothing for longer than the whole-request budget
    is still there afterwards.

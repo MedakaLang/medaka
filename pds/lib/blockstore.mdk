@@ -9,6 +9,7 @@
 -- The byte-range validator is intentionally local at each untrusted boundary.
 -- lint-disable-file rule-duplicate-body
 
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encode}
 import map.{Map(..), get, set, size, entries}
 import lib.cid.{Cid, cidCodec, cidEqual, cidForDagCbor, cidForRaw, cidToBytes}
@@ -25,7 +26,7 @@ validBytes bytes i =
     bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
 
 cidKey : Cid -> String
-cidKey cid = encode (cidToBytes cid)
+cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
 
 expectedCid : Cid -> Array Int -> Cid
 expectedCid cid bytes =

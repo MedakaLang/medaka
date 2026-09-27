@@ -21,9 +21,11 @@ import byteparser.{
   leU16, leU32, leU64
 }
 import bytes.{
-  Bytes, adoptByteBlockUnsafe, fromArrayAssumeByteDomain, fromByteBlockPrefix,
-  lendByteBlockUnsafe, encodeUtf8, toArray
+  Bytes, fromArrayAssumeByteDomain, fromByteBlockPrefix, lendByteBlockUnsafe,
+  encodeUtf8, toArray
 }
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
 import u8 as U8
 import u16 as U16
 import u32 as U32
@@ -125,19 +127,21 @@ emitBytes src (Builder backing len) =
   let () = byteBlockBlit srcBlock 0 !backing !len n
   len := needed
 
-{- | The builder's backing block as a `Bytes`, and the number of bytes
-   emitted so far, without copying.
+{- | The builder's backing block, and the number of bytes emitted so far,
+   without copying.
 
-   The byte string is the builder's own block, so it may be longer than the
-   count, and bytes at or past the count are unwritten scratch. A later
-   emit writes into that block or replaces it, so read the counted bytes
-   before emitting again. `buildBytes` is the copying form.
+   The block is the builder's own, so it may be longer than the count, and
+   bytes at or past the count are unwritten scratch. A later emit writes
+   into that block or replaces it, so read the counted bytes before emitting
+   again. It is a `MutBytes` rather than a `Bytes` because it changes under
+   the builder: it cannot be compared, hashed or kept as a value.
+   `buildBytes` is the copying form.
 
    > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}
 export
-builderParts : Builder -> (Bytes, Int)
-builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
+builderParts : Builder -> (MutBytes, Int)
+builderParts (Builder backing len) = (MB.adoptByteBlockUnsafe !backing, !len)
 
 -- | Appends a `U16` as two bytes, most significant byte first. The inverse
 -- of `byteparser.beU16`.
@@ -276,15 +280,15 @@ emitLeUint n v buf =
 -- ---------------------------------------------------------------------------
 
 -- Build bytes by running an emit action on a fresh builder and return the
--- resulting `Array Int`.  Used in round-trip doctests below.
-build1 : (Builder -> Unit) -> Array Int
+-- resulting `Bytes`.  Used in round-trip doctests below.
+build1 : (Builder -> Unit) -> Bytes
 build1 f =
   let buf = newBuilder ()
   f buf
-  buildArray buf
+  buildBytes buf
 
 -- ---------------------------------------------------------------------------
--- Doctests — round-trip: emit → buildArray → runByteParser decoder == value
+-- Doctests — round-trip: emit → buildBytes → runByteParser decoder == value
 -- ---------------------------------------------------------------------------
 
 -- emitU8 ↔ beUint 1
@@ -515,7 +519,7 @@ prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
   match runByteParser (takeBytes 2) (build1 (emitU16BE w))
     Err _ => False
     Ok bytes =>
-      let reversedArr = arrayReverse (toArray bytes)
-      match runByteParser leU16 reversedArr
+      let reversed = fromArrayAssumeByteDomain (arrayReverse (toArray bytes))
+      match runByteParser leU16 reversed
         Ok got => got == w
         Err _ => False

@@ -1,0 +1,33 @@
+-- A raw worker (N5, #3428) keeps a tail self-call a loop at any depth.  This
+-- corpus builds at -O0, where LLVM eliminates no tail call, so a recursion
+-- 10,000,000 deep survives the 256 MB stack only as a `musttail` the emitter
+-- wrote itself: a U64 accumulator through `if`, and a U32 state through a
+-- block of `let`s.  The last line is a U64 function whose self-call sits in a
+-- `match` arm, which keeps a word result and the uniform define's shape; its
+-- depth stays small because at -O0 the uniform define does not loop either.
+
+import u64 as U64
+import u32 as U32
+
+sumTo : U64 -> U64 -> U64
+sumTo n acc = if n == 0 then acc else sumTo (n - 1) (acc + n)
+
+spin : Int -> U32 -> U32
+spin n x =
+  if n <= 0 then
+    x
+  else
+    let y = U32.rotateLeft x 5 + 0x9e3779b9
+    spin (n - 1) (U32.bitXor y (U32.shiftRight y 3))
+
+fnv : List Int -> U64 -> U64
+-- The self-call must sit in a `match` arm: that is the shape under test.
+-- lint-disable-next-line rule-match-on-param
+fnv xs h = match xs
+  [] => h
+  x :: rest => fnv rest (U64.bitXor h (U64.truncate x) * 0x100000001b3)
+
+main =
+  println (sumTo 10000000 0)
+  println (spin 10000000 1)
+  println (fnv [1..1000] 0xcbf29ce484222325)

@@ -40,8 +40,6 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
-IDENT "adoptByteBlockUnsafe"
-COMMA
 IDENT "fromArrayAssumeByteDomain"
 COMMA
 IDENT "fromByteBlockPrefix"
@@ -51,6 +49,17 @@ COMMA
 IDENT "encodeUtf8"
 COMMA
 IDENT "toArray"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "mut_bytes"
+AS
+UPPER "MB"
+NEWLINE
+IMPORT
+IDENT "mut_bytes"
+DOT_LBRACE
+UPPER "MutBytes"
 RBRACE
 NEWLINE
 IMPORT
@@ -446,7 +455,7 @@ COLON
 UPPER "Builder"
 ARROW
 LPAREN
-UPPER "Bytes"
+UPPER "MutBytes"
 COMMA
 UPPER "Int"
 RPAREN
@@ -459,6 +468,8 @@ IDENT "len"
 RPAREN
 EQUAL
 LPAREN
+UPPER "MB"
+DOT
 IDENT "adoptByteBlockUnsafe"
 BANG
 IDENT "backing"
@@ -1107,8 +1118,7 @@ ARROW
 UPPER "Unit"
 RPAREN
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 NEWLINE
 IDENT "build1"
 IDENT "f"
@@ -1124,7 +1134,7 @@ NEWLINE
 IDENT "f"
 IDENT "buf"
 NEWLINE
-IDENT "buildArray"
+IDENT "buildBytes"
 IDENT "buf"
 NEWLINE
 DEDENT
@@ -1429,18 +1439,21 @@ IDENT "bytes"
 FAT_ARROW
 INDENT
 LET
-IDENT "reversedArr"
+IDENT "reversed"
 EQUAL
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayReverse"
 LPAREN
 IDENT "toArray"
 IDENT "bytes"
 RPAREN
+RPAREN
 NEWLINE
 MATCH
 IDENT "runByteParser"
 IDENT "leU16"
-IDENT "reversedArr"
+IDENT "reversed"
 INDENT
 UPPER "Ok"
 IDENT "got"

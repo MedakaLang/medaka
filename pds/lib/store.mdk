@@ -67,6 +67,7 @@ import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
+import bytes.{encodeUtf8, fromArrayAssumeByteDomain, toArray}
 import crypto.hmac.{ctEq}
 import crypto.sha256.{sha256}
 import json.{Json}
@@ -271,7 +272,7 @@ storeWithPreferences prefs (Store blocks repo auth _) =
    nothing else. -}
 export
 sessionFingerprint : String -> Array Int
-sessionFingerprint token = sha256 (toUtf8 token)
+sessionFingerprint token = toArray (sha256 (encodeUtf8 token))
 
 recordFamily : SessionRecord -> Array Int
 recordFamily (SessionRecord _ _ _ family) = family
@@ -284,7 +285,11 @@ liveRefresh : Int -> Array Int -> List SessionRecord -> Option SessionRecord
 liveRefresh now wanted open =
   find
     (record => match record
-      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh)
+      SessionRecord _ refresh expires _ =>
+        now < expires
+          && ctEq
+            (fromArrayAssumeByteDomain wanted)
+            (fromArrayAssumeByteDomain refresh))
     open
 
 -- The consumption record of this refresh token, while its family lasts.
@@ -295,7 +300,11 @@ consumedRefresh : Int ->
 consumedRefresh now wanted consumed =
   find
     (entry => match entry
-      ConsumedRefresh refresh _ _ ends _ => now < ends && ctEq wanted refresh)
+      ConsumedRefresh refresh _ _ ends _ =>
+        now < ends
+          && ctEq
+            (fromArrayAssumeByteDomain wanted)
+            (fromArrayAssumeByteDomain refresh))
     consumed
 
 -- The consumption record of this refresh token dropped.
@@ -303,19 +312,31 @@ withoutConsumed : Array Int -> List ConsumedRefresh -> List ConsumedRefresh
 withoutConsumed wanted consumed =
   filter
     (entry => match entry
-      ConsumedRefresh refresh _ _ _ _ => not (ctEq wanted refresh))
+      ConsumedRefresh refresh _ _ _ _ =>
+        not
+          (ctEq
+            (fromArrayAssumeByteDomain wanted)
+            (fromArrayAssumeByteDomain refresh)))
     consumed
 
 hasAccess : Int -> Array Int -> List SessionRecord -> Bool
 hasAccess _ _ [] = False
 hasAccess now wanted ((SessionRecord access _ expires _) :: rest) =
-  now < expires && ctEq wanted access || hasAccess now wanted rest
+  now < expires
+      && ctEq
+        (fromArrayAssumeByteDomain wanted)
+        (fromArrayAssumeByteDomain access)
+    || hasAccess now wanted rest
 
 withoutRefresh : Array Int -> List SessionRecord -> List SessionRecord
 withoutRefresh wanted open =
   filter
     (record => match record
-      SessionRecord _ refresh _ _ => not (ctEq wanted refresh))
+      SessionRecord _ refresh _ _ =>
+        not
+          (ctEq
+            (fromArrayAssumeByteDomain wanted)
+            (fromArrayAssumeByteDomain refresh)))
     open
 
 -- Every session and every consumed token of one family dropped. Nothing of
@@ -323,8 +344,20 @@ withoutRefresh wanted open =
 withoutFamily : Array Int -> Sessions -> Sessions
 withoutFamily family (Sessions open consumed) =
   Sessions
-    (filter (record => not (ctEq family (recordFamily record))) open)
-    (filter (entry => not (ctEq family (consumedFamily entry))) consumed)
+    (filter
+      (record =>
+        not
+          (ctEq
+            (fromArrayAssumeByteDomain family)
+            (fromArrayAssumeByteDomain (recordFamily record))))
+      open)
+    (filter
+      (entry =>
+        not
+          (ctEq
+            (fromArrayAssumeByteDomain family)
+            (fromArrayAssumeByteDomain (consumedFamily entry))))
+      consumed)
 
 withSessions : Sessions -> Store -> Store
 withSessions sessions (Store blocks repo (Auth secret credential _) prefs) =
@@ -467,7 +500,10 @@ storeSessionClose now fingerprint store = match storeSessions store
     let found =
       find
         (record => match record
-          SessionRecord _ refresh _ _ => ctEq fingerprint refresh)
+          SessionRecord _ refresh _ _ =>
+            ctEq
+              (fromArrayAssumeByteDomain fingerprint)
+              (fromArrayAssumeByteDomain refresh))
         open
     let family = match found
       Some record => Some (recordFamily record)

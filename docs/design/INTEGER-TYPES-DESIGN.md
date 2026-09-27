@@ -8,7 +8,11 @@ index, CRC-32 and the property runner's `fmix32` on `U32`). N3 BUILT (boxed
 `addCarry` and `subBorrow`, `bits64` retired, the multi-byte codecs typed).
 N4 BUILT (the `Hashable` folds and field/scalar on `U64`, `checkedAdd`,
 `checkedSub` and `checkedMul`, and `Int` overflow trapping on all three
-engines). N5–N6 are design.
+engines). N5 BUILT (on the LLVM backend, `U64` and `U32` cross `let`,
+parameter and result in registers, `U32` is computed as native `i32`, and
+field/scalar are re-limbed). N6 BUILT (`I32` and `I64` on all three
+engines with the `i32` and `i64` modules, every fixed-width type crossing the
+FFI as its C twin, and `sqlite/` reading SQLite's full 64-bit `INTEGER`).
 Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
@@ -45,8 +49,8 @@ tagged types first, `U64` second, the trap last.
 |---|---|---|---|---|
 | `Int` | 63, signed | tagged immediate, unchanged | **traps** (N4; it wrapped before) | N4 |
 | `U8` `U16` `U32` | 8 / 16 / 32, unsigned | tagged immediate, distinct static type; no runtime or GC change | **wraps** modulo 2^n | N1 |
-| `U64` | 64, unsigned | boxed cell, the `Float` shape, first; unboxed in monomorphic code later | wraps | N3, N5 |
-| `I32` `I64` | 32 / 64, signed | reserved names; built when a customer is named | wraps | N6 |
+| `U64` | 64, unsigned | boxed cell, the `Float` shape; on the LLVM backend a raw register across `let`, parameter and result where the static type is known (N5) | wraps | N3, N5 |
+| `I32` `I64` | 32 / 64, signed | `I32` as `U32` (tagged, held sign-extended); `I64` as `U64` (boxed, its own header) | wraps | N6 |
 | bignum | arbitrary | non-goal | | |
 
 **The rule.** `Int` is the *arithmetic* type and traps. The `U` types are
@@ -197,6 +201,25 @@ For a U type of width n, with values in `0 .. 2^n - 1`:
 | `minBound`, `maxBound` | `0` and `2^n - 1` |
 | `Display`, `Debug` | decimal; hex is an explicit conversion |
 
+For `I32` and `I64`, with values in `-2^(n-1) .. 2^(n-1) - 1` (N6; Val,
+2026-09-26):
+
+| Operation | Result |
+|---|---|
+| `+` `-` `*` | modulo 2^n in two's complement, no diagnostic |
+| `/` `%` | truncating toward zero, as C and `Int` do (`-7 / 2 == -3`, `-7 % 2 == -1`); `minBound / -1 == minBound` and `minBound % -1 == 0`; divisor 0 panics, as `Int` |
+| `negate x`, `abs x` | wrap: `negate minBound == abs minBound == minBound` |
+| `signum x` | `-1`, `0` or `1` |
+| `shiftLeft x k` | `k >= n` gives 0; the bits shifted past the sign bit are discarded; `k < 0` panics |
+| `shiftRight x k` | arithmetic (copies the sign); `k >= n` gives 0 or `-1`; `k < 0` panics |
+| `compare`, `==` | signed order; `Ord`, `Eq` and `Hashable` agree |
+| `minBound`, `maxBound` | `-2^(n-1)` and `2^(n-1) - 1` |
+| `Display`, `Debug` | decimal with a `-` |
+
+`Int`'s `intMinBound / -1` traps (N4) where `I32`'s and `I64`'s wrap: the
+signed fixed-width types are bit-pattern types like the U family, and the rule
+of §2 is that the family wraps.
+
 Shifting by the width gives 0 rather than masking the amount because a
 masked amount is silent wrongness (`shiftLeft x 40` on a `U32` would mean
 `shiftLeft x 8`), and the select it costs is one instruction that folds
@@ -256,6 +279,54 @@ with impls `Eq`, `Ord`, `Num`, `Bounded`, `Hashable`, `Display`, `Debug`. `fromI
 is the `Num` method rather than a module function, so it is written `fromInt n`
 (checked at the type the context gives it), never `U32.fromInt n`.
 
+### 5.0 The signed modules (N6)
+
+`i32` and `i64` (`import i64 as I64`) keep §5's vocabulary where a sign changes
+nothing and leave out what belongs to bit patterns: rotations, bit counts, byte
+codecs, `toHex` and `mulWide` stay on the U types, reached through `fromBits`
+and `toBits`, which keep the bits and change how they are read (Val,
+2026-09-26).
+
+```medaka-nocheck: a signature listing
+-- i32
+tryFromInt   : Int -> Option I32
+truncate     : Int -> I32         -- the masking door, low 32 bits
+toInt        : I32 -> Int         -- total
+fromU8       : U8 -> I32
+fromU16      : U16 -> I32
+truncateI64  : I64 -> I32
+fromBits     : U32 -> I32
+toBits       : I32 -> U32
+bitAnd bitOr bitXor : I32 -> I32 -> I32
+bitNot       : I32 -> I32
+shiftLeft shiftRight : I32 -> Int -> I32
+-- i64
+toInt        : I64 -> Option Int  -- narrowing, as U64.toInt
+fromU8 fromU16 fromU32 fromI32 : … -> I64
+fromBits     : U64 -> I64
+toBits       : I64 -> U64
+bitAnd bitOr bitXor : I64 -> I64 -> I64
+bitNot       : I64 -> I64
+shiftLeft shiftRight : I64 -> Int -> I64
+```
+
+with impls `Eq`, `Ord`, `Num`, `Bounded`, `Hashable`, `Display`, `Debug` in the
+modules themselves: nothing in the prelude uses a signed type, so unlike `Num
+U64` none of them is in `core.mdk`. Every `Int` fits an `I64`, so `I64` has no
+`tryFromInt` or `truncate` and its `fromInt` never panics. `Hashable I32` is
+the hash of `toInt`, and `Hashable I64` the hash of `toBits`, so a signed value
+in `Int`'s range hashes as that `Int` does. `I64.toIntTruncating` was left out:
+nothing calls it.
+
+The literal route is §3's. A literal grounded to `I32` is range-checked and is
+its word; `-2147483648` folds to the constant. A wide literal is accepted at
+`I64` up to `2^63 - 1`, and `-` applied to one down to `-2^63`:
+`-9223372036854775808` is two tokens the parser reads as the negation of the
+wide literal 2^63, whose `I64` bit pattern negates, wrapping, to `minBound`. A
+literal pattern is typed by an `I32` scrutinee (a negative literal arm does not
+parse for any integer type, `I32` included); on an `I64` it is refused as on a
+`U64`, and #3455 stays open for both.
+
 ### 5.1 `U64`'s asymmetry
 
 `U64 -> Int` is a narrowing, since `Int` holds 63 bits. `U64.toInt` is
@@ -310,15 +381,27 @@ mask, or, once the emitter reads scalar types from Core IR (#353), a native
 same, with the caveat that #2360's boxing applies and a `U32` above 2^30
 does not fit an `i31`.
 
+As built (N5), on the LLVM backend: a `U32` stays Int's tagged word at every
+uniform boundary (a closure, an array slot, a polymorphic call), and inside
+code whose type is known it is an `i32`.  An expression computes on `i32`
+registers, so `+`, `-` and `*` wrap by themselves and need no mask; a `let`
+keeps the `i32`; an annotated function whose signature names `U32` passes it
+as an `i32` to and from its raw worker (see §6.2); and a saturated call of a
+small non-recursive `U32` function, which covers the `u32` module's
+operations, is inlined where it is emitted, so a rotate by a constant amount
+reaches LLVM as the shift pair it turns into one rotate instruction.  The
+word is truncated once where it enters and zero-extended and retagged once
+where it leaves.  Wasm is unchanged: #2360 stays its own issue, since Wasm
+treats representation as a whole-program property (Val, 2026-09-26).
+
 ### 6.2 `U64`
 
 A 64-bit value does not fit a tagged word. N3 lands it **boxed**, in the
 cell shape `Float` already uses on both native and Wasm, with the same
 emitter paths that unbox a `Float` for arithmetic. That is correct and
 already faster than a five-word `data U64` cell plus sixteen multiplies.
-Unboxing in monomorphic code is N5 and rides #353 together with `Float`;
-it is a performance step, not a correctness one, and `U64` does not wait
-for it.
+Unboxing in monomorphic code is N5; it is a performance step, not a
+correctness one, and `U64` does not wait for it.
 
 The interpreter, `compiler/eval/eval.mdk`, is a Medaka program compiled
 with a 63-bit `Int`, so it cannot hold a native `U64` until the emitter
@@ -337,12 +420,59 @@ three bitwise operations, the two shifts and `u64MulHigh`). The compiler's own s
 support has landed and the seed has been re-minted twice, the ratchet B2
 used for `ByteBlock` (`docs/design/BYTES-DESIGN.md`).
 
+As built (N5), on the LLVM backend, and as the scalar slice of #353 rather
+than all of it (Val, 2026-09-26): `Float` keeps its own heuristics, and the
+backend-neutral runtime-type stamps #353 describes remain its scope.
+
+- A `let` whose value is statically `U64` holds the raw 64-bit payload, and
+  is boxed where it escapes (printed, stored, captured, passed to a
+  polymorphic function).  A value that would be boxed more than once in its
+  scope is boxed once at the binding instead.
+- An annotated single-clause function whose declared signature names `U64`
+  or `U32` gets a raw worker, `@mdk_<f>__rw`: those parameters and that
+  result cross the call as payloads (`U32` as `i32`), and a tail self-call is
+  a loop on registers.  A `U64` parameter is raw only where no occurrence in
+  the body would box it, so a value that only passes through stays a cell.  A
+  result is raw only where every tail call stays one: a self-call through
+  `if`, `let`, a block or a two-arm literal `match`, or a call of a worker
+  with the same raw result.  A self-call in any other `match` arm, or a tail
+  call of an ordinary function, keeps a word result, emitted as the uniform
+  define is, so a deep recursion loops exactly where it did before.
+  `@mdk_<f>` remains the uniform entry for closures and partial application,
+  a wrapper around the worker.  The positions come from the declared
+  signature, which the typechecker checked, never from a guess.
+- `let (h, l) = U64.mulWide a b`, and a destructuring `let` of any small
+  single-clause function whose body ends in a tuple, is inlined: the
+  components are bound in registers and no tuple is allocated.
+- Multi-clause functions, lambdas and dictionary-polymorphic functions still
+  box a `U64` at their boundary, and a `U64` in an array, tuple, list or
+  record is a cell.  That is why field/scalar store limbs as `Int` (§9).
+
 ### 6.3 The FFI
 
 `ffiCrossableTy` in `compiler/types/typecheck.mdk` admits `Int`, `Float`,
 `Bool`, `Char`, `String`, `Unit` and `Array Int`. The U types cross as
 `uint8_t`, `uint16_t`, `uint32_t`, `uint64_t` in N6, with `I32`/`I64` as
 `int32_t`/`int64_t`; `Array Int` stays the crossable sequence type.
+
+As built (N6): the contract is `compiler/FFI-ABI.md` §2.1b. A narrow argument
+is truncated to its C width with the extension written as LLVM's
+`zeroext`/`signext` attribute, a narrow result is read at its width and extended
+in the emitted code, and `U64`/`I64` cross as their payloads. No check is needed
+at the boundary in either direction: the declared type is the range. The same
+work closed #3477: an `int64_t` returned into `Int` outside 63 bits used to lose
+its top bit at exit 0, and now stops the program, naming `I64` as the
+declaration that receives it. Wasm refuses user foreign declarations, as before.
+
+### 6.4 `I32` and `I64` (N6)
+
+`I32` is `U32`'s representation with a sign: `Int`'s tagged word holding the
+value sign-extended, so the word compare is its order, `toInt` is the identity
+and an in-range literal is a plain `Int` literal. An arithmetic result is
+sign-extended from bit 31. `I64` is `U64`'s cell with its own header, so nothing
+type-lost (the runtime's polymorphic equality, ordering, printing and `Num`
+paths, Wasm's `$i64`, the interpreter's `VI64`) can read one as the other; the
+interpreter keeps `U64`'s two halves and reads the top bit as the sign.
 
 ## 7. Constant time
 
@@ -387,8 +517,8 @@ constant.
 | **N2 (the first consumers)** | `U8` is the element type of `Bytes`/`MutBytes`/`bytebuilder`/`byteparser` (#3415); `U32` carries sha256/hmac/pbkdf2/crc32 and the property-runner RNG; the round is re-measured against the figures on #3377 |
 | **N3 (U64)** | boxed `U64`, wide literals, `mulWide`/`addCarry`/`subBorrow`, the multi-byte codecs typed, the `bits64` module deleted with #2311 and #432 closed, SplitMix/FNV moved, the seed re-minted twice |
 | **N4 (Int traps)** | every wrap dependent moved (the `Hashable` folds, field/scalar), the census repeated over the emitter child and `pdsd`, the cost measured, `Int` overflow panics on all three engines, `checkedAdd` family shipped, spec updated |
-| **N5 (unboxed and lowered)** | #353, `i32` lowering, #2360, field/scalar on 64-bit limbs |
-| **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opens when a customer is named |
+| **N5 (unboxed and lowered)** | #353's scalar slice (U64/U32 raw across `let`, parameter and result, LLVM), `i32` lowering with rotates as rotates, `mulWide` bound in registers, field on 5x52 and scalar on 8x32 limbs (Val, 2026-09-26); #2360 stays its own issue |
+| **N6 (signed and the FFI)** | `I32`/`I64`, C-twin crossing; opened for `sqlite/`'s full 64-bit `INTEGER` (#3456, Val 2026-09-26) |
 
 N2's measurement (2026-09-25, shared box, interleaved, both arms built by
 one binary): SHA-256 on `U32` runs about 3% fewer instructions per block
@@ -403,6 +533,35 @@ with each bit operation a helper that ThinLTO inlines: no `i32` arithmetic and
 no rotate instruction. That gap is N5's budget. Two folds #3431 lists stay
 on `Int`: `hmac`'s `ctEqAccum` and `pbkdf2`'s xor fold combine bytes with
 `bitOr`/`bitXor`, never leave `0` to `255`, and so never wrap or trap.
+
+N5's measurement (2026-09-26, shared box, instructions:u, each arm built by
+its own tree's compiler, main at `c57f74898`): SHA-256 over 16,448 blocks
+drops from 451M to 198M instructions (0.44), about 1.0 µs per block with setup
+on a quiet box against 3.1 µs, which is under #3377's 1.24–1.35 µs for
+hand-written `i32` IR; the rotates are `rol`/`ror`.  A KDF round of 20k keyed
+HMACs drops to 0.47, 20k field multiplications to 0.15 (126.5M to 18.4M),
+50 scalar inversions to 0.033 (1.049G to 34.8M), one ECDSA signature to 0.18
+(244.7M to 45.2M), and the pdsd export/rehydrate/MST-insert workloads to
+0.64/0.59/0.82.  The hashing workload and the interpreter's per-step cost
+are unchanged; `medaka check` of the compiler is +1.7%, all of it the larger
+source (cross-loaded, the two binaries check the same source in the same
+instructions).  On SHA-256 the steps were: the `i32` lowering alone, with the
+round state still a tuple (#3369's shape), 4% fewer instructions; the state
+carried as eight parameters on top of it, 50%; those parameters passed as
+`i32` to the raw worker, 56%.
+
+N6's measurement (2026-09-26, shared box, each arm built by its own tree's
+compiler, main at `343a4b6ad`, instructions:u unless stated): hello-world
+`check`, `run` and `build` are flat in cachegrind `Ir` (−0.01%, +0.02%,
++0.13%), since no signed impl is in `core.mdk`; `medaka check` of the
+compiler is +0.53%, all of it the larger source (the new binary checks main's
+source in the same instructions, +0.007%); the interpreter's per-step cost
+on an `Int` loop is +0.9% (7,921 to 7,993 instructions), after `Int`
+comparisons were given their own arms ahead of the `U64`/`I64` shape arms;
+and `sqlite/` over 100,000 rows is +0.3% for a filtered aggregate, +0.1% for
+an ORDER BY and +1.0% for `sum(v * 3 + 1)`, whose arithmetic is now checked
+so an overflow becomes a REAL rather than a trap.  Wall time is inside the
+noise on every workload.
 
 N1 precedes N2 because the family's conversion names must be fixed before
 `U8` ships (#3415, point 1). N2 precedes N3 so the tagged mechanism is

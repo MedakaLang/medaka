@@ -1,0 +1,15 @@
+-- DICT-SEMANTICS §4.1 G4 (#2095) control: the same dictionary-abstracted
+-- `where` helper as `g4-where-multi-type.mdk`, used at ONE type at every call
+-- site, so both applications forward `both`'s single given.  Prints 2.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz _ = 1
+
+both : Sz a => a -> a -> Int
+both x y = g x + g y
+  where
+    g v = sz v
+
+main = println (both (1 : Int) (2 : Int))

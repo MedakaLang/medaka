@@ -306,6 +306,15 @@ path in `emitDefaultRKeyRef`; what is missing is wiring it into the RDict chain.
 gap is wider than the method-less impl #948 turned on — the derived-Ord ADT inheriting
 `max`/`min` is exactly what `emitDispatchChainDefaulted` exists for on the LLVM side.
 
+> **PROMOTED (M-EVIDENCE S4).** Every inherited slot now lowers to a per-instance
+> `CImplDefault` entry (one per `InheritedDefault` row of the disposition table), which
+> every engine dispatches exactly like the instance's supplied methods — so the wasm
+> RDict chain has an arm for every inheriting instance, and its keys come from the same
+> entries as the supplied methods' (#1068's route-key disagreement goes with it).
+> `llvmM/inherited_default_dict_dispatch`, `llvmM/attributed_impl_dispatch` and
+> `llvmM/typearg_inherited_default_dispatch` are eval == native == wasm and were
+> promoted out of the ledger.
+
 ### 3.8 Four promoted rows on 2026-09-12
 
 Four independently derived values are now pinned after their ledger rows promoted:

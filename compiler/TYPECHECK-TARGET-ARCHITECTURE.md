@@ -304,14 +304,16 @@ Seven steps, in this order, with the dependency reasons measured in the feasibil
    which is what D-SEL wants — and that interpreter work must be costed. The two **emitters** do
    read `Route` from Core IR data (`wasm_emit.mdk:4734`, *"carries the resolved Routes as DATA
    on CMethod/CDict"*), so they are genuinely below lowering and can stay.
-   🚨 **`RNone` is a runtime dispatch decision today.** `methodAtNarrow env _ v RNone =
-   narrowUnrouted env v` (`eval.mdk:1580`); default-body sibling calls are `RNone` *by
-   construction* because a default body has no impl to key to, and the LLVM emitter mirrors it
-   as `emitDefaultRKey` (`llvm_emit.mdk:5583`). M2's "solving is not optional" makes every site
-   an evidence site **except a default body**, which has no dict parameter to be evidence for
-   while G1 is unimplemented tree-wide. So M2 either keeps `RNone` as a **declared, pinned**
-   optimization under D-SEL's side condition, or takes B-1/G1 as a prerequisite — **owner
-   decision** (SA-10 Q4), and it decides whether M2 is one move or two. Until `eval` has no
+   🚨 **`RNone` was a runtime dispatch decision for default bodies until #1082 (2026-09-26).**
+   `methodAtNarrow env _ v RNone = narrowUnrouted env v` (historical citation, `eval.mdk:1580`);
+   default-body sibling calls used to be `RNone` *by construction* because a default body had no
+   impl to key to — the LLVM emitter mirrored it as `emitDefaultRKey` (deleted, `llvm_emit.mdk`).
+   **G1 is now landed tree-wide** (`registerLocalAbs`/`localAbsCandidate`,
+   `docs/spec/DICT-SEMANTICS.md` §4.1 G1), and separately (S4) a default body is inferred once
+   against a receiver `self` given (`DefaultBodyOwner`) and specialized per instance by
+   `compiler/types/disposition.mdk`'s table — the RNone exception this bullet described is
+   retired by construction, not by taking B-1/G1 as M2's prerequisite (owner decision, SA-10 Q4,
+   was answered by landing both independently of M2). Until `eval` has no
    `Route` arm, M2 is half-landed and the `engines` gate is the only witness between
    "compatible with D-SEL" and "two semantics".
 
@@ -326,11 +328,15 @@ is rhetoric.
 whether instance-context evidence is captured recursively. **It is captured at construction, as
 arguments** — GHC's `EvDFunApp dfun tys evs`, where the context evidence is passed to the dfun
 and never re-resolved. **D-EV-DEF** (`docs/spec/DICT-SEMANTICS.md:215-224`) already specifies
-that shape. B-1 is also under-prioritized: `entailSuper` and `SupersPath` **do not exist
-anywhere in `compiler/`** (0 hits, tree-wide); supers are flattened into extra dict slots by
-`expandSupersFix`/`expandSupersVecs` (`:12469-12725`), which is the re-resolution L4 forbids.
-L4 is 0-for-2 on it and #1125/#1127 are both DRAINED-BY "B-1 + B-2, both required", with B-2
-closed.
+that shape. **Landed since this finding was written**: a given's super is now an
+evidence-DAG projection (`ProjectedGiven`/`SuperclassEvidence`, `givenEvidenceBinder`,
+`compiler/types/typecheck.mdk:10176-10182`, `:36572`, `:36750`), never a fresh given and
+never a second `entail` — not under the `entailSuper`/`SupersPath` names this finding
+predicted, but the re-resolution it flagged is gone. The appended dict slots
+`expandSupersVecs` (`:15472-15473`) still exist — their VALUE is the projection
+(owner ruling D4, 2026-09-26: keep the flat calling convention as projection's
+lowering); un-widening that arity is a named follow-on under #993/#679, not this
+package. #1125/#1127 are both DRAINED-BY "B-1 + B-2, both required", with B-2 closed.
 
 ### SA-6. #1288 is a deduplication inside typecheck, not a relocation
 
@@ -468,7 +474,8 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
    found eight discarded diagnostics from two mangling-vs-typecheck divergences on the emit
    path (a constructor-head fast path that rejected mangled constructors; the prelude
    mapping that covered only core's exports), both fixed, so the self-compile is clean with
-   the gate hard (C3a measured). Side finding: the emitter never honored
+   the gate hard (C3a measured). Side finding, HISTORICAL (the hatch and its env var are
+   deleted under #1082, 2026-09-26): the emitter never honored
    `MEDAKA_ARGTAG_UNPIN`, so `test/argtag_matrix_fixtures/CENSUS.md`'s headline (every
    masked cell wrong on the native engine, blocked on #1082) was an instrument artifact;
    re-measured with the hatch armed, the disjoint-head cells are `decidable` — the census
@@ -1279,8 +1286,11 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    same inputs in `driveModulesGo`, taking the stdlib root as `dirOf coreP` — the CLI shape
    hands the child the stdlib's own `core.mdk`. The census is DERIVED, not asserted: the
    exported publishers of driver state in `types/typecheck.mdk` that `driver/medaka_cli.mdk`
-   calls are exactly three — `resetTypeErrorsSticky`, `setLocalPinDisabled`,
-   `setStdlibOwnership` — and the child now calls all three. `setCoherenceUserDecls` reaches
+   calls were exactly three at this unit's landing — `resetTypeErrorsSticky`,
+   `setLocalPinDisabled`, `setStdlibOwnership` — and the child called all three.
+   HISTORICAL: `setLocalPinDisabled` and the local pin it toggled are deleted under
+   #1082 (2026-09-26); a re-derivation of this census now finds two publishers, not
+   three. `setCoherenceUserDecls` reaches
    the flat arm only and no Module-arm driver calls it; `projectTrustedMods` and
    `--allow-internal` feed resolve, which stays with the parent by design.
    **What is still NOT converged**, and was not in this unit's scope: `build --json` still
@@ -3110,9 +3120,10 @@ Every claim below is labelled **MEASURED** (run first-hand while writing this),
   **already identity-keyed** — `defaultCellName ifaceId method =
   "\{ifaceId}#\{method}"` (`compiler/eval/eval.mdk:335`) — so eval's wrong
   answer is produced by a **selector over two survivors**
-  (`ifaceIdsAtTag`/`defaultOwnedBy`'s first-match fallback,
-  `compiler/ir/core_ir_lower.mdk:1241-1248`,
-  `compiler/backend/wasm_emit.mdk:4511-4518`), not by a bare table key.
+  (`ifaceIdsAtTag`/`defaultOwnedBy`'s first-match fallback — HISTORICAL: both
+  deleted under #1265's fix, s4-identity-keyed-defaults, `3580cf589`; every engine's
+  default lookup is now keyed by `compiler/types/disposition.mdk`'s
+  `(ifaceId, method, instance)` table), not by a bare table key.
   The residual bake-in worry is answered *by §9.3's constraint*, not by luck:
   the only way building `IE` could entrench #1265 is if `IE` grew a
   `(method, tag)`-keyed default registry, and §9.3 forbids that mechanically.
@@ -3231,11 +3242,12 @@ the key whose two survivors #1265 is the first-match over.
      a zero extraction as a pass"* (`test/registry_keying_ratchet.sh:242-251`;
      the writer ratchet repeats it at `:319`). Check 4 must fail closed the same
      way — a zero-length `IE` block is a broken delimiter, never an empty answer.
-3. **A declared non-flip.** `test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse`
-   must stay RED across A-3.4, declared up front per §7's pin→stage map. It is
-   the *observable* of this constraint: if A-3.4 changed the default-arm answer
-   in any direction, the pin flips and the must-fail gate reds naming #1265.
-   Fail-capable both ways, which prose is not.
+3. **A declared non-flip.** The #1265 must-fail pin had to stay RED across
+   A-3.4, declared up front per §7's pin→stage map. It was the *observable* of
+   this constraint: if A-3.4 changed the default-arm answer in any direction, the
+   pin flipped and the must-fail gate redded naming #1265.  (#1265 has since been
+   fixed by per-instance defaults (M-EVIDENCE); its positive rows are
+   `test/dict_fixtures/s5-two-ifaces-one-type-defaults*`.)
 
 The constraint is also stated in the ratchet's **existing `declEnvsRef` row**, so
 widening it is an edit to a reviewed artefact rather than a silent drift — see
@@ -3509,7 +3521,7 @@ reach. Run the three commands rather than trusting this table's membership.
 | `implTysIfMatch` · `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
 | `superDeclsRef`, `argDispatchIdxRef`, `methodDispatchIdxRef` | `DriverState`, interface/method-side | **NOT `IE`** — CE-side or RLocal-site channels (#1351); A-3.3 excludes the latter two deliberately |
 | `EmitInput.methodIfaces` / `methodIfaceIndex` / `methodIfaceIdIndex` (`compiler/backend/llvm_emit.mdk:781-783`), read via `methodIfaceOfInput`/`methodArityOfInput`/`methodArityOfIface` (`:480-513`) by both backends | emit-side method→(iface, arity) table | **NOT `IE`** — #1112 §1 row 7. B-2 (#1113) is CLOSED and is no longer this row's routing. ⚠️ This row named `methodIfaceTableRef`/`methodIfaceIndexRef` in `compiler/backend/emit_support.mdk:449-464` until 2026-08-26; **neither symbol has existed since the `EmitInput` boundary landed** (`grep -rn 'methodIfaceTableRef' compiler/` → no hits), and `emit_support.mdk:449-464` holds `lazyGlobalNames`/`isDictParamName`, unrelated. This row's question was resolved by the **`emit-dispatch-identity`** sprint (#1810 / #1852, both CLOSED) — verified: `EmitInput` now carries both `methodIfaceIndex` (bare-name) AND `methodIfaceIdIndex` (an `OrdMap Int`, identity-keyed by iface id — `llvm_emit.mdk:783`, `:513`), the identity-keyed table this row was asking for |
-| `ifaceImplHeadsRef` / `ifaceIdsAtTag` / `defaultOwnedBy` / `narrowDefaults` / `CImplDefault` (`compiler/ir/core_ir_lower.mdk`, both emitters), `defaultCellName` cells (`compiler/eval/eval.mdk`) | the default-arm registry and its selector | **NOT `IE`, BY CONSTRAINT** (§9.3) — **#1265 (OPEN)**, not B-2/#1113 (CLOSED). Verified: #1265's own repro names exactly these symbols (`CImplDefault`, `ifaceIdsAtTag`, `defaultOwnedBy`) — two different interfaces sharing a method name at one receiver tag both pass `defaultOwnedBy`, and the `_ => Some fallback` arm first-matches, surviving on all three engines |
+| `ifaceImplHeadsRef` / `ifaceIdsAtTag` / `defaultOwnedBy` / `narrowDefaults` / `CImplDefault` (`compiler/ir/core_ir_lower.mdk`, both emitters), `defaultCellName` cells (`compiler/eval/eval.mdk`) | HISTORICAL row name — the default-arm registry and its selector, as they existed when this row was written | **#1265 FIXED, s4-identity-keyed-defaults (`3580cf589`), superseding this row.** `ifaceIdsAtTag`/`defaultOwnedBy`/`narrowDefaults` are deleted; the default-arm registry is now `compiler/types/disposition.mdk`'s `DispositionTable`, published beside `IE`/`CE` and read by every engine, keyed by `(ifaceId, method, instance)` — not by this row's bare `(method, tag)` selector. `CImplDefault` and `defaultCellName` survive as the payload/cell-naming halves; they no longer select |
 
 **The three selection legs above — CHECKER (`concreteReqMatchByIface`), ROUTER
 (`entailInst`'s `EKNestedTop` arm), and METHOD-keyed (`implDictRoutesForRow` /

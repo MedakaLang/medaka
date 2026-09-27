@@ -52,7 +52,9 @@ import lib.xrpc.{
 
 mustHeader : String -> String -> Header
 mustHeader name value =
-  resultOrPanic "ratelimit_test: mustHeader" (makeHeader name (toUtf8 value))
+  resultOrPanic
+    "ratelimit_test: mustHeader"
+    (makeHeader name (encodeUtf8 value))
 
 xffHeader : String -> Header
 xffHeader = mustHeader "x-forwarded-for"
@@ -213,15 +215,17 @@ test "an ordinary class refusal renders its own class message and headers" =
         (classMessage WritesClass)
         "too many write requests for this identity in the current window",
       expectEqual (headerName limitH) "ratelimit-limit",
-      expectEqual (headerValue limitH) (toUtf8 "\{classAllowance WritesClass}"),
+      expectEqual
+        (headerValue limitH)
+        (encodeUtf8 "\{classAllowance WritesClass}"),
       expectEqual (headerName remainingH) "ratelimit-remaining",
       expectEqual
         (headerValue remainingH)
-        (toUtf8 "\{classAllowance WritesClass}"),
+        (encodeUtf8 "\{classAllowance WritesClass}"),
       expectEqual (headerName resetH) "ratelimit-reset",
       expectEqual
         (headerValue resetH)
-        (toUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
+        (encodeUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
     ]
     _ => expectTrue False
 
@@ -239,13 +243,13 @@ test "a capacity refusal renders capacityMessage and the cardinality cap" =
       expectEqual (headerName limitH) "ratelimit-limit",
       expectEqual
         (headerValue limitH)
-        (toUtf8 "\{maxRateLimitIdentitiesPerWindow}"),
+        (encodeUtf8 "\{maxRateLimitIdentitiesPerWindow}"),
       expectEqual (headerName remainingH) "ratelimit-remaining",
-      expectEqual (headerValue remainingH) (toUtf8 "0"),
+      expectEqual (headerValue remainingH) (encodeUtf8 "0"),
       expectEqual (headerName resetH) "ratelimit-reset",
       expectEqual
         (headerValue resetH)
-        (toUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
+        (encodeUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
     ]
     _ => expectTrue False
 

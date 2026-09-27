@@ -9,6 +9,7 @@
 
 import lib.dbwriter.{writeDatabase}
 import lib.recordfmt.{Cell(..)}
+import i64
 
 tableName : String
 tableName = "users"
@@ -27,6 +28,8 @@ ipkIdx = Some 0
 --   3  "Carol"   -5        (negative i8 age)
 --   7  "Dave"    1000000   (i32 age; non-contiguous rowid)
 --   42 "Eve"     127       (i8 boundary)
+--   43 "Fay"     2^63 - 1  (int64's largest, past Int: a CInt64)
+--   44 "Gus"     -2^63     (int64's smallest)
 rows : List (List Cell)
 rows = [
   [CInt 1, CText "Alice", CInt 30],
@@ -34,6 +37,8 @@ rows = [
   [CInt 3, CText "Carol", CInt (-5)],
   [CInt 7, CText "Dave", CInt 1000000],
   [CInt 42, CText "Eve", CInt 127],
+  [CInt 43, CText "Fay", CInt64 9223372036854775807],
+  [CInt 44, CText "Gus", CInt64 (-9223372036854775808)],
 ]
 
 main : <IO> Unit

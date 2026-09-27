@@ -16,6 +16,8 @@
 -- (`sqVarint`): a round-trip `sqVarintBytes → sqVarint` reproduces the value.
 
 import byteparser.{ByteParser, ByteParserE, BResult(..), runByteParser}
+import bytes.{Bytes, fromArrayAssumeByteDomain, fromU8Array}
+import u8 as U8
 import u64 as U64
 
 -- ---------------------------------------------------------------------------
@@ -40,34 +42,35 @@ groupMask = 127
 
 -- | Read a SQLite variable-length integer (1–9 bytes) off the input.
 --
--- > runByteParser sqVarint (arrayFromList [0])
+-- > runByteParser sqVarint (fromU8Array [|0|])
 -- Ok 0
--- > runByteParser sqVarint (arrayFromList [127])
+-- > runByteParser sqVarint (fromU8Array [|127|])
 -- Ok 127
--- > runByteParser sqVarint (arrayFromList [129, 0])
+-- > runByteParser sqVarint (fromU8Array [|129, 0|])
 -- Ok 128
--- > runByteParser sqVarint (arrayFromList [0x81, 0x80, 0x01])
+-- > runByteParser sqVarint (fromU8Array [|0x81, 0x80, 0x01|])
 -- Ok 16385
--- > runByteParser sqVarint (arrayFromList [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+-- > runByteParser sqVarint (fromU8Array [|0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF|])
 -- Ok -1
--- > runByteParser sqVarint (arrayFromList [0xA0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00])
+-- > runByteParser sqVarint (fromU8Array [|0xA0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00|])
 -- Err "varint: value does not fit Int at byte 8"
 export
 sqVarint : ByteParser Int
 sqVarint = ByteParserE sqVarintGo
 
 -- Decode up to 9 bytes.  `byteNum` counts which byte we are on (1-indexed).
-sqVarintGo : Array Int -> Int -> BResult Int
-sqVarintGo input pos = sqVarintLoop input pos 0 1
+sqVarintGo : Bytes -> Int -> Int -> BResult Int
+sqVarintGo input pos end = sqVarintLoop input pos end 0 1
 
 -- Process one byte of a varint.  `b` is the byte value, already fetched.
-sqVarintStep : Array Int -> Int -> Int -> Int -> Int -> BResult Int
-sqVarintStep input pos acc byteNum b
+sqVarintStep : Bytes -> Int -> Int -> Int -> Int -> Int -> BResult Int
+sqVarintStep input pos end acc byteNum b
   | byteNum == 9 = ninthByte acc b pos
   | b >= contBit =
     sqVarintLoop
       input
       (pos + 1)
+      end
       (shiftLeft acc 7 + bitAnd b groupMask)
       (byteNum + 1)
   | otherwise = BOk (shiftLeft acc 7 + bitAnd b groupMask) (pos + 1)
@@ -83,10 +86,10 @@ ninthByte acc b pos =
   else
     BErr "varint: value does not fit Int" pos
 
-sqVarintLoop : Array Int -> Int -> Int -> Int -> BResult Int
-sqVarintLoop input pos acc byteNum
-  | pos >= arrayLength input = BErr "unexpected end of input (varint)" pos
-  | otherwise = sqVarintStep input pos acc byteNum input[pos]
+sqVarintLoop : Bytes -> Int -> Int -> Int -> Int -> BResult Int
+sqVarintLoop input pos end acc byteNum
+  | pos >= end = BErr "unexpected end of input (varint)" pos
+  | otherwise = sqVarintStep input pos end acc byteNum (U8.toInt input[pos])
 
 -- ---------------------------------------------------------------------------
 -- ENCODE — sqVarintBytes : Int -> List Int  (the on-wire byte sequence)
@@ -146,7 +149,10 @@ ninthFormGroup x k =
 
 -- | Decode a freshly-encoded value: sqVarintBytes → sqVarint == value.
 roundTrip : Int -> Result String Int
-roundTrip v = runByteParser sqVarint (arrayFromList (sqVarintBytes v))
+roundTrip v =
+  runByteParser
+    sqVarint
+    (fromArrayAssumeByteDomain (arrayFromList (sqVarintBytes v)))
 
 -- 9-byte: at and past 2^56, Int's largest value, and negative values
 -- > roundTrip 72057594037927936

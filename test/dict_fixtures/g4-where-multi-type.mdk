@@ -1,0 +1,20 @@
+-- DICT-SEMANTICS §4.1 G4 (#2095): #1052's `where` spelling. A local binding
+-- generalized over a residual predicate abstracts it, and each use site solves
+-- its own instance: `g`'s use at Int reaches `sz _ = 1` and its use at Bool
+-- reaches `sz _ = 2`, so `both` prints 3.  One dictionary shared between the
+-- two uses would print 2 or 4.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz _ = 1
+
+impl Sz Bool where
+  sz _ = 2
+
+both : (Sz a, Sz b) => a -> b -> Int
+both x y = g x + g y
+  where
+    g v = sz v
+
+main = println (both (1 : Int) True)

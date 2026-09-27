@@ -19,6 +19,7 @@ import test.{
   expectTrue,
 }
 import test.dbfix.{q, qd}
+import bytes.{fromArrayAssumeByteDomain}
 import byteparser.{runByteParser}
 import lib.varint.{sqVarint, sqVarintBytes}
 import lib.recordenc.{encodeRecord}
@@ -30,13 +31,17 @@ import lib.sqlstmt.{parseSelect, renderSelect}
 -- 9-byte threshold, which is exactly the domain sqVarintBytes/sqVarint cover.
 prop "varint encode then decode round-trips" (n : Int) =
   let v = bitAnd n 72057594037927935
-  eq (runByteParser sqVarint (arrayFromList (sqVarintBytes v))) (Ok v)
+  eq
+    (runByteParser
+      sqVarint
+      (fromArrayAssumeByteDomain (arrayFromList (sqVarintBytes v))))
+    (Ok v)
 
 -- ── record: encodeRecord ∘ parseRecord = identity ──────────────────────────
 recordRoundTrip : List Cell -> Result String (List Cell)
 recordRoundTrip cells = do
   bs <- encodeRecord cells
-  runByteParser parseRecord bs
+  runByteParser parseRecord (fromArrayAssumeByteDomain bs)
 
 prop "record round-trips a row of ints" (xs : List Int) =
   let cells = map CInt xs

@@ -1,0 +1,15 @@
+-- #866 / #1082 — A LOCAL THAT FORWARDS A DICTIONARY, USED AT TWO TYPES.
+--
+-- `sh` calls the constrained `shows`, so its scheme keeps `Debug a`.  A local binding
+-- is dictionary-abstracted like a top-level one: each use applies `sh` to the
+-- dictionary solved at that use, so `sh True` and `sh "a"` reach different instances.
+-- Ground truth, from the source: `debug True` is `True`, `debug "a"` is `"a"` with
+-- its quotes.  A single dictionary shared by both uses would print `TrueTrue`.
+--
+-- Verdict: ACCEPT.
+shows : Debug a => a -> String
+shows v = debug v
+
+main =
+  let sh = v => shows v
+  println (sh True ++ sh "a")

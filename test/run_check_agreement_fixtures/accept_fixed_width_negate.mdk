@@ -1,0 +1,17 @@
+-- Unary minus at a fixed-width head is that head's `Num` negation, which wraps:
+-- `-(5 : U8)` is 251 whether it is written directly, reached through a
+-- `Num a =>` function, or through a dictionary-abstracted local.  `-2147483648`
+-- at `I32` is the one literal whose magnitude alone does not fit.
+import u8
+import i32 as I32
+
+neg : Num a => a -> a
+neg x = -x
+
+main =
+  let a = 5 : U8
+  let b = 7 : I32
+  let lneg = y => -y
+  let m = -2147483648 : I32
+  println
+    "\{debug (-a)}|\{debug (neg a)}|\{debug (lneg a)}|\{debug (-b)}|\{debug (lneg b)}|\{debug (lneg 3)}|\{debug m}"

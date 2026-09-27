@@ -13,6 +13,7 @@
 
 import string.{lines, split, trim, toUtf8, startsWith, stripPrefix, toInt}
 import path.{basename}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{encode, decode}
 import lib.base58.{base58btcAlphabet, base58btcEncode, base58btcDecode}
 import lib.multiformats.{
@@ -48,7 +49,8 @@ bytesToIntBEGo bytes i acc =
     bytesToIntBEGo bytes (i + 1) (acc * 256 + bytes[i])
 
 mustDecodeHex : String -> Array Int
-mustDecodeHex s = resultOrPanic "encodings_vectors: bad hex '\{s}'" (decode s)
+mustDecodeHex s =
+  toArray (resultOrPanic "encodings_vectors: bad hex '\{s}'" (decode s))
 
 -- A `0x`-prefixed (or bare) hex field -> Int, e.g. "0x1200" -> 4608.
 hexFieldToInt : String -> Int
@@ -248,7 +250,7 @@ varintExampleChecks line = match split "\t" line
       check
         "varint-encode:\{decStr}"
         hexBytes
-        (encode actualBytes)
+        (encode (fromArrayAssumeByteDomain actualBytes))
         (expectedBytes == actualBytes)
     let decodedAll = uvarintDecodeAll expectedBytes
     let expectedDecode = Ok value : Result String Int

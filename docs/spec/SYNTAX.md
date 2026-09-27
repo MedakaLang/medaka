@@ -51,7 +51,7 @@ p18 = (1, "hi")  -- Tuple
 `Int` is a 63-bit tagged signed integer (`intMinBound`/`intMaxBound` = `-2^62`
 / `2^62 - 1`, i.e. `-4611686018427387904` / `4611686018427387903`), not a full
 64-bit machine word. An **integer literal** whose magnitude exceeds `2^62` is a
-**wide literal**: only a `U64` holds it (see below), so where its type grounds
+**wide literal**: only a `U64` or an `I64` holds it (see below), so where its type grounds
 to `Int` (or defaults to it) it is an `L-INT-OVERFLOW` compile error —
 `println 9223372036854775807` (a legal-looking 64-bit-max literal) does not
 silently print `-1`, it is rejected (`integer literal 9223372036854775807 does
@@ -63,7 +63,7 @@ refused at `Int`, and `intMinBound` is reachable only through the adjacent-sign
 form `-4611686018427387904`, where the parser fuses the `-` and the digits into
 one negative literal. A literal of `2^64` or more fits no type and is a lex
 error (`integer literal too large for U64 (max 2^64 - 1)`); a negated wide
-literal (`-0xFFFFFFFFFFFFFFFF`) is refused too. **Arithmetic** overflow
+literal is refused everywhere but `I64` (`-0xFFFFFFFFFFFFFFFF` fits nothing). **Arithmetic** overflow
 **panics**: `Int` is a fixed-width integer, not an arbitrary-precision bignum,
 and `+`, `-`, `*`, negation and `/` whose exact result falls outside the range
 stop the program with `runtime error [E-INT-OVERFLOW]: 4611686018427387903 + 1
@@ -94,7 +94,8 @@ when that is `U8`/`U16`/`U32` (`classify : U8 -> String; classify 10 = …`) and
 is range-checked the same way; otherwise it is an `Int`.
 
 **`U64`** holds `0 .. 2^64 - 1` in a boxed cell (it does not fit `Int`'s tagged
-word); its operations live in the stdlib module `u64` (`import u64 as U64`). Its
+word; the native backend keeps it in a register where its type is known); its
+operations live in the stdlib module `u64` (`import u64 as U64`). Its
 arithmetic wraps modulo 2^64 like the rest of the family, and it compares
 unsigned. A literal in `U64` position may be a wide literal
 (`0x9E3779B97F4A7C15`, `18446744073709551615`); a negative one is refused.
@@ -102,6 +103,20 @@ Converting back narrows, since `Int` holds 63 bits: `U64.toInt` answers an
 `Option Int`, and `U64.toIntTruncating` keeps the low 63 bits. A literal
 **pattern** cannot match a `U64` (compare in a guard, `x if x == 0`). Design:
 `docs/design/INTEGER-TYPES-DESIGN.md`.
+
+**Signed fixed-width integers.** `I32` holds `-2^31 .. 2^31 - 1` in `Int`'s
+word and `I64` holds `-2^63 .. 2^63 - 1` in a boxed cell; their operations
+live in the stdlib modules `i32` and `i64` (`import i64 as I64`). Their `+`,
+`-`, `*`, `negate` and `abs` **wrap** in two's complement (`negate minBound`
+and `abs minBound` are `minBound`), `/` and `%` truncate toward zero as C does
+(`minBound / -1` is `minBound`, `minBound % -1` is `0`), they compare signed,
+and `shiftRight` is arithmetic. A literal is range-checked like the unsigned
+types'; an `I64` literal may be a wide one down to
+`-9223372036854775808`, which the parser reads as `-` applied to the wide
+literal 2^63. A literal **pattern** is typed by an `I32` scrutinee (a negative
+literal arm does not parse for any integer type; use a guard); it cannot match
+an `I64`. Every `Int` fits an `I64`, so `fromInt` at `I64` never panics,
+and `I64.toInt` answers an `Option Int`.
 
 String escapes: `\n \t \r \0 \\ \"` and unicode `\u{48}` (char literals also take
 `\'`). `\{` is **not** a literal-brace escape — it is the interpolation opener (see

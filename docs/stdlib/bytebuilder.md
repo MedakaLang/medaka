@@ -84,16 +84,18 @@ costs `O(n)` whatever the builder's current capacity.
 ### `builderParts`
 
 ```
-builderParts : Builder -> (Bytes, Int)
+builderParts : Builder -> (MutBytes, Int)
 ```
 
-The builder's backing block as a `Bytes`, and the number of bytes
-emitted so far, without copying.
+The builder's backing block, and the number of bytes emitted so far,
+without copying.
 
-The byte string is the builder's own block, so it may be longer than the
-count, and bytes at or past the count are unwritten scratch. A later
-emit writes into that block or replaces it, so read the counted bytes
-before emitting again. `buildBytes` is the copying form.
+The block is the builder's own, so it may be longer than the count, and
+bytes at or past the count are unwritten scratch. A later emit writes
+into that block or replaces it, so read the counted bytes before emitting
+again. It is a `MutBytes` rather than a `Bytes` because it changes under
+the builder: it cannot be compared, hashed or kept as a value.
+`buildBytes` is the copying form.
 
 ```medaka
 > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n

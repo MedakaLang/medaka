@@ -643,6 +643,26 @@ export
 u64HalvesHex : Int -> Int -> String
 u64HalvesHex hi lo = hexDigits 8 hi "" ++ hexDigits 8 lo ""
 
+-- An `I64` literal's halves (`ast.LI64`, the two's complement pattern) as a
+-- literal that spells the same value: `0x…` of the pattern when it is not
+-- negative, and `-0x…` of the magnitude when it is.
+export
+i64HalvesLiteral : Int -> Int -> String
+i64HalvesLiteral hi lo
+  | hi < 2147483648 = "0x" ++ u64HalvesHex hi lo
+  | otherwise =
+    let mlo = (4294967296 - lo) % 4294967296
+    let mhi = (4294967296 - hi - (if lo == 0 then 0 else 1)) % 4294967296
+    "-0x" ++ u64HalvesHex mhi mlo
+
+-- An `Int` as the halves of its 64-bit two's complement pattern (`ast.LI64`).
+export
+int64Halves : Int -> (Int, Int)
+int64Halves n =
+  let lo = (n % 4294967296 + 4294967296) % 4294967296
+  let hi = ((n - lo) / 4294967296 % 4294967296 + 4294967296) % 4294967296
+  (hi, lo)
+
 hexDigits : Int -> Int -> String -> String
 hexDigits 0 _ acc = acc
 hexDigits k n acc =

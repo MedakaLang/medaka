@@ -20,7 +20,10 @@
    publishes — so each names the clause it enforces. -}
 
 import array.{blit, fill, make, setInPlace}
-import hex.{encode}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
+import list.{replicate}
+import mut_bytes as MB
 import string.{fromUtf8, toUtf8}
 import test.{
   expectEach,
@@ -32,7 +35,8 @@ import test.{
   expectTrue,
   fail,
 }
-import lib.sha1.{sha1, sha1FixedBytes}
+import u8 as U8
+import lib.sha1.{sha1}
 import lib.websocket.{
   AssembleEvent(..),
   DecodeResult(..),
@@ -50,22 +54,9 @@ import lib.websocket.{
 
 -- # Helpers
 
--- The message of RFC 3174 TEST3/TEST4: `pattern` repeated `n` times, built
--- as bytes so the huge repeat count never materializes a String.
-repeated : Array Int -> Int -> Array Int
-repeated pattern n =
-  let unit = arrayLength pattern
-  let out = make (unit * n) 0
-  repeatInto out pattern unit 0 n
-  out
-
-repeatInto : Array Int -> Array Int -> Int -> Int -> Int -> Unit
-repeatInto out pattern unit i n =
-  if i >= n then
-    ()
-  else
-    blit pattern 0 out (i * unit) unit
-    repeatInto out pattern unit (i + 1) n
+-- The message of RFC 3174 TEST3/TEST4: `pattern` repeated `n` times.
+repeatedBytes : Bytes -> Int -> Bytes
+repeatedBytes pattern n = B.concat (replicate n pattern)
 
 -- A decode that is expected to succeed, reduced to the four things every
 -- assertion below asks about.
@@ -101,40 +92,123 @@ maxPayload = 65536
 
 test "RFC 3174 §7.3 TEST1: \"abc\"" =
   expectEqual
-    "a9993e364706816aba3e25717850c26c9cd0d89d"
-    (encode (sha1 (toUtf8 "abc")))
+    (fromU8Array [|
+      0xa9,
+      0x99,
+      0x3e,
+      0x36,
+      0x47,
+      0x06,
+      0x81,
+      0x6a,
+      0xba,
+      0x3e,
+      0x25,
+      0x71,
+      0x78,
+      0x50,
+      0xc2,
+      0x6c,
+      0x9c,
+      0xd0,
+      0xd8,
+      0x9d,
+    |])
+    (sha1 (encodeUtf8 "abc"))
 
 test "RFC 3174 §7.3 TEST2: the 56-byte alphabet string" =
   expectEqual
-    "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
-    (encode
-      (sha1
-        (toUtf8 "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")))
+    (fromU8Array [|
+      0x84,
+      0x98,
+      0x3e,
+      0x44,
+      0x1c,
+      0x3b,
+      0xd2,
+      0x6e,
+      0xba,
+      0xae,
+      0x4a,
+      0xa1,
+      0xf9,
+      0x51,
+      0x29,
+      0xe5,
+      0xe5,
+      0x46,
+      0x70,
+      0xf1,
+    |])
+    (sha1
+      (encodeUtf8 "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))
 
 -- RFC 3174 TEST3's message: the one byte of "a", a million times. Built by
--- `make` rather than by `repeated`, whose per-repeat recursion would be a
--- million frames deep under the tree-walking interpreter.
-millionA : Array Int
+-- `MB.fill` rather than by `repeatedBytes`, whose per-repeat `B.concat` cost
+-- would be quadratic bytes copied at this repeat count.
+millionA : Bytes
 millionA =
-  let a = toUtf8 "a"
-  make 1000000 a[0]
+  let mb = MB.make 1000000
+  MB.fill (U8.truncate 97) mb
+  MB.freeze mb
 
 test "RFC 3174 §7.3 TEST3: one million 'a'" =
   expectEqual
-    "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
-    (encode (sha1FixedBytes millionA))
+    (fromU8Array [|
+      0x34,
+      0xaa,
+      0x97,
+      0x3c,
+      0xd4,
+      0xc4,
+      0xda,
+      0xa4,
+      0xf6,
+      0x1e,
+      0xeb,
+      0x2b,
+      0xdb,
+      0xad,
+      0x27,
+      0x31,
+      0x65,
+      0x34,
+      0x01,
+      0x6f,
+    |])
+    (sha1 millionA)
 
 test "RFC 3174 §7.3 TEST4: a 64-byte pattern ten times (exact block multiple)" =
   expectEqual
-    "dea356a2cddd90c7a7ecedc5ebb563934f460452"
-    (encode
-      (sha1
-        (repeated
-          (toUtf8
-            "0123456701234567012345670123456701234567012345670123456701234567")
-          10)))
+    (fromU8Array [|
+      0xde,
+      0xa3,
+      0x56,
+      0xa2,
+      0xcd,
+      0xdd,
+      0x90,
+      0xc7,
+      0xa7,
+      0xec,
+      0xed,
+      0xc5,
+      0xeb,
+      0xb5,
+      0x63,
+      0x93,
+      0x4f,
+      0x46,
+      0x04,
+      0x52,
+    |])
+    (sha1
+      (repeatedBytes
+        (encodeUtf8
+          "0123456701234567012345670123456701234567012345670123456701234567")
+        10))
 
-test "the digest is 20 bytes" = expectEqual 20 (arrayLength (sha1 (toUtf8 "")))
+test "the digest is 20 bytes" = expectEqual 20 (B.length (sha1 (encodeUtf8 "")))
 
 -- # The opening handshake — RFC 6455 §1.3
 

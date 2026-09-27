@@ -14,10 +14,10 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import http.{parseRequestClassified}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
-import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
+import string.{contains, fromUtf8, toUtf8}
 import test.{
   expectAtLeast,
   expectEach,
@@ -34,8 +34,6 @@ import lib.credential.{
   LoginVerdict,
   credentialIterations,
   defaultIterations,
-  loginCheckAdvance,
-  loginCheckVerdict,
   loginOutcome,
   makeCredential,
 }
@@ -59,6 +57,11 @@ import lib.store.{
   storeEmpty,
   storeWithCredential,
   storeWithServerSecret,
+}
+import test.fixture_support.{altTestSecret, contextAt}
+import test.request_support.{authOf, loginJson, postJson}
+import test.response_support.{
+  bodyOf, outcome, settled, statusLineOf, stringField
 }
 
 accountDidText : String
@@ -88,9 +91,6 @@ server =
 -- A fixed session secret. The seam only ever compares a MAC against it, so a
 -- fixture value is as good as an entropy-drawn one here; the real server
 -- draws its own from `osEntropyBytes` (`pds/serve.mdk`).
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
-
 {- | The iteration count this file's credentials are derived at.
 
    It is NOT `defaultIterations`: every derivation here is paid for in gate
@@ -116,7 +116,7 @@ credential =
 -- | A configured server's store: session secret and account credential, no
 -- repository. No session route touches the repository.
 configuredStore : Store
-configuredStore = match storeWithServerSecret testSecret storeEmpty
+configuredStore = match storeWithServerSecret altTestSecret storeEmpty
   Ok withSecret => storeWithCredential credential withSecret
   Err message => panic "session_routes_test: session secret: \{message}"
 
@@ -159,35 +159,12 @@ credentiallessStore : Store
 credentiallessStore =
   resultOrPanic
     "session_routes_test: session secret"
-    (storeWithServerSecret testSecret storeEmpty)
+    (storeWithServerSecret altTestSecret storeEmpty)
 
 testInstant : Int
 testInstant = 1700000000
 
-nonceAt : Int -> Array Int
-nonceAt seed = arrayMakeWith 16 (i => (i * 31 + seed) % 256)
-
-{- | A request context at `instant`, identified by `seed`.
-
-   The seed becomes the minted tokens' `jti`, so two requests placed at the
-   same instant with different seeds mint DIFFERENT tokens — which is what the
-   real server gets from drawing a fresh nonce per request. Two requests with
-   the same seed at the same instant would mint the same token, and one cell
-   below relies on exactly that to prove the nonce is what separates them. -}
-contextAt : Int -> Int -> RequestContext
-contextAt instant seed =
-  RequestContext { nowSeconds = instant, nonce = nonceAt seed, login = None }
-
 -- # Requests and responses
-
-authOf : String -> String
-authOf "" = ""
-authOf token = "Authorization: Bearer \{token}\r\n"
-
-postJson : String -> String -> String -> Array Int
-postJson token nsid bodyJson =
-  toUtf8
-    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength (toUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
 
 {- | A bodiless POST, the shape `refreshSession` and `deleteSession` take.
    The zero-length `Content-Length` is what a real client sends on one, so it
@@ -202,46 +179,9 @@ getQuery token nsid =
   toUtf8
     "GET /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
 
-loginJson : String -> String -> String
-loginJson identifier passwordText =
-  stringify
-    (jObject [
-      ("identifier", JString identifier),
-      ("password", JString passwordText),
-    ])
-
--- The status line and, for a refusal, atproto's error code: the two things a
--- client can act on. A token or a password never appears in either.
-outcome : Array Int -> String
-outcome bytes =
-  let text = fromUtf8 bytes
-  let status = match parse (bodyOf text)
-    Ok body => match get "error" body
-      Some (JString code) => code
-      _ => ""
-    Err _ => ""
-  if status == "" then statusLineOf text else "\{statusLineOf text} \{status}"
-
-statusLineOf : String -> String
-statusLineOf text = match split "\r\n" text
-  first :: _ => drop 9 first
-  [] => "no status line"
-
-bodyOf : String -> String
-bodyOf text = match indexOf "\r\n\r\n" text
-  Some at => drop (at + 4) text
-  None => ""
-
--- | One string field of a response body, or `""`.
-field : String -> Array Int -> String
-field name bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get name body
-    Some (JString value) => value
-    _ => ""
-  Err _ => ""
-
 -- | One boolean field of a response body, or `None` if it is absent or not a
--- `JBool` (mirrors `field`, whose `JString`-only match can't see this shape).
+-- `JBool` (mirrors `stringField`, whose `JString`-only match can't see this
+-- shape).
 fieldBool : String -> Array Int -> Option Bool
 fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
   Ok body => match get name body
@@ -268,11 +208,13 @@ fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
 send context store bytes = match fromArray bytes
   Some packed =>
-    handleBytes
-      server
-      { context | login = verdictAgainst noUpgradeSalt store packed }
-      store
-      packed
+    let (next, response) =
+      handleBytes
+        server
+        { context | login = verdictAgainst noUpgradeSalt store packed }
+        store
+        packed
+    (next, toArray response)
   None => panic "session_routes: request fixture holds a non-byte element"
 
 -- The salt a login that earns an upgrade re-derives the credential under.
@@ -295,11 +237,6 @@ verdictAgainst salt store packed = match parseRequestClassified packed
       settled
       (classifyLogin server (fromArrayAssumeByteDomain salt) store request)
 
-settled : LoginCheck -> LoginVerdict
-settled check = match loginCheckVerdict check
-  Some verdict => verdict
-  None => settled (loginCheckAdvance 256 check)
-
 -- | One request against `store`, carrying a verdict computed elsewhere rather
 -- than against `store` itself.
 sendWithVerdict : Option LoginVerdict ->
@@ -308,11 +245,13 @@ sendWithVerdict : Option LoginVerdict ->
   (Store, Array Int)
 sendWithVerdict verdict store bytes = match fromArray bytes
   Some packed =>
-    handleBytes
-      server
-      { contextAt testInstant 40 | login = verdict }
-      store
-      packed
+    let (next, response) =
+      handleBytes
+        server
+        { contextAt testInstant 40 | login = verdict }
+        store
+        packed
+    (next, toArray response)
   None => panic "session_routes: request fixture holds a non-byte element"
 
 createSessionNsid : String
@@ -336,14 +275,18 @@ login instant seed store =
   send
     (contextAt instant seed)
     store
-    (postJson "" createSessionNsid (loginJson accountHandleText password))
+    (postJson
+      accountHostText
+      ""
+      createSessionNsid
+      (loginJson accountHandleText password))
 
 {- | A logged-in session: the store holding it, its access token, and its
    refresh token. Every cell below starts from one of these. -}
 loggedIn : (Store, String, String)
 loggedIn =
   let (store, response) = login testInstant 1 configuredStore
-  (store, field "accessJwt" response, field "refreshJwt" response)
+  (store, stringField "accessJwt" response, stringField "refreshJwt" response)
 
 sessionStore : Store
 sessionStore = match loggedIn
@@ -366,7 +309,7 @@ test "a login with the right password is 200" =
 test "a login is answered with the account's DID and handle" =
   let (_, response) = login testInstant 1 configuredStore
   expectEqual
-    (field "did" response ++ " " ++ field "handle" response)
+    (stringField "did" response ++ " " ++ stringField "handle" response)
     "\{accountDidText} \{accountHandleText}"
 
 test "a login is answered with an active session" =
@@ -387,7 +330,11 @@ test "a login by DID is accepted as well as by handle" =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson accountDidText password))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountDidText password))
   expectEqual (outcome response) "200 OK"
 
 -- atproto handles are domain names, and domain names are case-insensitive.
@@ -396,7 +343,11 @@ test "a login by handle is case-insensitive" =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson "ALICE.TEST" password))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson "ALICE.TEST" password))
   expectEqual (outcome response) "200 OK"
 
 test "a login with the wrong password is refused" =
@@ -404,7 +355,11 @@ test "a login with the wrong password is refused" =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountHandleText "not it"))
   expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
 
 {- | A login whose verdict was computed against a credential the store no
@@ -422,7 +377,11 @@ test "a login with the wrong password is refused" =
    the first login carries, and the check of the record it left behind. -}
 test "a login verdict computed against a replaced credential is refused" =
   let loginBytes =
-    postJson "" createSessionNsid (loginJson accountHandleText password)
+    postJson
+      accountHostText
+      ""
+      createSessionNsid
+      (loginJson accountHandleText password)
   let upgrading = verdictFor upgradeSalt loginBytes outdatedStore
   let (raced, first) = sendWithVerdict upgrading outdatedStore loginBytes
   let (_, second) = sendWithVerdict upgrading raced loginBytes
@@ -466,7 +425,11 @@ test "a login verdict computed against a replaced credential is refused" =
    accepted and not as accepted-upgrading. -}
 test "a login naming another identifier is offered no upgrade" =
   let loginBytes =
-    postJson "" createSessionNsid (loginJson "someone-else.test" password)
+    postJson
+      accountHostText
+      ""
+      createSessionNsid
+      (loginJson "someone-else.test" password)
   let verdict = verdictFor upgradeSalt loginBytes outdatedStore
   let (after, response) = sendWithVerdict verdict outdatedStore loginBytes
   expectEach [
@@ -502,7 +465,11 @@ test "a login that carries no verdict is refused" =
     sendWithVerdict
       None
       configuredStore
-      (postJson "" createSessionNsid (loginJson accountHandleText password))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountHandleText password))
   expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
 
 {- | The three ways a login can fail are ONE answer, byte for byte. The
@@ -514,12 +481,20 @@ test "a wrong password and an unknown identifier are the same refusal" =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountHandleText "not it"))
   let (_, unknownIdentifier) =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson "nobody.test" password))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson "nobody.test" password))
   expectEqual (fromUtf8 wrongPassword) (fromUtf8 unknownIdentifier)
 
 test "a login against a server with no credential is the same refusal" =
@@ -527,12 +502,20 @@ test "a login against a server with no credential is the same refusal" =
     send
       (contextAt testInstant 1)
       credentiallessStore
-      (postJson "" createSessionNsid (loginJson accountHandleText password))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountHandleText password))
   let (_, wrongPassword) =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountHandleText "not it"))
   expectEqual (fromUtf8 noCredential) (fromUtf8 wrongPassword)
 
 -- Nothing the client sent comes back. A refusal that quoted the identifier
@@ -542,7 +525,11 @@ test "a refusal repeats neither the password nor the identifier" =
     send
       (contextAt testInstant 1)
       configuredStore
-      (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
+      (postJson
+        accountHostText
+        ""
+        createSessionNsid
+        (loginJson accountHandleText "not it"))
   let text = fromUtf8 response
   expectEach [
     (
@@ -564,7 +551,9 @@ test "a refusal repeats neither the password nor the identifier" =
 test "two logins in the same second issue different tokens" =
   let (_, first) = login testInstant 1 configuredStore
   let (_, second) = login testInstant 2 configuredStore
-  expectNotEqual (field "accessJwt" first) (field "accessJwt" second)
+  expectNotEqual
+    (stringField "accessJwt" first)
+    (stringField "accessJwt" second)
 
 -- # The access token
 
@@ -582,7 +571,7 @@ test "getSession names the account the token belongs to" =
       (contextAt testInstant 3)
       sessionStore
       (getQuery accessToken getSessionNsid)
-  expectEqual (field "did" response) accountDidText
+  expectEqual (stringField "did" response) accountDidText
 
 test "getSession reports the session as active" =
   let (_, response) =
@@ -641,11 +630,11 @@ rotatedStore = match refreshed
 
 rotatedAccess : String
 rotatedAccess = match refreshed
-  (_, response) => field "accessJwt" response
+  (_, response) => stringField "accessJwt" response
 
 rotatedRefresh : String
 rotatedRefresh = match refreshed
-  (_, response) => field "refreshJwt" response
+  (_, response) => stringField "refreshJwt" response
 
 test "a refresh with the session's refresh token is 200" = match refreshed
   (_, response) => expectEqual (outcome response) "200 OK"
@@ -726,7 +715,7 @@ rotateAt : Int -> Int -> Store -> String -> (Store, String, String)
 rotateAt instant seed store refresh =
   let (next, response) =
     send (contextAt instant seed) store (postNoInput refresh refreshSessionNsid)
-  (next, field "accessJwt" response, field "refreshJwt" response)
+  (next, stringField "accessJwt" response, stringField "refreshJwt" response)
 
 {- | A family rotated three times, the last only ten minutes before the ninety
    days since its login run out: every token in it is freshly minted, and the
@@ -850,7 +839,7 @@ test "a burst of replays inside the grace window leaves one of its pairs open" =
             answerTo
               at
               store
-              (getQuery (field "accessJwt" response) getSessionNsid))
+              (getQuery (stringField "accessJwt" response) getSessionNsid))
           responses),
     ),
     (
@@ -862,7 +851,9 @@ test "a burst of replays inside the grace window leaves one of its pairs open" =
             answerTo
               at
               store
-              (postNoInput (field "refreshJwt" response) refreshSessionNsid))
+              (postNoInput
+                (stringField "refreshJwt" response)
+                refreshSessionNsid))
           responses),
     ),
     (
@@ -891,8 +882,8 @@ revocation =
     revoked,
     currentAccess,
     currentRefresh,
-    field "accessJwt" siblingResponse,
-    field "refreshJwt" siblingResponse,
+    stringField "accessJwt" siblingResponse,
+    stringField "refreshJwt" siblingResponse,
     replay,
   )
 
@@ -999,6 +990,7 @@ test "a write with the deleted session's access token is refused first" =
       (contextAt (testInstant + 61) 8)
       closedStore
       (postJson
+        accountHostText
         accessToken
         createRecordNsid
         (stringify
@@ -1058,7 +1050,7 @@ lateConsumedClosed =
       (contextAt (testInstant + 60 + 7201) 65)
       twoFamilies
       (postNoInput refreshToken deleteSessionNsid)
-  (store, currentAccess, field "accessJwt" siblingResponse, response)
+  (store, currentAccess, stringField "accessJwt" siblingResponse, response)
 
 test "logging out with a consumed refresh token past its grace is 200" =
   let (_, _, _, response) = lateConsumedClosed
@@ -1090,8 +1082,8 @@ test "logging out with a consumed refresh token leaves a sibling family open" =
 test "logging out of one session leaves another open" =
   let (afterFirst, _) = login testInstant 1 configuredStore
   let (twoSessions, secondResponse) = login testInstant 9 afterFirst
-  let secondAccess = field "accessJwt" secondResponse
-  let secondRefresh = field "refreshJwt" secondResponse
+  let secondAccess = stringField "accessJwt" secondResponse
+  let secondRefresh = stringField "refreshJwt" secondResponse
   let (afterClose, _) =
     send
       (contextAt (testInstant + 1) 10)

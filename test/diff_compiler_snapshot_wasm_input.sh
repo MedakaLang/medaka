@@ -85,7 +85,7 @@ grep -q 'mdk_impl_.*_score' "$WORK/only.wat" || {
   echo "FAIL: snapshot WAT did not emit Score implementations"
   exit 1
 }
-grep -Fq '(func $mdk_impl_U_score (param' "$WORK/only.wat" || {
+grep -Fq '(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_U_score (param' "$WORK/only.wat" || {
   echo "FAIL: snapshot WAT did not eta-expand Score to its declared receiver arity"
   exit 1
 }

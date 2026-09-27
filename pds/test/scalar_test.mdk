@@ -11,7 +11,8 @@
 
    The INPUTS below are this slice's own selection and need no provenance: an
    input is not an answer key. They are built programmatically so the limb
-   boundaries (every 16 bits) are hit exactly rather than by hand-typed hex.
+   boundaries (every 32 bits, and every 16 in between) are hit exactly rather
+   than by hand-typed hex.
 
    The two 32-byte constants that ARE spelled out — `n` and `n+1` — are the
    published curve order (SEC 2 v2 §2.4.1), used as REJECTION inputs, not as
@@ -24,6 +25,7 @@
 
 import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
+import test.fixture_support.{bitBytes, decBytes}
 import array as A
 import lib.scalar.{
   Sc,
@@ -48,33 +50,6 @@ import lib.scalar.{
 }
 
 -- ── Input construction (inputs, not answer keys) ──────────────────────
-
--- 32 big-endian bytes with exactly bit `k` set.
-bitBytes : Int -> Array Int
-bitBytes k =
-  let out = arrayMake 32 0
-  out[31 - shiftRight k 3] := shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)
-  out
-
--- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
--- reaches).
-decBytes : Array Int -> Array Int
-decBytes bs =
-  let out = arrayCopy bs
-  let () = decGo out 31
-  out
-
-decGo : Array Int -> Int -> Unit
-decGo out i =
-  if i < 0 then
-    ()
-  else
-    let v = out[i]
-    if v == 0 then
-      out[i] := 255
-      decGo out (i - 1)
-    else
-      A.setInPlace i (v - 1) out
 
 -- 32 big-endian bytes, incremented by one.
 incBytes : Array Int -> Array Int
@@ -111,6 +86,43 @@ halveGo bs out i carry =
     out[i] := shiftRight cur 1 + shiftLeft carry 7
     halveGo bs out (i + 1) (bitAnd cur 1)
 
+-- 32 big-endian bytes, a - b (a >= b, which every input here satisfies).
+subBytes : Array Int -> Array Int -> Array Int
+subBytes a b =
+  let out = arrayMake 32 0
+  let () = subGo a b out 31 0
+  out
+
+subGo : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
+subGo a b out i borrow =
+  if i < 0 then
+    ()
+  else
+    let v = a[i] - b[i] - borrow
+    if v < 0 then
+      out[i] := v + 256
+      subGo a b out (i - 1) 1
+    else
+      out[i] := v
+      subGo a b out (i - 1) 0
+
+-- 32 big-endian bytes, a + b (the sum below 2^256, which every input here
+-- satisfies).
+addBytes : Array Int -> Array Int -> Array Int
+addBytes a b =
+  let out = arrayMake 32 0
+  let () = addGo a b out 31 0
+  out
+
+addGo : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
+addGo a b out i carry =
+  if i < 0 then
+    ()
+  else
+    let v = a[i] + b[i] + carry
+    out[i] := bitAnd v 255
+    addGo a b out (i - 1) (shiftRight v 8)
+
 allOnes : Array Int
 allOnes = arrayMake 32 255
 
@@ -144,7 +156,8 @@ nHalfPlus1 = scFromBytesReduce (incBytes nHalfBytes)
 nMinus1 : Sc
 nMinus1 = scFromBytesReduce nMinus1Bytes
 
--- The sixteen limb boundaries of the 16 x 2^16 layout.
+-- Every 16-bit boundary: the seven limb boundaries of the 8 x 2^32 layout
+-- and the mid-limb positions between them.
 limbBits : List Int
 limbBits = [16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
 
@@ -277,7 +290,7 @@ test "a * (b + c) = a*b + a*c" =
 -- ring, at representative limb positions.
 --
 -- The six: the low bit, the top bit, a mid-limb boundary, the first limb
--- boundary, an all-ones-below-a-boundary value at limb 0, and one at limb 15.
+-- boundary, an all-ones-below-a-boundary value in limb 0, and one in limb 7.
 invSamples : List Sc
 invSamples = map scFromBytesReduce [
   bitBytes 0,
@@ -301,6 +314,16 @@ test "a * inverse a = 1 for every non-zero a (representative limb positions)" =
 -- is the one cell where "wrong" and "by design" look identical.
 test "inverse 0 = 0 (the settled convention, not an error)" =
   expectTrue (scIsZero (scInverse scZero))
+
+-- The largest product, (n - 1)^2, is n^2 - 2n + 1: every fold of the
+-- reduction runs on it, and it ends one subtraction of n away from 1.
+test "(n - 1) * (n - 1) = 1, the largest product" =
+  expectTrue (scEqual (scMul nMinus1 nMinus1) scOne)
+
+-- 2(n - 1) = 2n - 2 is at least 2^256, so the addition carries out of the top
+-- limb; the result is -2, reached here through negation instead.
+test "(n - 1) + (n - 1) = -2, a sum that carries out of 256 bits" =
+  expectTrue (scEqual (scAdd nMinus1 nMinus1) (scNegate (scAdd scOne scOne)))
 
 -- ── Serialization ─────────────────────────────────────────────────────
 
@@ -353,6 +376,32 @@ test "fromBytesReduce ACCEPTS n+1 and reduces it to 1" =
 
 test "fromBytesReduce ACCEPTS 2^256-1" =
   expectFalse (scIsZero (scFromBytesReduce allOnes))
+
+-- Every value in [n, 2^256) is below 2n, so it reduces to x - n. The inputs
+-- span that range: its bottom (n, n + 1), limb boundaries above n, and its top
+-- (2^256 - 1); x - n is computed on the bytes, not by the module.
+aboveN : List (Array Int)
+aboveN = [
+  nBytes,
+  nPlus1Bytes,
+  addBytes nBytes (bitBytes 0),
+  addBytes nBytes (decBytes (bitBytes 32)),
+  addBytes nBytes (bitBytes 64),
+  addBytes nBytes (bitBytes 127),
+  addBytes nBytes (decBytes (bitBytes 128)),
+  allOnes,
+]
+
+reducesToDifference : Array Int -> Bool
+reducesToDifference x = match scFromBytes (subBytes x nBytes)
+  Ok d => scEqual (scFromBytesReduce x) d
+  Err _ => False
+
+test "fromBytesReduce x = x - n for every x in [n, 2^256)" =
+  expectTrue (all reducesToDifference aboveN)
+
+test "the [n, 2^256) input list is non-empty (this `all` cannot go vacuous)" =
+  expectEqual (length aboveN) 8
 
 -- ── The low-S boundary (structural) ───────────────────────────────────
 -- `scIsHigh` is STRICT: s > floor(n/2). `n_h` here is derived as (n-1)/2,

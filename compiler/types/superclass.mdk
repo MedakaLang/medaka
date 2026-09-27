@@ -1,0 +1,139 @@
+-- The superclass closure: every predicate a dictionary for one predicate also
+-- supplies, reached through the interfaces' declared `requires` clauses.
+--
+-- One walk, parameterised three ways, so its readers differ only in what they
+-- carry and what they collapse:
+--
+--   * `lookup` answers "what are this interface's type parameters and direct
+--     supers".  Readers pass an identity-keyed lookup over the class
+--     environment; nothing here scans declarations.
+--   * `step` maps one direct `Super` into the payload the reader carries
+--     (argument monos, tyvar ids, `Ty`s), given the sub-predicate's
+--     type-parameter names and payload.  `None` drops that super, which is how
+--     a reader that cannot resolve every super parameter declines it.
+--   * `key` renders a node for the dedup that decides which nodes are the same
+--     predicate.  The first occurrence in breadth-first order wins.
+--
+-- Each result node records its projection path: the seed's position in the
+-- input followed by the index of each direct super taken, so a superclass
+-- predicate can be named as a projection of the seed's evidence rather than
+-- selected again.
+
+import frontend.ast.{Super(..)}
+import types.repr.{IfaceRef}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
+
+-- One predicate in a closure.  `superPath` is empty for nothing: a seed's path
+-- is `[seedIndex]`, and each super step appends the direct-super index.
+public export data SuperNode p = SuperNode {
+  superPath : List Int,
+  superIface : IfaceRef,
+  superPayload : p,
+}
+
+-- The seeds followed by their transitive supers, breadth-first, deduplicated by
+-- `key` (seeds included; the first occurrence of a key wins).
+export
+superClosure : (IfaceRef -> Option (List String, List Super)) ->
+  (List String -> p -> Super -> Option p) ->
+  (IfaceRef -> p -> String) ->
+  List (IfaceRef, p) ->
+  List (SuperNode p)
+superClosure lookup step key seeds =
+  let seedNodes = seedNodesFrom 0 seeds
+  let (kept, seen) = keepFresh key seedNodes omEmpty
+  closureLayers lookup step key kept seen kept
+
+-- The direct supers of one node, in declaration order, each carrying its path.
+export
+directSupers : (IfaceRef -> Option (List String, List Super)) ->
+  (List String -> p -> Super -> Option p) ->
+  SuperNode p ->
+  List (SuperNode p)
+directSupers lookup step node = match lookup node.superIface
+  None => []
+  Some (typarams, supers) => directSupersFrom step typarams node 0 supers
+
+-- A `Super`'s identity as an interface reference.
+export
+superIfaceRef : Super -> IfaceRef
+superIfaceRef (Super { superHead, superOrigin, ... }) =
+  IfaceRef { irName = superHead, irOrigin = superOrigin }
+
+-- Position of [name] in [names], mapped onto the same position of [values].
+-- `None` when the name is absent or the value list is shorter.
+export
+lookupPos : String -> List String -> List a -> Option a
+lookupPos _ [] _ = None
+lookupPos _ _ [] = None
+lookupPos name (n :: ns) (v :: vs)
+  | n == name = Some v
+  | otherwise = lookupPos name ns vs
+
+-- `Some` of every image when [f] succeeds on all of [xs], else `None`.
+export
+mapAll : (a -> Option b) -> List a -> Option (List b)
+mapAll _ [] = Some []
+mapAll f (x :: xs) = match f x
+  None => None
+  Some y => map (y :: _) (mapAll f xs)
+
+seedNodesFrom : Int -> List (IfaceRef, p) -> List (SuperNode p)
+seedNodesFrom _ [] = []
+seedNodesFrom i ((iface, payload) :: rest) =
+  SuperNode { superPath = [i], superIface = iface, superPayload = payload }
+    :: seedNodesFrom (i + 1) rest
+
+directSupersFrom : (List String -> p -> Super -> Option p) ->
+  List String ->
+  SuperNode p ->
+  Int ->
+  List Super ->
+  List (SuperNode p)
+directSupersFrom _ _ _ _ [] = []
+directSupersFrom step typarams node i (s :: rest) =
+  let tailNodes = directSupersFrom step typarams node (i + 1) rest
+  match step typarams node.superPayload s
+    None => tailNodes
+    Some payload =>
+      SuperNode {
+          superPath = node.superPath ++ [i],
+          superIface = superIfaceRef s,
+          superPayload = payload,
+        }
+        :: tailNodes
+
+-- Breadth-first: expand the whole frontier, keep the unseen nodes in order,
+-- append them, repeat until a layer adds nothing.  Declared supers are
+-- acyclic (W1), and the dedup set bounds the walk regardless.
+closureLayers : (IfaceRef -> Option (List String, List Super)) ->
+  (List String -> p -> Super -> Option p) ->
+  (IfaceRef -> p -> String) ->
+  List (SuperNode p) ->
+  OrdMap Bool ->
+  List (SuperNode p) ->
+  List (SuperNode p)
+closureLayers _ _ _ acc _ [] = acc
+closureLayers lookup step key acc seen frontier =
+  let candidates = flatMapNodes (directSupers lookup step) frontier
+  let (fresh, seen2) = keepFresh key candidates seen
+  closureLayers lookup step key (acc ++ fresh) seen2 fresh
+
+flatMapNodes : (SuperNode p -> List (SuperNode p)) ->
+  List (SuperNode p) ->
+  List (SuperNode p)
+flatMapNodes _ [] = []
+flatMapNodes f (n :: rest) = f n ++ flatMapNodes f rest
+
+keepFresh : (IfaceRef -> p -> String) ->
+  List (SuperNode p) ->
+  OrdMap Bool ->
+  (List (SuperNode p), OrdMap Bool)
+keepFresh _ [] seen = ([], seen)
+keepFresh key (n :: rest) seen =
+  let k = key n.superIface n.superPayload
+  if omHasKey k seen then
+    keepFresh key rest seen
+  else
+    let (kept, seen2) = keepFresh key rest (omInsert k True seen)
+    (n :: kept, seen2)
