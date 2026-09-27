@@ -30600,8 +30600,27 @@ implHeadSubstGo [] [] acc = acc
 implHeadSubstGo (p :: ps) (c :: cs) None = None
 implHeadSubstGo (p :: ps) (c :: cs) (Some sofar) = match matchTyMono p c
   None => None
-  Some s => implHeadSubstGo ps cs (Some (mergeSubstPreferConcrete sofar s))
+  Some s => implHeadSubstGo ps cs (mergeSubstConsistent sofar s)
 implHeadSubstGo _ _ _ = None
+
+-- Merge the bindings one head position recovered into those of the positions
+-- before it. A name bound at both keeps the concrete binding over a free one,
+-- as `mergeSubstPreferConcrete` does; two ground bindings that differ admit
+-- no single matcher for the head, so it does not match: `Get (Box a) a` never
+-- matches `Get (Box Float) Int`.
+mergeSubstConsistent : List (String, Mono) ->
+  List (String, Mono) ->
+  Option (List (String, Mono))
+mergeSubstConsistent acc [] = Some acc
+mergeSubstConsistent acc ((k, v) :: rest) = match lookupAssoc k acc
+  Some old if groundConflict old v => None
+  _ => mergeSubstConsistent (mergeOne acc k v) rest
+
+groundConflict : Mono -> Mono -> Bool
+groundConflict a b =
+  isEmptyL (monoUnboundIds a)
+    && isEmptyL (monoUnboundIds b)
+    && not (cohEqMono a b)
 
 -- Merge two name→mono substs; on a key collision keep whichever value has a
 -- concrete head tycon (so the grounded element wins over a free result var).
@@ -35707,19 +35726,13 @@ allConcreteHeads (m :: rest) =
 
 -- #154 PR3: implMatches / implMatchesReceiver (flat whole-universe scans) are replaced
 -- by the keyed implMatchesU / implMatchesReceiverU above.  implHeadMatchesArgs (used by
--- both the keyed matcher and matchTyMono callers) stays: a head-arg type pattern is
+-- both the keyed matcher and matchTyMono callers) stays: each head-arg type pattern is
 -- matched against the corresponding mono via matchTyMono (a TyVar in the head is a
--- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`).
+-- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`), and a
+-- variable the head repeats must be bound consistently across positions
+-- (`implHeadSubst`).
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
-implHeadMatchesArgs tys args
-  | listLen tys == listLen args = allHeadArgsMatch (zipL tys args)
-  | otherwise = False
-
-allHeadArgsMatch : List (Ty, Mono) -> Bool
-allHeadArgsMatch [] = True
-allHeadArgsMatch ((ty, m) :: rest) = match matchTyMono ty m
-  Some _ => allHeadArgsMatch rest
-  None => False
+implHeadMatchesArgs tys args = isSome (implHeadSubst tys args)
 
 -- register, per slot, the default body's constraint var id → `$dict_<method>_<slot>`
 -- in activeDictVars, so an in-body method ref unified to that var routes RDict.

@@ -1,5 +1,5 @@
 # META
-source_lines=50898
+source_lines=50911
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -30604,8 +30604,27 @@ implHeadSubstGo [] [] acc = acc
 implHeadSubstGo (p :: ps) (c :: cs) None = None
 implHeadSubstGo (p :: ps) (c :: cs) (Some sofar) = match matchTyMono p c
   None => None
-  Some s => implHeadSubstGo ps cs (Some (mergeSubstPreferConcrete sofar s))
+  Some s => implHeadSubstGo ps cs (mergeSubstConsistent sofar s)
 implHeadSubstGo _ _ _ = None
+
+-- Merge the bindings one head position recovered into those of the positions
+-- before it. A name bound at both keeps the concrete binding over a free one,
+-- as `mergeSubstPreferConcrete` does; two ground bindings that differ admit
+-- no single matcher for the head, so it does not match: `Get (Box a) a` never
+-- matches `Get (Box Float) Int`.
+mergeSubstConsistent : List (String, Mono) ->
+  List (String, Mono) ->
+  Option (List (String, Mono))
+mergeSubstConsistent acc [] = Some acc
+mergeSubstConsistent acc ((k, v) :: rest) = match lookupAssoc k acc
+  Some old if groundConflict old v => None
+  _ => mergeSubstConsistent (mergeOne acc k v) rest
+
+groundConflict : Mono -> Mono -> Bool
+groundConflict a b =
+  isEmptyL (monoUnboundIds a)
+    && isEmptyL (monoUnboundIds b)
+    && not (cohEqMono a b)
 
 -- Merge two name→mono substs; on a key collision keep whichever value has a
 -- concrete head tycon (so the grounded element wins over a free result var).
@@ -35711,19 +35730,13 @@ allConcreteHeads (m :: rest) =
 
 -- #154 PR3: implMatches / implMatchesReceiver (flat whole-universe scans) are replaced
 -- by the keyed implMatchesU / implMatchesReceiverU above.  implHeadMatchesArgs (used by
--- both the keyed matcher and matchTyMono callers) stays: a head-arg type pattern is
+-- both the keyed matcher and matchTyMono callers) stays: each head-arg type pattern is
 -- matched against the corresponding mono via matchTyMono (a TyVar in the head is a
--- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`).
+-- wildcard; a parametric impl `impl Eq (List a)` thus matches `List Int`), and a
+-- variable the head repeats must be bound consistently across positions
+-- (`implHeadSubst`).
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
-implHeadMatchesArgs tys args
-  | listLen tys == listLen args = allHeadArgsMatch (zipL tys args)
-  | otherwise = False
-
-allHeadArgsMatch : List (Ty, Mono) -> Bool
-allHeadArgsMatch [] = True
-allHeadArgsMatch ((ty, m) :: rest) = match matchTyMono ty m
-  Some _ => allHeadArgsMatch rest
-  None => False
+implHeadMatchesArgs tys args = isSome (implHeadSubst tys args)
 
 -- register, per slot, the default body's constraint var id → `$dict_<method>_<slot>`
 -- in activeDictVars, so an in-body method ref unified to that var routes RDict.
@@ -56171,8 +56184,13 @@ isTyAuth _ = False
 (DTypeSig false "implHeadSubstGo" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
 (DFunDef false "implHeadSubstGo" ((PList) (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "None")) (EVar "None"))
-(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "Some" (PVar "sofar"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "ps")) (EVar "cs")) (EApp (EVar "Some") (EApp (EApp (EVar "mergeSubstPreferConcrete") (EVar "sofar")) (EVar "s")))))))
+(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "Some" (PVar "sofar"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "ps")) (EVar "cs")) (EApp (EApp (EVar "mergeSubstConsistent") (EVar "sofar")) (EVar "s"))))))
 (DFunDef false "implHeadSubstGo" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "mergeSubstConsistent" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
+(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PList)) (EApp (EVar "Some") (EVar "acc")))
+(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "acc")) (arm (PCon "Some" (PVar "old")) ((GBool (EApp (EApp (EVar "groundConflict") (EVar "old")) (EVar "v")))) (EVar "None")) (arm PWild () (EApp (EApp (EVar "mergeSubstConsistent") (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EVar "k")) (EVar "v"))) (EVar "rest")))))
+(DTypeSig false "groundConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "groundConflict" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "a"))) (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "b")))) (EApp (EVar "not") (EApp (EApp (EVar "cohEqMono") (EVar "a")) (EVar "b")))))
 (DTypeSig false "mergeSubstPreferConcrete" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EApp (EApp (EVar "mergeSubstPreferConcrete") (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EVar "k")) (EVar "v"))) (EVar "rest")))
@@ -56851,10 +56869,7 @@ isTyAuth _ = False
 (DFunDef false "allConcreteHeads" ((PList)) (EVar "True"))
 (DFunDef false "allConcreteHeads" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EVar "headTyconNameMono") (EVar "m"))) (EApp (EVar "allConcreteHeads") (EVar "rest"))))
 (DTypeSig false "implHeadMatchesArgs" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
-(DFunDef false "implHeadMatchesArgs" ((PVar "tys") (PVar "args")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "args"))) (EApp (EVar "allHeadArgsMatch") (EApp (EApp (EVar "zipL") (EVar "tys")) (EVar "args"))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "allHeadArgsMatch" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ty") (TyCon "Mono"))) (TyCon "Bool")))
-(DFunDef false "allHeadArgsMatch" ((PList)) (EVar "True"))
-(DFunDef false "allHeadArgsMatch" ((PCons (PTuple (PVar "ty") (PVar "m")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "ty")) (EVar "m")) (arm (PCon "Some" PWild) () (EApp (EVar "allHeadArgsMatch") (EVar "rest"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "implHeadMatchesArgs" ((PVar "tys") (PVar "args")) (EApp (EVar "isSome") (EApp (EApp (EVar "implHeadSubst") (EVar "tys")) (EVar "args"))))
 (DTypeSig false "registerMethodDictSlots" (TyFun (TyCon "ScopeId") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Unit"))))))
 (DFunDef false "registerMethodDictSlots" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "registerMethodDictSlots" ((PVar "scope") (PVar "slot") (PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerOneMethodDict") (EVar "scope")) (EVar "slot")) (EVar "id")) (EVar "subst"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerMethodDictSlots") (EVar "scope")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")) (EVar "subst")))))
@@ -64311,8 +64326,13 @@ isTyAuth _ = False
 (DTypeSig false "implHeadSubstGo" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))))
 (DFunDef false "implHeadSubstGo" ((PList) (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "None")) (EVar "None"))
-(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "Some" (PVar "sofar"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "ps")) (EVar "cs")) (EApp (EVar "Some") (EApp (EApp (EVar "mergeSubstPreferConcrete") (EVar "sofar")) (EVar "s")))))))
+(DFunDef false "implHeadSubstGo" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "c") (PVar "cs")) (PCon "Some" (PVar "sofar"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "p")) (EVar "c")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EVar "implHeadSubstGo") (EVar "ps")) (EVar "cs")) (EApp (EApp (EVar "mergeSubstConsistent") (EVar "sofar")) (EVar "s"))))))
 (DFunDef false "implHeadSubstGo" (PWild PWild PWild) (EVar "None"))
+(DTypeSig false "mergeSubstConsistent" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))))
+(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PList)) (EApp (EVar "Some") (EVar "acc")))
+(DFunDef false "mergeSubstConsistent" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "acc")) (arm (PCon "Some" (PVar "old")) ((GBool (EApp (EApp (EVar "groundConflict") (EVar "old")) (EVar "v")))) (EVar "None")) (arm PWild () (EApp (EApp (EVar "mergeSubstConsistent") (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EVar "k")) (EVar "v"))) (EVar "rest")))))
+(DTypeSig false "groundConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "groundConflict" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "a"))) (EApp (EVar "isEmptyL") (EApp (EVar "monoUnboundIds") (EVar "b")))) (EApp (EVar "not") (EApp (EApp (EVar "cohEqMono") (EVar "a")) (EVar "b")))))
 (DTypeSig false "mergeSubstPreferConcrete" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "mergeSubstPreferConcrete" ((PVar "acc") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EApp (EApp (EVar "mergeSubstPreferConcrete") (EApp (EApp (EApp (EVar "mergeOne") (EVar "acc")) (EVar "k")) (EVar "v"))) (EVar "rest")))
@@ -64991,10 +65011,7 @@ isTyAuth _ = False
 (DFunDef false "allConcreteHeads" ((PList)) (EVar "True"))
 (DFunDef false "allConcreteHeads" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EVar "headTyconNameMono") (EVar "m"))) (EApp (EVar "allConcreteHeads") (EVar "rest"))))
 (DTypeSig false "implHeadMatchesArgs" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
-(DFunDef false "implHeadMatchesArgs" ((PVar "tys") (PVar "args")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "args"))) (EApp (EVar "allHeadArgsMatch") (EApp (EApp (EVar "zipL") (EVar "tys")) (EVar "args"))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "allHeadArgsMatch" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ty") (TyCon "Mono"))) (TyCon "Bool")))
-(DFunDef false "allHeadArgsMatch" ((PList)) (EVar "True"))
-(DFunDef false "allHeadArgsMatch" ((PCons (PTuple (PVar "ty") (PVar "m")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "ty")) (EVar "m")) (arm (PCon "Some" PWild) () (EApp (EVar "allHeadArgsMatch") (EVar "rest"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "implHeadMatchesArgs" ((PVar "tys") (PVar "args")) (EApp (EVar "isSome") (EApp (EApp (EVar "implHeadSubst") (EVar "tys")) (EVar "args"))))
 (DTypeSig false "registerMethodDictSlots" (TyFun (TyCon "ScopeId") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Unit"))))))
 (DFunDef false "registerMethodDictSlots" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "registerMethodDictSlots" ((PVar "scope") (PVar "slot") (PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerOneMethodDict") (EVar "scope")) (EVar "slot")) (EVar "id")) (EVar "subst"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerMethodDictSlots") (EVar "scope")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")) (EVar "subst")))))

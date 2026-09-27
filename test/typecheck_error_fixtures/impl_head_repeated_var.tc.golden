@@ -1,0 +1,2 @@
+TYPE ERROR: No impl of Get for (Box Float) Int
+TYPE ERROR: No impl of Index for (Array Float) Int Int

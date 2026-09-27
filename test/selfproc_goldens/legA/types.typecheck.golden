@@ -81,7 +81,6 @@ allCoreFns : List String -> Bool
 allDigits : String -> Bool
 allDigitsFrom : String -> Int -> Bool
 allEVars : Expr -> List String
-allHeadArgsMatch : List (Ty, Mono) -> Bool
 allIfaceMethodNames : List Decl -> List String
 allInRange : List Int -> Int -> Bool
 allMethodParamsMentioned : List String -> Ty -> Bool
@@ -1198,6 +1197,7 @@ graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
 groundAdmittedReceivers : TcEnv -> String -> List Mono -> Option Loc -> Unit
+groundConflict : Mono -> Mono -> Bool
 groundMultiParamObligations : List Decl -> List UObligation -> Unit
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -1781,6 +1781,7 @@ mentionsEscaped : Authority -> Bool
 mentionsOpened : Authority -> Bool
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
+mergeSubstConsistent : List (String, Mono) -> List (String, Mono) -> Option (List (String, Mono))
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
 methodArgs : Ty -> List Ty
 methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
