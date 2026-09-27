@@ -108,6 +108,25 @@ givenVisibleFrom store useScope binderScope
     Some parent => givenVisibleFrom store parent binderScope
     None => False
 
+-- `givenVisibleFrom` with the use site's side read once: the ordinals of the use
+-- scope and each of its ancestors, innermost first.  A scan testing many givens
+-- against one use site walks the parent chain once instead of once per given.
+export
+visibleChain : ScopeStore -> ScopeId -> List Int
+visibleChain store useScope = match (scopeFrame store useScope).sfParent
+  Some parent => scopeOrdinal useScope :: visibleChain store parent
+  None => [scopeOrdinal useScope]
+
+-- `givenVisibleFrom store useScope binderScope`, given `visibleChain store useScope`.
+export
+visibleOnChain : List Int -> ScopeId -> Bool
+visibleOnChain chain binderScope =
+  ordinalOnChain (scopeOrdinal binderScope) chain
+
+ordinalOnChain : Int -> List Int -> Bool
+ordinalOnChain _ [] = False
+ordinalOnChain i (s :: rest) = i == s || ordinalOnChain i rest
+
 export
 enclosingDefaultBody : ScopeStore -> ScopeId -> Option DefaultBodyIdentity
 enclosingDefaultBody store sid =

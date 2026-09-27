@@ -1,5 +1,5 @@
 # META
-source_lines=50094
+source_lines=50114
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -24985,23 +24985,21 @@ uniqueMethodTemplateGiven : MethodPredicateTemplate ->
   List GivenEntry ->
   Option GivenEntry
 uniqueMethodTemplateGiven template useScope givens =
-  match methodTemplateGivenScan template useScope givens MethodTemplateGivenNone
+  let chain = Scopes.visibleChain (currentScopeStore ()) useScope
+  match methodTemplateGivenScan template chain givens MethodTemplateGivenNone
     MethodTemplateGivenOne given => Some given
     _ => None
 
 methodTemplateGivenScan : MethodPredicateTemplate ->
-  ScopeId ->
+  List Int ->
   List GivenEntry ->
   MethodTemplateGivenResult ->
   MethodTemplateGivenResult
 methodTemplateGivenScan _ _ [] result = result
-methodTemplateGivenScan template useScope (given :: rest) result =
+methodTemplateGivenScan template chain (given :: rest) result =
   let result2 =
     if givenInScope GSPredicateOnly given
-      && Scopes.givenVisibleFrom
-        (currentScopeStore ())
-        useScope
-        (Scopes.binderScope given.geBinder)
+      && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
       && methodPredicateTemplateMatchesSlot
         template
         given.geSlot then match result
@@ -25011,7 +25009,7 @@ methodTemplateGivenScan template useScope (given :: rest) result =
       result
   match result2
     MethodTemplateGivenMany => MethodTemplateGivenMany
-    _ => methodTemplateGivenScan template useScope rest result2
+    _ => methodTemplateGivenScan template chain rest result2
 
 methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
   PredicateSlot ->
@@ -36794,16 +36792,23 @@ firstPredForEncl : PredicateRequest ->
   ScopeId ->
   List GivenEntry ->
   Option AssumAnswer
-firstPredForEncl _ _ [] = None
-firstPredForEncl request useScope (g :: rest)
+firstPredForEncl request useScope givens =
+  firstPredOnChain
+    request
+    (Scopes.visibleChain (currentScopeStore ()) useScope)
+    givens
+
+firstPredOnChain : PredicateRequest ->
+  List Int ->
+  List GivenEntry ->
+  Option AssumAnswer
+firstPredOnChain _ _ [] = None
+firstPredOnChain request chain (g :: rest)
   | givenInScope GSPredicateOnly g
-    && Scopes.givenVisibleFrom
-      (currentScopeStore ())
-      useScope
-      (Scopes.binderScope g.geBinder)
+    && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
     && predicateRequestMatchesSlot request g.geSlot =
     Some (givenAnswerForRequest request g)
-  | otherwise = firstPredForEncl request useScope rest
+  | otherwise = firstPredOnChain request chain rest
 
 -- Semantic given evidence requires predicate-only eligibility, complete matched
 -- vectors, and resolved declaration identities.  Id-witnessed, unknown-vector,
@@ -36842,17 +36847,28 @@ firstPredForEnclAt : GivenScope ->
   ScopeId ->
   List GivenEntry ->
   Option AssumAnswer
-firstPredForEnclAt _ _ _ _ [] = None
-firstPredForEnclAt scope target request useScope (g :: rest)
+firstPredForEnclAt scope target request useScope givens =
+  firstPredAtOnChain
+    scope
+    target
+    request
+    (Scopes.visibleChain (currentScopeStore ()) useScope)
+    givens
+
+firstPredAtOnChain : GivenScope ->
+  Int ->
+  PredicateRequest ->
+  List Int ->
+  List GivenEntry ->
+  Option AssumAnswer
+firstPredAtOnChain _ _ _ _ [] = None
+firstPredAtOnChain scope target request chain (g :: rest)
   | givenInScope scope g
     && containsI target g.geSlot.psBoundIds
-    && Scopes.givenVisibleFrom
-      (currentScopeStore ())
-      useScope
-      (Scopes.binderScope g.geBinder)
+    && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
     && predicateRequestMatchesSlot request g.geSlot =
     Some (givenAnswerForRequest request g)
-  | otherwise = firstPredForEnclAt scope target request useScope rest
+  | otherwise = firstPredAtOnChain scope target request chain rest
 
 -- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
 -- for a producer that can still supply OriginUnresolved.  Complete method requests do
@@ -40924,15 +40940,19 @@ goalMatchesGiven scope iface args =
     (givensForScope scope)
 
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
-anyGivenMatches _ _ [] = False
-anyGivenMatches request scope (g :: rest) =
+anyGivenMatches request scope givens =
+  anyGivenOnChain
+    request
+    (Scopes.visibleChain (currentScopeStore ()) scope)
+    givens
+
+anyGivenOnChain : PredicateRequest -> List Int -> List GivenEntry -> Bool
+anyGivenOnChain _ _ [] = False
+anyGivenOnChain request chain (g :: rest) =
   givenInScope GSPredicateOnly g
-      && Scopes.givenVisibleFrom
-        (currentScopeStore ())
-        scope
-        (Scopes.binderScope g.geBinder)
+      && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
       && predicateRequestMatchesSlot request g.geSlot
-    || anyGivenMatches request scope rest
+    || anyGivenOnChain request chain rest
 
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isSemanticGivenAnswer (Some (SemanticGiven (GivenEvidence _))) = True
@@ -54549,10 +54569,10 @@ isTyAuth _ = False
 (DFunDef false "methodPredicateTemplateArgs" ((PCons (PCon "None") PWild)) (EVar "None"))
 (DData Private "MethodTemplateGivenResult" () ((variant "MethodTemplateGivenNone" (ConPos)) (variant "MethodTemplateGivenOne" (ConPos (TyCon "GivenEntry"))) (variant "MethodTemplateGivenMany" (ConPos))) ())
 (DTypeSig false "uniqueMethodTemplateGiven" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "GivenEntry"))))))
-(DFunDef false "uniqueMethodTemplateGiven" ((PVar "template") (PVar "useScope") (PVar "givens")) (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))
-(DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
+(DFunDef false "uniqueMethodTemplateGiven" ((PVar "template") (PVar "useScope") (PVar "givens")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
 (DFunDef false "methodTemplateGivenScan" (PWild PWild (PList) (PVar "result")) (EVar "result"))
-(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "useScope") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "rest")) (EVar "result2")))))))
+(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "chain") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "rest")) (EVar "result2")))))))
 (DTypeSig false "methodPredicateTemplateMatchesSlot" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
 (DFunDef false "methodPredicateTemplateMatchesSlot" ((PVar "template") (PVar "slot")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EFieldAccess (EVar "slot") "psIface")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "False")) (arm (PCon "PSArgsKnown" (PVar "arguments")) () (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EFieldAccess (EVar "template") "mptArguments")) (EVar "arguments"))))))
 (DTypeSig false "methodPredicateTemplateArgumentsMatch" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
@@ -56201,8 +56221,10 @@ isTyAuth _ = False
 (DTypeSig false "activeFunDictPredOf" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "AssumAnswer")))))
 (DFunDef false "activeFunDictPredOf" ((PVar "request") (PVar "useScope")) (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "request")) (EVar "useScope")) (EApp (EVar "givensForScope") (EVar "useScope"))))
 (DTypeSig false "firstPredForEncl" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))
-(DFunDef false "firstPredForEncl" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstPredForEncl" ((PVar "request") (PVar "useScope") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "request")) (EVar "useScope")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstPredForEncl" ((PVar "request") (PVar "useScope") (PVar "givens")) (EApp (EApp (EApp (EVar "firstPredOnChain") (EVar "request")) (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope"))) (EVar "givens")))
+(DTypeSig false "firstPredOnChain" (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))
+(DFunDef false "firstPredOnChain" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstPredOnChain" ((PVar "request") (PVar "chain") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstPredOnChain") (EVar "request")) (EVar "chain")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "givenAnswerExact" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerExact" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "SemanticGiven") (EApp (EVar "GivenEvidence") (EFieldAccess (EVar "g") "geBinder")))) (arm (PCon "ProjectedGiven" (PVar "parent") (PVar "path")) () (EApp (EVar "SemanticGiven") (EApp (EApp (EVar "SuperclassEvidence") (EVar "parent")) (EVar "path"))))))
 (DTypeSig false "givenAnswerForRequest" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer"))))
@@ -56210,8 +56232,10 @@ isTyAuth _ = False
 (DTypeSig false "givenAnswerResidual" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerResidual" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder"))) (arm (PCon "ProjectedGiven" PWild PWild) () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder")))))
 (DTypeSig false "firstPredForEnclAt" (TyFun (TyCon "GivenScope") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))))
-(DFunDef false "firstPredForEnclAt" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstPredForEnclAt" ((PVar "scope") (PVar "target") (PVar "request") (PVar "useScope") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "scope")) (EVar "g")) (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psBoundIds"))) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "scope")) (EVar "target")) (EVar "request")) (EVar "useScope")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstPredForEnclAt" ((PVar "scope") (PVar "target") (PVar "request") (PVar "useScope") (PVar "givens")) (EApp (EApp (EApp (EApp (EApp (EVar "firstPredAtOnChain") (EVar "scope")) (EVar "target")) (EVar "request")) (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope"))) (EVar "givens")))
+(DTypeSig false "firstPredAtOnChain" (TyFun (TyCon "GivenScope") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))))
+(DFunDef false "firstPredAtOnChain" (PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstPredAtOnChain" ((PVar "scope") (PVar "target") (PVar "request") (PVar "chain") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "scope")) (EVar "g")) (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psBoundIds"))) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredAtOnChain") (EVar "scope")) (EVar "target")) (EVar "request")) (EVar "chain")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "activeFunDictPredOfResidual" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))
 (DFunDef false "activeFunDictPredOfResidual" ((PVar "iface") (PVar "args") (PVar "useScope")) (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (EVar "iface")) (EVar "args")) (EVar "useScope")) (EApp (EVar "givensForScope") (EVar "useScope"))))
 (DTypeSig false "firstPredForEnclResidual" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer")))))))
@@ -56898,8 +56922,10 @@ isTyAuth _ = False
 (DFunDef false "goalMatchesGiven" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "goalMatchesGiven" ((PVar "scope") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "anyGivenMatches") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (EVar "scope")) (EApp (EVar "givensForScope") (EVar "scope"))))
 (DTypeSig false "anyGivenMatches" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyCon "Bool")))))
-(DFunDef false "anyGivenMatches" (PWild PWild (PList)) (EVar "False"))
-(DFunDef false "anyGivenMatches" ((PVar "request") (PVar "scope") (PCons (PVar "g") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "scope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "request")) (EVar "scope")) (EVar "rest"))))
+(DFunDef false "anyGivenMatches" ((PVar "request") (PVar "scope") (PVar "givens")) (EApp (EApp (EApp (EVar "anyGivenOnChain") (EVar "request")) (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "scope"))) (EVar "givens")))
+(DTypeSig false "anyGivenOnChain" (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyCon "Bool")))))
+(DFunDef false "anyGivenOnChain" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "anyGivenOnChain" ((PVar "request") (PVar "chain") (PCons (PVar "g") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EApp (EApp (EVar "anyGivenOnChain") (EVar "request")) (EVar "chain")) (EVar "rest"))))
 (DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
 (DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
 (DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
@@ -62564,10 +62590,10 @@ isTyAuth _ = False
 (DFunDef false "methodPredicateTemplateArgs" ((PCons (PCon "None") PWild)) (EVar "None"))
 (DData Private "MethodTemplateGivenResult" () ((variant "MethodTemplateGivenNone" (ConPos)) (variant "MethodTemplateGivenOne" (ConPos (TyCon "GivenEntry"))) (variant "MethodTemplateGivenMany" (ConPos))) ())
 (DTypeSig false "uniqueMethodTemplateGiven" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "GivenEntry"))))))
-(DFunDef false "uniqueMethodTemplateGiven" ((PVar "template") (PVar "useScope") (PVar "givens")) (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))
-(DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
+(DFunDef false "uniqueMethodTemplateGiven" ((PVar "template") (PVar "useScope") (PVar "givens")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))))
+(DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
 (DFunDef false "methodTemplateGivenScan" (PWild PWild (PList) (PVar "result")) (EVar "result"))
-(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "useScope") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "rest")) (EVar "result2")))))))
+(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "chain") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "rest")) (EVar "result2")))))))
 (DTypeSig false "methodPredicateTemplateMatchesSlot" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
 (DFunDef false "methodPredicateTemplateMatchesSlot" ((PVar "template") (PVar "slot")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EFieldAccess (EVar "slot") "psIface")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "False")) (arm (PCon "PSArgsKnown" (PVar "arguments")) () (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EFieldAccess (EVar "template") "mptArguments")) (EVar "arguments"))))))
 (DTypeSig false "methodPredicateTemplateArgumentsMatch" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
@@ -64216,8 +64242,10 @@ isTyAuth _ = False
 (DTypeSig false "activeFunDictPredOf" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "AssumAnswer")))))
 (DFunDef false "activeFunDictPredOf" ((PVar "request") (PVar "useScope")) (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "request")) (EVar "useScope")) (EApp (EVar "givensForScope") (EVar "useScope"))))
 (DTypeSig false "firstPredForEncl" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))
-(DFunDef false "firstPredForEncl" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstPredForEncl" ((PVar "request") (PVar "useScope") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "request")) (EVar "useScope")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstPredForEncl" ((PVar "request") (PVar "useScope") (PVar "givens")) (EApp (EApp (EApp (EVar "firstPredOnChain") (EVar "request")) (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope"))) (EVar "givens")))
+(DTypeSig false "firstPredOnChain" (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))
+(DFunDef false "firstPredOnChain" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstPredOnChain" ((PVar "request") (PVar "chain") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstPredOnChain") (EVar "request")) (EVar "chain")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "givenAnswerExact" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerExact" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "SemanticGiven") (EApp (EVar "GivenEvidence") (EFieldAccess (EVar "g") "geBinder")))) (arm (PCon "ProjectedGiven" (PVar "parent") (PVar "path")) () (EApp (EVar "SemanticGiven") (EApp (EApp (EVar "SuperclassEvidence") (EVar "parent")) (EVar "path"))))))
 (DTypeSig false "givenAnswerForRequest" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer"))))
@@ -64225,8 +64253,10 @@ isTyAuth _ = False
 (DTypeSig false "givenAnswerResidual" (TyFun (TyCon "GivenEntry") (TyCon "AssumAnswer")))
 (DFunDef false "givenAnswerResidual" ((PVar "g")) (EMatch (EFieldAccess (EVar "g") "geProvenance") (arm (PCon "DirectGiven") () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder"))) (arm (PCon "ProjectedGiven" PWild PWild) () (EApp (EVar "LegacyPredicate") (EFieldAccess (EVar "g") "geBinder")))))
 (DTypeSig false "firstPredForEnclAt" (TyFun (TyCon "GivenScope") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))))
-(DFunDef false "firstPredForEnclAt" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstPredForEnclAt" ((PVar "scope") (PVar "target") (PVar "request") (PVar "useScope") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "scope")) (EVar "g")) (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psBoundIds"))) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "scope")) (EVar "target")) (EVar "request")) (EVar "useScope")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "firstPredForEnclAt" ((PVar "scope") (PVar "target") (PVar "request") (PVar "useScope") (PVar "givens")) (EApp (EApp (EApp (EApp (EApp (EVar "firstPredAtOnChain") (EVar "scope")) (EVar "target")) (EVar "request")) (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope"))) (EVar "givens")))
+(DTypeSig false "firstPredAtOnChain" (TyFun (TyCon "GivenScope") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))))
+(DFunDef false "firstPredAtOnChain" (PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstPredAtOnChain" ((PVar "scope") (PVar "target") (PVar "request") (PVar "chain") (PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "scope")) (EVar "g")) (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EFieldAccess (EVar "g") "geSlot") "psBoundIds"))) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EVar "Some") (EApp (EApp (EVar "givenAnswerForRequest") (EVar "request")) (EVar "g"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredAtOnChain") (EVar "scope")) (EVar "target")) (EVar "request")) (EVar "chain")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "activeFunDictPredOfResidual" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "AssumAnswer"))))))
 (DFunDef false "activeFunDictPredOfResidual" ((PVar "iface") (PVar "args") (PVar "useScope")) (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (EVar "iface")) (EVar "args")) (EVar "useScope")) (EApp (EVar "givensForScope") (EVar "useScope"))))
 (DTypeSig false "firstPredForEnclResidual" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "AssumAnswer")))))))
@@ -64913,8 +64943,10 @@ isTyAuth _ = False
 (DFunDef false "goalMatchesGiven" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "goalMatchesGiven" ((PVar "scope") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "anyGivenMatches") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (EVar "scope")) (EApp (EVar "givensForScope") (EVar "scope"))))
 (DTypeSig false "anyGivenMatches" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyCon "Bool")))))
-(DFunDef false "anyGivenMatches" (PWild PWild (PList)) (EVar "False"))
-(DFunDef false "anyGivenMatches" ((PVar "request") (PVar "scope") (PCons (PVar "g") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "scope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "request")) (EVar "scope")) (EVar "rest"))))
+(DFunDef false "anyGivenMatches" ((PVar "request") (PVar "scope") (PVar "givens")) (EApp (EApp (EApp (EVar "anyGivenOnChain") (EVar "request")) (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "scope"))) (EVar "givens")))
+(DTypeSig false "anyGivenOnChain" (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyCon "Bool")))))
+(DFunDef false "anyGivenOnChain" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "anyGivenOnChain" ((PVar "request") (PVar "chain") (PCons (PVar "g") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "g")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "g") "geBinder")))) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EFieldAccess (EVar "g") "geSlot"))) (EApp (EApp (EApp (EVar "anyGivenOnChain") (EVar "request")) (EVar "chain")) (EVar "rest"))))
 (DTypeSig false "isSemanticGivenAnswer" (TyFun (TyApp (TyCon "Option") (TyCon "AssumAnswer")) (TyCon "Bool")))
 (DFunDef false "isSemanticGivenAnswer" ((PCon "Some" (PCon "SemanticGiven" (PCon "GivenEvidence" PWild)))) (EVar "True"))
 (DFunDef false "isSemanticGivenAnswer" (PWild) (EVar "False"))
