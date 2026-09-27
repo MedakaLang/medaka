@@ -3246,7 +3246,7 @@ the key whose two survivors #1265 is the first-match over.
    A-3.4, declared up front per §7's pin→stage map. It was the *observable* of
    this constraint: if A-3.4 changed the default-arm answer in any direction, the
    pin flipped and the must-fail gate redded naming #1265.  (#1265 has since been
-   fixed by per-instance defaults, M-EVIDENCE S4; its positive rows are
+   fixed by per-instance defaults (M-EVIDENCE); its positive rows are
    `test/dict_fixtures/s5-two-ifaces-one-type-defaults*`.)
 
 The constraint is also stated in the ratchet's **existing `declEnvsRef` row**, so
