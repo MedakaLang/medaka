@@ -107,9 +107,9 @@ expected_internal_source_manifest() {
 EOF
 }
 
-# sign.mdk re-pinned 2026-09-27: it gained the transitional
-# `secretKeyFromByteArray` (a fixed-control byte-domain fold ahead of
-# `secretKeyFromBytes`), which neither signing driver reaches.
+# sign.mdk re-pinned 2026-09-27: the transitional `Array Int` secret-key
+# ingress and its byte-domain fold were deleted once every caller passed
+# `Bytes`; neither signing driver reached them.
 expected_public_source_manifest() {
   cat <<'EOF'
 3731538746 28626  pds/lib/field.mdk
@@ -120,7 +120,7 @@ expected_public_source_manifest() {
 2001432321 10382  stdlib/u64.mdk
 2873386462 1355  pds/lib/hmac_sha256.mdk
 2537316894 24171  pds/lib/secp256k1.mdk
-1970691876 5699  pds/lib/sign.mdk
+117756289 4527  pds/lib/sign.mdk
 3773914323 3185  pds/test/constant_time_signing_public_main.mdk
 EOF
 }

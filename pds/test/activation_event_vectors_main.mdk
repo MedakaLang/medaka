@@ -37,8 +37,8 @@
    configuration, and there is no route that can deactivate an account), so
    there is no builder arm to grade them against. -}
 
-import array.{sliceClamped}
-import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, sliceClamped}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort}
@@ -74,24 +74,19 @@ accountHeaderHex = "a2617468236163636f756e74626f7001"
 syncHeaderHex : String
 syncHeaderHex = "a26174652373796e63626f7001"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "activation_event: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "activation_event: malformed hex" (decode text)
 
 mustCbor : String -> DagCbor
 mustCbor text = mustCborBytes (mustHex text)
 
-mustCborBytes : Array Int -> DagCbor
+mustCborBytes : Bytes -> DagCbor
 mustCborBytes bytes =
-  resultOrPanic
-    "activation_event: undecodable body"
-    (dagCborDecode (fromArrayAssumeByteDomain bytes))
+  resultOrPanic "activation_event: undecodable body" (dagCborDecode bytes)
 
-mustCar : Array Int -> Car
+mustCar : Bytes -> Car
 mustCar bytes =
-  resultOrPanic
-    "activation_event: undecodable corpus CAR"
-    (carDecode (fromArrayAssumeByteDomain bytes))
+  resultOrPanic "activation_event: undecodable corpus CAR" (carDecode bytes)
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "activation_event: malformed TID" (tidParse text)
@@ -110,9 +105,9 @@ intOf body name = match field body name
   Some (DcInt value) => Some value
   _ => None
 
-bytesOf : DagCbor -> String -> Array Int
+bytesOf : DagCbor -> String -> Bytes
 bytesOf body name = match field body name
-  Some (DcBytes bytes) => toArray bytes
+  Some (DcBytes bytes) => bytes
   _ => panic "activation_event: corpus body has no byte field '\{name}'"
 
 {- | The corpus as tag/value pairs. Every row is tab-separated and its first
@@ -159,14 +154,14 @@ gradeBody tag bodyHex built = match dagCborEncode built
    because the reference splices them downstream — must actually be there,
    holding what the caller passed: a frame short either of them is one no
    relay can order. -}
-gradeFrame : String -> String -> Result String (Array Int) -> <IO> Bool
+gradeFrame : String -> String -> Result String Bytes -> <IO> Bool
 gradeFrame tag _ (Err message) =
   let () = println "\{tag}-FRAME: FAIL builder refused: \{message}"
   False
 gradeFrame tag headerHex (Ok bytes) =
-  let headerBytes = arrayLength (mustHex headerHex)
-  let headed = startsWith headerHex (encode (fromArrayAssumeByteDomain bytes))
-  let body = mustCborBytes (sliceClamped headerBytes (arrayLength bytes) bytes)
+  let headerBytes = B.length (mustHex headerHex)
+  let headed = startsWith headerHex (encode bytes)
+  let body = mustCborBytes (sliceClamped headerBytes (B.length bytes) bytes)
   let stamped =
     intOf body "seq" == Some sampleSeq && textOf body "time" == sampleTime
   let () =
@@ -290,7 +285,7 @@ gradeGenesisCommit rows =
     Err message =>
       let () = println "GENESIS-COMMIT: FAIL builder refused: \{message}"
       False
-    Ok event => match carDecode (fromArrayAssumeByteDomain event.blocksCar)
+    Ok event => match carDecode event.blocksCar
       Err message =>
         let () =
           println "GENESIS-COMMIT: FAIL undecodable blocks CAR: \{message}"
@@ -327,10 +322,10 @@ soleCid cids =
   panic
     "activation_event: corpus CAR holds \{intToString (length cids)} blocks, expected 1"
 
-soleBlockBytes : Cid -> List (Cid, Bytes) -> Array Int
+soleBlockBytes : Cid -> List (Cid, Bytes) -> Bytes
 soleBlockBytes root [(cid, bytes)] =
   if cidToString cid == cidToString root then
-    toArray bytes
+    bytes
   else
     panic "activation_event: corpus CAR's sole block is not its root"
 soleBlockBytes _ blocks =

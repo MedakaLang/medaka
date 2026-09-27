@@ -11,13 +11,13 @@
    two public values derived from it, and no other output; the failure paths
    name the file and the rule and never the value. -}
 
-import bytes.{fromArrayAssumeByteDomain}
+import bytes.{fromArray, fromArrayAssumeByteDomain}
 import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
 import lib.jwt.{serverSecretBytes}
 import lib.sign.{
-  publicKeyCompressed, publicKeyForSecret, secretKeyFromByteArray
+  SecretKey, publicKeyCompressed, publicKeyForSecret, secretKeyFromBytes
 }
 
 {- | How many candidate scalars `keygen` will draw before giving up.
@@ -28,8 +28,16 @@ import lib.sign.{
 keygenAttempts : Int
 keygenAttempts = 8
 
+{- | Door, checked: `lib.sign` admits `Bytes` and this module's candidates
+   are `Array Int`. An element outside 0..255 gets `secretKeyFromBytes`'s own
+   refusal, which is what the `Array Int` ingress this replaces answered. -}
+secretKeyDoor : Array Int -> Result String SecretKey
+secretKeyDoor raw = match fromArray raw
+  None => Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+  Some bytes => secretKeyFromBytes bytes
+
 {- | A fresh secp256k1 secret scalar, admitted by the same
-   `lib.sign.secretKeyFromByteArray` the server admits `--key` with — so
+   `lib.sign.secretKeyFromBytes` the server admits `--key` with — so
    `keygen` can produce no value `serve` would later refuse, and admits `d`
    only in `[1, n)`.
 
@@ -45,7 +53,7 @@ keygenSecretBytes attempts =
       "the entropy source produced no scalar in 1..n-1; refusing to write a key"
   else
     let candidate = osEntropyBytes signingKeyBytes
-    match secretKeyFromByteArray candidate
+    match secretKeyDoor candidate
       Err _ => keygenSecretBytes (attempts - 1)
       Ok _ => Ok candidate
 
@@ -64,7 +72,7 @@ signingKeyBytes = 32
 export
 keygenSummary : Array Int -> Result String (String, String)
 keygenSummary bytes = do
-  secret <- secretKeyFromByteArray bytes
+  secret <- secretKeyDoor bytes
   let publicKey = publicKeyForSecret secret
   Ok (
     encode (publicKeyCompressed publicKey),

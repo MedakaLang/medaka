@@ -195,7 +195,7 @@ import time.{
 }
 import bytebuilder.{Builder, emitBytes, builderParts, newBuilder}
 import bytes as B
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, toArray}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 
@@ -712,7 +712,7 @@ stageCommitEvent dir did nowSeconds before after = do
     seq = seq,
     timeSeconds = nowSeconds,
     anchorCommitCid = Some (headText after),
-    frameHex = encode (fromArrayAssumeByteDomain frame),
+    frameHex = encode frame,
   }
 
 {- | The four events a repository's creation emits, in the order
@@ -857,7 +857,7 @@ genesisFrom _ _ _ _ _ _ = Ok ()
 
 -- The `#sync` frame for a repository's current head: the one event that
 -- states where the repository stands without describing how it got there.
-headSyncFrame : String -> Repo -> Int -> String -> Result String (Array Int)
+headSyncFrame : String -> Repo -> Int -> String -> Result String Bytes
 headSyncFrame did repo seq time =
   let commit = repoLatestCommit repo
   syncSyncFrame
@@ -877,7 +877,7 @@ headSyncFrame did repo seq time =
    `stageCommitEvent` gives: a relay's cursor has to survive this process. -}
 emitUnanchored : String ->
   Int ->
-  (Int -> String -> Result String (Array Int)) ->
+  (Int -> String -> Result String Bytes) ->
   <FileRead, FileWrite> Result String Unit
 emitUnanchored dir nowSeconds build = do
   seq <- eventLogNextSequence dir
@@ -886,7 +886,7 @@ emitUnanchored dir nowSeconds build = do
     seq = seq,
     timeSeconds = nowSeconds,
     anchorCommitCid = None,
-    frameHex = encode (fromArrayAssumeByteDomain frame),
+    frameHex = encode frame,
   }
   eventLogPromote dir eventLogRetentionSeconds nowSeconds
 
@@ -972,7 +972,12 @@ headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
 persistRepo : String -> Repo -> <FileRead, FileWrite> Result String Unit
 persistRepo dir repo = do
   blocks <- repoExportBlocks repo
-  persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
+  -- Door: `lib.repo` exports `Bytes` blocks and `persistSave` writes
+  -- `Array Int` rows; `toArray` is total.
+  persistSave
+    dir
+    (repoCommitCid (repoLatestCommit repo))
+    (map ((cid, bytes) => (cid, toArray bytes)) blocks)
 
 -- ── rate limiting ───────────────────────────────────────────────────────────
 
