@@ -1,5 +1,5 @@
 # META
-source_lines=6465
+source_lines=6513
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -18,6 +18,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{
   Loc(..),
+  declNameLoc,
   orElseLoc,
   Lit(..),
   Ty(..),
@@ -2482,21 +2483,60 @@ externWithBodyErrors externs ((DFunDef _ n _ _) :: rest) =
     ++ externWithBodyErrors externs rest
 externWithBodyErrors externs (_ :: rest) = externWithBodyErrors externs rest
 
+-- A program's own type may shadow a prelude type (#3465): the resolver and
+-- the typechecker give a module's declaration precedence over the prelude's
+-- (`tyOriginScope`), so only a builtin head, which no declaration defines,
+-- and a second declaration in the program itself clash.  Constructors and
+-- interfaces are still reserved against the prelude: a constructor is keyed
+-- by its spelling downstream (#3471), and shadowing covers types only (an
+-- interface is out of #3465's scope).  Each report is located at the
+-- declaration's name; a constructor's report at its type's name, since a
+-- variant carries no span of its own.
 duplicateErrors : List Decl -> List Decl -> List ResError
 duplicateErrors preludeDecls prog =
   let seed = not (programIsCore prog)
-  let typeSeed = primitiveTypes ++ whenL seed (dataRecordNames preludeDecls)
-  let ctorSeed = primitiveConstructors ++ whenL seed (ctorNames preludeDecls)
-  let ifaceSeed = whenL seed (map fst (interfaceList preludeDecls))
-  map (dupErr "type") (findDups typeSeed (dataRecordNames prog))
-    ++ map (dupErr "constructor") (findDups ctorSeed (ctorNames prog))
-    ++ map
-      (dupErr "interface")
-      (findDups ifaceSeed (map fst (interfaceList prog)))
+  let types = namedLocs dataRecordNames prog
+  let ctors = namedLocs ctorNames prog
+  let ifaces = namedLocs (ds => map fst (interfaceList ds)) prog
+  reservedClashes "built-in type" primitiveTypes types
+    ++ ownDups "type" types omEmpty
+    ++ reservedClashes "built-in constructor" primitiveConstructors ctors
+    ++ reservedClashes
+      "prelude constructor"
+      (whenL seed (ctorNames preludeDecls))
+      ctors
+    ++ ownDups "constructor" ctors omEmpty
+    ++ reservedClashes
+      "prelude interface"
+      (whenL seed (map fst (interfaceList preludeDecls)))
+      ifaces
+    ++ ownDups "interface" ifaces omEmpty
     ++ ifaceMethodCollisions prog
 
-dupErr : String -> String -> ResError
-dupErr kind n = DuplicateDefinition kind n None
+-- Every declaration of a name in [reserved], as a [kind] clash.
+reservedClashes : String ->
+  List String ->
+  List (String, Option Loc) ->
+  List ResError
+reservedClashes kind reserved named =
+  let reservedSet = omFromNames reserved omEmpty
+  flatMap
+    ((n, l) =>
+      if omHasKey n reservedSet then [DuplicateDefinition kind n l] else [])
+    named
+
+-- Every second declaration of a name the program declares twice.
+ownDups : String -> List (String, Option Loc) -> OrdMap Unit -> List ResError
+ownDups _ [] _ = []
+ownDups kind ((n, l) :: rest) seen
+  | omHasKey n seen = DuplicateDefinition kind n l :: ownDups kind rest seen
+  | otherwise = ownDups kind rest (omInsert n () seen)
+
+-- The names [names] extracts from each declaration, each at that
+-- declaration's name span (an attribute's wrapped declaration included).
+namedLocs : (List Decl -> List String) -> List Decl -> List (String, Option Loc)
+namedLocs names decls =
+  flatMap (d => map (n => (n, declNameLoc d)) (names [d])) decls
 
 -- Q1 (Stage B / Phase 4b): a module whose OWN declarations include two
 -- `interface`s declaring the same METHOD name is REJECTED, on the DECLARATION.
@@ -2759,6 +2799,14 @@ ppResError (UnknownEffect n _) =
 ppResError (UnknownField n _) = "Unknown field: " ++ n
 ppResError (FieldNotInRecord f r _) =
   "Unknown field: \{f}. Record '\{r}' has no field '\{f}'"
+ppResError (DuplicateDefinition "built-in type" n _) =
+  "'\{n}' is a built-in type: a program cannot declare a type of that name. Rename the declaration"
+ppResError (DuplicateDefinition "built-in constructor" n _) =
+  "'\{n}' is a built-in constructor: a program cannot declare a constructor of that name. Rename the constructor"
+ppResError (DuplicateDefinition "prelude constructor" n _) =
+  "'\{n}' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name"
+ppResError (DuplicateDefinition "prelude interface" n _) =
+  "'\{n}' is an interface of the prelude: a program's own interface cannot share a prelude interface's name (a type may; an interface does not shadow the prelude's). Rename the interface"
 ppResError (DuplicateDefinition k n _) = "Duplicate \{k}: \{n}"
 ppResError (UnknownInterface n _) = "Unknown interface: " ++ n
 ppResError (MethodNotInInterface m i _) =
@@ -6468,7 +6516,7 @@ takeOriginTrace _ =
   originTraceLog := []
   rows
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -7157,9 +7205,14 @@ takeOriginTrace _ =
 (DFunDef false "externWithBodyErrors" ((PVar "externs") (PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "externs")) (EListLit (EApp (EApp (EVar "ExternWithBody") (EVar "n")) (EVar "None"))) (EListLit)) (EApp (EApp (EVar "externWithBodyErrors") (EVar "externs")) (EVar "rest"))))
 (DFunDef false "externWithBodyErrors" ((PVar "externs") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "externWithBodyErrors") (EVar "externs")) (EVar "rest")))
 (DTypeSig false "duplicateErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "duplicateErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "typeSeed") (EBinOp "++" (EVar "primitiveTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls"))))) (DoLet false false (PVar "ctorSeed") (EBinOp "++" (EVar "primitiveConstructors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls"))))) (DoLet false false (PVar "ifaceSeed") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "preludeDecls"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "dupErr") (ELit (LString "type")))) (EApp (EApp (EVar "findDups") (EVar "typeSeed")) (EApp (EVar "dataRecordNames") (EVar "prog")))) (EApp (EApp (EVar "map") (EApp (EVar "dupErr") (ELit (LString "constructor")))) (EApp (EApp (EVar "findDups") (EVar "ctorSeed")) (EApp (EVar "ctorNames") (EVar "prog"))))) (EApp (EApp (EVar "map") (EApp (EVar "dupErr") (ELit (LString "interface")))) (EApp (EApp (EVar "findDups") (EVar "ifaceSeed")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "prog")))))) (EApp (EVar "ifaceMethodCollisions") (EVar "prog"))))))
-(DTypeSig false "dupErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ResError"))))
-(DFunDef false "dupErr" ((PVar "kind") (PVar "n")) (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "kind")) (EVar "n")) (EVar "None")))
+(DFunDef false "duplicateErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "types") (EApp (EApp (EVar "namedLocs") (EVar "dataRecordNames")) (EVar "prog"))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "namedLocs") (EVar "ctorNames")) (EVar "prog"))) (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "namedLocs") (ELam ((PVar "ds")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "ds"))))) (EVar "prog"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "built-in type"))) (EVar "primitiveTypes")) (EVar "types")) (EApp (EApp (EApp (EVar "ownDups") (ELit (LString "type"))) (EVar "types")) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "built-in constructor"))) (EVar "primitiveConstructors")) (EVar "ctors"))) (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "prelude constructor"))) (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (EVar "ctors"))) (EApp (EApp (EApp (EVar "ownDups") (ELit (LString "constructor"))) (EVar "ctors")) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "prelude interface"))) (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "preludeDecls"))))) (EVar "ifaces"))) (EApp (EApp (EApp (EVar "ownDups") (ELit (LString "interface"))) (EVar "ifaces")) (EVar "omEmpty"))) (EApp (EVar "ifaceMethodCollisions") (EVar "prog"))))))
+(DTypeSig false "reservedClashes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "reservedClashes" ((PVar "kind") (PVar "reserved") (PVar "named")) (EBlock (DoLet false false (PVar "reservedSet") (EApp (EApp (EVar "omFromNames") (EVar "reserved")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "n") (PVar "l"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "reservedSet")) (EListLit (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "kind")) (EVar "n")) (EVar "l"))) (EListLit)))) (EVar "named")))))
+(DTypeSig false "ownDups" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "ownDups" (PWild (PList) PWild) (EListLit))
+(DFunDef false "ownDups" ((PVar "kind") (PCons (PTuple (PVar "n") (PVar "l")) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EBinOp "::" (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "kind")) (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "ownDups") (EVar "kind")) (EVar "rest")) (EVar "seen"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ownDups") (EVar "kind")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "namedLocs" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "namedLocs" ((PVar "names") (PVar "decls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "declNameLoc") (EVar "d"))))) (EApp (EVar "names") (EListLit (EVar "d")))))) (EVar "decls")))
 (DTypeSig false "ifaceMethodCollisions" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
 (DFunDef false "ifaceMethodCollisions" ((PVar "prog")) (EApp (EApp (EVar "ifaceMethodCollisionsGo") (EVar "omEmpty")) (EApp (EVar "ownInterfaceMethods") (EVar "prog"))))
 (DTypeSig false "ifaceMethodCollisionsGo" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -7240,6 +7293,10 @@ takeOriginTrace _ =
 (DFunDef false "ppResError" ((PCon "UnknownEffect" (PVar "n") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Mut"))) (EBinOp "==" (EVar "n") (ELit (LString "Panic")))) (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown effect: ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"))) (EBinOp "++" (ELit (LString "Unknown effect: ")) (EVar "n"))))
 (DFunDef false "ppResError" ((PCon "UnknownField" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown field: ")) (EVar "n")))
 (DFunDef false "ppResError" ((PCon "FieldNotInRecord" (PVar "f") (PVar "r") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown field: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ". Record '"))) (EApp (EVar "display") (EVar "r"))) (ELit (LString "' has no field '"))) (EApp (EVar "display") (EVar "f"))) (ELit (LString "'"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "built-in type")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is a built-in type: a program cannot declare a type of that name. Rename the declaration"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "built-in constructor")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is a built-in constructor: a program cannot declare a constructor of that name. Rename the constructor"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "prelude constructor")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "prelude interface")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is an interface of the prelude: a program's own interface cannot share a prelude interface's name (a type may; an interface does not shadow the prelude's). Rename the interface"))))
 (DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
 (DFunDef false "ppResError" ((PCon "UnknownInterface" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown interface: ")) (EVar "n")))
 (DFunDef false "ppResError" ((PCon "MethodNotInInterface" (PVar "m") (PVar "i") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Method '")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "' is not part of interface '"))) (EApp (EVar "display") (EVar "i"))) (ELit (LString "'"))))
@@ -8036,7 +8093,7 @@ takeOriginTrace _ =
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EUnOp "!" (EVar "originTraceLog"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "splitOnChar" false) (mem "startsWith" false))))
@@ -8725,9 +8782,14 @@ takeOriginTrace _ =
 (DFunDef false "externWithBodyErrors" ((PVar "externs") (PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "externs")) (EListLit (EApp (EApp (EVar "ExternWithBody") (EVar "n")) (EVar "None"))) (EListLit)) (EApp (EApp (EVar "externWithBodyErrors") (EVar "externs")) (EVar "rest"))))
 (DFunDef false "externWithBodyErrors" ((PVar "externs") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "externWithBodyErrors") (EVar "externs")) (EVar "rest")))
 (DTypeSig false "duplicateErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "duplicateErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "typeSeed") (EBinOp "++" (EVar "primitiveTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls"))))) (DoLet false false (PVar "ctorSeed") (EBinOp "++" (EVar "primitiveConstructors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls"))))) (DoLet false false (PVar "ifaceSeed") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "preludeDecls"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "dupErr") (ELit (LString "type")))) (EApp (EApp (EVar "findDups") (EVar "typeSeed")) (EApp (EVar "dataRecordNames") (EVar "prog")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "dupErr") (ELit (LString "constructor")))) (EApp (EApp (EVar "findDups") (EVar "ctorSeed")) (EApp (EVar "ctorNames") (EVar "prog"))))) (EApp (EApp (EMethodRef "map") (EApp (EVar "dupErr") (ELit (LString "interface")))) (EApp (EApp (EVar "findDups") (EVar "ifaceSeed")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "prog")))))) (EApp (EVar "ifaceMethodCollisions") (EVar "prog"))))))
-(DTypeSig false "dupErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ResError"))))
-(DFunDef false "dupErr" ((PVar "kind") (PVar "n")) (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "kind")) (EVar "n")) (EVar "None")))
+(DFunDef false "duplicateErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "types") (EApp (EApp (EVar "namedLocs") (EVar "dataRecordNames")) (EVar "prog"))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "namedLocs") (EVar "ctorNames")) (EVar "prog"))) (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "namedLocs") (ELam ((PVar "ds")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "ds"))))) (EVar "prog"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "built-in type"))) (EVar "primitiveTypes")) (EVar "types")) (EApp (EApp (EApp (EVar "ownDups") (ELit (LString "type"))) (EVar "types")) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "built-in constructor"))) (EVar "primitiveConstructors")) (EVar "ctors"))) (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "prelude constructor"))) (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (EVar "ctors"))) (EApp (EApp (EApp (EVar "ownDups") (ELit (LString "constructor"))) (EVar "ctors")) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "reservedClashes") (ELit (LString "prelude interface"))) (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "preludeDecls"))))) (EVar "ifaces"))) (EApp (EApp (EApp (EVar "ownDups") (ELit (LString "interface"))) (EVar "ifaces")) (EVar "omEmpty"))) (EApp (EVar "ifaceMethodCollisions") (EVar "prog"))))))
+(DTypeSig false "reservedClashes" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "reservedClashes" ((PVar "kind") (PVar "reserved") (PVar "named")) (EBlock (DoLet false false (PVar "reservedSet") (EApp (EApp (EVar "omFromNames") (EVar "reserved")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "n") (PVar "l"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "reservedSet")) (EListLit (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "kind")) (EVar "n")) (EVar "l"))) (EListLit)))) (EVar "named")))))
+(DTypeSig false "ownDups" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "ownDups" (PWild (PList) PWild) (EListLit))
+(DFunDef false "ownDups" ((PVar "kind") (PCons (PTuple (PVar "n") (PVar "l")) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EBinOp "::" (EApp (EApp (EApp (EVar "DuplicateDefinition") (EVar "kind")) (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "ownDups") (EVar "kind")) (EVar "rest")) (EVar "seen"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ownDups") (EVar "kind")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "namedLocs" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "namedLocs" ((PVar "names") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "declNameLoc") (EVar "d"))))) (EApp (EVar "names") (EListLit (EVar "d")))))) (EVar "decls")))
 (DTypeSig false "ifaceMethodCollisions" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
 (DFunDef false "ifaceMethodCollisions" ((PVar "prog")) (EApp (EApp (EVar "ifaceMethodCollisionsGo") (EVar "omEmpty")) (EApp (EVar "ownInterfaceMethods") (EVar "prog"))))
 (DTypeSig false "ifaceMethodCollisionsGo" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -8808,6 +8870,10 @@ takeOriginTrace _ =
 (DFunDef false "ppResError" ((PCon "UnknownEffect" (PVar "n") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Mut"))) (EBinOp "==" (EVar "n") (ELit (LString "Panic")))) (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown effect: ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"))) (EBinOp "++" (ELit (LString "Unknown effect: ")) (EVar "n"))))
 (DFunDef false "ppResError" ((PCon "UnknownField" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown field: ")) (EVar "n")))
 (DFunDef false "ppResError" ((PCon "FieldNotInRecord" (PVar "f") (PVar "r") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown field: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ". Record '"))) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString "' has no field '"))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString "'"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "built-in type")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is a built-in type: a program cannot declare a type of that name. Rename the declaration"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "built-in constructor")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is a built-in constructor: a program cannot declare a constructor of that name. Rename the constructor"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "prelude constructor")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name"))))
+(DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PLit (LString "prelude interface")) (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is an interface of the prelude: a program's own interface cannot share a prelude interface's name (a type may; an interface does not shadow the prelude's). Rename the interface"))))
 (DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate ")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
 (DFunDef false "ppResError" ((PCon "UnknownInterface" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown interface: ")) (EVar "n")))
 (DFunDef false "ppResError" ((PCon "MethodNotInInterface" (PVar "m") (PVar "i") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Method '")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "' is not part of interface '"))) (EApp (EMethodRef "display") (EVar "i"))) (ELit (LString "'"))))

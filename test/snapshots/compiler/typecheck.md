@@ -1,5 +1,5 @@
 # META
-source_lines=50180
+source_lines=50230
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -5165,6 +5165,7 @@ deKindAbstractFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindPrivateFixture : Decl
@@ -5178,6 +5179,7 @@ deKindPrivateFixture = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deKindNewtypeFixture : Decl
@@ -5191,6 +5193,7 @@ deKindNewtypeFixture = DNewtype {
   newtypeCtorBinders = [],
   newtypeDerives = [],
   newtypeOrigin = OriginModule "m",
+  newtypeNameLoc = None,
 }
 
 deKindFixtureDecls : List Decl
@@ -5347,6 +5350,7 @@ deNameIdxAlpha = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedA : Decl
@@ -5360,6 +5364,7 @@ deNameIdxSharedA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modA",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxBeta : Decl
@@ -5373,6 +5378,7 @@ deNameIdxBeta = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxSharedB : Decl
@@ -5386,6 +5392,7 @@ deNameIdxSharedB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "modB",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deNameIdxModA : DeclEnvModule
@@ -5857,6 +5864,7 @@ aliasFixturePubCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePrivCore : Decl
@@ -5867,6 +5875,7 @@ aliasFixturePrivCore = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
+  tyAliasNameLoc = None,
 }
 
 aliasFixturePubM : Decl
@@ -5877,6 +5886,7 @@ aliasFixturePubM = DTypeAlias {
   tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "m",
+  tyAliasNameLoc = None,
 }
 
 -- PUBLIC, but wrapped in an attribute.  ⚠️ SINCE #1228/#1586 THIS ROW IS VISIBLE:
@@ -5894,6 +5904,7 @@ aliasFixtureAttribCore =
       tyAliasParamKinds = [],
       tyAliasRhs = tyConBuiltin "Int" None,
       tyAliasOrigin = OriginModule "core",
+      tyAliasNameLoc = None,
     }
 
 aliasFixtureEnv : DataEnv
@@ -5952,6 +5963,7 @@ deFieldOwnerFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerFixtureB : Decl
@@ -5966,6 +5978,7 @@ deFieldOwnerFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
@@ -5989,6 +6002,7 @@ deFieldOwnerFixtureC = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deFieldOwnerCollisionEnv : DataEnv
@@ -6037,6 +6051,7 @@ deRecordOrderFixtureA = DData {
   dataDerives = [],
   dataOrigin = OriginModule "m",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 deRecordOrderFixtureB : Decl
@@ -6051,6 +6066,7 @@ deRecordOrderFixtureB = DData {
   dataDerives = [],
   dataOrigin = OriginModule "n",
   dataExtern = False,
+  dataNameLoc = None,
 }
 
 -- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
@@ -7475,6 +7491,7 @@ ceSameDeclIn m methods = DInterface {
   supers = [ceSuperEq],
   methods = methods,
   ifaceOrigin = OriginModule m,
+  ifaceNameLoc = None,
 }
 
 -- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
@@ -7689,6 +7706,7 @@ ceGradedIface = DInterface {
   supers = [],
   methods = [ceGradedMethod],
   ifaceOrigin = OriginModule "gmod",
+  ifaceNameLoc = None,
 }
 
 ceGradedEnv : ClassEnv
@@ -7731,6 +7749,7 @@ ceFunctorIface = DInterface {
   supers = [],
   methods = [ceFunctorMethod],
   ifaceOrigin = OriginModule "fmod",
+  ifaceNameLoc = None,
 }
 
 ceFunctorEnv : ClassEnv
@@ -11647,22 +11666,52 @@ typeMismatchReportRest a b = match !currentDoOrigin
 -- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
 -- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
 -- yields `None` here and its message is untouched.  That residual is #1243.)
+-- A program's own type may shadow a prelude type (#3465), so two sides whose
+-- heads share a spelling but not an identity can also differ in shape
+-- (`Result vs Result a b`): their heads are compared as well.
 sameSpellingHint : Mono -> Mono -> Option String
 sameSpellingHint a b
-  | ppMono a /= ppMono b = None
+  | ppMono a /= ppMono b = map idConflictHelp (headIdConflict a b)
   | otherwise = map idConflictHelp (firstIdConflict a b)
 
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idConflictHelp (name, o1, o2) =
-  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — import the one you mean rather than declaring a second type of the same name"
+  let remedy =
+    if isPreludeOrigin o1 || isPreludeOrigin o2 then
+      "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects"
+    else
+      "import the one you mean rather than declaring a second type of the same name"
+  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — \{remedy}"
+
+isPreludeOrigin : TyConOrigin -> Bool
+isPreludeOrigin (OriginModule m) = m == "core"
+isPreludeOrigin _ = False
 
 -- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
 -- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
 -- present identities) and is answered rather than omitted so this stays total.
 originPhrase : TyConOrigin -> String
+originPhrase (OriginModule "core") = "the prelude"
+originPhrase (OriginModule "__user__") = "this program"
 originPhrase (OriginModule m) = "module '\{m}'"
 originPhrase OriginBuiltin = "the language itself"
 originPhrase OriginUnresolved = "an unknown module"
+
+-- The two sides' application heads, when they are same-spelled type
+-- constructors of different declarations.
+headIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+headIdConflict a b = match (spineHead a, spineHead b)
+  (TCon n1 o1, TCon n2 o2) =>
+    if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
+      Some (n1, o1, o2)
+    else
+      None
+  _ => None
+
+spineHead : Mono -> Mono
+spineHead t = match normalize t
+  TApp f _ => spineHead f
+  other => other
 
 -- The FIRST head, in a parallel structural walk of the two monos, whose name
 -- agrees while its identity does not.  Parallel and shape-guarded on purpose:
@@ -41124,6 +41173,7 @@ methodRowTestIface moduleId name typarams methods = DInterface {
   supers = [],
   methods = methods,
   ifaceOrigin = OriginModule moduleId,
+  ifaceNameLoc = None,
 }
 
 methodRowTestConstraint : String -> String -> List Ty -> Constraint
@@ -51030,11 +51080,11 @@ isTyAuth _ = False
 (DTypeSig false "declEnvSeedDataUniverse" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyCon "Unit"))))
 (DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deNameIndexBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "dePolaritiesBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deAtomsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
-(DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
-(DFunDef false "deKindPrivateFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPrivate")) (fa "dataName" (ELit (LString "Priv"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkPriv"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deKindPrivateFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPrivate")) (fa "dataName" (ELit (LString "Priv"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkPriv"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deKindNewtypeFixture" (TyCon "Decl"))
-(DFunDef false "deKindNewtypeFixture" () (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "True")) (fa "newtypeName" (ELit (LString "Wrap"))) (fa "newtypeParams" (EListLit)) (fa "newtypeParamKinds" (EListLit)) (fa "newtypeCtor" (ELit (LString "Wrap"))) (fa "newtypeFieldTy" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "newtypeCtorBinders" (EListLit)) (fa "newtypeDerives" (EListLit)) (fa "newtypeOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DFunDef false "deKindNewtypeFixture" () (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "True")) (fa "newtypeName" (ELit (LString "Wrap"))) (fa "newtypeParams" (EListLit)) (fa "newtypeParamKinds" (EListLit)) (fa "newtypeCtor" (ELit (LString "Wrap"))) (fa "newtypeFieldTy" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "newtypeCtorBinders" (EListLit)) (fa "newtypeDerives" (EListLit)) (fa "newtypeOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "newtypeNameLoc" (EVar "None")))))
 (DTypeSig false "deKindFixtureDecls" (TyApp (TyCon "List") (TyCon "Decl")))
 (DFunDef false "deKindFixtureDecls" () (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deKindAbstractFixture") (EVar "deKindPrivateFixture") (EVar "deKindNewtypeFixture")))
 (DTypeSig false "deKindRow0" (TyCon "DeclEnvModule"))
@@ -51056,13 +51106,13 @@ isTyAuth _ = False
 (DTypeSig false "deSeedNameParity" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "deSeedNameParity" ((PVar "mid")) (EBlock (DoLet false false (PVar "accumulated") (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainNames"))))) (DoLet false false (PVar "rebuilt") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainKinds"))))) (EVar "omEmpty")))) (DoExpr (EBinOp "==" (EVar "accumulated") (EVar "rebuilt")))))
 (DTypeSig false "deNameIdxAlpha" (TyCon "Decl"))
-(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxSharedA" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxBeta" (TyCon "Decl"))
-(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxSharedB" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxModA" (TyCon "DeclEnvModule"))
 (DFunDef false "deNameIdxModA" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "modA"))) (EListLit (EVar "deNameIdxAlpha") (EVar "deNameIdxSharedA"))))
 (DTypeSig false "deNameIdxModB" (TyCon "DeclEnvModule"))
@@ -51118,23 +51168,23 @@ isTyAuth _ = False
 (DTypeSig false "aliasVisibleTo" (TyFun (TyCon "Int") (TyFun (TyCon "AliasDecl") (TyCon "Bool"))))
 (DFunDef false "aliasVisibleTo" ((PVar "cur") (PVar "ad")) (EBinOp "&&" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "ad") "adOrd")) (EFieldAccess (EVar "ad") "adPub")) (EBinOp "/=" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))))
 (DTypeSig false "aliasFixturePubCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
+(DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixturePrivCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePrivCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "False")) (fa "tyAliasName" (ELit (LString "PrivCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
+(DFunDef false "aliasFixturePrivCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "False")) (fa "tyAliasName" (ELit (LString "PrivCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixturePubM" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixtureAttribCore" (TyCon "Decl"))
-(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (ELit (LString "old"))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core"))))))))
+(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (ELit (LString "old"))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
 (DTypeSig false "aliasFixtureEnv" (TyCon "DataEnv"))
 (DFunDef false "aliasFixtureEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EListLit (EVar "aliasFixturePubCore") (EVar "aliasFixturePrivCore") (EVar "aliasFixtureAttribCore"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "m"))) (EListLit (EVar "aliasFixturePubM"))))))
 (DTypeSig false "aliasNamesAt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "aliasNamesAt" ((PVar "cur")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EVar "aliasFixtureEnv") "deAliases"))))
 (DTypeSig false "deFieldOwnerFixtureA" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deFieldOwnerFixtureC" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deFieldOwnerCollisionEnv" (TyCon "DataEnv"))
 (DFunDef false "deFieldOwnerCollisionEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))))
 (DTypeSig false "deFieldOwnerSingleEnv" (TyCon "DataEnv"))
@@ -51145,9 +51195,9 @@ isTyAuth _ = False
 (DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
 (DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
 (DTypeSig false "deRecordOrderFixtureA" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deRecordOrderFixtureB" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deRecordOrderEnv" (TyCon "DataEnv"))
 (DFunDef false "deRecordOrderEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deRecordOrderFixtureA"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "n"))) (EListLit (EVar "deRecordOrderFixtureB"))))))
 (DTypeSig false "deRecordIdentTyNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -51331,7 +51381,7 @@ isTyAuth _ = False
 (DTypeSig false "ceSuperEq" (TyCon "Super"))
 (DFunDef false "ceSuperEq" () (ERecordCreate "Super" ((fa "superHead" (ELit (LString "Eq"))) (fa "superParams" (EListLit (ELit (LString "a")))) (fa "superOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
 (DTypeSig false "ceSameDeclIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))
-(DFunDef false "ceSameDeclIn" ((PVar "m") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Same"))) (fa "typarams" (EListLit (ELit (LString "a")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit (EVar "ceSuperEq"))) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DFunDef false "ceSameDeclIn" ((PVar "m") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Same"))) (fa "typarams" (EListLit (ELit (LString "a")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit (EVar "ceSuperEq"))) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "m"))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "ceProbeEnv" (TyCon "ClassEnv"))
 (DFunDef false "ceProbeEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "amod"))) (EListLit (EApp (EApp (EVar "ceSameDeclIn") (ELit (LString "amod"))) (EListLit (EVar "ceMethodFoo"))))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "zmod"))) (EListLit (EApp (EApp (EVar "ceSameDeclIn") (ELit (LString "zmod"))) (EListLit (EVar "ceMethodBar"))))))))
 (DTypeSig false "ceProbeKey" (TyFun (TyCon "String") (TyCon "RegKey")))
@@ -51371,7 +51421,7 @@ isTyAuth _ = False
 (DTypeSig false "ceGradedMethod" (TyCon "IfaceMethod"))
 (DFunDef false "ceGradedMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "run"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "e"))))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EListLit (ELit (LString "e")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
 (DTypeSig false "ceGradedIface" (TyCon "Decl"))
-(DFunDef false "ceGradedIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Async"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EApp (EVar "Some") (EApp (EApp (EVar "KindArrow") (EVar "KindEffect")) (EApp (EApp (EVar "KindArrow") (EVar "KindType")) (EVar "KindType")))))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceGradedMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "gmod")))))))
+(DFunDef false "ceGradedIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Async"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EApp (EVar "Some") (EApp (EApp (EVar "KindArrow") (EVar "KindEffect")) (EApp (EApp (EVar "KindArrow") (EVar "KindType")) (EVar "KindType")))))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceGradedMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "gmod")))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "ceGradedEnv" (TyCon "ClassEnv"))
 (DFunDef false "ceGradedEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "gmod"))) (EListLit (EVar "ceGradedIface"))))))
 (DTypeSig false "ceGradedKey" (TyCon "RegKey"))
@@ -51379,7 +51429,7 @@ isTyAuth _ = False
 (DTypeSig false "ceFunctorMethod" (TyCon "IfaceMethod"))
 (DFunDef false "ceFunctorMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "fmap"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
 (DTypeSig false "ceFunctorIface" (TyCon "Decl"))
-(DFunDef false "ceFunctorIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Functor"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceFunctorMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "fmod")))))))
+(DFunDef false "ceFunctorIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Functor"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceFunctorMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "fmod")))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "ceFunctorEnv" (TyCon "ClassEnv"))
 (DFunDef false "ceFunctorEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "fmod"))) (EListLit (EVar "ceFunctorIface"))))))
 (DTypeSig false "ceFunctorKey" (TyCon "RegKey"))
@@ -51977,13 +52027,22 @@ isTyAuth _ = False
 (DTypeSig false "typeMismatchReportRest" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "typeMismatchReportRest" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentDoOrigin")) (arm (PCon "Some" (PVar "doLoc")) () (EApp (EApp (EApp (EVar "typeMismatchInDo") (EVar "a")) (EVar "b")) (EVar "doLoc"))) (arm (PCon "None") () (EMatch (EApp (EVar "firstTupleCallHint") (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "sameSpellingHint") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))))
 (DTypeSig false "sameSpellingHint" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "sameSpellingHint" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "ppMono") (EVar "a")) (EApp (EVar "ppMono") (EVar "b"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "firstIdConflict") (EVar "a")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sameSpellingHint" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "ppMono") (EVar "a")) (EApp (EVar "ppMono") (EVar "b"))) (EApp (EApp (EVar "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "headIdConflict") (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "firstIdConflict") (EVar "a")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "idConflictHelp" (TyFun (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin")) (TyCon "String")))
-(DFunDef false "idConflictHelp" ((PTuple (PVar "name") (PVar "o1") (PVar "o2"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "these are two DIFFERENT types that share the name '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "': one comes from "))) (EApp (EVar "display") (EApp (EVar "originPhrase") (EVar "o1")))) (ELit (LString ", the other from "))) (EApp (EVar "display") (EApp (EVar "originPhrase") (EVar "o2")))) (ELit (LString " — import the one you mean rather than declaring a second type of the same name"))))
+(DFunDef false "idConflictHelp" ((PTuple (PVar "name") (PVar "o1") (PVar "o2"))) (EBlock (DoLet false false (PVar "remedy") (EIf (EBinOp "||" (EApp (EVar "isPreludeOrigin") (EVar "o1")) (EApp (EVar "isPreludeOrigin") (EVar "o2"))) (ELit (LString "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects")) (ELit (LString "import the one you mean rather than declaring a second type of the same name")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "these are two DIFFERENT types that share the name '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "': one comes from "))) (EApp (EVar "display") (EApp (EVar "originPhrase") (EVar "o1")))) (ELit (LString ", the other from "))) (EApp (EVar "display") (EApp (EVar "originPhrase") (EVar "o2")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "remedy"))) (ELit (LString ""))))))
+(DTypeSig false "isPreludeOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))
+(DFunDef false "isPreludeOrigin" ((PCon "OriginModule" (PVar "m"))) (EBinOp "==" (EVar "m") (ELit (LString "core"))))
+(DFunDef false "isPreludeOrigin" (PWild) (EVar "False"))
 (DTypeSig false "originPhrase" (TyFun (TyCon "TyConOrigin") (TyCon "String")))
+(DFunDef false "originPhrase" ((PCon "OriginModule" (PLit (LString "core")))) (ELit (LString "the prelude")))
+(DFunDef false "originPhrase" ((PCon "OriginModule" (PLit (LString "__user__")))) (ELit (LString "this program")))
 (DFunDef false "originPhrase" ((PCon "OriginModule" (PVar "m"))) (EBinOp "++" (EBinOp "++" (ELit (LString "module '")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "'"))))
 (DFunDef false "originPhrase" ((PCon "OriginBuiltin")) (ELit (LString "the language itself")))
 (DFunDef false "originPhrase" ((PCon "OriginUnresolved")) (ELit (LString "an unknown module")))
+(DTypeSig false "headIdConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
+(DFunDef false "headIdConflict" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "spineHead") (EVar "a")) (EApp (EVar "spineHead") (EVar "b"))) (arm (PTuple (PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2")))) (EApp (EVar "Some") (ETuple (EVar "n1") (EVar "o1") (EVar "o2"))) (EVar "None"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "spineHead" (TyFun (TyCon "Mono") (TyCon "Mono")))
+(DFunDef false "spineHead" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "f") PWild) () (EApp (EVar "spineHead") (EVar "f"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "firstIdConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
 (DFunDef false "firstIdConflict" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))) (arm (PTuple (PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2")))) (EApp (EVar "Some") (ETuple (EVar "n1") (EVar "o1") (EVar "o2"))) (EVar "None"))) (arm (PTuple (PCon "TApp" (PVar "f1") (PVar "x1")) (PCon "TApp" (PVar "f2") (PVar "x2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "f1")) (EVar "f2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "x1")) (EVar "x2")))) (arm (PTuple (PCon "TFun" (PVar "d1") PWild (PVar "r1")) (PCon "TFun" (PVar "d2") PWild (PVar "r2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "r1")) (EVar "r2")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Loc") (TyCon "Unit")))))
@@ -57016,7 +57075,7 @@ isTyAuth _ = False
 (DTypeSig false "scopeGivenProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
 (DFunDef false "scopeGivenProbe" (PWild) (EBlock (DoLet false false (PVar "savedGraph") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false (PVar "store") (EApp (EVar "currentScopeStore") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "given-probe"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "owner") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "owner"))))) (DoLet false false (PVar "sibling") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "sibling"))))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "PairGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "args") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EListLit (ELit (LInt 41))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 0))))) (DoLet false false (PVar "exact") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "unknown") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EVar "PSArgsUnknown"))))) (DoLet false false (PVar "truncated") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false (PVar "witnessIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "WitnessGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "witnessSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "witnessIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int")))))) (fa "psBoundIds" (EListLit (ELit (LInt 73))))))) (DoLet false false (PVar "witnessRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "witnessIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "witnessSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 1))))) (DoLet false false (PVar "compatibleIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "CompatibleGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "compatibleSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "compatibleIface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit (ELit (LInt 89))))))) (DoLet false false (PVar "compatibleRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "compatibleIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "compatibleSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 2))))) (DoLet false false (PVar "givens") (EApp (EVar "givensForScope") (EVar "owner"))) (DoLet false false (PVar "result") (EListLit (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "exact")) (EVar "owner")) (EVar "givens")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "exact")) (EVar "sibling")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "truncated")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "GSImplRequires")) (ELit (LInt 73))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "GSImplRequires")) (ELit (LInt 74))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSemanticGivenAnswer") (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "exact")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "GSPredicateOnly")) (ELit (LInt 41))) (EVar "unknown")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (ELit (LString "PairGiven"))) (EVar "args")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "compatibleRequest")) (EVar "owner")) (EVar "givens"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EVar "savedGraph"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EVar "result"))))
 (DTypeSig false "methodRowTestIface" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))
-(DFunDef false "methodRowTestIface" ((PVar "moduleId") (PVar "name") (PVar "typarams") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "False")) (fa "def" (EVar "False")) (fa "name" (EVar "name")) (fa "typarams" (EVar "typarams")) (fa "typaramKinds" (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "typarams"))) (fa "supers" (EListLit)) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "moduleId"))))))
+(DFunDef false "methodRowTestIface" ((PVar "moduleId") (PVar "name") (PVar "typarams") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "False")) (fa "def" (EVar "False")) (fa "name" (EVar "name")) (fa "typarams" (EVar "typarams")) (fa "typaramKinds" (EApp (EApp (EVar "map") (ELam (PWild) (EVar "None"))) (EVar "typarams"))) (fa "supers" (EListLit)) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "moduleId"))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "methodRowTestConstraint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint")))))
 (DFunDef false "methodRowTestConstraint" ((PVar "moduleId") (PVar "name") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "name")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EApp (EVar "OriginModule") (EVar "moduleId"))))))
 (DTypeSig false "methodRowTestFoldMapDecl" (TyCon "Decl"))
@@ -59066,11 +59125,11 @@ isTyAuth _ = False
 (DTypeSig false "declEnvSeedDataUniverse" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyCon "Unit"))))
 (DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deNameIndexBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "dePolaritiesBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deAtomsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
-(DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
-(DFunDef false "deKindPrivateFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPrivate")) (fa "dataName" (ELit (LString "Priv"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkPriv"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deKindPrivateFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPrivate")) (fa "dataName" (ELit (LString "Priv"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkPriv"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deKindNewtypeFixture" (TyCon "Decl"))
-(DFunDef false "deKindNewtypeFixture" () (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "True")) (fa "newtypeName" (ELit (LString "Wrap"))) (fa "newtypeParams" (EListLit)) (fa "newtypeParamKinds" (EListLit)) (fa "newtypeCtor" (ELit (LString "Wrap"))) (fa "newtypeFieldTy" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "newtypeCtorBinders" (EListLit)) (fa "newtypeDerives" (EListLit)) (fa "newtypeOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DFunDef false "deKindNewtypeFixture" () (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "True")) (fa "newtypeName" (ELit (LString "Wrap"))) (fa "newtypeParams" (EListLit)) (fa "newtypeParamKinds" (EListLit)) (fa "newtypeCtor" (ELit (LString "Wrap"))) (fa "newtypeFieldTy" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "newtypeCtorBinders" (EListLit)) (fa "newtypeDerives" (EListLit)) (fa "newtypeOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "newtypeNameLoc" (EVar "None")))))
 (DTypeSig false "deKindFixtureDecls" (TyApp (TyCon "List") (TyCon "Decl")))
 (DFunDef false "deKindFixtureDecls" () (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deKindAbstractFixture") (EVar "deKindPrivateFixture") (EVar "deKindNewtypeFixture")))
 (DTypeSig false "deKindRow0" (TyCon "DeclEnvModule"))
@@ -59092,13 +59151,13 @@ isTyAuth _ = False
 (DTypeSig false "deSeedNameParity" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "deSeedNameParity" ((PVar "mid")) (EBlock (DoLet false false (PVar "accumulated") (EApp (EVar "omKeys") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainNames"))))) (DoLet false false (PVar "rebuilt") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainKinds"))))) (EVar "omEmpty")))) (DoExpr (EBinOp "==" (EVar "accumulated") (EVar "rebuilt")))))
 (DTypeSig false "deNameIdxAlpha" (TyCon "Decl"))
-(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxSharedA" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxBeta" (TyCon "Decl"))
-(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxSharedB" (TyCon "Decl"))
-(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deNameIdxModA" (TyCon "DeclEnvModule"))
 (DFunDef false "deNameIdxModA" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "modA"))) (EListLit (EVar "deNameIdxAlpha") (EVar "deNameIdxSharedA"))))
 (DTypeSig false "deNameIdxModB" (TyCon "DeclEnvModule"))
@@ -59154,23 +59213,23 @@ isTyAuth _ = False
 (DTypeSig false "aliasVisibleTo" (TyFun (TyCon "Int") (TyFun (TyCon "AliasDecl") (TyCon "Bool"))))
 (DFunDef false "aliasVisibleTo" ((PVar "cur") (PVar "ad")) (EBinOp "&&" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "ad") "adOrd")) (EFieldAccess (EVar "ad") "adPub")) (EBinOp "/=" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))))
 (DTypeSig false "aliasFixturePubCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
+(DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixturePrivCore" (TyCon "Decl"))
-(DFunDef false "aliasFixturePrivCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "False")) (fa "tyAliasName" (ELit (LString "PrivCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
+(DFunDef false "aliasFixturePrivCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "False")) (fa "tyAliasName" (ELit (LString "PrivCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixturePubM" (TyCon "Decl"))
-(DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixtureAttribCore" (TyCon "Decl"))
-(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (ELit (LString "old"))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core"))))))))
+(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (ELit (LString "old"))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
 (DTypeSig false "aliasFixtureEnv" (TyCon "DataEnv"))
 (DFunDef false "aliasFixtureEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EListLit (EVar "aliasFixturePubCore") (EVar "aliasFixturePrivCore") (EVar "aliasFixtureAttribCore"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "m"))) (EListLit (EVar "aliasFixturePubM"))))))
 (DTypeSig false "aliasNamesAt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "aliasNamesAt" ((PVar "cur")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EVar "aliasFixtureEnv") "deAliases"))))
 (DTypeSig false "deFieldOwnerFixtureA" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deFieldOwnerFixtureC" (TyCon "Decl"))
-(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deFieldOwnerCollisionEnv" (TyCon "DataEnv"))
 (DFunDef false "deFieldOwnerCollisionEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))))
 (DTypeSig false "deFieldOwnerSingleEnv" (TyCon "DataEnv"))
@@ -59181,9 +59240,9 @@ isTyAuth _ = False
 (DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
 (DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
 (DTypeSig false "deRecordOrderFixtureA" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deRecordOrderFixtureB" (TyCon "Decl"))
-(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")))))
+(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataParamKinds" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataCtorBinders" (EListLit)) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig false "deRecordOrderEnv" (TyCon "DataEnv"))
 (DFunDef false "deRecordOrderEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deRecordOrderFixtureA"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "n"))) (EListLit (EVar "deRecordOrderFixtureB"))))))
 (DTypeSig false "deRecordIdentTyNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -59367,7 +59426,7 @@ isTyAuth _ = False
 (DTypeSig false "ceSuperEq" (TyCon "Super"))
 (DFunDef false "ceSuperEq" () (ERecordCreate "Super" ((fa "superHead" (ELit (LString "Eq"))) (fa "superParams" (EListLit (ELit (LString "a")))) (fa "superOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
 (DTypeSig false "ceSameDeclIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))
-(DFunDef false "ceSameDeclIn" ((PVar "m") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Same"))) (fa "typarams" (EListLit (ELit (LString "a")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit (EVar "ceSuperEq"))) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DFunDef false "ceSameDeclIn" ((PVar "m") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Same"))) (fa "typarams" (EListLit (ELit (LString "a")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit (EVar "ceSuperEq"))) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "m"))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "ceProbeEnv" (TyCon "ClassEnv"))
 (DFunDef false "ceProbeEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "amod"))) (EListLit (EApp (EApp (EVar "ceSameDeclIn") (ELit (LString "amod"))) (EListLit (EVar "ceMethodFoo"))))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "zmod"))) (EListLit (EApp (EApp (EVar "ceSameDeclIn") (ELit (LString "zmod"))) (EListLit (EVar "ceMethodBar"))))))))
 (DTypeSig false "ceProbeKey" (TyFun (TyCon "String") (TyCon "RegKey")))
@@ -59407,7 +59466,7 @@ isTyAuth _ = False
 (DTypeSig false "ceGradedMethod" (TyCon "IfaceMethod"))
 (DFunDef false "ceGradedMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "run"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "e"))))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EListLit (ELit (LString "e")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
 (DTypeSig false "ceGradedIface" (TyCon "Decl"))
-(DFunDef false "ceGradedIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Async"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EApp (EVar "Some") (EApp (EApp (EVar "KindArrow") (EVar "KindEffect")) (EApp (EApp (EVar "KindArrow") (EVar "KindType")) (EVar "KindType")))))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceGradedMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "gmod")))))))
+(DFunDef false "ceGradedIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Async"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EApp (EVar "Some") (EApp (EApp (EVar "KindArrow") (EVar "KindEffect")) (EApp (EApp (EVar "KindArrow") (EVar "KindType")) (EVar "KindType")))))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceGradedMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "gmod")))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "ceGradedEnv" (TyCon "ClassEnv"))
 (DFunDef false "ceGradedEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "gmod"))) (EListLit (EVar "ceGradedIface"))))))
 (DTypeSig false "ceGradedKey" (TyCon "RegKey"))
@@ -59415,7 +59474,7 @@ isTyAuth _ = False
 (DTypeSig false "ceFunctorMethod" (TyCon "IfaceMethod"))
 (DFunDef false "ceFunctorMethod" () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "fmap"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EApp (EApp (EVar "TyApp") (EApp (EVar "TyVar") (ELit (LString "f")))) (EApp (EVar "TyVar") (ELit (LString "a")))))) (EVar "None")) (EVar "None")))
 (DTypeSig false "ceFunctorIface" (TyCon "Decl"))
-(DFunDef false "ceFunctorIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Functor"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceFunctorMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "fmod")))))))
+(DFunDef false "ceFunctorIface" () (ERecordCreate "DInterface" ((fa "pub" (EVar "True")) (fa "def" (EVar "False")) (fa "name" (ELit (LString "Functor"))) (fa "typarams" (EListLit (ELit (LString "f")))) (fa "typaramKinds" (EListLit (EVar "None"))) (fa "supers" (EListLit)) (fa "methods" (EListLit (EVar "ceFunctorMethod"))) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (ELit (LString "fmod")))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "ceFunctorEnv" (TyCon "ClassEnv"))
 (DFunDef false "ceFunctorEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "fmod"))) (EListLit (EVar "ceFunctorIface"))))))
 (DTypeSig false "ceFunctorKey" (TyCon "RegKey"))
@@ -60013,13 +60072,22 @@ isTyAuth _ = False
 (DTypeSig false "typeMismatchReportRest" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "typeMismatchReportRest" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentDoOrigin")) (arm (PCon "Some" (PVar "doLoc")) () (EApp (EApp (EApp (EVar "typeMismatchInDo") (EVar "a")) (EVar "b")) (EVar "doLoc"))) (arm (PCon "None") () (EMatch (EApp (EVar "firstTupleCallHint") (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "sameSpellingHint") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))))
 (DTypeSig false "sameSpellingHint" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "sameSpellingHint" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "ppMono") (EVar "a")) (EApp (EVar "ppMono") (EVar "b"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "firstIdConflict") (EVar "a")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sameSpellingHint" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "ppMono") (EVar "a")) (EApp (EVar "ppMono") (EVar "b"))) (EApp (EApp (EMethodRef "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "headIdConflict") (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "firstIdConflict") (EVar "a")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "idConflictHelp" (TyFun (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin")) (TyCon "String")))
-(DFunDef false "idConflictHelp" ((PTuple (PVar "name") (PVar "o1") (PVar "o2"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "these are two DIFFERENT types that share the name '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "': one comes from "))) (EApp (EMethodRef "display") (EApp (EVar "originPhrase") (EVar "o1")))) (ELit (LString ", the other from "))) (EApp (EMethodRef "display") (EApp (EVar "originPhrase") (EVar "o2")))) (ELit (LString " — import the one you mean rather than declaring a second type of the same name"))))
+(DFunDef false "idConflictHelp" ((PTuple (PVar "name") (PVar "o1") (PVar "o2"))) (EBlock (DoLet false false (PVar "remedy") (EIf (EBinOp "||" (EApp (EVar "isPreludeOrigin") (EVar "o1")) (EApp (EVar "isPreludeOrigin") (EVar "o2"))) (ELit (LString "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects")) (ELit (LString "import the one you mean rather than declaring a second type of the same name")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "these are two DIFFERENT types that share the name '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "': one comes from "))) (EApp (EMethodRef "display") (EApp (EVar "originPhrase") (EVar "o1")))) (ELit (LString ", the other from "))) (EApp (EMethodRef "display") (EApp (EVar "originPhrase") (EVar "o2")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "remedy"))) (ELit (LString ""))))))
+(DTypeSig false "isPreludeOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))
+(DFunDef false "isPreludeOrigin" ((PCon "OriginModule" (PVar "m"))) (EBinOp "==" (EVar "m") (ELit (LString "core"))))
+(DFunDef false "isPreludeOrigin" (PWild) (EVar "False"))
 (DTypeSig false "originPhrase" (TyFun (TyCon "TyConOrigin") (TyCon "String")))
+(DFunDef false "originPhrase" ((PCon "OriginModule" (PLit (LString "core")))) (ELit (LString "the prelude")))
+(DFunDef false "originPhrase" ((PCon "OriginModule" (PLit (LString "__user__")))) (ELit (LString "this program")))
 (DFunDef false "originPhrase" ((PCon "OriginModule" (PVar "m"))) (EBinOp "++" (EBinOp "++" (ELit (LString "module '")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "'"))))
 (DFunDef false "originPhrase" ((PCon "OriginBuiltin")) (ELit (LString "the language itself")))
 (DFunDef false "originPhrase" ((PCon "OriginUnresolved")) (ELit (LString "an unknown module")))
+(DTypeSig false "headIdConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
+(DFunDef false "headIdConflict" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "spineHead") (EVar "a")) (EApp (EVar "spineHead") (EVar "b"))) (arm (PTuple (PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2")))) (EApp (EVar "Some") (ETuple (EVar "n1") (EVar "o1") (EVar "o2"))) (EVar "None"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "spineHead" (TyFun (TyCon "Mono") (TyCon "Mono")))
+(DFunDef false "spineHead" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "f") PWild) () (EApp (EVar "spineHead") (EVar "f"))) (arm (PVar "other") () (EVar "other"))))
 (DTypeSig false "firstIdConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
 (DFunDef false "firstIdConflict" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))) (arm (PTuple (PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2")))) (EApp (EVar "Some") (ETuple (EVar "n1") (EVar "o1") (EVar "o2"))) (EVar "None"))) (arm (PTuple (PCon "TApp" (PVar "f1") (PVar "x1")) (PCon "TApp" (PVar "f2") (PVar "x2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "f1")) (EVar "f2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "x1")) (EVar "x2")))) (arm (PTuple (PCon "TFun" (PVar "d1") PWild (PVar "r1")) (PCon "TFun" (PVar "d2") PWild (PVar "r2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "r1")) (EVar "r2")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Loc") (TyCon "Unit")))))
@@ -65052,7 +65120,7 @@ isTyAuth _ = False
 (DTypeSig false "scopeGivenProbe" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Bool"))))
 (DFunDef false "scopeGivenProbe" (PWild) (EBlock (DoLet false false (PVar "savedGraph") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false (PVar "store") (EApp (EVar "currentScopeStore") (ELit LUnit))) (DoLet false false (PVar "root") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EVar "None")) (ELit (LInt 0))) (ELit (LString "given-probe"))) (EVar "ModuleOwner"))) (DoLet false false (PVar "owner") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "owner"))))) (DoLet false false (PVar "sibling") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EVar "store")) (EApp (EVar "Some") (EVar "root"))) (ELit (LInt 1))) (ELit (LString "given-probe"))) (EApp (EVar "BindingOwner") (ELit (LString "sibling"))))) (DoLet false false (PVar "iface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "PairGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "args") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EListLit (ELit (LInt 41))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 0))))) (DoLet false false (PVar "exact") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "unknown") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EVar "PSArgsUnknown"))))) (DoLet false false (PVar "truncated") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false (PVar "witnessIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "WitnessGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "witnessSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "witnessIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int")))))) (fa "psBoundIds" (EListLit (ELit (LInt 73))))))) (DoLet false false (PVar "witnessRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "witnessIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "witnessSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 1))))) (DoLet false false (PVar "compatibleIface") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "CompatibleGiven"))) (fa "irOrigin" (EApp (EVar "OriginModule") (ELit (LString "given-probe"))))))) (DoLet false false (PVar "compatibleSlot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "compatibleIface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit (ELit (LInt 89))))))) (DoLet false false (PVar "compatibleRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "compatibleIface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EListLit (EApp (EVar "tconBuiltin") (ELit (LString "Int"))))))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "compatibleSlot")) (EApp (EApp (EVar "Scopes.binderAt") (EVar "owner")) (ELit (LInt 2))))) (DoLet false false (PVar "givens") (EApp (EVar "givensForScope") (EVar "owner"))) (DoLet false false (PVar "result") (EListLit (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "exact")) (EVar "owner")) (EVar "givens")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "exact")) (EVar "sibling")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "truncated")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "GSImplRequires")) (ELit (LInt 73))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "GSImplRequires")) (ELit (LInt 74))) (EVar "witnessRequest")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isSemanticGivenAnswer") (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "exact")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EApp (EVar "firstPredForEnclAt") (EVar "GSPredicateOnly")) (ELit (LInt 41))) (EVar "unknown")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EApp (EVar "firstPredForEnclResidual") (ELit (LString "PairGiven"))) (EVar "args")) (EVar "owner")) (EVar "givens"))) (EApp (EVar "isLegacyPredicateAnswer") (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "compatibleRequest")) (EVar "owner")) (EVar "givens"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EVar "savedGraph"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EVar "result"))))
 (DTypeSig false "methodRowTestIface" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))
-(DFunDef false "methodRowTestIface" ((PVar "moduleId") (PVar "name") (PVar "typarams") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "False")) (fa "def" (EVar "False")) (fa "name" (EVar "name")) (fa "typarams" (EVar "typarams")) (fa "typaramKinds" (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "typarams"))) (fa "supers" (EListLit)) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "moduleId"))))))
+(DFunDef false "methodRowTestIface" ((PVar "moduleId") (PVar "name") (PVar "typarams") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "False")) (fa "def" (EVar "False")) (fa "name" (EVar "name")) (fa "typarams" (EVar "typarams")) (fa "typaramKinds" (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "None"))) (EVar "typarams"))) (fa "supers" (EListLit)) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EApp (EVar "OriginModule") (EVar "moduleId"))) (fa "ifaceNameLoc" (EVar "None")))))
 (DTypeSig false "methodRowTestConstraint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint")))))
 (DFunDef false "methodRowTestConstraint" ((PVar "moduleId") (PVar "name") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "name")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EApp (EVar "OriginModule") (EVar "moduleId"))))))
 (DTypeSig false "methodRowTestFoldMapDecl" (TyCon "Decl"))

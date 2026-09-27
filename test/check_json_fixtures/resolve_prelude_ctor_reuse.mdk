@@ -1,0 +1,2 @@
+data Result = Ok Int | Oops
+main = 0

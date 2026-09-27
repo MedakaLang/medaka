@@ -21,7 +21,7 @@ import frontend.ast.{
   PropParam,
   ImplMethod(..),
   Ty(..),
-  TyConOrigin,
+  TyConOrigin(..),
   sameTyConHead,
   Variant(..),
   Field(..),
@@ -326,16 +326,18 @@ genForType ge env subst depth (TyApp (TyCon { tyConName = "Array" }) t) =
         depth
         t
         (randIntRange 0 (listLenBound (genEnvTyDefs ge) depth t))))
-genForType ge env subst depth (TyApp (TyCon { tyConName = "Option" }) t) =
-  if randBoolL () then
-    VCon "None" []
-  else
-    VCon "Some" [genForType ge env subst depth t]
-genForType ge env subst depth (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) =
-  if randBoolL () then
-    VCon "Ok" [genForType ge env subst depth a]
-  else
-    VCon "Err" [genForType ge env subst depth e]
+genForType ge env subst depth (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
+  | not (programModuleOrigin o) =
+    if randBoolL () then
+      VCon "None" []
+    else
+      VCon "Some" [genForType ge env subst depth t]
+genForType ge env subst depth (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
+  | not (programModuleOrigin o) =
+    if randBoolL () then
+      VCon "Ok" [genForType ge env subst depth a]
+    else
+      VCon "Err" [genForType ge env subst depth e]
 genForType ge env subst depth (TyTuple ts) =
   VTuple (genTuple ge env subst depth ts)
 genForType ge env subst depth ty = match userArbitrary ge env ty
@@ -356,7 +358,7 @@ genEnvTyDefs (GenEnv tydefs _ _ _) = tydefs
 unusableArbAt : GenEnv -> Ty -> Option String
 unusableArbAt (GenEnv _ _ unusable _) ty = match tyHeadIdentity ty
   Some (n, o) =>
-    if contains n builtinGenHeads
+    if builtinGenHead n o
       || isEmptyL (filterList (sameHeadAs n o) unusable) then
       None
     else
@@ -885,6 +887,16 @@ unexpandedAlias tydefs aliases ty = match tySpine ty
 -- `randomInt`/`randomBool` externs, which draw from the SAME ref the program
 -- under test does: that both perturbs the program's own stream and makes
 -- `--seed` describe nothing, since `seedPropRng` reseeds the private ref alone.
+-- A head the runner draws itself: one of [builtinGenHeads], and not a
+-- program's own type that shares the name (a program may declare its own
+-- `Option` or `Result`, #3465; it is drawn structurally, like any user type).
+builtinGenHead : String -> TyConOrigin -> Bool
+builtinGenHead n o = contains n builtinGenHeads && not (programModuleOrigin o)
+
+programModuleOrigin : TyConOrigin -> Bool
+programModuleOrigin (OriginModule m) = m /= "core"
+programModuleOrigin _ = False
+
 builtinGenHeads : List String
 builtinGenHeads = [
   "Int",
@@ -922,7 +934,7 @@ builtinGenHeads = [
 -- more than one candidate.
 userArbitrary : GenEnv -> List (String, Value e) -> Ty -> <e> Option (Value e)
 userArbitrary (GenEnv _ arbs _ _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
-  if contains n builtinGenHeads then
+  if builtinGenHead n o then
     None
   else match arbImplKeyFor arbs n o
     Some route => match lookupAssoc "arbitrary" evalEnv

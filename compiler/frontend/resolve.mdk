@@ -2484,8 +2484,10 @@ externWithBodyErrors externs (_ :: rest) = externWithBodyErrors externs rest
 -- (`tyOriginScope`), so only a builtin head, which no declaration defines,
 -- and a second declaration in the program itself clash.  Constructors and
 -- interfaces are still reserved against the prelude: a constructor is keyed
--- by its spelling downstream (#3471) and an interface's methods collide with
--- the prelude's.  Each report is located at the declaration's name.
+-- by its spelling downstream (#3471), and shadowing covers types only (an
+-- interface is out of #3465's scope).  Each report is located at the
+-- declaration's name; a constructor's report at its type's name, since a
+-- variant carries no span of its own.
 duplicateErrors : List Decl -> List Decl -> List ResError
 duplicateErrors preludeDecls prog =
   let seed = not (programIsCore prog)
@@ -2520,10 +2522,7 @@ reservedClashes kind reserved named =
     named
 
 -- Every second declaration of a name the program declares twice.
-ownDups : String ->
-  List (String, Option Loc) ->
-  OrdMap Unit ->
-  List ResError
+ownDups : String -> List (String, Option Loc) -> OrdMap Unit -> List ResError
 ownDups _ [] _ = []
 ownDups kind ((n, l) :: rest) seen
   | omHasKey n seen = DuplicateDefinition kind n l :: ownDups kind rest seen
@@ -2531,9 +2530,7 @@ ownDups kind ((n, l) :: rest) seen
 
 -- The names [names] extracts from each declaration, each at that
 -- declaration's name span (an attribute's wrapped declaration included).
-namedLocs : (List Decl -> List String) ->
-  List Decl ->
-  List (String, Option Loc)
+namedLocs : (List Decl -> List String) -> List Decl -> List (String, Option Loc)
 namedLocs names decls =
   flatMap (d => map (n => (n, declNameLoc d)) (names [d])) decls
 
@@ -2805,7 +2802,7 @@ ppResError (DuplicateDefinition "built-in constructor" n _) =
 ppResError (DuplicateDefinition "prelude constructor" n _) =
   "'\{n}' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name"
 ppResError (DuplicateDefinition "prelude interface" n _) =
-  "'\{n}' is an interface of the prelude: a program cannot declare an interface of that name, since its methods would collide with the prelude's. Rename the interface"
+  "'\{n}' is an interface of the prelude: a program's own interface cannot share a prelude interface's name (a type may; an interface does not shadow the prelude's). Rename the interface"
 ppResError (DuplicateDefinition k n _) = "Duplicate \{k}: \{n}"
 ppResError (UnknownInterface n _) = "Unknown interface: " ++ n
 ppResError (MethodNotInInterface m i _) =
