@@ -1408,7 +1408,7 @@ methodPrerequisiteView prerequisite = (
 methodOutcomeView : MethodReturnTraceEntry -> Option MethodOutcomeView
 methodOutcomeView entry = match entry.mrtOutcome
   Some (Solved (GivenEvidence binder)) => Some (MOVGiven binder)
-  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites)) =>
+  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites _)) =>
     Some
       (MOVInstance
         identity

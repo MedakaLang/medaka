@@ -67,9 +67,13 @@ faithfulSexpMode = SexpMode { faithfulRoutes = True }
 export
 routeSexp : SexpMode -> Route -> String
 routeSexp _ RNone = "RNone"
-routeSexp m (RKey k ds) =
+routeSexp m (RKey k ds sups) =
   if m.faithfulRoutes then
-    node "RKey" [escStr k, slist (map (routeSexp m) ds)]
+    node "RKey" [
+      escStr k,
+      slist (map (routeSexp m) ds),
+      slist (map (routeSexp m) sups),
+    ]
   else
     node "RKey" [escStr k]
 routeSexp _ (RDict d) = node "RDict" [escStr d]
@@ -90,6 +94,8 @@ routeSexp m (RLocal s ds) =
   else
     node "RLocal" [escStr s]
 routeSexp _ (RScalar s) = node "RScalar" [escStr s]
+routeSexp m (RProj r path) =
+  node "RProj" (routeSexp m r :: map intToString path)
 
 -- ── CExpr ─────────────────────────────────────────────────────────────────────
 

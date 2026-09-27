@@ -196,7 +196,13 @@ import types.repr.{
   tupleTagArityGo,
   wrapIf,
 }
-import types.superclass.{SuperNode(..), lookupPos, mapAll, superClosure}
+import types.superclass.{
+  SuperNode(..),
+  lookupPos,
+  mapAll,
+  superClosure,
+  superIfaceRef,
+}
 import types.effect_domain.{
   canonParam,
   subTopOf,
@@ -299,6 +305,7 @@ import types.evidence.{
   RequestInstanceId(..),
   ScopeId(..),
   SolverEvidence(..),
+  SuperEvidence(..),
 }
 import types.scopes.{
   DefaultBodyIdentity(..),
@@ -472,6 +479,7 @@ import types.disposition.{
   InstanceShape(..),
   buildDispositionTableWithShapes,
   installDispositions,
+  instanceReqParam,
   validateDispositionTable,
 }
 
@@ -7829,7 +7837,6 @@ data DriverState = DriverState {
   dictEligibleSetRef : Ref (OrdMap Unit),
   mangledShadowMapRef : Ref (List (String, String)),
   mangledFunDefsPresentRef : Ref Bool,
-  userIfaceNamesRef : Ref (OrdMap Unit),
   coherenceUserDecls : Ref (List Decl),
   stdlibOwnedModsRef : Ref (OrdMap Unit),
   flatEntryIsStdlibRef : Ref Bool,
@@ -7872,7 +7879,6 @@ freshDriverState _ = DriverState {
   dictEligibleSetRef = Ref omEmpty,
   mangledShadowMapRef = Ref [],
   mangledFunDefsPresentRef = Ref False,
-  userIfaceNamesRef = Ref omEmpty,
   coherenceUserDecls = Ref [],
   stdlibOwnedModsRef = Ref omEmpty,
   flatEntryIsStdlibRef = Ref False,
@@ -9937,6 +9943,9 @@ data AssumAnswer =
   | SemanticGiven SolverEvidence
   | LegacyScalar EvidenceBinderId
   | LegacyPredicate EvidenceBinderId
+  -- a projection of the given at the binder along a direct-super path, reached
+  -- through a rung that does not qualify as semantic evidence
+  | LegacyProjected EvidenceBinderId (List Int)
 
 assumptionTraceEnabled : Ref Bool
 assumptionTraceEnabled = Ref False
@@ -10127,35 +10136,39 @@ obligationPredicateMonos o = match o.oPayload
 
 routeOutcomeKind : Route -> EvidenceOutcomeKind
 routeOutcomeKind RNone = EOKNone
-routeOutcomeKind (RKey _ _) = EOKInstance
+routeOutcomeKind (RKey _ _ _) = EOKInstance
 routeOutcomeKind (RDict _) = EOKGiven
 routeOutcomeKind (RDictFwd _) = EOKGiven
 routeOutcomeKind (RLocal _ _) = EOKLocal
 routeOutcomeKind (RScalar _) = EOKScalar
+routeOutcomeKind (RProj r _) = routeOutcomeKind r
 
 routeGivenBinder : Route -> Option String
 routeGivenBinder (RDict n) = Some n
 routeGivenBinder (RDictFwd n) = Some n
+routeGivenBinder (RProj r _) = routeGivenBinder r
 routeGivenBinder _ = None
 
 routeInstanceKey : Route -> Option String
-routeInstanceKey (RKey k _) = Some k
+routeInstanceKey (RKey k _ _) = Some k
 routeInstanceKey _ = None
 
--- The nested route list an `RKey`/`RLocal` packs at this slot: the flattened super
--- slots and packed `requires`, exactly as `entailInst` produces them.
+-- The nested route list an `RKey`/`RLocal` packs at this slot: the packed
+-- `requires`, exactly as `entailInst` produces them.
 routePrerequisiteRoutes : Route -> List Route
-routePrerequisiteRoutes (RKey _ rs) = rs
+routePrerequisiteRoutes (RKey _ rs _) = rs
 routePrerequisiteRoutes (RLocal _ rs) = rs
 routePrerequisiteRoutes _ = []
 
 renderRouteIdentity : Route -> String
 renderRouteIdentity RNone = "RNone"
-renderRouteIdentity (RKey k _) = "RKey " ++ k
+renderRouteIdentity (RKey k _ _) = "RKey " ++ k
 renderRouteIdentity (RDict n) = "RDict " ++ n
 renderRouteIdentity (RDictFwd n) = "RDictFwd " ++ n
 renderRouteIdentity (RLocal n _) = "RLocal " ++ n
 renderRouteIdentity (RScalar n) = "RScalar " ++ n
+renderRouteIdentity (RProj r path) =
+  "RProj (\{renderRouteIdentity r}) \{joinWith "." (map intToString path)}"
 
 noteEvidenceObservation : Obligation -> Unit
 noteEvidenceObservation o =
@@ -10218,6 +10231,7 @@ assumAnswerBinder : AssumAnswer -> EvidenceBinderId
 assumAnswerBinder (SemanticGiven evidence) = givenEvidenceBinder evidence
 assumAnswerBinder (LegacyScalar binder) = binder
 assumAnswerBinder (LegacyPredicate binder) = binder
+assumAnswerBinder (LegacyProjected binder _) = binder
 
 -- The evidence an assumption answer denotes.  A legacy answer has no semantic evidence
 -- beyond the binder it routes through.
@@ -10225,6 +10239,8 @@ assumAnswerEvidence : AssumAnswer -> SolverEvidence
 assumAnswerEvidence (SemanticGiven evidence) = evidence
 assumAnswerEvidence (LegacyScalar binder) = GivenEvidence binder
 assumAnswerEvidence (LegacyPredicate binder) = GivenEvidence binder
+assumAnswerEvidence (LegacyProjected binder path) =
+  SuperclassEvidence binder path
 
 assumAnswerKind : AssumAnswer -> AssumptionTraceKind
 assumAnswerKind (SemanticGiven (SuperclassEvidence _ _)) =
@@ -10232,18 +10248,69 @@ assumAnswerKind (SemanticGiven (SuperclassEvidence _ _)) =
 assumAnswerKind (SemanticGiven _) = ATDirectPredicate
 assumAnswerKind (LegacyScalar _) = ATLegacyScalar
 assumAnswerKind (LegacyPredicate _) = ATLegacyPredicate
+assumAnswerKind (LegacyProjected _ _) = ATLegacyPredicate
 
 -- The dict parameter that carries given-rooted evidence.  A superclass projection of a
--- given lowers to the parameter the flat calling convention assigns that super: the
--- projected given's own binder, registered beside it.  The projection is never
--- selected again; this only names where its value already is.
+-- given reads its parent's parameter: the super is a field of that dictionary
+-- (`givenEvidenceRoute`), never selected again.
 givenEvidenceBinder : SolverEvidence -> EvidenceBinderId
 givenEvidenceBinder (GivenEvidence binder) = binder
-givenEvidenceBinder (SuperclassEvidence parent path) =
-  match projectedGivenOf parent path
-    Some g => g.geBinder
-    None => panic "superclass evidence names no registered projection"
+givenEvidenceBinder (SuperclassEvidence parent _) = parent
 givenEvidenceBinder _ = panic "non-given assumption evidence"
+
+-- The route an assumption answer lowers to, reading its binder's parameter as
+-- [paramRoute] renders it: a projection answer projects the parameter's dictionary
+-- onto the super.  A scalar answer (a tyvar-keyed rung, which cannot say which
+-- predicate it answered) whose binder's own predicate is a SUB-interface of the
+-- goal's [goalIface] is projected the same way, along the first superclass path from
+-- the binder's interface to the goal's.
+assumAnswerRoute : AssumAnswer ->
+  Option IfaceRef ->
+  ScopeId ->
+  (String -> Route) ->
+  Route
+assumAnswerRoute (SemanticGiven (SuperclassEvidence parent path)) _ _ paramRoute =
+  RProj (paramRoute (renderEvidenceBinder parent)) path
+assumAnswerRoute (LegacyProjected parent path) _ _ paramRoute =
+  RProj (paramRoute (renderEvidenceBinder parent)) path
+assumAnswerRoute (LegacyScalar binder) (Some goalIface) useScope paramRoute =
+  let base = paramRoute (renderEvidenceBinder binder)
+  match scalarGivenProjection binder goalIface useScope
+    Some path => RProj base path
+    None => base
+assumAnswerRoute answer _ _ paramRoute =
+  paramRoute (renderEvidenceBinder (assumAnswerBinder answer))
+
+-- The direct-super path from the predicate [binder] declares to [goalIface], when the
+-- two differ.  Matched by spelling: a goal from a bare-named producer carries no
+-- origin, and within one interface's superclass closure a spelling names one node.
+scalarGivenProjection : EvidenceBinderId ->
+  IfaceRef ->
+  ScopeId ->
+  Option (List Int)
+scalarGivenProjection binder goalIface useScope =
+  match directGivenIfaceOf binder (givensForScope useScope)
+    None => None
+    Some declared =>
+      if declared.irName == goalIface.irName then
+        None
+      else
+        map
+          (n => drop 1 n.superPath)
+          (find
+            (n => n.superIface.irName == goalIface.irName)
+            (superClosure
+              superLookup
+              (_ _ _ => Some ())
+              (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
+              [(declared, ())]))
+
+directGivenIfaceOf : EvidenceBinderId -> List GivenEntry -> Option IfaceRef
+directGivenIfaceOf _ [] = None
+directGivenIfaceOf binder (g :: rest)
+  | g.geBinder == binder && g.geProvenance == DirectGiven =
+    Some g.geSlot.psIface
+  | otherwise = directGivenIfaceOf binder rest
 
 projectedGivenOf : EvidenceBinderId -> List Int -> Option GivenEntry
 projectedGivenOf parent path =
@@ -10261,9 +10328,6 @@ noteAssumption scope answer =
           atKind = assumAnswerKind answer,
         }
         :: assumptionTraceEntries.value
-
-assumAnswerName : AssumAnswer -> String
-assumAnswerName answer = renderEvidenceBinder (assumAnswerBinder answer)
 
 captureScope : Unit -> ScopeId
 captureScope _ = Scopes.captureScopeCursor perRun.value.currentScope.value
@@ -10705,7 +10769,7 @@ methodReturnMemoIface iface =
 
 methodReturnMemoOutcome : SolverOutcome -> String
 methodReturnMemoOutcome (Solved (GivenEvidence _)) = "given"
-methodReturnMemoOutcome (Solved (InstanceEvidence _ _ _)) = "instance"
+methodReturnMemoOutcome (Solved (InstanceEvidence _ _ _ _)) = "instance"
 methodReturnMemoOutcome (Solved (SuperclassEvidence _ _)) = "superclass"
 methodReturnMemoOutcome (Deferred _ _) = "deferred"
 methodReturnMemoOutcome (Insoluble _ MissingInstance) = "missing"
@@ -10713,7 +10777,7 @@ methodReturnMemoOutcome (Insoluble _ (AmbiguousInstances _)) = "ambiguous"
 methodReturnMemoOutcome (Insoluble _ (ResolutionCycle _)) = "cycle"
 
 methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
-methodReturnMemoPrerequisites (Solved (InstanceEvidence _ _ prerequisites)) =
+methodReturnMemoPrerequisites (Solved (InstanceEvidence _ _ prerequisites _)) =
   map
     (prerequisite => (
       methodReturnMemoIface prerequisite.prerequisiteInterface,
@@ -10730,12 +10794,19 @@ methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
 
 methodReturnMemoRoute : Route -> String
 methodReturnMemoRoute RNone = "none"
-methodReturnMemoRoute (RKey key prerequisites) =
-  "key:\{key}[\{joinWith "," (map methodReturnMemoRoute prerequisites)}]"
+methodReturnMemoRoute (RKey key prerequisites supers) =
+  "key:\{key}[\{joinWith "," (map methodReturnMemoRoute prerequisites)}]\{methodReturnMemoSupers supers}"
 methodReturnMemoRoute (RDict name) = "given:\{name}"
 methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
 methodReturnMemoRoute (RLocal name _) = "local:\{name}"
 methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
+methodReturnMemoRoute (RProj r path) =
+  "projected:\{methodReturnMemoRoute r}.\{joinWith "." (map intToString path)}"
+
+methodReturnMemoSupers : List Route -> String
+methodReturnMemoSupers [] = ""
+methodReturnMemoSupers supers =
+  "{\{joinWith "," (map methodReturnMemoRoute supers)}}"
 
 -- Test-only seam: the names a default body's evidence binders render to.  Its
 -- method-level slots are dictionary parameters of the lowered body; its receiver is
@@ -13792,7 +13863,7 @@ declaredEffectsAt inst declared =
 
 recordDeclaredBindingCall : CDeclared -> List (Int, Mono) -> Unit
 recordDeclaredBindingCall dc subst =
-  let expanded = expandSupersVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
+  let expanded = dedupSlotVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
   recordCallObligations
     (map fst expanded)
     (constraintMonosOf (map (pair => (fst pair).csId) expanded) subst)
@@ -15426,7 +15497,7 @@ inferDeclaredDictAt ev dc inst =
   -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
   -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
   -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
-  let expandedV = expandSupersVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
+  let expandedV = dedupSlotVecs (zipSlotVecs dc.cdSlots dc.cdArgs)
   let expanded = map fst expandedV
   let ids = map (s => s.csId) expanded
   let monos = constraintMonosOf ids (snd inst)
@@ -15603,43 +15674,23 @@ constraintMonosOf (id :: rest) subst = match lookupAssocI id subst
   Some m => m :: constraintMonosOf rest subst
   None => constraintMonosOf rest subst
 
--- #994 (B-3-b): THE write op for the per-run fn-constraint table PAIR, and its
--- cross-module twin below.  `funConstraintsRef` and `funConstraintIfacesRef` are
--- slot-parallel per entry and index-parallel across entries; every whole-table
--- replacement of one owes the matching replacement of the other, and until this op
--- existed that pairing was a convention each site re-established by hand.
---
--- 🚨 It takes the two tables as ONE tuple — the shape `expandSupersCross` already
--- returns — because a "write both members simultaneously" fusion is FORBIDDEN for these
--- tables.  The id expansion READS the pre-expansion iface table (`expandSupersEntry`
--- pairs ids with ifaces before closing over supers), so expanding ids against an
--- ALREADY-expanded iface list appends every super slot a SECOND time and changes dict
--- ARITY: the define side (`dictArityOf`) would bind more dict params than the call side
--- (`recRoutes`/`recRoute`/`inferDictAtFound`) applies.  A pure function that consumes
--- both tables and returns both results makes both reads happen before either write, so
--- the ordering constraint is discharged by the TYPE rather than by statement order in a
--- caller that a later edit can reshuffle.
-expandFunPredicateSlots : List (String, List PredicateSlot) ->
-  List (String, List PredicateSlot)
-expandFunPredicateSlots table = map expandPredicateSlotEntry table
+-- One dict slot per distinct declared predicate (`dedupSlotVecs`'s key), in
+-- declaration order.  A superinterface of a declared predicate takes no slot of its
+-- own: the dictionary a slot receives carries its supers, and a superclass method is
+-- answered by projecting that dictionary (the `ProjectedGiven` givens
+-- `registerFunPredGiven` registers beside each slot).  Runs at ONE finalization point
+-- (after inference, before realizeRecDictApps/dictPass), so the define side
+-- (`dictArityOf`) and every call side (`dedupSlotVecs` over the callee's declared
+-- slots) see the same slot sequence.
+dedupPredicateSlotsTable : Unit -> Unit
+dedupPredicateSlotsTable _ =
+  perRun.value.funPredicateSlotsRef :=
+    map dedupPredicateSlotEntry perRun.value.funPredicateSlotsRef.value
 
-expandPredicateSlotEntry : (String, List PredicateSlot) ->
+dedupPredicateSlotEntry : (String, List PredicateSlot) ->
   (String, List PredicateSlot)
-expandPredicateSlotEntry (name, slots) = (name, expandPredicateSlots slots)
-
-expandPredicateSlots : List PredicateSlot -> List PredicateSlot
-expandPredicateSlots slots =
-  let idx = predicateSlotIndex slots omEmpty
-  map
-    (predicateSlotFromExpanded idx)
-    (expandSupersVecs (map predicateSlotView slots))
-
-predicateSlotIndex : List PredicateSlot ->
-  OrdMap PredicateSlot ->
-  OrdMap PredicateSlot
-predicateSlotIndex [] acc = acc
-predicateSlotIndex (s :: rest) acc =
-  predicateSlotIndex rest (omInsert (cslotVecKey (predicateSlotView s)) s acc)
+dedupPredicateSlotEntry (name, slots) =
+  (name, dedupBy (s => cslotVecKey (predicateSlotView s)) slots)
 
 predicateSlotFromExpanded : OrdMap PredicateSlot ->
   (CSlot, List Mono) ->
@@ -15653,93 +15704,6 @@ predicateSlotFromExpanded idx pair = match omLookup (cslotVecKey pair) idx
       psArgs = PSArgsKnown args,
       psBoundIds = dedupI (slot.csId :: flatMap monoTyvarIds args),
     }
-
--- ── WS-1b: superclass-evidence flatten ──────────────────────────────────
--- A `=>`-constrained fn whose body calls a SUPERCLASS method (e.g. `build : Sub a =>`
--- calls `mk`, a Sup method, where `Sub a requires Sup a`) needs an honest super-dict
--- slot threaded through.  Inference registers only the DECLARED constraints in
--- funConstraintsRef/funConstraintIfacesRef; this pass APPENDS, per entry, one extra
--- slot for each (transitive) superinterface, mapping the super's decl param-names to
--- the constraint's instantiated tyvar ids positionally (`Sub a`/`Sup a` share `a`, so
--- the super id == the sub id).  Appended AFTER the declared slots so existing slot
--- indices are unchanged; deduped by (iface, id) within an entry.  Because the dict
--- VALUE is just a type tag (VDict "Widget"), the super slot's route is identical to
--- the sub slot's — no separate projection is needed; the slot just has to EXIST so the
--- call site applies a matching dict and the def binds a matching param.
---
--- Mutates the TABLE refs themselves at ONE finalization point (after inference, before
--- realizeRecDictApps/dictPass) so EVERY reader — define-side dictArityOf and call-side
--- recRoutes/recRoute/inferDictAtFound — sees identical expanded entries automatically.
--- Transitive: a fixpoint over the constraint set (the WS-4a acyclic-supers guard makes
--- it terminate), so `Top` reaches `Base` through `Mid` (chain3b).
---
--- #994 (B-3-b): the expansion itself is `expandSupersCross` — the SAME pure function the
--- cross-module snapshot uses — so the two forms cannot drift apart (they must stay in
--- lockstep or a cross-module constrained fn under-fills), and reading both tables as its
--- arguments is what keeps the old iface table visible to the id expansion.  See
--- `setFunConstraintTables` for why writing the two members simultaneously is forbidden.
-expandSupersTable : Unit -> Unit
-expandSupersTable _ =
-  perRun.value.funPredicateSlotsRef :=
-    expandFunPredicateSlots perRun.value.funPredicateSlotsRef.value
-
--- The appended super slots of a `=>` constraint list: the superclass closure
--- (`types/superclass.mdk`) of the declared slots, breadth-first, deduplicated by
--- `cslotVecKey` over the whole predicate so `(Ix a Char, Ix a Bool) => …` keeps two
--- slots and `(Shw a, Shw a) => …` keeps one.  Each slot carries the argument vector its
--- `requires` clause names (`requires Ix a b` off a `Sub a b` slot routes on
--- `Ix Int Char`, not `Ix Int`).  The define side (`dictArityOf`) and every call side
--- size from this one function, so they agree slot for slot.
-expandSupersVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
-expandSupersVecs declared =
-  map
-    slotOfSuperNode
-    (superClosure
-      userSuperLookup
-      slotSuperStep
-      slotNodeKey
-      (map (sv => ((fst sv).csIface, ((fst sv).csId, snd sv))) declared))
-
-slotOfSuperNode : SuperNode (Int, List Mono) -> (CSlot, List Mono)
-slotOfSuperNode n =
-  let (id, vec) = n.superPayload
-  (CSlot { csIface = n.superIface, csId = id }, vec)
-
-slotNodeKey : IfaceRef -> (Int, List Mono) -> String
-slotNodeKey iface (id, vec) =
-  cslotVecKey (CSlot { csIface = iface, csId = id }, vec)
-
--- Only a USER interface's supers become dict slots (WS-1b): prelude super chains are
--- dispatched by argument tag.  The gate asks a SPELLING question because
--- `userIfaceNamesRef` is a name set.
-userSuperLookup : IfaceRef -> Option (List String, List Super)
-userSuperLookup ir
-  | omHasKey ir.irName driverState.value.userIfaceNamesRef.value =
-    superLookup ir
-  | otherwise = None
-
--- One super of an (id, vector) slot.  A `requires` chain is over the sub-predicate's
--- type parameters, so the super keeps the sub's lead id (0 for a nullary super).  Its
--- vector maps the super's parameters positionally through the sub's vector; when the
--- sub has no complete vector, or a parameter does not resolve, the super gets `[]`
--- ("no vector recoverable") rather than a shorter-than-declared argument list.
-slotSuperStep : List String ->
-  (Int, List Mono) ->
-  Super ->
-  Option (Int, List Mono)
-slotSuperStep typarams (id, vec) (Super { superParams = params, ... })
-  | not (all (p => contains p typarams) params) = None
-  | otherwise =
-    let superId = if isEmptyL params then 0 else id
-    let superVec =
-      if listLen vec
-        == listLen
-          typarams then match mapAll (p => lookupPos p typarams vec) params
-        Some ms => ms
-        None => []
-      else
-        []
-    Some (superId, superVec)
 
 -- S-slot-key-vector (#1866): keyed on the WHOLE PREDICATE — slot AND argument vector — so
 -- the vector DOES participate in the arity decision.  `(Ix a Char, Ix a Bool) => …` is two
@@ -20612,7 +20576,7 @@ shadowStandaloneDictSlots slots args subst =
   if isEmptyL slots then
     emptyShadowDicts
   else
-    let expandedV = expandSupersVecs (zipSlotVecs slots args)
+    let expandedV = dedupSlotVecs (zipSlotVecs slots args)
     let expanded = map fst expandedV
     -- the ROUTE half stays a SPELLING, exactly as `inferDictAtFound`'s `pushDictApp`
     -- does — route words, not identities (see `dispHeadTab`).
@@ -24638,19 +24602,22 @@ exactReturnRoutes name encl scope isReturnPosition resolution = match (
     givenRoute isReturnPosition binder,
     [],
   )
-  (Solved (projection@(SuperclassEvidence _ _)), None) => (
-    givenRoute isReturnPosition (givenEvidenceBinder projection),
+  (Solved (SuperclassEvidence parent path), None) => (
+    RProj (givenRoute isReturnPosition parent) path,
     [],
   )
-  (Solved (InstanceEvidence _ _ prerequisites), Some row) => (
-    RKey (methodRouteKeyForRow name perRun.value.bodyImplEnvRef.value row) [],
+  (Solved (InstanceEvidence _ _ prerequisites _), Some row) => (
+    RKey
+      (methodRouteKeyForRow name perRun.value.bodyImplEnvRef.value row)
+      []
+      [],
     methodReturnEvidenceRoutes encl scope prerequisites,
   )
   (Deferred _ _, None) => match resolution.mrrFallbackTag
-    Some tag => (RKey tag [], [])
+    Some tag => (RKey tag [] [], [])
     None => (RNone, [])
   (Insoluble _ _, None) => match resolution.mrrFallbackTag
-    Some tag => (RKey tag [], [])
+    Some tag => (RKey tag [] [], [])
     None => (RNone, [])
   _ => panic "ordinary return outcome and selected row disagree"
 
@@ -24707,7 +24674,7 @@ resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin 
   ()
 
 numericReturnRoute : Route -> List Route -> Route
-numericReturnRoute (RKey key _) routes = RKey key routes
+numericReturnRoute (RKey key _ _) routes = RKey key routes []
 numericReturnRoute route _ = route
 
 -- Recover the FULL list of interface-type-parameter monos for a method occurrence,
@@ -25826,7 +25793,7 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
       tag
       operandMono
       [operandMono]
-    RKey key reqs
+    RKey key reqs []
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
@@ -25875,7 +25842,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
       Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
         let reqs = implDictRoutesForRow encl useScope goals row
         let key = methodRouteKeyForRow method env row
-        let route = RKey key reqs
+        let route = RKey key reqs []
         let _ =
           noteNumericPredicateTrace
             NPTArithmetic
@@ -25883,7 +25850,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
             useScope
             !goalSiteLoc
             (Some selectedIface)
-            (Some (RKey key []))
+            (Some (RKey key [] []))
             reqs
         route
       None =>
@@ -28546,16 +28513,6 @@ checkOneIfaceCycle ce cur done row =
       (pushTypeError "T-CYCLIC-SUPERINTERFACE")
       (ifaceDfsCycle ce cur done [row] row)
 
--- WS-1b: the user-interface name set (`userIfaceNamesRef`, which gates
--- super-expansion) still reads this bare-name collector.  A-3.5c stopped using it
--- for the CYCLE walk only; re-pointing that set at `CE` is not this unit's.
-collectIfaceNames : List Decl -> List String
-collectIfaceNames [] = []
-collectIfaceNames ((DInterface { name, ... }) :: rest) =
-  name :: collectIfaceNames rest
-collectIfaceNames ((DAttrib _ d) :: rest) = collectIfaceNames (d :: rest)
-collectIfaceNames (_ :: rest) = collectIfaceNames rest
-
 -- The `done`/`path` identity, rendered once.  `regKeyRender` is `RegKey`'s own
 -- collision-free renderer, so two same-spelled interfaces in unrelated modules
 -- get DIFFERENT set members — which is the whole point of the re-key.
@@ -30560,7 +30517,7 @@ resolveDictApps prog (app :: rest) =
 -- callback) so a nested element-position caller STRUCTURALLY cannot read [prog] or
 -- raise T-AMBIGUOUS-INSTANCE — the type forbids it, so a blanket RNone→RKey can never
 -- corrupt element-dict routing (the fear the three variants were "kept SEPARATE" for).
-data Undetermined = KeepNone | CountImpls (List Decl) String
+data Undetermined = KeepNone | CountImpls (List Decl) IfaceRef
 
 -- #156 S3b: the SiteKind-parametrized entailment core.  ONE `assum → inst → fallback`
 -- ladder that both the genuine return-position method resolver (`resolveSite`, EKReturn)
@@ -30691,7 +30648,11 @@ entail : String ->
 entail name m encl useScope kind = match entailAssum m encl name useScope kind
   Some answer =>
     let _ = noteAssumption useScope answer
-    let result = (entailAssumRoute (assumAnswerName answer) kind, [])
+    let result = (
+      assumAnswerRoute answer (goalIfaceOfKind name kind) useScope (dname =>
+        entailAssumRoute dname kind),
+      [],
+    )
     let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
     result
   None => match headTyconMono m
@@ -30804,6 +30765,16 @@ entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
 entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
   activeDictVarOfEncl request m encl useScope
 
+-- The interface of the predicate a goal of [kind] discharges, when the kind knows it.
+goalIfaceOfKind : String -> EntailKind -> Option IfaceRef
+goalIfaceOfKind _ (EKNestedTop iface _ _ _ _) =
+  if iface.irName == "" then None else Some iface
+goalIfaceOfKind _ (EKNumReturn predicate _ _ _) =
+  Some predicate.predicateInterface
+goalIfaceOfKind _ (EKPredicateOp _ _ predicate) =
+  Some predicate.predicateInterface
+goalIfaceOfKind name _ = admittedIfaceFor name
+
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumRoute dname (EKReturn _ isRp) =
   if isRp then RDictFwd dname else RDict dname
@@ -30838,28 +30809,28 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
       Some row =>
         let routeKey = methodRouteKeyForRow name env row
         let routes = implDictRoutesForRow encl useScope goals row
-        (RKey routeKey [], routes)
-      None => (RKey tag [], [])
+        (RKey routeKey [] [], routes)
+      None => (RKey tag [] [], [])
     -- A method without predicate-vector metadata retains the scalar result-head
     -- selection and substitution used by the compatibility path.
     None => match ieSelectRowByMethod env name [m]
       Some row =>
         let routeKey = methodRouteKeyForRow name env row
         let routes = legacyReturnReqRoutesForRow encl useScope m row
-        (RKey routeKey [], routes)
-      None => (RKey tag [], [])
+        (RKey routeKey [] [], routes)
+      None => (RKey tag [] [], [])
 entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env predicate.predicateInterface goals
     Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
-      let route = RKey (methodRouteKeyForRow name env row) []
+      let route = RKey (methodRouteKeyForRow name env row) [] []
       let routes = implDictRoutesForRow encl useScope goals row
       let _ =
         noteNumericEntailment kind useScope (Some selectedIface) route routes
       (route, routes)
     None =>
-      let route = RKey tag []
+      let route = RKey tag [] []
       let _ = noteNumericEntailment kind useScope None route []
       (route, [])
 -- The primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed,
@@ -30884,13 +30855,15 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ prevSize spent rest) =
   let goals = m :: rest
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env iface goals
-    Some row => (
+    Some (row@(ImplRow _ _ selectedIface _ _ _)) => (
       RKey
         (predicateRouteKeyForRow env row)
-        (argImplRequiresRoutesForRow encl useScope m goals prevSize spent row),
+        (argImplRequiresRoutesForRow encl useScope m goals prevSize spent row)
+        (superRoutesAt selectedIface encl useScope goals prevSize spent),
       [],
     )
-    None => (RKey tag [], [])
+    None =>
+      (RKey tag [] (superRoutesAt iface encl useScope goals prevSize spent), [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
@@ -30917,13 +30890,41 @@ entailInst name m encl useScope tag (EKArg fullMono) =
     else
       innerDefaultMethod name
   (
-    RKey routeKey [],
+    RKey routeKey [] [],
     argImplDictRoutesForEncl encl useScope dictName tag m goals,
   )
 entailInst name m encl useScope tag (EKOp isBinop _) =
   (stampOpRouteVal isBinop encl useScope name m tag, [])
 entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
   (stampPredicateOpRouteVal encl useScope name m tag predicate, [])
+
+-- A dictionary's super segment at the goal vector [goals]: one route per DIRECT
+-- super of [iface], in declaration order, each solved at that same goal by the whole
+-- ladder (DICT-SEMANTICS §2: supers are resolved per construction goal, `assum`
+-- before `inst`).  A super step keeps the goal's size, so it spends none of the
+-- `requires` fuel the chain carries; the declared super graph is acyclic (W1), so it
+-- cannot recur on its own.
+superRoutesAt : IfaceRef ->
+  String ->
+  ScopeId ->
+  List Mono ->
+  Int ->
+  Int ->
+  List Route
+superRoutesAt iface encl useScope goals prevSize spent =
+  map (superRouteAt encl useScope prevSize spent) (directSuperGoals iface goals)
+
+superRouteAt : String ->
+  ScopeId ->
+  Int ->
+  Int ->
+  (IfaceRef, Option (List Mono)) ->
+  Route
+superRouteAt encl useScope prevSize spent (superIface, superArgs) =
+  match superArgs
+    Some (g0 :: gs) =>
+      routeOfD superIface encl useScope KeepNone g0 gs prevSize spent
+    _ => RNone
 
 entailFallback : ScopeId -> EntailKind -> Route
 entailFallback _ (EKReturn _ _) = RNone
@@ -31020,7 +31021,7 @@ routesOfMonosTopV prog encl useScope monos ifaces [] =
   routesOfMonosTop prog encl useScope monos ifaces
 routesOfMonosTopV _ _ _ [] _ _ = []
 routesOfMonosTopV prog encl useScope (m :: rest) [] (_ :: vs) =
-  routeOf ifaceRefNone encl useScope (CountImpls prog "") m
+  routeOf ifaceRefNone encl useScope (CountImpls prog ifaceRefNone) m
     :: routesOfMonosTopV prog encl useScope rest [] vs
 routesOfMonosTopV prog encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
   topRouteV prog encl useScope iface m v
@@ -31044,8 +31045,8 @@ topRouteV : List Decl ->
   Route
 topRouteV prog encl useScope iface m goals = match vectorGoal iface goals
   Some (g0, gs) =>
-    routeOfD iface encl useScope (CountImpls prog iface.irName) g0 gs 0 0
-  None => routeOf iface encl useScope (CountImpls prog iface.irName) m
+    routeOfD iface encl useScope (CountImpls prog iface) g0 gs 0 0
+  None => routeOf iface encl useScope (CountImpls prog iface) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -31074,17 +31075,17 @@ routesOfMonosTop : List Decl ->
   List Route
 routesOfMonosTop _ _ _ [] _ = []
 routesOfMonosTop prog encl useScope (m :: rest) [] =
-  routeOf ifaceRefNone encl useScope (CountImpls prog "") m
+  routeOf ifaceRefNone encl useScope (CountImpls prog ifaceRefNone) m
     :: routesOfMonosTop prog encl useScope rest []
 routesOfMonosTop prog encl useScope (m :: rest) (iface :: ifacesRest) =
-  routeOf iface encl useScope (CountImpls prog iface.irName) m
+  routeOf iface encl useScope (CountImpls prog iface) m
     :: routesOfMonosTop prog encl useScope rest ifacesRest
 
 -- the undetermined-constraint resolution: count impls of [iface] in [prog].
-routeUndeterminedTop : List Decl -> ScopeId -> String -> Route
-routeUndeterminedTop prog scope iface
-  | iface == "" = RNone
-  | otherwise = match implHeadTagsForIface prog iface
+routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> Route
+routeUndeterminedTop prog scope ifaceRef
+  | ifaceRef.irName == "" = RNone
+  | otherwise = match implHeadTagsForIface prog ifaceRef.irName
     [] => RNone
     -- #1110: `tag` arrived as a bare `String` from `implHeadTagsForIface`, which
     -- projects an impl head through `headTyconTy` and DISCARDS the `Ty` that
@@ -31096,14 +31097,18 @@ routeUndeterminedTop prog scope iface
       RKey
         tag
         (argImplRequiresRoutes
-          (ifaceRefBare iface)
+          (ifaceRefBare ifaceRef.irName)
           ""
           scope
           (tconUnresolved tag)
           []
           0
           0)
-    _ => reportAmbiguousImpl iface
+        -- the goal is undetermined, so each super is too: answered by the same count
+        (map
+          ((superIface, _) => routeUndeterminedTop prog scope superIface)
+          (directSuperGoals ifaceRef []))
+    _ => reportAmbiguousImpl ifaceRef.irName
 
 reportAmbiguousImpl : String -> Route
 reportAmbiguousImpl iface =
@@ -31388,85 +31393,10 @@ argImplReqRoutes : String ->
   Int ->
   Int ->
   List Route
-argImplReqRoutes encl useScope subst reqs prevSize spent =
-  argExpandedImplReqRoutes
-    encl
-    useScope
-    subst
-    (expandImplRequires reqs)
-    prevSize
-    spent
-
-argExpandedImplReqRoutes : String ->
-  ScopeId ->
-  List (String, Mono) ->
-  List Require ->
-  Int ->
-  Int ->
-  List Route
-argExpandedImplReqRoutes _ _ _ [] _ _ = []
-argExpandedImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
+argImplReqRoutes _ _ _ [] _ _ = []
+argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
   argReqRoute rIface encl useScope subst rargs prevSize spent
-    :: argExpandedImplReqRoutes encl useScope subst rest prevSize spent
-
--- Impl prerequisites use the same flattened superclass representation as `=>`
--- constraints: declared predicates stay first (verbatim), then each transitive
--- superclass not already present gets its own dictionary slot, breadth-first.
--- Keeping this expansion in `Require` form gives routing, definition arity, and body
--- registration one shared slot sequence.
-expandImplRequires : List Require -> List Require
-expandImplRequires reqs = map fst (expandImplRequiresPaths reqs)
-
--- The same sequence, each entry paired with where it came from: `[i]` for the i-th
--- declared predicate, `i :: path` for a super projected from it along `path`.
-expandImplRequiresPaths : List Require -> List (Require, List Int)
-expandImplRequiresPaths reqs =
-  let rigidMap = implRequireRigidMap reqs
-  let closure =
-    superClosure
-      superLookup
-      implRequireSuperStep
-      (iface args => implRequireKey rigidMap (requireOfSuper iface args))
-      (map
-        (r => (
-          IfaceRef { irName = r.requireHead, irOrigin = r.requireOrigin },
-          r.requireArgs,
-        ))
-        reqs)
-  zipL reqs (map (i => [i]) (rangeFromCount 0 (listLen reqs)))
-    ++ map
-      (n => (requireOfSuper n.superIface n.superPayload, n.superPath))
-      (filter (n => listLen n.superPath > 1) closure)
-
-requireOfSuper : IfaceRef -> List Ty -> Require
-requireOfSuper iface args = Require {
-  requireHead = iface.irName,
-  requireArgs = args,
-  requireOrigin = iface.irOrigin,
-}
-
-implRequireSuperStep : List String -> List Ty -> Super -> Option (List Ty)
-implRequireSuperStep typarams args (Super { superParams = params, ... }) =
-  mapAll (p => lookupPos p typarams args) params
-
-implRequireRigidMap : List Require -> List (String, Mono)
-implRequireRigidMap reqs =
-  map (name => (name, TRigid name)) (dedup (flatMap implRequireTyvars reqs))
-
-implRequireTyvars : Require -> List String
-implRequireTyvars (Require { requireArgs = args, ... }) =
-  flatMap tyVarNames args
-
-implRequireKey : List (String, Mono) -> Require -> String
-implRequireKey rigidMap (Require { requireHead = iface, requireArgs = args, requireOrigin = origin }) =
-  let monos = map (fromAstType rigidMap) args
-  cslotVecKey (
-    CSlot {
-      csIface = IfaceRef { irName = iface, irOrigin = origin },
-      csId = firstOrZero (flatMap monoTyvarIds monos),
-    },
-    monos,
-  )
+    :: argImplReqRoutes encl useScope subst rest prevSize spent
 
 argReqRoute : String ->
   String ->
@@ -31545,7 +31475,7 @@ recRoute encl scope mono slot = match recPredicateArgs mono slot
   _ => match slot.psBoundIds
     id :: _ => match findTvarInMono mono id
       None => RNone
-      Some m => resolveRecMono encl scope m
+      Some m => resolveRecMono encl scope slot.psIface m
     [] => RNone
 
 recPredicateArgs : Mono -> PredicateSlot -> Option (List Mono)
@@ -31562,16 +31492,18 @@ recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   None => None
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
 
-resolveRecMono : String -> ScopeId -> Mono -> Route
-resolveRecMono encl scope m = match headTyconMono m
-  Some hk => RKey (headKeyTag hk) []
+resolveRecMono : String -> ScopeId -> IfaceRef -> Mono -> Route
+resolveRecMono encl scope iface m = match headTyconMono m
+  Some hk => RKey (headKeyTag hk) [] (superRoutesAt iface encl scope [m] 0 0)
+  -- the enclosing slot is found by tyvar alone, so it may hold a SUB-interface of
+  -- the callee's predicate: read the super out of it
   None => match enclSlot encl m
     Some slot =>
-      RDict
-        (renderEvidenceBinder
-          (Scopes.binderAt
-            (Scopes.declarationScope (currentScopeStore ()) scope)
-            slot))
+      let binder =
+        Scopes.binderAt
+          (Scopes.declarationScope (currentScopeStore ()) scope)
+          slot
+      assumAnswerRoute (LegacyScalar binder) (Some iface) scope RDict
     None => routeOf ifaceRefNone "" scope KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
@@ -31683,7 +31615,7 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
     route if fixedWidthLiteralFits route n => ELit (LInt n)
     route if u64LiteralFits route n =>
       ELit (LU64 (n / 4294967296) (n % 4294967296))
-    RKey tag _ if isI64Head tag =>
+    RKey tag _ _ if isI64Head tag =>
       let halves = int64Halves n
       ELit (LI64 (fst halves) (snd halves))
     route =>
@@ -31708,7 +31640,7 @@ rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
   RNone => EUnOp op e routeRef
   -- a primitive operand's scalar tag: the builtin negation, as for an unrouted site
   RScalar _ => EUnOp op e routeRef
-  RKey tag _ if op == "-" && isI32Head tag && isSome (negatedI32Lit e) =>
+  RKey tag _ _ if op == "-" && isI32Head tag && isSome (negatedI32Lit e) =>
     ELit (LInt (optionOr 0 (negatedI32Lit e)))
   _ => unopMethodApp op e routeRef
 -- A wide literal is a `U64` or `I64` constant (`checkWideLiterals` has refused it
@@ -31716,7 +31648,7 @@ rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
 -- At `I64` the halves are the pattern of the magnitude; a `-` around it is the
 -- wrapping negation that makes `-2^63` `minBound`.
 rewriteBinopExpr (EWideLit hi lo dref _) = match !dref
-  RKey tag _ if isI64Head tag => ELit (LI64 hi lo)
+  RKey tag _ _ if isI64Head tag => ELit (LI64 hi lo)
   _ => ELit (LU64 hi lo)
 rewriteBinopExpr e = e
 
@@ -31741,7 +31673,7 @@ negatedInI32 n =
 -- a negative one keeps its `fromInt` call, which panics, exactly as
 -- `fixedWidthLiteralFits` leaves an out-of-range tagged literal.
 u64LiteralFits : Route -> Int -> Bool
-u64LiteralFits (RKey tag _) n = isU64Head tag && n >= 0
+u64LiteralFits (RKey tag _ _) n = isU64Head tag && n >= 0
 u64LiteralFits _ _ = False
 
 -- A literal routed to a fixed-width head's `fromInt` is that head's word already
@@ -31749,7 +31681,7 @@ u64LiteralFits _ _ = False
 -- range is checked HERE, on the value, not assumed from the module check: an
 -- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
 fixedWidthLiteralFits : Route -> Int -> Bool
-fixedWidthLiteralFits (RKey tag _) n = match taggedFixedRange tag
+fixedWidthLiteralFits (RKey tag _ _) n = match taggedFixedRange tag
   Some (lo, hi) => n >= lo && n <= hi
   None => False
 fixedWidthLiteralFits _ _ = False
@@ -31759,7 +31691,7 @@ fixedWidthLiteralFits _ _ = False
 -- eval read leading dict words) rather than the route reqs (which the RKey call
 -- path ignores).  A non-RKey / empty-reqs route forwards no dicts.
 binopRouteSplit : Route -> (Route, List Route)
-binopRouteSplit (RKey tag reqs) = (RKey tag [], reqs)
+binopRouteSplit (RKey tag reqs _) = (RKey tag [] [], reqs)
 binopRouteSplit r = (r, [])
 
 binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
@@ -31824,8 +31756,7 @@ dictPassDecl names _ (DLetGroup pub binds) =
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
 dictPassDecl _ _ (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
-  methods =
-    implDictPassMethods implOrigin (listLen (expandImplRequires reqs)) methods,
+  methods = implDictPassMethods implOrigin (listLen reqs) methods,
 }
 -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
@@ -31969,6 +31900,7 @@ siteRDictName : Ref Route -> List String
 siteRDictName r = match !r
   RDict d => [d]
   RDictFwd d => [d]
+  RProj inner _ => routeRDictName inner
   _ => []
 
 siteRDictNamesL : List Route -> List String
@@ -31983,7 +31915,9 @@ routeRDictName (RDictFwd d) = [d]
 -- gate that decides whether to PREPEND those impl-dict params (usesImplDict) must
 -- see the nested name, else the route references a param the clause never declares
 -- → emitter panics "unbound dict witness".  Recurse into the nested reqs.
-routeRDictName (RKey _ reqs) = flatMap routeRDictName reqs
+routeRDictName (RKey _ reqs sups) =
+  flatMap routeRDictName reqs ++ flatMap routeRDictName sups
+routeRDictName (RProj r _) = routeRDictName r
 routeRDictName _ = []
 
 -- every EMethodAt route ref reachable in [e] (a pure structural walk; reading a
@@ -32880,7 +32814,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- lint-disable-next-line rule-prefer-assign-op
 
   let _ =
-    let _ = expandSupersTable ()
+    let _ = dedupPredicateSlotsTable ()
     -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
     -- must not propagate as a graph-wide deletion into the next module's seed.
     let _ =
@@ -34379,7 +34313,7 @@ solveExactReturnInstance request wanted [] = MethodReturnResolution {
 solveExactReturnInstance request wanted args =
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env wanted.predicate.predicateInterface args
-    Some (row@(ImplRow _ inst _ _ _ _)) =>
+    Some (row@(ImplRow _ inst selectedIface _ _ _)) =>
       let prerequisites = methodReturnPrerequisites args row
       MethodReturnResolution {
         mrrWanted = wanted,
@@ -34388,7 +34322,8 @@ solveExactReturnInstance request wanted args =
             (InstanceEvidence
               (RequestInstanceId (instRefSeq inst))
               args
-              prerequisites),
+              prerequisites
+              (instanceSuperEvidence selectedIface args)),
         mrrSelectedRow = Some row,
         mrrFallbackTag = methodReturnFallbackTag request,
       }
@@ -34423,10 +34358,40 @@ exactReturnBlockers args =
 methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
 methodReturnPrerequisites args row = match selectedRowReqMatch args row
   Some (subst, reqs) =>
-    map
-      prerequisiteEvidence
-      (map (reqToObligation subst) (expandImplRequires reqs))
+    map prerequisiteEvidence (map (reqToObligation subst) reqs)
   None => []
+
+-- The direct supers of [iface] at [args], as the predicates a dictionary for that
+-- goal carries in its super segment (declaration order).
+instanceSuperEvidence : IfaceRef -> List Mono -> List SuperEvidence
+instanceSuperEvidence iface args =
+  map
+    ((superIface, superArgs) => SuperEvidence {
+      superInterface = superIface,
+      superArguments = optionOr [] superArgs,
+    })
+    (directSuperGoals iface args)
+
+-- Each direct super of [iface] at the goal vector [goals], in declaration order, with
+-- its argument vector — `None` when a super parameter does not resolve against the
+-- goal (a shorter-than-declared vector).  One entry per declared super, always, so
+-- a super's position in this list is its index in every dictionary of [iface].
+directSuperGoals : IfaceRef -> List Mono -> List (IfaceRef, Option (List Mono))
+directSuperGoals iface goals = match superLookup iface
+  None => []
+  Some (typarams, supers) =>
+    map
+      (sup => (
+        superIfaceRef sup,
+        if listLen goals == listLen typarams then
+          mapAll (p => lookupPos p typarams goals) (superParamsOf sup)
+        else
+          None,
+      ))
+      supers
+
+superParamsOf : Super -> List String
+superParamsOf (Super { superParams = params, ... }) = params
 
 prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
 prerequisiteEvidence (iface, args) = PrerequisiteEvidence {
@@ -34443,7 +34408,7 @@ consumeExactReturnOutcome univ request resolution =
     panic "ordinary return solver outcome failed validation"
   else match resolution.mrrOutcome
     Solved (GivenEvidence _) => ()
-    Solved (InstanceEvidence _ _ prerequisites) =>
+    Solved (InstanceEvidence _ _ prerequisites _) =>
       checkReqObligations
         univ
         request.mrrLoc
@@ -34485,7 +34450,7 @@ methodReturnResolutionValid request resolution =
               }
               g.geSlot
           None => False
-      (Solved (InstanceEvidence identity args prerequisites), Some row) =>
+      (Solved (InstanceEvidence identity args prerequisites _), Some row) =>
         methodReturnInstanceMatches identity row
           && monoVecSameGiven
             args
@@ -36990,12 +36955,7 @@ registerImplRequires _ _ _ _ _ _ [] = ()
 registerImplRequires ce cur iface implTvMap rpNames reqs (scoped :: rest)
   | registersElementDict mname rpNames =
     let methodArity = methodDictArityInClassEnv ce cur iface mname
-    let _ =
-      registerReqSlots
-        scoped.simScope
-        implTvMap
-        methodArity
-        (expandImplRequiresPaths reqs)
+    let _ = registerReqSlots scoped.simScope implTvMap methodArity reqs
     registerImplRequires ce cur iface implTvMap rpNames reqs rest
   | otherwise = registerImplRequires ce cur iface implTvMap rpNames reqs rest
   where
@@ -37014,26 +36974,13 @@ registersElementDict : String -> List String -> Bool
 registersElementDict mname rpNames =
   contains mname rpNames || isSome (argDispatchOf mname)
 
--- One dict parameter per entry of the flat `requires` sequence, starting at [base].  A
--- declared predicate is direct evidence; an appended super is the projection of the
--- declared predicate it was reached from, stored at its own parameter so the flat
--- calling convention's slot sequence is unchanged.
-registerReqSlots : ScopeId ->
-  List (String, Mono) ->
-  Int ->
-  List (Require, List Int) ->
-  Unit
-registerReqSlots scope implTvMap base entries =
-  registerReqSlotsFrom scope implTvMap base base entries
-
-registerReqSlotsFrom : ScopeId ->
-  List (String, Mono) ->
-  Int ->
-  Int ->
-  List (Require, List Int) ->
-  Unit
-registerReqSlotsFrom _ _ _ _ [] = ()
-registerReqSlotsFrom scope implTvMap base slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }, path) :: rest) =
+-- One dict parameter per declared `requires` predicate, starting at [base].  Each is
+-- direct evidence; the predicate's transitive supers are projections of that same
+-- parameter (the dictionary carries them), registered beside it exactly as a
+-- signature slot's are (`registerFunPredGivenSlots`).
+registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
+registerReqSlots _ _ _ [] = ()
+registerReqSlots scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let binder = Scopes.binderAt scope slot
@@ -37043,23 +36990,15 @@ registerReqSlotsFrom scope implTvMap base slot ((Require { requireHead = iface, 
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
   }
-  let _ = match path
-    [_] =>
-      let _ = registerEachActive ids binder
-      let _ = registerPredGiven reqIface argMonos binder
-      -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
-      -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
-      -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
-      -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
-      pushGiven GMIdWitnessed DirectGiven slotPred binder
-    declared :: projection =>
-      pushGiven
-        GMPredicate
-        (ProjectedGiven (Scopes.binderAt scope (base + declared)) projection)
-        slotPred
-        binder
-    [] => panic "impl requires entry without a source path"
-  registerReqSlotsFrom scope implTvMap base (slot + 1) rest
+  let _ = registerEachActive ids binder
+  let _ = registerPredGiven reqIface argMonos binder
+  -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
+  -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
+  -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
+  -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
+  let _ = pushGiven GMIdWitnessed DirectGiven slotPred binder
+  let _ = registerFunPredGivenSlots (predicateSlotKnownSupers slotPred) binder
+  registerReqSlots scope implTvMap (slot + 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
 -- by TYVAR ID, which cannot express a STRUCTURED given: `requires S (List a)` registers
@@ -37253,7 +37192,7 @@ givenAnswerForRequest request g = match (
 givenAnswerResidual : GivenEntry -> AssumAnswer
 givenAnswerResidual g = match g.geProvenance
   DirectGiven => LegacyPredicate g.geBinder
-  ProjectedGiven _ _ => LegacyPredicate g.geBinder
+  ProjectedGiven parent path => LegacyProjected parent path
 
 -- The id-witnessed scan.  [scope] is the rung's own declaration of what it may read —
 -- both rungs that reach here supply a tyvar-id witness, but only one of them is keyed on
@@ -42192,7 +42131,7 @@ methodReturnProbeCodes ownedRow impls =
   map tcCode (reverseL perRun.value.typeErrors.items.value)
 
 methodReturnProbeRouteKey : Route -> String
-methodReturnProbeRouteKey (RKey key _) = key
+methodReturnProbeRouteKey (RKey key _ _) = key
 methodReturnProbeRouteKey _ = ""
 
 methodReturnProbeStamp : MethodSchemeRow ->
@@ -42301,11 +42240,16 @@ methodReturnResolutionMutationProbe _ =
   let resolution = solveExactReturnOnce request
   let valid = methodReturnResolutionValid request resolution
   let (wrongSelection, wrongPrerequisites) = match resolution.mrrOutcome
-    Solved (InstanceEvidence _ args prerequisites) => (
+    Solved (InstanceEvidence _ args prerequisites supers) => (
       MethodReturnResolution {
         mrrWanted = resolution.mrrWanted,
         mrrOutcome =
-          Solved (InstanceEvidence (RequestInstanceId (-1)) args prerequisites),
+          Solved
+            (InstanceEvidence
+              (RequestInstanceId (-1))
+              args
+              prerequisites
+              supers),
         mrrSelectedRow = resolution.mrrSelectedRow,
         mrrFallbackTag = resolution.mrrFallbackTag,
       },
@@ -42321,7 +42265,8 @@ methodReturnResolutionMutationProbe _ =
                     resolution.mrrWanted.predicate.predicateInterface,
                   prerequisiteArguments = args,
                 }
-                :: prerequisites)),
+                :: prerequisites)
+              supers),
         mrrSelectedRow = resolution.mrrSelectedRow,
         mrrFallbackTag = resolution.mrrFallbackTag,
       },
@@ -42354,7 +42299,7 @@ methodReturnResolutionMutationProbe _ =
 
 methodReturnSelectedIdentity : MethodReturnResolution -> Int
 methodReturnSelectedIdentity resolution = match resolution.mrrOutcome
-  Solved (InstanceEvidence (RequestInstanceId identity) _ _) => identity
+  Solved (InstanceEvidence (RequestInstanceId identity) _ _ _) => identity
   _ => -1
 
 methodReturnProbeSlotIfaces : List PredicateSlot -> List String
@@ -47097,7 +47042,6 @@ copyDriverState d = DriverState {
   dictEligibleSetRef = Ref d.dictEligibleSetRef.value,
   mangledShadowMapRef = Ref d.mangledShadowMapRef.value,
   mangledFunDefsPresentRef = Ref d.mangledFunDefsPresentRef.value,
-  userIfaceNamesRef = Ref d.userIfaceNamesRef.value,
   coherenceUserDecls = Ref d.coherenceUserDecls.value,
   stdlibOwnedModsRef = Ref d.stdlibOwnedModsRef.value,
   flatEntryIsStdlibRef = Ref d.flatEntryIsStdlibRef.value,
@@ -47443,15 +47387,12 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   let runtimeSeed = withDeclParamKinds coreDecls (u =>
     externSchemes (externTyOriginScope coreDecls) runtimeDecls)
   let _ = seedAbstractRecordTypes coreDecls modules
-  -- TREES only, WS-1b: the interfaces in scope for super expansion before the
-  -- first sweep, and the user-interface gate that scopes it.  The diags arm sets
-  -- neither: its per-module worker leaves `superDeclsRef` to `checkBodyImpl`'s own
-  -- `superDecls` binding, and super-expansion is not gated there.
+  -- TREES only: the interfaces in scope for the superclass census before the first
+  -- sweep.  The diags arm leaves `superDeclsRef` to `checkBodyImpl`'s own
+  -- `superDecls` binding.
   let _ = match sel
     GOutTrees =>
       driverState.value.superDeclsRef := declEnvs.deAllDecls
-      driverState.value.userIfaceNamesRef :=
-        namesToSet (collectIfaceNames (flatMap snd modules)) omEmpty
       ()
     GOutDiags => ()
   -- #2705: BOTH arms MARK (solving is not optional), with the same sets, and each
@@ -48231,6 +48172,7 @@ buildDispositions envs =
   let table =
     buildDispositionTableWithShapes
       (dispositionRowsOfImpls envs.deImpls impls envs.deIfaces)
+      (map ifaceSuperCountOfRow impls)
   let _ =
     validateDispositionTable (dispositionSlotsOfImpls impls envs.deIfaces) table
   table
@@ -48284,8 +48226,8 @@ dispositionRowsOfImpl ie r ce =
     isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
     isTys = tys,
     isDictWord = predicateRouteKeyForRow ie r,
-    isSuperWords = instanceSuperWords ie iface tys,
-    isReqCount = listLen (expandImplRequires reqs),
+    isSupers = instanceSuperRoutes ie iface tys reqs,
+    isReqCount = listLen reqs,
   }
   let ifaceWord = ifaceWordOf iface.irOrigin iface.irName
   let supplied = ieRowMethodNames r
@@ -48306,39 +48248,113 @@ dispositionRowsOfImpl ie r ce =
           (ceRowRequired ceRow)
           (ceRowMethodNames ceRow))
 
--- For each interface in [iface]'s superclass closure, the dictionary word of its
--- instance at [tys] — the instance a superclass method called through an
--- `iface tys` receiver runs.  A superclass with no selectable instance is left out
--- (the receiver's own word stands in, as before); acceptance already demanded one.
-instanceSuperWords : ImplEnv -> IfaceRef -> List Ty -> List (String, String)
-instanceSuperWords ie iface tys =
-  let rigid = map (n => (n, TRigid n)) (dedup (flatMap tyVarNames tys))
-  let nodes =
-    superClosure
-      superLookup
-      implRequireSuperStep
-      (i args => implRequireKey rigid (requireOfSuper i args))
-      [(iface, tys)]
-  flatMap
-    (superWordOfNode ie rigid)
-    (filter (n => listLen n.superPath > 1) nodes)
+-- The interface word of [r]'s interface with its direct superinterface count: the
+-- super segment every dictionary of that interface stores.
+ifaceSuperCountOfRow : ImplRow -> (String, Int)
+ifaceSuperCountOfRow r =
+  let (iface, _, _) = ieRowTriple r
+  (
+    ifaceWordOf iface.irOrigin iface.irName,
+    listLen (directSuperGoals iface []),
+  )
 
-superWordOfNode : ImplEnv ->
-  List (String, Mono) ->
-  SuperNode (List Ty) ->
-  List (String, String)
-superWordOfNode ie rigid n =
-  match (ieSelectRowByIface
-    ie
-    n.superIface
-    (map (fromAstType rigid) n.superPayload))
-    Some row => [
-      (
-        ifaceWordOf n.superIface.irOrigin n.superIface.irName,
-        predicateRouteKeyForRow ie row,
-      ),
+-- The receiver's super segment for an instance `reqs => iface tys`: each direct super
+-- at the instance's own head, solved over the instance's `requires` as givens (the
+-- k-th read through `instanceReqParam k`), `assum` before `inst` as a construction
+-- goal is.  The head's type variables are rigid: the specialization is one body for
+-- every instantiation of the head.
+instanceSuperRoutes : ImplEnv ->
+  IfaceRef ->
+  List Ty ->
+  List Require ->
+  List Route
+instanceSuperRoutes ie iface tys reqs =
+  let names = dedup (flatMap tyVarNames tys ++ flatMap requireTyVarNames reqs)
+  let rigid = map (n => (n, TRigid n)) names
+  let givens = instanceReqGivens rigid 0 reqs
+  map
+    (instanceGoalRoute ie givens requiresNonShrinkingFuel)
+    (directSuperGoals iface (map (fromAstType rigid) tys))
+
+requireTyVarNames : Require -> List String
+requireTyVarNames (Require { requireArgs = args, ... }) =
+  flatMap tyVarNames args
+
+instanceReqGivens : List (String, Mono) ->
+  Int ->
+  List Require ->
+  List (Int, IfaceRef, List Mono)
+instanceReqGivens _ _ [] = []
+instanceReqGivens rigid k ((Require { requireHead = h, requireArgs = args, requireOrigin = o }) :: rest) =
+  (k, IfaceRef { irName = h, irOrigin = o }, map (fromAstType rigid) args)
+    :: instanceReqGivens rigid (k + 1) rest
+
+-- One goal of the receiver's super segment: a `requires` given or a super of one,
+-- else the selected instance with its own `requires` and supers solved the same way.
+instanceGoalRoute : ImplEnv ->
+  List (Int, IfaceRef, List Mono) ->
+  Int ->
+  (IfaceRef, Option (List Mono)) ->
+  Route
+instanceGoalRoute _ _ fuel (_, None) = RNone
+instanceGoalRoute ie givens fuel (goalIface, Some args) =
+  match instanceGivenRoute givens goalIface args
+    Some route => route
+    None =>
+      if fuel <= 0 then
+        RNone
+      else match ieSelectRowByIface ie goalIface args
+        Some (row@(ImplRow _ _ rowIface (headTy :: implTys) rowReqs _)) =>
+          match (headSubstWithParams
+            headTy
+            (headTy :: implTys)
+            (firstOr args)
+            args)
+            Some subst =>
+              RKey
+                (predicateRouteKeyForRow ie row)
+                (map
+                  (instanceGoalRoute ie givens (fuel - 1))
+                  (map (requireGoalAt subst) rowReqs))
+                (map
+                  (instanceGoalRoute ie givens (fuel - 1))
+                  (directSuperGoals rowIface args))
+            None => RNone
+        _ => RNone
+
+firstOr : List Mono -> Mono
+firstOr (m :: _) = m
+firstOr [] = tconBuiltin "Unit"
+
+requireGoalAt : List (String, Mono) -> Require -> (IfaceRef, Option (List Mono))
+requireGoalAt subst (Require { requireHead = h, requireArgs = args, requireOrigin = o }) = (
+  IfaceRef { irName = h, irOrigin = o },
+  Some (map (fromAstType subst) args),
+)
+
+-- The `requires` given answering [goalIface args] directly, or through its supers.
+instanceGivenRoute : List (Int, IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  Option Route
+instanceGivenRoute [] _ _ = None
+instanceGivenRoute ((k, giveIface, giveArgs) :: rest) goalIface args =
+  let param = RDict (instanceReqParam k)
+  if sameIfaceDecl giveIface goalIface && monoVecSameGiven giveArgs args then
+    Some param
+  else
+    let closure = superClosure superLookup predicateSuperStep predicateNodeKey [
+      (giveIface, giveArgs),
     ]
-    None => []
+    let hit =
+      find
+        (n =>
+          sameIfaceDecl n.superIface goalIface
+            && monoVecSameGiven n.superPayload args)
+        closure
+    match hit
+      Some n => Some (RProj param (drop 1 n.superPath))
+      None => instanceGivenRoute rest goalIface args
 
 dispositionRowsOfMethods : InstId ->
   IfaceRef ->

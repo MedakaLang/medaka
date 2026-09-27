@@ -1073,10 +1073,15 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- RKey = a concrete impl head tag (or, for two same-head impls, the canonical impl
 --   key — TYPECHECK-AUDIT C7) plus its own requires routes recursively (Phase
 --   83/84 #5: the nested element-dict routes so dict_of_route builds a structured
---   VDict carrying every element dict the impl body needs);
+--   VDict carrying every element dict the impl body needs), then one route per
+--   DIRECT superinterface of the dictionary's interface, in declaration order, each
+--   solved at the same goal (DICT-SEMANTICS §2: a dictionary carries its supers);
 -- RDict = read the named dict parameter at runtime (enclosing constraint);
 -- RDictFwd = like RDict but for return-position sites: also forward the structured
 --   dict's own requires into the selected impl body (Phase 83/84 #5).
+-- RProj = the dictionary a route denotes, projected along a path of direct-super
+--   indices (DICT-SEMANTICS §3 `super`).  A dictionary stores its supers before its
+--   requires, so an index names the same slot whichever instance the dictionary is.
 -- RLocal = NOT a method dispatch (Phase 112 / TYPECHECK-AUDIT C5): at this call
 --   site the interface has no impl for the concrete receiver, but an explicitly-
 --   imported/local standalone function shadows the method name, so eval ignores
@@ -1119,11 +1124,12 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- too, since the Int primitive is the default.
 public export data Route =
   | RNone
-  | RKey String (List Route)
+  | RKey String (List Route) (List Route)
   | RDict String
   | RDictFwd String
   | RLocal String (List Route)
   | RScalar String
+  | RProj Route (List Int)
 
 -- The fixed-width integer heads (`docs/design/INTEGER-TYPES-DESIGN.md` §2).  Each
 -- shares `Int`'s tagged word and holds a value in `0 .. 2^n - 1`; the static type

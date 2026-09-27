@@ -269,7 +269,9 @@ mangleEvVal rm (EvMethod iface arity r reqs mds) =
 mangleRoute : OrdMap String -> Route -> Route
 mangleRoute rm (RLocal sym ds) =
   RLocal (renameDefName rm sym) (map (mangleRoute rm) ds)
-mangleRoute rm (RKey k ds) = RKey k (map (mangleRoute rm) ds)
+mangleRoute rm (RKey k ds sups) =
+  RKey k (map (mangleRoute rm) ds) (map (mangleRoute rm) sups)
+mangleRoute rm (RProj r path) = RProj (mangleRoute rm r) path
 mangleRoute _ (r@RNone) = r
 mangleRoute _ (r@(RDict _)) = r
 mangleRoute _ (r@(RDictFwd _)) = r
