@@ -1255,8 +1255,8 @@ secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fa
 pass 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 / {
-    sub(/ctEq digest \(pbkdf2HmacSha256 /, "digest == (pbkdf2HmacSha256 ")
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) / {
+    sub(/ctEq \(fromArrayAssumeByteDomain digest\) /, "(fromArrayAssumeByteDomain digest) == ")
   }
   { print }
 ' "$CREDENTIAL" > "$WORK/credential_eq_mutant.mdk"
@@ -1277,10 +1277,13 @@ awk '
     print "  else sameBytes a b (i + 1)"
     print ""
   }
-  /^  now < expires && ctEq wanted access \|\| hasAccess now wanted rest/ {
+  /^  now < expires$/ {
     print "  now < expires && (arrayLength wanted == arrayLength access && sameBytes wanted access 0) || hasAccess now wanted rest"
+    skip = 1
     next
   }
+  skip && /^    \|\| hasAccess now wanted rest$/ { skip = 0; next }
+  skip { next }
   { print }
 ' "$STORE" > "$WORK/store_loop_mutant.mdk"
 if cmp -s "$STORE" "$WORK/store_loop_mutant.mdk"; then
@@ -1292,7 +1295,7 @@ fi
 pass 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
     next
   }
@@ -1312,7 +1315,7 @@ fi
 pass 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
     next
   }
@@ -1327,7 +1330,7 @@ fi
 pass 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
     next
   }
@@ -1342,7 +1345,7 @@ fi
 pass 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
     next
   }
@@ -1362,7 +1365,7 @@ fi
 pass 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  ctEq (digest) ( digest ) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
     next
   }
@@ -1377,7 +1380,7 @@ fi
 pass 'credential tautological ctEq with reparenthesized arguments is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  ctEq digest"
     print "    digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
     next
@@ -1393,7 +1396,7 @@ fi
 pass 'credential tautological ctEq split across lines is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  (digest |> ctEq digest) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
     next
   }
@@ -1408,7 +1411,7 @@ fi
 pass 'credential tautological ctEq fed through |> is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
     print "  (ctEq digest) digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
     next
   }
@@ -1428,8 +1431,9 @@ awk '
     print "import crypto.hmac as H"
     next
   }
-  /^      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh\)$/ {
-    print "      SessionRecord _ refresh expires _ => now < expires && H.ctEq wanted refresh)"
+  /^          && ctEq$/ && !aliased {
+    print "          && H.ctEq"
+    aliased = 1
     next
   }
   { print }

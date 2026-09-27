@@ -12,6 +12,7 @@
    Provenance: `pds/test/VECTOR-PROVENANCE.txt`. -}
 
 import array as A
+import bytes.{toArray}
 import hex.{decode}
 import list.{zipWith}
 import lib.sign.{
@@ -139,7 +140,8 @@ didRows rows =
 
 hexBytes : String -> Array Int
 hexBytes text =
-  resultOrPanic "public-key driver: corpus field is not hex" (decode text)
+  toArray
+    (resultOrPanic "public-key driver: corpus field is not hex" (decode text))
 
 {- | Every official row, graded through the exact composition `pds keygen`
    prints: the secret's compressed public key and the `did:key` naming it. -}

@@ -22,7 +22,7 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
-import bytes.{fromArray}
+import bytes.{encodeUtf8, fromArray, toArray}
 import http.{
   Header,
   makeHeader,
@@ -69,6 +69,7 @@ import lib.xrpc.{
   queryEndpoint,
   registryEndpoints,
 }
+import test.response_support.{bodyText}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -80,7 +81,9 @@ handleFixture : Server ->
   Array Int ->
   (Store, Array Int)
 handleFixture httpServer context store request = match fromArray request
-  Some packed => handleBytes httpServer context store packed
+  Some packed =>
+    let (next, response) = handleBytes httpServer context store packed
+    (next, toArray response)
   None => panic "auth_seam: request fixture holds a non-byte element"
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
@@ -148,13 +151,13 @@ mustResponse : String -> Response
 mustResponse body =
   resultOrPanic
     "auth_seam_test: response setup failed"
-    (makeResponse 200 "OK" [textHeader] (toUtf8 body))
+    (makeResponse 200 "OK" [textHeader] (encodeUtf8 body))
 
 textHeader : Header
 textHeader =
   resultOrPanic
     "auth_seam_test: header setup failed"
-    (makeHeader "content-type" (toUtf8 "text/plain"))
+    (makeHeader "content-type" (encodeUtf8 "text/plain"))
 
 {- | Reports the `AuthOutcome` the seam resolved, so a public route reached
    with a good token is distinguishable from one reached with none. Reaching
@@ -293,23 +296,6 @@ bearer : String -> String
 bearer token = "Authorization: Bearer \{token}\r\n"
 
 -- ── response inspection ─────────────────────────────────────────────────────
-
-bodyStart : Array Int -> Int -> Int
-bodyStart bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "auth_seam_test: response has no body separator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i + 4
-  else
-    bodyStart bytes (i + 1)
-
-bodyText : Array Int -> String
-bodyText bytes =
-  let start = bodyStart bytes 0
-  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
 
 -- The three status digits of "HTTP/1.1 NNN Reason".
 statusOf : Array Int -> String

@@ -28,6 +28,7 @@
    reference's CAR bytes, the second by handing it our own — so neither the
    block order nor any other field is graded against itself. -}
 
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{reverse, zip}
@@ -96,7 +97,8 @@ data Grade = Grade {
 }
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "commit_event: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "commit_event: malformed hex" (decode text))
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "commit_event: malformed CID" (cidFromString text)
@@ -318,7 +320,7 @@ eventWith did step ops car = SyncCommitEvent {
 frameHex : SyncCommitEvent -> String
 frameHex event = match syncCommitFrame event
   Err message => panic "commit_event: frame encoding failed: \{message}"
-  Ok bytes => encode bytes
+  Ok bytes => encode (fromArrayAssumeByteDomain bytes)
 
 -- Each op's previous record CID, read from the repository before the write.
 observedPrevs : List Op -> Repo -> List (Option Cid)

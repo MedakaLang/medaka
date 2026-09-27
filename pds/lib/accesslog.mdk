@@ -22,7 +22,10 @@
      a request target that routinely carries a credential, and an operator
      reading a log wants the route rather than its arguments. -}
 
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import string.{fromUtf8, indexOf, take, toUtf8}
+import u8 as U8
 
 {- | One finished request, as the log records it.
 
@@ -101,18 +104,10 @@ httpVersionPrefix = "HTTP/1.1 "
 statusDigitOffset : Int
 statusDigitOffset = 9
 
-matchesPrefix : Array Int -> Array Int -> Int -> Bool
-matchesPrefix bytes prefix i =
-  if i >= arrayLength prefix then
-    True
-  else if bytes[i] /= prefix[i] then
-    False
-  else
-    matchesPrefix bytes prefix (i + 1)
-
-digitAt : Array Int -> Int -> Option Int
+digitAt : Bytes -> Int -> Option Int
 digitAt bytes i =
-  if bytes[i] >= 48 && bytes[i] <= 57 then Some (bytes[i] - 48) else None
+  let byte = U8.toInt bytes[i]
+  if byte >= 48 && byte <= 57 then Some (byte - 48) else None
 
 {- | The status code of a serialized HTTP/1.1 response, read back off the
    bytes that are actually going out.
@@ -128,12 +123,11 @@ digitAt bytes i =
    valid HTTP status: a plausible code standing in for an unreadable one is
    exactly the silent wrongness this module exists to avoid. -}
 export
-responseStatusCode : Array Int -> Int
+responseStatusCode : Bytes -> Int
 responseStatusCode bytes =
-  let prefix = toUtf8 httpVersionPrefix
-  if arrayLength bytes < statusDigitOffset + 3 then
+  if B.length bytes < statusDigitOffset + 3 then
     0
-  else if not (matchesPrefix bytes prefix 0) then
+  else if not (B.startsWith (encodeUtf8 httpVersionPrefix) bytes) then
     0
   else match (
     digitAt bytes statusDigitOffset,

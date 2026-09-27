@@ -11,6 +11,7 @@
 --
 --   medaka run pds/test/guard_probes_main.mdk <case>
 
+import bytes as B
 import crypto.sha256.{sha256}
 import lib.base58.{base58btcEncode}
 import lib.multiformats.{uvarintEncode}
@@ -21,11 +22,19 @@ main = match args ()
   -- into that domain if the guard is absent: 256 aliases to 0 (the measured
   -- collision) and -1 aliases to 255.
   ["sha256-over"] =>
-    let d = sha256 (arrayFromList [256])
-    println "REACHED sha256-over len=\{intToString (arrayLength d)}"
+    let d =
+      sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (B.fromArray (arrayFromList [256])))
+    println "REACHED sha256-over len=\{intToString (B.length d)}"
   ["sha256-under"] =>
-    let d = sha256 (arrayFromList [0 - 1])
-    println "REACHED sha256-under len=\{intToString (arrayLength d)}"
+    let d =
+      sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (B.fromArray (arrayFromList [0 - 1])))
+    println "REACHED sha256-under len=\{intToString (B.length d)}"
   -- CONTROL. 0 and 255 are the two INCLUSIVE endpoints of the domain,
   -- chosen deliberately: this is the cell that catches a `>= 255` or `> 0`
   -- off-by-one in the guard. It prints the digest LENGTH, never a digest
@@ -33,8 +42,12 @@ main = match args ()
   -- golden, and the real digests are graded against the ledgered corpus by
   -- pds/test/sha256_vectors_test.mdk.
   ["sha256-edges"] =>
-    let d = sha256 (arrayFromList [0, 255])
-    println "OK sha256-edges len=\{intToString (arrayLength d)}"
+    let d =
+      sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (B.fromArray (arrayFromList [0, 255])))
+    println "OK sha256-edges len=\{intToString (B.length d)}"
   ["base58-over"] => println (base58btcEncode (arrayFromList [0, 256]))
   ["base58-under"] => println (base58btcEncode (arrayFromList [0, 0 - 1]))
   ["base58-edges"] =>

@@ -135,6 +135,7 @@ import string.{
   replaceAll,
   join,
 }
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encodeUpper}
 import lib.wideint as W
 import i64
@@ -419,7 +420,7 @@ isHexDigit c =
 
 blobFrom : String -> Parser Literal
 blobFrom s = match decode s
-  Ok bytes => deferPure (LBlob bytes)
+  Ok bytes => deferPure (LBlob (toArray bytes))
   Err e => failWith "malformed blob literal: \{e}"
 
 -- ---------------------------------------------------------------------------
@@ -1036,7 +1037,7 @@ renderLiteral (LInt n) = "\{n}"
 renderLiteral (LInt64 x) = display x
 renderLiteral (LFloat f) = "\{f}"
 renderLiteral (LText s) = "'\{replaceAll "'" "''" s}'"
-renderLiteral (LBlob b) = "X'\{encodeUpper b}'"
+renderLiteral (LBlob b) = "X'\{encodeUpper (fromArrayAssumeByteDomain b)}'"
 renderLiteral LNull = "NULL"
 
 cmpText : CmpOp -> String

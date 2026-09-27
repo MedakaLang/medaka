@@ -66,6 +66,8 @@ import test.{
 import bytes as B
 import bytes.{Bytes, encodeUtf8, fromArray}
 import string.{contains, toUtf8}
+import mut_bytes as MB
+import test.fixture_support.{appendBytes}
 
 rejects : String -> Bytes -> Bool
 rejects expected input = match parseRequest input
@@ -76,12 +78,6 @@ mustRequest : Bytes -> Request
 mustRequest input = match parseRequest input
   Ok request => request
   Err message => panic message
-
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right =
-  let leftSize = arrayLength left
-  arrayMakeWith (leftSize + arrayLength right) (i =>
-    if i < leftSize then left[i] else right[i - leftSize])
 
 names : List Header -> List String
 names = map headerName
@@ -94,12 +90,12 @@ mustBytes arr = match fromArray arr
 emptyBytes : Bytes
 emptyBytes = mustBytes [||]
 
-mustHeader : String -> Array Int -> Header
+mustHeader : String -> Bytes -> Header
 mustHeader name value = match makeHeader name value
   Ok header => header
   Err message => panic message
 
-mustResponse : Int -> String -> List Header -> Array Int -> Response
+mustResponse : Int -> String -> List Header -> Bytes -> Response
 mustResponse status reason headers body =
   match makeResponse status reason headers body
     Ok response => response
@@ -178,7 +174,7 @@ test "header accessors return trimmed field bytes" =
       (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test:\t value \t\r\n\r\n")
   match requestHeaders request
-    [_host, value] => expectEqual (headerValue value) (toUtf8 "value")
+    [_host, value] => expectEqual (headerValue value) (encodeUtf8 "value")
     _ => fail "expected exactly two headers (Host, X-Test)"
 
 test "chunked framing accepts extensions and ordered trailers" =
@@ -574,8 +570,8 @@ test "chunk-count ceiling accepts at and rejects over" = expectEach [
 
 test "zero-length response serialization is exact and computes one length" =
   expectEqual
-    (serializeResponse (mustResponse 204 "No Content" [] [||]))
-    (toUtf8 "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n")
+    (serializeResponse (mustResponse 204 "No Content" [] emptyBytes))
+    (encodeUtf8 "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n")
 
 test "binary response serialization preserves header order and bytes" =
   let response =
@@ -583,53 +579,52 @@ test "binary response serialization preserves header order and bytes" =
       200
       "OK"
       [
-        mustHeader "X-First" (toUtf8 "one"),
-        mustHeader "Content-Type" (toUtf8 "application/octet-stream"),
+        mustHeader "X-First" (encodeUtf8 "one"),
+        mustHeader "Content-Type" (encodeUtf8 "application/octet-stream"),
       ]
-      [|0, 255|]
+      (mustBytes [|0, 255|])
   expectEqual
     (serializeResponse response)
-    (appendBytes (toUtf8
-      "HTTP/1.1 200 OK\r\nx-first: one\r\ncontent-type: application/octet-stream\r\ncontent-length: 2\r\n\r\n") [|
-      0, 255
-    |])
+    (encodeUtf8
+        "HTTP/1.1 200 OK\r\nx-first: one\r\ncontent-type: application/octet-stream\r\ncontent-length: 2\r\n\r\n"
+      ++ mustBytes [|0, 255|])
 
 test "response status outside the three-digit supported range is rejected" = expectEach
   [
     (
       "a status below 100 is refused",
-      expectTrue (isErr (makeResponse 99 "Continue" [] [||])),
+      expectTrue (isErr (makeResponse 99 "Continue" [] emptyBytes)),
     ),
     (
       "a status above 599 is refused",
-      expectTrue (isErr (makeResponse 600 "Nope" [] [||])),
+      expectTrue (isErr (makeResponse 600 "Nope" [] emptyBytes)),
     ),
   ]
 
 test "response reason phrase injection is rejected" =
-  expectTrue (isErr (makeResponse 200 "OK\r\nInjected: yes" [] [||]))
+  expectTrue (isErr (makeResponse 200 "OK\r\nInjected: yes" [] emptyBytes))
 
 test "safe header constructor canonicalizes names" =
-  expectEqual (headerName (mustHeader "X-Trace-ID" (toUtf8 "abc"))) "x-trace-id"
+  expectEqual
+    (headerName (mustHeader "X-Trace-ID" (encodeUtf8 "abc")))
+    "x-trace-id"
 
 test "invalid response header name and value injection are rejected" = expectEach
   [
     (
       "a header name with a space is refused",
-      expectTrue (isErr (makeHeader "Bad Name" (toUtf8 "value"))),
+      expectTrue (isErr (makeHeader "Bad Name" (encodeUtf8 "value"))),
     ),
     (
       "a header value carrying CRLF is refused",
-      expectTrue (isErr (makeHeader "X-Test" (toUtf8 "ok\r\nInjected: yes"))),
+      expectTrue
+        (isErr (makeHeader "X-Test" (encodeUtf8 "ok\r\nInjected: yes"))),
     ),
   ]
 
 test "caller response framing fields are rejected" =
-  let reserved = mustHeader "Content-Length" (toUtf8 "7")
-  expectTrue (isErr (makeResponse 200 "OK" [reserved] (toUtf8 "payload")))
-
-test "response body elements must be bytes" =
-  expectTrue (isErr (makeResponse 200 "OK" [] [|256|]))
+  let reserved = mustHeader "Content-Length" (encodeUtf8 "7")
+  expectTrue (isErr (makeResponse 200 "OK" [reserved] (encodeUtf8 "payload")))
 
 test "query decoding preserves repeated names, empty values, and order" =
   let request =
@@ -722,21 +717,21 @@ test "media type and subtype are case-insensitive with bounded parameters" =
       ),
     ])
     (parseMediaType
-      (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
+      (encodeUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
 
 test "malformed and non-ASCII media types are rejected" = expectEach [
   (
     "a media type with no subtype is refused",
-    expectTrue (isErr (parseMediaType (toUtf8 "application"))),
+    expectTrue (isErr (parseMediaType (encodeUtf8 "application"))),
   ),
   (
     "an unterminated quoted parameter is refused",
     expectTrue
-      (isErr (parseMediaType (toUtf8 "text/plain; charset=\"unterminated"))),
+      (isErr (parseMediaType (encodeUtf8 "text/plain; charset=\"unterminated"))),
   ),
   (
     "a non-ASCII byte in the media type is refused",
-    expectTrue (isErr (parseMediaType [|97, 112, 112, 47, 255|])),
+    expectTrue (isErr (parseMediaType (mustBytes [|97, 112, 112, 47, 255|]))),
   ),
 ]
 
@@ -806,7 +801,7 @@ test "raw media types preserve binary bytes" =
       ),
       (
         "the body bytes are passed through untouched",
-        expectEqual [|0, 128, 255|] bytes,
+        expectEqual (mustBytes [|0, 128, 255|]) bytes,
       ),
     ]
     _ => fail "expected a RawBody decode result"
@@ -867,7 +862,10 @@ scanAgrees input = match scanRequestBoundary input 0
   HttpFramedAt at =>
     at >= 0
       && at <= B.length input
-      && (match (parseRequestAt input 0 at, parseRequest (prefix input at))
+      && (match (
+        parseRequestAt (MB.thaw input) 0 at,
+        parseRequest (prefix input at),
+      )
         (Ok viaFrame, Ok viaPrefix) => sameRequest viaFrame viaPrefix
         _ => False)
 
@@ -989,8 +987,8 @@ test "pipelined requests are framed one at a time from a single buffer" =
     scanRequestBoundary pipelined (B.length simpleGet),
   )
     (HttpFramedAt first, HttpFramedAt second) => match (
-      parseRequestAt pipelined 0 first,
-      parseRequestAt pipelined first second,
+      parseRequestAt (MB.thaw pipelined) 0 first,
+      parseRequestAt (MB.thaw pipelined) first second,
     )
       (Ok head, Ok tail) => expectEach [
         (
@@ -1152,7 +1150,11 @@ test "a body short of its content length is pending, padding notwithstanding" =
   let padded = tenByteBody ++ mustBytes (arrayMakeWith 7 (_ => 0))
   match (
     fst
-      (scanRequestBoundaryWithin padded (B.length tenByteBody) 0 httpScanStart),
+      (scanRequestBoundaryWithin
+        (MB.thaw padded)
+        (B.length tenByteBody)
+        0
+        httpScanStart),
     scanRequestBoundary padded 0,
   )
     (HttpNeedMore, HttpFramedAt at) => expectEqual at (B.length padded)
@@ -1162,18 +1164,19 @@ test "a body short of its content length is pending, padding notwithstanding" =
 
 -- Scanning a padded backing array one received byte at a time has to agree with
 -- scanning the exact prefix of that many bytes, for every shape in the corpus.
-availAgreesGo : Bytes -> Int -> Int -> HttpScan -> Bool
-availAgreesGo padded live avail scan =
-  let (resumed, next) = scanRequestBoundaryWithin padded avail 0 scan
+availAgreesGo : Bytes -> MB.MutBytes -> Int -> Int -> HttpScan -> Bool
+availAgreesGo padded buffer live avail scan =
+  let (resumed, next) = scanRequestBoundaryWithin buffer avail 0 scan
   let agrees = sameFrame resumed (scanRequestBoundary (prefix padded avail) 0)
   if avail >= live then
     agrees
   else
-    agrees && availAgreesGo padded live (avail + 1) next
+    agrees && availAgreesGo padded buffer live (avail + 1) next
 
 availAgrees : Bytes -> Bool
 availAgrees input =
-  availAgreesGo (input ++ slackBytes) (B.length input) 0 httpScanStart
+  let padded = input ++ slackBytes
+  availAgreesGo padded (MB.thaw padded) (B.length input) 0 httpScanStart
 
 allAvailAgree : List Bytes -> Bool
 allAvailAgree [] = True

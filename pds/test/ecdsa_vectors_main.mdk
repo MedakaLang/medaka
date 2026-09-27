@@ -23,6 +23,7 @@ import lib.sign.{
 }
 import crypto.sha256.{sha256}
 import array as A
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import string.{split, toInt, trim}
@@ -32,8 +33,11 @@ bytes value =
   if value == "-" then
     [||]
   else match decode value
-    Ok decoded => decoded
+    Ok decoded => toArray decoded
     Err message => panic "ecdsa_vectors: malformed hex: \{message}"
+
+hexOf : Array Int -> String
+hexOf x = encode (fromArrayAssumeByteDomain x)
 
 scalar : String -> Sc
 scalar value =
@@ -175,7 +179,7 @@ runExceptionalProbes counts key digest expectedCandidate0 =
     if candidate1Ok then
       let () = bump counts 2
       println
-        "PROBE candidate-1-selection: PASS computations=2 c0.valid=0 c0.r=\{encode candidate0R} c0.raw_s=\{encode candidate0RawS} c0.low_s=\{encode candidate0LowS} c1.valid=1 c1.r=\{encode candidate1R} c1.raw_s=\{encode candidate1RawS} c1.low_s=\{encode candidate1LowS}"
+        "PROBE candidate-1-selection: PASS computations=2 c0.valid=0 c0.r=\{hexOf candidate0R} c0.raw_s=\{hexOf candidate0RawS} c0.low_s=\{hexOf candidate0LowS} c1.valid=1 c1.r=\{hexOf candidate1R} c1.raw_s=\{hexOf candidate1RawS} c1.low_s=\{hexOf candidate1LowS}"
     else
       let () = bump counts 1
       println "FAIL candidate-1-selection probe"
@@ -191,7 +195,7 @@ runExceptionalProbes counts key digest expectedCandidate0 =
   if exhaustionOk then
     let () = bump counts 2
     println
-      "PROBE two-candidate-exhaustion: PASS computations=2 c0.valid=0 c0.r=\{encode exhaust0R} c0.raw_s=\{encode exhaust0RawS} c0.low_s=\{encode exhaust0LowS} c1.valid=0 c1.r=\{encode exhaust1R} c1.raw_s=\{encode exhaust1RawS} c1.low_s=\{encode exhaust1LowS} aggregate=0"
+      "PROBE two-candidate-exhaustion: PASS computations=2 c0.valid=0 c0.r=\{hexOf exhaust0R} c0.raw_s=\{hexOf exhaust0RawS} c0.low_s=\{hexOf exhaust0LowS} c1.valid=0 c1.r=\{hexOf exhaust1R} c1.raw_s=\{hexOf exhaust1RawS} c1.low_s=\{hexOf exhaust1LowS} aggregate=0"
   else
     let () = bump counts 1
     println "FAIL two-candidate-exhaustion probe"
@@ -212,7 +216,7 @@ runPublicSigningRow counts keyHex digest publicHex expectedCompact =
         let () = bump counts 1
         println "FAIL public signing: \{message}"
       Ok signature =>
-        let compactOk = encode (signatureCompact signature) == expectedCompact
+        let compactOk = hexOf (signatureCompact signature) == expectedCompact
         let verifyOk = match publicKeyFromCompressed (bytes publicHex)
           Err _ => False
           Ok publicKey => verifyDigest publicKey digest signature
@@ -237,11 +241,11 @@ runSigningRow counts lineNo text = match split " " (trim text)
       ecdsaSignDigestForTest key digest
     let ok =
       validBit == 1
-        && encode nonce == expectedK
-        && encode r == expectedR
-        && encode rawS == expectedRawS
-        && encode lowS == expectedLowS
-        && encode compact == expectedCompact
+        && hexOf nonce == expectedK
+        && hexOf r == expectedR
+        && hexOf rawS == expectedRawS
+        && hexOf lowS == expectedLowS
+        && hexOf compact == expectedCompact
     let () =
       runPublicSigningRow counts keyHex digest expectedPublic expectedCompact
     if ok then
@@ -254,7 +258,7 @@ runSigningRow counts lineNo text = match split " " (trim text)
     else
       let () = bump counts 1
       println
-        "FAIL signing row \{row}: k=\{encode nonce} r=\{encode r} raw_s=\{encode rawS} low_s=\{encode lowS} compact=\{encode compact}"
+        "FAIL signing row \{row}: k=\{hexOf nonce} r=\{hexOf r} raw_s=\{hexOf rawS} low_s=\{hexOf lowS} compact=\{hexOf compact}"
   _ =>
     let () = bump counts 1
     println "FAIL signing line \{intToString lineNo}: malformed row"
@@ -357,7 +361,12 @@ runVerificationRow counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx lin
         let () = A.setInPlace idValue 1 seen
         let () = bump counts uniqueIdx
         let compact = bytes compactHex
-        let digest = sha256 (bytes messageHex)
+        let digest =
+          toArray
+            (sha256
+              (optionOrPanic
+                "sha256: every element must be a byte in 0..255"
+                (fromArray (bytes messageHex))))
         let uncompressed = bytes keyHex
         match pointFromUncompressedForTest uncompressed
           Err message =>

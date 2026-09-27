@@ -302,11 +302,10 @@ The field's name, in lowercase ASCII.
 ### `headerValue`
 
 ```
-headerValue : Header -> Array Int
+headerValue : Header -> Bytes
 ```
 
-The field's value bytes, with surrounding whitespace removed. The result
-is a copy.
+The field's value bytes, with surrounding whitespace removed.
 
 ### `requestMethod`
 
@@ -381,17 +380,17 @@ a method or a field name.
 ### `findByte`
 
 ```
-findByte : Array Int -> Int -> Int -> Int -> Option Int
+findByte : Bytes -> Int -> Int -> Int -> Option Int
 findByte value pos end wanted
 ```
 
 The index of the first `wanted` in `value[pos, end)`, or `None`. No
-element at or past `end` is read.
+byte at or past `end` is read.
 
 ### `trimLeftOws`
 
 ```
-trimLeftOws : Array Int -> Int -> Int -> Int
+trimLeftOws : Bytes -> Int -> Int -> Int
 trimLeftOws value pos end
 ```
 
@@ -401,7 +400,7 @@ a tab, or `end` when they all are.
 ### `trimRightOws`
 
 ```
-trimRightOws : Array Int -> Int -> Int -> Int
+trimRightOws : Bytes -> Int -> Int -> Int
 trimRightOws value start end
 ```
 
@@ -436,7 +435,7 @@ one. Both letter cases are accepted.
 ### `skipOws`
 
 ```
-skipOws : Array Int -> Int -> Int -> Int
+skipOws : Bytes -> Int -> Int -> Int
 skipOws value pos end
 ```
 
@@ -534,8 +533,8 @@ chunk at a time, the answer is `None`.
 ### `scanRequestBoundaryWithin`
 
 ```
-scanRequestBoundaryWithin : Bytes -> Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
-scanRequestBoundaryWithin input avail start _
+scanRequestBoundaryWithin : MutBytes -> Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
+scanRequestBoundaryWithin input avail start scan
 ```
 
 The end of the first complete request at or after `start` within the
@@ -549,6 +548,10 @@ that is only partly filled. A pending request already larger than
 `[0, avail]`, fails as `HttpMalformed` and leaves the state unchanged.
 A resumed scan costs time proportional to the bytes that arrived since the
 state was produced.
+
+`input` is a buffer still being written, such as the block
+`bytebuilder.builderParts` hands out, and it is read in place: nothing the
+scan keeps refers to it.
 
 ### `scanRequestBoundaryFrom`
 
@@ -572,13 +575,13 @@ without the state.
 ### `parseRequestAt`
 
 ```
-parseRequestAt : Bytes -> Int -> Int -> Result HttpParseFailure Request
+parseRequestAt : MutBytes -> Int -> Int -> Result HttpParseFailure Request
 parseRequestAt input start end
 ```
 
 The request framed by `input[start, end)`, parsed as
-`parseRequestClassified` parses that slice on its own. Bounds outside the
-buffer fail as `HttpMalformed`.
+`parseRequestClassified` parses a copy of that slice on its own. Bounds
+outside the buffer fail as `HttpMalformed`.
 
 ### `parseRequest`
 
@@ -640,11 +643,10 @@ chunked.
 ### `parsedResponseBody`
 
 ```
-parsedResponseBody : ParsedResponse -> Array Int
+parsedResponseBody : ParsedResponse -> Bytes
 ```
 
-The body, with any chunked transfer coding removed. The result is a
-copy.
+The body, with any chunked transfer coding removed.
 
 ### `parsedResponseBodyLength`
 
@@ -657,7 +659,7 @@ The byte length of the decoded body.
 ### `parseResponseClassified`
 
 ```
-parseResponseClassified : Array Int -> Result HttpParseFailure ParsedResponse
+parseResponseClassified : Bytes -> Result HttpParseFailure ParsedResponse
 parseResponseClassified input
 ```
 
@@ -672,21 +674,21 @@ buffer, unless its status code (1xx, 204, or 304) forbids a body.
 ### `parseResponse`
 
 ```
-parseResponse : Array Int -> Result String ParsedResponse
+parseResponse : Bytes -> Result String ParsedResponse
 parseResponse input
 ```
 
 `parseResponseClassified` with the failure reduced to its diagnostic.
 
 ```medaka
-> isErr (parseResponse [||])
+> isErr (parseResponse (encodeUtf8 ""))
 True
 ```
 
 ### `responseBoundaryWithin`
 
 ```
-responseBoundaryWithin : Array Int -> Int -> Option Int
+responseBoundaryWithin : MutBytes -> Int -> Option Int
 responseBoundaryWithin input avail
 ```
 
@@ -695,12 +697,22 @@ or `None` when that prefix is incomplete, malformed, or a response that
 ends only when the connection closes.
 
 Bytes at or past `avail` are never read. The offset is less than `avail`
-when another message follows the response.
+when another message follows the response. An `avail` outside the buffer
+answers `None`.
+
+`input` is a buffer still being written, such as the block
+`bytebuilder.builderParts` hands out, and it is read in place, so a
+response whose header declares its length costs the header, not the body.
+
+```medaka
+> responseBoundaryWithin (MB.thaw (encodeUtf8 "HTTP/1.1 204 No Content\r\n\r\nX")) 27
+Some 27
+```
 
 ### `responseBoundary`
 
 ```
-responseBoundary : Array Int -> Option Int
+responseBoundary : Bytes -> Option Int
 responseBoundary input
 ```
 
@@ -720,7 +732,7 @@ which checks the status, the reason phrase, and the fields.
 ### `makeHeader`
 
 ```
-makeHeader : String -> Array Int -> Result String Header
+makeHeader : String -> Bytes -> Result String Header
 makeHeader name value
 ```
 
@@ -731,15 +743,15 @@ them, are rejected, so a field cannot split the response.
 ### `makeResponse`
 
 ```
-makeResponse : Int -> String -> List Header -> Array Int -> Result String Response
+makeResponse : Int -> String -> List Header -> Bytes -> Result String Response
 makeResponse status reason headers body
 ```
 
 A response with the given status, reason phrase, fields, and body, or
 `Err` when one of them is invalid.
 
-`status` must be from 100 to 599, `reason` printable ASCII, and every
-element of `body` from 0 to 255. `headers` may not include
+`status` must be from 100 to 599 and `reason` printable ASCII.
+`headers` may not include
 `Content-Length` or `Transfer-Encoding`; `serializeResponse` writes the
 framing itself.
 
@@ -763,10 +775,10 @@ that `serializeResponse` adds is not among them.
 ### `responseBody`
 
 ```
-responseBody : Response -> Array Int
+responseBody : Response -> Bytes
 ```
 
-The body bytes. The result is a copy.
+The body bytes.
 
 ### `responseReason`
 
@@ -779,7 +791,7 @@ The reason phrase, as given to `makeResponse`.
 ### `serializeResponse`
 
 ```
-serializeResponse : Response -> Array Int
+serializeResponse : Response -> Bytes
 ```
 
 The bytes of the response as an HTTP/1.1 message: the status line, the
@@ -803,7 +815,7 @@ Parameters are checked by `parseMediaType` and then dropped.
 data DecodedBody
   = JsonBody MediaType Json
   | TextBody MediaType String
-  | RawBody MediaType (Array Int)
+  | RawBody MediaType Bytes
 ```
 
 A request body decoded by its media type. An `application/json` body is
@@ -853,7 +865,7 @@ The lowercased subtype, such as `"plain"` for `text/plain`.
 ### `parseMediaType`
 
 ```
-parseMediaType : Array Int -> Result String MediaType
+parseMediaType : Bytes -> Result String MediaType
 parseMediaType value
 ```
 

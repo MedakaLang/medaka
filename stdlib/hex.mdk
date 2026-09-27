@@ -1,13 +1,8 @@
-{- | Hexadecimal encoding and decoding of bytes.
+{- | Hexadecimal encoding and decoding.
 
-   `encode`/`decode` take an `Array Int` with each element from `0` to `255`,
-   the same form `readFileBytes` and `writeFileBytes` use; `encodeBytes`/
-   `decodeBytes` take and return `Bytes` instead. Each byte becomes two hex
+   `encode`/`decode` take and return `Bytes`. Each byte becomes two hex
    digits, most significant first. Encoding produces lowercase digits and
-   decoding accepts either case.
-
-   An element outside `0` to `255` is masked to its low eight bits on the way
-   in rather than refused, so `-1` and `511` both encode as `"ff"`. -}
+   decoding accepts either case; `encodeUpper` produces uppercase digits. -}
 
 -- hex/base64 codec wrappers over a module-local decode share identical wrapper bodies by design.
 -- lint-disable-file rule-duplicate-body
@@ -19,7 +14,9 @@
 
 import array.{fromList, get as arrGet}
 import bytes as B
-import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
+import bytes.{
+  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
+}
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 import u8 as U8
@@ -62,36 +59,26 @@ encodeAs : Bytes -> Bool -> String
 encodeAs bs upper =
   stringFromChars (arrayFromList (encodeGo bs (B.length bs - 1) upper []))
 
-{- | The byte string as lowercase hex, two digits per byte.
-
-   > encodeBytes (fromArrayAssumeByteDomain [|255, 0, 16|])
-   "ff0010" -}
-export
-encodeBytes : Bytes -> String
-encodeBytes b = encodeAs b False
-
 {- | The bytes as lowercase hex, two digits per byte.
 
-   > encode (fromList [255, 0, 16])
+   > encode (fromU8Array [|255, 0, 16|])
    "ff0010" -}
 export
-encode : Array Int -> String
-encode bytes = encodeBytes (fromArrayAssumeByteDomain bytes)
+encode : Bytes -> String
+encode b = encodeAs b False
 
--- > encode ([||] : Array Int)
+-- > encode (fromU8Array [||])
 -- ""
--- > encode (fromList [0])
+-- > encode (fromU8Array [|0|])
 -- "00"
--- > encode (fromList [300, -1])
--- "2cff"
 
 {- | The bytes as uppercase hex, two digits per byte.
 
-   > encodeUpper (fromList [255, 0, 16])
+   > encodeUpper (fromU8Array [|255, 0, 16|])
    "FF0010" -}
 export
-encodeUpper : Array Int -> String
-encodeUpper bytes = encodeAs (fromArrayAssumeByteDomain bytes) True
+encodeUpper : Bytes -> String
+encodeUpper b = encodeAs b True
 
 {- | The UTF-8 bytes of a string as lowercase hex.
 
@@ -99,7 +86,7 @@ encodeUpper bytes = encodeAs (fromArrayAssumeByteDomain bytes) True
    "48656c6c6f" -}
 export
 encodeString : String -> String
-encodeString s = encode (toUtf8 s)
+encodeString s = encode (encodeUtf8 s)
 
 -- # Decoding
 
@@ -120,13 +107,13 @@ decodeGo chars i n acc
    `Err` when the string has an odd length or any character that is not a
    hex digit. Whitespace is not skipped.
 
-   > map toArray (decodeBytes "ff0010")
+   > map toArray (decode "ff0010")
    Ok [|255, 0, 16|]
-   > decodeBytes "zz"
+   > decode "zz"
    Err "hex.decode: invalid hex digit" -}
 export
-decodeBytes : String -> Result String Bytes
-decodeBytes s =
+decode : String -> Result String Bytes
+decode s =
   let chars = toChars s
   let n = arrayLength chars
   if isOdd n then
@@ -139,36 +126,20 @@ decodeBytes s =
       (xs => fromArrayAssumeByteDomain (arrayFromList xs))
       (decodeGo chars 0 n [])
 
--- > let b = fromArrayAssumeByteDomain [||] in decodeBytes (encodeBytes b) == Ok b
+-- > let b = fromU8Array [||] in decode (encode b) == Ok b
 -- True
--- > let b = fromArrayAssumeByteDomain [|0|] in decodeBytes (encodeBytes b) == Ok b
+-- > let b = fromU8Array [|0|] in decode (encode b) == Ok b
 -- True
--- > let b = fromArrayAssumeByteDomain (fromList [0..=255]) in decodeBytes (encodeBytes b) == Ok b
+-- > let b = fromArrayAssumeByteDomain (fromList [0..=255]) in decode (encode b) == Ok b
 -- True
--- > decodeBytes "f"
--- Err "hex.decode: odd-length input"
--- > decodeBytes "gg"
--- Err "hex.decode: invalid hex digit"
-
-{- | The bytes written in a hex string.
-
-   `Err` when the string has an odd length or any character that is not a
-   hex digit. Whitespace is not skipped.
-
-   > decode "ff0010"
-   Ok [|255, 0, 16|]
-   > decode "zz"
-   Err "hex.decode: invalid hex digit" -}
-export
-decode : String -> Result String (Array Int)
-decode s = map toArray (decodeBytes s)
-
--- > decode "FF0010"
+-- > map toArray (decode "FF0010")
 -- Ok [|255, 0, 16|]
--- > decode ""
+-- > map toArray (decode "")
 -- Ok [||]
 -- > decode "f"
 -- Err "hex.decode: odd-length input"
+-- > decode "gg"
+-- Err "hex.decode: invalid hex digit"
 
 {- | The string whose UTF-8 bytes are written in a hex string.
 
@@ -176,21 +147,19 @@ decode s = map toArray (decodeBytes s)
    Ok "Hello" -}
 export
 decodeString : String -> Result String String
-decodeString s = map fromUtf8 (decode s)
+decodeString s = map (bs => fromUtf8 (toArray bs)) (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 
-toByteArray : List Int -> Array Int
-toByteArray xs = arrayFromList (map (b => (b % 256 + 256) % 256) xs)
+toBytes : List Int -> Bytes
+toBytes xs =
+  fromArrayAssumeByteDomain
+    (arrayFromList (map (b => (b % 256 + 256) % 256) xs))
 
-prop "hex round-trip: decode (encode bs) == Ok bs" (xs : List Int) =
-  let bs = toByteArray xs
-  decode (encode bs) == Ok bs
+prop "hex round-trip: decode (encode b) == Ok b" (xs : List Int) =
+  let b = toBytes xs
+  decode (encode b) == Ok b
 
 prop "hex encode length is 2x byte length" (xs : List Int) =
-  let bs = toByteArray xs
-  stringLength (encode bs) == 2 * arrayLength bs
-
-prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int) =
-  let b = fromArrayAssumeByteDomain (toByteArray xs)
-  decodeBytes (encodeBytes b) == Ok b
+  let b = toBytes xs
+  stringLength (encode b) == 2 * B.length b

@@ -2,6 +2,7 @@
    the registered native corpus gate; these cases keep discovery non-vacuous. -}
 
 import test.{expectEach, expectEqual, expectTrue}
+import bytes.{toArray}
 import hex.{decode}
 import lib.secp256k1.{
   EcdsaSignature,
@@ -10,7 +11,7 @@ import lib.secp256k1.{
 }
 
 bytes : String -> Array Int
-bytes value = resultOrPanic "ecdsa_test: malformed hex" (decode value)
+bytes value = toArray (resultOrPanic "ecdsa_test: malformed hex" (decode value))
 
 signature : String -> EcdsaSignature
 signature value =

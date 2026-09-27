@@ -34,6 +34,7 @@ import lib.recordfmt.{Cell(..), nthCell}
 import lib.select.{eColInt, eEq, eLitI, eLitT}
 import lib.sqlite.{Db, openDb, scanTableRowsIpk, rowCellsWithIpk}
 import lib.btree.{Row}
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encodeUpper}
 import list.{reverse}
 import demo_support.{printRows, parseN}
@@ -105,7 +106,7 @@ renderCell CNull = ""
 renderCell (CInt n) = intToString n
 renderCell (CInt64 x) = display x
 renderCell (CText s) = s
-renderCell (CBlob a) = encodeUpper a
+renderCell (CBlob a) = encodeUpper (fromArrayAssumeByteDomain a)
 renderCell (CFloat f) = floatToString f
 
 renderRow : Option Int -> Row -> String

@@ -94,14 +94,14 @@ Operations on `Array a`.
 
 ## [`base32`](base32.md)
 
-Base32 encoding and decoding of bytes, per RFC 4648.
+Base32 encoding and decoding, per RFC 4648.
 
 - [`base32Encode`](base32.md#base32encode)
 - [`base32Decode`](base32.md#base32decode)
 
 ## [`base64`](base64.md)
 
-Base64 encoding and decoding of bytes, per RFC 4648.
+Base64 encoding and decoding, per RFC 4648.
 
 - [`encode`](base64.md#encode)
 - [`encodeUrlSafe`](base64.md#encodeurlsafe)
@@ -136,7 +136,7 @@ A buffer for building byte arrays.
 
 ## [`byteparser`](byteparser.md)
 
-Parser combinators over byte arrays.
+Parser combinators over `Bytes`.
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParserE`](byteparser.md#byteparsere)
@@ -160,7 +160,6 @@ Parser combinators over byte arrays.
 - [`choice`](byteparser.md#choice)
 - [`chainl1`](byteparser.md#chainl1)
 - [`takeBytes`](byteparser.md#takebytes)
-- [`takeSlice`](byteparser.md#takeslice)
 - [`beUint`](byteparser.md#beuint)
 - [`beSint`](byteparser.md#besint)
 - [`beFloat64`](byteparser.md#befloat64)
@@ -174,6 +173,7 @@ Parser combinators over byte arrays.
 - [`leU32`](byteparser.md#leu32)
 - [`leU64`](byteparser.md#leu64)
 - [`runByteParser`](byteparser.md#runbyteparser)
+- [`runByteParserWithin`](byteparser.md#runbyteparserwithin)
 
 ## [`bytes`](bytes.md)
 
@@ -321,22 +321,20 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 
 ## [`crypto.hmac`](crypto.hmac.md)
 
-HMAC-SHA-256 (RFC 2104) over byte arrays.
+HMAC-SHA-256 (RFC 2104) over byte strings.
 
 - [`ctEq`](crypto.hmac.md#cteq)
 - [`hmacSha256`](crypto.hmac.md#hmacsha256)
-- [`hmacSha256FixedBytes`](crypto.hmac.md#hmacsha256fixedbytes)
 - [`HmacSha256Key`](crypto.hmac.md#hmacsha256key)
 - [`hmacSha256Key`](crypto.hmac.md#hmacsha256key)
 - [`hmacSha256WithKey`](crypto.hmac.md#hmacsha256withkey)
 
 ## [`crypto.sha256`](crypto.sha256.md)
 
-SHA-256 hashing of a byte array (FIPS 180-4).
+SHA-256 hashing of a byte string (FIPS 180-4).
 
 - [`sha256AssumeByteDomainFrom`](crypto.sha256.md#sha256assumebytedomainfrom)
 - [`sha256FoldKeyBlock`](crypto.sha256.md#sha256foldkeyblock)
-- [`sha256FixedBytes`](crypto.sha256.md#sha256fixedbytes)
 - [`sha256`](crypto.sha256.md#sha256)
 
 ## [`fs`](fs.md)
@@ -389,13 +387,11 @@ A mutable set of distinct elements, keyed by hash.
 
 ## [`hex`](hex.md)
 
-Hexadecimal encoding and decoding of bytes.
+Hexadecimal encoding and decoding.
 
-- [`encodeBytes`](hex.md#encodebytes)
 - [`encode`](hex.md#encode)
 - [`encodeUpper`](hex.md#encodeupper)
 - [`encodeString`](hex.md#encodestring)
-- [`decodeBytes`](hex.md#decodebytes)
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
 
@@ -706,6 +702,8 @@ A mutable string of bytes, fixed at its allocated length.
 - [`blit`](mut_bytes.md#blit)
 - [`freeze`](mut_bytes.md#freeze)
 - [`thaw`](mut_bytes.md#thaw)
+- [`adoptByteBlockUnsafe`](mut_bytes.md#adoptbyteblockunsafe)
+- [`lendByteBlockUnsafe`](mut_bytes.md#lendbyteblockunsafe)
 
 ## [`net`](net.md)
 
@@ -742,8 +740,6 @@ TCP connections and name resolution.
 - [`accept`](net_async.md#accept)
 - [`recv`](net_async.md#recv)
 - [`recvWithin`](net_async.md#recvwithin)
-- [`recvBytes`](net_async.md#recvbytes)
-- [`recvBytesWithin`](net_async.md#recvbyteswithin)
 - [`send`](net_async.md#send)
 - [`sendAll`](net_async.md#sendall)
 - [`sendAllWithin`](net_async.md#sendallwithin)

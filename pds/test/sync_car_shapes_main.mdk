@@ -54,7 +54,7 @@
    is graded as text and not merely as a substring. -}
 
 import array.{sliceClamped}
-import bytes.{fromArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort, zip}
@@ -81,6 +81,7 @@ import lib.server_core.{
 }
 import lib.store.{Store, storeFromRepo}
 import lib.tid.{Tid, tidClockId, tidEncode, tidMicros, tidParse}
+import test.request_support.{queryRequest}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -92,7 +93,9 @@ handleFixture : Server ->
   Array Int ->
   (Store, Array Int)
 handleFixture httpServer context store request = match fromArray request
-  Some packed => handleBytes httpServer context store packed
+  Some packed =>
+    let (next, response) = handleBytes httpServer context store packed
+    (next, toArray response)
   None => panic "sync_car_shapes: request fixture holds a non-byte element"
 
 {- | The secret every row in this corpus was signed with
@@ -160,7 +163,8 @@ testContext =
   RequestContext { nowSeconds = 1700000000, nonce = [||], login = None }
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "sync_car_shapes: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "sync_car_shapes: malformed hex" (decode text))
 
 mustCbor : Array Int -> DagCbor
 mustCbor bytes =
@@ -245,10 +249,6 @@ fixtureRepo did records rev =
 
 -- ── the seam ────────────────────────────────────────────────────────────────
 
-queryRequest : String -> Array Int
-queryRequest target =
-  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
-
 headerEnd : Array Int -> Int -> Int
 headerEnd bytes i =
   if i + 3 >= arrayLength bytes then
@@ -279,7 +279,8 @@ responseStatus bytes = match split " " (responseHead bytes)
 -- it, so the successor store is discarded rather than threaded.
 call : Server -> Store -> String -> Array Int
 call server store target =
-  let (_, bytes) = handleFixture server testContext store (queryRequest target)
+  let (_, bytes) =
+    handleFixture server testContext store (queryRequest accountHostText target)
   bytes
 
 hasCarMediaType : Array Int -> Bool
@@ -385,7 +386,8 @@ gradeDecoded rows tag body = match carDecode body
     let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
     let containOk = missing == []
     let boundedOk = length blocks <= maxRecordBlocks tag
-    let bytesOk = encode body == rowValue rows "\{tag}-CAR"
+    let bytesOk =
+      encode (fromArrayAssumeByteDomain body) == rowValue rows "\{tag}-CAR"
     let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"
     let () =
       println
@@ -418,7 +420,9 @@ gradeBlocksPresent server store did rows =
   let response = call server store (blocksTarget did wanted)
   let status = responseStatus response
   let body = responseBody response
-  let bytesOk = encode body == rowValue rows "GETBLOCKS-PRESENT-CAR"
+  let bytesOk =
+    encode (fromArrayAssumeByteDomain body)
+      == rowValue rows "GETBLOCKS-PRESENT-CAR"
   let framed = status == "200" && hasCarMediaType response
   let rootsOk =
     emittedRootCount body == length (rowCids rows "GETBLOCKS-PRESENT-ROOTS")

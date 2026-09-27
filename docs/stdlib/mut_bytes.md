@@ -181,6 +181,44 @@ A write to the result does not reach `b`.
 ([|104, 105|], [|65, 105|])
 ```
 
+## Runtime interop
+
+### `adoptByteBlockUnsafe`
+
+```
+adoptByteBlockUnsafe : ByteBlock -> MutBytes
+adoptByteBlockUnsafe bb
+```
+
+The mutable byte string holding `bb` itself, with no copy.
+
+The byte string and `bb` share storage, so a write through either is seen
+by the other. The whole block becomes the byte string.
+
+```medaka
+> let bb = byteBlockFromString "hi" in let mb = adoptByteBlockUnsafe bb in let _ = setInPlace 0 72 mb in byteBlockGetUnsafe 0 bb
+72
+```
+
+### `lendByteBlockUnsafe`
+
+```
+lendByteBlockUnsafe : MutBytes -> ByteBlock
+lendByteBlockUnsafe mb
+```
+
+The block `mb` is built on, with no copy.
+
+The counterpart of `adoptByteBlockUnsafe`, for a caller that reads the
+bytes in place without paying for `freeze`'s copy. A write to the block
+changes `mb`, and a later write to `mb` changes what the block holds, so
+read it before `mb` is written again.
+
+```medaka
+> byteBlockLength (lendByteBlockUnsafe (make 5))
+5
+```
+
 ## Instances
 
 ### `Index MutBytes Int U8`

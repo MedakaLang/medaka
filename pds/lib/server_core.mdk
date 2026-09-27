@@ -21,7 +21,7 @@ import http.{
   Response,
   serializeResponse,
 }
-import bytes.{Bytes, toArray}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import hex as Hex
 import json.{Json(..), get}
 import lib.credential.{
@@ -242,7 +242,7 @@ presentedHeader [] 1 (Some value) = bearerOf (fromUtf8 value)
 presentedHeader [] _ _ = NotBearer
 presentedHeader (header :: rest) count value =
   if headerName header == "authorization" then
-    presentedHeader rest (count + 1) (Some (headerValue header))
+    presentedHeader rest (count + 1) (Some (toArray (headerValue header)))
   else
     presentedHeader rest count value
 
@@ -397,7 +397,7 @@ handleRouted (Server account registry handler) context store request =
 
    It exists because a subscription leaves the request/response lifecycle
    permanently and nothing downstream of `handle` can express that — `handle`
-   returns a complete `Response` and `handleBytes` a complete `Array Int`. So
+   returns a complete `Response` and `handleBytes` its complete `Bytes`. So
    the shell asks this question first, and only a `NotAnUpgrade` answer
    reaches the ordinary path. Every DECISION in it is taken here rather than
    in the shell: routing, NSID admission, the handshake's own well-formedness,
@@ -441,7 +441,7 @@ pickHeader _ [] 1 (Some value) = HeaderPicked (fromUtf8 value)
 pickHeader _ [] _ _ = HeaderRepeated
 pickHeader wanted (header :: rest) count value =
   if headerName header == wanted then
-    pickHeader wanted rest (count + 1) (Some (headerValue header))
+    pickHeader wanted rest (count + 1) (Some (toArray (headerValue header)))
   else
     pickHeader wanted rest count value
 
@@ -666,7 +666,7 @@ serviceAuthFor account context nsid audience = ServiceAuthRequest {
   iss = accountDid account,
   aud = audience,
   lxm = Some nsid,
-  jti = Hex.encode context.nonce,
+  jti = Hex.encode (fromArrayAssumeByteDomain context.nonce),
   iat = context.nowSeconds,
   exp = None,
 }
@@ -1062,7 +1062,7 @@ serviceAuthClaims account context table params = do
     iss = accountDid account,
     aud = audience,
     lxm = method,
-    jti = Hex.encode context.nonce,
+    jti = Hex.encode (fromArrayAssumeByteDomain context.nonce),
     iat = context.nowSeconds,
     exp = Some expiry,
   }
@@ -1184,7 +1184,7 @@ resourceExcessResponse =
 -- | Handle one complete buffered request. Both HTTP failure classes preserve
 -- the exact input Store; successful calls expose the handler's successor.
 export
-handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Array Int)
+handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Bytes)
 handleBytes server context store bytes = match parseRequestClassified bytes
   Err (HttpMalformed _) =>
     (store, serializeResponse (withAllowOrigin malformedHttpResponse))

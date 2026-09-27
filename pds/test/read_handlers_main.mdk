@@ -33,7 +33,7 @@
    OWN `did:web` carries the repository's signing key, so that arm needs a
    repository and is graded here, against the corpus's key. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -60,6 +60,16 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse}
+import test.fixture_support.{
+  fieldText, lastHex, meaningful, testNonce, testSecret
+}
+import test.request_support.{
+  createBody,
+  deleteBody,
+  pathRequest,
+  procedureRequest,
+  queryRequest,
+}
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -71,7 +81,9 @@ handleFixture : Server ->
   Array Int ->
   (Store, Array Int)
 handleFixture httpServer context store request = match fromArray request
-  Some packed => handleBytes httpServer context store packed
+  Some packed =>
+    let (next, response) = handleBytes httpServer context store packed
+    (next, toArray response)
   None => panic "read_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
@@ -84,7 +96,8 @@ collectionText : String
 collectionText = "app.bsky.feed.post"
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "read_handlers: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "read_handlers: malformed hex" (decode text))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "read_handlers: malformed TID" (tidParse text)
@@ -118,26 +131,8 @@ storeMustRepo store =
 
 -- ── the session credential every write now needs ──────────────────────────
 
-{- | A fixed session-token secret and a fixed instant. Record writes are
-   `AuthenticatedRoute`, so `lib.server_core`'s seam refuses one that
-   arrives without a verifiable bearer token — a driver that replays
-   writes must present one, and the store it replays them against must
-   carry the secret that token was minted from.
-
-   The secret is a fixture, not entropy: this file grades handler
-   behavior, and a random secret would only make the transcript
-   irreproducible. -}
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
-
 testInstant : Int
 testInstant = 1700000000
-
-{- | The per-request nonce every request in this file is placed at. Nothing
-   here drives a route that mints a token, so the value only has to be fixed;
-   `pds/shell/server.mdk` draws a real one from `osEntropyBytes` per request. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 testContext : RequestContext
 testContext =
@@ -176,23 +171,6 @@ testToken did =
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-procedureRequest : String -> String -> String -> Array Int
-procedureRequest did nsid body =
-  let bytes = toUtf8 body
-  toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{testToken did}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
-    ++ bytes
-
-queryRequest : String -> Array Int
-queryRequest target =
-  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
-
--- | A GET at a bare path. The well-knowns are not XRPC, so they are reached
--- without the `/xrpc/` prefix `queryRequest` adds.
-pathRequest : String -> Array Int
-pathRequest target =
-  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
-
 -- ── response inspection ─────────────────────────────────────────────────────
 
 headerEnd : Array Int -> Int -> Int
@@ -221,11 +199,6 @@ responseJson bytes =
     "read_handlers: response body is not JSON"
     (parse (responseBodyText bytes))
 
-fieldText : String -> Json -> String
-fieldText name value = match get name value
-  Some (JString text) => text
-  _ => "<missing:\{name}>"
-
 errorCode : Array Int -> String
 errorCode bytes = fieldText "error" (responseJson bytes)
 
@@ -242,25 +215,6 @@ rkeysOf : Json -> String
 rkeysOf value = join "," (map (fieldText "uri") (recordsOf value))
 
 -- ── the transcript ──────────────────────────────────────────────────────────
-
-createBody : String -> String -> String -> Json -> String
-createBody did collection rkey record =
-  stringify
-    (jObject [
-      ("repo", JString did),
-      ("collection", JString collection),
-      ("rkey", JString rkey),
-      ("record", record),
-    ])
-
-deleteBody : String -> String -> String -> String
-deleteBody did collection rkey =
-  stringify
-    (jObject [
-      ("repo", JString did),
-      ("collection", JString collection),
-      ("rkey", JString rkey),
-    ])
 
 splitPath : String -> (String, String)
 splitPath text = match split "/" text
@@ -284,7 +238,11 @@ runStep did server store opLine = match split "\t" opLine
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "read_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleFixture server testContext store (procedureRequest did nsid body)
+      handleFixture
+        server
+        testContext
+        store
+        (procedureRequest accountHostText (testToken did) nsid body)
     if errorCode responseBytes == "<missing:error>" then
       next
     else
@@ -307,13 +265,13 @@ check label ok detail =
 readJson : Server -> Store -> String -> Json
 readJson server store target =
   let (_, responseBytes) =
-    handleFixture server testContext store (queryRequest target)
+    handleFixture server testContext store (queryRequest accountHostText target)
   responseJson responseBytes
 
 readError : Server -> Store -> String -> String
 readError server store target =
   let (_, responseBytes) =
-    handleFixture server testContext store (queryRequest target)
+    handleFixture server testContext store (queryRequest accountHostText target)
   errorCode responseBytes
 
 recordRoute : String -> String -> String
@@ -334,14 +292,16 @@ carCell server store did corpusHex =
       server
       testContext
       store
-      (queryRequest "com.atproto.sync.getRepo?did=\{did}")
+      (queryRequest accountHostText "com.atproto.sync.getRepo?did=\{did}")
   let served = responseBodyBytes responseBytes
   let exported = match repoExportCar (storeMustRepo store)
     Ok bytes => bytes
     Err message => panic "read_handlers: repoExportCar failed: \{message}"
   let corpus = mustHex corpusHex
-  let servedHex = encode served
-  let ok = servedHex == encode exported && servedHex == encode corpus
+  let servedHex = encode (fromArrayAssumeByteDomain served)
+  let ok =
+    servedHex == encode (fromArrayAssumeByteDomain exported)
+      && servedHex == encode (fromArrayAssumeByteDomain corpus)
   check
     "sync-getRepo-car-bytes"
     ok
@@ -349,9 +309,6 @@ carCell server store did corpusHex =
 
 firstHex : String -> String
 firstHex text = stringSlice 0 32 text
-
-lastHex : String -> String
-lastHex text = stringSlice (stringLength text - 32) (stringLength text) text
 
 didKeyMultibaseOf : String -> String
 didKeyMultibaseOf did =
@@ -388,7 +345,11 @@ responseStatus bytes =
 wellKnownDidJsonBytes : Server -> Store -> Array Int
 wellKnownDidJsonBytes server store =
   let (_, responseBytes) =
-    handleFixture server testContext store (pathRequest "/.well-known/did.json")
+    handleFixture
+      server
+      testContext
+      store
+      (pathRequest accountHostText "/.well-known/did.json")
   responseBytes
 
 {- | What a resolver gets from `/.well-known/did.json`, in the three
@@ -677,9 +638,6 @@ runRows : List String -> <IO> Unit
 runRows [meta, t0, _, _, _, _, _, op1, _, _, _, op2, _, op3, _, op4, commit4, _, carRow, "END"] =
   runTranscript (split "\t" meta) t0 op1 op2 op3 op4 commit4 carRow
 runRows _ = panic "read_handlers: unexpected corpus shape"
-
-meaningful : String -> Bool
-meaningful line = line /= "" && not (startsWith "#" line)
 
 runRead : Result String (List String) -> <IO> Unit
 runRead (Err message) = panic "read_handlers: cannot read corpus: \{message}"

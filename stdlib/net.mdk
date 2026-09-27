@@ -22,9 +22,13 @@
 -- interpreter (NET-DESIGN.md §7).
 
 import array.{setInPlace}
+import bytes as B
+import bytes.{Bytes, fromArrayAssumeByteDomain}
+import list.{reverse}
 import vector.{Vector, new, push, toArray}
 import string.{toUtf8, fromUtf8}
 import time.{Duration, toMillis}
+import u8 as U8
 import test.{expectAll, expectEqual, expectTrue}
 
 -- # Handles
@@ -89,24 +93,29 @@ accept lis = netTcpAccept lis
 
    `sendAll` is the form that sends everything. -}
 export
-send : Connection h -> Array Int -> <Net h> Result String Int
-send conn bs = netSend conn bs
+send : Connection h -> Bytes -> <Net h> Result String Int
+send conn bs = netSend conn (B.toArray bs)
 
 {- | Receives up to `n` bytes in one call.
 
-   An empty array means the peer has closed the connection. `recvAll` is the
-   form that reads to the end. -}
+   An empty result means the peer has closed the connection. `recvAll` is
+   the form that reads to the end. -}
 export
-recv : Connection h -> Int -> <Net h> Result String (Array Int)
-recv conn n = netRecv conn n
+recv : Connection h -> Int -> <Net h> Result String Bytes
+recv conn n = map fromArrayAssumeByteDomain (netRecv conn n)
 
 {- | Sends every byte, looping over `send` as needed.
 
    `Err` on the first failed send, or when a send writes nothing, which is
    treated as a stalled connection. -}
 export
-sendAll : Connection h -> Array Int -> <Net h> Result String Unit
-sendAll conn bs = sendAllFrom (bytes off => netSendFrom conn bytes off) bs 0
+sendAll : Connection h -> Bytes -> <Net h> Result String Unit
+sendAll conn bs = sendArray conn (B.toArray bs)
+
+-- The send externs take an array, so the payload is unpacked once here and
+-- the loop below advances an offset through that one copy.
+sendArray : Connection h -> Array Int -> <Net h> Result String Unit
+sendArray conn bs = sendAllFrom (bytes off => netSendFrom conn bytes off) bs 0
 
 sendAllFrom : (Array Int -> Int -> <e> Result String Int) ->
   Array Int ->
@@ -212,30 +221,29 @@ test "sendAll returns the first host error without another write" =
     expectEqual [0, 2] !offsets,
   ]
 
-recvAllLoop : Connection h -> Vector Int -> <Net h> Result String (Array Int)
-recvAllLoop conn buf = match recv conn 4096
+recvAllLoop : Connection h -> List Bytes -> <Net h> Result String Bytes
+recvAllLoop conn chunks = match recv conn 4096
   Err e => Err e
   Ok chunk =>
-    if arrayLength chunk == 0 then
-      Ok (toArray buf)
+    if B.isEmpty chunk then
+      Ok (B.concat (reverse chunks))
     else
-      let _ = fold (acc b => let _ = push b buf in acc) () chunk
-      recvAllLoop conn buf
+      recvAllLoop conn (chunk :: chunks)
 
 {- | Receives everything until the peer closes the connection.
 
    `Err` on the first failed receive; whatever was read before it is
    discarded. -}
 export
-recvAll : Connection h -> <Net h> Result String (Array Int)
-recvAll conn = recvAllLoop conn (new ())
+recvAll : Connection h -> <Net h> Result String Bytes
+recvAll conn = recvAllLoop conn []
 
 -- # Text
 
 -- | Sends a string as UTF-8, every byte of it.
 export
 sendString : Connection h -> String -> <Net h> Result String Unit
-sendString conn s = sendAll conn (toUtf8 s)
+sendString conn s = sendArray conn (toUtf8 s)
 
 {- | Receives everything until the peer closes the connection, decoded as
    UTF-8.
@@ -244,7 +252,7 @@ sendString conn s = sendAll conn (toUtf8 s)
    or a bounded amount with `recv`. -}
 export
 recvString : Connection h -> <Net h> Result String String
-recvString conn = map fromUtf8 (recvAll conn)
+recvString conn = map (bs => fromUtf8 (B.toArray bs)) (recvAll conn)
 
 -- | Sends a string as UTF-8 followed by a newline.
 export
@@ -257,11 +265,11 @@ recvLineLoop : Connection h ->
 recvLineLoop conn buf = match recv conn 1
   Err e => Err e
   Ok chunk =>
-    if arrayLength chunk == 0 then
+    if B.isEmpty chunk then
       -- EOF: no trailing newline seen. Report whatever was buffered, if any.
       if isEmpty buf then Ok None else Ok (Some (fromUtf8 (toArray buf)))
     else
-      let b = arrayGetUnsafe 0 chunk
+      let b = U8.toInt chunk[0]
       if b == 10 then
         Ok (Some (fromUtf8 (toArray buf)))
       else

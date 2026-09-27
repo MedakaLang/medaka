@@ -1,0 +1,13 @@
+-- #3411 — `bytebuilder.builderParts` hands out the builder's live block, and a
+-- later emit writes into that same block. As a `Bytes` it could be compared
+-- (`b == b`), hashed or kept as a value while its contents changed under it.
+-- It is a `MutBytes`, which has no `Eq` impl, so the comparison below is a
+-- type error rather than an equality that later emits can silently change.
+import bytebuilder.{builderParts, emitBytes, newBuilder}
+import bytes.{encodeUtf8}
+
+main =
+  let buf = newBuilder ()
+  let () = emitBytes (encodeUtf8 "hey") buf
+  let (b, _) = builderParts buf
+  println (b == b)

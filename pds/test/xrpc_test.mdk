@@ -1,6 +1,6 @@
 {- | Focused structural XRPC registry, routing, and canonical-error tests. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, toArray}
 import http.{
   maxJsonBodyBytes,
   maxRawBodyBytes,
@@ -15,6 +15,7 @@ import http.{
 import json.{stringify}
 import string.{toUtf8}
 import test.{expectEach, expectEqual, expectFalse, expectTrue, fail, pass}
+import test.fixture_support.{appendBytes}
 import lib.nsid.{validateNsid}
 import lib.xrpc.{
   AuthPolicy(..),
@@ -36,12 +37,6 @@ import lib.xrpc.{
   xrpcFailureResponse,
   xrpcFailureStatus,
 }
-
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right =
-  let leftSize = arrayLength left
-  arrayMakeWith (leftSize + arrayLength right) (i =>
-    if i < leftSize then left[i] else right[i - leftSize])
 
 -- The framer reads a packed `Bytes`; this driver's fixtures are still
 -- `Array Int`, and `fromArray` is the only door between them. A fixture
@@ -118,7 +113,7 @@ failureValueMatches status code message failed =
   xrpcFailureStatus failed == status
     && xrpcFailureError failed == code
     && xrpcFailureMessage failed == message
-    && serializeResponse (xrpcFailureResponse failed)
+    && toArray (serializeResponse (xrpcFailureResponse failed))
       == expectedFailure status code message
 
 failureMatches : Int -> String -> String -> Request -> Bool

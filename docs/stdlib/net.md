@@ -109,7 +109,7 @@ address the listener was granted.
 ### `send`
 
 ```
-send : Connection h -> Array Int -> <Net h> Result String Int
+send : Connection h -> Bytes -> <Net h> Result String Int
 send conn bs
 ```
 
@@ -121,19 +121,19 @@ which may be fewer than given.
 ### `recv`
 
 ```
-recv : Connection h -> Int -> <Net h> Result String (Array Int)
+recv : Connection h -> Int -> <Net h> Result String Bytes
 recv conn n
 ```
 
 Receives up to `n` bytes in one call.
 
-An empty array means the peer has closed the connection. `recvAll` is the
-form that reads to the end.
+An empty result means the peer has closed the connection. `recvAll` is
+the form that reads to the end.
 
 ### `sendAll`
 
 ```
-sendAll : Connection h -> Array Int -> <Net h> Result String Unit
+sendAll : Connection h -> Bytes -> <Net h> Result String Unit
 sendAll conn bs
 ```
 
@@ -145,7 +145,7 @@ treated as a stalled connection.
 ### `recvAll`
 
 ```
-recvAll : Connection h -> <Net h> Result String (Array Int)
+recvAll : Connection h -> <Net h> Result String Bytes
 recvAll conn
 ```
 

@@ -1,5 +1,5 @@
 # META
-source_lines=203
+source_lines=236
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable string of bytes, fixed at its allocated length.
@@ -30,9 +30,8 @@ stages=DESUGAR,MARK
 -- neither aliases.
 
 import core.{Debug, Index, Option}
-import bytes.{
-  Bytes, adoptByteBlockUnsafe, encodeUtf8, lendByteBlockUnsafe, toArray
-}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, toArray}
 import u8 as U8
 
 {- | The mutable byte-string type.
@@ -179,7 +178,7 @@ blit (src@(MutBytes sb)) srcOff (dst@(MutBytes db)) dstOff len =
 export
 freeze : MutBytes -> Bytes
 freeze (mb@(MutBytes bb)) =
-  adoptByteBlockUnsafe (byteBlockCopyUnsafe (byteBlockLength bb) bb)
+  B.adoptByteBlockUnsafe (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 
 {- | A mutable copy of `b`.
 
@@ -190,8 +189,42 @@ freeze (mb@(MutBytes bb)) =
 export
 thaw : Bytes -> MutBytes
 thaw b =
-  let bb = lendByteBlockUnsafe b
+  let bb = B.lendByteBlockUnsafe b
   MutBytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
+
+-- # Runtime interop
+
+-- The two exports with a `ByteBlock` in their signature, the counterparts of
+-- `bytes`' `adoptByteBlockUnsafe` and `lendByteBlockUnsafe`. Both alias: the
+-- `MutBytes` and the block share storage, so a write through either reaches
+-- the other, which is what the `Unsafe` suffix names. Call them only from a
+-- module that already holds a `ByteBlock` of its own -- `bytebuilder.mdk`
+-- handing out its live buffer, `http.mdk` reading one in place -- never to
+-- route around this module's own operations.
+
+{- | The mutable byte string holding `bb` itself, with no copy.
+
+   The byte string and `bb` share storage, so a write through either is seen
+   by the other. The whole block becomes the byte string.
+
+   > let bb = byteBlockFromString "hi" in let mb = adoptByteBlockUnsafe bb in let _ = setInPlace 0 72 mb in byteBlockGetUnsafe 0 bb
+   72 -}
+export
+adoptByteBlockUnsafe : ByteBlock -> MutBytes
+adoptByteBlockUnsafe bb = MutBytes bb
+
+{- | The block `mb` is built on, with no copy.
+
+   The counterpart of `adoptByteBlockUnsafe`, for a caller that reads the
+   bytes in place without paying for `freeze`'s copy. A write to the block
+   changes `mb`, and a later write to `mb` changes what the block holds, so
+   read it before `mb` is written again.
+
+   > byteBlockLength (lendByteBlockUnsafe (make 5))
+   5 -}
+export
+lendByteBlockUnsafe : MutBytes -> ByteBlock
+lendByteBlockUnsafe (mb@(MutBytes bb)) = bb
 
 {- | Renders as `MutBytes "<hex>"`, in the lowercase hex form `Debug Bytes`
    uses, from the buffer's current contents.
@@ -201,13 +234,14 @@ thaw b =
    > let mb = make 2 in let _ = setInPlace 0 255 mb in debug mb
    "MutBytes \"ff00\"" -}
 export impl Debug MutBytes where
-  -- `adoptByteBlockUnsafe` aliases rather than copies, so the digits are the
+  -- `B.adoptByteBlockUnsafe` aliases rather than copies, so the digits are the
   -- buffer's current bytes; the `Bytes` it builds is read here and dropped,
   -- and the byte-to-hex walk is not written a second time.
-  debug (MutBytes bb) = "Mut\{debug (adoptByteBlockUnsafe bb)}"
+  debug (MutBytes bb) = "Mut\{debug (B.adoptByteBlockUnsafe bb)}"
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Index" false) (mem "Option" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "lendByteBlockUnsafe" false) (mem "toArray" false))))
+(DUse false (UseAlias ("bytes") "B"))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "toArray" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DNewtype true "MutBytes" () "MutBytes" (TyCon "ByteBlock") ())
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyCon "MutBytes")))
@@ -226,13 +260,18 @@ export impl Debug MutBytes where
 (DTypeSig true "blit" (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DFunDef false "blit" ((PAs "src" (PCon "MutBytes" (PVar "sb"))) (PVar "srcOff") (PAs "dst" (PCon "MutBytes" (PVar "db"))) (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "sb")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "db")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "sb")) (EVar "srcOff")) (EVar "db")) (EVar "dstOff")) (EVar "len"))))))))
 (DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
-(DFunDef false "freeze" ((PAs "mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
+(DFunDef false "freeze" ((PAs "mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "B.adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
 (DTypeSig true "thaw" (TyFun (TyCon "Bytes") (TyCon "MutBytes")))
-(DFunDef false "thaw" ((PVar "b")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "lendByteBlockUnsafe") (EVar "b"))) (DoExpr (EApp (EVar "MutBytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))))
-(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
+(DFunDef false "thaw" ((PVar "b")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "B.lendByteBlockUnsafe") (EVar "b"))) (DoExpr (EApp (EVar "MutBytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))))
+(DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "MutBytes")))
+(DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "MutBytes") (EVar "bb")))
+(DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "MutBytes") (TyCon "ByteBlock")))
+(DFunDef false "lendByteBlockUnsafe" ((PAs "mb" (PCon "MutBytes" (PVar "bb")))) (EVar "bb"))
+(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Index" false) (mem "Option" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "lendByteBlockUnsafe" false) (mem "toArray" false))))
+(DUse false (UseAlias ("bytes") "B"))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "toArray" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DNewtype true "MutBytes" () "MutBytes" (TyCon "ByteBlock") ())
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyCon "MutBytes")))
@@ -251,7 +290,11 @@ export impl Debug MutBytes where
 (DTypeSig true "blit" (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DFunDef false "blit" ((PAs "src" (PCon "MutBytes" (PVar "sb"))) (PVar "srcOff") (PAs "dst" (PCon "MutBytes" (PVar "db"))) (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "sb")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "byteBlockLength") (EVar "db")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "MutBytes.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "sb")) (EVar "srcOff")) (EVar "db")) (EVar "dstOff")) (EVar "len"))))))))
 (DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
-(DFunDef false "freeze" ((PAs "mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
+(DFunDef false "freeze" ((PAs "mb" (PCon "MutBytes" (PVar "bb")))) (EApp (EVar "B.adoptByteBlockUnsafe") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
 (DTypeSig true "thaw" (TyFun (TyCon "Bytes") (TyCon "MutBytes")))
-(DFunDef false "thaw" ((PVar "b")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "lendByteBlockUnsafe") (EVar "b"))) (DoExpr (EApp (EVar "MutBytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))))
-(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
+(DFunDef false "thaw" ((PVar "b")) (EBlock (DoLet false false (PVar "bb") (EApp (EVar "B.lendByteBlockUnsafe") (EVar "b"))) (DoExpr (EApp (EVar "MutBytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))))
+(DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "MutBytes")))
+(DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "MutBytes") (EVar "bb")))
+(DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "MutBytes") (TyCon "ByteBlock")))
+(DFunDef false "lendByteBlockUnsafe" ((PAs "mb" (PCon "MutBytes" (PVar "bb")))) (EVar "bb"))
+(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))

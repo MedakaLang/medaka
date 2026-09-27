@@ -1,14 +1,12 @@
 # META
-source_lines=279
+source_lines=288
 stages=DESUGAR,MARK
 # SOURCE
-{- | Base64 encoding and decoding of bytes, per RFC 4648.
+{- | Base64 encoding and decoding, per RFC 4648.
 
-   Bytes are an `Array Int` with each element from `0` to `255`, the same
-   form `readFileBytes` and `writeFileBytes` use. `encode` and `decode` use
-   the standard alphabet with `=` padding; `encodeUrlSafe` and
-   `decodeUrlSafe` use the URL and filename safe alphabet, with `-` and `_`
-   in place of `+` and `/`, still padded.
+   `encode` and `decode` use the standard alphabet with `=` padding;
+   `encodeUrlSafe` and `decodeUrlSafe` use the URL and filename safe
+   alphabet, with `-` and `_` in place of `+` and `/`, still padded.
 
    Decoding is strict: the length must be a multiple of four, only the
    alphabet and trailing padding are accepted, and whitespace is not
@@ -22,17 +20,22 @@ stages=DESUGAR,MARK
 -- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
 -- lint-disable-file rule-stdlib-reimpl
 
-import array.{get, fromList}
+import array.{get}
+import bytes as B
+import bytes.{
+  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
+}
 import list.{reverse}
-import string.{toUtf8, fromUtf8, toChars}
+import string.{fromUtf8, toChars}
+import u8 as U8
 
--- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
--- call site below only ever indexes within the array's own known length, so
--- the `None` arm is unreachable; this avoids the internal-only
--- `arrayGetUnsafe` primitive.
-byteAt : Int -> Array Int -> Int
-byteAt i arr = match get i arr
-  Some b => b
+-- In-bounds indexing via the safe `bytes.get`, panicking on a miss.  Every
+-- call site below only ever indexes within the byte string's own known
+-- length, so the `None` arm is unreachable; this avoids the internal-only
+-- unsafe accessor.
+byteAt : Int -> Bytes -> Int
+byteAt i bs = match B.get i bs
+  Some b => U8.toInt b
   None => panic "base64: index out of bounds"
 
 charAt : Int -> Array Char -> Char
@@ -81,14 +84,14 @@ b64Val c urlSafe =
 -- Characters are consed on and reversed once at the end: appending each
 -- quad to the accumulator instead would be linear in the characters already
 -- emitted, making the whole encode quadratic in the input's length.
-encodeGo : Array Int -> Int -> Int -> Bool -> List Char -> List Char
-encodeGo bytes i n urlSafe acc
+encodeGo : Bytes -> Int -> Int -> Bool -> List Char -> List Char
+encodeGo bs i n urlSafe acc
   | i >= n = reverse acc
   | otherwise =
     let remain = n - i
-    let b0 = byteAt i bytes
-    let b1 = if remain > 1 then byteAt (i + 1) bytes else 0
-    let b2 = if remain > 2 then byteAt (i + 2) bytes else 0
+    let b0 = byteAt i bs
+    let b1 = if remain > 1 then byteAt (i + 1) bs else 0
+    let b2 = if remain > 2 then byteAt (i + 2) bs else 0
     let c0 = shiftRight b0 2
     let c1 = bitOr (shiftLeft (bitAnd b0 3) 4) (shiftRight b1 4)
     let c2 = bitOr (shiftLeft (bitAnd b1 15) 2) (shiftRight b2 6)
@@ -97,40 +100,39 @@ encodeGo bytes i n urlSafe acc
     let ch1 = b64Char c1 urlSafe
     let ch2 = if remain > 1 then b64Char c2 urlSafe else '='
     let ch3 = if remain > 2 then b64Char c3 urlSafe else '='
-    encodeGo bytes (i + 3) n urlSafe (ch3 :: ch2 :: ch1 :: ch0 :: acc)
+    encodeGo bs (i + 3) n urlSafe (ch3 :: ch2 :: ch1 :: ch0 :: acc)
 
 {- | The bytes as standard base64, padded with `=`.
 
-   > encode (toUtf8 "foobar")
+   > encode (encodeUtf8 "foobar")
    "Zm9vYmFy"
-   > encode (toUtf8 "fo")
+   > encode (encodeUtf8 "fo")
    "Zm8=" -}
 export
-encode : Array Int -> String
-encode bytes =
-  stringFromChars
-    (arrayFromList (encodeGo bytes 0 (arrayLength bytes) False []))
+encode : Bytes -> String
+encode bs =
+  stringFromChars (arrayFromList (encodeGo bs 0 (B.length bs) False []))
 
 -- RFC 4648 test vectors.
--- > encode (toUtf8 "")
+-- > encode (encodeUtf8 "")
 -- ""
--- > encode (toUtf8 "f")
+-- > encode (encodeUtf8 "f")
 -- "Zg=="
--- > encode (toUtf8 "foo")
+-- > encode (encodeUtf8 "foo")
 -- "Zm9v"
--- > encode (toUtf8 "foob")
+-- > encode (encodeUtf8 "foob")
 -- "Zm9vYg=="
--- > encode (toUtf8 "fooba")
+-- > encode (encodeUtf8 "fooba")
 -- "Zm9vYmE="
 
 {- | The bytes as URL and filename safe base64, padded with `=`.
 
-   > encodeUrlSafe (fromList [255, 239, 191])
+   > encodeUrlSafe (fromU8Array [|255, 239, 191|])
    "_--_" -}
 export
-encodeUrlSafe : Array Int -> String
-encodeUrlSafe bytes =
-  stringFromChars (arrayFromList (encodeGo bytes 0 (arrayLength bytes) True []))
+encodeUrlSafe : Bytes -> String
+encodeUrlSafe bs =
+  stringFromChars (arrayFromList (encodeGo bs 0 (B.length bs) True []))
 
 {- | The UTF-8 bytes of a string as standard base64.
 
@@ -138,7 +140,7 @@ encodeUrlSafe bytes =
    "Zm9v" -}
 export
 encodeString : String -> String
-encodeString s = encode (toUtf8 s)
+encodeString s = encode (encodeUtf8 s)
 
 -- # Decoding
 
@@ -216,45 +218,50 @@ decodeGo chars i n urlSafe acc
       Err e => Err e
       Ok bytes => decodeGo chars (i + 4) n urlSafe (reverse bytes ++ acc)
 
-decodeWith : String -> Bool -> Result String (Array Int)
+decodeWith : String -> Bool -> Result String Bytes
 decodeWith s urlSafe =
   let chars = toChars s
   let n = arrayLength chars
   if n % 4 /= 0 then
     Err "base64.decode: length not a multiple of 4"
   else
-    map arrayFromList (decodeGo chars 0 n urlSafe [])
+    -- Each decoded byte is built from bit-shifts of the 6-bit alphabet
+    -- values, so the byte domain holds by construction and the checked door
+    -- would only add a scan.
+    map
+      (xs => fromArrayAssumeByteDomain (arrayFromList xs))
+      (decodeGo chars 0 n urlSafe [])
 
-{- | The bytes written in standard base64.
+{- | The bytes written in standard base64, as a `Bytes`.
 
    `Err` when the length is not a multiple of four, a character is outside
    the alphabet, or padding appears anywhere but the end.
 
-   > decode "Zm9vYmFy"
+   > map toArray (decode "Zm9vYmFy")
    Ok [|102, 111, 111, 98, 97, 114|]
    > decode "Zg="
    Err "base64.decode: length not a multiple of 4" -}
 export
-decode : String -> Result String (Array Int)
+decode : String -> Result String Bytes
 decode s = decodeWith s False
 
--- > decode ""
+-- > map toArray (decode "")
 -- Ok [||]
--- > decode "Zg=="
+-- > map toArray (decode "Zg==")
 -- Ok [|102|]
--- > decode "Zm8="
+-- > map toArray (decode "Zm8=")
 -- Ok [|102, 111|]
--- > decode "Zm9v"
+-- > map toArray (decode "Zm9v")
 -- Ok [|102, 111, 111|]
 -- > decode "Z@=="
 -- Err "base64.decode: invalid character or padding"
 
-{- | The bytes written in URL and filename safe base64.
+{- | The bytes written in URL and filename safe base64, as a `Bytes`.
 
-   > decodeUrlSafe "_--_"
+   > map toArray (decodeUrlSafe "_--_")
    Ok [|255, 239, 191|] -}
 export
-decodeUrlSafe : String -> Result String (Array Int)
+decodeUrlSafe : String -> Result String Bytes
 decodeUrlSafe s = decodeWith s True
 
 {- | The string whose UTF-8 bytes are written in standard base64.
@@ -263,30 +270,35 @@ decodeUrlSafe s = decodeWith s True
    Ok "foo" -}
 export
 decodeString : String -> Result String String
-decodeString s = map fromUtf8 (decode s)
+decodeString s = map (bs => fromUtf8 (toArray bs)) (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 
-toByteArray : List Int -> Array Int
-toByteArray xs = arrayFromList (map (b => (b % 256 + 256) % 256) xs)
+toBytes : List Int -> Bytes
+toBytes xs =
+  fromArrayAssumeByteDomain
+    (arrayFromList (map (b => (b % 256 + 256) % 256) xs))
 
-prop "base64 round-trip: decode (encode bs) == Ok bs" (xs : List Int) =
-  let bs = toByteArray xs
-  decode (encode bs) == Ok bs
+prop "base64 round-trip: decode (encode b) == Ok b" (xs : List Int) =
+  let b = toBytes xs
+  decode (encode b) == Ok b
 
-prop "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe bs) == Ok bs" (xs : List Int) =
-  let bs = toByteArray xs
-  decodeUrlSafe (encodeUrlSafe bs) == Ok bs
+prop "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe b) == Ok b" (xs : List Int) =
+  let b = toBytes xs
+  decodeUrlSafe (encodeUrlSafe b) == Ok b
 
 prop "base64 encoded length is a multiple of 4" (xs : List Int) =
-  let bs = toByteArray xs
-  stringLength (encode bs) % 4 == 0
+  let b = toBytes xs
+  stringLength (encode b) % 4 == 0
 # DESUGAR
-(DUse false (UseGroup ("array") ((mem "get" false) (mem "fromList" false))))
+(DUse false (UseGroup ("array") ((mem "get" false))))
+(DUse false (UseAlias ("bytes") "B"))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromU8Array" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
-(DTypeSig false "byteAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Int"))))
-(DFunDef false "byteAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
+(DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "toChars" false))))
+(DUse false (UseAlias ("u8") "U8"))
+(DTypeSig false "byteAt" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Int"))))
+(DFunDef false "byteAt" ((PVar "i") (PVar "bs")) (EMatch (EApp (EApp (EVar "B.get") (EVar "i")) (EVar "bs")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "U8.toInt") (EVar "b"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
 (DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
 (DTypeSig false "b64Char" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
@@ -296,14 +308,14 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "charOrFallback" ((PCon "None")) (ELit (LChar "?")))
 (DTypeSig false "b64Val" (TyFun (TyCon "Char") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "b64Val" ((PVar "c") (PVar "urlSafe")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "charCode") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 65))) (EBinOp "<=" (EVar "n") (ELit (LInt 90)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 65)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 97))) (EBinOp "<=" (EVar "n") (ELit (LInt 122)))) (EApp (EVar "Some") (EBinOp "+" (EBinOp "-" (EVar "n") (ELit (LInt 97))) (ELit (LInt 26)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 48))) (EBinOp "<=" (EVar "n") (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "+" (EBinOp "-" (EVar "n") (ELit (LInt 48))) (ELit (LInt 52)))) (EIf (EBinOp "&&" (EVar "urlSafe") (EBinOp "==" (EVar "c") (ELit (LChar "-")))) (EApp (EVar "Some") (ELit (LInt 62))) (EIf (EBinOp "&&" (EVar "urlSafe") (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EVar "Some") (ELit (LInt 63))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "urlSafe")) (EBinOp "==" (EVar "c") (ELit (LChar "+")))) (EApp (EVar "Some") (ELit (LInt 62))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "urlSafe")) (EBinOp "==" (EVar "c") (ELit (LChar "/")))) (EApp (EVar "Some") (ELit (LInt 63))) (EVar "None")))))))))))
-(DTypeSig false "encodeGo" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))))))
-(DFunDef false "encodeGo" ((PVar "bytes") (PVar "i") (PVar "n") (PVar "urlSafe") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverse") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "remain") (EBinOp "-" (EVar "n") (EVar "i"))) (DoLet false false (PVar "b0") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bytes"))) (DoLet false false (PVar "b1") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "bytes")) (ELit (LInt 0)))) (DoLet false false (PVar "b2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "bytes")) (ELit (LInt 0)))) (DoLet false false (PVar "c0") (EApp (EApp (EVar "shiftRight") (EVar "b0")) (ELit (LInt 2)))) (DoLet false false (PVar "c1") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b0")) (ELit (LInt 3)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "b1")) (ELit (LInt 4))))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b1")) (ELit (LInt 15)))) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b2")) (ELit (LInt 6))))) (DoLet false false (PVar "c3") (EApp (EApp (EVar "bitAnd") (EVar "b2")) (ELit (LInt 63)))) (DoLet false false (PVar "ch0") (EApp (EApp (EVar "b64Char") (EVar "c0")) (EVar "urlSafe"))) (DoLet false false (PVar "ch1") (EApp (EApp (EVar "b64Char") (EVar "c1")) (EVar "urlSafe"))) (DoLet false false (PVar "ch2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "b64Char") (EVar "c2")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoLet false false (PVar "ch3") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "b64Char") (EVar "c3")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "n")) (EVar "urlSafe")) (EBinOp "::" (EVar "ch3") (EBinOp "::" (EVar "ch2") (EBinOp "::" (EVar "ch1") (EBinOp "::" (EVar "ch0") (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "encode" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
-(DFunDef false "encode" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "False")) (EListLit)))))
-(DTypeSig true "encodeUrlSafe" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
-(DFunDef false "encodeUrlSafe" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "True")) (EListLit)))))
+(DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))))))
+(DFunDef false "encodeGo" ((PVar "bs") (PVar "i") (PVar "n") (PVar "urlSafe") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverse") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "remain") (EBinOp "-" (EVar "n") (EVar "i"))) (DoLet false false (PVar "b0") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bs"))) (DoLet false false (PVar "b1") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "bs")) (ELit (LInt 0)))) (DoLet false false (PVar "b2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "bs")) (ELit (LInt 0)))) (DoLet false false (PVar "c0") (EApp (EApp (EVar "shiftRight") (EVar "b0")) (ELit (LInt 2)))) (DoLet false false (PVar "c1") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b0")) (ELit (LInt 3)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "b1")) (ELit (LInt 4))))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b1")) (ELit (LInt 15)))) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b2")) (ELit (LInt 6))))) (DoLet false false (PVar "c3") (EApp (EApp (EVar "bitAnd") (EVar "b2")) (ELit (LInt 63)))) (DoLet false false (PVar "ch0") (EApp (EApp (EVar "b64Char") (EVar "c0")) (EVar "urlSafe"))) (DoLet false false (PVar "ch1") (EApp (EApp (EVar "b64Char") (EVar "c1")) (EVar "urlSafe"))) (DoLet false false (PVar "ch2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "b64Char") (EVar "c2")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoLet false false (PVar "ch3") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "b64Char") (EVar "c3")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "n")) (EVar "urlSafe")) (EBinOp "::" (EVar "ch3") (EBinOp "::" (EVar "ch2") (EBinOp "::" (EVar "ch1") (EBinOp "::" (EVar "ch0") (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "encode" (TyFun (TyCon "Bytes") (TyCon "String")))
+(DFunDef false "encode" ((PVar "bs")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (ELit (LInt 0))) (EApp (EVar "B.length") (EVar "bs"))) (EVar "False")) (EListLit)))))
+(DTypeSig true "encodeUrlSafe" (TyFun (TyCon "Bytes") (TyCon "String")))
+(DFunDef false "encodeUrlSafe" ((PVar "bs")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (ELit (LInt 0))) (EApp (EVar "B.length") (EVar "bs"))) (EVar "True")) (EListLit)))))
 (DTypeSig true "encodeString" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "encodeUtf8") (EVar "s"))))
 (DData Private "Tok" () ((variant "TokVal" (ConPos (TyCon "Int"))) (variant "TokPad" (ConPos)) (variant "TokBad" (ConPos))) ())
 (DTypeSig false "tok" (TyFun (TyCon "Char") (TyFun (TyCon "Bool") (TyCon "Tok"))))
 (DFunDef false "tok" ((PVar "c") (PVar "urlSafe")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "="))) (EVar "TokPad") (EMatch (EApp (EApp (EVar "b64Val") (EVar "c")) (EVar "urlSafe")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "TokVal") (EVar "v"))) (arm (PCon "None") () (EVar "TokBad")))))
@@ -311,25 +323,28 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "decodeQuad" ((PVar "c0") (PVar "c1") (PVar "c2") (PVar "c3") (PVar "urlSafe") (PVar "isLast")) (EMatch (ETuple (EApp (EApp (EVar "b64Val") (EVar "c0")) (EVar "urlSafe")) (EApp (EApp (EVar "b64Val") (EVar "c1")) (EVar "urlSafe")) (EApp (EApp (EVar "tok") (EVar "c2")) (EVar "urlSafe")) (EApp (EApp (EVar "tok") (EVar "c3")) (EVar "urlSafe"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b")) (PCon "TokVal" (PVar "c")) (PCon "TokVal" (PVar "d"))) () (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a")) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "c")) (ELit (LInt 2)))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "c")) (ELit (LInt 3)))) (ELit (LInt 6)))) (EVar "d"))))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b")) (PCon "TokVal" (PVar "c")) (PCon "TokPad")) () (EIf (EVar "isLast") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a")) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "c")) (ELit (LInt 2)))))) (EApp (EVar "Err") (ELit (LString "base64.decode: misplaced padding"))))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b")) (PCon "TokPad") (PCon "TokPad")) () (EIf (EVar "isLast") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a")) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (EApp (EVar "Err") (ELit (LString "base64.decode: misplaced padding"))))) (arm PWild () (EApp (EVar "Err") (ELit (LString "base64.decode: invalid character or padding"))))))
 (DTypeSig false "decodeGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))))))
 (DFunDef false "decodeGo" ((PVar "chars") (PVar "i") (PVar "n") (PVar "urlSafe") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EVar "reverse") (EVar "acc"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "isLast") (EBinOp "==" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EVar "n"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "decodeQuad") (EApp (EApp (EVar "charAt") (EVar "i")) (EVar "chars"))) (EApp (EApp (EVar "charAt") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "chars"))) (EApp (EApp (EVar "charAt") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "chars"))) (EApp (EApp (EVar "charAt") (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "chars"))) (EVar "urlSafe")) (EVar "isLast")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "bytes")) () (EApp (EApp (EApp (EApp (EApp (EVar "decodeGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (EVar "n")) (EVar "urlSafe")) (EBinOp "++" (EApp (EVar "reverse") (EVar "bytes")) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "decodeWith" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
-(DFunDef false "decodeWith" ((PVar "s") (PVar "urlSafe")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EIf (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 4))) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base64.decode: length not a multiple of 4"))) (EApp (EApp (EVar "map") (EVar "arrayFromList")) (EApp (EApp (EApp (EApp (EApp (EVar "decodeGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n")) (EVar "urlSafe")) (EListLit)))))))
-(DTypeSig true "decode" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DTypeSig false "decodeWith" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))
+(DFunDef false "decodeWith" ((PVar "s") (PVar "urlSafe")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EIf (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 4))) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base64.decode: length not a multiple of 4"))) (EApp (EApp (EVar "map") (ELam ((PVar "xs")) (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EVar "xs"))))) (EApp (EApp (EApp (EApp (EApp (EVar "decodeGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n")) (EVar "urlSafe")) (EListLit)))))))
+(DTypeSig true "decode" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))
 (DFunDef false "decode" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "False")))
-(DTypeSig true "decodeUrlSafe" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DTypeSig true "decodeUrlSafe" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))
 (DFunDef false "decodeUrlSafe" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "True")))
 (DTypeSig true "decodeString" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "decodeString" ((PVar "s")) (EApp (EApp (EVar "map") (EVar "fromUtf8")) (EApp (EVar "decode") (EVar "s"))))
-(DTypeSig false "toByteArray" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int"))))
-(DFunDef false "toByteArray" ((PVar "xs")) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "b") (ELit (LInt 256))) (ELit (LInt 256))) (ELit (LInt 256))))) (EVar "xs"))))
-(DProp false "base64 round-trip: decode (encode bs) == Ok bs" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decode") (EApp (EVar "encode") (EVar "bs"))) (EApp (EVar "Ok") (EVar "bs"))))))
-(DProp false "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe bs) == Ok bs" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decodeUrlSafe") (EApp (EVar "encodeUrlSafe") (EVar "bs"))) (EApp (EVar "Ok") (EVar "bs"))))))
-(DProp false "base64 encoded length is a multiple of 4" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EBinOp "%" (EApp (EVar "stringLength") (EApp (EVar "encode") (EVar "bs"))) (ELit (LInt 4))) (ELit (LInt 0))))))
+(DFunDef false "decodeString" ((PVar "s")) (EApp (EApp (EVar "map") (ELam ((PVar "bs")) (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "bs"))))) (EApp (EVar "decode") (EVar "s"))))
+(DTypeSig false "toBytes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bytes")))
+(DFunDef false "toBytes" ((PVar "xs")) (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "b") (ELit (LInt 256))) (ELit (LInt 256))) (ELit (LInt 256))))) (EVar "xs")))))
+(DProp false "base64 round-trip: decode (encode b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decode") (EApp (EVar "encode") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
+(DProp false "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decodeUrlSafe") (EApp (EVar "encodeUrlSafe") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
+(DProp false "base64 encoded length is a multiple of 4" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EBinOp "%" (EApp (EVar "stringLength") (EApp (EVar "encode") (EVar "b"))) (ELit (LInt 4))) (ELit (LInt 0))))))
 # MARK
-(DUse false (UseGroup ("array") ((mem "get" false) (mem "fromList" false))))
+(DUse false (UseGroup ("array") ((mem "get" false))))
+(DUse false (UseAlias ("bytes") "B"))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromU8Array" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
-(DTypeSig false "byteAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Int"))))
-(DFunDef false "byteAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "b")) () (EVar "b")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
+(DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "toChars" false))))
+(DUse false (UseAlias ("u8") "U8"))
+(DTypeSig false "byteAt" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Int"))))
+(DFunDef false "byteAt" ((PVar "i") (PVar "bs")) (EMatch (EApp (EApp (EVar "B.get") (EVar "i")) (EVar "bs")) (arm (PCon "Some" (PVar "b")) () (EApp (EVar "U8.toInt") (EVar "b"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
 (DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "base64: index out of bounds"))))))
 (DTypeSig false "b64Char" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
@@ -339,14 +354,14 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "charOrFallback" ((PCon "None")) (ELit (LChar "?")))
 (DTypeSig false "b64Val" (TyFun (TyCon "Char") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "b64Val" ((PVar "c") (PVar "urlSafe")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "charCode") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 65))) (EBinOp "<=" (EVar "n") (ELit (LInt 90)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 65)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 97))) (EBinOp "<=" (EVar "n") (ELit (LInt 122)))) (EApp (EVar "Some") (EBinOp "+" (EBinOp "-" (EVar "n") (ELit (LInt 97))) (ELit (LInt 26)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 48))) (EBinOp "<=" (EVar "n") (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "+" (EBinOp "-" (EVar "n") (ELit (LInt 48))) (ELit (LInt 52)))) (EIf (EBinOp "&&" (EVar "urlSafe") (EBinOp "==" (EVar "c") (ELit (LChar "-")))) (EApp (EVar "Some") (ELit (LInt 62))) (EIf (EBinOp "&&" (EVar "urlSafe") (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EVar "Some") (ELit (LInt 63))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "urlSafe")) (EBinOp "==" (EVar "c") (ELit (LChar "+")))) (EApp (EVar "Some") (ELit (LInt 62))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "urlSafe")) (EBinOp "==" (EVar "c") (ELit (LChar "/")))) (EApp (EVar "Some") (ELit (LInt 63))) (EVar "None")))))))))))
-(DTypeSig false "encodeGo" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))))))
-(DFunDef false "encodeGo" ((PVar "bytes") (PVar "i") (PVar "n") (PVar "urlSafe") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverse") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "remain") (EBinOp "-" (EVar "n") (EVar "i"))) (DoLet false false (PVar "b0") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bytes"))) (DoLet false false (PVar "b1") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "bytes")) (ELit (LInt 0)))) (DoLet false false (PVar "b2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "bytes")) (ELit (LInt 0)))) (DoLet false false (PVar "c0") (EApp (EApp (EVar "shiftRight") (EVar "b0")) (ELit (LInt 2)))) (DoLet false false (PVar "c1") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b0")) (ELit (LInt 3)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "b1")) (ELit (LInt 4))))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b1")) (ELit (LInt 15)))) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b2")) (ELit (LInt 6))))) (DoLet false false (PVar "c3") (EApp (EApp (EVar "bitAnd") (EVar "b2")) (ELit (LInt 63)))) (DoLet false false (PVar "ch0") (EApp (EApp (EVar "b64Char") (EVar "c0")) (EVar "urlSafe"))) (DoLet false false (PVar "ch1") (EApp (EApp (EVar "b64Char") (EVar "c1")) (EVar "urlSafe"))) (DoLet false false (PVar "ch2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "b64Char") (EVar "c2")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoLet false false (PVar "ch3") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "b64Char") (EVar "c3")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "n")) (EVar "urlSafe")) (EBinOp "::" (EVar "ch3") (EBinOp "::" (EVar "ch2") (EBinOp "::" (EVar "ch1") (EBinOp "::" (EVar "ch0") (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "encode" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
-(DFunDef false "encode" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "False")) (EListLit)))))
-(DTypeSig true "encodeUrlSafe" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
-(DFunDef false "encodeUrlSafe" ((PVar "bytes")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "bytes"))) (EVar "True")) (EListLit)))))
+(DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char"))))))))
+(DFunDef false "encodeGo" ((PVar "bs") (PVar "i") (PVar "n") (PVar "urlSafe") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "reverse") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "remain") (EBinOp "-" (EVar "n") (EVar "i"))) (DoLet false false (PVar "b0") (EApp (EApp (EVar "byteAt") (EVar "i")) (EVar "bs"))) (DoLet false false (PVar "b1") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "bs")) (ELit (LInt 0)))) (DoLet false false (PVar "b2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "byteAt") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "bs")) (ELit (LInt 0)))) (DoLet false false (PVar "c0") (EApp (EApp (EVar "shiftRight") (EVar "b0")) (ELit (LInt 2)))) (DoLet false false (PVar "c1") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b0")) (ELit (LInt 3)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "b1")) (ELit (LInt 4))))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b1")) (ELit (LInt 15)))) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b2")) (ELit (LInt 6))))) (DoLet false false (PVar "c3") (EApp (EApp (EVar "bitAnd") (EVar "b2")) (ELit (LInt 63)))) (DoLet false false (PVar "ch0") (EApp (EApp (EVar "b64Char") (EVar "c0")) (EVar "urlSafe"))) (DoLet false false (PVar "ch1") (EApp (EApp (EVar "b64Char") (EVar "c1")) (EVar "urlSafe"))) (DoLet false false (PVar "ch2") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 1))) (EApp (EApp (EVar "b64Char") (EVar "c2")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoLet false false (PVar "ch3") (EIf (EBinOp ">" (EVar "remain") (ELit (LInt 2))) (EApp (EApp (EVar "b64Char") (EVar "c3")) (EVar "urlSafe")) (ELit (LChar "=")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "n")) (EVar "urlSafe")) (EBinOp "::" (EVar "ch3") (EBinOp "::" (EVar "ch2") (EBinOp "::" (EVar "ch1") (EBinOp "::" (EVar "ch0") (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "encode" (TyFun (TyCon "Bytes") (TyCon "String")))
+(DFunDef false "encode" ((PVar "bs")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (ELit (LInt 0))) (EApp (EVar "B.length") (EVar "bs"))) (EVar "False")) (EListLit)))))
+(DTypeSig true "encodeUrlSafe" (TyFun (TyCon "Bytes") (TyCon "String")))
+(DFunDef false "encodeUrlSafe" ((PVar "bs")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (ELit (LInt 0))) (EApp (EVar "B.length") (EVar "bs"))) (EVar "True")) (EListLit)))))
 (DTypeSig true "encodeString" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "encodeString" ((PVar "s")) (EApp (EVar "encode") (EApp (EVar "encodeUtf8") (EVar "s"))))
 (DData Private "Tok" () ((variant "TokVal" (ConPos (TyCon "Int"))) (variant "TokPad" (ConPos)) (variant "TokBad" (ConPos))) ())
 (DTypeSig false "tok" (TyFun (TyCon "Char") (TyFun (TyCon "Bool") (TyCon "Tok"))))
 (DFunDef false "tok" ((PVar "c") (PVar "urlSafe")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "="))) (EVar "TokPad") (EMatch (EApp (EApp (EVar "b64Val") (EVar "c")) (EVar "urlSafe")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "TokVal") (EVar "v"))) (arm (PCon "None") () (EVar "TokBad")))))
@@ -354,16 +369,16 @@ prop "base64 encoded length is a multiple of 4" (xs : List Int) =
 (DFunDef false "decodeQuad" ((PVar "c0") (PVar "c1") (PVar "c2") (PVar "c3") (PVar "urlSafe") (PVar "isLast")) (EMatch (ETuple (EApp (EApp (EVar "b64Val") (EVar "c0")) (EVar "urlSafe")) (EApp (EApp (EVar "b64Val") (EVar "c1")) (EVar "urlSafe")) (EApp (EApp (EVar "tok") (EVar "c2")) (EVar "urlSafe")) (EApp (EApp (EVar "tok") (EVar "c3")) (EVar "urlSafe"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b")) (PCon "TokVal" (PVar "c")) (PCon "TokVal" (PVar "d"))) () (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a")) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "c")) (ELit (LInt 2)))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "c")) (ELit (LInt 3)))) (ELit (LInt 6)))) (EVar "d"))))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b")) (PCon "TokVal" (PVar "c")) (PCon "TokPad")) () (EIf (EVar "isLast") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a")) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))) (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))) (ELit (LInt 4)))) (EApp (EApp (EVar "shiftRight") (EVar "c")) (ELit (LInt 2)))))) (EApp (EVar "Err") (ELit (LString "base64.decode: misplaced padding"))))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b")) (PCon "TokPad") (PCon "TokPad")) () (EIf (EVar "isLast") (EApp (EVar "Ok") (EListLit (EApp (EApp (EVar "bitOr") (EApp (EApp (EVar "shiftLeft") (EVar "a")) (ELit (LInt 2)))) (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (EApp (EVar "Err") (ELit (LString "base64.decode: misplaced padding"))))) (arm PWild () (EApp (EVar "Err") (ELit (LString "base64.decode: invalid character or padding"))))))
 (DTypeSig false "decodeGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))))))
 (DFunDef false "decodeGo" ((PVar "chars") (PVar "i") (PVar "n") (PVar "urlSafe") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EVar "reverse") (EVar "acc"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "isLast") (EBinOp "==" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EVar "n"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "decodeQuad") (EApp (EApp (EVar "charAt") (EVar "i")) (EVar "chars"))) (EApp (EApp (EVar "charAt") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "chars"))) (EApp (EApp (EVar "charAt") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "chars"))) (EApp (EApp (EVar "charAt") (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "chars"))) (EVar "urlSafe")) (EVar "isLast")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "bytes")) () (EApp (EApp (EApp (EApp (EApp (EVar "decodeGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (EVar "n")) (EVar "urlSafe")) (EBinOp "++" (EApp (EVar "reverse") (EVar "bytes")) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "decodeWith" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
-(DFunDef false "decodeWith" ((PVar "s") (PVar "urlSafe")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EIf (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 4))) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base64.decode: length not a multiple of 4"))) (EApp (EApp (EMethodRef "map") (EVar "arrayFromList")) (EApp (EApp (EApp (EApp (EApp (EVar "decodeGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n")) (EVar "urlSafe")) (EListLit)))))))
-(DTypeSig true "decode" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DTypeSig false "decodeWith" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))
+(DFunDef false "decodeWith" ((PVar "s") (PVar "urlSafe")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EIf (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 4))) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "base64.decode: length not a multiple of 4"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "xs")) (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EVar "xs"))))) (EApp (EApp (EApp (EApp (EApp (EVar "decodeGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n")) (EVar "urlSafe")) (EListLit)))))))
+(DTypeSig true "decode" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))
 (DFunDef false "decode" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "False")))
-(DTypeSig true "decodeUrlSafe" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))
+(DTypeSig true "decodeUrlSafe" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))
 (DFunDef false "decodeUrlSafe" ((PVar "s")) (EApp (EApp (EVar "decodeWith") (EVar "s")) (EVar "True")))
 (DTypeSig true "decodeString" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "decodeString" ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "fromUtf8")) (EApp (EVar "decode") (EVar "s"))))
-(DTypeSig false "toByteArray" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Array") (TyCon "Int"))))
-(DFunDef false "toByteArray" ((PVar "xs")) (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "b") (ELit (LInt 256))) (ELit (LInt 256))) (ELit (LInt 256))))) (EVar "xs"))))
-(DProp false "base64 round-trip: decode (encode bs) == Ok bs" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decode") (EApp (EVar "encode") (EVar "bs"))) (EApp (EVar "Ok") (EVar "bs"))))))
-(DProp false "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe bs) == Ok bs" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decodeUrlSafe") (EApp (EVar "encodeUrlSafe") (EVar "bs"))) (EApp (EVar "Ok") (EVar "bs"))))))
-(DProp false "base64 encoded length is a multiple of 4" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EBinOp "%" (EApp (EVar "stringLength") (EApp (EVar "encode") (EVar "bs"))) (ELit (LInt 4))) (ELit (LInt 0))))))
+(DFunDef false "decodeString" ((PVar "s")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "bs")) (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "bs"))))) (EApp (EVar "decode") (EVar "s"))))
+(DTypeSig false "toBytes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bytes")))
+(DFunDef false "toBytes" ((PVar "xs")) (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "b") (ELit (LInt 256))) (ELit (LInt 256))) (ELit (LInt 256))))) (EVar "xs")))))
+(DProp false "base64 round-trip: decode (encode b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decode") (EApp (EVar "encode") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
+(DProp false "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "decodeUrlSafe") (EApp (EVar "encodeUrlSafe") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
+(DProp false "base64 encoded length is a multiple of 4" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "toBytes") (EVar "xs"))) (DoExpr (EBinOp "==" (EBinOp "%" (EApp (EVar "stringLength") (EApp (EVar "encode") (EVar "b"))) (ELit (LInt 4))) (ELit (LInt 0))))))

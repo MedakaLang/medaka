@@ -175,7 +175,10 @@ suites = [
   ("fs", (8, NativeCapability)),
   ("hash_map", (24, EvalAndNative)),
   ("hash_set", (13, EvalAndNative)),
-  ("hex", (23, EvalAndNative)),
+  -- `encodeBytes`/`decodeBytes` merged into `encode`/`decode` (S-codecs-
+  -- bytes), taking their doctests and prop with them; the floor fell from
+  -- 23 to the assertions the surviving names still carry.
+  ("hex", (17, EvalAndNative)),
   -- The resource-limit examples. Neither of the two vehicles named in the
   -- header reaches this module, so without this row nothing would run them.
   ("http", (6, EvalAndNative)),
@@ -382,7 +385,7 @@ test "stdlib/hash_map.mdk executed >= 24 assertions" =
 test "stdlib/hash_set.mdk executed >= 13 assertions" =
   floorExpectation "hash_set"
 
-test "stdlib/hex.mdk executed >= 23 assertions" = floorExpectation "hex"
+test "stdlib/hex.mdk executed >= 17 assertions" = floorExpectation "hex"
 
 test "stdlib/http.mdk executed >= 6 assertions" = floorExpectation "http"
 

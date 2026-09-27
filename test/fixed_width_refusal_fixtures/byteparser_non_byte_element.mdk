@@ -1,6 +1,8 @@
--- #3415: an input element outside 0..255 is not a byte.  Reading it panics
--- rather than failing the parse, so `many anyByte` cannot stop at it and
--- succeed on the prefix `[1]`, and nothing is printed.
+-- #3414: `runByteParser` takes `Bytes`, whose elements are `U8` by
+-- construction, so an out-of-range element can no longer reach the parser
+-- at runtime — it is now a compile-time literal refusal, same as any other
+-- out-of-range `U8` literal.
 import byteparser.{anyByte, many, runByteParser}
+import bytes.{fromU8Array}
 
-main = println (runByteParser (many anyByte) [|1, 300, 2|])
+main = println (runByteParser (many anyByte) (fromU8Array [|1, 300, 2|]))
