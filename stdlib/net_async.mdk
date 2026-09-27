@@ -29,7 +29,6 @@ import bytes as B
 import bytes.{Bytes, adoptByteBlockUnsafe}
 import net.{Connection, Listener}
 import net as N
-import string.{toUtf8}
 import time.{Duration}
 
 {- | TCP over the async scheduler: the `net` operations that park instead of
@@ -246,68 +245,75 @@ recvWake conn dl n False = deferThen (awaitAny [
 -- The count may be short; `sendAll` loops.
 export
 send : Connection h -> Bytes -> Async <Clock, Net h | e> (Result String Int)
-send conn bytes = sendArray conn (B.toArray bytes)
+send conn bytes =
+  sendWindow conn (B.lendByteBlockUnsafe bytes) 0 (B.length bytes)
 
--- The send externs take an array, so each sending operation unpacks its
--- payload once and every retry and offset below reuses that one copy.
-sendArray : Connection h ->
-  Array Int ->
+-- Every sending operation reads the payload's own block through a window
+-- `[off, end)`, so no retry or offset copies the bytes.
+sendWindow : Connection h ->
+  ByteBlock ->
+  Int ->
+  Int ->
   Async <Clock, Net h | e> (Result String Int)
-sendArray conn bytes = deferThen (liftIO (u => trySend conn bytes)) (step =>
-  sendStep conn bytes step)
+sendWindow conn bb off end = deferThen (liftIO (u =>
+  trySend conn bb off end)) (step =>
+  sendStep conn bb off end step)
 
-trySend : Connection h -> Array Int -> <Net h> Result String (Option Int)
-trySend conn bytes = match netSetNonblock conn True
-  Ok _ => netTrySend conn bytes
+trySend : Connection h ->
+  ByteBlock ->
+  Int ->
+  Int ->
+  <Net h> Result String (Option Int)
+trySend conn bb off end = match netSetNonblock conn True
+  Ok _ => netTrySendBytesFrom conn bb off end
   Err e => Err e
 
 sendStep : Connection h ->
-  Array Int ->
+  ByteBlock ->
+  Int ->
+  Int ->
   Result String (Option Int) ->
   Async <Clock, Net h | e> (Result String Int)
-sendStep conn bytes (Ok None) =
-  deferThen (awaitAny [waitWrite (socketFd conn)]) (_ => sendArray conn bytes)
-sendStep _ _ (Ok (Some n)) = deferPure (Ok n)
-sendStep _ _ (Err e) = deferPure (Err e)
+sendStep conn bb off end (Ok None) = deferThen (awaitAny [
+  waitWrite (socketFd conn),
+]) (_ =>
+  sendWindow conn bb off end)
+sendStep _ _ _ _ (Ok (Some n)) = deferPure (Ok n)
+sendStep _ _ _ _ (Err e) = deferPure (Err e)
 
 -- | Sends every byte, parking as needed.
 export
 sendAll : Connection h -> Bytes -> Async <Clock, Net h | e> (Result String Unit)
-sendAll conn bytes = sendFrom conn (B.toArray bytes) 0
+sendAll conn bytes =
+  sendFrom conn (B.lendByteBlockUnsafe bytes) 0 (B.length bytes)
 
--- The loop keeps an offset into the one array rather than slicing it, and the
--- extern copies at most 64 KiB per call, so a large payload costs its own
+-- The loop keeps an offset into the one block rather than slicing it, and the
+-- extern sends at most 64 KiB per call, so a large payload costs its own
 -- length, not its length squared.
 sendFrom : Connection h ->
-  Array Int ->
+  ByteBlock ->
+  Int ->
   Int ->
   Async <Clock, Net h | e> (Result String Unit)
-sendFrom conn bytes off =
-  if off >= arrayLength bytes then
+sendFrom conn bb off end =
+  if off >= end then
     deferPure (Ok ())
   else
-    deferThen (liftIO (u => trySendFrom conn bytes off)) (step =>
-      sendFromStep conn bytes off step)
-
-trySendFrom : Connection h ->
-  Array Int ->
-  Int ->
-  <Net h> Result String (Option Int)
-trySendFrom conn bytes off = match netSetNonblock conn True
-  Ok _ => netTrySendFrom conn bytes off
-  Err e => Err e
+    deferThen (liftIO (u => trySend conn bb off end)) (step =>
+      sendFromStep conn bb off end step)
 
 sendFromStep : Connection h ->
-  Array Int ->
+  ByteBlock ->
+  Int ->
   Int ->
   Result String (Option Int) ->
   Async <Clock, Net h | e> (Result String Unit)
-sendFromStep conn bytes off (Ok None) = deferThen (awaitAny [
+sendFromStep conn bb off end (Ok None) = deferThen (awaitAny [
   waitWrite (socketFd conn),
 ]) (_ =>
-  sendFrom conn bytes off)
-sendFromStep conn bytes off (Ok (Some n)) = sendFrom conn bytes (off + n)
-sendFromStep _ _ _ (Err e) = deferPure (Err e)
+  sendFrom conn bb off end)
+sendFromStep conn bb off end (Ok (Some n)) = sendFrom conn bb (off + n) end
+sendFromStep _ _ _ _ (Err e) = deferPure (Err e)
 
 -- | `sendAll` that gives up after `d` with `Err "timed out"`.
 export
@@ -316,56 +322,60 @@ sendAllWithin : Duration ->
   Bytes ->
   Async <Clock, Net h | e> (Result String Unit)
 sendAllWithin d conn bytes =
-  let payload = B.toArray bytes
-  deferThen (deadlineAfter d) (dl => sendUntil conn dl payload 0)
+  let bb = B.lendByteBlockUnsafe bytes
+  let end = B.length bytes
+  deferThen (deadlineAfter d) (dl => sendUntil conn dl bb 0 end)
 
 -- The deadline is checked before every attempt, so no round of work runs
 -- past it unobserved.
 sendUntil : Connection h ->
   Wait <Clock, Net h | e> ->
-  Array Int ->
+  ByteBlock ->
+  Int ->
   Int ->
   Async <Clock, Net h | e> (Result String Unit)
-sendUntil conn dl bytes off =
-  if off >= arrayLength bytes then
+sendUntil conn dl bb off end =
+  if off >= end then
     deferPure (Ok ())
   else
     deferThen (expired dl) (late =>
       if late then
         deferPure (Err "timed out")
       else
-        sendUntilTry conn dl bytes off)
+        sendUntilTry conn dl bb off end)
 
 sendUntilTry : Connection h ->
   Wait <Clock, Net h | e> ->
-  Array Int ->
+  ByteBlock ->
+  Int ->
   Int ->
   Async <Clock, Net h | e> (Result String Unit)
-sendUntilTry conn dl bytes off = deferThen (liftIO (u =>
-  trySendFrom conn bytes off)) (step =>
-  sendUntilStep conn dl bytes off step)
+sendUntilTry conn dl bb off end = deferThen (liftIO (u =>
+  trySend conn bb off end)) (step =>
+  sendUntilStep conn dl bb off end step)
 
 sendUntilStep : Connection h ->
   Wait <Clock, Net h | e> ->
-  Array Int ->
+  ByteBlock ->
+  Int ->
   Int ->
   Result String (Option Int) ->
   Async <Clock, Net h | e> (Result String Unit)
-sendUntilStep conn dl bytes off (Ok None) = deferThen (awaitAny [
+sendUntilStep conn dl bb off end (Ok None) = deferThen (awaitAny [
   waitWrite (socketFd conn),
   dl,
 ]) (_ =>
-  sendUntil conn dl bytes off)
-sendUntilStep conn dl bytes off (Ok (Some n)) =
-  sendUntil conn dl bytes (off + n)
-sendUntilStep _ _ _ _ (Err e) = deferPure (Err e)
+  sendUntil conn dl bb off end)
+sendUntilStep conn dl bb off end (Ok (Some n)) =
+  sendUntil conn dl bb (off + n) end
+sendUntilStep _ _ _ _ _ (Err e) = deferPure (Err e)
 
 -- | Sends a string as UTF-8, parking as needed.
 export
 sendString : Connection h ->
   String ->
   Async <Clock, Net h | e> (Result String Unit)
-sendString conn s = sendFrom conn (toUtf8 s) 0
+sendString conn s = sendAll conn (B.encodeUtf8 s)
 
 -- | Closes a connection.
 export

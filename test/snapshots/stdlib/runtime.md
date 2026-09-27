@@ -1,5 +1,5 @@
 # META
-source_lines=898
+source_lines=921
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -387,6 +387,29 @@ extern netTrySend : Socket h -> Array Int -> <Net h> Result String (Option Int)
 -- per call, so a loop over a large payload pays only for the bytes it sends.
 extern netTrySendFrom : Socket h ->
   Array Int ->
+  Int ->
+  <Net h> Result String (Option Int)
+
+{- | Sends the bytes of a block from index `start` up to but not including
+   `end`, at most 64 KiB per call. The result is the number of bytes written,
+   which may be fewer than asked for.
+
+   A window outside the block, where `start` is negative, `end` is less than
+   `start`, or `end` is past the block's length, is `Err`. Unlike
+   `netSendFrom`, which clamps its offset, the window is not clamped: a window
+   outside the block is a caller's mistake, and clamping would hide it. -}
+extern netSendBytesFrom : Socket h ->
+  ByteBlock ->
+  Int ->
+  Int ->
+  <Net h> Result String Int
+
+{- | `netSendBytesFrom` that returns `None` instead of blocking. `Some n` is
+   the count written, which may be short. A window outside the block is `Err`,
+   as for `netSendBytesFrom`. -}
+extern netTrySendBytesFrom : Socket h ->
+  ByteBlock ->
+  Int ->
   Int ->
   <Net h> Result String (Option Int)
 
@@ -970,6 +993,8 @@ extern stringToLower : String -> String
 (DExtern false "netTryRecvBytes" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
 (DExtern false "netTrySend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "netTrySendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "netSendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))
+(DExtern false "netTrySendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
@@ -1165,6 +1190,8 @@ extern stringToLower : String -> String
 (DExtern false "netTryRecvBytes" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "ByteBlock")))))))
 (DExtern false "netTrySend" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "netTrySendFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DExtern false "netSendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))))
+(DExtern false "netTrySendBytesFrom" (TyFun (TyApp (TyCon "Socket") (TyVar "h")) (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((atom "Net" (name "h"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
