@@ -89,7 +89,7 @@ server =
 accessToken : String
 accessToken =
   mintToken
-    (fromArrayAssumeByteDomain testSecret)
+    testSecret
     accountDidText
     accountHostText
     "blob_handlers-fixture-token"

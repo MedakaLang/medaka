@@ -506,7 +506,7 @@ inboundHandle = "perfroute.example"
 inboundToken : String
 inboundToken =
   mintToken
-    (B.fromArrayAssumeByteDomain testSecret)
+    testSecret
     perfDid
     inboundHost
     "inbound-alloc-probe-token"

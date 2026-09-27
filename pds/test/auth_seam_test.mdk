@@ -22,7 +22,8 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
-import bytes.{encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8, fromArray, fromU8Array, toArray}
+import u8 as U8
 import http.{
   Header,
   makeHeader,
@@ -97,11 +98,11 @@ accountHostText = "pds.example"
 {- | A fixed session secret. The seam grades a token against whatever secret
    the `Store` carries, so a fixture secret is the whole point here: entropy
    would only make the tokens below irreproducible. -}
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 11 + 5) % 256)
+testSecret : Bytes
+testSecret = fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 11 + 5)))
 
-otherSecret : Array Int
-otherSecret = arrayMakeWith 32 (i => (i * 13 + 7) % 256)
+otherSecret : Bytes
+otherSecret = fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 13 + 7)))
 
 testInstant : Int
 testInstant = 1700000000
@@ -193,9 +194,9 @@ configuredStore =
 
 -- ── tokens ──────────────────────────────────────────────────────────────────
 
-tokenFor : Array Int -> String -> String -> String -> Int -> Int -> String
+tokenFor : Bytes -> String -> String -> String -> Int -> Int -> String
 tokenFor secret sub aud tokenId from until =
-  mintToken (fromArrayAssumeByteDomain secret) sub aud tokenId from until
+  mintToken secret sub aud tokenId from until
 
 goodToken : String
 goodToken =

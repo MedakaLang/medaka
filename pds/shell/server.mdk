@@ -950,7 +950,7 @@ blobRowsOwed before after (cid :: rest) =
         "blob \{cidToString cid} is listed by the blob half but holds no bytes"
     Some bytes => do
       tail <- blobRowsOwed before after rest
-      Ok ((cid, declaredMimeType after cid, bytes) :: tail)
+      Ok ((cid, declaredMimeType after cid, toArray bytes) :: tail)
   else
     blobRowsOwed before after rest
 

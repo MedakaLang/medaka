@@ -34,7 +34,7 @@
    operator's directory off the cost of every commit. -}
 
 import array
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes}
 import fs.{mkdirAllDurably, replaceDurably}
 import hex.{decode, encode}
 import json.{Json, asArray, jArray, parse, stringify}
@@ -195,22 +195,22 @@ sessionsPath dir = "\{dir}/sessions"
    opened at that instant would. -}
 sessionRowText : SessionRow -> String
 sessionRowText (OpenSessionRow access refresh expires family) =
-  "\{encode (fromArrayAssumeByteDomain access)} \{encode (fromArrayAssumeByteDomain refresh)} \{intToString expires} \{encode (fromArrayAssumeByteDomain family)}"
+  "\{encode access} \{encode refresh} \{intToString expires} \{encode family}"
 sessionRowText (ConsumedRefreshRow refresh family at ends replayed) =
   let fields =
-    "consumed \{encode (fromArrayAssumeByteDomain refresh)} \{encode (fromArrayAssumeByteDomain family)} \{intToString at} \{intToString ends}"
+    "consumed \{encode refresh} \{encode family} \{intToString at} \{intToString ends}"
   match replayed
     None => fields
-    Some session => "\{fields} \{encode (fromArrayAssumeByteDomain session)}"
+    Some session => "\{fields} \{encode session}"
 
 sessionsText : List SessionRow -> String
 sessionsText rows = join "\n" (map sessionRowText rows)
 
-rowFingerprint : String -> Result String (Array Int)
+rowFingerprint : String -> Result String Bytes
 rowFingerprint text =
   mapErr
     (message => "persist: sessions file has an invalid fingerprint: \{message}")
-    (map toArray (decode text))
+    (decode text)
 
 rowInstant : String -> Result String Int
 rowInstant text = match toInt text

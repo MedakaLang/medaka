@@ -68,6 +68,7 @@ import lib.event_log_record.{
 }
 import lib.repo.{
   Repo,
+  blockBytesChecked,
   repoCommitCid,
   repoCreate,
   repoExportBlocks,
@@ -130,9 +131,8 @@ secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 accountDid : String
 accountDid = "did:plc:persistencefixture000000"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "store_persistence: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "store_persistence: malformed hex" (decode text)
 
 mustSecret : SecretKey
 mustSecret =
@@ -174,7 +174,7 @@ olderRepo =
     mustRepo
       (repoInitFromKeyBytes
         accountDid
-        (mustHex secretHex)
+        (toArray (mustHex secretHex))
         (mustTid "3lba2s5ykxs2a"))
   let one =
     write "app.bsky.feed.post/3lba2s5ykxs2b" "first" "3lba2s5ykxs2b" base
@@ -636,7 +636,10 @@ frameFor (Some _) = "a1"
 putBlobs : List (Cid, String, Array Int) -> Store -> Store
 putBlobs [] store = store
 putBlobs ((cid, mimeType, bytes) :: rest) store =
-  match storePutBlob cid mimeType bytes store
+  let stored = do
+    checked <- blockBytesChecked bytes
+    storePutBlob cid mimeType checked store
+  match stored
     Err message => panic "store_persistence: blob fixture rejected: \{message}"
     Ok next => putBlobs rest next
 
