@@ -951,6 +951,7 @@ expandSupersFix : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono
 expandSupersTable : List Decl -> Unit
 expandSupersVecs : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono)
 expectedParamTypes : Mono -> Int -> List Mono
+exportedRootCells : Map String Unit -> List (String, Scheme) -> Map Int Unit
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
 exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 exprLoc : Expr -> Option Loc
@@ -968,6 +969,7 @@ externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
 externSigsToMap : List Decl -> Map String (Ty, List (String, Int)) -> Map String (Ty, List (String, Int))
 failureBound : SummaryFailure (Option Loc, String) -> Option Authority
+failureMentions : Map Int Unit -> SummaryFailure (Option Loc, String) -> Bool
 ffiArrowNote : Int -> Int -> String
 ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
 ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
@@ -2169,7 +2171,7 @@ primaryLiteralProblems : List (String, Param) -> String -> List String
 processLetGroup : TcEnv -> List LetBind -> TcEnv
 processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List String -> (TcEnv, List (String, Scheme), Map String (List (List Pat, Expr)))
 processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (List String) -> (List (String, Scheme), Map String (List (List Pat, Expr)))
-processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> (List (String, Scheme), Map String (List (List Pat, Expr)))
+processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> Map String Unit -> (List (String, Scheme), Map String (List (List Pat, Expr)))
 producedSlotCovariants : Mono -> List Bool
 productAxesProblems : List (String, Param) -> Param -> List String
 propParamName : PropParam -> String
@@ -2401,6 +2403,7 @@ reportUnboundAuthorityNames : Ty -> SigVars -> Unit
 reportUnboundAuthorityNamesIn : List Ty -> SigVars -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
+reportUnsolvedExport : Map String (List (List Pat, Expr)) -> (String, Map Int Unit) -> Unit
 reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono
@@ -2470,6 +2473,7 @@ rewriteArgScoped : ArgRw -> Map String Unit -> Expr -> Expr
 rewriteArgStmts : ArgRw -> Map String Unit -> List DoStmt -> List DoStmt
 rewriteBinopExpr : Expr -> Expr
 rewriteRPDict : Map String Unit -> Map String Unit -> Expr -> Expr
+rootCellsOf : Map String Unit -> List (String, Scheme) -> List (String, Map Int Unit)
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
@@ -2819,6 +2823,7 @@ unknownRecordMsg : String -> String
 unopMethod : String -> Option String
 unopMethodApp : String -> Expr -> Ref Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
+unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String
 unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)

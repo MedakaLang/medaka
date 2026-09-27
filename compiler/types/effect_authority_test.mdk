@@ -1204,10 +1204,10 @@ test "a variable nothing bounds below takes the empty authority" = expectAll [
         "each f xs = match xs\n  [] => []\n  x :: r => f x :: each f r\nnone _ = each (subIn cfg) []\n")),
   expectTrue (rejects (residual "partial = subIn cfg\nuse _ = partial etc\n")),
   expectEqual
-    "Dir () -> Dir \"cfg/*\""
+    "Dir {} -> Dir \"cfg/*\""
     (schemeOf (residual "partial = subIn cfg\n") "partial"),
   expectEqual
-    "a -> <Store ()> List Int"
+    "a -> <Store {}> List Int"
     (schemeOf
       (residual
         "each f xs = match xs\n  [] => []\n  x :: r => f x :: each f r\nnone _ = each (rdSub cfg) []\n")
@@ -1267,6 +1267,45 @@ test "a recursive group decides a relation two members' schemes share" = expectA
       (rejects
         (residual
           "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True etc\n")),
+  ]
+
+-- An exported binding the value restriction keeps monomorphic, whose type
+-- holds an authority nothing in its module bounds below, is refused: an
+-- importer cannot supply it later.  A private one takes the empty
+-- authority; a use in the module, or a signature, determines it.
+libCodes : String -> List String
+libCodes body =
+  flatMap
+    (m => match m
+      (_, (_, errors, _)) => map tcCode errors)
+    (checkModulesDiagsChain None "" [] [] (desugar (parseLocated prelude)) [
+      (
+        "lib",
+        desugar
+          (parseLocated
+            ("public export data Dir (d : Authority Store) = Dir (String @d)\n"
+              ++ "mk : (s : String) -> Dir s\nmk s = Dir s\n"
+              ++ "sub : Dir d -> (p : String @d) -> Dir d\nsub h _ = h\n"
+              ++ "cfg : Dir \"cfg/*\"\ncfg = mk \"cfg/*\"\n"
+              ++ "app : Dir \"cfg/app\"\napp = mk \"cfg/app\"\n"
+              ++ "subIn h (Dir p) = sub h p\n"
+              ++ body)),
+      ),
+    ])
+
+test "an exported authority nothing in its module determines is refused" = expectAll
+  [
+    expectEqual
+      ["T-EXPORT-UNSOLVED-AUTHORITY"]
+      (libCodes "export\npartial = subIn cfg\n"),
+    expectEqual [] (libCodes "partial = subIn cfg\n"),
+    expectEqual
+      []
+      (libCodes "export\npartial = subIn cfg\nuse _ = partial app\n"),
+    expectEqual
+      []
+      (libCodes
+        "export\npartial : Dir \"cfg/app\" -> Dir \"cfg/*\"\npartial = subIn cfg\n"),
   ]
 
 test "an authority bounded below by the top is solved, not kept" =

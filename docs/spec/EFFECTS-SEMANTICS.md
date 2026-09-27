@@ -412,12 +412,20 @@ least solution, variables bounded by each other collapsing to one representative
 first. A variable the owning scope decides that nothing bounds below (no
 value ever reaches it: an unused partial application, a callback over an
 empty list) takes the least solution of all, the empty authority `⊥`, which
-every bound admits; it renders `()` (`Dir ()`, `<FileRead ()>`, the label
-kept). A variable a binding's type mentions is not decided this way inside
-a binding group: its scheme may quantify it, and each use supplies it. The
-module root is the exception: it decides every variable left, so a top-level
-binding the value restriction keeps monomorphic takes `⊥` for an authority
-nothing in its module bounds below, and an importer cannot supply one later. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
+every bound admits. It prints as the empty set, `{}` (`Dir {}`,
+`<FileRead {}>`, the label kept), and has no written form: nothing a program
+states needs it, and a signature names the authority a value is meant for. A
+host boundary renders it conservatively (a manifest charges the label). A
+variable a binding's type mentions is not decided this way inside a binding
+group: its scheme may quantify it, and each use supplies it. The module root
+decides every variable left, a monomorphic top-level binding's included, as
+the least solution over the module's own uses; a binding the module keeps
+private takes `⊥` for an authority nothing in the module bounds below. An
+EXPORTED binding whose type holds such an authority is refused
+(`T-EXPORT-UNSOLVED-AUTHORITY`): the value restriction keeps it from being
+generalized, an importer cannot supply the authority later, and any solution
+the module chose alone would be a guess. A signature, or a use in the module,
+determines it. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
 bound a joined qualifier writes) has no single least solution, and no member
 is chosen for it: such an obligation is decided once the join's members are
 known, so a value in `String @(p | q)` is built against written or otherwise

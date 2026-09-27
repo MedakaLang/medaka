@@ -824,7 +824,10 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
    relation to one monomorphic cell each keep a residual. An internal
    variable (in no member's type, `rlTyped`) that nothing bounds below takes
    the empty authority `AJoin []` (`bottomUnbounded`); the module root does
-   the same for every variable it decides. Every local binding route (`blockLet`,
+   the same for every variable it decides, except a cell an exported
+   monomorphic binding's type holds (`exportedRootCells`): one the root leaves
+   unsolved is `T-EXPORT-UNSOLVED-AUTHORITY` at the binding, and the
+   obligations over it are not reported again (`failureMentions`). Every local binding route (`blockLet`,
    `blockRecLet`, `inferLetSimple`, `inferRecLet`, `processLetGroup`) keeps
    residuals the same way (`finishValueEffectsKeeping`).
 3. **Owing.** `forceInstantiation` re-emits each residual through
@@ -857,7 +860,7 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
    (`renderResiduals`, `contextText`); `ppDomain` reads a qualifier through its
    links, so a solved cell no longer prints as a fresh binder (`subH h = sub h`
    printed `Dir d -> (a : String) -> Dir d`). A residual the solver has since
-   proved is not printed (`openResiduals`); the empty authority prints `()`,
+   proved is not printed (`openResiduals`); the empty authority prints `{}`,
    and an effect atom holding it keeps its label (`renderAtomWith`).
 
 Coverage: `types/effect_authority_test.mdk` (the residual groups: two

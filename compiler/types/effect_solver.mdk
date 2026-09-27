@@ -1307,16 +1307,25 @@ distinctFailuresGo (f :: rest) seen = match f.esfAuthority
 
 -- Once every binding of the module is inferred, the variables no binding
 -- owned take their least solution over every use, and each obligation over
--- them is decided.
+-- them is decided.  [exported] are the cells an exported monomorphic
+-- binding's type holds: an importer's uses are not this module's, so such a
+-- cell is solved from this module's lower bounds but never defaulted to the
+-- empty authority; the caller refuses one left unsolved.
 export
 closeRootAuthorities : SummarySolver c ->
   Map Int Unit ->
+  Map Int Unit ->
   (Int -> Authority -> Authority) ->
   List (SummaryFailure c)
-closeRootAuthorities solver rigid widen =
+closeRootAuthorities solver rigid exported widen =
   let wanteds = reverseL solver.essRoot.value
   let owned = cell => not (M.has (authvarId cell) rigid)
-  let _ = solveAuthorities owned owned widen wanteds
+  let _ =
+    solveAuthorities
+      owned
+      (cell => owned cell && not (M.has (authvarId cell) exported))
+      widen
+      wanteds
   solver.essRoot := []
   distinctFailures
     (flatMap

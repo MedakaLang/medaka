@@ -32920,7 +32920,12 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   let env1 = extendBindings envGlobal shadowLayer
   let defs = funDefs progS
   let (topSchemes, groupedOut) =
-    processTopGroups env1 sigs defs (groupNames defs omEmpty)
+    processTopGroups
+      env1
+      sigs
+      defs
+      (groupNames defs omEmpty)
+      (namesToSet (publicValNames prog) omEmpty)
   -- Module: the marked tree this call returns (the groups' marked clauses written
   -- back, the tail bodies marked with the module's final dict-name set) and its
   -- stamped twin, which the tail-body inference below reads.  Flat: `progS` is both.
@@ -39215,21 +39220,78 @@ processTopGroups : TcEnv ->
   List (String, Ty) ->
   List (String, (List Pat, Expr)) ->
   List String ->
+  OrdMap Unit ->
   (List (String, Scheme), OrdMap (List (List Pat, Expr)))
-processTopGroups env sigs defs names =
+processTopGroups env sigs defs names exported =
   driverState.value.sigNameSetRef := sigNamesToSet sigs omEmpty
   driverState.value.sigTyMapRef := omFromPairs (reverseL sigs) omEmpty
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   let result = processSCCs env sigs grouped ordered
   let _ = resolvePendingJoins 0
+  let failures =
+    EffectSolver.closeRootAuthorities
+      perRun.value.effectSummaries
+      perRun.value.rigidAuthvarsRef.value
+      (exportedRootCells exported (fst result))
+      widenOpenedFor
+  -- read again after the close: a cell the root solved no longer appears
+  let unsolved = rootCellsOf exported (fst result)
+  let unsolvedIds = fold (acc (_, ids) => IdMap.union acc ids) Tip unsolved
   let _ =
     reportEffectSummaryFailures
-      (EffectSolver.closeRootAuthorities
-        perRun.value.effectSummaries
-        perRun.value.rigidAuthvarsRef.value
-        widenOpenedFor)
+      (filterList (f => not (failureMentions unsolvedIds f)) failures)
+  let _ = fold (_ u => reportUnsolvedExport grouped u) () unsolved
   result
+
+-- The authority cells an exported binding's published type holds unquantified:
+-- a binding the value restriction keeps monomorphic leaves its type's cells to
+-- the module root.
+exportedRootCells : OrdMap Unit -> List (String, Scheme) -> Map Int Unit
+exportedRootCells exported schemes =
+  fold (acc (_, ids) => IdMap.union acc ids) Tip (rootCellsOf exported schemes)
+
+rootCellsOf : OrdMap Unit ->
+  List (String, Scheme) ->
+  List (String, Map Int Unit)
+rootCellsOf exported schemes =
+  flatMap
+    ((name, scheme) =>
+      if omHasKey name exported then match unquantifiedAuthIds scheme
+        Tip => []
+        ids => [(name, ids)]
+      else
+        [])
+    schemes
+
+unquantifiedAuthIds : Scheme -> Map Int Unit
+unquantifiedAuthIds (Forall _ _ auths _ force mono) =
+  fold
+    (acc id => IdMap.delete id acc)
+    (authIdsIn mono (rowAuthIds force Tip))
+    auths
+
+failureMentions : Map Int Unit -> SummaryFailure (Option Loc, String) -> Bool
+failureMentions Tip _ = False
+failureMentions ids failure = match failure.esfAuthority
+  Some (lo, hi) =>
+    anyList (c => IdMap.has (authvarId c) ids) (authVars lo ++ authVars hi)
+  None => False
+
+-- An exported binding whose type still holds a cell after the root solved:
+-- nothing in its module bounds it below, and an importer cannot supply it
+-- later.  Its obligations are this failure, not separate ones.
+reportUnsolvedExport : OrdMap (List (List Pat, Expr)) ->
+  (String, Map Int Unit) ->
+  Unit
+reportUnsolvedExport grouped (name, _) =
+  let loc = match clausesOf name grouped
+    (_, body) :: _ => exprLoc body
+    [] => None
+  pushTypeErrorAt
+    "T-EXPORT-UNSOLVED-AUTHORITY"
+    loc
+    "Exported binding '\{name}' has an authority in its type that nothing in this module determines: the value restriction keeps it from being generalized, and an importer cannot supply it later. Give '\{name}' a type signature that names the authority, or use it in this module at the authority it is meant for"
 
 -- per-name dependencies: the other top-level names a binding's bodies reference
 -- (a conservative over-approximation via all free EVars is fine — only names

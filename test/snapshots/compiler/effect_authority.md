@@ -1,5 +1,5 @@
 # META
-source_lines=196
+source_lines=197
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -178,6 +178,7 @@ anySub lo (m :: ms) = authSubN lo m || anySub lo ms
 export
 renderAuthorityWith : (Ref Authvar -> String) -> Authority -> String
 renderAuthorityWith name a = match authNorm a
+  AJoin [] => " {}"
   AConst p => drender p
   AVar cell => " " ++ name cell
   AJoin ms => " (" ++ joinWith " | " (map (renderOperand name) ms) ++ ")"
@@ -269,7 +270,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "anySub" (PWild (PList)) (EVar "False"))
 (DFunDef false "anySub" ((PVar "lo") (PCons (PVar "m") (PVar "ms"))) (EBinOp "||" (EApp (EApp (EVar "authSubN") (EVar "lo")) (EVar "m")) (EApp (EApp (EVar "anySub") (EVar "lo")) (EVar "ms"))))
 (DTypeSig true "renderAuthorityWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Authority") (TyCon "String"))))
-(DFunDef false "renderAuthorityWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "drender") (EVar "p"))) (arm (PCon "AVar" (PVar "cell")) () (EBinOp "++" (ELit (LString " ")) (EApp (EVar "name") (EVar "cell")))) (arm (PCon "AJoin" (PVar "ms")) () (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EApp (EVar "renderOperand") (EVar "name"))) (EVar "ms")))) (ELit (LString ")"))))))
+(DFunDef false "renderAuthorityWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AJoin" (PList)) () (ELit (LString " {}"))) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "drender") (EVar "p"))) (arm (PCon "AVar" (PVar "cell")) () (EBinOp "++" (ELit (LString " ")) (EApp (EVar "name") (EVar "cell")))) (arm (PCon "AJoin" (PVar "ms")) () (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EVar "map") (EApp (EVar "renderOperand") (EVar "name"))) (EVar "ms")))) (ELit (LString ")"))))))
 (DTypeSig false "renderOperand" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Authority") (TyCon "String"))))
 (DFunDef false "renderOperand" (PWild (PCon "AConst" (PVar "p"))) (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p"))))
 (DFunDef false "renderOperand" ((PVar "name") (PCon "AVar" (PVar "cell"))) (EApp (EVar "name") (EVar "cell")))
@@ -349,7 +350,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "anySub" (PWild (PList)) (EVar "False"))
 (DFunDef false "anySub" ((PVar "lo") (PCons (PVar "m") (PVar "ms"))) (EBinOp "||" (EApp (EApp (EVar "authSubN") (EVar "lo")) (EVar "m")) (EApp (EApp (EVar "anySub") (EVar "lo")) (EVar "ms"))))
 (DTypeSig true "renderAuthorityWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Authority") (TyCon "String"))))
-(DFunDef false "renderAuthorityWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "drender") (EVar "p"))) (arm (PCon "AVar" (PVar "cell")) () (EBinOp "++" (ELit (LString " ")) (EApp (EVar "name") (EVar "cell")))) (arm (PCon "AJoin" (PVar "ms")) () (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderOperand") (EVar "name"))) (EVar "ms")))) (ELit (LString ")"))))))
+(DFunDef false "renderAuthorityWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AJoin" (PList)) () (ELit (LString " {}"))) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "drender") (EVar "p"))) (arm (PCon "AVar" (PVar "cell")) () (EBinOp "++" (ELit (LString " ")) (EApp (EVar "name") (EVar "cell")))) (arm (PCon "AJoin" (PVar "ms")) () (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderOperand") (EVar "name"))) (EVar "ms")))) (ELit (LString ")"))))))
 (DTypeSig false "renderOperand" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Authority") (TyCon "String"))))
 (DFunDef false "renderOperand" (PWild (PCon "AConst" (PVar "p"))) (EApp (EVar "trimLeft") (EApp (EVar "drender") (EVar "p"))))
 (DFunDef false "renderOperand" ((PVar "name") (PCon "AVar" (PVar "cell"))) (EApp (EVar "name") (EVar "cell")))

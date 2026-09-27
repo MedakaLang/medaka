@@ -1092,6 +1092,18 @@ on a built binary beside a control, and each answered by a rule, not a case):
   context; `stash : Dir d -> Unit` over a monomorphic cell is accepted as too
   general.
 
+**#3462 rulings** (Val, 2026-09-26, on Fable's advice; built on this branch):
+
+1. An exported binding the value restriction keeps monomorphic, whose type
+   holds an authority nothing in its module bounds below, is refused
+   (`T-EXPORT-UNSOLVED-AUTHORITY`, asking for a signature); a private one keeps
+   the empty authority. No hits across the 142 stdlib and pds modules.
+2. The empty authority prints `{}` with its label kept, has no written form,
+   and a host boundary stays conservative.
+3. The residual shared by every member of a recursive group is #3482's
+   follow-up; the honest pair is pinned as
+   `test/must_fail_fixtures/3482-mutual-recursion-shared-residual`.
+
 **Traps paid for (#3462):**
 
 - A join must be decided before the closing scope reads its roots and

@@ -83,7 +83,7 @@ renderAtom a = renderAtomWith authvarDefaultName a
 -- (`FileWrite dst, FileWrite src`), the spelling a signature writes and the
 -- parser folds back into one atom; the join form ` (a | b)` is not one.  The
 -- empty authority (a least solution nothing bounded below) keeps its label
--- and renders ` ()`: a label must never vanish from a row.
+-- and renders ` {}`, the empty set: a label must never vanish from a row.
 export
 renderAtomWith : (Ref Authvar -> String) -> Atom -> String
 renderAtomWith name a = match authNorm (atomAuth a)

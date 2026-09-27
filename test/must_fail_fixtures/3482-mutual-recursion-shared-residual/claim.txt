@@ -1,0 +1,18 @@
+issue: 3482
+what: an honest mutually recursive where-group (`q1`/`q2`) reads only under the
+what: captured handle `h`, and `outer cfg cfg` reads under `cfg/*`. Correct verdict:
+what: ACCEPT, exit 0. Observed: REJECTED at exit 1 ("Binding 'outer' reaches d where
+what: only a is admitted"). The relation between the pair's shared authority and
+what: `h`'s is mentioned by both members, so #3462 decides it in the group rather
+what: than keeping a residual on one member (keeping it on one member was an S0,
+what: #3470 review round 3). #3482 builds the residual shared by every member.
+cmd: run main.mdk
+exit: 1
+control: run control.mdk
+why-verb: `run` rather than `check`: both reject identically (typecheck's
+why-verb: decision), and `run` also shows the control executes.
+why-stdout: absent on purpose. The fix moves the exit code from 1 to 0; pinning
+why-stdout: the message would couple the row to wording, not to the mechanism.
+why-control: control.mdk is the same read through a self-recursive local, which
+why-control: one member owns, so it keeps its residual and is accepted today. If
+why-control: it breaks, residual schemes broke, not #3482.
