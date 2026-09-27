@@ -378,16 +378,30 @@ cevalLet env pat e1 e2 = match matchPat pat (ceval env e1)
 cevalBlock : EvalEnv (Value e) -> List CStmt -> <e> Value e
 cevalBlock _ [] = VUnit
 cevalBlock env [CSExpr e] = ceval env e
+cevalBlock env [CSLet True (PVar f _) e] =
+  let _ = cBlockRecEnv env f e
+  VUnit
 cevalBlock env [CSLet _ pat e] = cBlockLetLast env pat e
 cevalBlock env ((CSExpr e) :: rest) =
   let _ = ceval env e
   cevalBlock env rest
+cevalBlock env ((CSLet True (PVar f _) e) :: rest) =
+  cevalBlock (cBlockRecEnv env f e) rest
 cevalBlock env ((CSLet _ pat e) :: rest) = cBlockLet env pat e rest
 cevalBlock env [CSAssign _ e] =
   let _ = ceval env e
   VUnit
 cevalBlock env ((CSAssign x e) :: rest) =
   cevalBlock (extendEnv env [(x, ceval env e)]) rest
+
+-- A recursive block binding sees itself, exactly as `cevalRecLet` does for an
+-- expression `let rec`.
+cBlockRecEnv : EvalEnv (Value e) -> String -> CExpr -> <e> EvalEnv (Value e)
+cBlockRecEnv env f e =
+  let cell = Ref VUnit
+  let recEnv = pushFrame env [(f, cell)]
+  cell := ceval recEnv e
+  recEnv
 
 cBlockLetLast : EvalEnv (Value e) -> Pat -> CExpr -> <e> Value e
 cBlockLetLast env pat e = match matchPat pat (ceval env e)

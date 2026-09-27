@@ -1,11 +1,8 @@
--- DICT-SEMANTICS §4.1 G4 (#2095): #1052's `where` spelling. G4 says a local
--- binding generalized over a residual predicate abstracts it and each use site
--- is its own instance -- here `g`'s uses at Int and Bool would print 1 and 2,
--- so `both` should print 3. The located `T-LOCAL-CONSTRAINED-MONO` pin
--- (#1986 rung 2, PR #2023) instead declines to generalize `g` at all and
--- rejects the whole binding, because #1082 (G1 dict-abstraction for locals)
--- has not landed. Pinned to TODAY's answer -- a reject -- not the spec's `3`;
--- the row goes red the day #1082 lands and must be re-pinned to ACCEPT/`3`.
+-- DICT-SEMANTICS §4.1 G4 (#2095): #1052's `where` spelling. A local binding
+-- generalized over a residual predicate abstracts it, and each use site solves
+-- its own instance: `g`'s use at Int reaches `sz _ = 1` and its use at Bool
+-- reaches `sz _ = 2`, so `both` prints 3.  One dictionary shared between the
+-- two uses would print 2 or 4.
 interface Sz a where
   sz : a -> Int
 

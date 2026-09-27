@@ -2,16 +2,16 @@
 -- instance makes a re-selection value-observable), with different names so
 -- this is not a byte-for-byte duplicate of `s6-1-4-supers-per-construction-
 -- goal.mdk`, which pins the same shape for §6.1.4/C2. `Boxed`'s `requires Sz a`
--- super slot is filled at `useSz`'s construction goal by entailing `Sz (Box
+-- super slot is filled at `useSz`'s construction goal by solving `Sz (Box
 -- Int)` against THREE overlapping `Sz` instances (`Int`, `Box a requires Sz
 -- a`, `Box Int`) -- the min-⊑ winner is the ground `Box Int` instance, `77`.
--- `sizeOf (Box 1 : Box Int)` on the next line is an INDEPENDENT top-level
--- goal at the same type, entailed separately. §2.1/§2.3 (this milestone) name
--- this today's mechanism: two SEPARATE selections that happen to land on the
--- same answer because both independently pick the ⊑-minimum, not one
--- projection that GUARANTEES they agree. Pinned to today's value, `77\n77`;
--- S2 replaces the super slot's selection with a projection from `useSz`'s own
--- construction evidence, which is the observation this row exists for.
+-- `sizeOf (Box 1 : Box Int)` on the next line is the top-level goal at the
+-- same type. §3 solves an instance's super at its construction goal with the
+-- same judgment as any other goal, so the two agree by construction; inside a
+-- body whose dictionary is a given, the super is instead a projection of that
+-- given. A value other than `77\n77` means the construction goal and the
+-- top-level goal were solved by different rules.
+--
 data Box a = Box a
 
 interface Sz a where

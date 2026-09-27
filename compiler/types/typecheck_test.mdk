@@ -1226,7 +1226,7 @@ test "block recursive arithmetic retains the outer predicate and route" =
   expectAll [
     expectEqual [] errors,
     expectEqual
-      [("core::Num", ["a"], "binding:value", True, [])]
+      [("core::Num", ["a"], "local:local", True, [])]
       (map
         (view => (
           view.ntvInterface,
@@ -1238,8 +1238,8 @@ test "block recursive arithmetic retains the outer predicate and route" =
         arithmetic),
     expectEqual
       [
-        ("binding:value", "binding:value", 0),
-        ("binding:value", "binding:value", 0),
+        ("local:local", "binding:value", 0),
+        ("local:local", "binding:value", 0),
       ]
       assumptions,
   ]
@@ -2447,7 +2447,7 @@ localCoreExprFacts (CMethod "fromInt" _ _ route _ _) = match route
 localCoreExprFacts _ = emptyLocalCoreFacts
 
 blockRecValueFacts : CBind -> LocalCoreFacts
-blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet False _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts localBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
@@ -2489,7 +2489,7 @@ lamThenGroupSource = joinNl [
 ]
 
 lamThenGroupBindFacts : CBind -> LocalCoreFacts
-lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind "g" [CClause _ gBody]] (CApp _ _))) (CApp _ _))]) =
+lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind _ [CClause _ gBody]] (CApp _ _))) (CApp _ _))]) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts gBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
@@ -3090,7 +3090,7 @@ test "synthesized impl copy retains ordinary binding ownership" =
     )
     (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
 
--- #2095 (M-EVIDENCE S0): production-path observation of `evidenceObservation`'s
+-- #2095: production-path observation of `evidenceObservation`'s
 -- entries, one program per family the mission asks for. `elaborateOne`'s two-
 -- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
 -- numeric prelude so `intToString` and friends are the same environment those
@@ -3214,7 +3214,7 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
       ]
     _ => fail "expected exactly one Box Int construction goal"
 
-test "today a flattened super slot is entailed as an independent instance selection, not a projection (#2095; S2 flips this pin)" =
+test "an appended super slot at an instance construction goal is solved at that goal (#2095, DICT §3 construction)" =
   let trace =
     evidenceObservationTrace
       (joinNl [
@@ -3239,8 +3239,7 @@ test "today a flattened super slot is entailed as an independent instance select
         (e =>
           e.eoeArity == 2
             && e.eoeOutcome == EOKInstance
-            && e.eoeInstanceKey == Some "Int"
-            && e.eoeProjectionPath == None)
+            && e.eoeInstanceKey == Some "Int")
         slots),
   ]
 
@@ -3270,7 +3269,7 @@ localUseSiteObserved source =
   let entries = finishEvidenceObservation ()
   (map tcCode errors, entries)
 
-test "a generalized local's use site is never itself a dict application; the pin rejects the sharing instead (#1986 rung 2, #2095)" =
+test "a generalized local is dictionary-abstracted: each use applies it to the given its own argument needs (#1082, #2095)" =
   let (codes, entries) =
     localUseSiteObserved
       (joinNl
@@ -3286,17 +3285,16 @@ test "a generalized local's use site is never itself a dict application; the pin
           "  let g v = sz v",
           "  g x + g y",
         ])
-  -- #1986: `g` is never a dict application at its own call sites (`g x`/`g y`)
-  -- — it has no scheme of its own to abstract, so no `EDictAt`/dict-app goal is
-  -- ever minted FOR IT. Its body's own `sz v` occurrence, unpinned, would
-  -- instead be forwarded to `both`'s enclosing given (`eoeOutcome == EOKGiven`
-  -- below) — the SAME dict at every call site regardless of `v`'s type, which is
-  -- exactly the cross-type sharing the located pin exists to reject.
+  -- `g x` and `g y` are dictionary applications of `g`, one per use, and each
+  -- forwards the given for its own argument's variable: two distinct binders.  One
+  -- binder shared by both uses is the #1045 wrong answer.
+  let apps = evidenceEntriesOfKind "GKDictApp" entries
   expectAll [
-    expectTrue (contains "T-LOCAL-CONSTRAINED-MONO" codes),
-    expectEqual 0 (listLen (evidenceEntriesOfKind "GKDictApp" entries)),
-    expectTrue (match evidenceEntriesWithPredicate "a" entries
-      [e] => e.eoeOutcome == EOKGiven
+    expectEqual [] codes,
+    expectEqual 2 (listLen apps),
+    expectTrue (all (e => e.eoeOutcome == EOKGiven) apps),
+    expectTrue (match map (e => e.eoeGivenBinder) apps
+      [Some first, Some second] => first /= second
       _ => False),
   ]
 

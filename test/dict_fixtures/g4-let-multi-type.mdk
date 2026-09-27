@@ -1,12 +1,7 @@
 -- DICT-SEMANTICS §4.1 G4 (#2095): #1052's `let` spelling of
--- `g4-where-multi-type.mdk` -- same body, same predicate, only the binder
--- form differs. DICT-SEMANTICS.md §11's G4 row records that the `where`/
--- `let`-group site and the four `let`-shaped sites used to pin on DIFFERENT
--- predicate sets (the #1052 divergence: `where` collapsed to `2`, `let`
--- generalized to the spec's `3`). #1986 rung 2 unified all five sites onto
--- one located `T-LOCAL-CONSTRAINED-MONO` reject, so this spelling now agrees
--- with the `where` spelling -- both reject, uniformly. Pinned to TODAY's
--- answer; re-pin to ACCEPT/`3` alongside the `where` row when #1082 lands.
+-- `g4-where-multi-type.mdk` -- same body, same predicate, only the binder form
+-- differs, so the answer is the same 3.  The two spellings once generalized
+-- differently (#1052); every local binding site now abstracts the same way.
 interface Sz a where
   sz : a -> Int
 
