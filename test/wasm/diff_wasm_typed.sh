@@ -1041,36 +1041,38 @@ if grep -E '^[[:space:]]*_?(emittedDefaultsWRef|emittedDefaultsSetW|defaultDefsW
   echo "FAIL H2B4-AUTHORITY-SET: retired default authority remains ambient"
   exit 1
 fi
-for required in \
-  'emittedDefaultNames : Ref (OrdMap Unit)' \
-  'defaultDefinitions : Ref (List (List String))' \
-  'emittedDefaultNames = Ref omEmpty' \
-  'defaultDefinitions = Ref []' \
-  'defaultAlreadyEmittedW : WasmEmit -> String -> Bool' \
-  'defaultAlreadyEmittedW emit name = omHasKey name !emit.emittedDefaultNames' \
-  'markDefaultEmittedW : WasmEmit -> String -> Unit' \
-  'emit.emittedDefaultNames' \
-  '(omInsert name () !emit.emittedDefaultNames)' \
-  'addDefaultDefW : WasmEmit -> List String -> Unit' \
-  'setRef emit.defaultDefinitions (def :: !emit.defaultDefinitions)' \
-  'defaultAlreadyEmittedW (progEmit prog) fname' \
-  'markDefaultEmittedW (progEmit prog) fname' \
-  'addDefaultDefW' \
-  '(emitDefaultDefineW prog fname tag method entry)' \
-  'reverseL (progEmit prog).defaultDefinitions.value'; do
-  has_wasm_pin "$required" || {
-    case "$required" in
-      *emittedDefaultNames*|*defaultAlreadyEmittedW*|*markDefaultEmittedW*) id=H2B4-DEFAULT-NAMES ;;
+# An inherited default is a per-inheritor `CImplDefault` impl entry, emitted like any
+# other impl entry, so no emitter state records which defaults were synthesized. The
+# lazy default-emission state (a seen-name set, a definition accumulator, their
+# accessors, and the lazy definer) stays retired: none of its names may appear in
+# the emitter, as a definition or as a use.
+for retired in \
+  emittedDefaultNames defaultAlreadyEmittedW markDefaultEmittedW \
+  defaultDefinitions addDefaultDefW emitDefaultDefineW; do
+  if grep -n -w -- "$retired" "$WASM_SRC"; then
+    case "$retired" in
+      emittedDefaultNames|defaultAlreadyEmittedW|markDefaultEmittedW) id=H2B4-DEFAULT-NAMES ;;
       *) id=H2B4-DEFAULT-DEFS ;;
     esac
-    echo "FAIL $id: missing routed default-state authority $required"
+    echo "FAIL $id: retired default-emission state $retired is back in $WASM_SRC"
+    exit 1
+  fi
+done
+# The default's symbol is a pure function of the entry (interface, method, instance
+# key), and its body goes through the same impl-body path as a supplied method.
+for required in \
+  'defaultFnNameW : String -> String -> String -> String' \
+  'implEntrySymW _ method (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) = defaultFnNameW ifaceWord method key' \
+  'implBodyExprW (CImplDefault _ _ _ _ _ e) = e'; do
+  has_wasm_pin "$required" || {
+    case "$required" in
+      implBodyExprW*) id=H2B4-DEFAULT-DEFS ;;
+      *) id=H2B4-DEFAULT-NAMES ;;
+    esac
+    echo "FAIL $id: missing entry-derived default emission $required"
     exit 1
   }
 done
-[ "$(grep -F 'flatMap (x => x) (reverseL ' "$WASM_SRC" | grep -F 'defaultDefinitions' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B4-DEFAULT-DEFS: strict and census default drains must both preserve reverse/flatten order"
-  exit 1
-}
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL wasm typed string-state ratchet: record and census must each own one fresh WasmEmit"
   exit 1
