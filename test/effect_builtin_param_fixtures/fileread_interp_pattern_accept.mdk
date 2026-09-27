@@ -1,0 +1,6 @@
+-- #3496 control: the same interpolated read under the pattern bound ⇒ ACCEPT.
+readCfg : String -> <FileRead "/etc/app/*"> Result String String
+readCfg name = readFile "/etc/app/\{name}"
+
+main : <IO> Unit
+main = println "fileread interp pattern accept"

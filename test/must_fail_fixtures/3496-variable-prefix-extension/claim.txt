@@ -1,0 +1,21 @@
+issue: 3496
+what: a wrapper whose row is its named argument's authority (`<FileRead p>`)
+what: reads `p ++ suffix`. The abstraction keeps p's authority for the
+what: concatenation, so a caller passing the exact element "cfg/app.toml" is
+what: charged for that one file while the read is of `cfg/app.toml.bak`.
+what: Correct verdict: REJECT, since an exact element admits only itself
+what: (EFFECTS-SEMANTICS §2.3) and alpha must over-approximate (§4). Observed:
+what: accepted at exit 0, with `onlyApp` claiming the single file.
+cmd: check main.mdk
+exit: 0
+stdout-line: onlyApp : Unit -> <FileRead "cfg/app.toml"> Result String String
+stdout-line: main : <IO> Unit
+control: check control.mdk
+why-verb: `check`: the defect is an acceptance, and the scheme line is the
+why-verb: wrong claim; there is no runtime value to observe.
+why-stdout: `onlyApp`'s scheme is the false claim; `main` proves the dump ran.
+why-stdout: Either fix shape (refuse the wrapper, or refuse the exact caller)
+why-stdout: moves the exit to 1 and drains this row.
+why-control: control.mdk forwards the argument unchanged, so the exact bound
+why-control: holds; it is accepted under every fix. If it breaks, named
+why-control: authorities broke, not #3496.

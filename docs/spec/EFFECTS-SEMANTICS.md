@@ -327,13 +327,20 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | in `Prefix`, a justified left prefix bounds the whole; in `Set`, non-literal concatenation gives `⊤` |
-| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix; the first interpolated expression stops it |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays. In `Set`, non-literal concatenation gives `⊤` |
+| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
 | `match … { … ⇒ eᵢ }` | `⊔ᵢ α(eᵢ)` (join over arms) |
 | a value whose checked type is `τ @q` | `q`, including variables, application results and field reads |
 | application result, parameter, or field without an authority qualifier; anything else | `⊤` |
+
+**Open: extending an authority variable.** No term names the extension of a
+variable, so `p ++ x` with `p : String @κ` currently keeps `κ`. That is sound
+only when the caller's element is a pattern: a caller passing the exact
+element `"cfg/app.toml"` is charged for that file while the read reaches
+`cfg/app.toml<x>` (#3496, pinned by must_fail
+`3496-variable-prefix-extension`).
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to

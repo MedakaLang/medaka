@@ -47,6 +47,47 @@ productPrimaryLift ((name, top) :: _) s = match top
   PSet _ => productNorm [(name, PSet (Some [s]))]
   _ => PProduct []
 
+-- The element a value denotes once an unknown suffix is appended to it. A
+-- pattern already admits every extension; an exact element becomes the
+-- pattern it begins; a Set member becomes an unknown member, the top. In a
+-- Product only the primary axis, the one a string lifts into, is extended.
+export
+extendParam : Param -> Param -> Param
+extendParam top p = match canonParam p
+  PPrefix (Some s) =>
+    if isPrefixPattern s then PPrefix (Some s) else PPrefix (Some (s ++ "*"))
+  PProduct ax => match top
+    PProduct ((name, _) :: _) => productNorm (map (extendAxis name) ax)
+    _ => PProduct []
+  q => subTopOf q
+
+extendAxis : String -> (String, Param) -> (String, Param)
+extendAxis primary (name, p) =
+  if name == primary then (name, extendParam (subTopOf p) p) else (name, p)
+
+-- The element a value denotes once a known suffix is appended: an exact
+-- element grows by the suffix, a pattern already admits it, and a Set member
+-- becomes an unknown member.
+export
+appendParam : Param -> String -> Param -> Param
+appendParam top suffix p = match canonParam p
+  PPrefix (Some s) =>
+    if isPrefixPattern s then
+      PPrefix (Some s)
+    else
+      canonParam (PPrefix (Some (s ++ suffix)))
+  PProduct ax => match top
+    PProduct ((name, _) :: _) => productNorm (map (appendAxis suffix name) ax)
+    _ => PProduct []
+  q => subTopOf q
+
+appendAxis : String -> String -> (String, Param) -> (String, Param)
+appendAxis suffix primary (name, p) =
+  if name == primary then
+    (name, appendParam (subTopOf p) suffix p)
+  else
+    (name, p)
+
 export
 lookupAxis : String -> List (String, Param) -> Option Param
 lookupAxis _ [] = None

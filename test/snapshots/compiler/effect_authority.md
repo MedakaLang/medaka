@@ -1,5 +1,5 @@
 # META
-source_lines=197
+source_lines=217
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -11,7 +11,8 @@ stages=DESUGAR,MARK
 -- when any operand does. Anything else is not proven, never assumed.
 
 import types.effect_domain.{
-  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf
+  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
+  appendParam
 }
 import support.util.{joinWith}
 import string.{trimLeft}
@@ -66,6 +67,25 @@ linkAuthvar cell a = cell := ALink (authvarId cell) a
 export
 authTop : Param -> Authority
 authTop top = AConst (subTopOf top)
+
+-- The authority of a value once a suffix is appended: each constant extends
+-- through its domain, by the suffix when it is known (`authAppend`) and to
+-- the pattern it begins when it is not (`authExtend`). A variable is kept as
+-- it stands, which is sound only when the caller's element is a pattern; the
+-- exact-element case is pinned by must_fail `3496-variable-prefix-extension`.
+export
+authExtend : Param -> Authority -> Authority
+authExtend top a = mapConstants (extendParam top) a
+
+export
+authAppend : Param -> String -> Authority -> Authority
+authAppend top suffix a = mapConstants (appendParam top suffix) a
+
+mapConstants : (Param -> Param) -> Authority -> Authority
+mapConstants f a = match authNorm a
+  AConst p => AConst (f p)
+  AJoin ms => authJoinAll (map (mapConstants f) ms)
+  v => v
 
 -- The domain's top for a term: from a constant's shape, or a variable's
 -- declared domain. An empty join (the empty authority, a variable's least
@@ -200,7 +220,7 @@ export
 renderAuthority : Authority -> String
 renderAuthority a = renderAuthorityWith authvarDefaultName a
 # DESUGAR
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "djoin" false) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "djoin" false) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -223,6 +243,12 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "a"))))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
+(DTypeSig true "authExtend" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
+(DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
+(DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))
@@ -280,7 +306,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DTypeSig true "renderAuthority" (TyFun (TyCon "Authority") (TyCon "String")))
 (DFunDef false "renderAuthority" ((PVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "authvarDefaultName")) (EVar "a")))
 # MARK
-(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "djoin" false) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false))))
+(DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "djoin" false) (mem "dsub" false) (mem "canonParam" false) (mem "drender" false) (mem "isSubTop" false) (mem "subTopOf" false) (mem "extendParam" false) (mem "appendParam" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("string") ((mem "trimLeft" false))))
 (DUse false (UseAlias ("map") "M"))
@@ -303,6 +329,12 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DFunDef false "linkAuthvar" ((PVar "cell") (PVar "a")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "ALink") (EApp (EVar "authvarId") (EVar "cell"))) (EVar "a"))))
 (DTypeSig true "authTop" (TyFun (TyCon "Param") (TyCon "Authority")))
 (DFunDef false "authTop" ((PVar "top")) (EApp (EVar "AConst") (EApp (EVar "subTopOf") (EVar "top"))))
+(DTypeSig true "authExtend" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "authExtend" ((PVar "top") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EVar "extendParam") (EVar "top"))) (EVar "a")))
+(DTypeSig true "authAppend" (TyFun (TyCon "Param") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyCon "Authority")))))
+(DFunDef false "authAppend" ((PVar "top") (PVar "suffix") (PVar "a")) (EApp (EApp (EVar "mapConstants") (EApp (EApp (EVar "appendParam") (EVar "top")) (EVar "suffix"))) (EVar "a")))
+(DTypeSig false "mapConstants" (TyFun (TyFun (TyCon "Param") (TyCon "Param")) (TyFun (TyCon "Authority") (TyCon "Authority"))))
+(DFunDef false "mapConstants" ((PVar "f") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EVar "f") (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstants") (EVar "f"))) (EVar "ms")))) (arm (PVar "v") () (EVar "v"))))
 (DTypeSig true "authDomainTop" (TyFun (TyCon "Authority") (TyCon "Param")))
 (DFunDef false "authDomainTop" ((PCon "AConst" (PVar "p"))) (EApp (EVar "subTopOf") (EVar "p")))
 (DFunDef false "authDomainTop" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarDomain") (EVar "cell")))

@@ -61,6 +61,32 @@ test "FileRead builtin rejects a concrete path outside its Prefix bound" = expec
   (fixture "fileread_hole_reject.mdk")
   ["performs <FileRead \"/etc/app/config.toml\">"]
 
+test "a concatenation extends an exact FileRead prefix to the pattern it begins" = expectCheckReject
+  (fixture "fileread_concat_exact_reject.mdk")
+  ["performs <FileRead \"/etc/app/*\">"]
+
+test "a concatenation under the pattern it begins is accepted" =
+  expectCheckAccept (fixture "fileread_concat_pattern_accept.mdk")
+
+test "an interpolation extends an exact FileRead prefix to the pattern it begins" = expectCheckReject
+  (fixture "fileread_interp_exact_reject.mdk")
+  ["performs <FileRead \"/etc/app/*\">"]
+
+test "an interpolation under the pattern it begins is accepted" =
+  expectCheckAccept (fixture "fileread_interp_pattern_accept.mdk")
+
+test "manifest grants a concatenation's pattern, never its exact prefix" =
+  expectManifest
+    "fileread_concat_manifest_accept.mdk"
+    "readUnder"
+    "[package.capabilities]\nFileRead = \"/etc/app/*\""
+
+test "manifest grants a literal concatenation exactly" =
+  expectManifest
+    "fileread_concat_manifest_accept.mdk"
+    "readFixed"
+    "[package.capabilities]\nFileRead = \"/etc/app/config.toml\""
+
 test "FileWrite builtin fills a concrete path inside its Prefix bound" =
   expectCheckAccept (fixture "filewrite_hole_accept.mdk")
 

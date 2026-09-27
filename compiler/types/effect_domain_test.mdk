@@ -1,5 +1,7 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
-import types.effect_domain.{Param(..), djoin, drender, dsub}
+import types.effect_domain.{
+  Param(..), djoin, drender, dsub, extendParam, appendParam
+}
 import types.effect_rows.{atomBuiltin, atomsDiff, atomsUnion, renderAtoms}
 
 test "prefix coverage is directed and respects the host boundary" = expectAll [
@@ -78,4 +80,37 @@ test "larger rows use the canonical label index without changing order" =
   expectAll [
     expectEqual "A, B, C, D, E, F" (renderAtoms all),
     expectEqual "B, F" (renderAtoms remaining),
+  ]
+
+test "an extension keeps a pattern, extends an exact element, tops a Set member" =
+  let schema = PProduct [("Host", PPrefix None), ("Method", PSet None)]
+  expectAll [
+    expectEqual
+      (drender (PPrefix (Some "cfg/*")))
+      (drender (extendParam (PPrefix None) (PPrefix (Some "cfg/")))),
+    expectEqual
+      (drender (PPrefix (Some "cfg/*")))
+      (drender (extendParam (PPrefix None) (PPrefix (Some "cfg/*")))),
+    expectEqual
+      (drender (PSet None))
+      (drender (extendParam (PSet None) (PSet (Some ["GET"])))),
+    expectEqual
+      (drender
+        (PProduct [
+          ("Host", PPrefix (Some "a.com/*")),
+          ("Method", PSet (Some ["GET"])),
+        ]))
+      (drender
+        (extendParam
+          schema
+          (PProduct [
+            ("Host", PPrefix (Some "a.com/")),
+            ("Method", PSet (Some ["GET"])),
+          ]))),
+    expectEqual
+      (drender (PPrefix (Some "cfg/app.toml")))
+      (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/app")))),
+    expectEqual
+      (drender (PPrefix (Some "cfg/*")))
+      (drender (appendParam (PPrefix None) ".toml" (PPrefix (Some "cfg/*")))),
   ]

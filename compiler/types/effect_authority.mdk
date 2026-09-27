@@ -7,7 +7,8 @@
 -- when any operand does. Anything else is not proven, never assumed.
 
 import types.effect_domain.{
-  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf
+  Param(..), djoin, dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
+  appendParam
 }
 import support.util.{joinWith}
 import string.{trimLeft}
@@ -62,6 +63,25 @@ linkAuthvar cell a = cell := ALink (authvarId cell) a
 export
 authTop : Param -> Authority
 authTop top = AConst (subTopOf top)
+
+-- The authority of a value once a suffix is appended: each constant extends
+-- through its domain, by the suffix when it is known (`authAppend`) and to
+-- the pattern it begins when it is not (`authExtend`). A variable is kept as
+-- it stands, which is sound only when the caller's element is a pattern; the
+-- exact-element case is pinned by must_fail `3496-variable-prefix-extension`.
+export
+authExtend : Param -> Authority -> Authority
+authExtend top a = mapConstants (extendParam top) a
+
+export
+authAppend : Param -> String -> Authority -> Authority
+authAppend top suffix a = mapConstants (appendParam top suffix) a
+
+mapConstants : (Param -> Param) -> Authority -> Authority
+mapConstants f a = match authNorm a
+  AConst p => AConst (f p)
+  AJoin ms => authJoinAll (map (mapConstants f) ms)
+  v => v
 
 -- The domain's top for a term: from a constant's shape, or a variable's
 -- declared domain. An empty join (the empty authority, a variable's least

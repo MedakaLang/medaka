@@ -1,0 +1,10 @@
+-- #3496: `p ++ ".bak"` keeps p's authority. A caller that passes the exact
+-- element "cfg/app.toml" is charged for that one file, but the read is of
+-- `cfg/app.toml.bak`, which an exact element does not admit (§2.3).
+readUnder : (p : String) -> String -> <FileRead p> Result String String
+readUnder p suffix = readFile (p ++ suffix)
+
+onlyApp : Unit -> <FileRead "cfg/app.toml"> Result String String
+onlyApp _ = readUnder "cfg/app.toml" ".bak"
+
+main = println 1
