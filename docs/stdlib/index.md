@@ -94,14 +94,14 @@ Operations on `Array a`.
 
 ## [`base32`](base32.md)
 
-Base32 encoding and decoding of bytes, per RFC 4648.
+Base32 encoding and decoding, per RFC 4648.
 
 - [`base32Encode`](base32.md#base32encode)
 - [`base32Decode`](base32.md#base32decode)
 
 ## [`base64`](base64.md)
 
-Base64 encoding and decoding of bytes, per RFC 4648.
+Base64 encoding and decoding, per RFC 4648.
 
 - [`encode`](base64.md#encode)
 - [`encodeUrlSafe`](base64.md#encodeurlsafe)
@@ -389,13 +389,11 @@ A mutable set of distinct elements, keyed by hash.
 
 ## [`hex`](hex.md)
 
-Hexadecimal encoding and decoding of bytes.
+Hexadecimal encoding and decoding.
 
-- [`encodeBytes`](hex.md#encodebytes)
 - [`encode`](hex.md#encode)
 - [`encodeUpper`](hex.md#encodeupper)
 - [`encodeString`](hex.md#encodestring)
-- [`decodeBytes`](hex.md#decodebytes)
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
 
