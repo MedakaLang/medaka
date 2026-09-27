@@ -1113,7 +1113,7 @@ for required in \
   'CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
   'CBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
   'CBind "main" [CClause [] (CLit (LInt 0))]' \
-  'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
+  'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" [] [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
@@ -2808,7 +2808,7 @@ for default_spec in "p1 PDefault 17" "u UDefault 29" "p2 PDefault 17"; do
   default_tag="${default_rest%% *}"
   default_constant="${default_rest#* }"
   default_wat="$WORK/default-$default_name.wat"
-  default_symbol="mdk_default_synthDefault_${default_tag}_a1"
+  default_symbol="mdk_default_DefaultFace_synthDefault_zZDefaultFace_7c_${default_tag}_7c_"
   [ "$(grep -F "(func \$$default_symbol" "$default_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B4-DEFAULT-NAMES: $default_name must contain exactly one named synthesized default"
     exit 1

@@ -1,0 +1,8 @@
+-- A method-less `impl Greet Dog`: Dog's `Greet.speak` slot is filled by ifb's default.
+import ifb.{Greet(..), speak}
+import dog.{Dog(..)}
+
+impl Greet Dog where
+
+export sayB : Dog -> String
+sayB d = speak d

@@ -4,13 +4,21 @@
 -- method-less slot is ever represented here — an impl that omits a required
 -- method with no default is rejected upstream (M1), never given an `Absent` row.
 --
--- Depends only on `types.repr`'s identity types, so `compiler/ir/*`,
--- `compiler/eval/*` and `compiler/backend/*` can import this module without
--- reaching `types.typecheck` — the producer (`buildDispositions`) lives there;
--- this module is the shared carrier plus the installed lookup, mirroring
+-- Depends only on `types.repr`'s and `frontend.ast`'s identity types, so
+-- `compiler/ir/*`, `compiler/eval/*` and `compiler/backend/*` can import this module
+-- without reaching `types.typecheck` — the producer (`buildDispositions`) lives
+-- there; this module is the shared carrier plus the installed lookup, mirroring
 -- `types/route_key.mdk`'s `evidenceRef`/`installEvidence`.
+--
+-- Its readers are the two passes that turn an `InheritedDefault` row into code:
+-- `core_ir_lower` (one `CImplDefault` entry per row, which every compiled engine
+-- dispatches like the instance's own methods) and eval's install (one specialized
+-- candidate per row).  Neither chooses a default: the row says which interface's
+-- body serves which instance's slot.
+import frontend.ast.{Ty}
 import types.repr.{IfaceRef(..)}
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
+import support.util.{reverseL}
 
 -- An instance's within-compile identity: the declaring module id and a
 -- whole-graph-unique ordinal.  Mirrors `types.typecheck`'s `InstRef` (`mid`,
@@ -66,14 +74,40 @@ dispositionKey : InstId -> String -> String
 dispositionKey inst method =
   "\{instIdMid inst}#\{intToString (instIdSeq inst)}@\{method}"
 
+-- What a pass needs to build one instance's specialization of an inherited
+-- default, named the way every engine already names the instance.
+public export data InstanceShape = InstanceShape {
+  -- the canonical route word (`route_key.implRouteKeyWord` of the impl's own
+  -- interface origin and type arguments, no method): the key its supplied
+  -- methods carry, so a specialization sits beside them under the same word
+  isWord : String,
+  -- the impl head's type arguments, from which a pass derives the head tag and
+  -- specificity score exactly as it does for the impl's own methods
+  isTys : List Ty,
+  -- the word a dictionary for this instance carries (the typechecker's
+  -- predicate route word: the bare head unless the head collides), which a
+  -- superclass call projected from the receiver dispatches by
+  isDictWord : String,
+  -- how many `requires` dictionaries the instance's methods take after their
+  -- method-level ones (the expanded requires list's length)
+  isReqCount : Int,
+}
+
 export data DispositionTable = DispositionTable {
   dtRows : List MethodDisposition,
   dtIndex : OrdMap MethodDisposition,
+  -- the instances inheriting each (interface word, method) slot, keyed by
+  -- `slotKey`, in producer order
+  dtInheritors : OrdMap (List InstanceShape),
 }
 
 export
 emptyDispositionTable : DispositionTable
-emptyDispositionTable = DispositionTable { dtRows = [], dtIndex = omEmpty }
+emptyDispositionTable = DispositionTable {
+  dtRows = [],
+  dtIndex = omEmpty,
+  dtInheritors = omEmpty,
+}
 
 export
 dispositionRows : DispositionTable -> List MethodDisposition
@@ -85,8 +119,50 @@ dispositionRows table = table.dtRows
 -- exactly one row or none.
 export
 buildDispositionTable : List MethodDisposition -> DispositionTable
-buildDispositionTable rows =
-  DispositionTable { dtRows = rows, dtIndex = insertDispositions rows omEmpty }
+buildDispositionTable rows = DispositionTable {
+  dtRows = rows,
+  dtIndex = insertDispositions rows omEmpty,
+  dtInheritors = omEmpty,
+}
+
+-- The producer's builder: each row with its instance's shape and its interface's
+-- word (`route_key.ifaceWordOf`), which also fills the inheritor index.
+export
+buildDispositionTableWithShapes : List (InstanceShape, String, MethodDisposition) ->
+  DispositionTable
+buildDispositionTableWithShapes shaped =
+  let rows = map ((_, _, d) => d) shaped
+  DispositionTable {
+    dtRows = rows,
+    dtIndex = insertDispositions rows omEmpty,
+    dtInheritors = insertInheritors (reverseL shaped) omEmpty,
+  }
+
+insertInheritors : List (InstanceShape, String, MethodDisposition) ->
+  OrdMap (List InstanceShape) ->
+  OrdMap (List InstanceShape)
+insertInheritors [] acc = acc
+insertInheritors ((shape, ifaceWord, InheritedDefault { method = m }) :: rest) acc =
+  let key = slotKey ifaceWord m
+  insertInheritors
+    rest
+    (omInsert key (shape :: optionOr [] (omLookup key acc)) acc)
+insertInheritors (_ :: rest) acc = insertInheritors rest acc
+
+-- `#` cannot occur in an interface word or a method name.
+--
+-- > slotKey "core::Ord" "lt"
+-- "core::Ord#lt"
+export
+slotKey : String -> String -> String
+slotKey ifaceWord method = "\{ifaceWord}#\{method}"
+
+-- The instances whose [method] slot of the interface with word [ifaceWord] is
+-- filled by that interface's default body, in producer order.  A map lookup.
+export
+inheritorsOf : String -> String -> DispositionTable -> List InstanceShape
+inheritorsOf ifaceWord method table =
+  optionOr [] (omLookup (slotKey ifaceWord method) table.dtInheritors)
 
 insertDispositions : List MethodDisposition ->
   OrdMap MethodDisposition ->
@@ -139,9 +215,9 @@ validateDispositionTable ((inst, iface, method) :: rest) table =
   validateDispositionTable rest table
 
 -- ── the installed table ────────────────────────────────────────────────────
--- No production reader exists yet (X-E, #1403, is the first). `elaborateModules`
--- installs one every elaboration so a future reader need not thread the table
--- through every call site by hand, exactly as `installEvidence` does today.
+-- `elaborateModules` installs one every elaboration so its readers (see the header)
+-- need not thread the table through every call site by hand, exactly as
+-- `installEvidence` does.
 dispositionsRef : Ref (Option DispositionTable)
 dispositionsRef = Ref None
 
@@ -159,3 +235,10 @@ installedDispositions : Unit -> DispositionTable
 installedDispositions _ = match !dispositionsRef
   None => panic "disposition table: no elaboration has published one"
   Some table => table
+
+-- For a lowering driver that may run without an elaboration (the untyped Core-IR
+-- probes): `None` there means the program was never typechecked, so it has no
+-- inherited slot a specialization could serve.
+export
+installedDispositionsOpt : Unit -> Option DispositionTable
+installedDispositionsOpt _ = !dispositionsRef

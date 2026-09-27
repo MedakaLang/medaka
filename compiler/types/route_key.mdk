@@ -190,13 +190,13 @@ evRoutesOf : EvVal -> List Route
 evRoutesOf (EvMany rs) = rs
 evRoutesOf (EvOne _) =
   panic "evidence table: a dictionary application solved to a single route"
-evRoutesOf (EvMethod _ _ _ _) =
+evRoutesOf (EvMethod _ _ _ _ _) =
   panic
     "evidence table: a dictionary application answered by a method occurrence"
 
--- The answer published for a method occurrence: its selected denotation's pre-use
--- arrow arity, dispatch route, selected impl's `requires` dicts and the method's own `=>`
--- dicts.  The arity is fixed from the selected scheme before application can
+-- The answer published for a method occurrence: the interface identity it resolved
+-- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's
+-- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can
 -- specialize its result.
 --
 -- Unlike `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
@@ -206,7 +206,7 @@ evRoutesOf (EvMethod _ _ _ _) =
 -- ordering hazard the header above describes, surfaced instead of answered with
 -- an unrouted dispatch.
 export
-evMethodRoutes : EvId -> (Int, Route, List Route, List Route)
+evMethodRoutes : EvId -> (String, Int, Route, List Route, List Route)
 evMethodRoutes (EvId m i) = match !evidenceRef
   None =>
     panic
@@ -225,8 +225,9 @@ evMethodRoutes (EvId m i) = match !evidenceRef
         else
           panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
 
-evMethodOf : EvVal -> (Int, Route, List Route, List Route)
-evMethodOf (EvMethod arity r impls meths) = (arity, r, impls, meths)
+evMethodOf : EvVal -> (String, Int, Route, List Route, List Route)
+evMethodOf (EvMethod iface arity r impls meths) =
+  (iface, arity, r, impls, meths)
 evMethodOf _ =
   panic
     "evidence table: a method occurrence answered by a dictionary application"

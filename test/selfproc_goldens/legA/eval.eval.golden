@@ -38,7 +38,7 @@ bytesBEToU64 : Array Int -> U64
 candIface : Value a -> String
 candIfaceKey : Value a -> (String, String)
 candKey : Value a -> String
-candMatches : String -> Value a -> Bool
+candOfIface : String -> Value a -> Bool
 canonHashFloat : Float -> Float
 canonNaN : Float
 cellOf : (String, Value a) -> (String, Ref (Value a))
@@ -55,6 +55,7 @@ clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Ex
 coalesceImpls : List (String, (Int, Value a)) -> List (String, Value a)
 coalesceOne : String -> List (String, (Int, Value a)) -> Value a
 collectCtors : List Decl -> List (String, Value a)
+collectDicts : Int -> List (Value a) -> (List (Value a) -> <a> Value a) -> Value a
 collectPartials : List (Value a) -> List (Value a) -> Value a -> <a> Option (Value a)
 compareValueLists : List (Value a) -> List (Value a) -> Ordering
 composeBwd : Value a -> Value a -> Value a
@@ -77,16 +78,8 @@ ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
 currentEvalLoc : Ref Loc
 declImplEntries : EvalEnv (Value a) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value a))
-declImplIfaceIdRow : Decl -> List (String, String, String)
-declImplIfaceIdTable : List Decl -> List (String, String, String)
-declImplIfaceIdsRef : Ref (List (String, String, String))
-defaultBodyKeyCell : String
-defaultCellName : String -> String -> String
-defaultCellOf : EvalEnv (Value a) -> String -> String -> <a> List (Value a)
-defaultEntry : EvalEnv (Value a) -> String -> List String -> IfaceMethod -> List (String, (Int, Value a))
-defaultNamesOf : String -> IfaceMethod -> List String
+defaultNamesOf : IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> <a> Value a
-dictShadows : EvalEnv (Value a) -> String -> String -> List Route -> <a> List (String, Ref (Value a))
 dispatchPositionsOf : Ty -> List String -> List Int
 displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> <a> Value a
@@ -111,8 +104,8 @@ evalLet : EvalEnv (Value a) -> Pat -> Expr -> Expr -> <a> Value a
 evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> <a> Value a
 evalMain : List Decl -> String
 evalMatch : EvalEnv (Value a) -> Value a -> List Arm -> <a> Value a
-evalMethodAt : EvalEnv (Value a) -> String -> Route -> List Route -> List Route -> <a> Value a
-evalMethodAtEv : EvalEnv (Value a) -> String -> (Int, Route, List Route, List Route) -> <a> Value a
+evalMethodAt : EvalEnv (Value a) -> String -> String -> Route -> List Route -> List Route -> <a> Value a
+evalMethodAtEv : EvalEnv (Value a) -> String -> (String, Int, Route, List Route, List Route) -> <a> Value a
 evalModules : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
@@ -171,13 +164,8 @@ hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
 ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
-ifaceDispatchRef : Ref (List ((String, String, String), List Int))
-ifaceIdsAtTagE : String -> List String
-ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
-ifaceOfMethod : String -> String
-ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
 ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 implDeclNames : Decl -> List String
 implDictRoutes : Option Int -> List Route -> List Route -> List Route
@@ -185,11 +173,13 @@ implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int)
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
 implMethodReqCountEntries : String -> String -> ImplMethod -> List ((String, String), Int)
-implMethodReqCounts : Decl -> List ((String, String), Int)
+implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
+inheritedDefaultEntries : EvalEnv (Value a) -> List ((String, String, String), List Int) -> DispositionTable -> TyConOrigin -> String -> IfaceMethod -> List (String, (Int, Value a))
+inheritedDefaultReqCounts : DispositionTable -> String -> IfaceMethod -> List ((String, String), Int)
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 installConsts : List (String, Ref (Value a)) -> List (String, Value a) -> <a> Unit
 installDispatchTables : List Decl -> List ((String, String, String), List Int)
@@ -200,7 +190,6 @@ intOverflow : String -> Value a
 intSeq : Int -> Int -> List Int
 intSeqIncl : Int -> Int -> List Int
 ioExternBindings : Unit -> List (String, Value <IO>)
-isDefaultCand : Value a -> Bool
 isDispatching : Value a -> Bool
 isMethodBinding : Value a -> Bool
 isNullary : List Pat -> Bool
@@ -249,8 +238,6 @@ methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (
 methodReqCountIndex : List ((String, String), Int) -> Map String (Map String Int)
 methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String Int) -> Map String (Map String Int)
 methodReqCountRef : Ref (Map String (Map String Int))
-methodsOfIface : String -> List String
-methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
 mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))
 modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
@@ -258,15 +245,13 @@ moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
 modulePathMap : Ref (List (String, String))
-narrowByDefaultBodyKey : EvalEnv (Value a) -> List (Value a) -> <a> Value a
 narrowMethod : EvalEnv (Value a) -> String -> Value a -> String -> <a> Value a
-narrowUnrouted : EvalEnv (Value a) -> Value a -> <a> Value a
+narrowToIface : String -> Value a -> Value a
+narrowedWord : EvalEnv (Value a) -> Route -> Value a -> <a> String
 negFloatIEEE : Float -> Float
 noMainMsg : String
-oneOnly : List a -> Option a
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
-onlyCandFor : List (Value a) -> List (Value a) -> <a> Value a
 optionToValue : Option (Value a) -> Value a
 ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
@@ -274,7 +259,6 @@ orderingToValue : Ordering -> Value a
 outputRef : Ref String
 overflowOperand : Int -> String
 overflowOperands : String -> Int -> Int -> String
-ownDefault : EvalEnv (Value a) -> String -> String -> <a> Option (Value a)
 pAcos : Value a -> <a> Value a
 pAllocBytes : Value a -> <a> Value a
 pAllocBytesIO : Value a -> <IO | a> Value a
@@ -415,11 +399,11 @@ pWallTimeSecIO : Value a -> <Clock | a> Value a
 pWriteFile : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileBytes : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileMode : Value a -> Value a -> Value a -> <FileWrite | a> Value a
+patVarName : Pat -> String
 payloadArity : ConPayload -> Int
 pendingRunDiags : Ref (List (String, String, List Diag))
-pickByTag : EvalEnv (Value a) -> String -> List (Value a) -> String -> <a> Value a
-pickDefaultCand : EvalEnv (Value a) -> String -> List (Value a) -> String -> <a> Value a
-pickTagFallback : EvalEnv (Value a) -> String -> List (Value a) -> String -> <a> Value a
+pickByTag : List (Value a) -> String -> <a> Value a
+pickTagFallback : List (Value a) -> <a> Value a
 positionsById : String -> String -> List ((String, String, String), List Int) -> Option (List Int)
 positionsByName : String -> String -> List ((String, String, String), List Int) -> List Int
 ppField : (String, Value a) -> String
@@ -436,12 +420,12 @@ prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a) ->
 progArgsRef : Ref (List String)
 pubReexports : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
-qualifiedDefaultEntry : String -> String -> (Int, Value a) -> List (String, (Int, Value a))
-qualifiedDefaultName : String -> String -> List String
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
 rangeListMk : List Int -> Value a
 reTag : String -> String -> List Int -> Int -> Value a -> Value a
+receiverBodyApplied : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> List (Value a) -> <a> Value a
+receiverBoundDefault : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> String -> InstanceShape -> Value a
 receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
@@ -462,15 +446,10 @@ runtimeTypeTag : Value a -> Option String
 selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)
 selfBind : String -> (String, String)
 seqV : Unit -> Value a -> Value a
-shadowBind : EvalEnv (Value a) -> String -> List Route -> String -> <a> List (String, Ref (Value a))
-shadowBindAt : EvalEnv (Value a) -> String -> List Route -> String -> Int -> <a> List (String, Ref (Value a))
-shadowOf : EvalEnv (Value a) -> String -> List Route -> String -> Int -> Value a -> <a> List (String, Ref (Value a))
 shadowedFun : List String -> Decl -> Bool
-siblingShadows : EvalEnv (Value a) -> String -> String -> List Route -> <a> List (String, Ref (Value a))
 sliceArray : Array (Value a) -> Int -> Int -> Value a
 sortByScore : List (Int, Value a) -> List (Int, Value a)
 sortGo : List (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
-specializeDefault : EvalEnv (Value a) -> String -> String -> Option Int -> List Route -> Value a -> <a> Option (Value a)
 startsWithAt : String -> Bool
 statTuple : (Int, Bool, Bool, Float) -> Value a
 storeMemo : Ref (Option (Value a)) -> Value a -> <a> Value a
@@ -513,5 +492,4 @@ valueTag : Value a -> Int
 variantFieldOrder : Variant -> List (String, List String)
 variantName : Variant -> String
 withCallFile : EvalEnv (Value a) -> (Unit -> <a> Value a) -> <a> Value a
-withEnvFrame : List (String, Ref (Value a)) -> Value a -> Option (Value a)
 zipFieldOrder : List String -> List (Value a) -> List (String, Value a)

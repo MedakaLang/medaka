@@ -46,6 +46,7 @@
 -- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
+  defaultReceiverDict,
   qualifierSource,
   Lit(..),
   isFixedWidthHead,
@@ -447,6 +448,7 @@ import types.registry.{
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{
   implRouteKeyWord,
+  ifaceWordOf,
   funHeadTag,
   installEvidence,
   evDictRoutes,
@@ -455,7 +457,8 @@ import types.disposition.{
   InstId(..),
   MethodDisposition(..),
   DispositionTable,
-  buildDispositionTable,
+  InstanceShape(..),
+  buildDispositionTableWithShapes,
   installDispositions,
 }
 
@@ -9276,10 +9279,9 @@ resolveArgStamp : String ->
   ScopeId ->
   Unit
 resolveArgStamp name tagRef implRef am fullMono encl origin scope =
-  let tagBefore = tagRef.value
   let (route, routes) = entail name am encl scope (EKArg fullMono)
   let _ = match route
-    RNone => noteDefaultBodyRNone DBRKArg name origin scope tagBefore route
+    RNone => ()
     _ => tagRef := route
   implRef := routes
 
@@ -9767,19 +9769,6 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- an entry can only ever match its own module's sites.
 data GraphMarks = GraphMarks { mGoals : Int, mNumlit : Int }
 
-public export data DefaultBodyRNoneKind =
-  | DBRKArg
-  | DBRKReturn
-  deriving (Eq, Debug)
-
-public export data DefaultBodyRNoneTraceEntry = DefaultBodyRNoneTraceEntry {
-  dbrOwner : DefaultBodyIdentity,
-  dbrCallee : String,
-  dbrKind : DefaultBodyRNoneKind,
-  dbrOrigin : Option Loc,
-  dbrScope : ScopeId,
-}
-
 public export data AssumptionTraceKind =
   | ATDirectPredicate
   | ATLegacyScalar
@@ -9914,26 +9903,6 @@ methodReturnTraceEnabled = Ref False
 methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
 methodReturnTraceEntries = Ref []
 
-defaultBodyRNoneTraceEnabled : Ref Bool
-defaultBodyRNoneTraceEnabled = Ref False
-
-defaultBodyRNoneTraceEntries : Ref (List DefaultBodyRNoneTraceEntry)
-defaultBodyRNoneTraceEntries = Ref []
-
-export
-beginDefaultBodyRNoneTrace : Unit -> Unit
-beginDefaultBodyRNoneTrace _ =
-  defaultBodyRNoneTraceEntries := []
-  defaultBodyRNoneTraceEnabled := True
-
-export
-finishDefaultBodyRNoneTrace : Unit -> List DefaultBodyRNoneTraceEntry
-finishDefaultBodyRNoneTrace _ =
-  let entries = reverseL defaultBodyRNoneTraceEntries.value
-  defaultBodyRNoneTraceEntries := []
-  defaultBodyRNoneTraceEnabled := False
-  entries
-
 export
 beginAssumptionTrace : Unit -> Unit
 beginAssumptionTrace _ =
@@ -10048,7 +10017,7 @@ noteMethodReturnTrace stage request route prerequisites =
         :: methodReturnTraceEntries.value
 
 -- #2095 (M-EVIDENCE S0): trace-gated, zero cost when off — same discipline as
--- `noteDefaultBodyRNone` and `methodReturnTrace`. Generalizes that pattern from
+-- `methodReturnTrace`. Generalizes that pattern from
 -- the one migrated return family to every `Obligation` `recordEvidence`
 -- publishes: a method occurrence and a dictionary application alike, whatever
 -- family produced the goal, read back from the SAME cells the stampers wrote
@@ -10263,34 +10232,12 @@ renderEvidenceBinder : EvidenceBinderId -> String
 renderEvidenceBinder (EvidenceBinderId sid ordinal) =
   match (Scopes.scopeFrame (currentScopeStore ()) sid).sfOwner
     BindingOwner owner => dictParamName owner ordinal
-    DefaultBodyOwner owner => dictParamName owner.dbiMethod ordinal
+    DefaultBodyOwner owner =>
+      if ordinal == defaultReceiverOrdinal then
+        defaultReceiverDict owner.dbiMethod
+      else
+        dictParamName owner.dbiMethod ordinal
     _ => panic "evidence binder outside binding scope"
-
-noteDefaultBodyRNone : DefaultBodyRNoneKind ->
-  String ->
-  Option Loc ->
-  ScopeId ->
-  Route ->
-  Route ->
-  Unit
-noteDefaultBodyRNone kind callee origin scope tagBefore computedRoute =
-  if not defaultBodyRNoneTraceEnabled.value then
-    ()
-  else match (tagBefore, computedRoute)
-    (RNone, RNone) =>
-      match Scopes.enclosingDefaultBody (currentScopeStore ()) scope
-        Some owner =>
-          defaultBodyRNoneTraceEntries :=
-            DefaultBodyRNoneTraceEntry {
-                dbrOwner = owner,
-                dbrCallee = callee,
-                dbrKind = kind,
-                dbrOrigin = origin,
-                dbrScope = scope,
-              }
-              :: defaultBodyRNoneTraceEntries.value
-        None => ()
-    _ => ()
 
 export
 scopeTraceContext : ScopeId -> (String, String)
@@ -10363,9 +10310,10 @@ data GivenMatch =
 -- this file gets the answer from the published table (`evMethodRoutes`) — but the
 -- stampers still write through `Ref`s (every goal destination is an `EvDest` over
 -- one), so the cells live here, minted with the node (`mintMethodCell`) and read
--- back by `methodCellEntries` when the table is published.  It owns four cells:
--- the selected denotation's pre-use arrow arity, the dispatch route, the selected
--- impl's `requires` dicts, and the method's own `=>` dicts.
+-- back by `methodCellEntries` when the table is published.  It owns five cells:
+-- the interface identity the occurrence resolved to, the selected denotation's
+-- pre-use arrow arity, the dispatch route, the selected impl's `requires` dicts,
+-- and the method's own `=>` dicts.
 -- Two channels carry one fact: inside this file a reader dereferences the live
 -- cell, outside it reads the installed snapshot, and "no cell is written after the
 -- last publish" is a discipline of the drain's schedule, not a type.  The mutable
@@ -10373,6 +10321,9 @@ data GivenMatch =
 -- solver's working store and nothing else may write it.
 data EvCell = EvCell {
   ecId : EvId,
+  -- the `ifaceWordOf` word of the interface whose method this occurrence denotes;
+  -- `""` while undecided and for an occurrence that denotes a standalone
+  ecIface : Ref String,
   ecArity : Ref (Option Int),
   ecTag : Ref Route,
   ecImpl : Ref (List Route),
@@ -10466,15 +10417,16 @@ freshGraphRun _ = GraphRun {
 -- every seed reader (`routeLocalSym`) expect to find on the dispatch cell.
 mintMethodCell : String -> EvId
 mintMethodCell seed =
-  mintMethodCellRaw None (if seed == "" then RNone else RLocal seed []) []
+  mintMethodCellRaw "" None (if seed == "" then RNone else RLocal seed []) []
 
 -- The `dictPass` mints: a node constructed AFTER the drain, from a route another
 -- node already solved, so its cells start at their final values.
-mintMethodCellWith : Int -> Route -> List Route -> EvId
-mintMethodCellWith arity tag impls = mintMethodCellRaw (Some arity) tag impls
+mintMethodCellWith : String -> Int -> Route -> List Route -> EvId
+mintMethodCellWith iface arity tag impls =
+  mintMethodCellRaw iface (Some arity) tag impls
 
-mintMethodCellRaw : Option Int -> Route -> List Route -> EvId
-mintMethodCellRaw arity tag impls =
+mintMethodCellRaw : String -> Option Int -> Route -> List Route -> EvId
+mintMethodCellRaw iface arity tag impls =
   let ev = freshEvId ()
   let i = evOrdinal ev
   let g = graphRun.value
@@ -10499,6 +10451,7 @@ mintMethodCellRaw arity tag impls =
       i
       (Some EvCell {
         ecId = ev,
+        ecIface = Ref iface,
         ecArity = Ref arity,
         ecTag = Ref tag,
         ecImpl = Ref impls,
@@ -10548,7 +10501,12 @@ methodCellEntriesFrom arr i acc
         (i - 1)
         (EvEntry
             c.ecId
-            (EvMethod arity c.ecTag.value c.ecImpl.value c.ecMeth.value)
+            (EvMethod
+              c.ecIface.value
+              arity
+              c.ecTag.value
+              c.ecImpl.value
+              c.ecMeth.value)
           :: acc)
 
 -- Install the table the readers below this file consult: the per-goal entries the
@@ -10719,13 +10677,11 @@ methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
 methodReturnMemoRoute (RLocal name _) = "local:\{name}"
 methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
 
--- Test-only seam for route states that production inference cannot place together:
--- an RLocal seed inside a default body, and a retained RNone in a synthetic child
--- scope.  The production Module-path coverage lives in typecheck_test.mdk; this probe
--- only pins the observer's early disabled exit, ancestry walk, pre-entail tag guard,
--- computed-route guard, and ABI rendering.
-defaultBodyRNoneServiceProbe : Unit -> (Bool, Bool, List String, Bool)
-defaultBodyRNoneServiceProbe _ =
+-- Test-only seam: the names a default body's evidence binders render to.  Its
+-- method-level slots are dictionary parameters of the lowered body; its receiver is
+-- never a parameter -- lowering and eval rebind it per instance (`defaultReceiverDict`).
+defaultBodyBinderNamesProbe : Unit -> List String
+defaultBodyBinderNamesProbe _ =
   let savedGraph = graphRun.value
   let savedPerRun = perRun.value
   graphRun := freshGraphRun ()
@@ -10742,43 +10698,17 @@ defaultBodyRNoneServiceProbe _ =
       1
       "owner-module"
       (DefaultBodyOwner owner)
-  let child =
-    Scopes.freshScope store (Some body) 2 "owner-module" (BindingOwner "local")
-  let ordinary =
-    Scopes.freshScope store (Some root) 1 "owner-module" (BindingOwner "copy")
-  let _ =
-    noteDefaultBodyRNone DBRKReturn "disabled" None (ScopeId 9999) RNone RNone
-  let _ = beginDefaultBodyRNoneTrace ()
-  let _ = noteDefaultBodyRNone DBRKReturn "seed" None child RNone RNone
-  let _ =
-    noteDefaultBodyRNone DBRKReturn "seed" None child (RLocal "seeded" []) RNone
-  let _ =
-    noteDefaultBodyRNone DBRKReturn "seed" None child RNone (RKey "Int" [])
-  let _ = noteDefaultBodyRNone DBRKReturn "seed" None ordinary RNone RNone
-  let entries = finishDefaultBodyRNoneTrace ()
-  let ancestry = match entries
-    [entry] =>
-      entry.dbrCallee == "seed"
-        && entry.dbrKind == DBRKReturn
-        && entry.dbrScope == child
-        && entry.dbrOwner.dbiMethod == "copy"
-        && (match entry.dbrOwner.dbiIface.irOrigin
-          OriginModule m => m == "owner-module"
-          _ => False)
-    _ => False
   let rendered = [
     renderEvidenceBinder (Scopes.binderAt body 0),
     renderEvidenceBinder (Scopes.binderAt body 1),
+    renderEvidenceBinder (Scopes.binderAt body defaultReceiverOrdinal),
   ]
-  let cleared = match finishDefaultBodyRNoneTrace ()
-    [] => True
-    _ => False
   graphRun := savedGraph
   perRun := savedPerRun
-  (True, ancestry, rendered, cleared)
+  rendered
 
--- > defaultBodyRNoneServiceProbe ()
--- (True, True, ["$dict_copy_0", "$dict_copy_1"], True)
+-- > defaultBodyBinderNamesProbe ()
+-- ["$dict_copy_0", "$dict_copy_1", "$self_copy"]
 
 -- #2547 unit 3: the current module's givens.  The module id is `driverState`'s, set once
 -- per module by `checkBodyImpl` before any body is inferred and copied by
@@ -14272,6 +14202,7 @@ inferIntRange env lo hi container =
 -- NOT a pendingSites/methodSiteFns return-position site.
 inferMethodAt : TcEnv ->
   String ->
+  Ref String ->
   Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
@@ -14279,7 +14210,7 @@ inferMethodAt : TcEnv ->
   Mono
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodAtCell env name c =
-  inferMethodAt env name c.ecArity c.ecTag c.ecImpl c.ecMeth
+  inferMethodAt env name c.ecIface c.ecArity c.ecTag c.ecImpl c.ecMeth
 
 -- #2705: a standalone-shadow occurrence (a user fn spelled like an interface
 -- method — `add x y = x + y` beside `Num`'s `add`) DENOTES THE STANDALONE, whose
@@ -14306,7 +14237,7 @@ recordShadowStandaloneObls env name subst
         None => ()
   | otherwise = ()
 
-inferMethodAt env name arityRef tagRef implRef methodRef =
+inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
   let selected = match standaloneValueBinding env name
     Some scheme => Some scheme
     None => standaloneValueBindingEmit env name tagRef
@@ -14334,19 +14265,21 @@ inferMethodAt env name arityRef tagRef implRef methodRef =
             (captureScope ())
             (freshEvId ()))
       inst.mtiBody
-    None => inferMethodCandidateAt env name arityRef tagRef implRef methodRef
+    None =>
+      inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef
 
 -- Selection precedes instantiation: the returned value, forcing row, obligations,
 -- and route slots above share one occurrence's substitution. A discarded method
 -- candidate must not supply a standalone value's receiver or dictionary cells.
 inferMethodCandidateAt : TcEnv ->
   String ->
+  Ref String ->
   Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
   Ref (List Route) ->
   Mono
-inferMethodCandidateAt env name arityRef tagRef implRef methodRef =
+inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
   match lookupVar env name
     -- Routed standalone recovery already ran before candidate selection.
     None => panic ("unbound method: " ++ name)
@@ -14355,6 +14288,7 @@ inferMethodCandidateAt env name arityRef tagRef implRef methodRef =
       let occurrence = inst.mtiBody
       let subst = inst.mtiSubstitution
       arityRef := Some (funArity occurrence)
+      ifaceRef := admittedIfaceWord name
       let _ = recordRLocalSite env name tagRef occurrence
       let ret = match argDispatchOf name
         Some idx =>
@@ -17118,6 +17052,24 @@ builtinClassPresent BSemigroup =
 builtinIfaceRef : BuiltinClass -> IfaceRef
 builtinIfaceRef c =
   IfaceRef { irName = builtinClassName c, irOrigin = builtinClassOrigin c }
+
+-- The interface word of the built-in class declaring an operator's method.  An
+-- operator denotes the prelude's method whatever a module names in scope, so the
+-- method nodes `dictPass` mints for operators and literals take their identity from
+-- here rather than from the module's admission.
+builtinMethodIfaceWord : String -> String
+builtinMethodIfaceWord method = match builtinClassOfMethod method
+  Some c => ifaceWordOf (builtinClassOrigin c) (builtinClassName c)
+  None => ""
+
+builtinClassOfMethod : String -> Option BuiltinClass
+builtinClassOfMethod "eq" = Some BEq
+builtinClassOfMethod "append" = Some BSemigroup
+builtinClassOfMethod m
+  | contains m ["compare", "lt", "gt", "lte", "gte"] = Some BOrd
+  | contains m ["add", "sub", "mul", "div", "rem", "negate", "fromInt"] =
+    Some BNum
+  | otherwise = None
 
 -- ONE walk over a PRELUDE declaration list, picking up each built-in class's declared
 -- origin and its presence.  Only `DInterface` decls contribute, and only the four fixed
@@ -24499,7 +24451,6 @@ resolveSite : List String ->
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
 resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
-  let tagBefore = tagRef.value
   let (route, routes) =
     entail
       name
@@ -24508,7 +24459,7 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
       scope
       (EKReturn fullMono (contains name rpNames))
   let _ = match route
-    RNone => noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
+    RNone => ()
     _ => tagRef := route
   implRef := routes
 
@@ -24546,13 +24497,11 @@ resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origi
           ()
         else
           panic "ordinary return route received invalid solver evidence"
-      let tagBefore = tagRef.value
       let (route, routes) =
         exactReturnRoutes name encl scope (contains name rpNames) resolution
       let _ = noteMethodReturnTrace MRTStamped request (Some route) routes
       let _ = match route
-        RNone =>
-          noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
+        RNone => ()
         _ => tagRef := route
       implRef := routes
 
@@ -24626,7 +24575,6 @@ resolveNumLitSite : List String ->
   ScopeId ->
   Unit
 resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin scope =
-  let tagBefore = tagRef.value
   let (route, routes) =
     entail
       name
@@ -24635,7 +24583,7 @@ resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin 
       scope
       (EKNumReturn predicate fullMono (contains name rpNames) origin)
   let _ = match route
-    RNone => noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
+    RNone => ()
     _ => tagRef := numericReturnRoute route routes
   ()
 
@@ -24796,6 +24744,15 @@ admittedIfaceFor name =
   map
     ((iface, _, _, _) => iface)
     (omLookup name perRun.value.methodIfaceParamsRef.value)
+
+-- The same admission, rendered as the word an impl's dispatch entry carries for its
+-- interface (`route_key.ifaceWordOf`, the first field of its canonical route key),
+-- so an engine can compare the two with `==`.  `""` for a name this module admits
+-- no interface method for.
+admittedIfaceWord : String -> String
+admittedIfaceWord name = match admittedIfaceFor name
+  Some iface => ifaceWordOf iface.irOrigin iface.irName
+  None => ""
 
 -- ══ S2-DECL (d): THE CHOICE, BY CARDINALITY OF THE ADMITTED SET (#2188) ═══════
 --
@@ -28995,17 +28952,17 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- word is a DIRECT HIT, because the general impl is itself registered under
 -- `__none__` (`call @mdk_impl___none___sz`), so `emitMethod`'s `implFor` arm
 -- catches those three fixtures and `emitGeneralRKey` — the tier that used to be
--- needed, before F-3b moved the word — is not reached from here at all.  The tier
--- that DOES depend on this function is the one below it, `emitDefaultRKey`, and it
--- is reached from the `None` arm, not from here: `mdk_default_<method>_<TAG>` is
--- keyed on the `<TAG>` that `optionOr tag` supplies at the caller.  That is why
--- the `None` arm must keep the concrete head tag (see its own comment).
+-- needed, before F-3b moved the word — is not reached from here at all.  What DOES
+-- depend on the `None` arm is an impl that inherits the method: its row lists no such
+-- method, so the scan finds none, and the site's word is the concrete head tag that
+-- `optionOr tag` supplies at the caller — the tag the inherited default's
+-- per-instance entry is filed under.  That is why the `None` arm must keep the
+-- concrete head tag (see its own comment).
 --
 -- ⇒ `optionOr tag` is NOT a hedge over a selector result.  At the sites where it
 -- fires it is the ONLY source of that TAG — nothing downstream re-derives one — so
--- deleting it breaks every cross-module method-less impl inheriting an interface
--- default.  And read a green suite here accordingly: it is evidence about the
--- DEFAULT tier, not about the route word.
+-- deleting it breaks every call of an inherited default through an impl whose row
+-- does not list the method.
 --
 -- The key/tag split deliberately mirrors `core_ir_lower.declRouteKey` (bare head when
 -- that head is unique among the interface's declared impls, canonical full-type key
@@ -31601,7 +31558,14 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
     route =>
       let split = binopRouteSplit route
       EApp
-        (EMethodAt "fromInt" "" (mintMethodCellWith 1 (fst split) (snd split)))
+        (EMethodAt
+          "fromInt"
+          ""
+          (mintMethodCellWith
+            (builtinMethodIfaceWord "fromInt")
+            1
+            (fst split)
+            (snd split)))
         (ELit (LInt n))
 -- Roadmap #18c: rewrite each *stamped* EUnOp (`-` → `negate`) into its Num
 -- method application via EMethodAt, exactly like the EBinOp arm above.  Only
@@ -31649,7 +31613,14 @@ binopMethodApp op l r routeRef =
   let call =
     EApp
       (EApp
-        (EMethodAt method "" (mintMethodCellWith 2 (fst split) (snd split)))
+        (EMethodAt
+          method
+          ""
+          (mintMethodCellWith
+            (builtinMethodIfaceWord method)
+            2
+            (fst split)
+            (snd split)))
         l)
       r
   if op == "/=" then EApp (EVar "not") call else call
@@ -31666,7 +31637,16 @@ unopMethodApp : String -> Expr -> Ref Route -> Expr
 unopMethodApp op e routeRef =
   let method = optionOr "negate" (unopMethod op)
   let split = binopRouteSplit !routeRef
-  EApp (EMethodAt method "" (mintMethodCellWith 1 (fst split) (snd split))) e
+  EApp
+    (EMethodAt
+      method
+      ""
+      (mintMethodCellWith
+        (builtinMethodIfaceWord method)
+        1
+        (fst split)
+        (snd split)))
+    e
 
 dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
 dictPassDecl names _ (DFunDef pub n pats body)
@@ -32014,6 +31994,11 @@ dictParamsFrom n start count
 
 dictParamName : String -> Int -> String
 dictParamName fn slot = "$dict_\{fn}_\{intToString slot}"
+
+-- The evidence-binder ordinal a default body's receiver is registered under.  Real
+-- slots count up from 0, so a negative ordinal can never alias one.
+defaultReceiverOrdinal : Int
+defaultReceiverOrdinal = -1
 
 -- the head node of a left-spine `TApp`, normalizing at each level (the head may
 -- be a TVar linked to a concrete type after unification — normalize follows only
@@ -33330,8 +33315,8 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
       defLoc
   let _ = exitLevel ()
   -- #873 (S0, silent wrongness): mirror inferImplMethod's #518 body-local Num
-  -- grounding onto the GENERIC-DEFAULT path.  A cross-module impl inherits the
-  -- untagged generic default (fillImplDefaults specializes SAME-MODULE only), so
+  -- grounding onto the GENERIC-DEFAULT path.  A default body is inferred ONCE, here,
+  -- and every inheriting instance's lowered copy reuses these routes, so
   -- an ambiguous Num literal consumed body-locally in a default body — its element
   -- var surfacing NOWHERE in the method's declared type — reached the
   -- route resolver UNGROUNDED here, exactly the #518 hole reopened: `t _ = s [1, 2]`
@@ -33367,12 +33352,23 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- authoritative method carrier with this very default-body substitution, then
   -- publish the same slots into the lexical given registry before route resolution.
   -- A complete request miss is terminal, so this carrier is not optional.
-  let slots =
-    methodLevelPredicateSlots
-      typarams
-      mty
-      (instantiateNamedMonos (snd st) (snd inst))
+  let named = instantiateNamedMonos (snd st) (snd inst)
+  let slots = methodLevelPredicateSlots typarams mty named
   let _ = registerSlotPredGivens bodyScope 0 slots
+  -- The receiver: the body answers for whichever instance inherits it, so a sibling
+  -- or superclass call inside it is discharged by the receiver's evidence (directly,
+  -- or projected onto a super) instead of being left for an engine to select.  The
+  -- binder is no parameter of the body — see `defaultReceiverDict`.
+  let receiverArgs =
+    map (tp => optionOr (TRigid tp) (lookupAssoc tp named)) typarams
+  let _ =
+    registerFunPredGiven
+      PredicateSlot {
+        psIface = iface,
+        psArgs = PSArgsKnown receiverArgs,
+        psBoundIds = dedupI (flatMap monoTyvarIds receiverArgs),
+      }
+      (Scopes.binderAt bodyScope defaultReceiverOrdinal)
   perRun.value.currentFn := savedCurrentFn
   closeScope ()
 inferDefaultMethod _ _ _ _ _ = ()
@@ -47973,18 +47969,37 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
 -- rejected upstream, M1 — never reaches this walk at all).
 buildDispositions : DeclEnvs -> DispositionTable
 buildDispositions envs =
-  buildDispositionTable
-    (dispositionRowsOfImpls (ieRowsAll envs.deImpls) envs.deIfaces)
+  buildDispositionTableWithShapes
+    (dispositionRowsOfImpls envs.deImpls (ieRowsAll envs.deImpls) envs.deIfaces)
 
-dispositionRowsOfImpls : List ImplRow -> ClassEnv -> List MethodDisposition
-dispositionRowsOfImpls [] _ = []
-dispositionRowsOfImpls (r :: rest) ce =
-  dispositionRowsOfImpl r ce ++ dispositionRowsOfImpls rest ce
+dispositionRowsOfImpls : ImplEnv ->
+  List ImplRow ->
+  ClassEnv ->
+  List (InstanceShape, String, MethodDisposition)
+dispositionRowsOfImpls _ [] _ = []
+dispositionRowsOfImpls ie (r :: rest) ce =
+  dispositionRowsOfImpl ie r ce ++ dispositionRowsOfImpls ie rest ce
 
-dispositionRowsOfImpl : ImplRow -> ClassEnv -> List MethodDisposition
-dispositionRowsOfImpl r ce =
-  let (iface, _, _) = ieRowTriple r
+-- Each row carries its instance's shape and its interface's word.  The shape's
+-- route words are minted by the same calls the lowering and eval install passes make
+-- on the impl's declaration (`implRouteKeyWord` over the impl's own origin and type
+-- arguments) and that a call site makes when it builds this instance's dictionary
+-- (`predicateRouteKeyForRow`), so a specialization is named and reached exactly as
+-- the instance's supplied methods are.
+dispositionRowsOfImpl : ImplEnv ->
+  ImplRow ->
+  ClassEnv ->
+  List (InstanceShape, String, MethodDisposition)
+dispositionRowsOfImpl ie r ce =
+  let (iface, tys, reqs) = ieRowTriple r
   let inst = InstId (instRefMid (ieRowInst r)) (instRefSeq (ieRowInst r))
+  let shape = InstanceShape {
+    isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
+    isTys = tys,
+    isDictWord = predicateRouteKeyForRow ie r,
+    isReqCount = listLen (expandImplRequires reqs),
+  }
+  let ifaceWord = ifaceWordOf iface.irOrigin iface.irName
   let supplied = ieRowMethodNames r
   match (ceLookupAt
     (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
@@ -47994,12 +48009,14 @@ dispositionRowsOfImpl r ce =
       panic
         "disposition table: no interface declaration for \{iface.irName} visible to accepted impl at ordinal \{intToString (ieRowOrd r)}"
     Some ceRow =>
-      dispositionRowsOfMethods
-        inst
-        iface
-        supplied
-        (ceRowRequired ceRow)
-        (ceRowMethodNames ceRow)
+      map
+        (d => (shape, ifaceWord, d))
+        (dispositionRowsOfMethods
+          inst
+          iface
+          supplied
+          (ceRowRequired ceRow)
+          (ceRowMethodNames ceRow))
 
 dispositionRowsOfMethods : InstId ->
   IfaceRef ->

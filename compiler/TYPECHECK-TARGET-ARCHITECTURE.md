@@ -3231,11 +3231,12 @@ the key whose two survivors #1265 is the first-match over.
      a zero extraction as a pass"* (`test/registry_keying_ratchet.sh:242-251`;
      the writer ratchet repeats it at `:319`). Check 4 must fail closed the same
      way — a zero-length `IE` block is a broken delimiter, never an empty answer.
-3. **A declared non-flip.** `test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse`
-   must stay RED across A-3.4, declared up front per §7's pin→stage map. It is
-   the *observable* of this constraint: if A-3.4 changed the default-arm answer
-   in any direction, the pin flips and the must-fail gate reds naming #1265.
-   Fail-capable both ways, which prose is not.
+3. **A declared non-flip.** The #1265 must-fail pin had to stay RED across
+   A-3.4, declared up front per §7's pin→stage map. It was the *observable* of
+   this constraint: if A-3.4 changed the default-arm answer in any direction, the
+   pin flipped and the must-fail gate redded naming #1265.  (#1265 has since been
+   fixed by per-instance defaults, M-EVIDENCE S4; its positive rows are
+   `test/dict_fixtures/s5-two-ifaces-one-type-defaults*`.)
 
 The constraint is also stated in the ratchet's **existing `declEnvsRef` row**, so
 widening it is an edit to a reviewed artefact rather than a silent drift — see

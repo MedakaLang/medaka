@@ -2347,6 +2347,61 @@ table = [
     pinned = "77\n77\n",
     codes = [],
   },
+  Row {
+    entry = "s5-two-ifaces-one-type-defaults/main.mdk",
+    label =
+      "§5 (#1265, drained from its must-fail pin): two interfaces declare a same-spelled method with different defaults and one type inherits both. Each inherited slot has its own per-instance entry, keyed by the interface that declared the default, so `sayA` answers `Speak`'s default and `sayB` `Greet`'s",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A-default|B-default\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-two-ifaces-one-type-defaults-swapped/main.mdk",
+    label =
+      "§5 (#1265) the row above with its first two imports exchanged: the answer must not move with import order (it printed B-default|B-default here, A-default|A-default above, before per-instance defaults)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A-default|B-default\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-xmod-default-sibling-amod-first/main.mdk",
+    label =
+      "§5 (#1821, drained from its must-fail pin): IA's cross-module default `dflt x = sib x + 1` calls its sibling through the default's receiver, so it reaches T's own `sib`, never the same-spelled `dflt` default of an interface imported under no name. 7 * 10 + 1",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "71\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-xmod-default-sibling-bmod-first/main.mdk",
+    label =
+      "§5 (#1821) the row above with its two import lines exchanged -- the order that printed IB's 9000 before per-instance defaults",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "71\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-xmod-default-same-spelled-iface/main.mdk",
+    label =
+      "§5/§8 I4 (#1619, drained from its must-fail pin): a method-less impl of di's `Tag` inherits di's default (7) while other's same-spelled `Tag` has an explicit impl at the same head (100). The occurrence's interface identity keeps the explicit impl out of di's slot",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(7, 100)\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2358,7 +2413,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 202
+tableRows = 207
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

@@ -1,0 +1,5 @@
+-- Interface A declares `speak` with a default body.  It shares only the METHOD
+-- spelling with ifb.mdk's `Greet`; the two are unrelated classes (DICT-SEMANTICS §8 I4).
+export interface Speak x where
+  speak : x -> String
+  speak _ = "A-default"

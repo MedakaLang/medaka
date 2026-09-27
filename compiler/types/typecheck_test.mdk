@@ -48,8 +48,6 @@ import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
-  DefaultBodyRNoneKind(..),
-  DefaultBodyRNoneTraceEntry(..),
   EvidenceObservationEntry(..),
   EvidenceOutcomeKind(..),
   MethodReturnMemoView(..),
@@ -60,7 +58,6 @@ import types.typecheck.{
   NumericPredicateTraceStage(..),
   TcDiag(..),
   beginAssumptionTrace,
-  beginDefaultBodyRNoneTrace,
   beginEvidenceObservation,
   beginMethodReturnTrace,
   beginNumericPredicateTrace,
@@ -71,7 +68,6 @@ import types.typecheck.{
   elaborateModules,
   elaborateOne,
   finishAssumptionTrace,
-  finishDefaultBodyRNoneTrace,
   finishEvidenceObservation,
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
@@ -1272,7 +1268,7 @@ wrappedReturnSource hasInt hasBox =
 
 returnMethodRoutes : CExpr -> Option (List String)
 returnMethodRoutes (CApp fn _) = returnMethodRoutes fn
-returnMethodRoutes (CMethod "produce" _ _ prerequisites _) =
+returnMethodRoutes (CMethod "produce" _ _ _ prerequisites _) =
   Some (map numericRouteView prerequisites)
 returnMethodRoutes _ = None
 
@@ -2303,7 +2299,7 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
 methodHeadArity : String -> CExpr -> Option Int
-methodHeadArity target (CMethod name arity _ _ _)
+methodHeadArity target (CMethod name _ arity _ _ _)
   | name == target = Some arity
   | otherwise = None
 methodHeadArity target (CApp f _) = methodHeadArity target f
@@ -2407,12 +2403,12 @@ test "value-position shadow publishes the selected standalone arity" =
 test "Core IR round-trip preserves method occurrence arity" =
   let original =
     CProgram
-      [CBind "main" [CClause [] (CMethod "probe" 7 RNone [] [])]]
+      [CBind "main" [CClause [] (CMethod "probe" "" 7 RNone [] [])]]
       []
       []
       []
   match parseCProgram (cprogramToSexp original)
-    CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
+    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])]] _ _ _ =>
       expectEqual 7 arity
     _ => fail "expected the round-tripped CProgram to keep the same shape"
 
@@ -2442,9 +2438,9 @@ localCoreExprFacts (CBinPrim op lhs rhs _) =
     addRoutes
     fromIntRoutes
     (primCount + (if op == "+" then 1 else 0))
-localCoreExprFacts (CMethod "add" _ (RDict binder) _ _) =
+localCoreExprFacts (CMethod "add" _ _ (RDict binder) _ _) =
   LocalCoreFacts False [binder] [] 0
-localCoreExprFacts (CMethod "fromInt" _ route _ _) = match route
+localCoreExprFacts (CMethod "fromInt" _ _ route _ _) = match route
   RDict binder => LocalCoreFacts False [] [binder] 0
   RDictFwd binder => LocalCoreFacts False [] [binder] 0
   _ => emptyLocalCoreFacts
@@ -2604,20 +2600,7 @@ data RequestView = RequestView {
 }
   deriving (Eq, Debug)
 
-data DefaultTraceView = DefaultTraceView {
-  dtvIfaceModule : String,
-  dtvIfaceName : String,
-  dtvMethod : String,
-  dtvCallee : String,
-  dtvKind : DefaultBodyRNoneKind,
-  dtvScopeModule : String,
-  dtvScopeOwner : String,
-  dtvStartLine : Int,
-}
-  deriving (Eq, Debug)
-
 data ModuleTraceView = ModuleTraceView {
-  mtvDefaults : List DefaultTraceView,
   mtvAssumptions : List TraceView,
   mtvErrors : Int,
 }
@@ -2652,32 +2635,9 @@ traceView entry =
 traceViewsNow : List AssumptionTraceEntry -> List TraceView
 traceViewsNow entries = map traceView entries
 
-defaultTraceView : DefaultBodyRNoneTraceEntry -> DefaultTraceView
-defaultTraceView entry =
-  let owner = entry.dbrOwner
-  let ifaceModule = match owner.dbiIface.irOrigin
-    OriginModule m => m
-    OriginBuiltin => "<builtin>"
-    OriginUnresolved => "<unresolved>"
-  let (scopeModule, scopeOwner) = scopeTraceContext entry.dbrScope
-  let startLine = match entry.dbrOrigin
-    Some (Loc _ line _ _ _) => line
-    None => 0
-  DefaultTraceView {
-    dtvIfaceModule = ifaceModule,
-    dtvIfaceName = owner.dbiIface.irName,
-    dtvMethod = owner.dbiMethod,
-    dtvCallee = entry.dbrCallee,
-    dtvKind = entry.dbrKind,
-    dtvScopeModule = scopeModule,
-    dtvScopeOwner = scopeOwner,
-    dtvStartLine = startLine,
-  }
-
 runModulesObserved : List (String, String) -> ModuleTraceView
 runModulesObserved sources =
   beginAssumptionTrace ()
-  beginDefaultBodyRNoneTrace ()
   let results =
     checkModulesDiagsChain
       None
@@ -2686,10 +2646,8 @@ runModulesObserved sources =
       []
       []
       (map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources)
-  let defaultEntries = finishDefaultBodyRNoneTrace ()
   let assumptionEntries = finishAssumptionTrace ()
   ModuleTraceView {
-    mtvDefaults = map defaultTraceView defaultEntries,
     mtvAssumptions = traceViewsNow assumptionEntries,
     mtvErrors = modErrorCount results,
   }
@@ -2999,54 +2957,51 @@ mixedDefaultSource = joinNl [
   "    base y",
 ]
 
-test "genuine inherited Supply return keeps full default owner and parser origin" =
+-- A default body's receiver is registered under this ordinal (`typecheck`'s
+-- `defaultReceiverOrdinal`), below every real slot.
+receiverOrdinal : Int
+receiverOrdinal = -1
+
+receiverAnswers : List TraceView -> List TraceView
+receiverAnswers views =
+  filter (v => binderOrdinal v.tvBinder == receiverOrdinal) views
+
+test "a default body's sibling return call is answered by its receiver" =
   let observed = runModulesObserved [("supply_iface", supplySource)]
   expectEqual
     (
       [
-        DefaultTraceView {
-          dtvIfaceModule = "supply_iface",
-          dtvIfaceName = "Supply",
-          dtvMethod = "copy",
-          dtvCallee = "seed",
-          dtvKind = DBRKReturn,
-          dtvScopeModule = "supply_iface",
-          dtvScopeOwner = "default:copy",
-          dtvStartLine = 4,
-        },
+        (
+          ATDirectPredicate,
+          receiverOrdinal,
+          "default:copy",
+          "default:copy",
+          True,
+        ),
       ],
       0,
     )
-    (observed.mtvDefaults, observed.mtvErrors)
+    (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
 
-test "mixed default separates argument fallback from qualified givens" =
+test "mixed default answers its argument-position sibling by the receiver" =
   let observed = runModulesObserved [("mixed_default", mixedDefaultSource)]
   expectEqual
     (
       [
-        DefaultTraceView {
-          dtvIfaceModule = "mixed_default",
-          dtvIfaceName = "Rich",
-          dtvMethod = "mixed",
-          dtvCallee = "peer",
-          dtvKind = DBRKArg,
-          dtvScopeModule = "mixed_default",
-          dtvScopeOwner = "default:mixed",
-          dtvStartLine = 9,
-        },
-      ],
-      [
         (ATSuperclassProjection, 0, "default:mixed", "default:mixed", True),
         (ATDirectPredicate, 1, "default:mixed", "default:mixed", True),
         (ATDirectPredicate, 0, "default:mixed", "default:mixed", True),
+        (
+          ATDirectPredicate,
+          receiverOrdinal,
+          "default:mixed",
+          "default:mixed",
+          True,
+        ),
       ],
       0,
     )
-    (
-      observed.mtvDefaults,
-      map assumptionShape observed.mtvAssumptions,
-      observed.mtvErrors,
-    )
+    (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
 
 test "same spelling retains module identity while impl bodies stay ordinary" =
   let colliding = runModulesObserved [
@@ -3087,15 +3042,17 @@ test "same spelling retains module identity while impl bodies stay ordinary" =
   expectEqual
     (
       ["owner_a", "owner_b"],
-      (1, [], []),
+      (1, 0, 0),
       [0, 0, 0, 0],
     )
     (
-      map (entry => entry.dtvIfaceModule) colliding.mtvDefaults,
+      map
+        (view => view.tvBinderModule)
+        (receiverAnswers colliding.mtvAssumptions),
       (
-        listLen synthesized.mtvDefaults,
-        explicit.mtvDefaults,
-        concrete.mtvDefaults,
+        listLen (receiverAnswers synthesized.mtvAssumptions),
+        listLen (receiverAnswers explicit.mtvAssumptions),
+        listLen (receiverAnswers concrete.mtvAssumptions),
       ),
       [
         colliding.mtvErrors,
@@ -3287,7 +3244,7 @@ test "today a flattened super slot is entailed as an independent instance select
         slots),
   ]
 
-test "a default body's sibling call publishes no evidence today (#2095; the approved RNone exception)" =
+test "a default body's sibling call is answered by the body's receiver (#2095)" =
   let trace =
     evidenceObservationTrace
       (joinNl [
@@ -3299,9 +3256,9 @@ test "a default body's sibling call publishes no evidence today (#2095; the appr
         "  sib x = x",
       ])
   let abstractSibling = evidenceEntriesWithPredicate "a" trace
-  expectTrue (match abstractSibling
-    [e] => e.eoeOutcome == EOKNone
-    _ => False)
+  expectEqual
+    [(EOKGiven, Some "$self_sz")]
+    (map (e => (e.eoeOutcome, e.eoeGivenBinder)) abstractSibling)
 
 localUseSiteObserved : String -> (List String, List EvidenceObservationEntry)
 localUseSiteObserved source =

@@ -1,0 +1,7 @@
+import lib.rca1265_ifb.{Greet(..), speak}
+import lib.rca1265_dog.{Dog(..)}
+
+impl Greet Dog where
+
+export sayB : Dog -> String
+sayB d = speak d
