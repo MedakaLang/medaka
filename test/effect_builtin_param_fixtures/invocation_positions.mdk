@@ -49,6 +49,21 @@ refArg r =
   let _ = r := (_ => readFile "c/x")
   "ok"
 
+-- An effect index is invariant: a cell of index-row callbacks the host
+-- supplies can be written by the entry, so its index is charged.
+data Cell (e : Effect) = Cell (Ref (Unit -> <e> Result String String))
+
+rowCellEntry : Cell <FileRead "e/*"> -> String
+rowCellEntry (Cell r) =
+  let _ = r := (_ => readFile "e/x")
+  "ok"
+
+-- An opened field reads under the head's own authority argument.
+data Rd (p : Authority FileRead) = Rd (Unit -> <FileRead p> Result String String)
+
+rdEntry : String -> Rd "i/*"
+rdEntry _ = Rd (_ => readFile "i/x")
+
 -- An authority the caller chooses: the grant is the whole label, and why.
 readUnder : (p : String) -> Unit -> <FileRead p> Result String String
 readUnder p = _ => readFile p

@@ -1,0 +1,6 @@
+-- #3463 review: one of two modules that spell a constructor `Api`.
+public export data Api = Api (Unit -> <FileRead "a/*"> Result String String)
+
+export
+mkApi : Unit -> Api
+mkApi _ = Api (_ => readFile "a/x")

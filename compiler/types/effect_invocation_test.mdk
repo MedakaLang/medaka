@@ -23,7 +23,9 @@ con n = TCon n (OriginModule "m")
 
 -- `Sink a` is contravariant in `a`; `Box a` covariant; `Cell a` invariant;
 -- `Api` has one monomorphic field performing `Net "api/"`; `Loop` names
--- itself; any other head is unknown to the summary.
+-- itself; `Holder t` holds a callback whose authority is its argument's
+-- name; `Grow a` holds a `Grow (Box a)`, ever larger; any other head is
+-- unknown to the summary.
 ops : InvocationOps
 ops = InvocationOps {
   headVariances =
@@ -33,11 +35,19 @@ ops = InvocationOps {
       TCon "Cell" _ => Some [VInv]
       TCon "Api" _ => Some []
       TCon "Loop" _ => Some []
+      TCon "Holder" _ => Some [VInv]
+      TCon "Grow" _ => Some [VCo]
       _ => None,
-  headFields =
+  appliedFields =
+    applied => match applied
+      TCon "Api" _ => [callback "api/"]
+      TCon "Loop" _ => [con "Loop", callback "loop/"]
+      TApp (TCon "Holder" _) (TCon t _) => [callback "h/\{t}/"]
+      TApp (TCon "Grow" _) x => [TApp (con "Grow") (TApp (con "Box") x)]
+      _ => [],
+  genericFields =
     h => match h
-      TCon "Api" _ => [TFun unit (net "api/") unit]
-      TCon "Loop" _ => [con "Loop", TFun unit (net "loop/") unit]
+      TCon "Grow" _ => [callback "grow/"]
       _ => [],
   headKey =
     h => match h
@@ -99,4 +109,16 @@ test "tuple elements and constructor fields are read at their position" = expect
     expectEqual "Net \"api/\"" (summary pure (con "Api")),
     expectEqual "" (summary pure (TFun (con "Api") pure unit)),
     expectEqual "Net \"loop/\"" (summary pure (con "Loop")),
+  ]
+
+test "each instantiation of a head is opened, and a growing one ends generically" = expectAll
+  [
+    expectEqual
+      "Net \"h/*\""
+      (summary
+        pure
+        (TApp
+          (TApp (con "__tuple2__") (TApp (con "Holder") (con "a")))
+          (TApp (con "Holder") (con "b")))),
+    expectEqual "Net \"grow/\"" (summary pure (TApp (con "Grow") unit)),
   ]

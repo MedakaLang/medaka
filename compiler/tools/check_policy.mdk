@@ -1,8 +1,8 @@
 import types.effect_domain.{canonParam, drender, Param(..)}
 import types.effect_authority.{
-  Authority(..), authSub, authVars, authHasVars, authvarDefaultName
+  Authority(..), authSub, authVars, authHasVars, authvarDefaultName, authJoinAll
 }
-import types.effect_invocation.{InvocationOps, invocationSummary}
+import types.effect_invocation.{invocationSummary}
 import types.effect_rows.{
   effLabelOrigin,
   atomLabelOf,
@@ -13,6 +13,7 @@ import types.effect_rows.{
   atomsUnion,
   renderAtom,
   Atom(..),
+  effrowLabels,
 }
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
@@ -64,7 +65,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude}
 import tools.check.{checkHasErrors}
-import types.repr.{Scheme(..)}
+import types.repr.{Scheme(..), Mono(..), normalize}
 import types.typecheck.{
   checkOneSchemeFull,
   lastInvocationOps,
@@ -340,14 +341,26 @@ collectOpts ((Some x) :: rest) = x :: collectOpts rest
 atomLabels : List Atom -> List String
 atomLabels atoms = map renderAtom atoms
 
--- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
-fnEffectsTable : InvocationOps ->
-  List (String, Scheme) ->
-  List (String, List Atom)
-fnEffectsTable _ [] = []
-fnEffectsTable ops ((name, sch) :: rest) = match invocationSummary ops sch
-  [] => fnEffectsTable ops rest
-  effs => (name, effs) :: fnEffectsTable ops rest
+-- (name, effect-atoms) for every fn whose CALL performs a non-empty effect set:
+-- the chain below follows what calling a callee performs, not what a host
+-- could reach through it.
+fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
+fnEffectsTable [] = []
+fnEffectsTable ((name, sch) :: rest) = match callPerformed sch
+  [] => fnEffectsTable rest
+  effs => (name, effs) :: fnEffectsTable rest
+
+-- What applying a binding performs: its forcing row and the rows along its
+-- result spine, an effect index returned included.
+callPerformed : Scheme -> List Atom
+callPerformed (Forall _ _ _ _ force mono) =
+  atomsUnion (effrowLabels force) (resultSpineRows mono)
+
+resultSpineRows : Mono -> List Atom
+resultSpineRows m = match normalize m
+  TFun _ row res => atomsUnion (effrowLabels row) (resultSpineRows res)
+  TEff row => effrowLabels row
+  _ => []
 
 -- Does fn `name` carry an atom whose LABEL is `label`?  (Chain reconstruction
 -- stays label-keyed — the param does not participate in the call-graph trace.)
@@ -447,7 +460,12 @@ notProvenLines effs policy =
   flatMap
     (a => match (authHasVars (atomAuth a), permitOf a policy)
       (True, Forbidden) => match policyEntryFor a policy
-        Some _ => ["   not proven: \{renderAtom a} (\{unresolvedWhy a})\n"]
+        Some _ =>
+          let unresolved =
+            Atom
+              (atomLabelOf a)
+              (authJoinAll (map AVar (authVars (atomAuth a))))
+          ["   not proven: \{renderAtom unresolved} (\{unresolvedWhy a})\n"]
         None => []
       _ => [])
     effs
@@ -458,7 +476,9 @@ unresolvedWhy : Atom -> String
 unresolvedWhy a =
   let names =
     map (v => "`" ++ authvarDefaultName v ++ "`") (authVars (atomAuth a))
-  "authority \{joinWith ", " names} is chosen by the caller"
+  match names
+    [one] => "authority variable \{one}"
+    _ => "authority variables \{joinWith ", " names}"
 
 -- The entry for an atom: its qualified key first, then its bare label.
 policyEntryFor : Atom -> List (String, EffParamTy) -> Option EffParamTy
@@ -604,7 +624,7 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
     checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
   let ops = lastInvocationOps ()
-  let effTable = fnEffectsTable ops schemes
+  let effTable = fnEffectsTable schemes
   -- Existence is checked against the complete scheme list, not effTable:
   -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
   -- a name index would reject a real pure entry exactly like an absent one.
@@ -848,7 +868,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let (preludeSchemes, ownSchemes) =
     checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable (lastInvocationOps ()) schemes
+  let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
     Some e => e

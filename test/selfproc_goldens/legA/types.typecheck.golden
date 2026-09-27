@@ -616,7 +616,6 @@ cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
 ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
-ctorFieldsByHead : List Scheme -> Map String (List Mono)
 ctorHasExistentials : Option Scheme -> Bool
 ctorHeadShaped : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
@@ -625,6 +624,7 @@ ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> St
 ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholds : String -> String -> Bool
+ctorsByHead : List Scheme -> Map String (List (List Mono, List Mono))
 currentDoDeferred : Ref Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
@@ -1571,6 +1571,7 @@ installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 instanceSuperWords : ImplEnv -> IfaceRef -> List Ty -> List (String, String)
 instantiate : Scheme -> Mono
 instantiateCtorPattern : Scheme -> Mono
+instantiateFields : List Mono -> (List Mono, List Mono) -> List Mono
 instantiateLegacyVarTracked : String -> Int -> Scheme -> MethodTrackedInstantiation
 instantiateMethodPredicateArgument : MethodInstantiationSubst -> Option Mono -> Option Mono
 instantiateMethodPredicateSlot : MethodPredicateSlot -> List (Int, Mono) -> Option PredicateSlot
@@ -2087,6 +2088,7 @@ paramPolaritiesOf : TabKey -> Option (List Polarity)
 paramRowAtomOccs : String -> Ty -> List (List Atom)
 paramRowAtomsFor : String -> List String -> List EffAtomTy -> List (List Atom)
 paramRowAtomsOf : TabKey -> Option (List (List Atom))
+paramSubst : List Mono -> List Mono -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) -> (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
 paramVarianceGuard : Mono -> Mono -> Mono -> Unit
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
 parkOpenedExistentials : Unit -> Unit
@@ -2640,6 +2642,8 @@ sitesFor : String -> Map String (List a) -> List a
 slotNodeKey : IfaceRef -> (Int, List Mono) -> String
 slotOfSuperNode : SuperNode (Int, List Mono) -> (CSlot, List Mono)
 slotSuperStep : List String -> (Int, List Mono) -> Super -> Option (Int, List Mono)
+slotVariance : Option Polarity -> Option Kind -> Variance
+slotVariances : Option (List Polarity) -> Option (List Kind) -> Option (List Variance)
 solveExactReturn : MethodReturnRequest -> MethodReturnResolution
 solveExactReturnInstance : MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
 solveExactReturnOnce : MethodReturnRequest -> MethodReturnResolution

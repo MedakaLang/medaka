@@ -290,10 +290,30 @@ test "a function the host can reach through the entry is charged" = expectAll [
     "[package.capabilities]\nFileRead = \"x/*\"",
 ]
 
+test "an index slot is invariant, and an opened field reads at the head's arguments" = expectAll
+  [
+    expectGrant "rowCellEntry" "FileRead = \"e/*\"",
+    expectGrant "rdEntry" "FileRead = \"i/*\"",
+  ]
+
+test "a type's fields are found by its identity, not a constructor's spelling" =
+  expectManifest
+    "invocation_same_ctor.mdk"
+    "entryA"
+    "[package.capabilities]\nFileRead = \"a/*\""
+
+test "check-policy's chain follows what calling a callee performs" =
+  expectVerbExitStartsWithAndContains
+    "check-policy"
+    [fixture "invocation_chain.mdk", "--allow", "Log", "--fn", "transform"]
+    1
+    "rejected. transform requires <FileRead \"q/*\">"
+    ["reached via: transform → reader"]
+
 test "an authority the caller chooses is granted whole and says why" =
   expectGrant
     "readUnder"
-    "FileRead = true  # unresolved: authority `p` is chosen by the caller"
+    "FileRead = true  # unresolved: authority variable `p`"
 
 test "check-policy accepts the sink entry and refuses its returned control" = expectAll
   [
@@ -315,4 +335,4 @@ test "check-policy names an authority a narrower entry cannot prove" =
     [fixture positions, "--allow", "FileRead=cfg/*", "--fn", "readUnder"]
     1
     "rejected. readUnder requires <FileRead p>"
-    ["not proven: FileRead p (authority `p` is chosen by the caller)"]
+    ["not proven: FileRead p (authority variable `p`)"]

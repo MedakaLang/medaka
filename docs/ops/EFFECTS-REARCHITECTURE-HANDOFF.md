@@ -1158,36 +1158,43 @@ named only by the residual context.
 ### #3463 invocation summary (2026-09-27)
 
 `compiler/types/effect_invocation.mdk` is the one summary `manifest` and
-`check-policy` share; `monoEffects`/`schemeEffects` are gone, and the
-reached-via chain reads the same summary per binding.
+`check-policy` share; `monoEffects`/`schemeEffects` are gone. The
+reached-via chain keeps its own question, what CALLING a callee performs (its
+forcing row and result spine, `callPerformed`), not what a host could reach
+through it.
 
 - **The walk:** from the entry's type, positive. An arrow charges its row where
   it is positive or invariant; its domain flips the position. A constructor's
   argument takes the slot's variance composed with the position; a slot the
-  checker cannot see is invariant, so charged. A positive effect index is
-  charged. Tuples keep the position. A data head visible to the entry is
-  opened, each constructor field read at the head's position, once per
-  (head, position).
-- **Its inputs:** `typecheck.lastInvocationOps` reads `InvocationView`, the
-  constructors and variance table of the last module `checkBodyImpl` checked
-  (the entry of a single drive), written once per module right after its data
-  environment is built. The variance is the checker's own table
-  (`paramPolaritiesIn`), never a second computation.
+  checker cannot see is invariant, and a slot whose parameter is an effect row
+  or an authority is an index, invariant by §6.4. Tuples keep the position. A
+  data head visible to the entry is opened: each constructor field,
+  instantiated at the head's arguments (types, rows and authorities
+  substituted), is read at the head's position, once per (head, position,
+  arguments), at most eight instantiations per (head, position) and then once
+  with the declaration's variables left in place.
+- **Its inputs:** `typecheck.lastInvocationOps` reads `InvocationView`, written
+  once per module by `checkBodyImpl` right after its data environment is built:
+  the constructors the module can name (its own environment plus the
+  identity-keyed universe, so two same-spelled constructors both count), and
+  its variance and kind tables (the checker's own, never a second computation).
 - **Protocol:** one, not two. Forcing, a call and any returned function all
   reduce to "every positive position is reachable", so a `ForceOnly | Call N`
   parameter would change no answer and was not added.
-- **Unresolved authority:** manifest `L = true  # unresolved: authority `p` is
-  chosen by the caller`; policy `not proven: L p (...)` when an entry narrower
-  than the whole label refuses it.
+- **Unresolved authority:** manifest `L = true  # unresolved: authority
+  variable `p``; policy `not proven: L p (...)`, naming only the variables,
+  when an entry narrower than the whole label refuses it.
 - **Charges moved both ways, as ratified:** a contravariant slot (#3463's
   `Sink`) is no longer charged; effect-indexed entries, a positive position
   inside an argument's domain, tuples, monomorphic data fields and
   host-supplied `Ref` cells now are (#3468's five shapes, each of which main
   reported as pure).
-- **Known over-charges, safe:** a row parameter's variance is not computed, so
-  a handler-shaped index is charged; an authority inside an opened field is a
-  variable of the declaration, not the entry's instantiation, so it renders
-  unresolved.
+- **Known over-charges, safe:** an index a type uses only covariantly is still
+  invariant, so charged in a negative position; builtin `List` has no variance
+  row, so a list in a domain is charged.
+- **By design, not opened:** an abstract or private type of another module. The
+  host holds the value but cannot invoke inside it; review round 1 raised it
+  (a module's own API can run it) and it is listed for Val.
 
 ## Delivered code and invariants to preserve
 

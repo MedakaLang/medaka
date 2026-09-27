@@ -1065,23 +1065,25 @@ declared variance (§6.4). Starting positive at the entry's type:
   read as invariant.
 - an effect index (`Async <Net> a`) in a positive position is charged.
 - a tuple's elements keep the position.
-- a data type visible to the entry is also opened: each constructor field is
-  read at the type's own position, so a row written inside a monomorphic
-  field is charged. An abstract or builtin type is read through its
-  variance only.
+- a data type visible to the entry is also opened: each constructor field,
+  instantiated at the type's arguments, is read at the type's own position,
+  so a row written inside a monomorphic field is charged. An abstract or
+  builtin type is read through its variance only: the host holds such a
+  value but cannot invoke anything inside it.
+- a slot whose parameter is an effect row or an authority is an index, and
+  an index is invariant (§6.4), so an effect index is charged in either
+  position. That over-charges an index a type only ever uses covariantly
+  where the type sits in a negative position, which is safe.
 
-A row parameter's variance is not yet computed and reads as covariant, so an
-effect index is charged even where a handler-shaped type uses it
-contravariantly. That over-charges, which is safe. `manifest` and
-`check-policy` share this summary (`compiler/types/effect_invocation.mdk`).
+`manifest` and `check-policy` share this summary
+(`compiler/types/effect_invocation.mdk`).
 
 Unresolved symbolic authority at a host boundary is conservatively top in its
 domain, or an explicit unresolved-manifest error. It must never be omitted or
 rendered as empty authority. A forcing effect cannot disappear merely because
 the entry's value type is `Unit` rather than an arrow. The manifest writes an
 authority still bound to a variable as the whole label, with a TOML comment
-naming the variable (`Net = true  # unresolved: authority `url` is chosen by
-the caller`). A policy entry narrower than the whole label reports it as
+naming the variable (`Net = true  # unresolved: authority variable `url``). A policy entry narrower than the whole label reports it as
 `not proven` rather than refusing it silently.
 
 **The host is the handler.** Medaka has no in-language effect handler. Instead the

@@ -1,5 +1,5 @@
 # META
-source_lines=50776
+source_lines=50846
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -7896,7 +7896,7 @@ freshDriverState _ = DriverState {
   sigTyMapRef = Ref omEmpty,
   currentModuleRef = Ref "",
   markSetsRef = Ref None,
-  invocationViewRef = Ref (InvocationView omEmpty []),
+  invocationViewRef = Ref (InvocationView [] [] []),
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -11614,32 +11614,52 @@ paramPolaritiesIn tab key
   | otherwise = lookupTab key tab
 
 -- ── the invocation summary's view (#3463) ─────────────────────────────────
--- What `types/effect_invocation.mdk` reads of a checked program: the
--- constructors in scope in the last module `checkBodyImpl` checked, the
--- entry of a single drive, and that module's variance table, its own
--- declarations over everything it imports.  Written once per module, right
--- after its data environment is built; a drive's caller reads it afterwards
--- through `lastInvocationOps`.
+-- What `types/effect_invocation.mdk` reads of a checked program, as the last
+-- module `checkBodyImpl` checked saw it (the entry of a single drive):
+-- every constructor it can name, from its own environment and from the
+-- identity-keyed universe (so two same-spelled constructors both count), and
+-- its variance and kind tables, its own declarations over everything it
+-- imports.  Written once per module, right after its data environment is
+-- built; a drive's caller reads it through `lastInvocationOps`.
 data InvocationView =
-  | InvocationView (OrdMap Scheme) (List (TabKey, List Polarity))
+  | InvocationView (List Scheme) (List (TabKey, List Polarity)) (List (TabKey, List Kind))
 
 recordInvocationView : TcEnv -> Unit
 recordInvocationView (TcEnv _ ctors _ _) =
+  let universe =
+    flatMap
+      (cands =>
+        map
+          (c => match c
+            (_, _, sch) => sch)
+          cands)
+      (IdMap.values crossRun.value.universeCtorIdentsRef.value)
   driverState.value.invocationViewRef :=
-    InvocationView ctors perRun.value.dataParamPolarityRef.value
+    InvocationView
+      (IdMap.values ctors ++ universe)
+      perRun.value.dataParamPolarityRef.value
+      perRun.value.dataParamKindsRef.value
 
 -- The summary's operations over the view of the entry the last drive checked.
 export
 lastInvocationOps : Unit -> InvocationOps
 lastInvocationOps _ = match driverState.value.invocationViewRef.value
-  InvocationView ctors pols =>
-    let fields = ctorFieldsByHead (IdMap.values ctors)
+  InvocationView ctors pols kinds =>
+    let byHead = ctorsByHead ctors
     InvocationOps {
       headVariances =
         h => match headTyconMono h
-          Some (HkDecl key) => map (map varianceOf) (paramPolaritiesIn pols key)
+          Some (HkDecl key) =>
+            slotVariances (paramPolaritiesIn pols key) (lookupTab key kinds)
           _ => None,
-      headFields = h => optionOr [] (omLookup (invocationHeadKey h) fields),
+      appliedFields =
+        applied =>
+          let (h, args) = spineParts applied
+          flatMap
+            (c => instantiateFields args c)
+            (optionOr [] (omLookup (invocationHeadKey h) byHead)),
+      genericFields =
+        h => flatMap snd (optionOr [] (omLookup (invocationHeadKey h) byHead)),
       headKey = invocationHeadKey,
     }
 
@@ -11648,22 +11668,72 @@ invocationHeadKey h = match headTyconMono h
   Some hk => headKeyTag hk
   None => "?"
 
+-- A slot's variance, read as invariant where its parameter is an effect row
+-- or an authority: an index is invariant (EFFECTS-SEMANTICS §6.4), whatever
+-- the variance table computed for it.
+slotVariances : Option (List Polarity) ->
+  Option (List Kind) ->
+  Option (List Variance)
+slotVariances None None = None
+slotVariances pols kinds =
+  let ps = optionOr [] pols
+  let ks = optionOr [] kinds
+  Some
+    (map
+      (i => slotVariance (nthOpt i ps) (nthOpt i ks))
+      (rangeFromCount 0 (maxI (listLen ps) (listLen ks))))
+
+slotVariance : Option Polarity -> Option Kind -> Variance
+slotVariance _ (Some KRow) = VInv
+slotVariance _ (Some (KAuth _)) = VInv
+slotVariance (Some p) _ = varianceOf p
+slotVariance None _ = VInv
+
 varianceOf : Polarity -> Variance
 varianceOf PCo = VCo
 varianceOf PContra = VContra
 varianceOf PInv = VInv
 
--- Every constructor's field types, grouped under its result head.
-ctorFieldsByHead : List Scheme -> OrdMap (List Mono)
-ctorFieldsByHead schemes =
+-- Every constructor under its result head: the head's arguments as the
+-- constructor declares them, and its field types.
+ctorsByHead : List Scheme -> OrdMap (List (List Mono, List Mono))
+ctorsByHead schemes =
   fold
     (acc sch => match sch
       Forall _ _ _ _ _ mono =>
         let (fieldTys, result) = arrowParts mono
-        let key = invocationHeadKey (fst (spineParts result))
-        omInsert key (optionOr [] (omLookup key acc) ++ fieldTys) acc)
+        let (h, params) = spineParts result
+        let key = invocationHeadKey h
+        omInsert key ((params, fieldTys) :: optionOr [] (omLookup key acc)) acc)
     omEmpty
     schemes
+
+-- A constructor's fields at an application's arguments: each declared
+-- parameter, a type, a row or an authority, is replaced by the argument in
+-- its slot.
+instantiateFields : List Mono -> (List Mono, List Mono) -> List Mono
+instantiateFields args (params, fieldTys) =
+  let (subst, esub, asub) = paramSubst params args ([], [], [])
+  map (substMono subst esub asub) fieldTys
+
+paramSubst : List Mono ->
+  List Mono ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority)) ->
+  (List (Int, Mono), List (Int, Ref Effvar), List (Int, Authority))
+paramSubst (p :: ps) (a :: rest) (subst, esub, asub) = match (
+  normalize p,
+  normalize a,
+)
+  (TVar cell, _) => paramSubst ps rest ((tyvarId cell, a) :: subst, esub, asub)
+  (TEff (EffRow [] (Some cell)), TEff row) =>
+    let id = effvarId cell
+    paramSubst ps rest (subst, (id, Ref (ELink id row)) :: esub, asub)
+  (TAuth q, TAuth actual) => match authNorm q
+    AVar cell =>
+      paramSubst ps rest (subst, esub, (authvarId cell, actual) :: asub)
+    _ => paramSubst ps rest (subst, esub, asub)
+  _ => paramSubst ps rest (subst, esub, asub)
+paramSubst _ _ acc = acc
 
 arrowParts : Mono -> (List Mono, Mono)
 arrowParts m = match normalize m
@@ -51985,7 +52055,7 @@ isTyAuth _ = False
 (DFunDef false "ceFunctorKey" () (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EApp (EVar "OriginModule") (ELit (LString "fmod")))) (ELit (LString "Functor")))))
 (DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphAdmittedMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "methodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "currentModuleRef" (TyApp (TyCon "Ref") (TyCon "String"))) (field "markSetsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MarkSets")))) (field "invocationViewRef" (TyApp (TyCon "Ref") (TyCon "InvocationView")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
-(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "currentModuleRef" (EApp (EVar "Ref") (ELit (LString "")))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EVar "InvocationView") (EVar "omEmpty")) (EListLit)))))))
+(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "currentModuleRef" (EApp (EVar "Ref") (ELit (LString "")))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit)))))))
 (DTypeSig false "driverState" (TyApp (TyCon "Ref") (TyCon "DriverState")))
 (DFunDef false "driverState" () (EApp (EVar "Ref") (EApp (EVar "freshDriverState") (ELit LUnit))))
 (DTypeSig false "pushPendingObl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyFun (TyCon "Provenance") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))))
@@ -52564,19 +52634,32 @@ isTyAuth _ = False
 (DFunDef false "paramPolaritiesOf" ((PVar "key")) (EApp (EApp (EVar "paramPolaritiesIn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EVar "key")))
 (DTypeSig false "paramPolaritiesIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))))))
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DData Private "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity"))))))) ())
+(DData Private "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DTypeSig false "recordInvocationView" (TyFun (TyCon "TcEnv") (TyCon "Unit")))
-(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EVar "InvocationView") (EVar "ctors")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value"))))
+(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EVar "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
 (DTypeSig true "lastInvocationOps" (TyFun (TyCon "Unit") (TyCon "InvocationOps")))
-(DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols")) () (EBlock (DoLet false false (PVar "fields") (EApp (EVar "ctorFieldsByHead") (EApp (EVar "IdMap.values") (EVar "ctors")))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "map") (EApp (EVar "map") (EVar "varianceOf"))) (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key")))) (arm PWild () (EVar "None"))))) (fa "headFields" (ELam ((PVar "h")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "fields"))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
+(DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds")) () (EBlock (DoLet false false (PVar "byHead") (EApp (EVar "ctorsByHead") (EVar "ctors"))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "slotVariances") (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key"))) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "kinds")))) (arm PWild () (EVar "None"))))) (fa "appliedFields" (ELam ((PVar "applied")) (EBlock (DoLet false false (PTuple (PVar "h") (PVar "args")) (EApp (EVar "spineParts") (EVar "applied"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "instantiateFields") (EVar "args")) (EVar "c")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))))) (fa "genericFields" (ELam ((PVar "h")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
 (DTypeSig false "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
 (DFunDef false "invocationHeadKey" ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (ELit (LString "?")))))
+(DTypeSig false "slotVariances" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Variance"))))))
+(DFunDef false "slotVariances" ((PCon "None") (PCon "None")) (EVar "None"))
+(DFunDef false "slotVariances" ((PVar "pols") (PVar "kinds")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "pols"))) (DoLet false false (PVar "ks") (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "kinds"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "slotVariance") (EApp (EApp (EVar "nthOpt") (EVar "i")) (EVar "ps"))) (EApp (EApp (EVar "nthOpt") (EVar "i")) (EVar "ks"))))) (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 0))) (EApp (EApp (EVar "maxI") (EApp (EVar "listLen") (EVar "ps"))) (EApp (EVar "listLen") (EVar "ks")))))))))
+(DTypeSig false "slotVariance" (TyFun (TyApp (TyCon "Option") (TyCon "Polarity")) (TyFun (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Variance"))))
+(DFunDef false "slotVariance" (PWild (PCon "Some" (PCon "KRow"))) (EVar "VInv"))
+(DFunDef false "slotVariance" (PWild (PCon "Some" (PCon "KAuth" PWild))) (EVar "VInv"))
+(DFunDef false "slotVariance" ((PCon "Some" (PVar "p")) PWild) (EApp (EVar "varianceOf") (EVar "p")))
+(DFunDef false "slotVariance" ((PCon "None") PWild) (EVar "VInv"))
 (DTypeSig false "varianceOf" (TyFun (TyCon "Polarity") (TyCon "Variance")))
 (DFunDef false "varianceOf" ((PCon "PCo")) (EVar "VCo"))
 (DFunDef false "varianceOf" ((PCon "PContra")) (EVar "VContra"))
 (DFunDef false "varianceOf" ((PCon "PInv")) (EVar "VInv"))
-(DTypeSig false "ctorFieldsByHead" (TyFun (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Mono")))))
-(DFunDef false "ctorFieldsByHead" ((PVar "schemes")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "sch")) (EMatch (EVar "sch") (arm (PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono")) () (EBlock (DoLet false false (PTuple (PVar "fieldTys") (PVar "result")) (EApp (EVar "arrowParts") (EVar "mono"))) (DoLet false false (PVar "key") (EApp (EVar "invocationHeadKey") (EApp (EVar "fst") (EApp (EVar "spineParts") (EVar "result"))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc"))) (EVar "fieldTys"))) (EVar "acc")))))))) (EVar "omEmpty")) (EVar "schemes")))
+(DTypeSig false "ctorsByHead" (TyFun (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Mono")))))))
+(DFunDef false "ctorsByHead" ((PVar "schemes")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "sch")) (EMatch (EVar "sch") (arm (PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono")) () (EBlock (DoLet false false (PTuple (PVar "fieldTys") (PVar "result")) (EApp (EVar "arrowParts") (EVar "mono"))) (DoLet false false (PTuple (PVar "h") (PVar "params")) (EApp (EVar "spineParts") (EVar "result"))) (DoLet false false (PVar "key") (EApp (EVar "invocationHeadKey") (EVar "h"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (ETuple (EVar "params") (EVar "fieldTys")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc"))))) (EVar "acc")))))))) (EVar "omEmpty")) (EVar "schemes")))
+(DTypeSig false "instantiateFields" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
+(DFunDef false "instantiateFields" ((PVar "args") (PTuple (PVar "params") (PVar "fieldTys"))) (EBlock (DoLet false false (PTuple (PVar "subst") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramSubst") (EVar "params")) (EVar "args")) (ETuple (EListLit) (EListLit) (EListLit)))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub"))) (EVar "fieldTys")))))
+(DTypeSig false "paramSubst" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "paramSubst" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "a") (PVar "rest")) (PTuple (PVar "subst") (PVar "esub") (PVar "asub"))) (EMatch (ETuple (EApp (EVar "normalize") (EVar "p")) (EApp (EVar "normalize") (EVar "a"))) (arm (PTuple (PCon "TVar" (PVar "cell")) PWild) () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EBinOp "::" (ETuple (EApp (EVar "tyvarId") (EVar "cell")) (EVar "a")) (EVar "subst")) (EVar "esub") (EVar "asub")))) (arm (PTuple (PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "cell")))) (PCon "TEff" (PVar "row"))) () (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoExpr (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EBinOp "::" (ETuple (EVar "id") (EApp (EVar "Ref") (EApp (EApp (EVar "ELink") (EVar "id")) (EVar "row")))) (EVar "esub")) (EVar "asub")))))) (arm (PTuple (PCon "TAuth" (PVar "q")) (PCon "TAuth" (PVar "actual"))) () (EMatch (EApp (EVar "authNorm") (EVar "q")) (arm (PCon "AVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EVar "esub") (EBinOp "::" (ETuple (EApp (EVar "authvarId") (EVar "cell")) (EVar "actual")) (EVar "asub"))))) (arm PWild () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EVar "esub") (EVar "asub")))))) (arm PWild () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EVar "esub") (EVar "asub"))))))
+(DFunDef false "paramSubst" (PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "arrowParts" (TyFun (TyCon "Mono") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Mono"))))
 (DFunDef false "arrowParts" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "dom") PWild (PVar "res")) () (EBlock (DoLet false false (PTuple (PVar "rest") (PVar "result")) (EApp (EVar "arrowParts") (EVar "res"))) (DoExpr (ETuple (EBinOp "::" (EVar "dom") (EVar "rest")) (EVar "result"))))) (arm (PVar "other") () (ETuple (EListLit) (EVar "other")))))
 (DTypeSig false "paramRowAtomsOf" (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))
@@ -60108,7 +60191,7 @@ isTyAuth _ = False
 (DFunDef false "ceFunctorKey" () (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EApp (EVar "OriginModule") (ELit (LString "fmod")))) (ELit (LString "Functor")))))
 (DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphAdmittedMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "methodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "currentModuleRef" (TyApp (TyCon "Ref") (TyCon "String"))) (field "markSetsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MarkSets")))) (field "invocationViewRef" (TyApp (TyCon "Ref") (TyCon "InvocationView")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
-(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "currentModuleRef" (EApp (EVar "Ref") (ELit (LString "")))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EVar "InvocationView") (EVar "omEmpty")) (EListLit)))))))
+(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphAdmittedMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "currentModuleRef" (EApp (EVar "Ref") (ELit (LString "")))) (fa "markSetsRef" (EApp (EVar "Ref") (EVar "None"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit)))))))
 (DTypeSig false "driverState" (TyApp (TyCon "Ref") (TyCon "DriverState")))
 (DFunDef false "driverState" () (EApp (EVar "Ref") (EApp (EVar "freshDriverState") (ELit LUnit))))
 (DTypeSig false "pushPendingObl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyFun (TyCon "Provenance") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))))
@@ -60687,19 +60770,32 @@ isTyAuth _ = False
 (DFunDef false "paramPolaritiesOf" ((PVar "key")) (EApp (EApp (EVar "paramPolaritiesIn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EVar "key")))
 (DTypeSig false "paramPolaritiesIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))))))
 (DFunDef false "paramPolaritiesIn" ((PVar "tab") (PVar "key")) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Ref")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "key")) (EApp (EApp (EVar "tyTabKey") (EVar "OriginBuiltin")) (ELit (LString "Array")))) (EApp (EVar "Some") (EListLit (EVar "PInv"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "tab")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DData Private "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity"))))))) ())
+(DData Private "InvocationView" () ((variant "InvocationView" (ConPos (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))) ())
 (DTypeSig false "recordInvocationView" (TyFun (TyCon "TcEnv") (TyCon "Unit")))
-(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EVar "InvocationView") (EVar "ctors")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value"))))
+(DFunDef false "recordInvocationView" ((PCon "TcEnv" PWild (PVar "ctors") PWild PWild)) (EBlock (DoLet false false (PVar "universe") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PTuple PWild PWild (PVar "sch")) () (EVar "sch"))))) (EVar "cands")))) (EApp (EVar "IdMap.values") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeCtorIdentsRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef")) (EApp (EApp (EApp (EVar "InvocationView") (EBinOp "++" (EApp (EVar "IdMap.values") (EVar "ctors")) (EVar "universe"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))))))
 (DTypeSig true "lastInvocationOps" (TyFun (TyCon "Unit") (TyCon "InvocationOps")))
-(DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols")) () (EBlock (DoLet false false (PVar "fields") (EApp (EVar "ctorFieldsByHead") (EApp (EVar "IdMap.values") (EVar "ctors")))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EVar "varianceOf"))) (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key")))) (arm PWild () (EVar "None"))))) (fa "headFields" (ELam ((PVar "h")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "fields"))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
+(DFunDef false "lastInvocationOps" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "invocationViewRef") "value") (arm (PCon "InvocationView" (PVar "ctors") (PVar "pols") (PVar "kinds")) () (EBlock (DoLet false false (PVar "byHead") (EApp (EVar "ctorsByHead") (EVar "ctors"))) (DoExpr (ERecordCreate "InvocationOps" ((fa "headVariances" (ELam ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PCon "HkDecl" (PVar "key"))) () (EApp (EApp (EVar "slotVariances") (EApp (EApp (EVar "paramPolaritiesIn") (EVar "pols")) (EVar "key"))) (EApp (EApp (EVar "lookupTab") (EVar "key")) (EVar "kinds")))) (arm PWild () (EVar "None"))))) (fa "appliedFields" (ELam ((PVar "applied")) (EBlock (DoLet false false (PTuple (PVar "h") (PVar "args")) (EApp (EVar "spineParts") (EVar "applied"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "instantiateFields") (EVar "args")) (EVar "c")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))))) (fa "genericFields" (ELam ((PVar "h")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "invocationHeadKey") (EVar "h"))) (EVar "byHead")))))) (fa "headKey" (EVar "invocationHeadKey")))))))))
 (DTypeSig false "invocationHeadKey" (TyFun (TyCon "Mono") (TyCon "String")))
 (DFunDef false "invocationHeadKey" ((PVar "h")) (EMatch (EApp (EVar "headTyconMono") (EVar "h")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (ELit (LString "?")))))
+(DTypeSig false "slotVariances" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Polarity"))) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Variance"))))))
+(DFunDef false "slotVariances" ((PCon "None") (PCon "None")) (EVar "None"))
+(DFunDef false "slotVariances" ((PVar "pols") (PVar "kinds")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "pols"))) (DoLet false false (PVar "ks") (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "kinds"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "slotVariance") (EApp (EApp (EVar "nthOpt") (EVar "i")) (EVar "ps"))) (EApp (EApp (EVar "nthOpt") (EVar "i")) (EVar "ks"))))) (EApp (EApp (EVar "rangeFromCount") (ELit (LInt 0))) (EApp (EApp (EVar "maxI") (EApp (EVar "listLen") (EVar "ps"))) (EApp (EVar "listLen") (EVar "ks")))))))))
+(DTypeSig false "slotVariance" (TyFun (TyApp (TyCon "Option") (TyCon "Polarity")) (TyFun (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Variance"))))
+(DFunDef false "slotVariance" (PWild (PCon "Some" (PCon "KRow"))) (EVar "VInv"))
+(DFunDef false "slotVariance" (PWild (PCon "Some" (PCon "KAuth" PWild))) (EVar "VInv"))
+(DFunDef false "slotVariance" ((PCon "Some" (PVar "p")) PWild) (EApp (EVar "varianceOf") (EVar "p")))
+(DFunDef false "slotVariance" ((PCon "None") PWild) (EVar "VInv"))
 (DTypeSig false "varianceOf" (TyFun (TyCon "Polarity") (TyCon "Variance")))
 (DFunDef false "varianceOf" ((PCon "PCo")) (EVar "VCo"))
 (DFunDef false "varianceOf" ((PCon "PContra")) (EVar "VContra"))
 (DFunDef false "varianceOf" ((PCon "PInv")) (EVar "VInv"))
-(DTypeSig false "ctorFieldsByHead" (TyFun (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Mono")))))
-(DFunDef false "ctorFieldsByHead" ((PVar "schemes")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "sch")) (EMatch (EVar "sch") (arm (PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono")) () (EBlock (DoLet false false (PTuple (PVar "fieldTys") (PVar "result")) (EApp (EVar "arrowParts") (EVar "mono"))) (DoLet false false (PVar "key") (EApp (EVar "invocationHeadKey") (EApp (EVar "fst") (EApp (EVar "spineParts") (EVar "result"))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc"))) (EVar "fieldTys"))) (EVar "acc")))))))) (EVar "omEmpty")) (EVar "schemes")))
+(DTypeSig false "ctorsByHead" (TyFun (TyApp (TyCon "List") (TyCon "Scheme")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Mono")))))))
+(DFunDef false "ctorsByHead" ((PVar "schemes")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "sch")) (EMatch (EVar "sch") (arm (PCon "Forall" PWild PWild PWild PWild PWild (PVar "mono")) () (EBlock (DoLet false false (PTuple (PVar "fieldTys") (PVar "result")) (EApp (EVar "arrowParts") (EVar "mono"))) (DoLet false false (PTuple (PVar "h") (PVar "params")) (EApp (EVar "spineParts") (EVar "result"))) (DoLet false false (PVar "key") (EApp (EVar "invocationHeadKey") (EVar "h"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (ETuple (EVar "params") (EVar "fieldTys")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc"))))) (EVar "acc")))))))) (EVar "omEmpty")) (EVar "schemes")))
+(DTypeSig false "instantiateFields" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
+(DFunDef false "instantiateFields" ((PVar "args") (PTuple (PVar "params") (PVar "fieldTys"))) (EBlock (DoLet false false (PTuple (PVar "subst") (PVar "esub") (PVar "asub")) (EApp (EApp (EApp (EVar "paramSubst") (EVar "params")) (EVar "args")) (ETuple (EListLit) (EListLit) (EListLit)))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub"))) (EVar "fieldTys")))))
+(DTypeSig false "paramSubst" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))))))))
+(DFunDef false "paramSubst" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "a") (PVar "rest")) (PTuple (PVar "subst") (PVar "esub") (PVar "asub"))) (EMatch (ETuple (EApp (EVar "normalize") (EVar "p")) (EApp (EVar "normalize") (EVar "a"))) (arm (PTuple (PCon "TVar" (PVar "cell")) PWild) () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EBinOp "::" (ETuple (EApp (EVar "tyvarId") (EVar "cell")) (EVar "a")) (EVar "subst")) (EVar "esub") (EVar "asub")))) (arm (PTuple (PCon "TEff" (PCon "EffRow" (PList) (PCon "Some" (PVar "cell")))) (PCon "TEff" (PVar "row"))) () (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoExpr (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EBinOp "::" (ETuple (EVar "id") (EApp (EVar "Ref") (EApp (EApp (EVar "ELink") (EVar "id")) (EVar "row")))) (EVar "esub")) (EVar "asub")))))) (arm (PTuple (PCon "TAuth" (PVar "q")) (PCon "TAuth" (PVar "actual"))) () (EMatch (EApp (EVar "authNorm") (EVar "q")) (arm (PCon "AVar" (PVar "cell")) () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EVar "esub") (EBinOp "::" (ETuple (EApp (EVar "authvarId") (EVar "cell")) (EVar "actual")) (EVar "asub"))))) (arm PWild () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EVar "esub") (EVar "asub")))))) (arm PWild () (EApp (EApp (EApp (EVar "paramSubst") (EVar "ps")) (EVar "rest")) (ETuple (EVar "subst") (EVar "esub") (EVar "asub"))))))
+(DFunDef false "paramSubst" (PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "arrowParts" (TyFun (TyCon "Mono") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Mono"))))
 (DFunDef false "arrowParts" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "dom") PWild (PVar "res")) () (EBlock (DoLet false false (PTuple (PVar "rest") (PVar "result")) (EApp (EVar "arrowParts") (EVar "res"))) (DoExpr (ETuple (EBinOp "::" (EVar "dom") (EVar "rest")) (EVar "result"))))) (arm (PVar "other") () (ETuple (EListLit) (EVar "other")))))
 (DTypeSig false "paramRowAtomsOf" (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))
