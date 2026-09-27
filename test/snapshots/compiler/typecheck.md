@@ -1,5 +1,5 @@
 # META
-source_lines=50701
+source_lines=50686
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -329,6 +329,7 @@ import types.registry.{
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
+  firstExprLoc,
   programIsCore,
   stampBindingIds,
   stampTopScope,
@@ -21656,34 +21657,8 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = fold processLetGroup env (letGroupComponents binds)
+  let env2 = processLetGroup env binds
   infer env2 body
-
--- A `where` block is checked one dependency component at a time, a
--- component's dependencies first, as a module's top level is: a binding that
--- only USES a sibling sees it generalized, rather than sharing its type
--- variables as a member of one recursive group would.  Without it an
--- authority relation a helper owes (`rd (Dir p) = readUnder h p`) is shared
--- by every sibling that calls the helper, and a group decides it (#3462).
--- Members keep their source order inside a component.  A block that repeats a
--- name stays one group: its components are not well defined.
-letGroupComponents : List LetBind -> List (List LetBind)
-letGroupComponents binds =
-  let names = map letBindName binds
-  let nameSet = namesToSet names omEmpty
-  if omSize nameSet < listLen names then
-    [binds]
-  else
-    let grouped =
-      fold
-        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
-        omEmpty
-        binds
-    map
-      (component =>
-        let members = namesToSet component omEmpty
-        filterList (b => omHasKey (letBindName b) members) binds)
-      (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -39267,7 +39242,7 @@ processTopGroups env sigs defs names exported =
   let _ =
     reportEffectSummaryFailures
       (filterList (f => not (failureMentions unsolvedIds f)) failures)
-  let _ = fold (_ u => reportUnsolvedExport grouped u) () unsolved
+  let _ = fold (seen u => reportUnsolvedExport grouped seen u) Tip unsolved
   result
 
 -- The authority cells an exported binding's published type holds unquantified:
@@ -39291,10 +39266,13 @@ rootCellsOf exported schemes =
     schemes
 
 unquantifiedAuthIds : Scheme -> Map Int Unit
-unquantifiedAuthIds (Forall _ _ auths _ force mono) =
+unquantifiedAuthIds (Forall _ _ auths residual force mono) =
   fold
     (acc id => IdMap.delete id acc)
-    (authIdsIn mono (rowAuthIds force Tip))
+    (fold
+      (acc r => authTermIds r.arUpper (authTermIds r.arLower acc))
+      (authIdsIn mono (rowAuthIds force Tip))
+      residual)
     auths
 
 failureMentions : Map Int Unit -> SummaryFailure (Option Loc, String) -> Bool
@@ -39304,21 +39282,28 @@ failureMentions ids failure = match failure.esfAuthority
     anyList (c => IdMap.has (authvarId c) ids) (authVars lo ++ authVars hi)
   None => False
 
--- An exported binding whose type still holds a cell after the root solved:
--- nothing in its module bounds it below, and an importer cannot supply it
--- later.  Its obligations are this failure, not separate ones.
+-- An exported binding whose published type (or residual context) still holds
+-- a cell after the root solved: nothing in its module bounds it below, and an
+-- importer cannot supply it later.  Each cell is reported once, at the first
+-- exported binding that holds it; the obligations over it are this failure,
+-- not separate ones.  Located at the binding's first located expression.
 reportUnsolvedExport : OrdMap (List (List Pat, Expr)) ->
+  Map Int Unit ->
   (String, Map Int Unit) ->
-  Unit
-reportUnsolvedExport grouped (name, _) =
-  let loc = match clausesOf name grouped
-    (_, body) :: _ => exprLoc body
-    [] => None
-  pushTypeErrorAt
-    "T-EXPORT-UNSOLVED-AUTHORITY"
-    loc
-    "Exported binding '\{name}' has an authority in its type that nothing in this module determines: the value restriction keeps it from being generalized, and an importer cannot supply it later. Give '\{name}' a type signature that names the authority, or use it in this module at the authority it is meant for"
-
+  Map Int Unit
+reportUnsolvedExport grouped seen (name, ids) =
+  if IdMap.foldlWithKey (acc id _ => acc && IdMap.has id seen) True ids then
+    seen
+  else
+    let loc = match clausesOf name grouped
+      (_, body) :: _ => firstExprLoc body
+      [] => None
+    let _ =
+      pushTypeErrorAt
+        "T-EXPORT-UNSOLVED-AUTHORITY"
+        loc
+        "Exported binding '\{name}' has an authority in its type that nothing in this module determines: it belongs to a value the value restriction keeps from being generalized (this binding or one it uses), so no use in an importing module can supply it. Give '\{name}', or the value it uses, a type signature that names the authority, or use it in this module at the authority it is meant for"
+    IdMap.union seen ids
 -- per-name dependencies: the other top-level names a binding's bodies reference
 -- (a conservative over-approximation via all free EVars is fine — only names
 -- that are themselves groups matter).  Consumed by depGraphMap → Tarjan.
@@ -50723,7 +50708,7 @@ isTyAuth _ = False
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false) (mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false) (mem "oGetCtors" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
@@ -54316,9 +54301,7 @@ isTyAuth _ = False
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "g"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "te") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "lits") (EApp (EVar "takePatLits") (ELit LUnit))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EApp (EVar "fst") (EVar "pr"))) (EVar "te"))) (DoLet false false PWild (EApp (EVar "settlePatLits") (EVar "lits"))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr")))) (EVar "rest")))))
 (DTypeSig false "inferLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "fold") (EVar "processLetGroup")) (EVar "env")) (EApp (EVar "letGroupComponents") (EVar "binds")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
-(DTypeSig false "letGroupComponents" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "LetBind")))))
-(DFunDef false "letGroupComponents" ((PVar "binds")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "omSize") (EVar "nameSet")) (EApp (EVar "listLen") (EVar "names"))) (EListLit (EVar "binds")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EVar "map") (EVar "funClausePair")) (EVar "clauses"))) (EVar "m")))) (EVar "omEmpty")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "component")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "namesToSet") (EVar "component")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "letBindName") (EVar "b"))) (EVar "members")))) (EVar "binds")))))) (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped"))))))))))
+(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "processLetGroup") (EVar "env")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
 (DTypeSig false "registerData" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "TcEnv"))))
 (DFunDef false "registerData" ((PVar "env") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d")))
 (DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataCtors" (PVar "variants")) (rf "dataCtorBinders" (PVar "binders")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EVar "anns")) (EVar "variants")) (EVar "binders")))
@@ -57199,18 +57182,18 @@ isTyAuth _ = False
 (DFunDef false "sigNamesToSet" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "sigNamesToSet" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "sigNamesToSet") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "m"))))
 (DTypeSig false "processTopGroups" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))))
-(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names") (PVar "exported")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "resolvePendingJoins") (ELit (LInt 0)))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EApp (EApp (EVar "exportedRootCells") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (EVar "widenOpenedFor"))) (DoLet false false (PVar "unsolved") (EApp (EApp (EVar "rootCellsOf") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (DoLet false false (PVar "unsolvedIds") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "ids"))) (EApp (EApp (EVar "IdMap.union") (EVar "acc")) (EVar "ids")))) (EVar "Tip")) (EVar "unsolved"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "failureMentions") (EVar "unsolvedIds")) (EVar "f"))))) (EVar "failures")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "u")) (EApp (EApp (EVar "reportUnsolvedExport") (EVar "grouped")) (EVar "u")))) (ELit LUnit)) (EVar "unsolved"))) (DoExpr (EVar "result"))))
+(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names") (PVar "exported")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "resolvePendingJoins") (ELit (LInt 0)))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EApp (EApp (EVar "exportedRootCells") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (EVar "widenOpenedFor"))) (DoLet false false (PVar "unsolved") (EApp (EApp (EVar "rootCellsOf") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (DoLet false false (PVar "unsolvedIds") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "ids"))) (EApp (EApp (EVar "IdMap.union") (EVar "acc")) (EVar "ids")))) (EVar "Tip")) (EVar "unsolved"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "failureMentions") (EVar "unsolvedIds")) (EVar "f"))))) (EVar "failures")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "seen") (PVar "u")) (EApp (EApp (EApp (EVar "reportUnsolvedExport") (EVar "grouped")) (EVar "seen")) (EVar "u")))) (EVar "Tip")) (EVar "unsolved"))) (DoExpr (EVar "result"))))
 (DTypeSig false "exportedRootCells" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
 (DFunDef false "exportedRootCells" ((PVar "exported") (PVar "schemes")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "ids"))) (EApp (EApp (EVar "IdMap.union") (EVar "acc")) (EVar "ids")))) (EVar "Tip")) (EApp (EApp (EVar "rootCellsOf") (EVar "exported")) (EVar "schemes"))))
 (DTypeSig false "rootCellsOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "rootCellsOf" ((PVar "exported") (PVar "schemes")) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "name") (PVar "scheme"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "exported")) (EMatch (EApp (EVar "unquantifiedAuthIds") (EVar "scheme")) (arm (PCon "Tip") () (EListLit)) (arm (PVar "ids") () (EListLit (ETuple (EVar "name") (EVar "ids"))))) (EListLit)))) (EVar "schemes")))
 (DTypeSig false "unquantifiedAuthIds" (TyFun (TyCon "Scheme") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))
-(DFunDef false "unquantifiedAuthIds" ((PCon "Forall" PWild PWild (PVar "auths") PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "id")) (EApp (EApp (EVar "IdMap.delete") (EVar "id")) (EVar "acc")))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EApp (EApp (EVar "rowAuthIds") (EVar "force")) (EVar "Tip")))) (EVar "auths")))
+(DFunDef false "unquantifiedAuthIds" ((PCon "Forall" PWild PWild (PVar "auths") (PVar "residual") (PVar "force") (PVar "mono"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "id")) (EApp (EApp (EVar "IdMap.delete") (EVar "id")) (EVar "acc")))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "r")) (EApp (EApp (EVar "authTermIds") (EFieldAccess (EVar "r") "arUpper")) (EApp (EApp (EVar "authTermIds") (EFieldAccess (EVar "r") "arLower")) (EVar "acc"))))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EApp (EApp (EVar "rowAuthIds") (EVar "force")) (EVar "Tip")))) (EVar "residual"))) (EVar "auths")))
 (DTypeSig false "failureMentions" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "SummaryFailure") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "failureMentions" ((PCon "Tip") PWild) (EVar "False"))
 (DFunDef false "failureMentions" ((PVar "ids") (PVar "failure")) (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EApp (EApp (EVar "anyList") (ELam ((PVar "c")) (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "c"))) (EVar "ids")))) (EBinOp "++" (EApp (EVar "authVars") (EVar "lo")) (EApp (EVar "authVars") (EVar "hi"))))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "reportUnsolvedExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyCon "Unit"))))
-(DFunDef false "reportUnsolvedExport" ((PVar "grouped") (PTuple (PVar "name") PWild)) (EBlock (DoLet false false (PVar "loc") (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "grouped")) (arm (PCons (PTuple PWild (PVar "body")) PWild) () (EApp (EVar "exprLoc") (EVar "body"))) (arm (PList) () (EVar "None")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-EXPORT-UNSOLVED-AUTHORITY"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Exported binding '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' has an authority in its type that nothing in this module determines: the value restriction keeps it from being generalized, and an importer cannot supply it later. Give '"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' a type signature that names the authority, or use it in this module at the authority it is meant for")))))))
+(DTypeSig false "reportUnsolvedExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))))
+(DFunDef false "reportUnsolvedExport" ((PVar "grouped") (PVar "seen") (PTuple (PVar "name") (PVar "ids"))) (EIf (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") PWild) (EBinOp "&&" (EVar "acc") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen"))))) (EVar "True")) (EVar "ids")) (EVar "seen") (EBlock (DoLet false false (PVar "loc") (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "grouped")) (arm (PCons (PTuple PWild (PVar "body")) PWild) () (EApp (EVar "firstExprLoc") (EVar "body"))) (arm (PList) () (EVar "None")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-EXPORT-UNSOLVED-AUTHORITY"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Exported binding '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' has an authority in its type that nothing in this module determines: it belongs to a value the value restriction keeps from being generalized (this binding or one it uses), so no use in an importing module can supply it. Give '"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "', or the value it uses, a type signature that names the authority, or use it in this module at the authority it is meant for"))))) (DoExpr (EApp (EApp (EVar "IdMap.union") (EVar "seen")) (EVar "ids"))))))
 (DTypeSig false "depsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "depsOf" ((PVar "name") (PVar "nameSet") (PVar "cbn")) (EApp (EApp (EVar "filterNonSelf") (EVar "name")) (EApp (EApp (EVar "keepGroupNames") (EVar "nameSet")) (EApp (EVar "dedup") (EApp (EVar "groupRefs") (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "cbn")))))))
 (DTypeSig false "groupRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -58731,7 +58714,7 @@ isTyAuth _ = False
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false) (mem "programIsCore" false) (mem "stampBindingIds" false) (mem "stampTopScope" false) (mem "stampDeclWith" false) (mem "stampClauseWith" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false) (mem "oGetCtors" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
@@ -62324,9 +62307,7 @@ isTyAuth _ = False
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "g"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "te") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "lits") (EApp (EVar "takePatLits") (ELit LUnit))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EApp (EVar "fst") (EVar "pr"))) (EVar "te"))) (DoLet false false PWild (EApp (EVar "settlePatLits") (EVar "lits"))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr")))) (EVar "rest")))))
 (DTypeSig false "inferLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EMethodRef "fold") (EVar "processLetGroup")) (EVar "env")) (EApp (EVar "letGroupComponents") (EVar "binds")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
-(DTypeSig false "letGroupComponents" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "LetBind")))))
-(DFunDef false "letGroupComponents" ((PVar "binds")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "omSize") (EVar "nameSet")) (EApp (EVar "listLen") (EVar "names"))) (EListLit (EVar "binds")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "funClausePair")) (EVar "clauses"))) (EVar "m")))) (EVar "omEmpty")) (EVar "binds"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "component")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "namesToSet") (EVar "component")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "letBindName") (EVar "b"))) (EVar "members")))) (EVar "binds")))))) (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped"))))))))))
+(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "processLetGroup") (EVar "env")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
 (DTypeSig false "registerData" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "TcEnv"))))
 (DFunDef false "registerData" ((PVar "env") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d")))
 (DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataCtors" (PVar "variants")) (rf "dataCtorBinders" (PVar "binders")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EVar "anns")) (EVar "variants")) (EVar "binders")))
@@ -65207,18 +65188,18 @@ isTyAuth _ = False
 (DFunDef false "sigNamesToSet" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "sigNamesToSet" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "sigNamesToSet") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "m"))))
 (DTypeSig false "processTopGroups" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))))
-(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names") (PVar "exported")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "resolvePendingJoins") (ELit (LInt 0)))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EApp (EApp (EVar "exportedRootCells") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (EVar "widenOpenedFor"))) (DoLet false false (PVar "unsolved") (EApp (EApp (EVar "rootCellsOf") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (DoLet false false (PVar "unsolvedIds") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "ids"))) (EApp (EApp (EVar "IdMap.union") (EVar "acc")) (EVar "ids")))) (EVar "Tip")) (EVar "unsolved"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "failureMentions") (EVar "unsolvedIds")) (EVar "f"))))) (EVar "failures")))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "u")) (EApp (EApp (EVar "reportUnsolvedExport") (EVar "grouped")) (EVar "u")))) (ELit LUnit)) (EVar "unsolved"))) (DoExpr (EVar "result"))))
+(DFunDef false "processTopGroups" ((PVar "env") (PVar "sigs") (PVar "defs") (PVar "names") (PVar "exported")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigNameSetRef")) (EApp (EApp (EVar "sigNamesToSet") (EVar "sigs")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false (PVar "grouped") (EApp (EVar "groupClauses") (EVar "defs"))) (DoLet false false (PVar "ordered") (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped")))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "processSCCs") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "ordered"))) (DoLet false false PWild (EApp (EVar "resolvePendingJoins") (ELit (LInt 0)))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "EffectSolver.closeRootAuthorities") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "effectSummaries")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "rigidAuthvarsRef") "value")) (EApp (EApp (EVar "exportedRootCells") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (EVar "widenOpenedFor"))) (DoLet false false (PVar "unsolved") (EApp (EApp (EVar "rootCellsOf") (EVar "exported")) (EApp (EVar "fst") (EVar "result")))) (DoLet false false (PVar "unsolvedIds") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "ids"))) (EApp (EApp (EVar "IdMap.union") (EVar "acc")) (EVar "ids")))) (EVar "Tip")) (EVar "unsolved"))) (DoLet false false PWild (EApp (EVar "reportEffectSummaryFailures") (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "failureMentions") (EVar "unsolvedIds")) (EVar "f"))))) (EVar "failures")))) (DoLet false false PWild (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "seen") (PVar "u")) (EApp (EApp (EApp (EVar "reportUnsolvedExport") (EVar "grouped")) (EVar "seen")) (EVar "u")))) (EVar "Tip")) (EVar "unsolved"))) (DoExpr (EVar "result"))))
 (DTypeSig false "exportedRootCells" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
 (DFunDef false "exportedRootCells" ((PVar "exported") (PVar "schemes")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "ids"))) (EApp (EApp (EVar "IdMap.union") (EVar "acc")) (EVar "ids")))) (EVar "Tip")) (EApp (EApp (EVar "rootCellsOf") (EVar "exported")) (EVar "schemes"))))
 (DTypeSig false "rootCellsOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "rootCellsOf" ((PVar "exported") (PVar "schemes")) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "name") (PVar "scheme"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "exported")) (EMatch (EApp (EVar "unquantifiedAuthIds") (EVar "scheme")) (arm (PCon "Tip") () (EListLit)) (arm (PVar "ids") () (EListLit (ETuple (EVar "name") (EVar "ids"))))) (EListLit)))) (EVar "schemes")))
 (DTypeSig false "unquantifiedAuthIds" (TyFun (TyCon "Scheme") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))
-(DFunDef false "unquantifiedAuthIds" ((PCon "Forall" PWild PWild (PVar "auths") PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "id")) (EApp (EApp (EVar "IdMap.delete") (EVar "id")) (EVar "acc")))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EApp (EApp (EVar "rowAuthIds") (EVar "force")) (EVar "Tip")))) (EVar "auths")))
+(DFunDef false "unquantifiedAuthIds" ((PCon "Forall" PWild PWild (PVar "auths") (PVar "residual") (PVar "force") (PVar "mono"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "id")) (EApp (EApp (EVar "IdMap.delete") (EVar "id")) (EVar "acc")))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "r")) (EApp (EApp (EVar "authTermIds") (EFieldAccess (EVar "r") "arUpper")) (EApp (EApp (EVar "authTermIds") (EFieldAccess (EVar "r") "arLower")) (EVar "acc"))))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EApp (EApp (EVar "rowAuthIds") (EVar "force")) (EVar "Tip")))) (EVar "residual"))) (EVar "auths")))
 (DTypeSig false "failureMentions" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "SummaryFailure") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "failureMentions" ((PCon "Tip") PWild) (EVar "False"))
 (DFunDef false "failureMentions" ((PVar "ids") (PVar "failure")) (EMatch (EFieldAccess (EVar "failure") "esfAuthority") (arm (PCon "Some" (PTuple (PVar "lo") (PVar "hi"))) () (EApp (EApp (EVar "anyList") (ELam ((PVar "c")) (EApp (EApp (EVar "IdMap.has") (EApp (EVar "authvarId") (EVar "c"))) (EVar "ids")))) (EBinOp "++" (EApp (EVar "authVars") (EVar "lo")) (EApp (EVar "authVars") (EVar "hi"))))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "reportUnsolvedExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyCon "Unit"))))
-(DFunDef false "reportUnsolvedExport" ((PVar "grouped") (PTuple (PVar "name") PWild)) (EBlock (DoLet false false (PVar "loc") (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "grouped")) (arm (PCons (PTuple PWild (PVar "body")) PWild) () (EApp (EVar "exprLoc") (EVar "body"))) (arm (PList) () (EVar "None")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-EXPORT-UNSOLVED-AUTHORITY"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Exported binding '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' has an authority in its type that nothing in this module determines: the value restriction keeps it from being generalized, and an importer cannot supply it later. Give '"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' a type signature that names the authority, or use it in this module at the authority it is meant for")))))))
+(DTypeSig false "reportUnsolvedExport" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))))
+(DFunDef false "reportUnsolvedExport" ((PVar "grouped") (PVar "seen") (PTuple (PVar "name") (PVar "ids"))) (EIf (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") PWild) (EBinOp "&&" (EVar "acc") (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen"))))) (EVar "True")) (EVar "ids")) (EVar "seen") (EBlock (DoLet false false (PVar "loc") (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "grouped")) (arm (PCons (PTuple PWild (PVar "body")) PWild) () (EApp (EVar "firstExprLoc") (EVar "body"))) (arm (PList) () (EVar "None")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-EXPORT-UNSOLVED-AUTHORITY"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Exported binding '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' has an authority in its type that nothing in this module determines: it belongs to a value the value restriction keeps from being generalized (this binding or one it uses), so no use in an importing module can supply it. Give '"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "', or the value it uses, a type signature that names the authority, or use it in this module at the authority it is meant for"))))) (DoExpr (EApp (EApp (EVar "IdMap.union") (EVar "seen")) (EVar "ids"))))))
 (DTypeSig false "depsOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "depsOf" ((PVar "name") (PVar "nameSet") (PVar "cbn")) (EApp (EApp (EVar "filterNonSelf") (EVar "name")) (EApp (EApp (EVar "keepGroupNames") (EVar "nameSet")) (EApp (EVar "dedup") (EApp (EVar "groupRefs") (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "cbn")))))))
 (DTypeSig false "groupRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))

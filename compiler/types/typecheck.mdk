@@ -325,6 +325,7 @@ import types.registry.{
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
+  firstExprLoc,
   programIsCore,
   stampBindingIds,
   stampTopScope,
@@ -21652,34 +21653,8 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = fold processLetGroup env (letGroupComponents binds)
+  let env2 = processLetGroup env binds
   infer env2 body
-
--- A `where` block is checked one dependency component at a time, a
--- component's dependencies first, as a module's top level is: a binding that
--- only USES a sibling sees it generalized, rather than sharing its type
--- variables as a member of one recursive group would.  Without it an
--- authority relation a helper owes (`rd (Dir p) = readUnder h p`) is shared
--- by every sibling that calls the helper, and a group decides it (#3462).
--- Members keep their source order inside a component.  A block that repeats a
--- name stays one group: its components are not well defined.
-letGroupComponents : List LetBind -> List (List LetBind)
-letGroupComponents binds =
-  let names = map letBindName binds
-  let nameSet = namesToSet names omEmpty
-  if omSize nameSet < listLen names then
-    [binds]
-  else
-    let grouped =
-      fold
-        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
-        omEmpty
-        binds
-    map
-      (component =>
-        let members = namesToSet component omEmpty
-        filterList (b => omHasKey (letBindName b) members) binds)
-      (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -39263,7 +39238,7 @@ processTopGroups env sigs defs names exported =
   let _ =
     reportEffectSummaryFailures
       (filterList (f => not (failureMentions unsolvedIds f)) failures)
-  let _ = fold (_ u => reportUnsolvedExport grouped u) () unsolved
+  let _ = fold (seen u => reportUnsolvedExport grouped seen u) Tip unsolved
   result
 
 -- The authority cells an exported binding's published type holds unquantified:
@@ -39287,10 +39262,13 @@ rootCellsOf exported schemes =
     schemes
 
 unquantifiedAuthIds : Scheme -> Map Int Unit
-unquantifiedAuthIds (Forall _ _ auths _ force mono) =
+unquantifiedAuthIds (Forall _ _ auths residual force mono) =
   fold
     (acc id => IdMap.delete id acc)
-    (authIdsIn mono (rowAuthIds force Tip))
+    (fold
+      (acc r => authTermIds r.arUpper (authTermIds r.arLower acc))
+      (authIdsIn mono (rowAuthIds force Tip))
+      residual)
     auths
 
 failureMentions : Map Int Unit -> SummaryFailure (Option Loc, String) -> Bool
@@ -39300,21 +39278,28 @@ failureMentions ids failure = match failure.esfAuthority
     anyList (c => IdMap.has (authvarId c) ids) (authVars lo ++ authVars hi)
   None => False
 
--- An exported binding whose type still holds a cell after the root solved:
--- nothing in its module bounds it below, and an importer cannot supply it
--- later.  Its obligations are this failure, not separate ones.
+-- An exported binding whose published type (or residual context) still holds
+-- a cell after the root solved: nothing in its module bounds it below, and an
+-- importer cannot supply it later.  Each cell is reported once, at the first
+-- exported binding that holds it; the obligations over it are this failure,
+-- not separate ones.  Located at the binding's first located expression.
 reportUnsolvedExport : OrdMap (List (List Pat, Expr)) ->
+  Map Int Unit ->
   (String, Map Int Unit) ->
-  Unit
-reportUnsolvedExport grouped (name, _) =
-  let loc = match clausesOf name grouped
-    (_, body) :: _ => exprLoc body
-    [] => None
-  pushTypeErrorAt
-    "T-EXPORT-UNSOLVED-AUTHORITY"
-    loc
-    "Exported binding '\{name}' has an authority in its type that nothing in this module determines: the value restriction keeps it from being generalized, and an importer cannot supply it later. Give '\{name}' a type signature that names the authority, or use it in this module at the authority it is meant for"
-
+  Map Int Unit
+reportUnsolvedExport grouped seen (name, ids) =
+  if IdMap.foldlWithKey (acc id _ => acc && IdMap.has id seen) True ids then
+    seen
+  else
+    let loc = match clausesOf name grouped
+      (_, body) :: _ => firstExprLoc body
+      [] => None
+    let _ =
+      pushTypeErrorAt
+        "T-EXPORT-UNSOLVED-AUTHORITY"
+        loc
+        "Exported binding '\{name}' has an authority in its type that nothing in this module determines: it belongs to a value the value restriction keeps from being generalized (this binding or one it uses), so no use in an importing module can supply it. Give '\{name}', or the value it uses, a type signature that names the authority, or use it in this module at the authority it is meant for"
+    IdMap.union seen ids
 -- per-name dependencies: the other top-level names a binding's bodies reference
 -- (a conservative over-approximation via all free EVars is fine — only names
 -- that are themselves groups matter).  Consumed by depGraphMap → Tarjan.

@@ -1658,7 +1658,6 @@ letBindName : LetBind -> String
 letBindNameTc : LetBind -> String
 letBindNamesTc : List LetBind -> List String
 letBindSites : LetBind -> List (Ref Route)
-letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letRecNonFunctionMsg : String -> String
 litType : Lit -> Mono
@@ -2404,7 +2403,7 @@ reportUnboundAuthorityNames : Ty -> SigVars -> Unit
 reportUnboundAuthorityNamesIn : List Ty -> SigVars -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
-reportUnsolvedExport : Map String (List (List Pat, Expr)) -> (String, Map Int Unit) -> Unit
+reportUnsolvedExport : Map String (List (List Pat, Expr)) -> Map Int Unit -> (String, Map Int Unit) -> Map Int Unit
 reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono

@@ -475,12 +475,12 @@ monomorphic cell, and each keeps its own residual over it: a local helper that u
 owes it. A component that reaches a local variable the binding does not
 quantify, or that another member of its binding group mentions (after the
 group's first solve, which may have linked one member's variable to
-another's), is decided in the group. A binding group is a set of bindings that
-reach each other: top-level definitions and a `where` block's bindings are
-split into such groups in dependency order, so a helper a sibling only calls
-is generalized first and keeps its own residual: a residual on one member would leave the
-other quantifying the same variable with no relation. Such a component is
-decided as before, and
+another's), is decided in the group: a residual on one member would leave the
+other quantifying the same variable with no relation. A binding group is a
+set of mutually dependent top-level definitions, or a whole `where` block, so
+a `where` sibling that only calls a residual-bearing helper shares it and the
+block decides the relation (splitting `where` blocks is #3487). Such a
+component is decided as before, and
 so is one bounded below by the domain's top, whose variable has no freedom
 left and is solved to it. A binding the value restriction keeps monomorphic
 has no context: the authorities of its type belong to the enclosing scope,

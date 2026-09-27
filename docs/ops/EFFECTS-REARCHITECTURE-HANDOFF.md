@@ -1092,16 +1092,28 @@ on a built binary beside a control, and each answered by a rule, not a case):
   context; `stash : Dir d -> Unit` over a monomorphic cell is accepted as too
   general.
 
-**#3462 review round 4** (whole diff on `ba7f925c2`): the new eligibility
-rule is sound (no launder across 105 probes, impl and default methods, a
-three-member where cycle, two modules), but a `where` block was one binding
-group, so a sibling that only CALLED a residual-bearing helper was refused
-(`readAll h ds = go ds where rd (Dir p) = readUnder h p; go …`; `main` and
-round 3 accepted it; round 3 also read outside the bound in the same shape).
-A `where` block is now split into dependency components as the top level is
-(`letGroupComponents`), which accepts the honest shapes, keeps every launder
-refused, and makes a `where` helper polymorphic in its siblings (docs/spec/
-SYNTAX.md); the spec says "binding group", not "recursive group".
+**#3462 review round 4** (whole diff on `ba7f925c2`): the eligibility rule
+held (no launder across 105 probes, impl and default methods, a three-member
+where cycle, two modules). But a `where` block is one binding group, so a
+sibling that only CALLS a residual-bearing helper
+(`readAll h ds = go ds where rd (Dir p) = readUnder h p; go …`) shares its
+authority and is refused; `main` accepts it (and, in the same shape, read
+outside the bound). Round 3's head read outside the bound there too.
+
+**#3462 review round 5** (on `c9960066b`, which split `where` blocks into
+dependency components): the split accepted round 4's honest shapes and kept
+every launder refused, but (a) it WIDENED an S0 that `main` has in the `let`
+form: a generalized helper returning a method's value (`g _ = def`) used at
+two types prints garbage from the built binary at exit 0 (#3486), and the
+split made the `where` form reach it; (b) per-component Num defaulting
+refused `where scale = 100; go y = y / scale` at Float. The split was
+reverted; dependency analysis for `where` is #3487 (after #3486 and a
+defaulting ruling), and round 4's honest shape is pinned as
+`test/must_fail_fixtures/3487-where-sibling-shares-helper-authority`. Also
+fixed from round 5: `T-EXPORT-UNSOLVED-AUTHORITY` is located at the binding's
+first located expression (`firstExprLoc`), reports each cell once, no longer
+says the value restriction holds a generalized function, and counts a cell
+named only by the residual context.
 
 **#3462 rulings** (Val, 2026-09-26, on Fable's advice; built on this branch):
 

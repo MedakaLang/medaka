@@ -1323,15 +1323,6 @@ test "a join with a local alternative is decided before its binding generalizes"
         (outer ++ "  h f\nuse : Int\nuse = outer False 100 (n => n)\n")),
   ]
 
--- A `where` block's bindings are checked in dependency order, as a module's
--- top level is: a helper its siblings only use is generalized before they
--- use it, so two siblings may use it at two types.
-test "a where helper is generalized before the siblings that use it" =
-  expectEqual
-    []
-    (errorsFor
-      "pair : (Int, Bool)\npair = (a, b)\n  where\n    g x = x\n    a = g 1\n    b = g True\n")
-
 test "a join the result's own use shapes keeps each alternative's row" = expectAll
   [
     expectEqual
