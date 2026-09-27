@@ -1608,10 +1608,11 @@ defaultFnName ifaceWord method key =
 defaultFnPrefix : String
 defaultFnPrefix = "mdk_default_"
 
--- the lifted LLVM name of a tagged impl method: `mdk_impl_<tag>_<method>`.  Type
--- heads and method names are alphanumeric identifiers (an operator like `+` is a
--- `CBinPrim`, never a method name here), so the concatenation is always a legal
--- LLVM symbol — clang would reject it loudly otherwise, which the gate catches.
+-- the lifted LLVM name of a tagged impl method: `mdk_impl_<symTag>_<method>`.
+-- [symTag] is already a legal identifier (`implFnSymTag` spells it through
+-- `injectiveIdent`), and method names are alphanumeric identifiers (an operator
+-- like `+` is a `CBinPrim`, never a method name here), so the concatenation is a
+-- legal LLVM symbol — clang would reject it loudly otherwise, which the gate catches.
 implFnName : String -> String -> String
 implFnName tag method = "mdk_impl_\{tag}_\{method}"
 
@@ -1619,8 +1620,10 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- emitted/dispatched under.  Two impls of one method that share a head tycon but
 -- differ in type args (`Def (MyPair Int Bool)` vs `Def (MyPair Bool Int)`) must NOT
 -- collide on `mdk_impl_<head>_<method>` — they need distinct bodies.  When the head
--- `tag` is the SOLE impl of `(method, head)` (the common case) → the bare head tag,
--- so every existing impl's symbol stays byte-identical (fixpoint-safe).  On a
+-- `tag` is the SOLE impl of `(method, head)` (the common case) → the head tag
+-- through `injectiveIdent`: a prelude or builtin head is an identifier and maps to
+-- itself, a module-qualified head (`app.T`, `route_key.typeTagOf`) is escaped, so
+-- two modules' same-named types never share a symbol (#1397).  On a
 -- collision → the INJECTIVELY encoded canonical full-type `key`, byte-distinct per
 -- impl.  #1950: this used to be a lossy `[^A-Za-z0-9_] → _` collapse, under which
 -- two keys differing ONLY in those positions landed on one symbol.
@@ -1630,7 +1633,10 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- so emitMethod's `implFnSymE` and emitGroup's name agree.
 implFnSymTag : List CImplEntry -> String -> String -> String -> String
 implFnSymTag entries method tag key =
-  if headTagUnique entries method tag then tag else injectiveIdent key
+  if headTagUnique entries method tag then
+    injectiveIdent tag
+  else
+    injectiveIdent key
 
 -- The exact impl symbols exported by a standalone prelude object.  A later
 -- program can add a same-(method, head) impl, changing the whole-program C7

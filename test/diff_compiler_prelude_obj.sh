@@ -141,8 +141,8 @@ if ! MEDAKA_STRICT=1 "$MEDAKA" build --allow-internal --keep-ir \
   -o "$abi" >"$abi.log" 2>&1; then
   echo "FAIL: could not inspect selected-interface impl ABI"
   fail=$((fail+1))
-elif ! grep -Eq '^define i64 @mdk_impl_Cat_szK\(i64 [^,()]+\) \{' "$abi.ll" \
-  || ! grep -Eq 'call i64 @mdk_impl_Cat_szK\(i64 [^,()]+\)' "$abi.ll"; then
+elif ! grep -Eq '^define i64 @mdk_impl_zZmodels_2e_Cat_szK\(i64 [^,()]+\) \{' "$abi.ll" \
+  || ! grep -Eq 'call i64 @mdk_impl_zZmodels_2e_Cat_szK\(i64 [^,()]+\)' "$abi.ll"; then
   echo "FAIL: unconstrained IA.szK impl retained a foreign method-dictionary prefix"
   fail=$((fail+1))
 fi

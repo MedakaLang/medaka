@@ -239,22 +239,22 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_Int_zero
   ret i64 %t2
 }
-; mdk-module program
-define i64 @mdk_force_$memo_Flag_zero() {
+; mdk-module $memo_zZ_5f
+define i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_$memo_Flag_zero
+  %t0 = load i8, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_$memo_Flag_zero
+  %t1 = load i64, ptr @mdk_g_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.$memo_Flag_zero)
+  call void @mdk_cyclic_value(ptr @.gname.$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_$memo_Flag_zero
-  %t2 = call i64 @mdk_impl_Flag_zero()
-  store i64 %t2, ptr @mdk_g_$memo_Flag_zero
-  store i8 2, ptr @mdk_gs_$memo_Flag_zero
+  store i8 1, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
+  %t2 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_zero()
+  store i64 %t2, ptr @mdk_g_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
+  store i8 2, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
   ret i64 %t2
 }
 ; mdk-module program
@@ -288,7 +288,7 @@ lz_forcing:
   unreachable
 lz_unforced:
   store i8 1, ptr @mdk_gs___user____flagZero
-  %t2 = call i64 @mdk_force_$memo_Flag_zero()
+  %t2 = call i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero()
   store i64 %t2, ptr @mdk_g___user____flagZero
   store i8 2, ptr @mdk_gs___user____flagZero
   ret i64 %t2
@@ -299,8 +299,8 @@ entry:
   ret i64 1
 }
 
-; mdk-module impl:Flag_zero
-define i64 @mdk_impl_Flag_zero() {
+; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Flag_zero
+define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
 entry:
   ret i64 1
 }
@@ -311,10 +311,10 @@ entry:
 @mdk_g_$memo_Int_zero = global i64 0
 ; mdk-module program
 @mdk_gs_$memo_Int_zero = global i8 0
-; mdk-module program
-@mdk_g_$memo_Flag_zero = global i64 0
-; mdk-module program
-@mdk_gs_$memo_Flag_zero = global i8 0
+; mdk-module $memo_zZ_5f
+@mdk_g_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero = global i64 0
+; mdk-module $memo_zZ_5f
+@mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero = global i8 0
 ; mdk-module program
 @mdk_g___user____intZero = global i64 0
 ; mdk-module program
@@ -325,8 +325,8 @@ entry:
 @mdk_gs___user____flagZero = global i8 0
 ; mdk-module program
 @.gname.$memo_Int_zero = private unnamed_addr constant [15 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\7A\65\72\6F\00"
-; mdk-module program
-@.gname.$memo_Flag_zero = private unnamed_addr constant [16 x i8] c"\24\6D\65\6D\6F\5F\46\6C\61\67\5F\7A\65\72\6F\00"
+; mdk-module $memo_zZ_5f
+@.gname.$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero = private unnamed_addr constant [42 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\32\65\5F\46\6C\61\67\5F\7A\65\72\6F\00"
 ; mdk-module program
 @.gname.__user____intZero = private unnamed_addr constant [18 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\69\6E\74\5A\65\72\6F\00"
 ; mdk-module program

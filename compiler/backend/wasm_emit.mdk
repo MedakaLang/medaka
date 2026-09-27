@@ -5769,7 +5769,8 @@ implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
--- the bare head (existing symbols unchanged); a genuine C7 collision (≥2 distinct
+-- the head tag through `injectiveIdent` (the identity on a prelude or builtin
+-- head; a module-qualified head is escaped, #1397); a genuine C7 collision (≥2 distinct
 -- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
 -- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
 -- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
@@ -5778,7 +5779,10 @@ implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 -- guard agree on the emitted symbol.
 implFnSymTagW : List CImplEntry -> String -> String -> String -> String
 implFnSymTagW entries method tag key =
-  if headTagUniqueW entries method tag then tag else injectiveIdent key
+  if headTagUniqueW entries method tag then
+    injectiveIdent tag
+  else
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct ones
 -- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl
@@ -12295,9 +12299,11 @@ reservedCtorArity _ = 0
 
 -- ── WAT type-name mangling ───────────────────────────────────────────────────
 -- a per-type root struct type name and a per-ctor struct type name.  Prefixed to
--- avoid colliding with the fixed $float / $boxint scaffolding.
+-- avoid colliding with the fixed $float / $boxint scaffolding.  The type word
+-- carries its module id (`my prog.T`, `café.T`), which need not be a WAT
+-- identifier, so it is spelled through `injectiveIdent`.
 typeRootName : String -> String
-typeRootName ty = "T_" ++ ty
+typeRootName ty = "T_" ++ injectiveIdent ty
 
 -- The per-ctor WasmGC struct type identifier.
 --
