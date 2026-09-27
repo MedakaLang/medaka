@@ -78,7 +78,9 @@
    native callee before it ships. Eval/Wasm retain value parity; Wasm's
    ordinary boxed `Int` carrier is outside this native constant-time claim. -}
 
-import array.{setInPlace}
+import bytes as B
+import mut_bytes as MB
+import u8 as U8
 import u64 as U64
 
 -- ── Constants ────────────────────────────────────────────────────────
@@ -115,8 +117,8 @@ foldR12 = 0x1000003d10000
 -- p - 2, the Fermat exponent for `feInverse`, as 32 big-endian bytes.
 --   p   = ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff fffffffe fffffc2f
 --   p-2 = ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff fffffffe fffffc2d
-expPMinus2 : Array Int
-expPMinus2 = [|
+expPMinus2 : B.Bytes
+expPMinus2 = B.fromU8Array [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2d
@@ -227,28 +229,28 @@ canonicalize raw =
 -- ── Serialization ────────────────────────────────────────────────────
 
 -- The big-endian 64-bit word in `bs[off .. off + 7]`. `off` is public.
-wordAt : Array Int -> Int -> U64
+wordAt : B.Bytes -> Int -> U64
 wordAt bs off =
   U64.bitOr
     (U64.bitOr
       (U64.bitOr
-        (U64.shiftLeft (U64.truncate bs[off]) 56)
-        (U64.shiftLeft (U64.truncate bs[off + 1]) 48))
+        (U64.shiftLeft (U64.fromU8 bs[off]) 56)
+        (U64.shiftLeft (U64.fromU8 bs[off + 1]) 48))
       (U64.bitOr
-        (U64.shiftLeft (U64.truncate bs[off + 2]) 40)
-        (U64.shiftLeft (U64.truncate bs[off + 3]) 32)))
+        (U64.shiftLeft (U64.fromU8 bs[off + 2]) 40)
+        (U64.shiftLeft (U64.fromU8 bs[off + 3]) 32)))
     (U64.bitOr
       (U64.bitOr
-        (U64.shiftLeft (U64.truncate bs[off + 4]) 24)
-        (U64.shiftLeft (U64.truncate bs[off + 5]) 16))
+        (U64.shiftLeft (U64.fromU8 bs[off + 4]) 24)
+        (U64.shiftLeft (U64.fromU8 bs[off + 5]) 16))
       (U64.bitOr
-        (U64.shiftLeft (U64.truncate bs[off + 6]) 8)
-        (U64.truncate bs[off + 7])))
+        (U64.shiftLeft (U64.fromU8 bs[off + 6]) 8)
+        (U64.fromU8 bs[off + 7])))
 
 -- 32 big-endian bytes -> the exact 256-bit value as 5 limbs (no reduction).
 -- The four 64-bit words w0 (least significant) .. w3 split at 52-bit limb
 -- boundaries.
-limbsOfBytes : Array Int -> Array Int
+limbsOfBytes : B.Bytes -> Array Int
 limbsOfBytes bs =
   let w3 = wordAt bs 0
   let w2 = wordAt bs 8
@@ -273,33 +275,15 @@ limbsOfBytes bs =
   let n4 = U64.toIntTruncating (U64.shiftRight w3 16)
   [|n0, n1, n2, n3, n4|]
 
--- Is this a well-formed 32-byte array with every element in 0..255?
-byteArrayOk : Array Int -> Bool
-byteArrayOk bs = arrayLength bs == 32 && byteRangeGo bs 0
-
-byteRangeGo : Array Int -> Int -> Bool
-byteRangeGo bs i =
-  if i >= 32 then
-    True
-  else
-    let b = bs[i]
-    if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
-
 -- | Parse 32 big-endian bytes as a CANONICAL field element: a value >= p is
 --   REJECTED rather than reduced. This is the entry point a wire format
 --   should use — an encoder that emits a non-canonical 32 bytes is producing
---   a value no verifier will agree with.
---
---   The `0 <= b <= 255` element contract IS enforced here (and the length):
---   an out-of-range element is an `Err`, never silently taken mod 256.
+--   a value no verifier will agree with. A length other than 32 is an `Err`.
 export
-feFromBytes : Array Int -> Result String Fe
+feFromBytes : B.Bytes -> Result String Fe
 feFromBytes bs =
-  if arrayLength bs /= 32 then
-    Err
-      "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
-  else if not (byteArrayOk bs) then
-    Err "field.feFromBytes: every element must be a byte in 0..255"
+  if B.length bs /= 32 then
+    Err "field.feFromBytes: expected 32 bytes, got \{intToString (B.length bs)}"
   else
     let raw = limbsOfBytes bs
     let reduced = canonicalize raw
@@ -314,64 +298,31 @@ feFromBytes bs =
 --   `secp256k1_fe_set_b32_mod` and is what the reference corpus's `red` rows
 --   grade. Use `feFromBytes` when the input is supposed to be canonical.
 --
---   The element contract is enforced here too, but this function is not
---   `Result`-typed, so a violation PANICS rather than aliasing mod 256. A
---   loud abort is the point: silently masking an out-of-range element would
---   compute a different value than the caller wrote.
+--   This function is not `Result`-typed, so a length other than 32 PANICS.
 export
-feFromBytesReduce : Array Int -> Fe
+feFromBytesReduce : B.Bytes -> Fe
 feFromBytesReduce bs =
-  if arrayLength bs /= 32 then
+  if B.length bs /= 32 then
     panic
-      "field.feFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
-  else if not (byteArrayOk bs) then
-    panic "field.feFromBytesReduce: every element must be a byte in 0..255"
+      "field.feFromBytesReduce: expected 32 bytes, got \{intToString (B.length bs)}"
   else
     canonicalize (limbsOfBytes bs)
 
 -- Write `w` as 8 big-endian bytes at `out[off .. off + 7]`. `off` is public.
-putWord : Array Int -> Int -> U64 -> Unit
+putWord : MB.MutBytes -> Int -> U64 -> Unit
 putWord out off w =
-  let () =
-    setInPlace
-      off
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 56) 255))
-      out
-  let () =
-    setInPlace
-      (off + 1)
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 48) 255))
-      out
-  let () =
-    setInPlace
-      (off + 2)
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 40) 255))
-      out
-  let () =
-    setInPlace
-      (off + 3)
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 32) 255))
-      out
-  let () =
-    setInPlace
-      (off + 4)
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 24) 255))
-      out
-  let () =
-    setInPlace
-      (off + 5)
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 16) 255))
-      out
-  let () =
-    setInPlace
-      (off + 6)
-      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 8) 255))
-      out
-  setInPlace (off + 7) (U64.toIntTruncating (U64.bitAnd w 255)) out
+  let () = MB.setInPlace off (U8.truncateU64 (U64.shiftRight w 56)) out
+  let () = MB.setInPlace (off + 1) (U8.truncateU64 (U64.shiftRight w 48)) out
+  let () = MB.setInPlace (off + 2) (U8.truncateU64 (U64.shiftRight w 40)) out
+  let () = MB.setInPlace (off + 3) (U8.truncateU64 (U64.shiftRight w 32)) out
+  let () = MB.setInPlace (off + 4) (U8.truncateU64 (U64.shiftRight w 24)) out
+  let () = MB.setInPlace (off + 5) (U8.truncateU64 (U64.shiftRight w 16)) out
+  let () = MB.setInPlace (off + 6) (U8.truncateU64 (U64.shiftRight w 8)) out
+  MB.setInPlace (off + 7) (U8.truncateU64 w) out
 
 -- | The canonical 32 big-endian bytes of a field element.
 export
-feToBytes : Fe -> Array Int
+feToBytes : Fe -> B.Bytes
 feToBytes a =
   let n = rawFe a
   let n0 = U64.truncate n[0]
@@ -379,7 +330,7 @@ feToBytes a =
   let n2 = U64.truncate n[2]
   let n3 = U64.truncate n[3]
   let n4 = U64.truncate n[4]
-  let out = arrayMake 32 0
+  let out = MB.make 32
   let () =
     putWord out 0 (U64.bitOr (U64.shiftRight n3 36) (U64.shiftLeft n4 16))
   let () =
@@ -387,7 +338,7 @@ feToBytes a =
   let () =
     putWord out 16 (U64.bitOr (U64.shiftRight n1 12) (U64.shiftLeft n2 40))
   let () = putWord out 24 (U64.bitOr n0 (U64.shiftLeft n1 52))
-  out
+  MB.freeze out
 
 -- ── Comparison ───────────────────────────────────────────────────────
 
@@ -745,5 +696,5 @@ powGo base bitIdx acc =
 -- Bit `k` of p-2, read out of its 32 big-endian bytes.
 expBit : Int -> Bool
 expBit k =
-  let byte = expPMinus2[31 - shiftRight k 3]
+  let byte = U8.toInt expPMinus2[31 - shiftRight k 3]
   bitAnd (shiftRight byte (k - shiftLeft (shiftRight k 3) 3)) 1 == 1

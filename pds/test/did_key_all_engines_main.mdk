@@ -2,7 +2,7 @@
    `did:key` corpus and the public decoder's malformed-input boundary. -}
 
 import array as A
-import bytes.{toArray}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{split, stripPrefix, toInt, trim}
@@ -16,11 +16,16 @@ import lib.multiformats.{
   uvarintDecode,
 }
 import lib.sign.{publicKeyCompressed, publicKeyFromCompressed}
+import bytes.{Bytes}
 
 mustHex : String -> Array Int
 mustHex text =
   toArray
     (resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text))
+
+mustHexBytes : String -> Bytes
+mustHexBytes text =
+  resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text)
 
 mustInt : String -> Int
 mustInt text =
@@ -39,12 +44,13 @@ canonicalPayload did keyBytes =
   let multibase = mustStrip "did:key:" did
   match multibaseBase58btcDecode multibase
     Err _ => False
-    Ok payload => match uvarintDecode payload
+    Ok payloadBytes => match uvarintDecode payloadBytes
       Err _ => False
       Ok (codec, consumed) =>
+        let prefix = toArray (multicodecPrefix multicodecSecp256k1Pub)
         codec == multicodecSecp256k1Pub
-          && consumed == arrayLength (multicodecPrefix multicodecSecp256k1Pub)
-          && payload == multicodecPrefix multicodecSecp256k1Pub ++ keyBytes
+          && consumed == arrayLength prefix
+          && toArray payloadBytes == prefix ++ keyBytes
 
 runRow : Int -> String -> <IO> Unit
 runRow expectedId line = match split " " (trim line)
@@ -54,7 +60,8 @@ runRow expectedId line = match split " " (trim line)
       panic "did_key_all_engines: row id \{idText} out of order"
     else
       let keyBytes = mustHex keyHex
-      match publicKeyFromCompressed keyBytes
+      let keyBlock = mustHexBytes keyHex
+      match publicKeyFromCompressed keyBlock
         Err message =>
           panic
             "did_key_all_engines: row \{idText} public key rejected: \{message}"
@@ -68,7 +75,7 @@ runRow expectedId line = match split " " (trim line)
               let recompressed = publicKeyCompressed decoded
               let ok =
                 encoded == expectedDid
-                  && recompressed == keyBytes
+                  && recompressed == keyBlock
                   && didKeyFromPublicKey decoded == expectedDid
                   && canonicalPayload expectedDid keyBytes
               if ok then
@@ -85,7 +92,12 @@ runRows (row :: rest) count =
   runRows rest (count + 1)
 
 payloadDid : Array Int -> String
-payloadDid payload = "did:key:" ++ multibaseBase58btc payload
+payloadDid payload =
+  -- Door: masked — every call site builds `payload` from already-valid
+  -- bytes (a multicodec prefix, a compressed key, or literal in-range
+  -- constants), so the domain holds by construction even where the SHAPE
+  -- is deliberately malformed for this boundary test.
+  "did:key:" ++ multibaseBase58btc (fromArrayAssumeByteDomain payload)
 
 reject : String -> String -> <IO> Int
 reject label did = match publicKeyFromDidKey did
@@ -100,7 +112,7 @@ runMalformed : Array Int -> String -> <IO> Int
 runMalformed keyBytes canonicalDid =
   let didBody = mustStrip "did:key:" canonicalDid
   let base58Body = mustStrip "z" didBody
-  let prefix = multicodecPrefix multicodecSecp256k1Pub
+  let prefix = toArray (multicodecPrefix multicodecSecp256k1Pub)
   let invalidPrefix = arrayCopy keyBytes
   let () = A.setInPlace 0 4 invalidPrefix
   let xAtOrAboveP = arrayMake 33 255
@@ -115,7 +127,7 @@ runMalformed keyBytes canonicalDid =
   let r6 =
     reject
       "wrong-codec"
-      (payloadDid (multicodecPrefix multicodecP256Pub ++ keyBytes))
+      (payloadDid (toArray (multicodecPrefix multicodecP256Pub) ++ keyBytes))
   let r7 =
     reject "nonminimal-codec" (payloadDid ([|0xe7, 0x81, 0x00|] ++ keyBytes))
   let r8 = reject "empty-payload" (payloadDid [||])

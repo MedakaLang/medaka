@@ -95,30 +95,33 @@ write_source_manifest() {
 # below proves the property on the linked binary: zero key-tainted reports.
 expected_internal_source_manifest() {
   cat <<'EOF'
-1376420778 29785  pds/lib/field.mdk
-1303044162 44815  pds/lib/scalar.mdk
+3731538746 28626  pds/lib/field.mdk
+155881618 41112  pds/lib/scalar.mdk
 2724272250 11762  stdlib/crypto/sha256.mdk
 2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-1062562400 1459  pds/lib/hmac_sha256.mdk
-1706692293 25394  pds/lib/secp256k1.mdk
-1633608214 4799  pds/test/constant_time_signing_main.mdk
+2873386462 1355  pds/lib/hmac_sha256.mdk
+2537316894 24171  pds/lib/secp256k1.mdk
+3443896964 4724  pds/test/constant_time_signing_main.mdk
 EOF
 }
 
+# sign.mdk re-pinned 2026-09-27: it gained the transitional
+# `secretKeyFromByteArray` (a fixed-control byte-domain fold ahead of
+# `secretKeyFromBytes`), which neither signing driver reaches.
 expected_public_source_manifest() {
   cat <<'EOF'
-1376420778 29785  pds/lib/field.mdk
-1303044162 44815  pds/lib/scalar.mdk
+3731538746 28626  pds/lib/field.mdk
+155881618 41112  pds/lib/scalar.mdk
 2724272250 11762  stdlib/crypto/sha256.mdk
 2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-1062562400 1459  pds/lib/hmac_sha256.mdk
-1706692293 25394  pds/lib/secp256k1.mdk
-1576054259 4921  pds/lib/sign.mdk
-2846312137 3153  pds/test/constant_time_signing_public_main.mdk
+2873386462 1355  pds/lib/hmac_sha256.mdk
+2537316894 24171  pds/lib/secp256k1.mdk
+1970691876 5699  pds/lib/sign.mdk
+3773914323 3185  pds/test/constant_time_signing_public_main.mdk
 EOF
 }
 
@@ -200,7 +203,7 @@ internal_source_routes_ok() {
   grep -F -q 'let safeNonce = scSelect (bitXor nonceValidBit 1) nonce scOne' "$secp" || return 1
   grep -F -q 'let lowS = scSelect (scHighBit rawS) rawS (scNegateCt rawS)' "$secp" || return 1
   tr -s '[:space:]' ' ' < "$secp" | grep -F -q 'if scIsZero r || scIsZero s || scIsHigh s then False' || return 1
-  grep -F -q 'let out = arrayMake 64 0' "$secp" || return 1
+  grep -F -q 'let out = MB.make 64' "$secp" || return 1
   grep -F -q 'let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)' "$secp" || return 1
   grep -F -q 'let r = scFromFixedBytesReduce (feToBytes x)' "$secp" || return 1
   grep -F -q 'scFromFixedBytesReduce bs = reduce256 (limbsOfBytes bs)' "$scalar" || return 1
@@ -215,12 +218,15 @@ internal_source_routes_ok() {
   [ "$(grep -F -c 'let inner = sha256 (concat [keyPad normalized 0x36, message])' "$hmac" || true)" -eq 1 ] || return 1
   [ "$(grep -F -c 'sha256 (concat [keyPad normalized 0x5c, inner])' "$hmac" || true)" -eq 1 ] || return 1
   # The 32-byte guard is the whole of pds/lib/hmac_sha256.mdk: it must still
-  # reject every other length, and it must admit the secret key and message
-  # into `Bytes` through the unchecked door, never the scanning `fromArray`.
-  grep -F -q 'if arrayLength key /= keyBytes then' "$guard" || return 1
-  [ "$(grep -F -c '(hmacSha256' "$guard" || true)" -eq 1 ] || return 1
-  [ "$(grep -F -c '(fromArrayAssumeByteDomain key)' "$guard" || true)" -eq 1 ] || return 1
-  [ "$(grep -F -c '(fromArrayAssumeByteDomain message))' "$guard" || true)" -eq 1 ] || return 1
+  # reject every other length, and it hands key and message to the schedule
+  # unchanged. Re-pinned 2026-09-27: the guard takes `Bytes`, whose type is
+  # the byte domain, so the unchecked doors it had are gone, and no
+  # conversion of either kind may come back: the masking door would reopen a
+  # path from `Array Int`, and the scanning `fromArray` would branch on each
+  # secret byte. Its one test is on the public length.
+  grep -F -q 'if B.length key /= keyBytes then' "$guard" || return 1
+  [ "$(grep -F -c 'hmacSha256 key message' "$guard" || true)" -eq 1 ] || return 1
+  if grep -F -q 'fromArrayAssumeByteDomain' "$guard"; then return 1; fi
   if grep -E -q '(^|[^A-Za-z])fromArray([^A-Za-z]|$)' "$guard"; then return 1; fi
   grep -F -q 'sha256 msg = sha256AssumeByteDomainFrom h0Init 0 msg' "$sha" || return 1
   return 0
@@ -236,7 +242,10 @@ public_source_routes_ok() {
   tree=$1
   sign="$tree/pds/lib/sign.mdk"
   driver="$tree/pds/test/constant_time_signing_public_main.mdk"
-  [ "$(grep -c '^import ' "$driver" || true)" -eq 1 ] || return 1
+  # Two imports since 2026-09-27: lib.sign, and the `Bytes` constructors the
+  # driver builds its fixed inputs with.
+  [ "$(grep -c '^import ' "$driver" || true)" -eq 2 ] || return 1
+  grep -F -x -q 'import bytes.{Bytes, fromU8Array}' "$driver" || return 1
   grep -F -q 'import lib.sign.{' "$driver" || return 1
   if grep -E -q '^import lib\.(scalar|secp256k1)' "$driver"; then return 1; fi
   if grep -F -q 'ForTest' "$driver"; then return 1; fi
@@ -429,12 +438,12 @@ restore_source_tree
 # graph. Each must turn the direct public audit red and restore byte-exactly.
 apply_mutation P01 "$WORK/pds/lib/sign.mdk" \
   'let (validBit, signature) = ecdsaSignDigest scalar digest' \
-  's/let \(validBit, signature\) = ecdsaSignDigest scalar digest/let signature = match ecdsaSignatureFromCompact (arrayMake 64 1)\n        Ok fixed => fixed\n        Err message => panic message\n      let validBit = 1/'
+  's/let \(validBit, signature\) = ecdsaSignDigest scalar digest/let signature = match ecdsaSignatureFromCompact (B.fromU8Array (arrayMake 64 1))\n        Ok fixed => fixed\n        Err message => panic message\n      let validBit = 1/'
 expect_public_route_red 'P01 public signDigest replaced by fixed compact parsing'
 
 apply_mutation P02 "$WORK/pds/lib/sign.mdk" \
   'publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))' \
-  's/publicKeyForSecret key = PublicKey \(publicPointForSecret \(secretScalar key\)\)/publicKeyForSecret _ = match pointFromCompressed (arrayMake 33 0)\n  Ok point => PublicKey point\n  Err message => panic message/'
+  's/publicKeyForSecret key = PublicKey \(publicPointForSecret \(secretScalar key\)\)/publicKeyForSecret _ = match pointFromCompressed (B.fromU8Array (arrayMake 33 0))\n  Ok point => PublicKey point\n  Err message => panic message/'
 expect_public_route_red 'P02 public publicKeyForSecret replaced by fixed public-key parsing'
 
 apply_mutation P03 "$WORK/pds/test/constant_time_signing_public_main.mdk" \
@@ -475,8 +484,8 @@ apply_mutation M10 "$WORK/pds/lib/secp256k1.mdk" \
 expect_route_red 'M10 verifier high-S boundary disabled'
 
 apply_mutation M11 "$WORK/pds/lib/secp256k1.mdk" \
-  'let out = arrayMake 64 0' \
-  's/let out = arrayMake 64 0/let out = arrayMake 65 0/'
+  'let out = MB.make 64' \
+  's/let out = MB\.make 64/let out = MB.make 65/'
 expect_route_red 'M11 compact output fixed width drifted'
 
 cp "$WORK/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/wycheproof.baseline"
@@ -669,7 +678,20 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # `concat`/`concatFill`/`concatLength` (the ipad/opad concatenation, over a
 # two-element list). None of the eight reads a byte to decide anything; the
 # control grade below counts their branches. 123 definitions.
-[ "$closure_grade" = '1548379241 3660' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived 2026-09-27 when the signing stack moved to `Bytes`, symbol by
+# symbol against the 123 above. Out: the field
+# and scalar public byte validators (`byteArrayOk`, `byteRangeGo` in each),
+# the scalar's per-element byte scan (`scanSecretBytes`, `secretByteBit`),
+# `copySignatureHalf` (the one `copyBytesInto` now serves), the guard's two
+# doors (`mdk_bytes__fromArrayAssumeByteDomain`, `mdk_bytes__toArray`) and
+# `mdk_core__not`, which only the validators called. In: the `Bytes` index
+# (`mdk_impl_zZbytes_2e_Bytes_index`, `mdk_bytes__byteAt`), the constant
+# tables' `mdk_bytes__fromU8Array`/`fromU8ArrayFill`, the scratch buffers'
+# `mdk_mut_bytes__{make,setInPlace,fill,fillFrom,freeze}`, the scalar's
+# `putLimb__rw`, the RFC 6979 `filledBytes`, and the byte conversions
+# `mdk_u8__toInt`, `mdk_u8__truncateU64__rw`, `mdk_u64__fromU8__rw`. 127
+# definitions.
+[ "$closure_grade" = '3855056094 3710' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -756,7 +778,27 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # digestBytes 9 -> 10, processTail 1 -> 2, sha256AssumeByteDomainFrom 4 -> 6,
 # keyPad 3 -> 6, and the guard hmacSha256FixedKey 2 -> 5 (its two unchecked
 # doors and the `toArray` back).
-[ "$control_grade" = '2314314774 5655' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived 2026-09-27 for the signing stack on `Bytes`, row by row
+# against the grade above; the closure change is the one at the closure
+# grade. No surviving row's branch column grew, and two fell:
+# feFromBytesReduce and scFromBytesReduce 2 -> 1, their byte-domain scan gone
+# (the one left is the public length test). Every row that left held only
+# public control or, in scanSecretBytes and secretByteBit, the fixed-control
+# scan the type now makes unnecessary. The rows that entered branch on public
+# shape only: the `Bytes` index 3 and MutBytes.setInPlace 3 (the constructor
+# tag and the two tests of the public index), MutBytes.make 1 (a negative
+# length), freeze 1 (the tag), fill 1 and fillFrom 2 (the tag and the public
+# counter), fromU8ArrayFill 2 (its counter over a public constant table);
+# byteAt, filledBytes, putLimb__rw's three traps (the public offset) and the
+# u8/u64 conversions have no source branch. The byte reads and writes are now
+# `Bytes`/MutBytes calls, which the index/write/make columns (Array calls)
+# do not count, so those columns fell to 0 in wordAt__rw, putWord__rw,
+# feToBytes, limbsOfBytes, expBit (both), scalarLadder, copyBytesInto,
+# rfc6979Initialize, rfc6979Message33/97, scSecretCandidate32 and
+# signatureBytes, and the call column rose with them (wordAt__rw and
+# putWord__rw 8 -> 16, scToBytes 9 -> 19, beWord 0 -> 4, and so on).
+# hmacSha256FixedKey fell 5 -> 3 calls, its doors gone.
+[ "$control_grade" = '2372950205 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1021,7 +1063,15 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # that `mdk_bytes__toArray` was already in this union (secretScalar reads the
 # at-rest key through it), so seven `mdk_bytes__` helpers enter here rather
 # than eight. 134 -> 136 definitions.
-if [ "$public_closure_grade" != '811918273 4045' ] || [ "$public_control_grade" != '1896713597 6253' ]; then
+# Re-derived 2026-09-27 for the signing stack on `Bytes`: the same closure
+# and row changes as the internal grades above, plus three
+# rows that only the public consumer reaches. sign.digestBytesOk and
+# secp256k1.publicBytesOk leave (the digest's byte domain is the type's), so
+# signDigest falls 4 -> 3 branches and ecdsaVerifyDigest 7 -> 6, each keeping
+# only its public length test; secretScalar falls 2 -> 1 calls, since the
+# at-rest key is passed to the reducer as it is stored, with no `toArray`.
+# 136 -> 138 definitions.
+if [ "$public_closure_grade" != '78090211 4034' ] || [ "$public_control_grade" != '3211431579 6277' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
@@ -1096,8 +1146,9 @@ fi
 
 write_taint_probe() {
   cat > "$TAINT_PROBE" <<'EOF'
-import bytes.{fromArrayAssumeByteDomain}
+import bytes.{Bytes, fromArrayAssumeByteDomain, length}
 import hex.{encode}
+import u8 as U8
 import u64 as U64
 import lib.scalar.{scSecretCandidate}
 import lib.secp256k1.{
@@ -1114,17 +1165,17 @@ extern ctVbits : Int -> <FFI> Int
 extern ctGcCount : Int -> <FFI> Int
 extern ctLoadAddress : Int -> <FFI> Int
 
-digestBytes : Array Int
-digestBytes = arrayMake 32 0
+digestBytes : Bytes
+digestBytes = fromArrayAssumeByteDomain (arrayMake 32 0)
 
-declassifyAll : Array Int -> <FFI> Array Int
+declassifyAll : Bytes -> <FFI> Array Int
 declassifyAll bytes =
-  arrayMakeWith (arrayLength bytes) (i => ctDeclassify bytes[i])
+  arrayMakeWith (length bytes) (i => ctDeclassify (U8.toInt bytes[i]))
 
 probeKey : Int -> <IO, FFI> Unit
 probeKey k =
   let _ = ctTaintLoad k
-  let secretBytes = arrayMakeWith 32 ctSecretByte
+  let secretBytes = fromArrayAssumeByteDomain (arrayMakeWith 32 ctSecretByte)
   let (secretValid, scalar) = scSecretCandidate secretBytes
   if ctDeclassify secretValid /= 1 then
     println "key \{k} rejected"
@@ -1137,7 +1188,7 @@ probeKey k =
       let compact = ecdsaSignatureCompact signature
       let sigPublic = declassifyAll compact
       println
-        "key \{k} vbits \{validVbits} \{ctVbits pub[5]} \{ctVbits compact[0]} pub \{encode (fromArrayAssumeByteDomain pubPublic)} sig \{encode (fromArrayAssumeByteDomain sigPublic)}"
+        "key \{k} vbits \{validVbits} \{ctVbits (U8.toInt pub[5])} \{ctVbits (U8.toInt compact[0])} pub \{encode (fromArrayAssumeByteDomain pubPublic)} sig \{encode (fromArrayAssumeByteDomain sigPublic)}"
     else
       println "key \{k} exhausted"
 

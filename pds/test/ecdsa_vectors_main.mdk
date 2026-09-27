@@ -23,21 +23,23 @@ import lib.sign.{
 }
 import crypto.sha256.{sha256}
 import array as A
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes}
+import u8 as U8
 import hex.{decode, encode}
 import io.{readLines}
 import string.{split, toInt, trim}
 
-bytes : String -> Array Int
+bytes : String -> Bytes
 bytes value =
   if value == "-" then
-    [||]
+    B.fromU8Array [||]
   else match decode value
-    Ok decoded => toArray decoded
+    Ok decoded => decoded
     Err message => panic "ecdsa_vectors: malformed hex: \{message}"
 
-hexOf : Array Int -> String
-hexOf x = encode (fromArrayAssumeByteDomain x)
+hexOf : Bytes -> String
+hexOf x = encode x
 
 scalar : String -> Sc
 scalar value =
@@ -49,75 +51,43 @@ tcId value = optionOrPanic "ecdsa_vectors: invalid tcId: \{value}" (toInt value)
 bump : Array Int -> Int -> Unit
 bump counts i = A.setInPlace i (counts[i] + 1) counts
 
-copy32 : Array Int -> Array Int -> Int -> Int -> Unit
-copy32 input out offset i =
-  if i >= 32 then
-    ()
-  else
-    let () = A.setInPlace (offset + i) input[i] out
-    copy32 input out offset (i + 1)
+compactOf : Bytes -> Bytes -> Bytes
+compactOf r s = B.concat [r, s]
 
-compactOf : Array Int -> Array Int -> Array Int
-compactOf r s =
-  let out = arrayMake 64 0
-  let () = copy32 r out 0 0
-  let () = copy32 s out 32 0
-  out
+component : Bytes -> Int -> Bytes
+component compact offset = compact.[offset..offset + 32]
 
-component : Array Int -> Int -> Array Int
-component compact offset =
-  let out = arrayMake 32 0
-  let () = componentGo compact out offset 0
-  out
+zero32 : Bytes
+zero32 = B.fromU8Array (arrayMake 32 0)
 
-componentGo : Array Int -> Array Int -> Int -> Int -> Unit
-componentGo compact out offset i =
-  if i >= 32 then
-    ()
-  else
-    let () = A.setInPlace i compact[offset + i] out
-    componentGo compact out offset (i + 1)
-
-one32 : Array Int
+one32 : Bytes
 one32 = bytes "0000000000000000000000000000000000000000000000000000000000000001"
 
-two32 : Array Int
+two32 : Bytes
 two32 = bytes "0000000000000000000000000000000000000000000000000000000000000002"
 
-n32 : Array Int
+n32 : Bytes
 n32 = bytes "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
 
-nMinusOne32 : Array Int
+nMinusOne32 : Bytes
 nMinusOne32 =
   bytes "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140"
 
-copyPrefix : Array Int -> Array Int -> Int -> Unit
-copyPrefix input out i =
-  if i >= arrayLength input || i >= arrayLength out then
-    ()
-  else
-    let () = A.setInPlace i input[i] out
-    copyPrefix input out (i + 1)
+-- The first `n` bytes of `input`, zero-padded when `input` is shorter.
+withLength : Bytes -> Int -> Bytes
+withLength input n =
+  let kept = B.sliceClamped 0 n input
+  B.concat [kept, B.fromU8Array (arrayMake (n - B.length kept) 0)]
 
-withLength : Array Int -> Int -> Array Int
-withLength input length =
-  let out = arrayMake length 0
-  let () = copyPrefix input out 0
-  out
-
-runPublicBoundaryProbes : Array Int ->
-  String ->
-  Array Int ->
-  Array Int ->
-  <IO> Unit
+runPublicBoundaryProbes : Array Int -> String -> Bytes -> Bytes -> <IO> Unit
 runPublicBoundaryProbes counts keyHex digest compact =
   let r = component compact 0
   let s = component compact 32
   let compactOk =
     isErr (signatureFromCompact (withLength compact 63))
       && isErr (signatureFromCompact (withLength compact 65))
-      && isErr (signatureFromCompact (compactOf (arrayMake 32 0) s))
-      && isErr (signatureFromCompact (compactOf r (arrayMake 32 0)))
+      && isErr (signatureFromCompact (compactOf zero32 s))
+      && isErr (signatureFromCompact (compactOf r zero32))
       && isErr (signatureFromCompact (compactOf n32 s))
       && isErr (signatureFromCompact (compactOf r n32))
       && isErr (signatureFromCompact (compactOf r nMinusOne32))
@@ -138,32 +108,24 @@ runPublicBoundaryProbes counts keyHex digest compact =
         let () = bump counts 1
         println "FAIL public malformed-digest signature ingress: \{message}"
       Ok signature =>
-        let shortDigest = arrayMake 31 0
-        let longDigest = arrayMake 33 0
-        let lowDomain = withLength digest 32
-        let highDomain = withLength digest 32
-        let () = A.setInPlace 0 (-1) lowDomain
-        let () = A.setInPlace 31 256 highDomain
+        let shortDigest = withLength digest 31
+        let longDigest = withLength digest 33
         let publicKey = publicKeyForSecret secret
         let signOk =
           isErr (signDigest secret shortDigest)
             && isErr (signDigest secret longDigest)
-            && isErr (signDigest secret lowDomain)
-            && isErr (signDigest secret highDomain)
         let verifyOk =
           not (verifyDigest publicKey shortDigest signature)
             && not (verifyDigest publicKey longDigest signature)
-            && not (verifyDigest publicKey lowDomain signature)
-            && not (verifyDigest publicKey highDomain signature)
         if signOk && verifyOk then
           let () = bump counts 15
           println
-            "PUBLIC malformed-digest: PASS sign=4/4 reject verify=4/4 false"
+            "PUBLIC malformed-digest: PASS sign=2/2 reject verify=2/2 false"
         else
           let () = bump counts 1
           println "FAIL public malformed-digest probe"
 
-runExceptionalProbes : Array Int -> Sc -> Array Int -> Array Int -> <IO> Unit
+runExceptionalProbes : Array Int -> Sc -> Bytes -> Bytes -> <IO> Unit
 runExceptionalProbes counts key digest expectedCandidate0 =
   let ((normal0, normal1), (candidate0Valid, candidate0R, candidate0RawS, candidate0LowS), (candidate1Valid, candidate1R, candidate1RawS, candidate1LowS), (selectedValid, selectedCompact)) =
     ecdsaInjectedSignProbeForTest key digest one32 0 two32 1
@@ -191,7 +153,7 @@ runExceptionalProbes counts key digest expectedCandidate0 =
       && exhaust0Valid == 0
       && exhaust1Valid == 0
       && exhaustValid == 0
-      && arrayLength exhaustCompact == 64
+      && B.length exhaustCompact == 64
   if exhaustionOk then
     let () = bump counts 2
     println
@@ -202,7 +164,7 @@ runExceptionalProbes counts key digest expectedCandidate0 =
 
 runPublicSigningRow : Array Int ->
   String ->
-  Array Int ->
+  Bytes ->
   String ->
   String ->
   <IO> Unit
@@ -269,31 +231,21 @@ runSigningRows counts (row :: rest) lineNo =
   let () = runSigningRow counts lineNo row
   runSigningRows counts rest (lineNo + 1)
 
-verifyCompact : AffinePoint -> Array Int -> Array Int -> Bool
+verifyCompact : AffinePoint -> Bytes -> Bytes -> Bool
 verifyCompact publicPoint digest compact =
   match ecdsaSignatureFromCompact compact
     Err _ => False
     Ok signature => ecdsaVerifyDigest publicPoint digest signature
 
-copyUncompressedX : Array Int -> Array Int -> Int -> Unit
-copyUncompressedX input out i =
-  if i >= 32 then
-    ()
-  else
-    let () = A.setInPlace (i + 1) input[i + 1] out
-    copyUncompressedX input out (i + 1)
-
-compressedFromUncompressed : Array Int -> Array Int
+compressedFromUncompressed : Bytes -> Bytes
 compressedFromUncompressed input =
-  if arrayLength input /= 65 then
-    [||]
+  if B.length input /= 65 then
+    B.fromU8Array [||]
   else
-    let out = arrayMake 33 0
-    let () = A.setInPlace 0 (2 + input[64] % 2) out
-    let () = copyUncompressedX input out 0
-    out
+    let prefix = U8.bitOr 2 (U8.bitAnd input[64] 1)
+    B.concat [B.fromU8Array [|prefix|], input.[1..33]]
 
-verifyPublicCompact : Array Int -> Array Int -> Array Int -> Bool
+verifyPublicCompact : Bytes -> Bytes -> Bytes -> Bool
 verifyPublicCompact uncompressed digest compact =
   match publicKeyFromCompressed (compressedFromUncompressed uncompressed)
     Err _ => False
@@ -303,14 +255,14 @@ verifyPublicCompact uncompressed digest compact =
 
 recordHighWitness : Array Int ->
   AffinePoint ->
-  Array Int ->
-  Array Int ->
+  Bytes ->
+  Bytes ->
   String ->
   <IO> Unit
 recordHighWitness counts publicPoint digest compact id =
   if counts[6] /= 0 then
     ()
-  else if arrayLength compact /= 64 then
+  else if B.length compact /= 64 then
     let () = bump counts 4
     println "FAIL high-S witness tcId=\{id}: compact length was not 64"
   else
@@ -324,7 +276,7 @@ recordHighWitness counts publicPoint digest compact id =
       println
         "WITNESS high-S tcId=\{id}: compact-parser=reject verifier-boundary=reject"
 
-recordMalformedWitness : Array Int -> Array Int -> String -> <IO> Unit
+recordMalformedWitness : Array Int -> Bytes -> String -> <IO> Unit
 recordMalformedWitness counts compact id =
   if counts[7] /= 0 then
     ()
@@ -361,12 +313,7 @@ runVerificationRow counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx lin
         let () = A.setInPlace idValue 1 seen
         let () = bump counts uniqueIdx
         let compact = bytes compactHex
-        let digest =
-          toArray
-            (sha256
-              (optionOrPanic
-                "sha256: every element must be a byte in 0..255"
-                (fromArray (bytes messageHex))))
+        let digest = sha256 (bytes messageHex)
         let uncompressed = bytes keyHex
         match pointFromUncompressedForTest uncompressed
           Err message =>

@@ -15,6 +15,7 @@
    write was is the caller's job, encoding it is this module's. -}
 
 import array
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set}
 import string.{fromUtf8}
@@ -24,6 +25,8 @@ import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
 import lib.repo.{
+  blockBytesChecked,
+  blockRowsChecked,
   Repo,
   RepoCommit,
   repoCommitCid,
@@ -176,7 +179,9 @@ createdNodes (Some before) after =
    states. -}
 export
 syncCommitCar : Cid -> List (Cid, Array Int) -> Result String (Array Int)
-syncCommitCar commitCid blocks = carEncode [commitCid] blocks
+syncCommitCar commitCid blocks = do
+  rows <- mapErr (message => "car: \{message}") (blockRowsChecked blocks)
+  map toArray (carEncode [commitCid] rows)
 
 opValue : SyncRepoOp -> DagCbor
 opValue (SyncOpCreate path cid) = DcMap [
@@ -226,6 +231,12 @@ syncCommitOpsMaxLength = 200
 export
 syncCommitBody : SyncCommitEvent -> DagCbor
 syncCommitBody event =
+  -- Masked: this returns a bare value and never refused; the range check
+  -- happens where the body is encoded, in `syncCommitFrame`.
+  commitBodyWith event (fromArrayAssumeByteDomain event.blocksCar)
+
+commitBodyWith : SyncCommitEvent -> Bytes -> DagCbor
+commitBodyWith event blocksCar =
   let tooBig = length event.ops > syncCommitOpsMaxLength
   DcMap
     ([
@@ -236,7 +247,7 @@ syncCommitBody event =
         ("commit", DcLink event.commitCid),
         ("rev", DcString (tidToString event.rev)),
         ("since", nullableRev event.since),
-        ("blocks", DcBytes event.blocksCar),
+        ("blocks", DcBytes blocksCar),
         ("ops", DcArray (if tooBig then [] else map opValue event.ops)),
         ("blobs", DcArray []),
         ("time", DcString event.time),
@@ -256,11 +267,13 @@ frameBytes : String -> DagCbor -> Result String (Array Int)
 frameBytes messageType bodyValue = do
   header <- dagCborEncode (messageHeader messageType)
   body <- dagCborEncode bodyValue
-  Ok (header ++ body)
+  Ok (toArray header ++ toArray body)
 
 export
 syncCommitFrame : SyncCommitEvent -> Result String (Array Int)
-syncCommitFrame event = frameBytes "#commit" (syncCommitBody event)
+syncCommitFrame event = match fromArray event.blocksCar
+  None => Err "dagcbor: byte string element outside byte range 0..255"
+  Some blocksCar => frameBytes "#commit" (commitBodyWith event blocksCar)
 
 {- | An event body plus its position in the stream.
 
@@ -334,7 +347,10 @@ syncAccountFrame seq time did =
 export
 syncSyncBody : String -> Tid -> Cid -> Array Int -> Result String DagCbor
 syncSyncBody did rev commitCid commitBytes = do
-  car <- carEncode [commitCid] [(commitCid, commitBytes)]
+  commitBlock <- mapErr
+    (message => "car: \{message}")
+    (blockBytesChecked commitBytes)
+  car <- carEncode [commitCid] [(commitCid, commitBlock)]
   Ok
     (DcMap [
       ("did", DcString did),
@@ -381,7 +397,7 @@ syncErrorFrame error message =
   do
     header <- dagCborEncode (DcMap [("op", DcInt (0 - 1))])
     body <- dagCborEncode bodyValue
-    Ok (header ++ body)
+    Ok (toArray header ++ toArray body)
 
 indexEntries : List (Array Int, Cid) -> Map String Cid -> Map String Cid
 indexEntries [] index = index
@@ -443,7 +459,7 @@ addedRecordBlocks (op :: rest) store acc = match opRecordCid op
     None =>
       Err
         "sync_event: record block \{cidToString cid} is absent from the post-write block store"
-    Some bytes => addedRecordBlocks rest store ((cid, bytes) :: acc)
+    Some bytes => addedRecordBlocks rest store ((cid, toArray bytes) :: acc)
 
 optionalCommit : Option Repo -> Option RepoCommit
 optionalCommit None = None

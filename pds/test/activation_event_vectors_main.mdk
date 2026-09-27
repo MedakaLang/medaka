@@ -38,7 +38,7 @@
    there is no builder arm to grade them against. -}
 
 import array.{sliceClamped}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort}
@@ -83,11 +83,15 @@ mustCbor text = mustCborBytes (mustHex text)
 
 mustCborBytes : Array Int -> DagCbor
 mustCborBytes bytes =
-  resultOrPanic "activation_event: undecodable body" (dagCborDecode bytes)
+  resultOrPanic
+    "activation_event: undecodable body"
+    (dagCborDecode (fromArrayAssumeByteDomain bytes))
 
 mustCar : Array Int -> Car
 mustCar bytes =
-  resultOrPanic "activation_event: undecodable corpus CAR" (carDecode bytes)
+  resultOrPanic
+    "activation_event: undecodable corpus CAR"
+    (carDecode (fromArrayAssumeByteDomain bytes))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "activation_event: malformed TID" (tidParse text)
@@ -108,7 +112,7 @@ intOf body name = match field body name
 
 bytesOf : DagCbor -> String -> Array Int
 bytesOf body name = match field body name
-  Some (DcBytes bytes) => bytes
+  Some (DcBytes bytes) => toArray bytes
   _ => panic "activation_event: corpus body has no byte field '\{name}'"
 
 {- | The corpus as tag/value pairs. Every row is tab-separated and its first
@@ -141,7 +145,7 @@ gradeBody tag bodyHex built = match dagCborEncode built
     let () = println "\{tag}: FAIL body would not encode: \{message}"
     False
   Ok bytes =>
-    let ok = encode (fromArrayAssumeByteDomain bytes) == bodyHex
+    let ok = encode bytes == bodyHex
     let () =
       println "\{tag}: \{gradeWord ok} body byte-identical to the pinned body"
     ok
@@ -286,7 +290,7 @@ gradeGenesisCommit rows =
     Err message =>
       let () = println "GENESIS-COMMIT: FAIL builder refused: \{message}"
       False
-    Ok event => match carDecode event.blocksCar
+    Ok event => match carDecode (fromArrayAssumeByteDomain event.blocksCar)
       Err message =>
         let () =
           println "GENESIS-COMMIT: FAIL undecodable blocks CAR: \{message}"
@@ -323,10 +327,10 @@ soleCid cids =
   panic
     "activation_event: corpus CAR holds \{intToString (length cids)} blocks, expected 1"
 
-soleBlockBytes : Cid -> List (Cid, Array Int) -> Array Int
+soleBlockBytes : Cid -> List (Cid, Bytes) -> Array Int
 soleBlockBytes root [(cid, bytes)] =
   if cidToString cid == cidToString root then
-    bytes
+    toArray bytes
   else
     panic "activation_event: corpus CAR's sole block is not its root"
 soleBlockBytes _ blocks =

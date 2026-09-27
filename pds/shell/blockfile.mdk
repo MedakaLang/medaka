@@ -68,7 +68,6 @@
    file through it. -}
 
 import bytes as B
-import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import string.{take}
 import fs.{isDir, mkdirAllDurably}
@@ -80,12 +79,11 @@ stagingName : String
 stagingName = ".staging"
 
 cidKey : Cid -> String
-cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+cidKey cid = encode (cidToBytes cid)
 
 -- | Directory holding one block's shard.
 blockShardDir : String -> Cid -> String
-blockShardDir dir cid =
-  "\{dir}/\{take 2 (encode (fromArrayAssumeByteDomain (cidDigest cid)))}"
+blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
 
 -- | Absolute path of one block's file.
 blockFilePath : String -> Cid -> String
@@ -153,7 +151,7 @@ blockFileWrite dir rows = do
   fsyncShards shards
 
 cidForName : String -> String -> Result String Cid
-cidForName path name = match map toArray (decode name)
+cidForName path name = match decode name
   Err message =>
     Err "blockfile: \{path}: block file name is not hex: \{message}"
   Ok bytes => match cidFromBytes bytes

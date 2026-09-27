@@ -62,14 +62,12 @@ hostText = "pds.example"
 handleText : String
 handleText = "synth.example"
 
-mustHex : String -> Array Int
-mustHex text = toArray (resultOrPanic "cost_curve: malformed hex" (decode text))
-
 corpusSecret : SecretKey
 corpusSecret =
   resultOrPanic
     "cost_curve: bad signing key"
-    (secretKeyFromBytes (mustHex secretHex))
+    (secretKeyFromBytes
+      (resultOrPanic "cost_curve: malformed hex" (decode secretHex)))
 
 -- ── loading the corpus exactly as `pds/serve.mdk` does ──────────────────────
 
@@ -116,7 +114,7 @@ benchContext =
 benchToken : String
 benchToken =
   mintToken
-    testSecret
+    (B.fromArrayAssumeByteDomain testSecret)
     corpusDid
     hostText
     "cost_curve-probe-token"

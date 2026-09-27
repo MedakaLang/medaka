@@ -66,7 +66,7 @@ import lib.blockstore.{
 import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord}
 import lib.jwt.{serverSecretBytes}
-import lib.repo.{Repo}
+import lib.repo.{Repo, blockBytesChecked}
 import bytes.{encodeUtf8, fromArrayAssumeByteDomain, toArray}
 import crypto.hmac.{ctEq}
 import crypto.sha256.{sha256}
@@ -168,17 +168,17 @@ blobHalfPut : Cid ->
   Array Int ->
   BlobHalf ->
   Result String BlobHalf
-blobHalfPut cid declared bytes (BlobHalf blocks index total version) =
+blobHalfPut cid declared bytes (BlobHalf blocks index total version) = do
   let stored =
     if blockStoreHas cid blocks then total else total + arrayLength bytes
-  map
-    (next =>
-      BlobHalf
-        next
-        (set (cidToString cid) (cid, declared) index)
-        stored
-        (version + 1))
-    (blockStorePut cid bytes blocks)
+  checked <- blockBytesChecked bytes
+  next <- blockStorePut cid checked blocks
+  Ok
+    (BlobHalf
+      next
+      (set (cidToString cid) (cid, declared) index)
+      stored
+      (version + 1))
 
 -- | Immutable verified protocol state. Its representation is private.
 export data Store = Store BlobHalf (Option Repo) Auth (List Json)
@@ -649,7 +649,8 @@ storeHasBlob cid (Store (BlobHalf blocks _ _ _) _ _ _) =
 -- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreGet cid blocks
+storeGet cid (Store (BlobHalf blocks _ _ _) _ _ _) =
+  map toArray (blockStoreGet cid blocks)
 
 -- | Verify and immutably insert a blob-half block, returning the successor
 -- store. No MIME type is recorded — this is the byte-only primitive
@@ -687,7 +688,7 @@ storeBlobMimeType cid (Store half _ _ _) = declaredTypeOf cid half
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
 storeBlobEntries (Store (BlobHalf blocks _ _ _) _ _ _) =
-  blockStoreEntries blocks
+  map ((cid, bytes) => (cid, toArray bytes)) (blockStoreEntries blocks)
 
 {- | Every distinct verified CID in the blob half, in canonical CID order and
    carrying no bytes — what `sync.listBlobs` pages over.

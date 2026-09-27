@@ -16,6 +16,7 @@
 
 import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
+import bytes.{Bytes, fromU8Array, length}
 import test.fixture_support.{bitBytes, decBytes}
 import lib.field.{
   Fe,
@@ -41,19 +42,19 @@ import lib.field.{
 
 -- ── Input construction (inputs, not answer keys) ──────────────────────
 
-allOnes : Array Int
-allOnes = arrayMake 32 255
+allOnes : Bytes
+allOnes = fromU8Array (arrayMake 32 255)
 
 -- p, p+1 as raw bytes: p = 2^256 - 2^32 - 977.
-pBytes : Array Int
-pBytes = [|
+pBytes : Bytes
+pBytes = fromU8Array [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f
 |]
 
-pPlus1Bytes : Array Int
-pPlus1Bytes = [|
+pPlus1Bytes : Bytes
+pPlus1Bytes = fromU8Array [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xfe, 0xff, 0xff, 0xfc, 0x30
@@ -64,7 +65,7 @@ limbBits : List Int
 limbBits = [26, 52, 78, 104, 130, 156, 182, 208, 234]
 
 -- One representative element per limb boundary, plus a few small ones.
-sampleBytes : List (Array Int)
+sampleBytes : List Bytes
 sampleBytes =
   [bitBytes 0, bitBytes 1, bitBytes 255]
     ++ map bitBytes limbBits
@@ -181,7 +182,7 @@ test "inverse 0 = 0 (the settled convention, not an error)" =
 
 -- ── Serialization ─────────────────────────────────────────────────────
 
-roundTrips : Array Int -> Bool
+roundTrips : Bytes -> Bool
 roundTrips bs = match feFromBytes bs
   Ok fe => feToBytes fe == bs
   Err _ => False
@@ -193,7 +194,7 @@ test "toBytes is 32 bytes" =
   expectSatisfies
     "every sample to encode to 32 bytes"
     (all (n => n == 32))
-    (map (a => arrayLength (feToBytes a)) samples)
+    (map (a => length (feToBytes a)) samples)
 
 test "fromBytes REJECTS p" = expectTrue (match feFromBytes pBytes
   Err _ => True
@@ -208,12 +209,12 @@ test "fromBytes REJECTS 2^256-1" = expectTrue (match feFromBytes allOnes
   Ok _ => False)
 
 test "fromBytes REJECTS a short input" = expectTrue
-  (match feFromBytes (arrayMake 31 0)
+  (match feFromBytes (fromU8Array (arrayMake 31 0))
     Err _ => True
     Ok _ => False)
 
-test "fromBytes REJECTS an out-of-range element" = expectTrue
-  (match feFromBytes (arrayMake 32 256)
+test "fromBytes REJECTS a long input" = expectTrue
+  (match feFromBytes (fromU8Array (arrayMake 33 0))
     Err _ => True
     Ok _ => False)
 

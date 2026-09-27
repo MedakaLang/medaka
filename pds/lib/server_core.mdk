@@ -292,9 +292,10 @@ verifiedCredential account policy context store token =
   match storeServerSecret store
     None => InvalidCredential
     Some secret =>
+      -- Masked, as before: the old HMAC key path masked this secret too.
       let verified =
         verifyToken
-          secret
+          (fromArrayAssumeByteDomain secret)
           (accountDid account)
           (audienceFor account policy)
           context.nowSeconds
@@ -1159,10 +1160,7 @@ classifyLogin (Server account registry _) salt store request =
           )
             (Some (JString identifier), Some (JString presented), Some record) =>
               let offered =
-                if identifiesAccount account identifier then
-                  toArray salt
-                else
-                  [||]
+                if identifiesAccount account identifier then salt else empty
               Some (loginCheckBegin presented offered defaultIterations record)
             _ => None
         _ => None

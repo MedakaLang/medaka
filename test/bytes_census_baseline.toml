@@ -17,6 +17,50 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "pds/lib/did_key.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/dagcbor.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/car.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/blockstore.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/sign.mdk"
+count = 3
+
+[[entry]]
+file = "pds/lib/pbkdf2.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/credential.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/jwt.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/base58.mdk"
+count = 11
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/cid.mdk"
+count = 0
+
+[[entry]]
 file = "pds/shell/server.mdk"
 count = 5
 
@@ -38,7 +82,7 @@ count = 10
 
 [[entry]]
 file = "gzip/lib/container.mdk"
-count = 2
+count = 0
 
 [[entry]]
 file = "gzip/lib/huffman.mdk"
@@ -50,20 +94,36 @@ count = 0
 
 [[entry]]
 file = "gzip/lib/crc32.mdk"
-count = 1
+count = 0
 
 [[entry]]
 file = "stdlib/hex.mdk"
-count = 6
+count = 0
 
 [[entry]]
 file = "stdlib/http.mdk"
-count = 82
+count = 0
 
 [[entry]]
 file = "stdlib/net.mdk"
-count = 13
+count = 9
 
 [[entry]]
 file = "stdlib/net_async.mdk"
-count = 20
+count = 9
+
+[[entry]]
+file = "pds/lib/field.mdk"
+count = 8
+
+[[entry]]
+file = "pds/lib/scalar.mdk"
+count = 8
+
+[[entry]]
+file = "pds/lib/secp256k1.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/hmac_sha256.mdk"
+count = 0

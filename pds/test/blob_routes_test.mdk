@@ -8,12 +8,13 @@
    session secret and credential but no repository, the same shape
    `pds/test/session_routes_test.mdk` already uses. -}
 
-import bytes.{Bytes, fromArray, toArray}
+import bytes.{Bytes, fromArray, fromU8Array, toArray}
 import http.{parseRequestClassified}
 import json.{Json(..), get, parse}
 import list.{sort}
 import string.{fromUtf8, toUtf8}
 import test.{expectEqual, expectTrue}
+import u8 as U8
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
 import lib.credential.{
@@ -71,7 +72,10 @@ server =
 credential : CredentialRecord
 credential =
   let derived =
-    makeCredential (arrayMakeWith 16 (i => (i * 13 + 3) % 256)) 4 password
+    makeCredential
+      (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
+      4
+      password
   match derived
     Ok made => made
     Err message => panic "blob_routes_test: credential: \{message}"

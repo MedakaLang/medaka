@@ -18,12 +18,20 @@ import json.{Json(..), get, jObject, stringify}
 import lib.cid.{Cid, cidForRaw, cidFromString, cidToString}
 import lib.resource_limits.{checkAccountBlobBytes, checkBlobBytes}
 import regex.{Regex, isFullMatch, mustCompile}
+import bytes.{fromArray, fromU8Array}
 
 -- | Content-address a blob's raw bytes with the raw codec (reuses
 -- `cidForRaw`; blobs are not a new CID kind).
+--
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForRaw` did.
 export
 blobCid : Array Int -> Cid
-blobCid bytes = cidForRaw bytes
+blobCid bytes =
+  cidForRaw
+    (optionOrPanic
+      "cidForRaw: every element must be a byte in 0..255"
+      (fromArray bytes))
 
 {- | An admitted blob reference: its content CID, declared MIME type, and
    byte size. The constructor is private — a `BlobRef` is only ever minted by
@@ -94,7 +102,7 @@ admitBlob accountUsedBytes mimeType bytes = do
 
 {- | Render a `BlobRef` as its lexicon-JSON `blob` shape.
 
-   > stringify (blobRefToJson (BlobRef (cidForRaw [||]) "image/png" 0))
+   > stringify (blobRefToJson (BlobRef (cidForRaw (fromU8Array [||])) "image/png" 0))
    "{\"$type\":\"blob\",\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"image/png\",\"size\":0}" -}
 export
 blobRefToJson : BlobRef -> Json
@@ -145,7 +153,7 @@ requiredSize body = match get "size" body
    caller that admits raw bytes against it must still verify them with
    `blobCid`).
 
-   > map blobRefMimeType (blobRefFromJson (blobRefToJson (BlobRef (cidForRaw [||]) "image/png" 0)))
+   > map blobRefMimeType (blobRefFromJson (blobRefToJson (BlobRef (cidForRaw (fromU8Array [||])) "image/png" 0)))
    Ok "image/png" -}
 export
 blobRefFromJson : Json -> Result String BlobRef

@@ -4,74 +4,78 @@
    secp256k1 order constants are inputs used to exercise the contract. -}
 
 import test.{expectEach, expectEqual, expectOkThen, expectTrue}
-import array as A
-import bytes.{toArray}
+import bytes.{Bytes, fromU8Array, length, toArray}
+import mut_bytes as MB
+import u8 as U8
 import hex.{decode}
 import lib.sign.{
+  secretKeyFromByteArray,
   secretKeyFromBytes,
   signatureFromCompact,
   signatureCompact,
   signDigest,
 }
 
-bytes : String -> Array Int
-bytes value =
-  toArray (resultOrPanic "sign_key_test: malformed hex" (decode value))
+bytes : String -> Bytes
+bytes value = resultOrPanic "sign_key_test: malformed hex" (decode value)
 
-oneBytes : Array Int
-oneBytes = [|
+zeros : Int -> Bytes
+zeros n = fromU8Array (arrayMake n 0)
+
+oneBytes : Bytes
+oneBytes = fromU8Array [|
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 1
 |]
 
-nBytes : Array Int
-nBytes = [|
+nBytes : Bytes
+nBytes = fromU8Array [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
   0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41
 |]
 
-knownCompact : Array Int
+knownCompact : Bytes
 knownCompact =
   bytes
     "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
 
-zeroRCompact : Array Int
+zeroRCompact : Bytes
 zeroRCompact =
   bytes
     "000000000000000000000000000000000000000000000000000000000000000011edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
 
-zeroSCompact : Array Int
+zeroSCompact : Bytes
 zeroSCompact =
   bytes
     "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e40000000000000000000000000000000000000000000000000000000000000000"
 
-rangeRCompact : Array Int
+rangeRCompact : Bytes
 rangeRCompact =
   bytes
     "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036414111edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
 
-rangeSCompact : Array Int
+rangeSCompact : Bytes
 rangeSCompact =
   bytes
     "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
 
-highSCompact : Array Int
+highSCompact : Bytes
 highSCompact =
   bytes
     "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4ee12372cf8dabd69d9b51403c23893260446a5aca818c9f55a1d5e8be63972ef"
 
-setAt : Int -> Int -> Array Int -> Array Int
+setAt : Int -> Int -> Bytes -> Bytes
 setAt i value bs =
-  let out = arrayCopy bs
-  let () = A.setInPlace i value out
-  out
+  let out = MB.thaw bs
+  let () = MB.setInPlace i (U8.truncate value) out
+  MB.freeze out
 
-decLast : Array Int -> Array Int
-decLast bs = setAt 31 (bs[31] - 1) bs
+decLast : Bytes -> Bytes
+decLast bs = setAt 31 (U8.toInt bs[31] - 1) bs
 
-incLast : Array Int -> Array Int
-incLast bs = setAt 31 (bs[31] + 1) bs
+incLast : Bytes -> Bytes
+incLast bs = setAt 31 (U8.toInt bs[31] + 1) bs
 
 test "secret key accepts one and n - 1" = expectEach [
   ("the scalar 1 is admitted", expectTrue (isOk (secretKeyFromBytes oneBytes))),
@@ -84,18 +88,18 @@ test "secret key accepts one and n - 1" = expectEach [
 test "secret key rejects public short and long lengths" = expectEach [
   (
     "a 31-byte key is rejected as too short",
-    expectTrue (isErr (secretKeyFromBytes (arrayMake 31 0))),
+    expectTrue (isErr (secretKeyFromBytes (zeros 31))),
   ),
   (
     "a 33-byte key is rejected as too long",
-    expectTrue (isErr (secretKeyFromBytes (arrayMake 33 0))),
+    expectTrue (isErr (secretKeyFromBytes (zeros 33))),
   ),
 ]
 
 test "secret key rejects zero, n, n + 1, and maximum" = expectEach [
   (
     "the scalar zero is rejected",
-    expectTrue (isErr (secretKeyFromBytes (arrayMake 32 0))),
+    expectTrue (isErr (secretKeyFromBytes (zeros 32))),
   ),
   (
     "the group order n is rejected",
@@ -107,58 +111,16 @@ test "secret key rejects zero, n, n + 1, and maximum" = expectEach [
   ),
   (
     "the all-ones 32-byte maximum is rejected",
-    expectTrue (isErr (secretKeyFromBytes (arrayMake 32 255))),
+    expectTrue (isErr (secretKeyFromBytes (fromU8Array (arrayMake 32 255)))),
   ),
 ]
-
-test "secret key rejects -1 in early middle and final positions" = expectEach [
-  (
-    "a -1 byte at the first position is rejected",
-    expectTrue (isErr (secretKeyFromBytes (setAt 0 (-1) oneBytes))),
-  ),
-  (
-    "a -1 byte in the middle is rejected",
-    expectTrue (isErr (secretKeyFromBytes (setAt 16 (-1) oneBytes))),
-  ),
-  (
-    "a -1 byte at the final position is rejected",
-    expectTrue (isErr (secretKeyFromBytes (setAt 31 (-1) oneBytes))),
-  ),
-]
-
-test "secret key rejects 256 in early middle and final positions" = expectEach [
-  (
-    "a 256 byte at the first position is rejected",
-    expectTrue (isErr (secretKeyFromBytes (setAt 0 256 oneBytes))),
-  ),
-  (
-    "a 256 byte in the middle is rejected",
-    expectTrue (isErr (secretKeyFromBytes (setAt 16 256 oneBytes))),
-  ),
-  (
-    "a 256 byte at the final position is rejected",
-    expectTrue (isErr (secretKeyFromBytes (setAt 31 256 oneBytes))),
-  ),
-]
-
-test "secret key stores a scalar before caller input mutates" =
-  let mutable = arrayCopy oneBytes
-  let admitted = secretKeyFromBytes mutable
-  let () = A.setInPlace 31 0 mutable
-  expectEach [
-    ("the original bytes were admitted", expectTrue (isOk admitted)),
-    (
-      "the caller's later mutation makes the same buffer inadmissible",
-      expectTrue (isErr (secretKeyFromBytes mutable)),
-    ),
-  ]
 
 test "public compact signatures round trip as exactly 64 bytes" =
   expectOkThen
     (signature =>
       let compact = signatureCompact signature
       expectEach [
-        ("arrayLength compact == 64", expectEqual 64 (arrayLength compact)),
+        ("length compact == 64", expectEqual 64 (length compact)),
         ("compact == knownCompact", expectEqual knownCompact compact),
       ])
     (signatureFromCompact knownCompact)
@@ -166,22 +128,11 @@ test "public compact signatures round trip as exactly 64 bytes" =
 test "public compact parsing rejects 63-byte and 65-byte lengths" = expectEach [
   (
     "a 63-byte compact signature is rejected as too short",
-    expectTrue (isErr (signatureFromCompact (arrayMake 63 0))),
+    expectTrue (isErr (signatureFromCompact (zeros 63))),
   ),
   (
     "a 65-byte compact signature is rejected as too long",
-    expectTrue (isErr (signatureFromCompact (arrayMake 65 0))),
-  ),
-]
-
-test "public compact parsing rejects non-byte elements" = expectEach [
-  (
-    "a -1 element in the r half is rejected",
-    expectTrue (isErr (signatureFromCompact (setAt 0 (-1) knownCompact))),
-  ),
-  (
-    "a 256 element in the s half is rejected",
-    expectTrue (isErr (signatureFromCompact (setAt 63 256 knownCompact))),
+    expectTrue (isErr (signatureFromCompact (zeros 65))),
   ),
 ]
 
@@ -209,26 +160,57 @@ test "public compact parsing rejects zero range and high-S components" = expectE
     ),
   ]
 
+byteArrayIngressErr : String
+byteArrayIngressErr =
+  "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+-- `SecretKey` has no `Eq`/`Debug` impl, so grade the `Err` message directly
+-- rather than the whole `Result`.
+byteArrayIngressMessage : Array Int -> String
+byteArrayIngressMessage raw = match secretKeyFromByteArray raw
+  Err e => e
+  Ok _ => "<admitted>"
+
+test "byte-array ingress rejects out-of-range elements and wrong lengths, admits a valid key" = expectEach
+  [
+    (
+      "an element of 256 is rejected",
+      expectEqual
+        byteArrayIngressErr
+        (byteArrayIngressMessage
+          (arrayMakeWith 32 (i => if i == 0 then 256 else 0))),
+    ),
+    (
+      "an element of -1 is rejected",
+      expectEqual
+        byteArrayIngressErr
+        (byteArrayIngressMessage
+          (arrayMakeWith 32 (i => if i == 0 then -1 else 0))),
+    ),
+    (
+      "a 31-element array is rejected",
+      expectEqual byteArrayIngressErr (byteArrayIngressMessage (arrayMake 31 0)),
+    ),
+    (
+      "a 33-element array is rejected",
+      expectEqual byteArrayIngressErr (byteArrayIngressMessage (arrayMake 33 0)),
+    ),
+    (
+      "a valid 32-byte key is admitted",
+      expectTrue (isOk (secretKeyFromByteArray (toArray oneBytes))),
+    ),
+  ]
+
 test "public signing rejects malformed digests before production" =
   expectOkThen
-    (secret =>
-      let zeroDigest = arrayMake 32 0
-      expectEach [
-        (
-          "rejects a too-short digest",
-          expectTrue (isErr (signDigest secret (arrayMake 31 0))),
-        ),
-        (
-          "rejects a too-long digest",
-          expectTrue (isErr (signDigest secret (arrayMake 33 0))),
-        ),
-        (
-          "rejects a negative-byte digest",
-          expectTrue (isErr (signDigest secret (setAt 0 (-1) zeroDigest))),
-        ),
-        (
-          "rejects an out-of-range-byte digest",
-          expectTrue (isErr (signDigest secret (setAt 31 256 zeroDigest))),
-        ),
-      ])
+    (secret => expectEach [
+      (
+        "rejects a too-short digest",
+        expectTrue (isErr (signDigest secret (zeros 31))),
+      ),
+      (
+        "rejects a too-long digest",
+        expectTrue (isErr (signDigest secret (zeros 33))),
+      ),
+    ])
     (secretKeyFromBytes oneBytes)
