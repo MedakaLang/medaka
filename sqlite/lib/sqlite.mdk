@@ -17,7 +17,7 @@
 -- `usableOf` derives from the parsed file header.
 
 import byteparser.{runByteParser}
-import bytes.{Bytes, fromArrayAssumeByteDomain}
+import bytes.{Bytes, fromArray}
 import lib.header.{
   DbHeader,
   parseHeader,
@@ -77,11 +77,15 @@ schemaSql e = e.sql
 --
 -- Takes `Array Int` because that is what `readFileBytes` and every in-memory
 -- test/demo builder hands it; the packed `Bytes` conversion happens once
--- here, not once per page or per cell downstream.
+-- here, not once per page or per cell downstream. An element outside 0..255
+-- panics rather than being masked into a different, well-formed database.
 export
 fromBytes : Array Int -> Result String Db
 fromBytes rawBytes =
-  let bytes = fromArrayAssumeByteDomain rawBytes
+  let bytes =
+    optionOrPanic
+      "sqlite.fromBytes: every element must be a byte in 0..255"
+      (fromArray rawBytes)
   match runByteParser parseHeader bytes
     Err e => Err "header: \{e}"
     Ok h =>
