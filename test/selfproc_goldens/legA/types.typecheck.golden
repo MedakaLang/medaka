@@ -1,5 +1,6 @@
 abstractFieldMsg : String -> String -> String
 abstractSlotIds : List Mono -> List Int
+abstractTypeWords : String -> List Decl -> List String
 activeDictPredOf : PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
 activeDictVarForEncl : Mono -> ScopeId -> Option EvidenceBinderId
 activeDictVarOf : Mono -> ScopeId -> Option EvidenceBinderId
@@ -2246,6 +2247,7 @@ recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
 recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
 recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
 receiverTypeIdent : Mono -> Option Ident
+receiverTypeWord : Mono -> String -> String
 recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit

@@ -1,5 +1,5 @@
 # META
-source_lines=50245
+source_lines=50260
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -458,6 +458,7 @@ import types.registry.{
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{
+  typeTagOf,
   implRouteKeyWord,
   ifaceWordOf,
   funHeadTag,
@@ -3290,13 +3291,19 @@ collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n }) :: r
 collectAbstractRecordTypes (_ :: rest) = collectAbstractRecordTypes rest
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.
+-- the prelude/core decls), once, before checking begins.  Keyed by the type
+-- word (`typeTagOf`), so a program's own type that shares an abstract export's
+-- name is not mistaken for it.
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAbstractRecordTypes coreDecls modules =
   let abstracts =
     collectAbstractRecordTypes coreDecls
-      ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules
+      ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   driverState.value.abstractRecordTypesRef := namesToSet abstracts omEmpty
+
+abstractTypeWords : String -> List Decl -> List String
+abstractTypeWords mid decls =
+  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
 
 -- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
 -- tuple/record shapes (return-position sites, arg-position stamps, operator sites,
@@ -16201,7 +16208,9 @@ resolveFieldRecord te fname = match headTyconNameMono te
     None => match lookupRecordByMangledHead te r fname
       Some pair => Some pair
       None =>
-        if omHasKey r driverState.value.abstractRecordTypesRef.value then
+        if omHasKey
+          (receiverTypeWord te r)
+          driverState.value.abstractRecordTypesRef.value then
           let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
           None
         else
@@ -16318,6 +16327,12 @@ recordForReceiverIdent te r =
 -- `headKeyIdent` (`types/registry.mdk`) is the accessor; its `None` collapses
 -- "rigid" and "no module id yet" because at a ROW lookup both mean the same
 -- thing — the derivation is written at that function.
+-- The receiver's type word (`headKeyTag`), else its bare head name.
+receiverTypeWord : Mono -> String -> String
+receiverTypeWord te r = match headTyconMono te
+  Some hk => headKeyTag hk
+  None => r
+
 receiverTypeIdent : Mono -> Option Ident
 receiverTypeIdent te = match headTyconMono te
   Some hk => headKeyIdent hk
@@ -50277,7 +50292,7 @@ isTyAuth _ = False
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "validateDispositionTable" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconBuiltin" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginBuiltin")))
@@ -50876,7 +50891,9 @@ isTyAuth _ = False
 (DFunDef false "collectAbstractRecordTypes" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
 (DFunDef false "collectAbstractRecordTypes" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectAbstractRecordTypes") (EVar "rest")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit"))))
-(DFunDef false "seedAbstractRecordTypes" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EVar "collectAbstractRecordTypes") (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DFunDef false "seedAbstractRecordTypes" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DTypeSig false "abstractTypeWords" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EVar "collectAbstractRecordTypes") (EVar "decls"))))
 (DData Private "SiteKind" () ((variant "SKReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKExactReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "MethodReturnRequest"))) (variant "SKNumReturn" (ConPos (TyCon "ClassPredicate") (TyCon "Mono"))) (variant "SKArg" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKOp" (ConPos (TyCon "Bool"))) (variant "SKPredicateOp" (ConPos (TyCon "Bool") (TyCon "ClassPredicate"))) (variant "SKRLocal" (ConPos (TyCon "String") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) ())
 (DData Private "PendingEntry" () ((variant "PendingEntry" (ConPos (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono") (TyCon "String") (TyCon "SiteKind") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "ScopeId") (TyCon "EvId")))) ())
 (DData Private "GoalKind" () ((variant "GKReturnSite" (ConPos)) (variant "GKArgStamp" (ConPos)) (variant "GKRLocalSite" (ConPos)) (variant "GKBinopSite" (ConPos)) (variant "GKUnopSite" (ConPos)) (variant "GKArithSite" (ConPos)) (variant "GKDictApp" (ConPos)) (variant "GKMethodDict" (ConPos)) (variant "GKRecDictApp" (ConPos))) ())
@@ -53050,13 +53067,15 @@ isTyAuth _ = False
 (DFunDef false "fieldOwnerAnyReachable" ((PList)) (EVar "False"))
 (DFunDef false "fieldOwnerAnyReachable" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (EApp (EVar "fieldOwnerAnyReachable") (EVar "rest"))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
 (DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordOfOtherType") (EVar "te")) (EVar "ri")) (EVar "None") (EApp (EVar "Some") (EVar "ri")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "recordOfOtherType" (TyFun (TyCon "Mono") (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
 (DFunDef false "recordOfOtherType" ((PVar "te") (PCon "RecordInfo" PWild PWild (PVar "res") PWild PWild)) (EMatch (ETuple (EApp (EVar "receiverTypeIdent") (EVar "te")) (EApp (EVar "receiverTypeIdent") (EVar "res"))) (arm (PTuple (PCon "Some" (PCon "Ident" PWild (PVar "wo") (PVar "wn"))) (PCon "Some" (PCon "Ident" PWild (PVar "ro") (PVar "rn")))) () (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "wn") (EVar "rn")) (EBinOp "==" (EVar "wo") (EVar "ro"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
+(DTypeSig false "receiverTypeWord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "receiverTypeWord" ((PVar "te") (PVar "r")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "receiverTypeIdent" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Ident"))))
 (DFunDef false "receiverTypeIdent" ((PVar "te")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyIdent") (EVar "hk"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "recordCandForType" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
@@ -58324,7 +58343,7 @@ isTyAuth _ = False
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "validateDispositionTable" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconBuiltin" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginBuiltin")))
@@ -58923,7 +58942,9 @@ isTyAuth _ = False
 (DFunDef false "collectAbstractRecordTypes" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
 (DFunDef false "collectAbstractRecordTypes" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectAbstractRecordTypes") (EVar "rest")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit"))))
-(DFunDef false "seedAbstractRecordTypes" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EVar "collectAbstractRecordTypes") (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DFunDef false "seedAbstractRecordTypes" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "abstracts") (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "abstractTypeWords") (EApp (EVar "fst") (EVar "m"))) (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef")) (EApp (EApp (EVar "namesToSet") (EVar "abstracts")) (EVar "omEmpty"))))))
+(DTypeSig false "abstractTypeWords" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "abstractTypeWords" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "typeTagOf") (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "n")))) (EApp (EVar "collectAbstractRecordTypes") (EVar "decls"))))
 (DData Private "SiteKind" () ((variant "SKReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKExactReturn" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "MethodReturnRequest"))) (variant "SKNumReturn" (ConPos (TyCon "ClassPredicate") (TyCon "Mono"))) (variant "SKArg" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono"))) (variant "SKOp" (ConPos (TyCon "Bool"))) (variant "SKPredicateOp" (ConPos (TyCon "Bool") (TyCon "ClassPredicate"))) (variant "SKRLocal" (ConPos (TyCon "String") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) ())
 (DData Private "PendingEntry" () ((variant "PendingEntry" (ConPos (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono") (TyCon "String") (TyCon "SiteKind") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "ScopeId") (TyCon "EvId")))) ())
 (DData Private "GoalKind" () ((variant "GKReturnSite" (ConPos)) (variant "GKArgStamp" (ConPos)) (variant "GKRLocalSite" (ConPos)) (variant "GKBinopSite" (ConPos)) (variant "GKUnopSite" (ConPos)) (variant "GKArithSite" (ConPos)) (variant "GKDictApp" (ConPos)) (variant "GKMethodDict" (ConPos)) (variant "GKRecDictApp" (ConPos))) ())
@@ -61097,13 +61118,15 @@ isTyAuth _ = False
 (DFunDef false "fieldOwnerAnyReachable" ((PList)) (EVar "False"))
 (DFunDef false "fieldOwnerAnyReachable" ((PCons (PVar "m") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef") "value")) (EApp (EVar "fieldOwnerAnyReachable") (EVar "rest"))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "receiverTypeWord") (EVar "te")) (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
 (DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordOfOtherType") (EVar "te")) (EVar "ri")) (EVar "None") (EApp (EVar "Some") (EVar "ri")))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "recordOfOtherType" (TyFun (TyCon "Mono") (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
 (DFunDef false "recordOfOtherType" ((PVar "te") (PCon "RecordInfo" PWild PWild (PVar "res") PWild PWild)) (EMatch (ETuple (EApp (EVar "receiverTypeIdent") (EVar "te")) (EApp (EVar "receiverTypeIdent") (EVar "res"))) (arm (PTuple (PCon "Some" (PCon "Ident" PWild (PVar "wo") (PVar "wn"))) (PCon "Some" (PCon "Ident" PWild (PVar "ro") (PVar "rn")))) () (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "wn") (EVar "rn")) (EBinOp "==" (EVar "wo") (EVar "ro"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
+(DTypeSig false "receiverTypeWord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "receiverTypeWord" ((PVar "te") (PVar "r")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyTag") (EVar "hk"))) (arm (PCon "None") () (EVar "r"))))
 (DTypeSig false "receiverTypeIdent" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Ident"))))
 (DFunDef false "receiverTypeIdent" ((PVar "te")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyIdent") (EVar "hk"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "recordCandForType" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))

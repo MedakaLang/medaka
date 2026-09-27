@@ -145,14 +145,11 @@ digitVal c = charCode c - charCode '0'
 -- names, so an identity-granularity value filtered by a name-granularity
 -- bucket table would be a granularity mismatch.
 --
--- ⚠️ `ctorType` is the MIRROR of that (leaf L2), and its asymmetry is
--- deliberate: its KEY stays the bare ctor name — `PCon String (List Pat)`
--- carries no identity carrier, so the reader end could never mint one — while
--- its VALUE becomes the same `TabKey`@`NsType` that `typeCtors` is keyed by.
--- That is what makes the `oGetCtorType >>= oGetCtors` round trip
--- identity-to-identity, so a nested column's lookup hits the row its own
--- declaration wrote.  With a bare-`String` value the round trip had to bridge
--- through a `TkBare` mint, which can never match a `TkIdent` row.
+-- `ctorType` keys by the bare ctor name, since `PCon String (List Pat)`
+-- carries no identity, and its value is the same `TabKey`@`NsType` that
+-- `typeCtors` is keyed by. Its one reader asks only whether a name is a known
+-- constructor (`oracleKnownName`); a column's constructor set comes from
+-- `ctorSiblings`.
 public export data Oracle = Oracle {
   typeCtors : List (TabKey, List String),
   ctorArity : OrdMap Int,
@@ -162,8 +159,10 @@ public export data Oracle = Oracle {
   -- constructor set comes from here, never from the type's spelling: before
   -- resolve two same-named types (a program's `Option` beside the prelude's,
   -- #3465) share one bare type key, and a round trip through it answers with
-  -- whichever declaration came first.  Constructor names are unique (a
-  -- prelude constructor cannot be reused, #3471), so the key is.
+  -- whichever declaration came first.  The table is first-wins by
+  -- constructor name, like `ctorArity`: two user modules may both declare a
+  -- `Bin`, and the first declaration answers for both.  A prelude constructor
+  -- cannot be reused (#3471), so a program's own never loses to the prelude's.
   ctorSiblings : OrdMap (List String),
 }
 

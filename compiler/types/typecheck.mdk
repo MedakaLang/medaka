@@ -454,6 +454,7 @@ import types.registry.{
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{
+  typeTagOf,
   implRouteKeyWord,
   ifaceWordOf,
   funHeadTag,
@@ -3286,13 +3287,19 @@ collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n }) :: r
 collectAbstractRecordTypes (_ :: rest) = collectAbstractRecordTypes rest
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
--- the prelude/core decls), once, before checking begins.
+-- the prelude/core decls), once, before checking begins.  Keyed by the type
+-- word (`typeTagOf`), so a program's own type that shares an abstract export's
+-- name is not mistaken for it.
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAbstractRecordTypes coreDecls modules =
   let abstracts =
     collectAbstractRecordTypes coreDecls
-      ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules
+      ++ flatMap (m => abstractTypeWords (fst m) (snd m)) modules
   driverState.value.abstractRecordTypesRef := namesToSet abstracts omEmpty
+
+abstractTypeWords : String -> List Decl -> List String
+abstractTypeWords mid decls =
+  map (n => typeTagOf (OriginModule mid) n) (collectAbstractRecordTypes decls)
 
 -- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
 -- tuple/record shapes (return-position sites, arg-position stamps, operator sites,
@@ -16197,7 +16204,9 @@ resolveFieldRecord te fname = match headTyconNameMono te
     None => match lookupRecordByMangledHead te r fname
       Some pair => Some pair
       None =>
-        if omHasKey r driverState.value.abstractRecordTypesRef.value then
+        if omHasKey
+          (receiverTypeWord te r)
+          driverState.value.abstractRecordTypesRef.value then
           let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
           None
         else
@@ -16314,6 +16323,12 @@ recordForReceiverIdent te r =
 -- `headKeyIdent` (`types/registry.mdk`) is the accessor; its `None` collapses
 -- "rigid" and "no module id yet" because at a ROW lookup both mean the same
 -- thing — the derivation is written at that function.
+-- The receiver's type word (`headKeyTag`), else its bare head name.
+receiverTypeWord : Mono -> String -> String
+receiverTypeWord te r = match headTyconMono te
+  Some hk => headKeyTag hk
+  None => r
+
 receiverTypeIdent : Mono -> Option Ident
 receiverTypeIdent te = match headTyconMono te
   Some hk => headKeyIdent hk
