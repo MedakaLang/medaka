@@ -321,22 +321,20 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 
 ## [`crypto.hmac`](crypto.hmac.md)
 
-HMAC-SHA-256 (RFC 2104) over byte arrays.
+HMAC-SHA-256 (RFC 2104) over byte strings.
 
 - [`ctEq`](crypto.hmac.md#cteq)
 - [`hmacSha256`](crypto.hmac.md#hmacsha256)
-- [`hmacSha256FixedBytes`](crypto.hmac.md#hmacsha256fixedbytes)
 - [`HmacSha256Key`](crypto.hmac.md#hmacsha256key)
 - [`hmacSha256Key`](crypto.hmac.md#hmacsha256key)
 - [`hmacSha256WithKey`](crypto.hmac.md#hmacsha256withkey)
 
 ## [`crypto.sha256`](crypto.sha256.md)
 
-SHA-256 hashing of a byte array (FIPS 180-4).
+SHA-256 hashing of a byte string (FIPS 180-4).
 
 - [`sha256AssumeByteDomainFrom`](crypto.sha256.md#sha256assumebytedomainfrom)
 - [`sha256FoldKeyBlock`](crypto.sha256.md#sha256foldkeyblock)
-- [`sha256FixedBytes`](crypto.sha256.md#sha256fixedbytes)
 - [`sha256`](crypto.sha256.md#sha256)
 
 ## [`fs`](fs.md)

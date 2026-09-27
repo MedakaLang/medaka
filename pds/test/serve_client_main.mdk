@@ -2369,7 +2369,12 @@ runRepoDigest port did =
   let out = match readResponse conn [||]
     Err message => panic "serve_client: getRepo failed: \{message}"
     Ok (200, body, _) =>
-      "\{intToString (arrayLength body)} \{hexOf (sha256 body)}"
+      let digest =
+        sha256
+          (optionOrPanic
+            "sha256: every element must be a byte in 0..255"
+            (B.fromArray body))
+      "\{intToString (arrayLength body)} \{Hex.encode digest}"
     Ok (status, body, _) =>
       panic
         "serve_client: getRepo answered \{intToString status}: \{fromUtf8 body}"
