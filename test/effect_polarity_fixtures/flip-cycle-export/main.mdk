@@ -1,0 +1,32 @@
+-- #3512: widening `T0 Pure` to `T0 Eff` through an invariant slot.  The capped
+-- variance fixpoint read `T0`'s slot as covariant and accepted the widening;
+-- `sneaky`, typed pure, then read a file.  EFFECTS-SEMANTICS.md §9: only
+-- equality is sound for a non-covariant parameter, so this is REJECTED.
+import ty.{T0(..), T1(..), T2(..), T3(..), T4(..)}
+
+type Eff = Unit -> <FileRead "lk/*"> Result String String
+
+type Pure = Unit -> Result String String
+
+widen0 : T0 Pure -> T0 Eff
+widen0 t = t
+
+mk : Ref String -> T0 Pure
+mk out =
+  let k0 : Pure -> Unit = cb => match cb ()
+    Ok s => out := "ok \{s}"
+    Err e => out := "err \{e}"
+  let f : ((Pure -> Unit) -> Unit) -> Unit = g => g k0
+  T0 (T1 (T2 (T3 (TB (T1 (T2 (T3 (TA f))))))))
+
+sneaky : String -> String
+sneaky _ =
+  let out = Ref "untouched"
+  let _ = match widen0 (mk out)
+    T0 (T1 (T2 (T3 (TB (T1 (T2 (T3 (TA f)))))))) =>
+      f (k => k (_ => readFile "lk/x"))
+    _ => ()
+  !out
+
+main : <IO> Unit
+main = println (sneaky "x")

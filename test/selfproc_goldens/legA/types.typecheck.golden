@@ -2201,6 +2201,7 @@ publicValNames : List Decl -> List String
 publishEvidence : Unit -> Unit
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
+publishedPolarity : Polarity -> Polarity
 pureRow : EffRow
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
