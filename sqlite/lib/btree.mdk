@@ -227,10 +227,12 @@ decodeLeafCell : Bytes -> Int -> Int -> Int -> Result String Row
 decodeLeafCell bytes pageSize usable off = bStep "payload-length varint" (runBP
   sqVarint
   bytes
-  off) (payloadLen pos1 => bStep "rowid varint" (runBP
+  off
+  (bytesLength bytes)) (payloadLen pos1 => bStep "rowid varint" (runBP
   sqVarint
   bytes
-  pos1) (rowid pos2 =>
+  pos1
+  (bytesLength bytes)) (rowid pos2 =>
   decodeCellPayload bytes pageSize usable payloadLen rowid pos2))
 
 -- Reassemble a cell's payload (following the overflow chain when it spills),
@@ -248,11 +250,15 @@ decodeCellPayload : Bytes ->
 decodeCellPayload bytes pageSize usable payloadLen rowid pos =
   let local = localPayloadSize usable payloadLen
   if local >= payloadLen then
-    bStep "record" (runBP parseRecord bytes pos) (cells _ =>
+    bStep "record" (runBP parseRecord bytes pos (bytesLength bytes)) (cells _ =>
       Ok (Row rowid cells))
   else do
     payload <- gatherPayload bytes pageSize usable payloadLen local pos
-    bStep "overflow record" (runBP parseRecord payload 0) (cells _ =>
+    bStep "overflow record" (runBP
+      parseRecord
+      payload
+      0
+      (bytesLength payload)) (cells _ =>
       Ok (Row rowid cells))
 
 -- Build the whole payload of a spilling cell: the `local` bytes held in the
@@ -351,11 +357,15 @@ decodeIndexCellPayload : Bytes ->
 decodeIndexCellPayload bytes pageSize usable payloadLen pos =
   let local = localPayloadSizeIndex usable payloadLen
   if local >= payloadLen then
-    bStep "record" (runBP parseRecord bytes pos) (cells _ =>
+    bStep "record" (runBP parseRecord bytes pos (bytesLength bytes)) (cells _ =>
       splitIndexRecord cells)
   else do
     payload <- gatherPayload bytes pageSize usable payloadLen local pos
-    bStep "overflow record" (runBP parseRecord payload 0) (cells _ =>
+    bStep "overflow record" (runBP
+      parseRecord
+      payload
+      0
+      (bytesLength payload)) (cells _ =>
       splitIndexRecord cells)
 
 -- | Decode one index-leaf cell at absolute byte offset `off`:
@@ -368,7 +378,7 @@ decodeIndexLeafCell : Bytes ->
   Result String (List Cell, Int)
 decodeIndexLeafCell bytes pageSize usable off = bStep
   "payload-length varint"
-  (runBP sqVarint bytes off)
+  (runBP sqVarint bytes off (bytesLength bytes))
   (payloadLen pos1 =>
     decodeIndexCellPayload bytes pageSize usable payloadLen pos1)
 
@@ -413,7 +423,8 @@ decodeIndexInteriorCell bytes pageSize usable off = do
   bStep "payload-length varint" (runBP
     sqVarint
     bytes
-    (off + 4)) (payloadLen pos1 =>
+    (off + 4)
+    (bytesLength bytes)) (payloadLen pos1 =>
     decodeIndexInteriorPayload bytes pageSize usable leftChild payloadLen pos1)
 
 decodeIndexInteriorPayload : Bytes ->
@@ -632,7 +643,8 @@ interiorCellRowid : Bytes -> Int -> Result String Int
 interiorCellRowid bytes off = bStep "interior rowid varint" (runBP
   sqVarint
   bytes
-  (off + 4)) (rid _ =>
+  (off + 4)
+  (bytesLength bytes)) (rid _ =>
   Ok rid)
 
 -- | Seek rowid `target` starting from page `pageNum`, handling both

@@ -1,7 +1,7 @@
 {- | Deterministic byte fixtures and small record/JSON helpers shared across
    the pds handler and route tests — secrets, nonces, per-seed contexts, byte
    builders and JSON-field accessors that many test mains built the same way
-   under different names (#3143). -}
+   under different names. -}
 
 import array.{setInPlace}
 import json.{Json(..), get}

@@ -1,5 +1,5 @@
 # META
-source_lines=595
+source_lines=617
 stages=DESUGAR,MARK
 # SOURCE
 {- | Parser combinators over `Bytes`.
@@ -49,10 +49,13 @@ public export data BResult a = BOk a Int | BErr String Int
 -- `ByteParser` alias pins the index to `<>`.
 --
 -- The wrapped function's third argument is the exclusive end of the range it
--- may read: `runBP` passes `length input`, and `runByteParserWithin` passes
--- an arbitrary bound, so every base-level read checks against `end` rather
--- than against `input`'s own length. Every combinator that calls into
--- another parser threads the SAME `end` through unchanged.
+-- may read, and every base-level read checks against `end` rather than
+-- against `input`'s own length. `runBP` takes that bound from its caller
+-- rather than defaulting to `length input`, so a primitive that delegates
+-- through `runBP` inherits whatever bound its own caller was given —
+-- `runByteParser` passes `length input`, `runByteParserWithin` passes its
+-- own `end`. Every combinator that calls into another parser threads the
+-- SAME `end` through unchanged.
 {- | A parser indexed by the effect row `e` its steps may perform.
 
    The wrapped function takes the input, a start position and an exclusive
@@ -65,18 +68,20 @@ public export data ByteParserE (e : Effect) a =
 -- exports has this type.
 export type ByteParser a = ByteParserE <> a
 
-{- | Runs `p` on `input` from position `pos` and returns the raw `BResult`.
+{- | Runs `p` on `input` from position `pos`, bounded to `[pos, end)`, and
+   returns the raw `BResult`.
 
-   `runByteParser` is the form that starts at `0` and returns a `Result`. -}
+   A primitive that delegates to another parser (rather than composing with
+   the combinators above) must call `runBP` with the SAME `end` it was
+   itself handed, never `length input` — otherwise it escapes a bound set by
+   `runByteParserWithin`. `runByteParser`/`runByteParserWithin` are the forms
+   that supply `end` themselves and return a `Result`.
+
+   > runByteParserWithin 0 1 (ByteParserE (input pos end => runBP (takeBytes 2) input pos end)) (fromU8Array [|1, 2, 3|])
+   Err "unexpected end of input at byte 1" -}
 export
-runBP : ByteParserE e a -> Bytes -> Int -> <e> BResult a
-runBP (ByteParserE f) input pos = f input pos (bytesLength input)
-
--- Runs `p` bounded to `[.., end)` rather than to `input`'s own length. Every
--- combinator below calls this, never `runBP`, so a bound set by
--- `runByteParserWithin` survives into every nested parser.
-runBPWithin : ByteParserE e a -> Bytes -> Int -> Int -> <e> BResult a
-runBPWithin (ByteParserE f) input pos end = f input pos end
+runBP : ByteParserE e a -> Bytes -> Int -> Int -> <e> BResult a
+runBP (ByteParserE f) input pos end = f input pos end
 
 -- Higher-kinded impl over the bare head `BResult`.
 export impl Mappable BResult where
@@ -97,7 +102,7 @@ onOk (BOk a pos) k = k a pos
 -- which is what lets the callback's row ride the index.
 
 export impl DeferredMappable ByteParserE where
-  deferMap g p = ByteParserE (input pos end => onOk (runBPWithin
+  deferMap g p = ByteParserE (input pos end => onOk (runBP
     p
     input
     pos
@@ -106,19 +111,19 @@ export impl DeferredMappable ByteParserE where
 
 export impl DeferredApplicative ByteParserE where
   deferPure a = ByteParserE (_ pos _ => BOk a pos)
-  deferAp pf pa = ByteParserE (input pos end => onOk (runBPWithin
+  deferAp pf pa = ByteParserE (input pos end => onOk (runBP
     pf
     input
     pos
-    end) (f p2 => onOk (runBPWithin pa input p2 end) (a p3 => BOk (f a) p3)))
+    end) (f p2 => onOk (runBP pa input p2 end) (a p3 => BOk (f a) p3)))
 
 export impl DeferredThenable ByteParserE where
-  deferThen p k = ByteParserE (input pos end => onOk (runBPWithin
+  deferThen p k = ByteParserE (input pos end => onOk (runBP
     p
     input
     pos
     end) (a p2 =>
-    runBPWithin (k a) input p2 end))
+    runBP (k a) input p2 end))
 
 -- # Alternatives
 
@@ -137,9 +142,9 @@ noMatch = ByteParserE (_ pos _ => BErr "noMatch" pos)
    Ok 2 -}
 export
 orElse : ByteParserE e a -> ByteParserE e a -> ByteParserE e a
-orElse p q = ByteParserE (input pos end => match runBPWithin p input pos end
+orElse p q = ByteParserE (input pos end => match runBP p input pos end
   BOk a pos2 => BOk a pos2
-  BErr _ _ => runBPWithin q input pos end)
+  BErr _ _ => runBP q input pos end)
 
 -- # Primitives
 
@@ -219,7 +224,7 @@ many : ByteParser a -> ByteParser (List a)
 many p = ByteParserE (input pos end => manyGo p input pos end [])
 
 manyGo : ByteParser a -> Bytes -> Int -> Int -> List a -> BResult (List a)
-manyGo p input pos end acc = match runBPWithin p input pos end
+manyGo p input pos end acc = match runBP p input pos end
   BErr _ _ => BOk (reverse acc) pos
   BOk a pos2 =>
     if pos2 == pos then
@@ -307,10 +312,13 @@ chainl1Rest p op acc =
 
 {- | Exactly `n` bytes, as a `Bytes`.
 
-   Fails when fewer than `n` bytes remain.
+   Fails when fewer than `n` bytes remain, even when `n` is far larger than
+   any real input could hold — the bound check never overflows.
 
    > runByteParser (takeBytes 3) (fromU8Array [|10, 20, 30, 40|])
-   Ok Bytes "0a141e" -}
+   Ok Bytes "0a141e"
+   > runByteParser (deferThen anyByte (_ => takeBytes 4611686018427387903)) (fromU8Array [|10, 20, 30, 40|])
+   Err "unexpected end of input at byte 4" -}
 export
 takeBytes : Int -> ByteParser Bytes
 takeBytes n = ByteParserE (takeBytesStep n)
@@ -318,7 +326,11 @@ takeBytes n = ByteParserE (takeBytesStep n)
 takeBytesStep : Int -> Bytes -> Int -> Int -> BResult Bytes
 takeBytesStep n input pos end
   | n <= 0 = BOk (slice input pos pos) pos
-  | pos + n > end = BErr "unexpected end of input" pos
+  -- `end - pos` rather than `pos + n`: `n` can be an arbitrary caller-given
+  -- Int (huge, even negative-looking after wraparound), and `pos + n` traps
+  -- E-INT-OVERFLOW where the base once returned `Err`. The failure position
+  -- is `end`, matching where the input actually ran out.
+  | n > end - pos = BErr "unexpected end of input" end
   | otherwise = BOk (slice input pos (pos + n)) (pos + n)
 
 -- # Integers and floats
@@ -576,7 +588,7 @@ leU64Go n shift acc input pos end
    Err "unexpected byte at byte 0" -}
 export
 runByteParser : ByteParser a -> Bytes -> Result String a
-runByteParser p bytes = match runBP p bytes 0
+runByteParser p bytes = match runBP p bytes 0 (bytesLength bytes)
   BOk a _ => Ok a
   BErr m pos => Err "\{m} at byte \{pos}"
 
@@ -586,17 +598,27 @@ runByteParser p bytes = match runBP p bytes 0
    Behaves as running `p` on `bytes.[start..end]` would, but every length
    check inside `p` sees `end` rather than `bytes`' own length, so a parser
    that reads to the end of its input stops at `end`, not at the end of the
-   larger `bytes` value it was carved from.
+   larger `bytes` value it was carved from. A position in a returned `Err`
+   is always an absolute offset into `bytes` itself, never relative to
+   `start`. `start < 0`, `end < start` or `end > length bytes` is a
+   malformed range and fails without running `p` at all, rather than
+   parsing an empty or truncated input.
 
    > runByteParserWithin 1 3 (many anyByte) (fromU8Array [|10, 20, 30, 40|])
    Ok [20, 30]
    > runByteParserWithin 0 1 beU16 (fromU8Array [|1, 2|])
-   Err "unexpected end of input at byte 1" -}
+   Err "unexpected end of input at byte 1"
+   > runByteParserWithin 2 1 anyByte (fromU8Array [|1, 2, 3|])
+   Err "invalid range [2, 1) for input of length 3" -}
 export
 runByteParserWithin : Int -> Int -> ByteParser a -> Bytes -> Result String a
-runByteParserWithin start end p bytes = match runBPWithin p bytes start end
-  BOk a _ => Ok a
-  BErr m pos => Err "\{m} at byte \{pos}"
+runByteParserWithin start end p bytes
+  | start < 0 || end < start || end > bytesLength bytes =
+    Err
+      "invalid range [\{start}, \{end}) for input of length \{bytesLength bytes}"
+  | otherwise = match runBP p bytes start end
+    BOk a _ => Ok a
+    BErr m pos => Err "\{m} at byte \{pos}"
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "reverse" false "arrayReverse"))))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromU8Array" false) (mem "length" false "bytesLength") (mem "toArray" false))))
@@ -608,21 +630,19 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DData Public "BResult" ("a") ((variant "BOk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "BErr" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "ByteParserE" ("e" "a") ((variant "ByteParserE" (ConPos (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a"))))))))) ())
 (DTypeAlias true "ByteParser" ("a") (TyApp (TyApp (TyCon "ByteParserE") (TyRow () None)) (TyVar "a")))
-(DTypeSig true "runBP" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a")))))))
-(DFunDef false "runBP" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos")) (EApp (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")) (EApp (EVar "bytesLength") (EVar "input"))))
-(DTypeSig false "runBPWithin" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a"))))))))
-(DFunDef false "runBPWithin" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")) (EVar "end")))
+(DTypeSig true "runBP" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a"))))))))
+(DFunDef false "runBP" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")) (EVar "end")))
 (DImpl true "Mappable" ((TyCon "BResult")) () ((im "map" ((PVar "f") (PCon "BOk" (PVar "a") (PVar "p"))) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p"))) (im "map" (PWild (PCon "BErr" (PVar "m") (PVar "p"))) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "p")))))
 (DTypeSig true "onOk" (TyFun (TyApp (TyCon "BResult") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))) (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))))
 (DFunDef false "onOk" ((PCon "BErr" (PVar "m") (PVar "ep")) PWild) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "ep")))
 (DFunDef false "onOk" ((PCon "BOk" (PVar "a") (PVar "pos")) (PVar "k")) (EApp (EApp (EVar "k") (EVar "a")) (EVar "pos")))
-(DImpl true "DeferredMappable" ((TyCon "ByteParserE")) () ((im "deferMap" ((PVar "g") (PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EVar "BOk") (EApp (EVar "g") (EVar "a"))) (EVar "p2")))))))))
-(DImpl true "DeferredApplicative" ((TyCon "ByteParserE")) () ((im "deferPure" ((PVar "a")) (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos"))))) (im "deferAp" ((PVar "pf") (PVar "pa")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "pf")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "f") (PVar "p2")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "pa")) (EVar "input")) (EVar "p2")) (EVar "end"))) (ELam ((PVar "a") (PVar "p3")) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p3")))))))))))
-(DImpl true "DeferredThenable" ((TyCon "ByteParserE")) () ((im "deferThen" ((PVar "p") (PVar "k")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EApp (EVar "k") (EVar "a"))) (EVar "input")) (EVar "p2")) (EVar "end")))))))))
+(DImpl true "DeferredMappable" ((TyCon "ByteParserE")) () ((im "deferMap" ((PVar "g") (PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EVar "BOk") (EApp (EVar "g") (EVar "a"))) (EVar "p2")))))))))
+(DImpl true "DeferredApplicative" ((TyCon "ByteParserE")) () ((im "deferPure" ((PVar "a")) (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos"))))) (im "deferAp" ((PVar "pf") (PVar "pa")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "pf")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "f") (PVar "p2")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "pa")) (EVar "input")) (EVar "p2")) (EVar "end"))) (ELam ((PVar "a") (PVar "p3")) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p3")))))))))))
+(DImpl true "DeferredThenable" ((TyCon "ByteParserE")) () ((im "deferThen" ((PVar "p") (PVar "k")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EApp (EApp (EVar "runBP") (EApp (EVar "k") (EVar "a"))) (EVar "input")) (EVar "p2")) (EVar "end")))))))))
 (DTypeSig true "noMatch" (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")))
 (DFunDef false "noMatch" () (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BErr") (ELit (LString "noMatch"))) (EVar "pos")))))
 (DTypeSig true "orElse" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")))))
-(DFunDef false "orElse" ((PVar "p") (PVar "q")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos2"))) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "q")) (EVar "input")) (EVar "pos")) (EVar "end")))))))
+(DFunDef false "orElse" ((PVar "p") (PVar "q")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos2"))) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "q")) (EVar "input")) (EVar "pos")) (EVar "end")))))))
 (DTypeSig true "failWith" (TyFun (TyCon "String") (TyApp (TyCon "ByteParser") (TyVar "a"))))
 (DFunDef false "failWith" ((PVar "msg")) (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BErr") (EVar "msg")) (EVar "pos")))))
 (DTypeSig true "satisfy" (TyFun (TyFun (TyCon "U8") (TyCon "Bool")) (TyApp (TyCon "ByteParser") (TyCon "U8"))))
@@ -642,7 +662,7 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DTypeSig true "many" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "many" ((PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (EListLit)))))
 (DTypeSig false "manyGo" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "BResult") (TyApp (TyCon "List") (TyVar "a")))))))))
-(DFunDef false "manyGo" ((PVar "p") (PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos"))) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EIf (EBinOp "==" (EVar "pos2") (EVar "pos")) (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos2")) (EApp (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos2")) (EVar "end")) (EBinOp "::" (EVar "a") (EVar "acc")))))))
+(DFunDef false "manyGo" ((PVar "p") (PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos"))) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EIf (EBinOp "==" (EVar "pos2") (EVar "pos")) (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos2")) (EApp (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos2")) (EVar "end")) (EBinOp "::" (EVar "a") (EVar "acc")))))))
 (DTypeSig true "some" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "some" ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EVar "deferThen") (EApp (EVar "many") (EVar "p"))) (ELam ((PVar "xs")) (EApp (EVar "deferPure") (EBinOp "::" (EVar "x") (EVar "xs"))))))))
 (DTypeSig true "sepBy1" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyApp (TyCon "ByteParser") (TyVar "b")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a"))))))
@@ -663,7 +683,7 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DTypeSig true "takeBytes" (TyFun (TyCon "Int") (TyApp (TyCon "ByteParser") (TyCon "Bytes"))))
 (DFunDef false "takeBytes" ((PVar "n")) (EApp (EVar "ByteParserE") (EApp (EVar "takeBytesStep") (EVar "n"))))
 (DTypeSig false "takeBytesStep" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyCon "Bytes")))))))
-(DFunDef false "takeBytesStep" ((PVar "n") (PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "pos")) (EVar "pos"))) (EVar "pos")) (EIf (EBinOp ">" (EBinOp "+" (EVar "pos") (EVar "n")) (EVar "end")) (EApp (EApp (EVar "BErr") (ELit (LString "unexpected end of input"))) (EVar "pos")) (EIf (EVar "otherwise") (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "n")))) (EBinOp "+" (EVar "pos") (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "takeBytesStep" ((PVar "n") (PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "pos")) (EVar "pos"))) (EVar "pos")) (EIf (EBinOp ">" (EVar "n") (EBinOp "-" (EVar "end") (EVar "pos"))) (EApp (EApp (EVar "BErr") (ELit (LString "unexpected end of input"))) (EVar "end")) (EIf (EVar "otherwise") (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "n")))) (EBinOp "+" (EVar "pos") (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "beUint" (TyFun (TyCon "Int") (TyApp (TyCon "ByteParser") (TyCon "Int"))))
 (DFunDef false "beUint" ((PVar "n")) (EApp (EVar "ByteParserE") (EApp (EApp (EVar "beUintGo") (EVar "n")) (ELit (LInt 0)))))
 (DTypeSig false "beUintGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyCon "Int"))))))))
@@ -705,9 +725,9 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DTypeSig false "leU64Go" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "U64") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyCon "U64")))))))))
 (DFunDef false "leU64Go" ((PVar "n") (PVar "shift") (PVar "acc") (PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "BOk") (EVar "acc")) (EVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EApp (EVar "BErr") (ELit (LString "unexpected end of input"))) (EVar "pos")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EVar "U64.fromU8") (EApp (EApp (EVar "index") (EVar "input")) (EVar "pos")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "leU64Go") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EBinOp "+" (EVar "shift") (ELit (LInt 8)))) (EApp (EApp (EVar "U64.bitOr") (EVar "acc")) (EApp (EApp (EVar "U64.shiftLeft") (EVar "b")) (EVar "shift")))) (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "runByteParser" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyCon "Bytes") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))
-(DFunDef false "runByteParser" ((PVar "p") (PVar "bytes")) (EMatch (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "bytes")) (ELit (LInt 0))) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EVar "display") (EVar "pos"))) (ELit (LString "")))))))
+(DFunDef false "runByteParser" ((PVar "p") (PVar "bytes")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "bytesLength") (EVar "bytes"))) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EVar "display") (EVar "pos"))) (ELit (LString "")))))))
 (DTypeSig true "runByteParserWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyCon "Bytes") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
-(DFunDef false "runByteParserWithin" ((PVar "start") (PVar "end") (PVar "p") (PVar "bytes")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "bytes")) (EVar "start")) (EVar "end")) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EVar "display") (EVar "pos"))) (ELit (LString "")))))))
+(DFunDef false "runByteParserWithin" ((PVar "start") (PVar "end") (PVar "p") (PVar "bytes")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "start") (ELit (LInt 0))) (EBinOp "<" (EVar "end") (EVar "start"))) (EBinOp ">" (EVar "end") (EApp (EVar "bytesLength") (EVar "bytes")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "invalid range [")) (EApp (EVar "display") (EVar "start"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "end"))) (ELit (LString ") for input of length "))) (EApp (EVar "display") (EApp (EVar "bytesLength") (EVar "bytes")))) (ELit (LString "")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "bytes")) (EVar "start")) (EVar "end")) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EVar "display") (EVar "pos"))) (ELit (LString "")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "reverse" false "arrayReverse"))))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromU8Array" false) (mem "length" false "bytesLength") (mem "toArray" false))))
@@ -719,21 +739,19 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DData Public "BResult" ("a") ((variant "BOk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "BErr" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "ByteParserE" ("e" "a") ((variant "ByteParserE" (ConPos (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a"))))))))) ())
 (DTypeAlias true "ByteParser" ("a") (TyApp (TyApp (TyCon "ByteParserE") (TyRow () None)) (TyVar "a")))
-(DTypeSig true "runBP" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a")))))))
-(DFunDef false "runBP" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos")) (EApp (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")) (EApp (EVar "bytesLength") (EVar "input"))))
-(DTypeSig false "runBPWithin" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a"))))))))
-(DFunDef false "runBPWithin" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")) (EVar "end")))
+(DTypeSig true "runBP" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a"))))))))
+(DFunDef false "runBP" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")) (EVar "end")))
 (DImpl true "Mappable" ((TyCon "BResult")) () ((im "map" ((PVar "f") (PCon "BOk" (PVar "a") (PVar "p"))) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p"))) (im "map" (PWild (PCon "BErr" (PVar "m") (PVar "p"))) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "p")))))
 (DTypeSig true "onOk" (TyFun (TyApp (TyCon "BResult") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))) (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))))
 (DFunDef false "onOk" ((PCon "BErr" (PVar "m") (PVar "ep")) PWild) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "ep")))
 (DFunDef false "onOk" ((PCon "BOk" (PVar "a") (PVar "pos")) (PVar "k")) (EApp (EApp (EVar "k") (EVar "a")) (EVar "pos")))
-(DImpl true "DeferredMappable" ((TyCon "ByteParserE")) () ((im "deferMap" ((PVar "g") (PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EVar "BOk") (EApp (EVar "g") (EVar "a"))) (EVar "p2")))))))))
-(DImpl true "DeferredApplicative" ((TyCon "ByteParserE")) () ((im "deferPure" ((PVar "a")) (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos"))))) (im "deferAp" ((PVar "pf") (PVar "pa")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "pf")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "f") (PVar "p2")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "pa")) (EVar "input")) (EVar "p2")) (EVar "end"))) (ELam ((PVar "a") (PVar "p3")) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p3")))))))))))
-(DImpl true "DeferredThenable" ((TyCon "ByteParserE")) () ((im "deferThen" ((PVar "p") (PVar "k")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EApp (EVar "k") (EVar "a"))) (EVar "input")) (EVar "p2")) (EVar "end")))))))))
+(DImpl true "DeferredMappable" ((TyCon "ByteParserE")) () ((im "deferMap" ((PVar "g") (PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EVar "BOk") (EApp (EVar "g") (EVar "a"))) (EVar "p2")))))))))
+(DImpl true "DeferredApplicative" ((TyCon "ByteParserE")) () ((im "deferPure" ((PVar "a")) (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos"))))) (im "deferAp" ((PVar "pf") (PVar "pa")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "pf")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "f") (PVar "p2")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "pa")) (EVar "input")) (EVar "p2")) (EVar "end"))) (ELam ((PVar "a") (PVar "p3")) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p3")))))))))))
+(DImpl true "DeferredThenable" ((TyCon "ByteParserE")) () ((im "deferThen" ((PVar "p") (PVar "k")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EApp (EApp (EVar "runBP") (EApp (EVar "k") (EVar "a"))) (EVar "input")) (EVar "p2")) (EVar "end")))))))))
 (DTypeSig true "noMatch#shadow" (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")))
 (DFunDef false "noMatch#shadow" () (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BErr") (ELit (LString "noMatch"))) (EVar "pos")))))
 (DTypeSig true "orElse#shadow" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")))))
-(DFunDef false "orElse#shadow" ((PVar "p") (PVar "q")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos2"))) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "q")) (EVar "input")) (EVar "pos")) (EVar "end")))))))
+(DFunDef false "orElse#shadow" ((PVar "p") (PVar "q")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EApp (EApp (EVar "BOk") (EVar "a")) (EVar "pos2"))) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "q")) (EVar "input")) (EVar "pos")) (EVar "end")))))))
 (DTypeSig true "failWith" (TyFun (TyCon "String") (TyApp (TyCon "ByteParser") (TyVar "a"))))
 (DFunDef false "failWith" ((PVar "msg")) (EApp (EVar "ByteParserE") (ELam (PWild (PVar "pos") PWild) (EApp (EApp (EVar "BErr") (EVar "msg")) (EVar "pos")))))
 (DTypeSig true "satisfy" (TyFun (TyFun (TyCon "U8") (TyCon "Bool")) (TyApp (TyCon "ByteParser") (TyCon "U8"))))
@@ -753,7 +771,7 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DTypeSig true "many" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "many" ((PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos") (PVar "end")) (EApp (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (EListLit)))))
 (DTypeSig false "manyGo" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "BResult") (TyApp (TyCon "List") (TyVar "a")))))))))
-(DFunDef false "manyGo" ((PVar "p") (PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos"))) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EIf (EBinOp "==" (EVar "pos2") (EVar "pos")) (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos2")) (EApp (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos2")) (EVar "end")) (EBinOp "::" (EVar "a") (EVar "acc")))))))
+(DFunDef false "manyGo" ((PVar "p") (PVar "input") (PVar "pos") (PVar "end") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (EVar "end")) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos"))) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EIf (EBinOp "==" (EVar "pos2") (EVar "pos")) (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos2")) (EApp (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos2")) (EVar "end")) (EBinOp "::" (EVar "a") (EVar "acc")))))))
 (DTypeSig true "some" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "some" ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "many") (EVar "p"))) (ELam ((PVar "xs")) (EApp (EMethodRef "deferPure") (EBinOp "::" (EVar "x") (EVar "xs"))))))))
 (DTypeSig true "sepBy1" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyApp (TyCon "ByteParser") (TyVar "b")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a"))))))
@@ -774,7 +792,7 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DTypeSig true "takeBytes" (TyFun (TyCon "Int") (TyApp (TyCon "ByteParser") (TyCon "Bytes"))))
 (DFunDef false "takeBytes" ((PVar "n")) (EApp (EVar "ByteParserE") (EApp (EVar "takeBytesStep") (EVar "n"))))
 (DTypeSig false "takeBytesStep" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyCon "Bytes")))))))
-(DFunDef false "takeBytesStep" ((PVar "n") (PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "pos")) (EVar "pos"))) (EVar "pos")) (EIf (EBinOp ">" (EBinOp "+" (EVar "pos") (EVar "n")) (EVar "end")) (EApp (EApp (EVar "BErr") (ELit (LString "unexpected end of input"))) (EVar "pos")) (EIf (EVar "otherwise") (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "n")))) (EBinOp "+" (EVar "pos") (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "takeBytesStep" ((PVar "n") (PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "pos")) (EVar "pos"))) (EVar "pos")) (EIf (EBinOp ">" (EVar "n") (EBinOp "-" (EVar "end") (EVar "pos"))) (EApp (EApp (EVar "BErr") (ELit (LString "unexpected end of input"))) (EVar "end")) (EIf (EVar "otherwise") (EApp (EApp (EVar "BOk") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "n")))) (EBinOp "+" (EVar "pos") (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "beUint" (TyFun (TyCon "Int") (TyApp (TyCon "ByteParser") (TyCon "Int"))))
 (DFunDef false "beUint" ((PVar "n")) (EApp (EVar "ByteParserE") (EApp (EApp (EVar "beUintGo") (EVar "n")) (ELit (LInt 0)))))
 (DTypeSig false "beUintGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyCon "Int"))))))))
@@ -816,6 +834,6 @@ runByteParserWithin start end p bytes = match runBPWithin p bytes start end
 (DTypeSig false "leU64Go" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "U64") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyCon "U64")))))))))
 (DFunDef false "leU64Go" ((PVar "n") (PVar "shift") (PVar "acc") (PVar "input") (PVar "pos") (PVar "end")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EVar "BOk") (EVar "acc")) (EVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EVar "end")) (EApp (EApp (EVar "BErr") (ELit (LString "unexpected end of input"))) (EVar "pos")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EVar "U64.fromU8") (EApp (EApp (EMethodRef "index") (EVar "input")) (EVar "pos")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "leU64Go") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EBinOp "+" (EVar "shift") (ELit (LInt 8)))) (EApp (EApp (EVar "U64.bitOr") (EVar "acc")) (EApp (EApp (EVar "U64.shiftLeft") (EVar "b")) (EVar "shift")))) (EVar "input")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "end")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "runByteParser" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyCon "Bytes") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))
-(DFunDef false "runByteParser" ((PVar "p") (PVar "bytes")) (EMatch (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "bytes")) (ELit (LInt 0))) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EMethodRef "display") (EVar "pos"))) (ELit (LString "")))))))
+(DFunDef false "runByteParser" ((PVar "p") (PVar "bytes")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "bytesLength") (EVar "bytes"))) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EMethodRef "display") (EVar "pos"))) (ELit (LString "")))))))
 (DTypeSig true "runByteParserWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyCon "Bytes") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
-(DFunDef false "runByteParserWithin" ((PVar "start") (PVar "end") (PVar "p") (PVar "bytes")) (EMatch (EApp (EApp (EApp (EApp (EVar "runBPWithin") (EVar "p")) (EVar "bytes")) (EVar "start")) (EVar "end")) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EMethodRef "display") (EVar "pos"))) (ELit (LString "")))))))
+(DFunDef false "runByteParserWithin" ((PVar "start") (PVar "end") (PVar "p") (PVar "bytes")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "start") (ELit (LInt 0))) (EBinOp "<" (EVar "end") (EVar "start"))) (EBinOp ">" (EVar "end") (EApp (EVar "bytesLength") (EVar "bytes")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "invalid range [")) (EApp (EMethodRef "display") (EVar "start"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "end"))) (ELit (LString ") for input of length "))) (EApp (EMethodRef "display") (EApp (EVar "bytesLength") (EVar "bytes")))) (ELit (LString "")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "bytes")) (EVar "start")) (EVar "end")) (arm (PCon "BOk" (PVar "a") PWild) () (EApp (EVar "Ok") (EVar "a"))) (arm (PCon "BErr" (PVar "m") (PVar "pos")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString " at byte "))) (EApp (EMethodRef "display") (EVar "pos"))) (ELit (LString "")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

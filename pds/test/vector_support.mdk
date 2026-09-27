@@ -1,6 +1,6 @@
-{- | Shared hostile-input assertion for the CAR/MST/repo vector mains
-   (#3143): a vector operation over an adversarial fixture must fail with
-   the expected route named in its error, not merely fail. -}
+{- | Shared hostile-input assertion for the CAR/MST/repo vector mains: a
+   vector operation over an adversarial fixture must fail with the expected
+   route named in its error, not merely fail. -}
 
 import string.{contains}
 
