@@ -181,6 +181,8 @@ import frontend.ast.{
   isFixedWidthHead,
   fixedWidthMask,
   isU64Head,
+  isFixedIntHead,
+  isBoxed64Head,
 }
 import ir.core_ir.{
   CExpr(..),
@@ -5015,6 +5017,26 @@ ffiCrossableHead n =
     || n == "String"
     || n == "Unit"
     || n == "Array"
+    || isFixedIntHead n
+
+-- The fixed-width integers cross as their C twins (FFI-ABI.md §2.1b): the
+-- tagged ones as the narrow C type, with the extension C's ABI expects written
+-- as the LLVM attribute so the platform's rule applies, and `U64`/`I64` as the
+-- 64-bit payload of their cell.
+ffiNarrowTy : String -> Option String
+ffiNarrowTy "U8" = Some "i8 zeroext"
+ffiNarrowTy "U16" = Some "i16 zeroext"
+ffiNarrowTy "U32" = Some "i32 zeroext"
+ffiNarrowTy "I32" = Some "i32 signext"
+ffiNarrowTy _ = None
+
+-- The bare LLVM type of a narrow head.
+ffiNarrowBits : String -> String
+ffiNarrowBits "U8" = "i8"
+ffiNarrowBits "U16" = "i16"
+ffiNarrowBits "U32" = "i32"
+ffiNarrowBits "I32" = "i32"
+ffiNarrowBits _ = "i64"
 
 -- ── the C types, per FFI-ABI.md §2 ──────────────────────────────────────────
 -- §2.1 immediates cross as plain `int64_t` (untagged); §2.2 `Float` crosses as an
@@ -5024,13 +5046,21 @@ ffiCParamTy : String -> String
 ffiCParamTy "Float" = "double"
 ffiCParamTy "String" = "ptr"
 ffiCParamTy "Array" = "ptr"
-ffiCParamTy _ = "i64"
+ffiCParamTy t = optionOr "i64" (ffiNarrowTy t)
 
+-- A return attribute precedes its type (`zeroext i8`), where a parameter's
+-- follows it.
 ffiCRetTy : String -> String
 ffiCRetTy "Unit" = "void"
 ffiCRetTy "Float" = "double"
 ffiCRetTy "String" = "ptr"
-ffiCRetTy _ = "i64"
+ffiCRetTy t = match ffiNarrowTy t
+  Some _ => "\{ffiNarrowAttr t} \{ffiNarrowBits t}"
+  None => "i64"
+
+ffiNarrowAttr : String -> String
+ffiNarrowAttr "I32" = "signext"
+ffiNarrowAttr _ = "zeroext"
 
 -- §2.6: a `Unit` PARAMETER marshals to nothing — it does not appear in the C
 -- call's argument list.  Dropped from the `declare` and the call site alike, by
@@ -5138,6 +5168,20 @@ ffiMarshalOut e ("Array" :: ts) (a :: rest) =
   let buf = ffiArrayIntOut e a
   let (cs, bufs) = ffiMarshalOut e ts rest
   ("ptr " ++ buf :: cs, (a, buf) :: bufs)
+-- §2.1b: a tagged fixed-width value is in its type's range by construction, so
+-- narrowing the untagged word to the C type loses nothing; `U64`/`I64` hand C
+-- the cell's payload.
+ffiMarshalOut e (t :: ts) (a :: rest)
+  | isSome (ffiNarrowTy t) =
+    let n = freshReg e
+    let _ = emit e "  \{n} = trunc i64 \{untagInt e a} to \{ffiNarrowBits t}"
+    let c = "\{optionOr "i64" (ffiNarrowTy t)} \{n}"
+    let (cs, bufs) = ffiMarshalOut e ts rest
+    (c :: cs, bufs)
+  | isBoxed64Head t =
+    let c = "i64 " ++ unboxU64 e a
+    let (cs, bufs) = ffiMarshalOut e ts rest
+    (c :: cs, bufs)
 -- §2.1: `Int`/`Bool`/`Char` are immediates — `ashr 1` to the plain C scalar.
 ffiMarshalOut e (t :: ts) (a :: rest)
   | ffiCrossableHead t =
@@ -5266,7 +5310,23 @@ ffiEmitCall e fname "Array" _ =
 --     is the convention every C caller already writes to, and the result is one
 --     of the exactly two words `if` and `match` both agree about.
 --   * `Char` is VALIDATED and TRAPS — see ffiNormalizeChar.
+-- §2.1b: a narrow result is read at its C width and extended here, never by
+-- trusting the register's upper bits, so it is in its type's range by
+-- construction; a `U64` result is boxed.
 ffiEmitCall e fname rty cargs
+  | isSome (ffiNarrowTy rty) =
+    let r = freshReg e
+    let _ = emit e "  \{r} = call \{ffiCRetTy rty} @\{fname}(\{cargs})"
+    let x = freshReg e
+    let ext = if rty == "I32" then "sext" else "zext"
+    let _ = emit e "  \{x} = \{ext} \{ffiNarrowBits rty} \{r} to i64"
+    (tagInt e x, LTInt)
+  | isU64Head rty =
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @\{fname}(\{cargs})"
+    (boxU64 e r, LTU64)
+  | isBoxed64Head rty =
+    gapE e "foreign call '\{fname}': an I64 result is not lowered yet"
   | ffiCrossableHead rty =
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @\{fname}(\{cargs})"
@@ -5274,6 +5334,8 @@ ffiEmitCall e fname rty cargs
       (ffiNormalizeBool e r, LTBool)
     else if rty == "Char" then
       (ffiNormalizeChar e fname r, LTChar)
+    else if rty == "Int" then
+      (ffiCheckInt e fname r, LTInt)
     else
       (tagInt e r, ffiImmediateLTy rty)
   | otherwise =
@@ -5348,6 +5410,34 @@ ffiNormalizeChar e fname r =
       e
       (LString
         "foreign call '\{fname}' returned a value that is not a valid Char: a Char must be a Unicode scalar, i.e. in 0..1114111 excluding the UTF-16 surrogates 55296..57343 (compiler/FFI-ABI.md section 2.1); the C function must return a valid Unicode scalar for a 'Char' result")
+  let _ = emit e "  call void @mdk_panic(i64 \{msg})"
+  let _ = emit e "  unreachable"
+  let _ = emit e (okL ++ ":")
+  tagInt e r
+
+-- Inbound `Int`: an `int64_t` outside `Int`'s 63 bits would lose its top bit to
+-- the tag, a different number at exit 0, so the boundary traps instead, as it
+-- does for an invalid `Char`.  The value fits exactly when shifting it left one
+-- bit and back reproduces it.  A C function that returns the full `int64_t`
+-- range is declared `I64`.
+ffiCheckInt : Emit -> String -> String -> String
+ffiCheckInt e fname r =
+  let n = intToString (freshLocal e)
+  let okL = "ffiint_ok" ++ n
+  let badL = "ffiint_bad" ++ n
+  let t = freshReg e
+  let back = freshReg e
+  let fits = freshReg e
+  let _ = emit e "  \{t} = shl i64 \{r}, 1"
+  let _ = emit e "  \{back} = ashr i64 \{t}, 1"
+  let _ = emit e "  \{fits} = icmp eq i64 \{back}, \{r}"
+  let _ = emit e "  br i1 \{fits}, label %\{okL}, label %\{badL}"
+  let _ = emit e (badL ++ ":")
+  let (msg, _) =
+    emitLit
+      e
+      (LString
+        "foreign call '\{fname}' returned an int64_t outside Int's range -4611686018427387904..4611686018427387903 (compiler/FFI-ABI.md section 2.1); declare the result I64 to receive the full int64_t range")
   let _ = emit e "  call void @mdk_panic(i64 \{msg})"
   let _ = emit e "  unreachable"
   let _ = emit e (okL ++ ":")
