@@ -22578,9 +22578,11 @@ intersectDeclAtoms (first :: rest) =
 -- registered — a forward reference, or the type itself, as in `data List a =
 -- Nil | Cons a (List a)` — reads `PCo` (`polarityAtOr None`), which is exactly
 -- today's (fully lenient) behaviour: it can only fail to tighten, never reject
--- something that used to be accepted.  That default is what makes the
--- self-recursive `List` come out `PCo`, and `declEnvPolarityEntriesFix`
--- iterates it away for everything but genuine self-recursion.
+-- something that used to be accepted.  Inside `declEnvPolarityEntriesFix`
+-- no own head misses: every declaration is seeded at `PPhantom`, so a self or
+-- forward reference reads "no occurrence yet", the join's unit, and the
+-- self-recursive `List` comes out `PCo` by convergence.  The `None` default
+-- is left to the single-pass `registerVariants` path.
 -- 🚨 THAT PARAGRAPH SCOPES TO THE UNREGISTERED-*TyCon*-HEAD MISS ONLY, AND IS
 -- NOT THE ABSTRACT-HEAD ARM (#2107).  The two were one sentence until #2107
 -- separated them: a head that is a type *parameter* (`data W f a = MkW (f a)`)
@@ -39030,10 +39032,11 @@ initialEnv =
 -- declared above the type it wraps read the lenient `PCo` default and never
 -- tightened (see `declEnvPolarityEntriesFix`).  Seeding the ref with the
 -- fixpoint over THIS CALL'S OWN decl list first makes the per-decl walk
--- re-derive the already-correct value instead: a fixpoint is by definition
--- stable under one more application of the same pass, and `lookupTab`'s
--- first-match over the re-derived prepend then agrees with the seed row it
--- shadows.
+-- find the seeded row and skip the recompute (`registerVariants` recomputes
+-- only a key the table lacks).  The seeded row is the published one, with
+-- "no occurrence" read as `PCo`, so it is NOT a fixpoint of one more pass
+-- over itself: a pass reading a published phantom slot as `PCo` can tighten.
+-- That is why the skip, not a recompute, is what keeps the seed.
 --
 -- 🚨 THE FIXPOINT SCOPE IS EXACTLY THE REGISTRATION SCOPE — [ds], never `prog`
 -- reached from ambient state.  Two of this function's four call sites pass a
