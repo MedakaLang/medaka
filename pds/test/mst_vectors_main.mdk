@@ -1,7 +1,7 @@
 {- | P1-B external MST corpus and hostile-structure driver. -}
 
 import array.{drop}
-import bytes.{fromArray, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse, sortBy}
@@ -161,14 +161,15 @@ runCorpus (line :: rest) current passed total =
 
 mustNode : DagCbor -> Array Int
 mustNode value =
-  resultOrPanic
-    "mst_vectors: hostile node encoding failed"
-    (dagCborEncode value)
+  toArray
+    (resultOrPanic
+      "mst_vectors: hostile node encoding failed"
+      (dagCborEncode value))
 
 entryValueWithTree : Array Int -> Int -> Cid -> DagCbor -> DagCbor
 entryValueWithTree key prefix value tree = DcMap [
   ("p", DcInt prefix),
-  ("k", DcBytes key),
+  ("k", DcBytes (fromArrayAssumeByteDomain key)),
   ("v", DcLink value),
   ("t", tree),
 ]

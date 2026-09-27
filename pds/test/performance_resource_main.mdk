@@ -2,7 +2,7 @@
 
 import array.{drop}
 import bytes as B
-import bytes.{Bytes, encodeUtf8, toArray}
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain, toArray}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 import hex.{decode}
@@ -67,8 +67,8 @@ import crypto.sha256.{sha256}
 import string.{contains, fromUtf8, toInt, toUtf8}
 import test.fixture_support.{testNonce, testSecret}
 
-mustBytes : Result String (Array Int) -> Array Int
-mustBytes (Ok bytes) = bytes
+mustBytes : Result String Bytes -> Array Int
+mustBytes (Ok bytes) = toArray bytes
 mustBytes (Err message) =
   panic "performance_resource: encoding failed: \{message}"
 
@@ -93,6 +93,12 @@ intBytes : Int -> Array Int
 intBytes n =
   [|bitAnd (shiftRight n 16) 255, bitAnd (shiftRight n 8) 255, bitAnd n 255|]
 
+-- Door: `car`/`blockstore` speak `Bytes` blocks; this driver's own block
+-- lists are still `Array Int`.
+blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
+blockRowsToBytesDoor =
+  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
+
 carRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
 carRows n i acc =
   if i >= n then
@@ -112,9 +118,8 @@ mstRows n i acc =
 runCar : Int -> <IO> Unit
 runCar n = match carRows n 0 []
   [] => panic "performance_resource: CAR size must be positive"
-  rows@((root, _) :: _) => match carEncode [root] rows
-    Ok bytes =>
-      println "CAR \{intToString n} \{intToString (arrayLength bytes)}"
+  rows@((root, _) :: _) => match carEncode [root] (blockRowsToBytesDoor rows)
+    Ok bytes => println "CAR \{intToString n} \{intToString (B.length bytes)}"
     Err message => panic "performance_resource: CAR scaling failed: \{message}"
 
 runMst : Int -> <IO> Unit
@@ -222,7 +227,10 @@ perfSignedCommit dataCid =
           ("data", DcLink dataCid),
           ("rev", DcString (tidToString perfRev)),
           ("prev", DcNull),
-          ("sig", DcBytes (signatureCompact signature)),
+          (
+            "sig",
+            DcBytes (fromArrayAssumeByteDomain (signatureCompact signature)),
+          ),
         ]))
   (cidForDagCborDoor signed, signed)
 
@@ -263,7 +271,7 @@ runExport n =
   let dataCid = mstRootCid tree
   let (commitCid, signed) = perfSignedCommit dataCid
   let blocks = perfGraphBlocks rows tree commitCid signed
-  match blockStoreFromBlocks blocks
+  match blockStoreFromBlocks (blockRowsToBytesDoor blocks)
     Err message =>
       panic "performance_resource: export block store failed: \{message}"
     Ok store => match repoExportGraph commitCid signed dataCid store
@@ -342,7 +350,7 @@ nodeEntries n i prior value acc =
       Some previous => prefix3 previous key
     let entry = DcMap [
       ("p", DcInt prefix),
-      ("k", DcBytes (drop prefix key)),
+      ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
       ("v", DcLink value),
       ("t", DcNull),
     ]
@@ -371,7 +379,7 @@ depthNode key value child =
             DcArray [
               DcMap [
                 ("p", DcInt 0),
-                ("k", DcBytes key),
+                ("k", DcBytes (fromArrayAssumeByteDomain key)),
                 ("v", DcLink value),
                 ("t", DcNull),
               ],
@@ -435,17 +443,18 @@ runLimits =
     reject
       "car-container-over"
       "container exceeds"
-      (carDecode (arrayMake (maxCarBytes + 1) 0)),
+      (carDecode (fromArrayAssumeByteDomain (arrayMake (maxCarBytes + 1) 0))),
     reject
       "car-section-over"
       "section exceeds"
       (carDecode
-        (framedHeader root
-          ++ toArray (uvarintEncode (maxCarSectionBytes + 1)))),
+        (fromArrayAssumeByteDomain
+          (framedHeader root
+            ++ toArray (uvarintEncode (maxCarSectionBytes + 1))))),
     reject
       "car-blocks-over"
       "block count exceeds"
-      (carEncode [root] tooManyCar),
+      (carEncode [root] (blockRowsToBytesDoor tooManyCar)),
     reject
       "mst-blocks-over"
       "node block count exceeds"

@@ -25,7 +25,7 @@
    the empty MST root node as well as the commit. -}
 
 import array.{sliceClamped}
-import bytes.{encodeUtf8}
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
 import list.{lookup, range, sort}
 import string.{toUtf8}
 import test.{expectEqual}
@@ -140,16 +140,19 @@ frameParts : Result String (Array Int) -> (DagCbor, DagCbor)
 frameParts (Err message) = panic "sync_event: frame refused: \{message}"
 frameParts (Ok bytes) = partsAt bytes 1
 
+decodePart : Array Int -> Int -> Int -> Result String DagCbor
+decodePart bytes lo hi =
+  dagCborDecode (fromArrayAssumeByteDomain (sliceClamped lo hi bytes))
+
 partsAt : Array Int -> Int -> (DagCbor, DagCbor)
 partsAt bytes cut =
   if cut > arrayLength bytes then
     panic "sync_event: frame carries no decodable header object"
-  else match dagCborDecode (sliceClamped 0 cut bytes)
+  else match decodePart bytes 0 cut
     Err _ => partsAt bytes (cut + 1)
-    Ok header =>
-      match dagCborDecode (sliceClamped cut (arrayLength bytes) bytes)
-        Err _ => partsAt bytes (cut + 1)
-        Ok body => (header, body)
+    Ok header => match decodePart bytes cut (arrayLength bytes)
+      Err _ => partsAt bytes (cut + 1)
+      Ok body => (header, body)
 
 -- The body's keys in the order they were encoded, which DAG-CBOR fixes: by
 -- key length first, then bytewise. A key the builder must NOT emit is absent
@@ -168,7 +171,7 @@ boolOf : DagCbor -> String -> Option Bool
 boolOf value name = asBool (bodyField name value)
 
 -- A CAR's roots and its blocks, each as CID text, in the order it holds them.
-carCidsOf : Array Int -> (List String, List String)
+carCidsOf : Bytes -> (List String, List String)
 carCidsOf bytes = match carDecode bytes
   Ok car => (
     map cidToString (carRoots car),
@@ -242,7 +245,7 @@ genesisEvent =
    varied run to run would still be a defect. -}
 test "a genesis commit's CAR carries the empty MST root beside the commit" =
   let commit = cidToString (repoCommitCid (repoLatestCommit genesisRepo))
-  expectEqual (carCidsOf genesisEvent.blocksCar) (
+  expectEqual (carCidsOf (fromArrayAssumeByteDomain genesisEvent.blocksCar)) (
     [commit],
     sort [commit, cidToString (mstRootCid mstEmpty)],
   )

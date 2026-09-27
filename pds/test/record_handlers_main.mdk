@@ -17,7 +17,7 @@
    `validationStatus: "unknown"` — this server grades nothing against a
    lexicon and says so rather than claiming a check it never ran. -}
 
-import bytes.{fromArray, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
 import io.{readLines}
@@ -93,9 +93,10 @@ mustTid : String -> Tid
 mustTid text = resultOrPanic "record_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text = match dagCborDecode (mustHex text)
-  Ok value => dagCborToLexJson value
-  Err message => panic "record_handlers: malformed record: \{message}"
+mustRecordJson text =
+  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
+    Ok value => dagCborToLexJson value
+    Err message => panic "record_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =

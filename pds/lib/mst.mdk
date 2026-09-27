@@ -197,7 +197,8 @@ splitLayer ((entry@(MstEntry _ _ depth)) :: rest) layer =
 
 mustEncodeNode : DagCbor -> Array Int
 mustEncodeNode value =
-  resultOrPanic "mst: internal node encoding failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "mst: internal node encoding failed" (dagCborEncode value))
 
 oldLeaves : List NodeEntry -> List OldLeaf
 oldLeaves [] = []
@@ -337,7 +338,7 @@ buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
     Some prior => commonPrefix prior key
   let wire = DcMap [
     ("p", DcInt prefix),
-    ("k", DcBytes (drop prefix key)),
+    ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
     ("v", DcLink value),
     ("t", childValue right),
   ]
@@ -695,7 +696,8 @@ decodeEntries : List DagCbor ->
   Result String (List DecodedEntry)
 decodeEntries [] _ acc = Ok (reverse acc)
 decodeEntries (value :: rest) previous acc = match value
-  DcMap [("k", DcBytes suffix), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] =>
+  DcMap [("k", DcBytes suffixBytes), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] =>
+    let suffix = toArray suffixBytes
     if prefix < 0 then
       Err "mst: prefix length must be non-negative"
     else match previous
@@ -732,7 +734,7 @@ decodeEntries (value :: rest) previous acc = match value
   _ => Err "mst: invalid node entry form"
 
 decodeNode : Array Int -> Result String DecodedNode
-decodeNode bytes = match dagCborDecode bytes
+decodeNode bytes = match dagCborDecode (fromArrayAssumeByteDomain bytes)
   Err message => Err "mst: \{message}"
   Ok value => match value
     DcMap [("e", DcArray entries), ("l", left)] =>

@@ -3,7 +3,7 @@
    Every mutation returns a fresh state.  Record, MST, and commit blocks cross
    the verified blockstore boundary before the state becomes observable. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{encode}
 import list.{reverse}
 import regex.{Regex, isFullMatchBytes, mustCompile}
@@ -247,14 +247,21 @@ signedValue did dataCid rev signature = DcMap [
   ("data", DcLink dataCid),
   ("rev", DcString (tidToString rev)),
   ("prev", DcNull),
-  ("sig", DcBytes (signatureCompact signature)),
+  ("sig", DcBytes (fromArrayAssumeByteDomain (signatureCompact signature))),
 ]
 
 encodeCommit : String -> DagCbor -> Result String (Array Int)
 encodeCommit label value =
   mapErr
     (message => "repo: \{label} commit encoding failed: \{message}")
-    (dagCborEncode value)
+    (map toArray (dagCborEncode value))
+
+-- Door: `blockstore`/`car` speak `Bytes`; `repo`'s own block lists are still
+-- `Array Int` (`lib.repo` moves in a later slice). One conversion helper
+-- covers every whole-block-list call.
+blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
+blockRowsToBytesDoor =
+  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
 
 buildCommit : String ->
   SecretKey ->
@@ -279,10 +286,10 @@ buildCommit did secret rev tree store = do
   let commitCid = cidForDagCborDoor signed
   withTree <- mapErr
     (message => "repo: storing MST failed: \{message}")
-    (blockStoreAddMany (mstNodeBlocks tree) store)
+    (blockStoreAddMany (blockRowsToBytesDoor (mstNodeBlocks tree)) store)
   complete <- mapErr
     (message => "repo: storing commit failed: \{message}")
-    (blockStorePut commitCid signed withTree)
+    (blockStorePut commitCid (fromArrayAssumeByteDomain signed) withTree)
   Ok (
     RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
     complete,
@@ -351,10 +358,10 @@ repoFromBlocks did secret commitCid blocks = do
   () <- validateDid did
   store <- mapErr
     (message => "repo: invalid persisted blocks: \{message}")
-    (blockStoreFromBlocks blocks)
+    (blockStoreFromBlocks (blockRowsToBytesDoor blocks))
   match blockStoreGet commitCid store
     None => Err "repo: missing persisted commit block"
-    Some signed => rehydrate did secret commitCid signed store
+    Some signed => rehydrate did secret commitCid (toArray signed) store
 
 -- ── reading a repository ────────────────────────────────────────────────────
 
@@ -463,7 +470,7 @@ stageRecord record store = do
   bytes <- mapErr
     (message => "repo: record encoding failed: \{message}")
     (dagCborEncode record)
-  let recordCid = cidForDagCborDoor bytes
+  let recordCid = cidForDagCborDoor (toArray bytes)
   withRecord <- mapErr
     (message => "repo: storing record failed: \{message}")
     (blockStorePut recordCid bytes store)
@@ -691,7 +698,7 @@ entryLinks ((DcMap [("k", DcBytes _), ("p", DcInt _), ("t", child), ("v", DcLink
     _ => Err "repo: tampered graph node child"
 entryLinks _ _ _ = Err "repo: tampered graph node entry"
 
-nodeLinks : Array Int -> Result String (List Cid, List Cid)
+nodeLinks : Bytes -> Result String (List Cid, List Cid)
 nodeLinks bytes = match dagCborDecode bytes
   Err message => Err "repo: tampered graph node: \{message}"
   Ok (DcMap [("e", DcArray entries), ("l", left)]) =>
@@ -738,7 +745,12 @@ walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
       let mergedChildren = fold (acc child => cidSeqAdd child acc) next children
       let mergedLeaves =
         fold (acc leaf => cidSeqAdd leaf acc) leaves foundLeaves
-      walkLayer rest store mergedChildren mergedLeaves ((cid, bytes) :: blocks)
+      walkLayer
+        rest
+        store
+        mergedChildren
+        mergedLeaves
+        ((cid, toArray bytes) :: blocks)
 
 recordBlocks : List Cid ->
   BlockStore ->
@@ -747,7 +759,7 @@ recordBlocks : List Cid ->
 recordBlocks [] _ acc = Ok (reverse acc)
 recordBlocks (cid :: rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
-  Some bytes => recordBlocks rest store ((cid, bytes) :: acc)
+  Some bytes => recordBlocks rest store ((cid, toArray bytes) :: acc)
 
 {- | Validate a commit root and export this implementation's deterministic order:
    commit, breadth-first MST nodes, then reachable record leaves. -}
@@ -761,7 +773,7 @@ repoExportGraph commitCid commitBytes dataRoot store =
   match blockStoreGet commitCid store
     None => Err "repo: missing graph commit block"
     Some storedCommit =>
-      if storedCommit /= commitBytes
+      if toArray storedCommit /= commitBytes
         || not (cidEqual commitCid (cidForDagCborDoor commitBytes)) then
         Err "repo: tampered graph commit block"
       else match decodeSignedCommit commitBytes
@@ -778,9 +790,9 @@ repoExportGraph commitCid commitBytes dataRoot store =
                 Ok records =>
                   let blocks =
                     (commitCid, arrayCopy commitBytes) :: nodes ++ records
-                  match carEncode [commitCid] blocks
+                  match carEncode [commitCid] (blockRowsToBytesDoor blocks)
                     Err message => Err "repo: CAR export failed: \{message}"
-                    Ok bytes => Ok (blocks, bytes)
+                    Ok bytes => Ok (blocks, toArray bytes)
 
 -- | Deterministic full repository CAR bytes.
 export
@@ -801,7 +813,7 @@ hasField _ [] = False
 hasField name ((key, _) :: rest) = name == key || hasField name rest
 
 decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
-decodeSignedCommit bytes = match dagCborDecode bytes
+decodeSignedCommit bytes = match dagCborDecode (fromArrayAssumeByteDomain bytes)
   Err message => Err "repo: invalid commit CBOR: \{message}"
   Ok (DcMap fields) =>
     if not (hasField "prev" fields) then
@@ -817,7 +829,7 @@ decodeSignedCommit bytes = match dagCborDecode bytes
             (tidParse revText)
           signature <- mapErr
             (message => "repo: invalid compact signature: \{message}")
-            (signatureFromCompact compact)
+            (signatureFromCompact (toArray compact))
           Ok (did, dataCid, rev, signature)
       _ =>
         Err

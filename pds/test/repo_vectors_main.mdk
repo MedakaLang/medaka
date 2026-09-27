@@ -1,7 +1,7 @@
 {- | P1-D official repository transcript and named rejection driver. -}
 
 import array as A
-import bytes.{fromArray, fromU8Array, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, fromU8Array, toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{contains, join, repeat, split, toInt, toUtf8}
@@ -80,11 +80,14 @@ mustSecret text =
 
 mustRecord : String -> DagCbor
 mustRecord text =
-  resultOrPanic "repo_vectors: malformed record" (dagCborDecode (mustHex text))
+  resultOrPanic
+    "repo_vectors: malformed record"
+    (dagCborDecode (fromArrayAssumeByteDomain (mustHex text)))
 
 mustEncode : DagCbor -> Array Int
 mustEncode value =
-  resultOrPanic "repo_vectors: test encoding failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "repo_vectors: test encoding failed" (dagCborEncode value))
 
 mustRepo : Result String Repo -> Repo
 mustRepo (Ok repo) = repo
@@ -171,7 +174,9 @@ gradeOperation line repo = gradeOperationParts (split "\t" line) repo
 observedRecord : Array Int -> Repo -> Option (Cid, Array Int)
 observedRecord path repo = match repoLookup path repo
   Ok (Some value) => match dagCborEncode value
-    Ok bytes => Some (cidForDagCborDoor bytes, bytes)
+    Ok bytes =>
+      let arr = toArray bytes
+      Some (cidForDagCborDoor arr, arr)
     Err _ => None
   Ok None => None
   Err _ => None
@@ -271,7 +276,7 @@ mustPut : Cid -> Array Int -> BlockStore -> BlockStore
 mustPut cid bytes store =
   resultOrPanic
     "repo_vectors: test block insertion failed"
-    (blockStorePut cid bytes store)
+    (blockStorePut cid (fromArrayAssumeByteDomain bytes) store)
 
 testCommitFields : String -> Cid -> List (String, DagCbor)
 testCommitFields did dataCid = [
@@ -280,8 +285,9 @@ testCommitFields did dataCid = [
   (
     "sig",
     DcBytes
-      (mustHex
-        "aaa6e79c2c161c48050d7439ae42a57637ccc38395614cfcd1a32d2836a5f6f32cb486409b88623d294c92f4557e1b92332957d4efd8cba967f79f4231f85aaa"),
+      (fromArrayAssumeByteDomain
+        (mustHex
+          "aaa6e79c2c161c48050d7439ae42a57637ccc38395614cfcd1a32d2836a5f6f32cb486409b88623d294c92f4557e1b92332957d4efd8cba967f79f4231f85aaa")),
   ),
   ("data", DcLink dataCid),
   ("prev", DcNull),
@@ -301,7 +307,7 @@ malformedBoundExport =
           DcArray [
             DcMap [
               ("p", DcInt 0),
-              ("k", DcBytes [||]),
+              ("k", DcBytes (fromArrayAssumeByteDomain [||])),
               ("v", DcLink recordCid),
               ("t", DcNull),
             ],
@@ -327,9 +333,10 @@ removeField name ((key, value) :: rest) =
   if key == name then rest else (key, value) :: removeField name rest
 
 commitFields : RepoCommit -> List (String, DagCbor)
-commitFields commit = match dagCborDecode (repoCommitSignedBytes commit)
-  Ok (DcMap fields) => fields
-  _ => panic "repo_vectors: latest commit did not decode"
+commitFields commit =
+  match dagCborDecode (fromArrayAssumeByteDomain (repoCommitSignedBytes commit))
+    Ok (DcMap fields) => fields
+    _ => panic "repo_vectors: latest commit did not decode"
 
 futureTid : RepoCommit -> Int -> Tid
 futureTid commit offset =
@@ -350,7 +357,12 @@ runHostile did secret repo path presentRecord =
   let missingPrev = mustEncode (DcMap (removeField "prev" fields))
   let badVersion = mustEncode (DcMap (setField "version" (DcInt 2) fields))
   let badSig =
-    mustEncode (DcMap (setField "sig" (DcBytes (arrayMake 64 0)) fields))
+    mustEncode
+      (DcMap
+        (setField
+          "sig"
+          (DcBytes (fromArrayAssumeByteDomain (arrayMake 64 0)))
+          fields))
   let tampered =
     let bytes = arrayCopy signed
     let () =
