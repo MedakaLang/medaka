@@ -1,9 +1,12 @@
 # META
-source_lines=845
+source_lines=855
 stages=DESUGAR,MARK
 # SOURCE
 import types.effect_domain.{canonParam, drender, Param(..)}
-import types.effect_authority.{Authority(..), authSub}
+import types.effect_authority.{
+  Authority(..), authSub, authVars, authHasVars, authvarDefaultName
+}
+import types.effect_invocation.{InvocationOps, invocationSummary}
 import types.effect_rows.{
   effLabelOrigin,
   atomLabelOf,
@@ -14,8 +17,6 @@ import types.effect_rows.{
   atomsUnion,
   renderAtom,
   Atom(..),
-  effrowLabels,
-  EffRow(..),
 }
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
@@ -67,14 +68,10 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude}
 import tools.check.{checkHasErrors}
-import types.repr.{
-  Scheme(..),
-  Mono(..),
-  normalize,
-  tupleSpine,
-}
+import types.repr.{Scheme(..)}
 import types.typecheck.{
   checkOneSchemeFull,
+  lastInvocationOps,
   checkModulesEntryFullSplitK,
   decodeSetParam,
   decodeWrittenParam,
@@ -336,29 +333,10 @@ collectOpts [] = []
 collectOpts (None :: rest) = collectOpts rest
 collectOpts ((Some x) :: rest) = x :: collectOpts rest
 
--- ── 4. effect ATOMS from a scheme (WS-1b: keep the param, not just the label) ─
--- Walk the normalized mono: at each TFun, collect the row's atoms (effrowLabels
--- already returns Atoms), recurse into the result; at TApp recurse into both
--- sides.  Deduped/sorted by label.  Mirror mono_effects / scheme_effects, but
--- the threaded representation is now `Atom` so the param survives to the compare.
-monoEffects : Mono -> List Atom
-monoEffects m = match normalize m
-  TFun _ row result =>
-    let atoms = effrowLabels row
-    atomsUnion atoms (monoEffects result)
-  -- Fork C (Stage 1 preservation): a tuple TYPE is now a `__tupleN__`-headed
-  -- `TApp` spine rather than an atomic `Mono.TTuple`, which the catch-all arm
-  -- `_ => []` answers with no element effects; reproduce
-  -- that exactly here instead of letting the generic `TApp` arm recurse in.
-  TApp a b => match tupleSpine (TApp a b)
-    Some _ => []
-    None => atomsUnion (monoEffects a) (monoEffects b)
-  _ => []
-
-export
-schemeEffects : Scheme -> List Atom
-schemeEffects (Forall _ _ _ _ force mono) =
-  atomsUnion (effrowLabels force) (monoEffects mono)
+-- ── 4. effect ATOMS from a scheme ────────────────────────────────────────
+-- What the host can make an entry perform: the invocation summary
+-- (`types/effect_invocation.mdk`), over the checked program's own
+-- constructors and variance table (`lastInvocationOps`).
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
@@ -367,11 +345,13 @@ atomLabels : List Atom -> List String
 atomLabels atoms = map renderAtom atoms
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
-fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
-fnEffectsTable [] = []
-fnEffectsTable ((name, sch) :: rest) = match schemeEffects sch
-  [] => fnEffectsTable rest
-  effs => (name, effs) :: fnEffectsTable rest
+fnEffectsTable : InvocationOps ->
+  List (String, Scheme) ->
+  List (String, List Atom)
+fnEffectsTable _ [] = []
+fnEffectsTable ops ((name, sch) :: rest) = match invocationSummary ops sch
+  [] => fnEffectsTable ops rest
+  effs => (name, effs) :: fnEffectsTable ops rest
 
 -- Does fn `name` carry an atom whose LABEL is `label`?  (Chain reconstruction
 -- stays label-keyed — the param does not participate in the call-graph trace.)
@@ -462,6 +442,27 @@ permitOf a policy = match policyEntryFor a policy
   Some written => match decodeWrittenParam (atomLabelOf a) written
     Ok pp => if authSub (atomAuth a) (AConst pp) then Permitted else Forbidden
     Err m => Malformed m
+
+-- An atom whose authority is still a variable at the host boundary, refused
+-- by a policy entry narrower than the whole label: the entry may well cover
+-- what the caller will choose, but nothing proves it.
+notProvenLines : List Atom -> List (String, EffParamTy) -> List String
+notProvenLines effs policy =
+  flatMap
+    (a => match (authHasVars (atomAuth a), permitOf a policy)
+      (True, Forbidden) => match policyEntryFor a policy
+        Some _ => ["   not proven: \{renderAtom a} (\{unresolvedWhy a})\n"]
+        None => []
+      _ => [])
+    effs
+
+-- Why an atom's authority is unresolved: the variables it still names.
+export
+unresolvedWhy : Atom -> String
+unresolvedWhy a =
+  let names =
+    map (v => "`" ++ authvarDefaultName v ++ "`") (authVars (atomAuth a))
+  "authority \{joinWith ", " names} is chosen by the caller"
 
 -- The entry for an atom: its qualified key first, then its bare label.
 policyEntryFor : Atom -> List (String, EffParamTy) -> Option EffParamTy
@@ -606,14 +607,15 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
   let (preludeSchemes, ownSchemes) =
     checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
+  let ops = lastInvocationOps ()
+  let effTable = fnEffectsTable ops schemes
   -- Existence is checked against the complete scheme list, not effTable:
   -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
   -- a name index would reject a real pure entry exactly like an absent one.
   match lookupAssoc fnName schemes
     None => PolicyReject "rejected. no '\{fnName}' entry found\n"
     Some fnScheme =>
-      let fnEffects = schemeEffects fnScheme
+      let fnEffects = invocationSummary ops fnScheme
       let forbidden = forbiddenLabels fnEffects policy
       match forbidden
         [] =>
@@ -631,7 +633,8 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
             "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
           let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
           let problems = stringConcat (policyProblems fnEffects policy)
-          PolicyReject (header ++ via ++ problems)
+          let unproven = stringConcat (notProvenLines fnEffects policy)
+          PolicyReject (header ++ via ++ problems ++ unproven)
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -665,7 +668,8 @@ listIsEmpty _ = False
 -- PPrefix (Some s) → 'Label = "s"'
 -- PUnit / PPrefix None → 'Label = true'
 -- An authority left symbolic at the host boundary is reported conservatively
--- as the bare grant (`Label = true`), never omitted.
+-- as the bare grant (`Label = true`), never omitted, with a TOML comment
+-- naming the variables that left it unresolved.
 atomToToml : (Atom -> String) -> Atom -> String
 atomToToml keyOf a =
   let label = keyOf a
@@ -675,7 +679,11 @@ atomToToml keyOf a =
       PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
       PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
       _ => label ++ " = true"
-    None => label ++ " = true"
+    None =>
+      if authHasVars (atomAuth a) then
+        "\{label} = true  # unresolved: \{unresolvedWhy a}"
+      else
+        label ++ " = true"
 
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
 -- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
@@ -785,7 +793,9 @@ runManifest preludeKey rtD coreD modsD fnName =
       -- index would refuse a real pure entry exactly like an absent one.
       match lookupAssoc fnName schemes
         None => ManifestNoSuchFn fnName
-        Some sch => ManifestOk (manifestToml (schemeEffects sch))
+        Some sch =>
+          ManifestOk
+            (manifestToml (invocationSummary (lastInvocationOps ()) sch))
     _ => ManifestTypeErrors errs
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
@@ -842,22 +852,23 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let (preludeSchemes, ownSchemes) =
     checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
+  let effTable = fnEffectsTable (lastInvocationOps ()) schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
     Some e => e
   fnEffects
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "Param" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false) (mem "EffRow" true))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false))))
+(DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "invocationSummary" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "tupleSpine" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "lastInvocationOps" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -972,15 +983,11 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "collectOpts" ((PList)) (EListLit))
 (DFunDef false "collectOpts" ((PCons (PCon "None") (PVar "rest"))) (EApp (EVar "collectOpts") (EVar "rest")))
 (DFunDef false "collectOpts" ((PCons (PCon "Some" (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "collectOpts") (EVar "rest"))))
-(DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EApp (EVar "atomsUnion") (EVar "atoms")) (EApp (EVar "monoEffects") (EVar "result")))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "monoEffects") (EVar "a"))) (EApp (EVar "monoEffects") (EVar "b")))))) (arm PWild () (EListLit))))
-(DTypeSig true "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild PWild PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "force"))) (EApp (EVar "monoEffects") (EVar "mono"))))
 (DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "atomLabels" ((PVar "atoms")) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EVar "atoms")))
-(DTypeSig false "fnEffectsTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "fnEffectsTable" ((PList)) (EListLit))
-(DFunDef false "fnEffectsTable" ((PCons (PTuple (PVar "name") (PVar "sch")) (PVar "rest"))) (EMatch (EApp (EVar "schemeEffects") (EVar "sch")) (arm (PList) () (EApp (EVar "fnEffectsTable") (EVar "rest"))) (arm (PVar "effs") () (EBinOp "::" (ETuple (EVar "name") (EVar "effs")) (EApp (EVar "fnEffectsTable") (EVar "rest"))))))
+(DTypeSig false "fnEffectsTable" (TyFun (TyCon "InvocationOps") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
+(DFunDef false "fnEffectsTable" (PWild (PList)) (EListLit))
+(DFunDef false "fnEffectsTable" ((PVar "ops") (PCons (PTuple (PVar "name") (PVar "sch")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "sch")) (arm (PList) () (EApp (EApp (EVar "fnEffectsTable") (EVar "ops")) (EVar "rest"))) (arm (PVar "effs") () (EBinOp "::" (ETuple (EVar "name") (EVar "effs")) (EApp (EApp (EVar "fnEffectsTable") (EVar "ops")) (EVar "rest"))))))
 (DTypeSig false "fnHasEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "fnHasEffect" ((PVar "table") (PVar "name") (PVar "label")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "table")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "effs")) () (EApp (EApp (EVar "contains") (EVar "label")) (EApp (EApp (EVar "map") (EVar "atomLabel")) (EVar "effs"))))))
 (DTypeSig false "findChain" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -1000,6 +1007,10 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DData Private "Permit" () ((variant "Permitted" (ConPos)) (variant "Forbidden" (ConPos)) (variant "Malformed" (ConPos (TyCon "String")))) ())
 (DTypeSig false "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
 (DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "policyEntryFor") (EVar "a")) (EVar "policy")) (arm (PCon "None") () (EVar "Forbidden")) (arm (PCon "Some" (PVar "written")) () (EMatch (EApp (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a"))) (EVar "written")) (arm (PCon "Ok" (PVar "pp")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp"))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
+(DTypeSig false "notProvenLines" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "notProvenLines" ((PVar "effs") (PVar "policy")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EMatch (ETuple (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PCon "Forbidden")) () (EMatch (EApp (EApp (EVar "policyEntryFor") (EVar "a")) (EVar "policy")) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   not proven: ")) (EApp (EVar "display") (EApp (EVar "renderAtom") (EVar "a")))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ")\n"))))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DTypeSig true "unresolvedWhy" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "unresolvedWhy" ((PVar "a")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "authvarDefaultName") (EVar "v"))) (ELit (LString "`"))))) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "authority ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString " is chosen by the caller"))))))
 (DTypeSig false "policyEntryFor" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "Option") (TyCon "EffParamTy")))))
 (DFunDef false "policyEntryFor" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "policySpelling") (EApp (EVar "qualifiedKey") (EVar "a")))) (EVar "policy")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "policy")))))
 (DTypeSig false "policySpelling" (TyFun (TyCon "String") (TyCon "String")))
@@ -1015,7 +1026,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
 (DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EMatch (EApp (EVar "parsePolicy") (EVar "allowStr")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "policy")) () (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicyWith") (EVar "policy")) (EVar "src")) (EVar "rtSrc")) (EVar "coreSrc")) (EVar "fnName"))))))
 (DTypeSig false "runCheckPolicyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
-(DFunDef false "runCheckPolicyWith" ((PVar "policy") (PVar "src") (PVar "rtSrc") (PVar "coreSrc") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoLet false false (PVar "problems") (EApp (EVar "stringConcat") (EApp (EApp (EVar "policyProblems") (EVar "fnEffects")) (EVar "policy")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EVar "problems"))))))))))))))
+(DFunDef false "runCheckPolicyWith" ((PVar "policy") (PVar "src") (PVar "rtSrc") (PVar "coreSrc") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (DoLet false false (PVar "effTable") (EApp (EApp (EVar "fnEffectsTable") (EVar "ops")) (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoLet false false (PVar "problems") (EApp (EVar "stringConcat") (EApp (EApp (EVar "policyProblems") (EVar "fnEffects")) (EVar "policy")))) (DoLet false false (PVar "unproven") (EApp (EVar "stringConcat") (EApp (EApp (EVar "notProvenLines") (EVar "fnEffects")) (EVar "policy")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EVar "problems")) (EVar "unproven"))))))))))))))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -1023,7 +1034,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "listIsEmpty" ((PList)) (EVar "True"))
 (DFunDef false "listIsEmpty" (PWild) (EVar "False"))
 (DTypeSig false "atomToToml" (TyFun (TyFun (TyCon "Atom") (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = \""))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\"")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "quoteTok")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = { "))) (EApp (EVar "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (EBinOp "++" (EVar "label") (ELit (LString " = true")))))) (arm (PCon "None") () (EBinOp "++" (EVar "label") (ELit (LString " = true"))))))))
+(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = \""))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\"")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "quoteTok")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = { "))) (EApp (EVar "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (EBinOp "++" (EVar "label") (ELit (LString " = true")))))) (arm (PCon "None") () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EVar "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
 (DTypeSig false "productTomlInline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "productTomlInline" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "axisToToml")) (EVar "ax"))))
 (DTypeSig false "axisToToml" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
@@ -1049,7 +1060,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
 (DData Public "ManifestResult" () ((variant "ManifestOk" (ConPos (TyCon "String"))) (variant "ManifestTypeErrors" (ConPos (TyApp (TyCon "List") (TyCon "TcDiag")))) (variant "ManifestNoSuchFn" (ConPos (TyCon "String")))) ())
 (DTypeSig true "runManifest" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyCon "ManifestResult")))))))
-(DFunDef false "runManifest" ((PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "fnName")) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "entrySchemes") (PVar "errs") (PVar "_warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "entrySchemes") (EVar "coreSchemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "ManifestNoSuchFn") (EVar "fnName"))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "ManifestOk") (EApp (EVar "manifestToml") (EApp (EVar "schemeEffects") (EVar "sch"))))))))) (arm PWild () (EApp (EVar "ManifestTypeErrors") (EVar "errs")))))))
+(DFunDef false "runManifest" ((PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "fnName")) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "entrySchemes") (PVar "errs") (PVar "_warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "entrySchemes") (EVar "coreSchemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "ManifestNoSuchFn") (EVar "fnName"))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "ManifestOk") (EApp (EVar "manifestToml") (EApp (EApp (EVar "invocationSummary") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (EVar "sch"))))))))) (arm PWild () (EApp (EVar "ManifestTypeErrors") (EVar "errs")))))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EVar "map") (EVar "atomToAllowTok")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowTok" (TyFun (TyCon "Atom") (TyCon "String")))
@@ -1063,18 +1074,19 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
 (DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))
+(DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EApp (EVar "fnEffectsTable") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))
 # MARK
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "Param" true))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false) (mem "EffRow" true))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false))))
+(DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" false) (mem "invocationSummary" false))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "effParamSurface" false) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false) (mem "tupleSpine" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "lastInvocationOps" false) (mem "checkModulesEntryFullSplitK" false) (mem "decodeSetParam" false) (mem "decodeWrittenParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
@@ -1189,15 +1201,11 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "collectOpts" ((PList)) (EListLit))
 (DFunDef false "collectOpts" ((PCons (PCon "None") (PVar "rest"))) (EApp (EVar "collectOpts") (EVar "rest")))
 (DFunDef false "collectOpts" ((PCons (PCon "Some" (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "collectOpts") (EVar "rest"))))
-(DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EApp (EVar "atomsUnion") (EVar "atoms")) (EApp (EVar "monoEffects") (EVar "result")))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "monoEffects") (EVar "a"))) (EApp (EVar "monoEffects") (EVar "b")))))) (arm PWild () (EListLit))))
-(DTypeSig true "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild PWild PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "force"))) (EApp (EVar "monoEffects") (EVar "mono"))))
 (DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "atomLabels" ((PVar "atoms")) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EVar "atoms")))
-(DTypeSig false "fnEffectsTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "fnEffectsTable" ((PList)) (EListLit))
-(DFunDef false "fnEffectsTable" ((PCons (PTuple (PVar "name") (PVar "sch")) (PVar "rest"))) (EMatch (EApp (EVar "schemeEffects") (EVar "sch")) (arm (PList) () (EApp (EVar "fnEffectsTable") (EVar "rest"))) (arm (PVar "effs") () (EBinOp "::" (ETuple (EVar "name") (EVar "effs")) (EApp (EVar "fnEffectsTable") (EVar "rest"))))))
+(DTypeSig false "fnEffectsTable" (TyFun (TyCon "InvocationOps") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
+(DFunDef false "fnEffectsTable" (PWild (PList)) (EListLit))
+(DFunDef false "fnEffectsTable" ((PVar "ops") (PCons (PTuple (PVar "name") (PVar "sch")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "sch")) (arm (PList) () (EApp (EApp (EVar "fnEffectsTable") (EVar "ops")) (EVar "rest"))) (arm (PVar "effs") () (EBinOp "::" (ETuple (EVar "name") (EVar "effs")) (EApp (EApp (EVar "fnEffectsTable") (EVar "ops")) (EVar "rest"))))))
 (DTypeSig false "fnHasEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "fnHasEffect" ((PVar "table") (PVar "name") (PVar "label")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "table")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "effs")) () (EApp (EApp (EVar "contains") (EVar "label")) (EApp (EApp (EMethodRef "map") (EVar "atomLabel")) (EVar "effs"))))))
 (DTypeSig false "findChain" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -1217,6 +1225,10 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DData Private "Permit" () ((variant "Permitted" (ConPos)) (variant "Forbidden" (ConPos)) (variant "Malformed" (ConPos (TyCon "String")))) ())
 (DTypeSig false "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
 (DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "policyEntryFor") (EVar "a")) (EVar "policy")) (arm (PCon "None") () (EVar "Forbidden")) (arm (PCon "Some" (PVar "written")) () (EMatch (EApp (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a"))) (EVar "written")) (arm (PCon "Ok" (PVar "pp")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "AConst") (EVar "pp"))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
+(DTypeSig false "notProvenLines" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "notProvenLines" ((PVar "effs") (PVar "policy")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EMatch (ETuple (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EApp (EVar "permitOf") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PCon "Forbidden")) () (EMatch (EApp (EApp (EVar "policyEntryFor") (EVar "a")) (EVar "policy")) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "   not proven: ")) (EApp (EMethodRef "display") (EApp (EVar "renderAtom") (EVar "a")))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ")\n"))))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EListLit))))) (EVar "effs")))
+(DTypeSig true "unresolvedWhy" (TyFun (TyCon "Atom") (TyCon "String")))
+(DFunDef false "unresolvedWhy" ((PVar "a")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "authvarDefaultName") (EVar "v"))) (ELit (LString "`"))))) (EApp (EVar "authVars") (EApp (EVar "atomAuth") (EVar "a"))))) (DoExpr (EBinOp "++" (EBinOp "++" (ELit (LString "authority ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "names")))) (ELit (LString " is chosen by the caller"))))))
 (DTypeSig false "policyEntryFor" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "Option") (TyCon "EffParamTy")))))
 (DFunDef false "policyEntryFor" ((PVar "a") (PVar "policy")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "policySpelling") (EApp (EVar "qualifiedKey") (EVar "a")))) (EVar "policy")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Some") (EVar "e"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "policy")))))
 (DTypeSig false "policySpelling" (TyFun (TyCon "String") (TyCon "String")))
@@ -1232,7 +1244,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
 (DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EMatch (EApp (EVar "parsePolicy") (EVar "allowStr")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "policy")) () (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicyWith") (EVar "policy")) (EVar "src")) (EVar "rtSrc")) (EVar "coreSrc")) (EVar "fnName"))))))
 (DTypeSig false "runCheckPolicyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
-(DFunDef false "runCheckPolicyWith" ((PVar "policy") (PVar "src") (PVar "rtSrc") (PVar "coreSrc") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoLet false false (PVar "problems") (EApp (EVar "stringConcat") (EApp (EApp (EVar "policyProblems") (EVar "fnEffects")) (EVar "policy")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EVar "problems"))))))))))))))
+(DFunDef false "runCheckPolicyWith" ((PVar "policy") (PVar "src") (PVar "rtSrc") (PVar "coreSrc") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (DoLet false false (PVar "effTable") (EApp (EApp (EVar "fnEffectsTable") (EVar "ops")) (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EApp (EVar "invocationSummary") (EVar "ops")) (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoLet false false (PVar "problems") (EApp (EVar "stringConcat") (EApp (EApp (EVar "policyProblems") (EVar "fnEffects")) (EVar "policy")))) (DoLet false false (PVar "unproven") (EApp (EVar "stringConcat") (EApp (EApp (EVar "notProvenLines") (EVar "fnEffects")) (EVar "policy")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "header") (EVar "via")) (EVar "problems")) (EVar "unproven"))))))))))))))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -1240,7 +1252,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "listIsEmpty" ((PList)) (EVar "True"))
 (DFunDef false "listIsEmpty" (PWild) (EVar "False"))
 (DTypeSig false "atomToToml" (TyFun (TyFun (TyCon "Atom") (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = \""))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\"")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "quoteTok")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = { "))) (EApp (EMethodRef "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (EBinOp "++" (EVar "label") (ELit (LString " = true")))))) (arm (PCon "None") () (EBinOp "++" (EVar "label") (ELit (LString " = true"))))))))
+(DFunDef false "atomToToml" ((PVar "keyOf") (PVar "a")) (EBlock (DoLet false false (PVar "label") (EApp (EVar "keyOf") (EVar "a"))) (DoExpr (EMatch (EApp (EVar "atomConst") (EVar "a")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "canonParam") (EVar "p")) (arm (PCon "PPrefix" (PCon "Some" (PVar "s"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = \""))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\"")))) (arm (PCon "PSet" (PCon "Some" (PVar "xs"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "quoteTok")) (EVar "xs"))))) (ELit (LString "]")))) (arm (PCon "PProduct" (PVar "ax")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = { "))) (EApp (EMethodRef "display") (EApp (EVar "productTomlInline") (EVar "ax")))) (ELit (LString " }")))) (arm PWild () (EBinOp "++" (EVar "label") (ELit (LString " = true")))))) (arm (PCon "None") () (EIf (EApp (EVar "authHasVars") (EApp (EVar "atomAuth") (EVar "a"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString " = true  # unresolved: "))) (EApp (EMethodRef "display") (EApp (EVar "unresolvedWhy") (EVar "a")))) (ELit (LString ""))) (EBinOp "++" (EVar "label") (ELit (LString " = true")))))))))
 (DTypeSig false "productTomlInline" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
 (DFunDef false "productTomlInline" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "axisToToml")) (EVar "ax"))))
 (DTypeSig false "axisToToml" (TyFun (TyTuple (TyCon "String") (TyCon "Param")) (TyCon "String")))
@@ -1266,7 +1278,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
 (DData Public "ManifestResult" () ((variant "ManifestOk" (ConPos (TyCon "String"))) (variant "ManifestTypeErrors" (ConPos (TyApp (TyCon "List") (TyCon "TcDiag")))) (variant "ManifestNoSuchFn" (ConPos (TyCon "String")))) ())
 (DTypeSig true "runManifest" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyCon "ManifestResult")))))))
-(DFunDef false "runManifest" ((PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "fnName")) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "entrySchemes") (PVar "errs") (PVar "_warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "entrySchemes") (EVar "coreSchemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "ManifestNoSuchFn") (EVar "fnName"))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "ManifestOk") (EApp (EVar "manifestToml") (EApp (EVar "schemeEffects") (EVar "sch"))))))))) (arm PWild () (EApp (EVar "ManifestTypeErrors") (EVar "errs")))))))
+(DFunDef false "runManifest" ((PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "fnName")) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "entrySchemes") (PVar "errs") (PVar "_warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "entrySchemes") (EVar "coreSchemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "ManifestNoSuchFn") (EVar "fnName"))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "ManifestOk") (EApp (EVar "manifestToml") (EApp (EApp (EVar "invocationSummary") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (EVar "sch"))))))))) (arm PWild () (EApp (EVar "ManifestTypeErrors") (EVar "errs")))))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EMethodRef "map") (EVar "atomToAllowTok")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowTok" (TyFun (TyCon "Atom") (TyCon "String")))
@@ -1280,4 +1292,4 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
 (DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))
+(DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EApp (EVar "fnEffectsTable") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))

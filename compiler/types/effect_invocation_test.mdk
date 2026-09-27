@@ -1,0 +1,102 @@
+-- The invocation summary over hand-built schemes: every negative beside a
+-- control that differs in one position.
+import test.{expectAll, expectEqual}
+import types.effect_invocation.{
+  InvocationOps(..), Variance(..), invocationSummary
+}
+import frontend.ast.{TyConOrigin(..)}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{EffRow(..), atomBuiltin, renderAtoms}
+import types.repr.{Scheme(..), Mono(..)}
+
+net : String -> EffRow
+net path = EffRow [atomBuiltin "Net" (PPrefix (Some path))] None
+
+pure : EffRow
+pure = EffRow [] None
+
+unit : Mono
+unit = TRigid "Unit"
+
+con : String -> Mono
+con n = TCon n (OriginModule "m")
+
+-- `Sink a` is contravariant in `a`; `Box a` covariant; `Cell a` invariant;
+-- `Api` has one monomorphic field performing `Net "api/"`; `Loop` names
+-- itself; any other head is unknown to the summary.
+ops : InvocationOps
+ops = InvocationOps {
+  headVariances =
+    h => match h
+      TCon "Sink" _ => Some [VContra]
+      TCon "Box" _ => Some [VCo]
+      TCon "Cell" _ => Some [VInv]
+      TCon "Api" _ => Some []
+      TCon "Loop" _ => Some []
+      _ => None,
+  headFields =
+    h => match h
+      TCon "Api" _ => [TFun unit (net "api/") unit]
+      TCon "Loop" _ => [con "Loop", TFun unit (net "loop/") unit]
+      _ => [],
+  headKey =
+    h => match h
+      TCon n _ => n
+      _ => "?",
+}
+
+summary : EffRow -> Mono -> String
+summary force mono =
+  renderAtoms (invocationSummary ops (Forall [] [] [] [] force mono))
+
+callback : String -> Mono
+callback path = TFun unit (net path) unit
+
+test "rows join across arrows, and the forcing row joins them" = expectAll [
+  expectEqual
+    "Net \"host/*\""
+    (summary pure (TFun unit (net "host/a/") (callback "host/b/"))),
+  expectEqual
+    "Net"
+    (summary
+      (net "other/path/")
+      (TFun unit (net "host/a/") (callback "host/b/"))),
+]
+
+test "a callback the host supplies is not charged; one it is handed back is" = expectAll
+  [
+    expectEqual "" (summary pure (TFun (callback "cb/") pure unit)),
+    expectEqual "Net \"cb/\"" (summary pure (TFun unit pure (callback "cb/"))),
+    -- a callback the entry passes back into a host-supplied function: positive
+    expectEqual
+      "Net \"cb/\""
+      (summary pure (TFun (TFun (callback "cb/") pure unit) pure unit)),
+  ]
+
+test "a slot is read at its declared variance, and an unknown one as invariant" = expectAll
+  [
+    expectEqual "" (summary pure (TApp (con "Sink") (callback "s/"))),
+    expectEqual "Net \"s/\"" (summary pure (TApp (con "Box") (callback "s/"))),
+    expectEqual "Net \"s/\"" (summary pure (TApp (con "Cell") (callback "s/"))),
+    expectEqual
+      "Net \"s/\""
+      (summary pure (TFun (TApp (con "Cell") (callback "s/")) pure unit)),
+    expectEqual
+      "Net \"s/\""
+      (summary pure (TApp (con "Opaque") (callback "s/"))),
+  ]
+
+test "an effect index is charged where it is positive" = expectAll [
+  expectEqual "Net \"i/\"" (summary pure (TApp (con "Box") (TEff (net "i/")))),
+  expectEqual "" (summary pure (TApp (con "Sink") (TEff (net "i/")))),
+]
+
+test "tuple elements and constructor fields are read at their position" = expectAll
+  [
+    expectEqual
+      "Net \"t/\""
+      (summary pure (TApp (TApp (con "__tuple2__") unit) (callback "t/"))),
+    expectEqual "Net \"api/\"" (summary pure (con "Api")),
+    expectEqual "" (summary pure (TFun (con "Api") pure unit)),
+    expectEqual "Net \"loop/\"" (summary pure (con "Loop")),
+  ]

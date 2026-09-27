@@ -16,7 +16,7 @@ import compiler_cli_test_support.{
   runMedaka,
 }
 import string.{stripSuffix}
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectAll, fail, pass}
 
 fixture : String -> <IO> String
 fixture name = fixtureIn "test/effect_builtin_param_fixtures" name
@@ -255,3 +255,64 @@ test "a direct alias does not hide a nullary extern" = expectCheckReject
 test "a constrained alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_constrained_reject.mdk")
   ["Foreign declaration 'k' has no arrow in its signature"]
+
+-- #3463/#3468: the invocation summary.  An entry is charged for what the host
+-- can reach through it, read by variance; each charged entry has a control
+-- that differs in one position.
+positions : String
+positions = "invocation_positions.mdk"
+
+-- The manifest of [fn] in `positions`: the header, then [grant] when non-empty.
+expectGrant : String -> String -> <Exec, IO> Expectation
+expectGrant fn grant =
+  let header = "[package.capabilities]"
+  expectManifest positions fn (if grant == "" then
+    header
+  else
+    "\{header}\n\{grant}")
+
+test "a callback the host supplies is not charged" = expectAll [
+  expectGrant "sinkEntry" "",
+  expectGrant "takerEntry" "",
+  expectGrant "hostCallback" "",
+]
+
+test "a function the host can reach through the entry is charged" = expectAll [
+  expectGrant "returnedEntry" "FileRead = \"r/*\"",
+  expectGrant "laterEntry" "FileRead = \"l/*\"",
+  expectGrant "tupledEntry" "FileRead = \"t/*\"",
+  expectGrant "apiEntry" "FileRead = \"a/*\"",
+  expectGrant "passBack" "FileRead = \"d/*\"",
+  expectGrant "refArg" "FileRead = \"c/*\"",
+  expectManifest
+    "invocation_async_index.mdk"
+    "transform"
+    "[package.capabilities]\nFileRead = \"x/*\"",
+]
+
+test "an authority the caller chooses is granted whole and says why" =
+  expectGrant
+    "readUnder"
+    "FileRead = true  # unresolved: authority `p` is chosen by the caller"
+
+test "check-policy accepts the sink entry and refuses its returned control" = expectAll
+  [
+    expectVerbExitStartsWith
+      "check-policy"
+      [fixture positions, "--allow", "Log", "--fn", "sinkEntry"]
+      0
+      "accepted. sinkEntry requires only pure",
+    expectVerbExitStartsWith
+      "check-policy"
+      [fixture positions, "--allow", "Log", "--fn", "returnedEntry"]
+      1
+      "rejected. returnedEntry requires <FileRead \"r/*\">",
+  ]
+
+test "check-policy names an authority a narrower entry cannot prove" =
+  expectVerbExitStartsWithAndContains
+    "check-policy"
+    [fixture positions, "--allow", "FileRead=cfg/*", "--fn", "readUnder"]
+    1
+    "rejected. readUnder requires <FileRead p>"
+    ["not proven: FileRead p (authority `p` is chosen by the caller)"]

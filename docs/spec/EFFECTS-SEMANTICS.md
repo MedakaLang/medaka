@@ -1050,10 +1050,39 @@ domain until process signals have a label of their own. That over-charges,
 which is safe, and the only program using them already holds that grant
 because it binds.
 
+**The invocation summary.** The host forces the entry, calls it, and may invoke
+any function value the entry hands back; a function value the host supplies is
+the host's own. So the effects charged are the forcing row joined with every
+row that sits in a position the entry controls, read off the entry's type by
+declared variance (§6.4). Starting positive at the entry's type:
+
+- an arrow in a positive position charges its row; its result keeps the
+  position and its domain flips it. An arrow in a negative position is the
+  host's, so its row is not charged.
+- an argument of a type constructor takes the constructor's variance for that
+  slot composed with the position. An invariant slot is both positive and
+  negative, so it is charged. A slot whose variance the checker cannot see is
+  read as invariant.
+- an effect index (`Async <Net> a`) in a positive position is charged.
+- a tuple's elements keep the position.
+- a data type visible to the entry is also opened: each constructor field is
+  read at the type's own position, so a row written inside a monomorphic
+  field is charged. An abstract or builtin type is read through its
+  variance only.
+
+A row parameter's variance is not yet computed and reads as covariant, so an
+effect index is charged even where a handler-shaped type uses it
+contravariantly. That over-charges, which is safe. `manifest` and
+`check-policy` share this summary (`compiler/types/effect_invocation.mdk`).
+
 Unresolved symbolic authority at a host boundary is conservatively top in its
 domain, or an explicit unresolved-manifest error. It must never be omitted or
 rendered as empty authority. A forcing effect cannot disappear merely because
-the entry's value type is `Unit` rather than an arrow.
+the entry's value type is `Unit` rather than an arrow. The manifest writes an
+authority still bound to a variable as the whole label, with a TOML comment
+naming the variable (`Net = true  # unresolved: authority `url` is chosen by
+the caller`). A policy entry narrower than the whole label reports it as
+`not proven` rather than refusing it silently.
 
 **The host is the handler.** Medaka has no in-language effect handler. Instead the
 **runtime platform** is the handler: it reads `M(module)` *before loading* the

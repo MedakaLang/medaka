@@ -289,6 +289,7 @@ import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes,
   resolveDeferredJoin
 }
+import types.effect_invocation.{InvocationOps(..), Variance(..)}
 import map as IdMap
 import map.{Map(..)}
 
@@ -7853,6 +7854,9 @@ data DriverState = DriverState {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
+  -- The last checked module's constructors and variance table, read by
+  -- `lastInvocationOps` — see `InvocationView`.
+  invocationViewRef : Ref InvocationView,
 }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -7888,6 +7892,7 @@ freshDriverState _ = DriverState {
   sigTyMapRef = Ref omEmpty,
   currentModuleRef = Ref "",
   markSetsRef = Ref None,
+  invocationViewRef = Ref (InvocationView omEmpty []),
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -11603,6 +11608,65 @@ paramPolaritiesIn tab key
   | tabKeyEq key (tyTabKey OriginBuiltin "Ref") = Some [PInv]
   | tabKeyEq key (tyTabKey OriginBuiltin "Array") = Some [PInv]
   | otherwise = lookupTab key tab
+
+-- ── the invocation summary's view (#3463) ─────────────────────────────────
+-- What `types/effect_invocation.mdk` reads of a checked program: the
+-- constructors in scope in the last module `checkBodyImpl` checked, the
+-- entry of a single drive, and that module's variance table, its own
+-- declarations over everything it imports.  Written once per module, right
+-- after its data environment is built; a drive's caller reads it afterwards
+-- through `lastInvocationOps`.
+data InvocationView =
+  | InvocationView (OrdMap Scheme) (List (TabKey, List Polarity))
+
+recordInvocationView : TcEnv -> Unit
+recordInvocationView (TcEnv _ ctors _ _) =
+  driverState.value.invocationViewRef :=
+    InvocationView ctors perRun.value.dataParamPolarityRef.value
+
+-- The summary's operations over the view of the entry the last drive checked.
+export
+lastInvocationOps : Unit -> InvocationOps
+lastInvocationOps _ = match driverState.value.invocationViewRef.value
+  InvocationView ctors pols =>
+    let fields = ctorFieldsByHead (IdMap.values ctors)
+    InvocationOps {
+      headVariances =
+        h => match headTyconMono h
+          Some (HkDecl key) => map (map varianceOf) (paramPolaritiesIn pols key)
+          _ => None,
+      headFields = h => optionOr [] (omLookup (invocationHeadKey h) fields),
+      headKey = invocationHeadKey,
+    }
+
+invocationHeadKey : Mono -> String
+invocationHeadKey h = match headTyconMono h
+  Some hk => headKeyTag hk
+  None => "?"
+
+varianceOf : Polarity -> Variance
+varianceOf PCo = VCo
+varianceOf PContra = VContra
+varianceOf PInv = VInv
+
+-- Every constructor's field types, grouped under its result head.
+ctorFieldsByHead : List Scheme -> OrdMap (List Mono)
+ctorFieldsByHead schemes =
+  fold
+    (acc sch => match sch
+      Forall _ _ _ _ _ mono =>
+        let (fieldTys, result) = arrowParts mono
+        let key = invocationHeadKey (fst (spineParts result))
+        omInsert key (optionOr [] (omLookup key acc) ++ fieldTys) acc)
+    omEmpty
+    schemes
+
+arrowParts : Mono -> (List Mono, Mono)
+arrowParts m = match normalize m
+  TFun dom _ res =>
+    let (rest, result) = arrowParts res
+    (dom :: rest, result)
+  other => ([], other)
 
 -- #2110: the ATOM-GUARANTEE read, sibling of `paramPolaritiesOf`.  No builtin
 -- rows: `Ref`/`Array` have no KRow parameter, so they guarantee no atoms and a
@@ -32732,6 +32796,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     let env0 = registerAllData base prog0
     let _ = applyRecordScopeOverrides prog0
     applyCtorScopeOverrides prog0 env0
+  let _ = recordInvocationView dataEnv
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -47113,6 +47178,7 @@ copyDriverState d = DriverState {
   sigTyMapRef = Ref d.sigTyMapRef.value,
   currentModuleRef = Ref d.currentModuleRef.value,
   markSetsRef = Ref d.markSetsRef.value,
+  invocationViewRef = Ref d.invocationViewRef.value,
 }
 
 -- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)

@@ -1155,6 +1155,40 @@ named only by the residual context.
   `build_oracles.sh --for diff_compiler_fmt` rebuilds; reading a verdict from a
   stale `test/bin/check_main` after a compiler change reads the old compiler.
 
+### #3463 invocation summary (2026-09-27)
+
+`compiler/types/effect_invocation.mdk` is the one summary `manifest` and
+`check-policy` share; `monoEffects`/`schemeEffects` are gone, and the
+reached-via chain reads the same summary per binding.
+
+- **The walk:** from the entry's type, positive. An arrow charges its row where
+  it is positive or invariant; its domain flips the position. A constructor's
+  argument takes the slot's variance composed with the position; a slot the
+  checker cannot see is invariant, so charged. A positive effect index is
+  charged. Tuples keep the position. A data head visible to the entry is
+  opened, each constructor field read at the head's position, once per
+  (head, position).
+- **Its inputs:** `typecheck.lastInvocationOps` reads `InvocationView`, the
+  constructors and variance table of the last module `checkBodyImpl` checked
+  (the entry of a single drive), written once per module right after its data
+  environment is built. The variance is the checker's own table
+  (`paramPolaritiesIn`), never a second computation.
+- **Protocol:** one, not two. Forcing, a call and any returned function all
+  reduce to "every positive position is reachable", so a `ForceOnly | Call N`
+  parameter would change no answer and was not added.
+- **Unresolved authority:** manifest `L = true  # unresolved: authority `p` is
+  chosen by the caller`; policy `not proven: L p (...)` when an entry narrower
+  than the whole label refuses it.
+- **Charges moved both ways, as ratified:** a contravariant slot (#3463's
+  `Sink`) is no longer charged; effect-indexed entries, a positive position
+  inside an argument's domain, tuples, monomorphic data fields and
+  host-supplied `Ref` cells now are (#3468's five shapes, each of which main
+  reported as pure).
+- **Known over-charges, safe:** a row parameter's variance is not computed, so
+  a handler-shaped index is charged; an authority inside an opened field is a
+  variable of the declaration, not the entry's instantiation, so it renders
+  unresolved.
+
 ## Delivered code and invariants to preserve
 
 | File under compiler/types | Responsibility at the checkpoint |

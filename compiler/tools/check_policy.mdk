@@ -1,5 +1,8 @@
 import types.effect_domain.{canonParam, drender, Param(..)}
-import types.effect_authority.{Authority(..), authSub}
+import types.effect_authority.{
+  Authority(..), authSub, authVars, authHasVars, authvarDefaultName
+}
+import types.effect_invocation.{InvocationOps, invocationSummary}
 import types.effect_rows.{
   effLabelOrigin,
   atomLabelOf,
@@ -10,8 +13,6 @@ import types.effect_rows.{
   atomsUnion,
   renderAtom,
   Atom(..),
-  effrowLabels,
-  EffRow(..),
 }
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
 -- policy checker (WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md).
@@ -63,14 +64,10 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude}
 import tools.check.{checkHasErrors}
-import types.repr.{
-  Scheme(..),
-  Mono(..),
-  normalize,
-  tupleSpine,
-}
+import types.repr.{Scheme(..)}
 import types.typecheck.{
   checkOneSchemeFull,
+  lastInvocationOps,
   checkModulesEntryFullSplitK,
   decodeSetParam,
   decodeWrittenParam,
@@ -332,29 +329,10 @@ collectOpts [] = []
 collectOpts (None :: rest) = collectOpts rest
 collectOpts ((Some x) :: rest) = x :: collectOpts rest
 
--- ── 4. effect ATOMS from a scheme (WS-1b: keep the param, not just the label) ─
--- Walk the normalized mono: at each TFun, collect the row's atoms (effrowLabels
--- already returns Atoms), recurse into the result; at TApp recurse into both
--- sides.  Deduped/sorted by label.  Mirror mono_effects / scheme_effects, but
--- the threaded representation is now `Atom` so the param survives to the compare.
-monoEffects : Mono -> List Atom
-monoEffects m = match normalize m
-  TFun _ row result =>
-    let atoms = effrowLabels row
-    atomsUnion atoms (monoEffects result)
-  -- Fork C (Stage 1 preservation): a tuple TYPE is now a `__tupleN__`-headed
-  -- `TApp` spine rather than an atomic `Mono.TTuple`, which the catch-all arm
-  -- `_ => []` answers with no element effects; reproduce
-  -- that exactly here instead of letting the generic `TApp` arm recurse in.
-  TApp a b => match tupleSpine (TApp a b)
-    Some _ => []
-    None => atomsUnion (monoEffects a) (monoEffects b)
-  _ => []
-
-export
-schemeEffects : Scheme -> List Atom
-schemeEffects (Forall _ _ _ _ force mono) =
-  atomsUnion (effrowLabels force) (monoEffects mono)
+-- ── 4. effect ATOMS from a scheme ────────────────────────────────────────
+-- What the host can make an entry perform: the invocation summary
+-- (`types/effect_invocation.mdk`), over the checked program's own
+-- constructors and variance table (`lastInvocationOps`).
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
@@ -363,11 +341,13 @@ atomLabels : List Atom -> List String
 atomLabels atoms = map renderAtom atoms
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
-fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
-fnEffectsTable [] = []
-fnEffectsTable ((name, sch) :: rest) = match schemeEffects sch
-  [] => fnEffectsTable rest
-  effs => (name, effs) :: fnEffectsTable rest
+fnEffectsTable : InvocationOps ->
+  List (String, Scheme) ->
+  List (String, List Atom)
+fnEffectsTable _ [] = []
+fnEffectsTable ops ((name, sch) :: rest) = match invocationSummary ops sch
+  [] => fnEffectsTable ops rest
+  effs => (name, effs) :: fnEffectsTable ops rest
 
 -- Does fn `name` carry an atom whose LABEL is `label`?  (Chain reconstruction
 -- stays label-keyed — the param does not participate in the call-graph trace.)
@@ -458,6 +438,27 @@ permitOf a policy = match policyEntryFor a policy
   Some written => match decodeWrittenParam (atomLabelOf a) written
     Ok pp => if authSub (atomAuth a) (AConst pp) then Permitted else Forbidden
     Err m => Malformed m
+
+-- An atom whose authority is still a variable at the host boundary, refused
+-- by a policy entry narrower than the whole label: the entry may well cover
+-- what the caller will choose, but nothing proves it.
+notProvenLines : List Atom -> List (String, EffParamTy) -> List String
+notProvenLines effs policy =
+  flatMap
+    (a => match (authHasVars (atomAuth a), permitOf a policy)
+      (True, Forbidden) => match policyEntryFor a policy
+        Some _ => ["   not proven: \{renderAtom a} (\{unresolvedWhy a})\n"]
+        None => []
+      _ => [])
+    effs
+
+-- Why an atom's authority is unresolved: the variables it still names.
+export
+unresolvedWhy : Atom -> String
+unresolvedWhy a =
+  let names =
+    map (v => "`" ++ authvarDefaultName v ++ "`") (authVars (atomAuth a))
+  "authority \{joinWith ", " names} is chosen by the caller"
 
 -- The entry for an atom: its qualified key first, then its bare label.
 policyEntryFor : Atom -> List (String, EffParamTy) -> Option EffParamTy
@@ -602,14 +603,15 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
   let (preludeSchemes, ownSchemes) =
     checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
+  let ops = lastInvocationOps ()
+  let effTable = fnEffectsTable ops schemes
   -- Existence is checked against the complete scheme list, not effTable:
   -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
   -- a name index would reject a real pure entry exactly like an absent one.
   match lookupAssoc fnName schemes
     None => PolicyReject "rejected. no '\{fnName}' entry found\n"
     Some fnScheme =>
-      let fnEffects = schemeEffects fnScheme
+      let fnEffects = invocationSummary ops fnScheme
       let forbidden = forbiddenLabels fnEffects policy
       match forbidden
         [] =>
@@ -627,7 +629,8 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
             "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
           let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
           let problems = stringConcat (policyProblems fnEffects policy)
-          PolicyReject (header ++ via ++ problems)
+          let unproven = stringConcat (notProvenLines fnEffects policy)
+          PolicyReject (header ++ via ++ problems ++ unproven)
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -661,7 +664,8 @@ listIsEmpty _ = False
 -- PPrefix (Some s) → 'Label = "s"'
 -- PUnit / PPrefix None → 'Label = true'
 -- An authority left symbolic at the host boundary is reported conservatively
--- as the bare grant (`Label = true`), never omitted.
+-- as the bare grant (`Label = true`), never omitted, with a TOML comment
+-- naming the variables that left it unresolved.
 atomToToml : (Atom -> String) -> Atom -> String
 atomToToml keyOf a =
   let label = keyOf a
@@ -671,7 +675,11 @@ atomToToml keyOf a =
       PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
       PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
       _ => label ++ " = true"
-    None => label ++ " = true"
+    None =>
+      if authHasVars (atomAuth a) then
+        "\{label} = true  # unresolved: \{unresolvedWhy a}"
+      else
+        label ++ " = true"
 
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
 -- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
@@ -781,7 +789,9 @@ runManifest preludeKey rtD coreD modsD fnName =
       -- index would refuse a real pure entry exactly like an absent one.
       match lookupAssoc fnName schemes
         None => ManifestNoSuchFn fnName
-        Some sch => ManifestOk (manifestToml (schemeEffects sch))
+        Some sch =>
+          ManifestOk
+            (manifestToml (invocationSummary (lastInvocationOps ()) sch))
     _ => ManifestTypeErrors errs
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
@@ -838,7 +848,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let (preludeSchemes, ownSchemes) =
     checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
+  let effTable = fnEffectsTable (lastInvocationOps ()) schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
     Some e => e

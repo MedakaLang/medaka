@@ -174,6 +174,7 @@ armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armSites : Arm -> List (Ref Route)
 armUnreachable : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+arrowParts : Mono -> (List Mono, Mono)
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 assignedFieldNames : List FieldAssign -> List String
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
@@ -615,6 +616,7 @@ cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
 ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
+ctorFieldsByHead : List Scheme -> Map String (List Mono)
 ctorHasExistentials : Option Scheme -> Bool
 ctorHeadShaped : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
@@ -1590,6 +1592,7 @@ instantiatedMethodPredicateArgs : PredicateSlotArgs -> List (Int, Mono) -> Predi
 intercalateComma : List String -> String
 interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
+invocationHeadKey : Mono -> String
 ioAliasLabels : List String
 ioLabel : EffLabel
 isBareTyvarMono : Mono -> Bool
@@ -1664,6 +1667,7 @@ kvEVars : (Expr, Expr) -> List String
 labelsMissing : List Atom -> List Atom -> List Atom
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
+lastInvocationOps : Unit -> InvocationOps
 launderEscapeFromLog : List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
 launderOpenActualArrow : EffRow -> List AbsorptionEvent -> List Atom
 leadInferredPred : (IfaceRef, List Int, List Mono) -> List (IfaceRef, Int, List Mono)
@@ -2292,6 +2296,7 @@ recordHasExistentials : Option RecordInfo -> Bool
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
+recordInvocationView : TcEnv -> Unit
 recordLocalBind : String -> Option Loc -> Mono -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
@@ -2859,6 +2864,7 @@ valueJoinOps : String -> (List EffRow -> EffRow) -> ValueJoinOps (Option Loc)
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
+varianceOf : Polarity -> Variance
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 variantName : Variant -> String
 variantNamed : String -> List Variant -> Bool
