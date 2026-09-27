@@ -58,6 +58,11 @@
 # exit 0.  Its read-only lines are the regression floor for the copy-back being
 # unconditional: it now also runs after every array call C never wrote to.
 #
+# CELLS 14 AND 15 are the fixed-width slice (N6, #3430, #3477): every
+# fixed-width type crossing as its C twin at its edge values, with the C side
+# printing what it received, and an `int64_t` into `Int` outside 63 bits
+# trapping rather than losing its top bit.
+#
 # CELL 13 is the INBOUND-STRING validity slice (#2175).  It crosses real C
 # pointers through `mdk_ffi_str_in`: canonical 1/2/3/4-byte UTF-8 and NULL stay
 # accepted, while every malformed class traps before a malformed Medaka String
@@ -715,6 +720,120 @@ CELL13B
     cat "$W/string_bad_$sfn.out" "$W/string_bad_$sfn.err"
   fi
 done
+
+# ── cell 14: the fixed-width C twins, both directions (FFI-ABI.md §2.1b) ─────
+# Each C function prints the value it RECEIVED at its own C type, then Medaka
+# prints what came back.  Hand-derived: an argument at a type's edge arrives as
+# itself (a zero- vs sign-extension slip prints a different C line), and the
+# result is one step on in that type's wrap.  The four `Max`/`Min` returns sit
+# where reading a narrow result with the wrong extension changes the number.
+cat > "$W/ffi_fixed_width.mdk" <<'CELL14'
+import u8
+import u16
+import u32
+import u64
+import i32
+import i64
+
+extern ffiFwU8 : U8 -> <FFI> U8
+extern ffiFwU16 : U16 -> <FFI> U16
+extern ffiFwU32 : U32 -> <FFI> U32
+extern ffiFwI32 : I32 -> <FFI> I32
+extern ffiFwU64 : U64 -> <FFI> U64
+extern ffiFwI64 : I64 -> <FFI> I64
+extern ffiFwU32Max : Unit -> <FFI> U32
+extern ffiFwI32Min : Unit -> <FFI> I32
+extern ffiFwU64Max : Unit -> <FFI> U64
+extern ffiFwI64Min : Unit -> <FFI> I64
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (ffiFwU8 255)
+  let _ = println (ffiFwU16 65535)
+  let _ = println (ffiFwU32 4294967295)
+  let _ = println (ffiFwI32 (-2147483648))
+  let _ = println (ffiFwI32 2147483647)
+  let _ = println (ffiFwI32 (-1))
+  let _ = println (ffiFwU64 18446744073709551615)
+  let _ = println (ffiFwI64 (-9223372036854775808))
+  let _ = println (ffiFwI64 9223372036854775807)
+  let _ = println (ffiFwU32Max ())
+  let _ = println (ffiFwI32Min ())
+  let _ = println (ffiFwU64Max ())
+  let _ = println (ffiFwI64Min ())
+  println (ffiFwI64Min () < 0)
+CELL14
+
+EXPECT_FIXED='C u8 255
+0
+C u16 65535
+0
+C u32 4294967295
+0
+C i32 -2147483648
+-2147483647
+C i32 2147483647
+-2147483648
+C i32 -1
+0
+C u64 18446744073709551615
+0
+C i64 -9223372036854775808
+-9223372036854775807
+C i64 9223372036854775807
+-9223372036854775808
+4294967295
+-2147483648
+18446744073709551615
+-9223372036854775808
+True'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_fixed_width.mdk" \
+     -o "$W/fixed_width.bin" >"$W/build14.log" 2>&1; then
+  echo "FAIL: fixed-width FFI program did not build"; cat "$W/build14.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got14="$("$W/fixed_width.bin" 2>&1)"
+  if [ "$got14" = "$EXPECT_FIXED" ]; then
+    echo "ok   ffi_fixed_width        U8/U16/U32/I32/U64/I64 cross as their C twins at every edge"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_fixed_width        output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_FIXED" "$got14"
+  fi
+fi
+
+# ── cell 15: an int64_t into Int outside 63 bits TRAPS (#3477) ──────────────
+# Before, the tag dropped bit 63 and INT64_MAX printed as -1 at exit 0.  The
+# in-range companion is Int's lowest value, which must still arrive unchanged.
+cat > "$W/ffi_int_range.mdk" <<'CELL15'
+extern ffiIntLowest : Unit -> <FFI> Int
+extern ffiIntTooBig : Unit -> <FFI> Int
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (ffiIntLowest ())
+  println (ffiIntTooBig ())
+CELL15
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_int_range.mdk" \
+     -o "$W/int_range.bin" >"$W/build15.log" 2>&1; then
+  echo "FAIL: inbound-Int range program did not build"; cat "$W/build15.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  "$W/int_range.bin" >"$W/int_range.out" 2>"$W/int_range.err"
+  rc15=$?
+  if [ "$rc15" -ne 0 ] \
+    && [ "$(cat "$W/int_range.out")" = "-4611686018427387904" ] \
+    && grep -q "runtime error" "$W/int_range.err" \
+    && grep -q "ffiIntTooBig' returned an int64_t outside Int's range" "$W/int_range.err" \
+    && grep -q "declare the result I64" "$W/int_range.err"; then
+    printf 'ok   ffi_inbound_int_range  in-range kept, INT64_MAX trapped (exit %d)\n' "$rc15"
+  else
+    printf 'FAIL ffi_inbound_int_range  exit %d, output:\n' "$rc15"; fail=$((fail+1))
+    cat "$W/int_range.out" "$W/int_range.err"
+  fi
+fi
 
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.
