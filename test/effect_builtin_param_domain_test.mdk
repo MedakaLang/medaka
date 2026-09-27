@@ -296,6 +296,15 @@ test "an index slot is invariant, and an opened field reads at the head's argume
     expectGrant "rdEntry" "FileRead = \"i/*\"",
   ]
 
+test "a nested data type ends, and nine sibling readers are each instantiated" = expectAll
+  [
+    expectManifest "invocation_nested.mdk" "useW" "[package.capabilities]",
+    expectManifest
+      "invocation_nested.mdk"
+      "caps"
+      "[package.capabilities]\nFileRead = \"srv/*\"",
+  ]
+
 test "a type's fields are found by its identity, not a constructor's spelling" =
   expectManifest
     "invocation_same_ctor.mdk"

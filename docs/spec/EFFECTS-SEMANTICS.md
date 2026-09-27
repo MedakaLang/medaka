@@ -1065,11 +1065,16 @@ declared variance (§6.4). Starting positive at the entry's type:
   read as invariant.
 - an effect index (`Async <Net> a`) in a positive position is charged.
 - a tuple's elements keep the position.
-- a data type visible to the entry is also opened: each constructor field,
-  instantiated at the type's arguments, is read at the type's own position,
-  so a row written inside a monomorphic field is charged. An abstract or
-  builtin type is read through its variance only: the host holds such a
-  value but cannot invoke anything inside it.
+- a data type whose constructors the entry's module can name is also
+  opened: each constructor field, instantiated at the type's arguments, is
+  read at the type's own position, so a row written inside a monomorphic
+  field is charged. A type opened again inside its own opening at other
+  arguments (a nested data type) is opened once with its parameters left as
+  variables. A builtin type, and a type whose constructors another module
+  keeps (an abstract or private type, or any newtype declared elsewhere), is
+  read through its variance only: the host holds such a value but cannot
+  apply anything inside it, though the declaring module's own functions
+  can. Whether that route belongs to the protocol is open.
 - a slot whose parameter is an effect row or an authority is an index, and
   an index is invariant (§6.4), so an effect index is charged in either
   position. That over-charges an index a type only ever uses covariantly
@@ -1083,8 +1088,9 @@ domain, or an explicit unresolved-manifest error. It must never be omitted or
 rendered as empty authority. A forcing effect cannot disappear merely because
 the entry's value type is `Unit` rather than an arrow. The manifest writes an
 authority still bound to a variable as the whole label, with a TOML comment
-naming the variable (`Net = true  # unresolved: authority variable `url``). A policy entry narrower than the whole label reports it as
-`not proven` rather than refusing it silently.
+naming the variable: ``Net = true  # unresolved: authority variable `url` ``.
+A policy entry narrower than the whole label reports it as `not proven`
+rather than refusing it silently.
 
 **The host is the handler.** Medaka has no in-language effect handler. Instead the
 **runtime platform** is the handler: it reads `M(module)` *before loading* the

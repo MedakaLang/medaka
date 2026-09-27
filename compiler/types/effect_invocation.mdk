@@ -36,104 +36,109 @@ public export data InvocationOps = InvocationOps {
   headKey : Mono -> String,
 }
 
--- How many differently-instantiated openings one head gets at one position
--- before it is opened once generically. A nested data type instantiates its
--- head at ever-larger arguments; the generic opening charges every row its
--- fields write, with each declaration variable left unresolved.
-openingCap : Int
-openingCap = 8
-
 -- The atoms a host can reach through [scheme]: its forcing row, and every
 -- row charged by the walk above.
 export
 invocationSummary : InvocationOps -> Scheme -> List Atom
 invocationSummary ops (Forall _ _ _ _ force mono) =
-  let st = reach ops VCo mono (Walk [] Tip Tip)
+  let st = reach ops Tip VCo mono (Walk [] Tip)
   atomsUnion (effrowLabels force) (walkAtoms st)
 
--- The walk's state: the atoms charged so far, the openings done (by head,
--- position and arguments), and the openings per (head, position).
-data Walk = Walk (List Atom) (Map String Unit) (Map String Int)
+-- The walk's state: the atoms charged so far, and the openings done, each
+-- keyed by head, position and arguments.  The (head, position) pairs on the
+-- current opening path travel beside it, not in it: they are the path, not
+-- the history.
+data Walk = Walk (List Atom) (Map String Unit)
 
 walkAtoms : Walk -> List Atom
-walkAtoms (Walk atoms _ _) = atoms
+walkAtoms (Walk atoms _) = atoms
 
-reach : InvocationOps -> Variance -> Mono -> Walk -> Walk
-reach ops pol m st = match normalize m
+reach : InvocationOps -> Map String Unit -> Variance -> Mono -> Walk -> Walk
+reach ops path pol m st = match normalize m
   TFun dom row res =>
     let charged = chargeRow pol row st
-    reach ops pol res (reach ops (flipV pol) dom charged)
+    reach ops path pol res (reach ops path (flipV pol) dom charged)
   TEff row => chargeRow pol row st
-  TQual inner _ => reach ops pol inner st
+  TQual inner _ => reach ops path pol inner st
   TApp a b => match tupleSpine (TApp a b)
-    Some elems => reachAll ops pol elems st
+    Some elems => reachAll ops path pol elems st
     None =>
       let (h, args) = spineParts (TApp a b)
       openHead
         ops
+        path
         pol
         (TApp a b)
         h
         args
-        (reachArgs ops pol (ops.headVariances h) 0 args st)
-  h@(TCon _ _) => openHead ops pol h h [] st
+        (reachArgs ops path pol (ops.headVariances h) 0 args st)
+  h@(TCon _ _) => openHead ops path pol h h [] st
   _ => st
 
 chargeRow : Variance -> EffRow -> Walk -> Walk
 chargeRow VContra _ st = st
-chargeRow _ row (Walk atoms done counts) =
-  Walk (atomsUnion atoms (effrowLabels row)) done counts
+chargeRow _ row (Walk atoms done) =
+  Walk (atomsUnion atoms (effrowLabels row)) done
 
-reachAll : InvocationOps -> Variance -> List Mono -> Walk -> Walk
-reachAll _ _ [] st = st
-reachAll ops pol (m :: rest) st = reachAll ops pol rest (reach ops pol m st)
+reachAll : InvocationOps ->
+  Map String Unit ->
+  Variance ->
+  List Mono ->
+  Walk ->
+  Walk
+reachAll _ _ _ [] st = st
+reachAll ops path pol (m :: rest) st =
+  reachAll ops path pol rest (reach ops path pol m st)
 
 -- Each argument at the head's variance for its slot, composed with the
 -- context; a slot the head does not declare is invariant.
 reachArgs : InvocationOps ->
+  Map String Unit ->
   Variance ->
   Option (List Variance) ->
   Int ->
   List Mono ->
   Walk ->
   Walk
-reachArgs _ _ _ _ [] st = st
-reachArgs ops pol vs i (arg :: rest) st =
+reachArgs _ _ _ _ _ [] st = st
+reachArgs ops path pol vs i (arg :: rest) st =
   let slot = match vs
     Some known => varianceAt known i
     None => VInv
-  reachArgs ops pol vs (i + 1) rest (reach ops (mulV pol slot) arg st)
+  reachArgs ops path pol vs (i + 1) rest (reach ops path (mulV pol slot) arg st)
 
--- Open an applied head once per distinct instantiation at a position, up to
--- the cap, then once generically.
+-- Open an applied head once per distinct instantiation at a position.  A
+-- head met again inside its own opening at other arguments (a nested data
+-- type grows them without end) is opened once generically instead: its
+-- fields' rows are all charged, each declaration variable left unresolved.
 openHead : InvocationOps ->
+  Map String Unit ->
   Variance ->
   Mono ->
   Mono ->
   List Mono ->
   Walk ->
   Walk
-openHead ops pol applied h args (Walk atoms done counts) =
+openHead ops path pol applied h args (Walk atoms done) =
   let site = "\{ops.headKey h}@\{varianceTag pol}"
   let key = "\{site}:\{joinWith "," (map ppMono args)}"
   let generic = "\{site}:*"
-  let n = match M.get site counts
-    Some k => k
-    None => 0
   if M.has key done || M.has generic done then
-    Walk atoms done counts
-  else if n >= openingCap then
+    Walk atoms done
+  else if M.has site path then
     reachAll
       ops
+      path
       pol
       (ops.genericFields h)
-      (Walk atoms (M.set generic () done) counts)
+      (Walk atoms (M.set generic () done))
   else
     reachAll
       ops
+      (M.set site () path)
       pol
       (ops.appliedFields applied)
-      (Walk atoms (M.set key () done) (M.set site (n + 1) counts))
+      (Walk atoms (M.set key () done))
 
 varianceAt : List Variance -> Int -> Variance
 varianceAt [] _ = VInv

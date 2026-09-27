@@ -1,5 +1,5 @@
 # META
-source_lines=875
+source_lines=849
 stages=DESUGAR,MARK
 # SOURCE
 import types.effect_domain.{canonParam, drender, Param(..)}
@@ -851,32 +851,6 @@ axisToAllow _ = []
 
 joinSemiTok : List String -> String
 joinSemiTok xs = joinWith ";" xs
-
--- Full manifest extraction returning the atom list (for round-trip gate).
-export
-runManifestAtoms : String -> String -> String -> String -> List Atom
-runManifestAtoms rtSrc coreSrc src fnName =
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugaredPrelude rtSrc
-  let coreD = desugaredPrelude coreSrc
-  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
-  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) =
-    checkOneSchemeFull rtD coreD ("__user__", userD)
-  let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
-  let fnEffects = match lookupAssoc fnName effTable
-    None => []
-    Some e => e
-  fnEffects
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
@@ -1097,8 +1071,6 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "axisToAllow" (PWild) (EListLit))
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
-(DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))
 # MARK
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "drender" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
@@ -1319,5 +1291,3 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "axisToAllow" (PWild) (EListLit))
 (DTypeSig false "joinSemiTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinSemiTok" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EVar "xs")))
-(DTypeSig true "runManifestAtoms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "runManifestAtoms" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EVar "fnEffects"))))

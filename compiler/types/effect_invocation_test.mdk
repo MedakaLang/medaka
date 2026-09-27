@@ -55,6 +55,12 @@ ops = InvocationOps {
       _ => "?",
 }
 
+-- A right-nested tuple of one `Holder` per name.
+holders : List String -> Mono
+holders [] = unit
+holders (n :: rest) =
+  TApp (TApp (con "__tuple2__") (TApp (con "Holder") (con n))) (holders rest)
+
 summary : EffRow -> Mono -> String
 summary force mono =
   renderAtoms (invocationSummary ops (Forall [] [] [] [] force mono))
@@ -121,4 +127,8 @@ test "each instantiation of a head is opened, and a growing one ends generically
           (TApp (con "__tuple2__") (TApp (con "Holder") (con "a")))
           (TApp (con "Holder") (con "b")))),
     expectEqual "Net \"grow/\"" (summary pure (TApp (con "Grow") unit)),
+    -- nine sibling instantiations are each opened; only recursion goes generic
+    expectEqual
+      "Net \"h/*\""
+      (summary pure (holders ["a", "b", "c", "d", "e", "f", "g", "h", "i"])),
   ]

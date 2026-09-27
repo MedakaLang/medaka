@@ -847,29 +847,3 @@ axisToAllow _ = []
 
 joinSemiTok : List String -> String
 joinSemiTok xs = joinWith ";" xs
-
--- Full manifest extraction returning the atom list (for round-trip gate).
-export
-runManifestAtoms : String -> String -> String -> String -> List Atom
-runManifestAtoms rtSrc coreSrc src fnName =
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugaredPrelude rtSrc
-  let coreD = desugaredPrelude coreSrc
-  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
-  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) =
-    checkOneSchemeFull rtD coreD ("__user__", userD)
-  let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
-  let fnEffects = match lookupAssoc fnName effTable
-    None => []
-    Some e => e
-  fnEffects

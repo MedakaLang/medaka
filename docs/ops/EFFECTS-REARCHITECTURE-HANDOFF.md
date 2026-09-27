@@ -1171,8 +1171,9 @@ through it.
   data head visible to the entry is opened: each constructor field,
   instantiated at the head's arguments (types, rows and authorities
   substituted), is read at the head's position, once per (head, position,
-  arguments), at most eight instantiations per (head, position) and then once
-  with the declaration's variables left in place.
+  arguments). A head met again inside its own opening at other arguments (a
+  nested data type) is opened once with the declaration's variables left in
+  place, so siblings stay precise and recursion ends.
 - **Its inputs:** `typecheck.lastInvocationOps` reads `InvocationView`, written
   once per module by `checkBodyImpl` right after its data environment is built:
   the constructors the module can name (its own environment plus the
@@ -1192,9 +1193,11 @@ through it.
 - **Known over-charges, safe:** an index a type uses only covariantly is still
   invariant, so charged in a negative position; builtin `List` has no variance
   row, so a list in a domain is charged.
-- **By design, not opened:** an abstract or private type of another module. The
-  host holds the value but cannot invoke inside it; review round 1 raised it
-  (a module's own API can run it) and it is listed for Val.
+- **By design, not opened:** a type whose constructors another module keeps
+  (abstract, private, or any newtype declared elsewhere). The host holds the
+  value but cannot apply anything inside it; the declaring module's own
+  functions can (review rounds 1 and 2), and whether that route belongs to
+  the protocol is listed for Val.
 
 ## Delivered code and invariants to preserve
 
