@@ -2338,12 +2338,16 @@ main = match args ()
    what it emits is exactly what the server would have written to disk. -}
 runCredentialAt : Int -> String -> <IO, Rand> Unit
 runCredentialAt count password =
-  match makeCredential (osEntropyBytes saltBytes) count password
+  let salt =
+    optionOrPanic
+      "makeCredential: every element must be a byte in 0..255"
+      (B.fromArray (osEntropyBytes saltBytes))
+  match makeCredential salt count password
     Err message => panic "serve_client: credential-at: \{message}"
     Ok record =>
       let () = println (intToString (credentialIterations record))
-      let () = println (hexOf (credentialSalt record))
-      println (hexOf (credentialDigest record))
+      let () = println (Hex.encode (credentialSalt record))
+      println (Hex.encode (credentialDigest record))
 
 {- | Upload one blob and print the CID the server content-addressed it to.
 

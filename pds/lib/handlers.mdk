@@ -1889,16 +1889,17 @@ mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
   let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
+  let key = fromArrayAssumeByteDomain secret
   (
     mintToken
-      secret
+      key
       (accountDid account)
       (accessAudience account)
       tokenId
       issued
       (issued + accessTokenSeconds),
     mintToken
-      secret
+      key
       (accountDid account)
       (refreshAudience account)
       tokenId

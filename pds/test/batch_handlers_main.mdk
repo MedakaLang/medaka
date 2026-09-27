@@ -145,7 +145,7 @@ testContext =
 testToken : String -> String
 testToken did =
   mintToken
-    testSecret
+    (fromArrayAssumeByteDomain testSecret)
     did
     accountHostText
     "batch_handlers-fixture-token"

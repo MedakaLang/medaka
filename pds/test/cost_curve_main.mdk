@@ -114,7 +114,7 @@ benchContext =
 benchToken : String
 benchToken =
   mintToken
-    testSecret
+    (B.fromArrayAssumeByteDomain testSecret)
     corpusDid
     hostText
     "cost_curve-probe-token"
