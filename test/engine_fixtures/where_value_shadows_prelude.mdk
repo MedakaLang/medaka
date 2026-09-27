@@ -9,8 +9,7 @@ plain _ = debug result
 folded : Unit -> String
 folded _ = debug result
   where
-    step acc x = acc + x
-    result = fold step 0 [1, 2, 3]
+    result = fold (acc x => acc + x) 0 [1, 2, 3]
 
 main =
   println (plain ())
