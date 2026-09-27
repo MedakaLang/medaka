@@ -2413,6 +2413,72 @@ table = [
     pinned = "(7, 100)\n",
     codes = [],
   },
+  Row {
+    entry = "impl-head-repeated-var-three-positions.mdk",
+    label =
+      "§3 one matcher for the whole head vector: `impl Pick a a a` never matches `Pick (List x) (List Int) (List U8)`, whichever position binds `a` first. Was accepted, printing a U8 list holding 300",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-three-positions-control.mdk",
+    label =
+      "control for the three-position row: every position `List Int` matches. Hand-derived: `pick [] [3, 7]` returns its second argument, [3, 7]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[3, 7]\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-spine.mdk",
+    label =
+      "§3 `impl Get (Box a) a` against `Get (Box (Option t)) (List Int)`: the two bindings of `a` disagree on their constructor while both hold a free variable, so no instantiation matches. Was accepted and crashed at run time",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-spine-control.mdk",
+    label =
+      "control for the spine row: a box holding the list the use wants matches. Hand-derived: total of [1, 2] is 3",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-body-default.mdk",
+    label =
+      "an impl body must not default a Num variable that `Index (Array a) Int e` ties to the impl's own, still free, `a`: grounding `e` to Int passed a head match it contradicts and ran an Int dictionary on Floats. Refused as ambiguous by run and build; `check` accepting it is #1641 (a constrained impl head suppresses the ambiguity), and this row reds when #1641 is fixed",
+    expCheck = "ACCEPT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-repeated-var-body-default-control.mdk",
+    label =
+      "control for the body-default row: the helper's signature names the element type as the impl's `a`. Hand-derived: 1.5 + 2.25 = 3.75, then 3 + 4 = 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "total=3.75\ntotal=7\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2424,7 +2490,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 208
+tableRows = 214
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

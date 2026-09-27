@@ -23892,10 +23892,22 @@ numChannelRootSet obls channels =
 -- used as `debug (two ())`): their Num obligation is on the call and
 -- dictionary-application windows, not the body's own, exactly as at a
 -- top-level group (#23).  The body-local boundary grounds them like any other
--- body-local root.
-bodyExtraNumObls : Int -> Int -> List UObligation
-bodyExtraNumObls callN0 dictN0 =
-  numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
+-- body-local root, except one a multi-parameter obligation of the body still
+-- mentions (`e` of `Index (Array a) Int e`): another parameter may fix it, and
+-- in an impl body that parameter is the impl's own head variable, still free
+-- here, so grounding it to Int would pass a head match it contradicts (#3521).
+bodyExtraNumObls : List UObligation -> Int -> Int -> List UObligation
+bodyExtraNumObls bodyObls callN0 dictN0 =
+  let calls = callUOblsWindow callN0
+  let tied = flatMap multiParamIds (bodyObls ++ calls)
+  filterList
+    (o => not (anyList (id => containsI id tied) (numObligIds o)))
+    (numCallObls calls ++ numDictObls (dictAppsSince dictN0))
+
+multiParamIds : UObligation -> List Int
+multiParamIds o = match uOblArgs o
+  args@(_ :: _ :: _) => flatMap monoUnboundIds args
+  _ => []
 
 defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
 defaultBodyLocalNumWith ownerPolicy protectedIds obls =
@@ -30728,23 +30740,47 @@ implHeadSubstGo (p :: ps) (c :: cs) (Some sofar) = match matchTyMono p c
 implHeadSubstGo _ _ _ = None
 
 -- Merge the bindings one head position recovered into those of the positions
--- before it. A name bound at both keeps the concrete binding over a free one,
--- as `mergeSubstPreferConcrete` does; two ground bindings that differ admit
--- no single matcher for the head, so it does not match: `Get (Box a) a` never
--- matches `Get (Box Float) Int`.
+-- before it. A name bound at two positions keeps the binding that says more:
+-- a constructor over a free variable, then the one with fewer free variables,
+-- so a later position is compared against the most specific binding so far.
+-- Two bindings that no instantiation can make equal admit no single matcher
+-- for the head, so it does not match: `Get (Box a) a` never matches
+-- `Get (Box Float) Int`, and `Pick a a a` never matches
+-- `Pick (List x) (List Int) (List U8)`.
 mergeSubstConsistent : List (String, Mono) ->
   List (String, Mono) ->
   Option (List (String, Mono))
 mergeSubstConsistent acc [] = Some acc
 mergeSubstConsistent acc ((k, v) :: rest) = match lookupAssoc k acc
-  Some old if groundConflict old v => None
-  _ => mergeSubstConsistent (mergeOne acc k v) rest
+  Some old =>
+    if monosClash old v then
+      None
+    else
+      mergeSubstConsistent
+        (map (e => if fst e == k then (k, moreSpecific old v) else e) acc)
+        rest
+  None => mergeSubstConsistent (acc ++ [(k, v)]) rest
 
-groundConflict : Mono -> Mono -> Bool
-groundConflict a b =
-  isEmptyL (monoUnboundIds a)
-    && isEmptyL (monoUnboundIds b)
-    && not (cohEqMono a b)
+moreSpecific : Mono -> Mono -> Mono
+moreSpecific old v = match (normalize old, normalize v)
+  (TVar _, _) => v
+  (_, TVar _) => old
+  _ =>
+    if listLen (monoUnboundIds v) < listLen (monoUnboundIds old) then v else old
+
+-- No instantiation of the free variables can make the two equal: their spines
+-- disagree on a constructor both know, or both are ground and differ.
+monosClash : Mono -> Mono -> Bool
+monosClash a b = match (normalize a, normalize b)
+  (TVar _, _) => False
+  (_, TVar _) => False
+  (TApp f x, TApp g y) => monosClash f g || monosClash x y
+  (TApp _ _, TCon _ _) => True
+  (TCon _ _, TApp _ _) => True
+  (na, nb) =>
+    isEmptyL (monoUnboundIds na)
+      && isEmptyL (monoUnboundIds nb)
+      && not (cohEqMono na nb)
 
 -- Merge two name→mono substs; on a key collision keep whichever value has a
 -- concrete head tycon (so the grounded element wins over a free result var).
@@ -33826,7 +33862,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
       nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
       nbMembers = [descriptor.mtiBody],
       nbSurvivingIds = monoRootIdSet [descriptor.mtiBody],
-      nbDefaultObls = addedObls ++ bodyExtraNumObls callN0 dictN0,
+      nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
       nbAmbiguityObls = addedObls,
     }
   -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
@@ -36244,7 +36280,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
           nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
           nbMembers = [expected],
           nbSurvivingIds = survivingNumIds,
-          nbDefaultObls = addedObls ++ bodyExtraNumObls callN0 dictN0,
+          nbDefaultObls = addedObls ++ bodyExtraNumObls addedObls callN0 dictN0,
           nbAmbiguityObls = addedObls,
         }
       -- Eval-path method-dict threading (parity with inferDefaultMethod's
