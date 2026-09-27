@@ -229,6 +229,10 @@ exempt = [
     "did_key_all_engines_test",
     "a value-plus-mutation gate-test, not a suite: it is one `vector_runner` row plus a mutation self-test, and `test/gates.toml` runs it as `pds/test/did_key_all_engines`",
   ),
+  (
+    "store_persistence_test",
+    "a gate-test, not a suite: it spawns `store_persistence_main.mdk` as separate processes over data directories it builds, and `test/gates.toml` runs it as `pds/test/store_persistence`",
+  ),
 ]
 
 exemptNames : List String

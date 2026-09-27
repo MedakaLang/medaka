@@ -1,0 +1,1492 @@
+{- | The durable store across process boundaries (P7).
+
+   `store_persistence_main.mdk` is built natively once and run as separate
+   processes over data directories this module builds, tampers with, winds
+   back and traces. Each `test` block is one concern:
+
+   - a repository, its blobs, preferences and sessions persisted by one
+     process are resumed, byte for byte, by another;
+   - no file the adapter wrote contains the signing key;
+   - a tampered block or blob file is refused rather than served, and a blob
+     the pure layer refuses never reaches a file;
+   - the half-written directories a crash can leave serve the previous value
+     or refuse;
+   - the event log's staged entry is finished or discarded against the
+     persisted head, and a genesis quartet interrupted at any point is
+     finished by the next start, and only once;
+   - crash residue under `.staging` is swept, and an entry no store wrote is
+     skipped or refused as its module states;
+   - every file is written at the mode it owes;
+   - every promote and every directory creation is barriered, read from the
+     syscall order under `strace`;
+   - one upload writes its own blob and nothing else, and a re-declared MIME
+     type still reaches the disk.
+
+   None of the crash states races a process kill. Every write path promotes
+   with `rename`, so the states a crash can leave are a finite set with fixed
+   contents; each is built directly, which is exhaustive where a kill would
+   be a sample and deterministic where a kill would be flaky. An `fsync`
+   decides when a write reaches the platter, never which file a `rename`
+   publishes, so the barrier test does not change that set.
+
+   Native only: every file extern the adapter uses is unimplemented in the
+   interpreter and rejected by Wasm (design row P9). The driver binary lives
+   in one scratch directory for the whole test process (`built`), under the
+   `TMPDIR` that `medaka gate run` gives the gate and removes afterwards;
+   each test works in a `freshScratch` directory of its own and reaps it. -}
+
+import test.vector_runner.{
+  buildNative,
+  freshScratch,
+  reap,
+  runSeconds,
+  spawn,
+  spawnFindings,
+}
+import array as A
+import bytes.{fromArrayAssumeByteDomain}
+import fs.{walkDir}
+import hex.{encode, encodeString}
+import list.{get, indexed, last, somes, sort}
+import path.{joinPath}
+import regex as R
+import string.{
+  contains,
+  endsWith,
+  join,
+  lastIndexOf,
+  lines,
+  startsWith,
+  stripPrefix,
+  stripSuffix,
+  take,
+  toInt,
+  words,
+}
+import test.{Expectation, fail, pass}
+import test_process.{medakaRoot}
+
+gate : String
+gate = "pds/test/store_persistence"
+
+driver : String
+driver = "pds/test/store_persistence_main.mdk"
+
+-- Must match `secretHex` in the driver.
+secretHex : String
+secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
+
+-- # Running the driver
+
+-- The driver, built once per test process: a top-level nullary binding is
+-- evaluated once, so every test below shares the one build.
+built : <Exec, IO> Result String String
+built = match freshScratch ()
+  Err e => Err "could not make a scratch directory for the build: \{e}"
+  Ok dir =>
+    let bin = "\{dir}/store_persistence"
+    match buildNative "\{gate} (native)" "\{medakaRoot}/\{driver}" bin
+      [] => Ok bin
+      f :: _ => Err f
+
+-- The stdout of one spawn that exited 0 and wrote nothing to stderr, or the
+-- first finding against it.
+graded : String -> Result String (Int, String, String) -> Result String String
+graded what ran = match spawnFindings "\{gate} (native)" what ran
+  (out, []) => Ok out
+  (_, f :: _) => Err f
+
+-- One run of the driver's `route` over `dir`.
+runRoute : String -> String -> String -> <Exec> Result String String
+runRoute bin route dir =
+  graded "the \{route} route" (spawn runSeconds [] bin [route, dir])
+
+-- The same run with the process umask set to `mask` first.
+runRouteUnder : String ->
+  String ->
+  String ->
+  String ->
+  <Exec> Result String String
+runRouteUnder mask bin route dir =
+  graded
+    "the \{route} route under umask \{mask}"
+    (spawn runSeconds [] "sh" [
+      "-c",
+      "umask \{mask} && exec \"$0\" \"$@\"",
+      bin,
+      route,
+      dir,
+    ])
+
+-- `cp -R src dst`: a whole data directory, copied before it is damaged.
+copyTree : String -> String -> <Exec> Result String Unit
+copyTree src dst =
+  map
+    (_ => ())
+    (graded "cp -R \{src}" (spawn runSeconds [] "cp" ["-R", src, dst]))
+
+{- | The test body run against the built driver in a fresh scratch directory,
+   which is removed afterwards. `Err` is the first failed assertion. -}
+inScratch : (String -> String -> <Exec, FileRead, FileWrite, IO> Result String Unit) ->
+  <Exec, FileRead, FileWrite, IO> Expectation
+inScratch body = match built
+  Err e => fail "\{gate}: \{e}"
+  Ok bin => match freshScratch ()
+    Err e => fail "\{gate}: could not make a scratch directory: \{e}"
+    Ok dir =>
+      let result = body bin dir
+      let _ = reap dir []
+      match result
+        Ok () => pass
+        Err e => fail "\{gate}: \{e}"
+
+-- # Assertions over output and files
+
+require : Bool -> String -> Result String Unit
+require True _ = Ok ()
+require False message = Err message
+
+-- The line `tail -1` prints: the last one, not the empty string after a
+-- final newline.
+lastLine : String -> String
+lastLine out =
+  let body = match stripSuffix "\n" out
+    Some b => b
+    None => out
+  match last (lines body)
+    Some l => l
+    None => ""
+
+requireLast : String -> String -> String -> Result String Unit
+requireLast want out message =
+  require
+    (lastLine out == want)
+    "\{message}; last line: \{debug (lastLine out)}"
+
+requireLine : String -> String -> String -> Result String Unit
+requireLine want out message = require (elem want (lines out)) message
+
+-- Whether some line of `out` matches `pattern`.
+hasMatch : String -> String -> Bool
+hasMatch pattern out =
+  let re = R.mustCompile pattern
+  any (R.isMatch re) (lines out)
+
+-- Every line that starts with `prefix`, the prefix removed.
+tagged : String -> String -> List String
+tagged prefix out = somes (map (stripPrefix prefix) (lines out))
+
+-- Every regular file under `dir`, sorted.
+filesUnder : String -> <FileRead> Result String (List String)
+filesUnder dir = match walkDir dir
+  Err e => Err "could not list \{dir}: \{e}"
+  Ok paths => Ok (sort (filter (p => fileIsRegular p) paths))
+
+fileIsRegular : String -> <FileRead> Bool
+fileIsRegular p = match statFile p
+  Ok (_, _, isFile, _) => isFile
+  Err _ => False
+
+-- `path` relative to `root`.
+relativeTo : String -> String -> String
+relativeTo root path = match stripPrefix "\{root}/" path
+  Some rel => rel
+  None => path
+
+-- `path` with its last `/component` removed, as `sub(/\/[^\/]*$/, "")`.
+parentOf : String -> String
+parentOf path = match lastIndexOf "/" path
+  Some i => take i path
+  None => path
+
+eachOk : (a -> <e> Result String Unit) -> List a -> <e> Result String Unit
+eachOk f xs = map (_ => ()) (traverse f xs)
+
+readText : String -> <FileRead> Result String String
+readText path = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok text => Ok text
+
+removeOrErr : String -> <FileWrite> Result String Unit
+removeOrErr path = match removeFile path
+  Err e => Err "could not remove \{path}: \{e}"
+  Ok () => Ok ()
+
+-- # Resume across a process boundary
+
+{- | What the save and load routes printed over one data directory. The
+   repository, blob, preferences and sessions halves all persist into the
+   same directory, so the key sweep covers every file they write. -}
+data Persisted = Persisted {
+  save : String,
+  load : String,
+  blobSave : String,
+  blobLoad : String,
+  prefsSave : String,
+  prefsLoad : String,
+  sessionsSave : String,
+  sessionsLoad : String,
+}
+
+persistInto : String -> String -> <Exec> Result String Persisted
+persistInto bin dir = do
+  save <- runRoute bin "save" dir
+  load <- runRoute bin "load" dir
+  blobSave <- runRoute bin "blob-save" dir
+  blobLoad <- runRoute bin "blob-load" dir
+  prefsSave <- runRoute bin "prefs-save" dir
+  prefsLoad <- runRoute bin "prefs-load" dir
+  sessionsSave <- runRoute bin "sessions-save" dir
+  sessionsLoad <- runRoute bin "sessions-load" dir
+  Ok Persisted {
+    save = save,
+    load = load,
+    blobSave = blobSave,
+    blobLoad = blobLoad,
+    prefsSave = prefsSave,
+    prefsLoad = prefsLoad,
+    sessionsSave = sessionsSave,
+    sessionsLoad = sessionsLoad,
+  }
+
+-- The repository half: the reloaded head commit CID, record count and
+-- exported CAR are the saved ones.
+repoResumed : Persisted -> Result String Unit
+repoResumed p = do
+  () <- requireLast "SAVE: PASS" p.save "save route did not pass"
+  () <- requireLine "SAVE records 3" p.save "save did not write three records"
+  () <- requireLast "LOAD: PASS" p.load "load route did not pass"
+  let saved = tagged "SAVE " p.save
+  () <- require (saved /= []) "save produced no state summary"
+  () <- require
+    (saved == tagged "LOAD " p.load)
+    "reloaded head commit CID / record count / getRepo CAR differ"
+  require
+    (any (R.isMatch (R.mustCompile "^car .* decodes$")) saved)
+    "exported CAR did not decode"
+
+-- The blob half: CID, declared MIME type and bytes. The MIME type is the part
+-- content addressing does not carry, so a reload that kept the bytes and lost
+-- the type would still be a loss.
+blobsResumed : Persisted -> Result String Unit
+blobsResumed p = do
+  () <- requireLast "BLOB-SAVE: PASS" p.blobSave "blob save route did not pass"
+  () <- requireLast "BLOB-LOAD: PASS" p.blobLoad "blob load route did not pass"
+  let saved = tagged "BLOBSAVE " p.blobSave
+  let loaded = tagged "BLOBLOAD " p.blobLoad
+  () <- require (saved /= []) "blob save produced no state summary"
+  () <- require
+    (saved == loaded)
+    "reloaded blob CID / declared MIME type / bytes differ"
+  require
+    (any (R.isMatch (R.mustCompile "^blob .* text/plain ")) loaded)
+    "the reloaded blob lost its declared MIME type"
+
+-- Preferences and sessions. The session set is security-relevant, and
+-- `pds serve` refuses to read it back at a wider mode, so the writer owes
+-- 0600 from the first byte.
+prefsAndSessionsResumed : String -> Persisted -> <FileRead> Result String Unit
+prefsAndSessionsResumed dir p = do
+  () <- requireLast
+    "PREFS SAVE: PASS"
+    p.prefsSave
+    "preferences save route did not pass"
+  () <- requireLast
+    "PREFS LOAD: PASS"
+    p.prefsLoad
+    "preferences load route did not pass"
+  () <- requireLast
+    "SESSIONS SAVE: PASS"
+    p.sessionsSave
+    "sessions save route did not pass"
+  () <- requireLast
+    "SESSIONS LOAD: PASS"
+    p.sessionsLoad
+    "sessions load route did not pass"
+  mode <- fileMode (joinPath dir "sessions")
+  require (mode == 384) "sessions file is mode \{octal mode}, expected 600"
+
+-- A sessions file written before session families: three fields per row. A
+-- startup that refused it would turn an upgrade into an outage, so the row
+-- must load and its access token must still verify.
+legacySessionsAdmitted : String ->
+  String ->
+  <Exec, FileWrite> Result String Unit
+legacySessionsAdmitted bin dir = do
+  () <- makeDir dir
+  let row = join " " [
+    "4f4e4d4c4b4a494847464544434241404f4e4d4c4b4a49484746454443424140",
+    "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
+    "2000000000",
+  ]
+  () <- writeFileMode (joinPath dir "sessions") 384 "\{row}\n"
+  out <- runRoute bin "sessions-legacy" dir
+  requireLast
+    "SESSIONS LEGACY: PASS"
+    out
+    "legacy sessions file was not admitted"
+
+test "resume: the repository, blobs, preferences and sessions persisted by one process are read back by another" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "data"
+    p <- persistInto bin dir
+    () <- repoResumed p
+    () <- blobsResumed p
+    () <- prefsAndSessionsResumed dir p
+    legacySessionsAdmitted bin (joinPath scratch "legacy-sessions"))
+
+-- # The signing key
+
+-- Every byte of every file below `dir`, as one lowercase hex string, which
+-- catches the key whether it was written raw or as hex text.
+treeHex : String -> <FileRead> Result String String
+treeHex dir = do
+  files <- filesUnder dir
+  chunks <- traverse
+    (f => match readFileBytes f
+      Err e => Err "could not read \{f}: \{e}"
+      Ok bs => Ok (encode (fromArrayAssumeByteDomain bs)))
+    files
+  Ok (join "" chunks)
+
+test "key: no persisted file carries the signing key, raw or as hex text" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "data"
+    _ <- persistInto bin dir
+    blobFiles <- filesUnder (joinPath dir "blobs")
+    () <- require
+      (length blobFiles == 4)
+      "expected 4 blob files under \{dir}/blobs, found \{intToString (length blobFiles)}"
+    files <- filesUnder dir
+    () <- require
+      (length files >= 2)
+      "expected persisted files, found \{intToString (length files)}"
+    hexText <- treeHex dir
+    () <- require
+      (not (contains secretHex hexText))
+      "a persisted file contains the raw signing-key bytes"
+    require
+      (not (contains (encodeString secretHex) hexText))
+      "a persisted file contains the signing key as hex text")
+
+-- # Tampered and refused content
+
+-- The first byte of `path` changed, its length not: only the content moves.
+tamper : String -> <FileRead, FileWrite> Result String Unit
+tamper path = match readFileBytes path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok bs => match A.first bs
+    None => Err "\{path} is empty; there is no byte to tamper with"
+    Some b =>
+      let changed =
+        A.mapWithIndex (i x => if i == 0 then if b == 0 then 1 else 0 else x) bs
+      match writeFileBytes path changed
+        Err e => Err "could not tamper with \{path}: \{e}"
+        Ok () => match readFileBytes path
+          Err e => Err "could not re-read \{path}: \{e}"
+          Ok after => do
+            () <- require (after /= bs) "tamper did not change \{path}"
+            require
+              (arrayLength after == arrayLength bs)
+              "tamper changed the length of \{path}; the test wants a pure content change"
+
+firstOf : String -> List String -> Result String String
+firstOf _ (x :: _) = Ok x
+firstOf what [] = Err "no \{what}"
+
+isSidecar : String -> Bool
+isSidecar path = match stripSuffix ".mime" path
+  Some _ => True
+  None => False
+
+test "tamper: a tampered block file and a tampered blob file are refused, not served" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "data"
+    _ <- persistInto bin dir
+    let blocks = joinPath scratch "tampered"
+    () <- copyTree dir blocks
+    blockFiles <- filesUnder (joinPath blocks "blocks")
+    victim <- firstOf "persisted block file to tamper with" blockFiles
+    () <- tamper victim
+    rejected <- runRoute bin "reject" blocks
+    () <- require
+      (any (startsWith "REJECT: PASS ") (lines rejected))
+      "tampered block file was not rejected: \{debug rejected}"
+    let blobs = joinPath scratch "blobtampered"
+    () <- copyTree dir blobs
+    blobFiles <- filesUnder (joinPath blobs "blobs")
+    blobVictim <- firstOf
+      "persisted blob file to tamper with"
+      (filter (f => not (isSidecar f)) blobFiles)
+    () <- tamper blobVictim
+    blobRejected <- runRoute bin "blob-reject" blobs
+    require
+      (any (startsWith "BLOB-REJECT: PASS ") (lines blobRejected))
+      "tampered blob file was not rejected: \{debug blobRejected}")
+
+-- A fresh directory, so "no blob file exists" is an assertion about this
+-- upload and not about a directory that was already empty of other blobs.
+test "oversize: a blob the pure layer refuses reaches no file at all" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "oversize"
+    () <- makeDir dir
+    out <- runRoute bin "blob-oversize" dir
+    () <- requireLast
+      "BLOB-OVERSIZE: PASS nothing was written"
+      out
+      "an oversize blob was not refused before writing"
+    files <- filesUnder dir
+    require
+      (files == [])
+      "an oversize blob left \{intToString (length files)} file(s) on disk")
+
+-- # Half-written directories
+
+{- | A crash between the last block write and the head `rename`.
+
+   `persistSave` writes the blocks and promotes the head last, so the state
+   a crash in between leaves is the newer generation's blocks under a head
+   file still naming the older one. It must load as the previous repository
+   exactly, blocks it cannot reach notwithstanding. The same crash on a first
+   save leaves blocks with no head at all, which must be refused. -}
+unpromotedHead : String ->
+  String ->
+  <Exec, FileRead, FileWrite> Result String Unit
+unpromotedHead bin scratch = do
+  let crash = joinPath scratch "crash-blocks-ahead"
+  old <- runRoute bin "crash-save-old" crash
+  () <- requireLast
+    "CRASH-SAVE-OLD: PASS"
+    old
+    "old-generation save route did not pass"
+  let headFile = joinPath crash "head"
+  oldHead <- readText headFile
+  _ <- runRoute bin "save" crash
+  () <- writeFile headFile oldHead
+  loaded <- runRoute bin "load" crash
+  () <- requireLast
+    "LOAD: PASS"
+    loaded
+    "an unpromoted head did not reload at all"
+  let oldState = tagged "OLD " old
+  () <- require (oldState /= []) "old-generation save produced no state summary"
+  () <- require
+    (oldState == tagged "LOAD " loaded)
+    "an unpromoted head served a repository that is not the previous one"
+  let first = joinPath scratch "crash-first-save"
+  _ <- runRoute bin "save" first
+  () <- removeOrErr (joinPath first "head")
+  refused <- runRoute bin "reject" first
+  require
+    (any (startsWith "REJECT: PASS ") (lines refused))
+    "a block directory with no head file was loaded anyway: \{debug refused}"
+
+{- | The inverse: a head promoted over a graph that is not all there.
+
+   Every persisted block in turn rather than one sample: a single tolerated
+   absence is a repository served with records silently missing, and which
+   block would be tolerated is exactly what a sample cannot say. -}
+headOverMissingBlock : String ->
+  String ->
+  String ->
+  (Int, String) ->
+  <Exec, FileWrite> Result String Unit
+headOverMissingBlock bin scratch dataDir (i, rel) = do
+  let copy = joinPath scratch "headahead-\{intToString i}"
+  () <- copyTree dataDir copy
+  () <- removeOrErr (joinPath copy rel)
+  out <- runRoute bin "reject" copy
+  require
+    (any (startsWith "REJECT: PASS ") (lines out))
+    "a head over a graph missing \{rel} was served anyway: \{debug out}"
+
+{- | The blob half, interrupted in both promote orders.
+
+   `blobfile.mdk` promotes the MIME sidecar first and the bytes last, so a
+   crash between them leaves a sidecar naming no bytes. The reverse state is
+   built too, since that ordering is a preference the code says it cannot
+   guarantee. Both must lose exactly the one blob they belong to, never the
+   read. -}
+blobHalfInterrupted : String ->
+  String ->
+  String ->
+  <Exec, FileRead, FileWrite> Result String Unit
+blobHalfInterrupted bin scratch dataDir = do
+  blobFiles <- filesUnder (joinPath dataDir "blobs")
+  victim <- firstOf
+    "persisted blob to interrupt"
+    (filter (f => not (isSidecar f)) blobFiles)
+  let rel = relativeTo dataDir victim
+  let sidecarOnly = joinPath scratch "sidecar-only"
+  () <- copyTree dataDir sidecarOnly
+  () <- removeOrErr (joinPath sidecarOnly rel)
+  survey <- runRoute bin "blob-survey" sidecarOnly
+  () <- requireLast
+    "BLOB-SURVEY: OK 1"
+    survey
+    "a sidecar promoted without its bytes did not cost exactly its own blob"
+  let bytesOnly = joinPath scratch "bytes-only"
+  () <- copyTree dataDir bytesOnly
+  () <- removeOrErr (joinPath bytesOnly "\{rel}.mime")
+  survey2 <- runRoute bin "blob-survey" bytesOnly
+  requireLast
+    "BLOB-SURVEY: OK 1"
+    survey2
+    "bytes promoted without their sidecar did not cost exactly their own blob"
+
+test "crash: every half-written repository or blob state serves the previous value or refuses" = inScratch
+  (bin scratch => do
+    () <- unpromotedHead bin scratch
+    let dataDir = joinPath scratch "data"
+    _ <- persistInto bin dataDir
+    blockFiles <- filesUnder (joinPath dataDir "blocks")
+    let rels = map (relativeTo dataDir) blockFiles
+    () <- eachOk (headOverMissingBlock bin scratch dataDir) (indexed rels)
+    () <- require
+      (length rels >= 4)
+      "expected several persisted blocks to remove, found \{intToString (length rels)}"
+    blobHalfInterrupted bin scratch dataDir)
+
+-- # The event log
+
+{- | The event log's two crash points, against a real persisted head, and
+   the arm neither reaches: an entry anchored to no commit.
+
+   `pds/test/event_log_test.mdk` grades the recovery rule over CID strings it
+   supplies itself; these stage an entry over a genuinely persisted
+   repository and let the file on disk decide. Both directions, because a
+   recovery that discarded everything would satisfy the orphan case alone.
+   The unanchored entry is owed whatever `persistLoad` answers, and the
+   `EVENTPLANNED` line is the #2906 claim: planning leaves the pending entry
+   and the promoted count where the stage left them. -}
+test "event log: a staged entry is finished when its head is on disk, discarded when it is not, and planning writes nothing" = inScratch
+  (bin scratch => do
+    owed <- runRoute bin "event-recover-owed" (joinPath scratch "event-owed")
+    () <- require
+      (hasMatch "^EVENTBEFORE staged .* entries 0$" owed)
+      "the owed case did not stage an entry to recover"
+    () <- requireLine
+      "EVENTAFTER staged none entries 1"
+      owed
+      "an entry naming the persisted head was not finished: \{debug owed}"
+    orphan <- runRoute
+      bin
+      "event-recover-orphan"
+      (joinPath scratch "event-orphan")
+    () <- require
+      (hasMatch "^EVENTBEFORE staged .* entries 0$" orphan)
+      "the orphan case did not stage an entry to recover"
+    () <- requireLine
+      "EVENTAFTER staged none entries 0"
+      orphan
+      "an entry naming no persisted head was not discarded: \{debug orphan}"
+    free <- runRoute
+      bin
+      "event-recover-unanchored"
+      (joinPath scratch "event-unanchored")
+    () <- requireLine
+      "EVENTBEFORE staged unanchored entries 0"
+      free
+      "the unanchored case did not stage an entry to recover"
+    () <- requireLine
+      "EVENTPLANNED staged unanchored entries 0"
+      free
+      "planning recovery wrote to the log instead of only deciding: \{debug free}"
+    requireLine
+      "EVENTAFTER staged none entries 1"
+      free
+      "an entry anchored to no commit was not finished: \{debug free}")
+
+-- # The genesis quartet
+
+-- The entries promoted past `n`, and the last-promoted pointer set back to
+-- `n` (removed for `n = 0`): the log a creation that died after `n` of its
+-- four events leaves.
+windBack : String -> Int -> <FileRead, FileWrite> Result String Unit
+windBack dir n = do
+  let entries = joinPath dir "events/entries"
+  names <- listDir entries
+  let past =
+    filter
+      (name =>
+        any
+          (k => startsWith "000000000000000\{intToString k}-" name)
+          [n + 1..=4])
+      names
+  () <- eachOk (name => removeOrErr (joinPath entries name)) past
+  let pointer = joinPath dir "events/.last"
+  () <- if n == 0 then
+    if fileExists pointer then removeOrErr pointer else Ok ()
+  else
+    writeFile pointer (intToString n)
+  remain <- listDir entries
+  require
+    (length remain == n)
+    "winding the log back to \{intToString n} left \{intToString (length remain)} entries"
+
+{- | A start over a log holding `n` of the four genesis events must leave the
+   log an uninterrupted creation leaves, byte for byte, and a second start
+   must add nothing and not move the sequence counter. -}
+genesisResumedFrom : String ->
+  String ->
+  String ->
+  Int ->
+  <Exec, FileRead, FileWrite> Result String Unit
+genesisResumedFrom bin scratch reference n = do
+  let dir = joinPath scratch "genesis-\{intToString n}"
+  created <- runRoute bin "genesis-init" dir
+  () <- require
+    (created == reference)
+    "two uninterrupted creations left different logs"
+  () <- windBack dir n
+  resumed <- runRoute bin "genesis-resume" dir
+  () <- require
+    (resumed == reference)
+    "a start over a log holding \{intToString n} of the 4 did not finish it: \{debug resumed}"
+  lastAfter <- readText (joinPath dir "events/.last")
+  again <- runRoute bin "genesis-resume" dir
+  () <- require
+    (again == resumed)
+    "a start after the quartet was finished (from \{intToString n}) emitted more"
+  lastAgain <- readText (joinPath dir "events/.last")
+  require
+    (lastAgain == lastAfter)
+    "a start after the quartet was finished (from \{intToString n}) moved the counter"
+
+{- | The other shape those two files can take, which is not a crash point:
+   the pointer gone while the entries it indexed remain. A promotion writes
+   the entry first and the pointer second, so no sequence reaches it; the
+   entries are real history, and resuming would re-mint a second quartet
+   beside them. It must be refused, and the refusal must write nothing. -}
+lostPointerRefused : String ->
+  String ->
+  String ->
+  <Exec, FileRead, FileWrite> Result String Unit
+lostPointerRefused bin scratch reference = do
+  let dir = joinPath scratch "genesis-lost-pointer"
+  created <- runRoute bin "genesis-init" dir
+  () <- require
+    (created == reference)
+    "two uninterrupted creations left different logs"
+  let pointer = joinPath dir "events/.last"
+  () <- removeOrErr pointer
+  out <- runRoute bin "genesis-guard" dir
+  () <- require
+    (any (startsWith "GENESIS-GUARD: ERR ") (lines out))
+    "a lost last-promoted pointer over surviving entries was resumed instead of refused: \{debug out}"
+  remain <- listDir (joinPath dir "events/entries")
+  () <- require
+    (length remain == 4)
+    "the refused start left \{intToString (length remain)} entries where it found 4"
+  require
+    (not (fileExists pointer))
+    "the refused start wrote the pointer it refused over"
+
+test "genesis: a creation interrupted after 0, 1, 2 or 3 of its four events is finished by the next start, once; a lost pointer is refused" = inScratch
+  (bin scratch => do
+    reference <- runRoute bin "genesis-init" (joinPath scratch "genesis-ref")
+    () <- requireLine
+      "GENESIS count 4"
+      reference
+      "a repository creation did not emit the four genesis events"
+    () <- eachOk (genesisResumedFrom bin scratch reference) [0, 1, 2, 3]
+    lostPointerRefused bin scratch reference)
+
+-- # Entries no store wrote
+
+-- One `.staging` directory after the sweep: still there, holding only the
+-- stray subdirectory, whose own file is untouched.
+stagingAfterSweep : String -> String -> <FileRead> Result String Unit
+stagingAfterSweep dir half = do
+  let staging = joinPath dir "\{half}/.staging"
+  () <- require
+    (isDirectory staging)
+    "the sweep removed the \{half}/.staging directory itself"
+  left <- listDir staging
+  () <- require
+    (left == ["stray-dir"])
+    "\{half}/.staging holds \{debug left} after the sweep, expected only stray-dir"
+  () <- require
+    (isDirectory (joinPath staging "stray-dir"))
+    "\{half}/.staging/stray-dir is no longer a directory after the sweep"
+  require
+    (fileIsRegular (joinPath staging "stray-dir/inner"))
+    "\{half}/.staging/stray-dir/inner did not survive the sweep"
+
+isDirectory : String -> <FileRead> Bool
+isDirectory p = match statFile p
+  Ok (_, isDir, _, _) => isDir
+  Err _ => False
+
+{- | `.staging` residue is swept at startup, never treated as corruption.
+
+   The route plants the residue a crash between a staged write and its
+   `rename` leaves, beside content it also persists legitimately, plus a
+   stray subdirectory under each `.staging` that this process never wrote,
+   then runs the three sweeps `pds/serve.mdk`'s `configure` runs (#2572,
+   #3052). Every plain-file residue must be gone, every stray subdirectory
+   untouched, and the legitimate content intact. -}
+test "residue: startup sweeps .staging crash residue and leaves stray subdirectories and real content alone" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "sweep-staging"
+    out <- runRoute bin "sweep-staging" dir
+    () <- requireLast
+      "SWEEP-STAGING: PASS"
+      out
+      "sweep-staging route did not pass"
+    () <- eachOk
+      ((want, message) => requireLine want out message)
+      [
+        (
+          "SWEEP residue-block absent",
+          "staged block residue survived the sweep",
+        ),
+        ("SWEEP residue-blob absent", "staged blob residue survived the sweep"),
+        (
+          "SWEEP residue-event absent",
+          "staged event residue survived the sweep",
+        ),
+        (
+          "SWEEP stray-block present",
+          "a stray blocks/.staging subdirectory did not survive the sweep",
+        ),
+        (
+          "SWEEP stray-blob present",
+          "a stray blobs/.staging subdirectory did not survive the sweep",
+        ),
+        (
+          "SWEEP stray-event present",
+          "a stray events/.staging subdirectory did not survive the sweep",
+        ),
+        (
+          "SWEEP records 3",
+          "the sweep disturbed the legitimately persisted repository",
+        ),
+        ("SWEEP blobs 2", "the sweep disturbed a legitimately persisted blob"),
+        (
+          "SWEEP entries 1",
+          "the sweep disturbed the legitimately promoted event entry",
+        ),
+      ]
+    eachOk (stagingAfterSweep dir) ["blocks", "blobs", "events"])
+
+-- The survey rows of `stray-entries`, by case name.
+strayRow : String -> String -> String
+strayRow out name = join "\n" (tagged "STRAY \{name} " out)
+
+-- A refusal must name the planted entry's own path: #3055's defect is a
+-- stray entry's refusal attributed to something else.
+strayNamed : String -> (String, String) -> Result String Unit
+strayNamed out (name, store) = do
+  let path = join "\n" (tagged "STRAYPLANT \{name} " out)
+  () <- require (path /= "") "\{name} planted nothing"
+  require
+    (any
+      (l => startsWith "STRAYMSG \{name} \{store} " l && contains path l)
+      (lines out))
+    "\{name}'s refusal does not name \{path}"
+
+{- | One entry no store wrote, at every level the three stores list: the
+   blocks and blobs shard trees at both their levels and the event log's
+   entry directory (#3055).
+
+   Each case plants exactly one entry in its own legitimate data directory
+   and reports all four readers, so a disposition that moved a store the
+   entry never touched fails here. The expected rows are built from the row
+   for the case that plants nothing, so the fixture's block count is not
+   pinned here.
+
+   Blocks and blobs: anything not a directory at the top, or a directory not
+   named like a shard, is skipped; anything not a file under a shard is
+   skipped; a file under a shard whose name spells no CID is refused. A
+   directory named like a shard is graded as one. `blobs-leaf-cid` is a
+   directory named like a blob's bytes beside a sidecar of its own, which
+   both blob readers must pass over; comparing `count` with `blobs` asserts
+   that. The event log refuses all three shapes: its listing is its index, so
+   an entry routed around would be an undetectable hole in the stream. -}
+test "stray: an entry no store wrote is skipped or refused as its module states, the refusal names it, and no other store moves" = inScratch
+  (bin scratch => do
+    out <- runRoute bin "stray-entries" (joinPath scratch "stray")
+    () <- requireLast
+      "STRAY-ENTRIES: PASS"
+      out
+      "stray-entries route did not pass"
+    let base = strayRow out "none"
+    () <- require (base /= "") "no baseline survey row"
+    let fields = words base
+    () <- require
+      (length fields == 8)
+      "baseline row has \{intToString (length fields)} fields, expected 8: \{base}"
+    () <- require
+      (not (contains "refused" base))
+      "the unplanted baseline did not read cleanly: \{base}"
+    let field =
+      i => match get i fields
+        Some f => f
+        None => ""
+    let blocksOk = field 1
+    let blobsOk = field 3
+    let countOk = field 5
+    let eventsOk = field 7
+    () <- require
+      (blobsOk == countOk)
+      "blobFileRead and blobFileCount disagree unplanted: \{base}"
+    let intact =
+      "blocks \{blocksOk} blobs \{blobsOk} count \{countOk} events \{eventsOk}"
+    let blocksRefused =
+      "blocks refused blobs \{blobsOk} count \{countOk} events \{eventsOk}"
+    let blobsRefused =
+      "blocks \{blocksOk} blobs refused count \{countOk} events \{eventsOk}"
+    let eventsRefused =
+      "blocks \{blocksOk} blobs \{blobsOk} count \{countOk} events refused"
+    () <- eachOk
+      ((name, want) => do
+        let got = strayRow out name
+        () <- require (got /= "") "no survey row for \{name}"
+        require (got == want) "\{name} answered '\{got}', expected '\{want}'")
+      [
+        ("blocks-top-file", intact),
+        ("blocks-top-dir", intact),
+        ("blocks-top-shard", blocksRefused),
+        ("blocks-leaf-file", blocksRefused),
+        ("blocks-leaf-dir", intact),
+        ("blocks-leaf-cid", intact),
+        ("blobs-top-file", intact),
+        ("blobs-top-dir", intact),
+        ("blobs-top-shard", blobsRefused),
+        ("blobs-leaf-file", blobsRefused),
+        ("blobs-leaf-dir", intact),
+        ("blobs-leaf-cid", intact),
+        ("events-file", eventsRefused),
+        ("events-dir", eventsRefused),
+        ("events-name", eventsRefused),
+      ]
+    eachOk (strayNamed out) [
+      ("blocks-top-shard", "blocks"),
+      ("blocks-leaf-file", "blocks"),
+      ("blobs-top-shard", "blobs"),
+      ("blobs-leaf-file", "blobs"),
+      ("events-file", "events"),
+      ("events-dir", "events"),
+      ("events-name", "events"),
+    ])
+
+-- # File modes
+
+-- Permission bits as the three octal digits `stat -c %a` prints.
+octal : Int -> String
+octal mode =
+  intToString (mode / 64 % 8)
+    ++ intToString (mode / 8 % 8)
+    ++ intToString (mode % 8)
+
+-- Every route that writes a kind of file this store keeps, each of which
+-- ends its output with a `: PASS` or `: OK` line.
+modeRoutes : List String
+modeRoutes = [
+  "save",
+  "blob-save",
+  "prefs-save",
+  "sessions-save",
+  "credential-save",
+  "event-recover-owed",
+]
+
+-- One line per regular file under `dir`: class, mode, owed mode, and the
+-- relative path. `bytesMode` is what a block's or a blob's bytes owe.
+modeSurvey : String -> Int -> <FileRead> Result String (List String)
+modeSurvey dir bytesMode = do
+  files <- filesUnder dir
+  traverse
+    (f => do
+      let rel = relativeTo dir f
+      let (kind, want) =
+        if startsWith "blocks/" rel then
+          ("bytes", bytesMode)
+        else if startsWith "blobs/" rel && isSidecar rel then
+          ("text", 384)
+        else if startsWith "blobs/" rel then
+          ("bytes", bytesMode)
+        else
+          ("text", 384)
+      mode <- fileMode f
+      Ok "\{kind} \{octal mode} \{octal want} \{rel}")
+    files
+
+-- Every kind of file the store keeps must appear in the survey, or its
+-- mode is ungraded.
+modeKinds : List String
+modeKinds = [
+  " head$",
+  " preferences$",
+  " sessions$",
+  " credential$",
+  " events/\\.last$",
+  " events/entries/[^/]*$",
+  " blocks/[0-9a-f][0-9a-f]/",
+  " blobs/[0-9a-f][0-9a-f]/[0-9a-f]*\\.mime$",
+  " blobs/[0-9a-f][0-9a-f]/[0-9a-f]*$",
+]
+
+{- | A fresh data directory populated by every write path under umask
+   `mask`, then every regular file graded by where it sits.
+
+   Every text file (head, preferences, sessions, credential, each event-log
+   file, each blob's MIME sidecar) is written at 0600 whatever the umask. A
+   block's bytes and a blob's bytes are not: `writeFileBytes` sets no mode,
+   so they follow the umask, and only a server started under umask 077
+   (`pds.service`'s `UMask=0077`) keeps them at 0600. The 022 run asserts
+   they stay 0644, so that gap is graded rather than assumed away. -}
+modesUnder : String ->
+  String ->
+  String ->
+  Int ->
+  <Exec, FileRead> Result String Unit
+modesUnder bin scratch mask bytesMode = do
+  let dir = joinPath scratch "umask\{mask}"
+  () <- eachOk
+    (route => do
+      out <- runRouteUnder mask bin route dir
+      let final = lastLine out
+      require
+        (endsWith ": PASS" final || endsWith ": OK" final)
+        "the \{route} route did not pass under umask \{mask}: \{debug final}")
+    modeRoutes
+  survey <- modeSurvey dir bytesMode
+  let listing = join "\n" survey
+  () <- eachOk
+    (kind =>
+      require
+        (any (R.isMatch (R.mustCompile kind)) survey)
+        "umask \{mask} wrote no file matching '\{kind}', so its mode is ungraded:\n\{listing}")
+    modeKinds
+  let wrong =
+    filter
+      (l => match words l
+        _ :: mode :: want :: _ => mode /= want
+        _ => True)
+      survey
+  require
+    (wrong == [])
+    "under umask \{mask}, \{intToString (length wrong)} file(s) are not at the mode they owe (class mode owed path):\n\{join "\n" wrong}"
+
+test "modes: every text file at 0600 under any umask; block and blob bytes follow the umask" = inScratch
+  (bin scratch => do
+    () <- modesUnder bin scratch "022" 420
+    modesUnder bin scratch "077" 384)
+
+-- # Barriers, read from the syscall order
+
+{- | One strace line as a normalized event, or `None` for a line that is not
+   a successful `fsync`, `rename` or `mkdir`: `F <path>` per fsync, `R <src>
+   <dst>` per rename, `M <path>` per created directory.
+
+   Everything else, the collector's SIGPWR/SIGXCPU pair above all, is dropped
+   here rather than by an strace filter, so a syscall the filter forgot shows
+   up as a missing event and not as a wrong verdict. A `mkdir` that fails
+   EEXIST wrote no entry and owes nothing, so only the `= 0` return counts;
+   both spellings are matched because which one glibc issues is its choice. -}
+traceEvent : String -> Option String
+traceEvent raw =
+  let stripped = R.replace pidPrefix "" raw
+  match R.find fsyncCall stripped
+    Some m => map (p => "F \{p}") (groupText m 0)
+    None => match R.find renameCall stripped
+      Some m => match (groupText m 0, groupText m 1)
+        (Some src, Some dst) => Some "R \{src} \{dst}"
+        _ => None
+      None => match R.find mkdirCall stripped
+        Some m => map (p => "M \{p}") (groupText m 0)
+        None => match R.find mkdiratCall stripped
+          Some m => map (p => "M \{p}") (groupText m 0)
+          None => None
+
+-- `strace -f -o` heads every line with the pid that made the call.
+pidPrefix : R.Regex
+pidPrefix = R.mustCompile "^[0-9]+ +"
+
+fsyncCall : R.Regex
+fsyncCall = R.mustCompile "^fsync\\([0-9]+<(.*)>\\) *= 0$"
+
+renameCall : R.Regex
+renameCall = R.mustCompile "^rename\\(\"([^\"]*)\", \"([^\"]*)\"\\) *= 0$"
+
+mkdirCall : R.Regex
+mkdirCall = R.mustCompile "^mkdir\\(\"([^\"]*)\", [^)]*\\) *= 0$"
+
+mkdiratCall : R.Regex
+mkdiratCall = R.mustCompile "^mkdirat\\([^,]*, \"([^\"]*)\", [^)]*\\) *= 0$"
+
+groupText : R.Match -> Int -> Option String
+groupText m i = match get i m.groups
+  Some (Some g) => Some g.text
+  _ => None
+
+{- | One route run under `strace -f`, as its normalized events in trace
+   order. Threads are followed because the runtime does its work on a
+   GC-aware worker pthread, so an unfollowed trace records none of it. -}
+traceRoute : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, FileRead> Result String (String, List String)
+traceRoute bin scratch route dir = do
+  let traceFile = joinPath scratch "trace.\{route}"
+  out <- graded
+    "the traced \{route} route"
+    (spawn runSeconds [] "strace" [
+      "-f",
+      "-y",
+      "-qq",
+      "-e",
+      "signal=none",
+      "-e",
+      "trace=fsync,rename,renameat,renameat2,mkdir,mkdirat",
+      "-o",
+      traceFile,
+      bin,
+      route,
+      dir,
+    ])
+  text <- readText traceFile
+  Ok (out, somes (map traceEvent (lines text)))
+
+-- 1-based positions of the events matching `pattern`: line numbers in the
+-- normalized trace, which is what every order assertion compares.
+positions : String -> List String -> List Int
+positions pattern events =
+  let re = R.mustCompile pattern
+  map
+    fst
+    (filter
+      (e => R.isMatch re (snd e))
+      (map (e => (fst e + 1, snd e)) (indexed events)))
+
+firstAt : String -> List String -> Option Int
+firstAt pattern events = match positions pattern events
+  i :: _ => Some i
+  [] => None
+
+lastAt : String -> List String -> Option Int
+lastAt pattern events = last (positions pattern events)
+
+countOf : String -> List String -> Int
+countOf pattern events = length (positions pattern events)
+
+eventAt : List String -> Int -> String
+eventAt events i = match get (i - 1) events
+  Some e => e
+  None => ""
+
+{- | 12a. `persistTransition` runs the blob half before the repo half, and
+   only the syscall order records which ran first. A record may name blob
+   bytes and never the reverse, so every blob promote must precede the
+   `head` promote that publishes the commit able to name them (#3057). Read
+   out of the transition route's own trace: "before" across a process
+   boundary is not this claim. -}
+halvesInCrashOrder : List String -> Result String Unit
+halvesInCrashOrder trans = do
+  let blobPromote = "^R [^ ]* [^ ]*/blobs/[0-9a-f][0-9a-f]/"
+  () <- require
+    (countOf blobPromote trans >= 1)
+    "the transition promoted no blob, so the half order is ungraded"
+  match (lastAt blobPromote trans, firstAt "^R [^ ]* [^ ]*/head$" trans)
+    (_, None) =>
+      Err "the transition promoted no head, so the half order is ungraded"
+    (None, _) =>
+      Err "the transition promoted no blob, so the half order is ungraded"
+    (Some lastBlob, Some firstHead) =>
+      require
+        (lastBlob < firstHead)
+        "the commit was promoted at event \{intToString firstHead} (\{eventAt trans firstHead}), the last blob at event \{intToString lastBlob} (\{eventAt trans lastBlob}); a crash between the halves can leave a committed record naming bytes that are not on disk"
+
+{- | 12b. `blockfile.mdk` promotes every block of a commit and then barriers
+   the distinct shard directories it touched. The universal rule tolerates a
+   per-block barrier too, so the discriminator is order: under batching every
+   block promote precedes every shard barrier within one route (#3058). A
+   count would not discriminate, since distinct shards and blocks are equal
+   with high probability at this fixture's size. -}
+shardBarriersBatched : List String -> Result String Unit
+shardBarriersBatched saved = do
+  let blockPromote = "^R [^ ]* [^ ]*/blocks/[0-9a-f][0-9a-f]/"
+  let blocks = countOf blockPromote saved
+  () <- require
+    (blocks >= 2)
+    "the save route promoted \{intToString blocks} block(s); two are needed for an interleaving to be possible at all"
+  match (
+    lastAt blockPromote saved,
+    firstAt "^F [^ ]*/blocks/[0-9a-f][0-9a-f]$" saved,
+  )
+    (_, None) => Err "no shard directory was barriered at all"
+    (None, _) => Err "the save route promoted no block"
+    (Some lastBlock, Some firstShard) =>
+      require
+        (firstShard > lastBlock)
+        "a shard directory was barriered at event \{intToString firstShard}, before the last block promote at event \{intToString lastBlock}; the barriers are per block, not per batch"
+
+{- | 12c. The blob area's own dentry sits in the data directory. On the
+   upload route no repo half runs, so nothing outside `blobfile.mdk` barriers
+   it, and the barrier must come after `blobs/` is created and before the
+   first blob the route publishes, or a crash after the client's 200 takes
+   the whole subtree. -}
+blobAreaBarriered : String -> List String -> Result String Unit
+blobAreaBarriered repo events = do
+  let at = R.escape repo
+  mkBlobs <- match firstAt "^M \{at}/blobs$" events
+    Some i => Ok i
+    None =>
+      Err
+        "the blob-save route created no blob area, so its dentry is ungraded here"
+  dataFsync <- match firstAt "^F \{at}$" events
+    Some i => Ok i
+    None =>
+      Err
+        "the blob-save route created \{repo}/blobs and never barriered \{repo}; a crash after this write loses the whole blobs subtree:\n\{join "\n" events}"
+  () <- require
+    (dataFsync > mkBlobs)
+    "\{repo} was barriered at event \{intToString dataFsync}, before the blob area was created at event \{intToString mkBlobs}"
+  firstPromote <- match firstAt "^R " events
+    Some i => Ok i
+    None =>
+      Err "the blob-save route promoted nothing, so the ordering is ungraded"
+  require
+    (dataFsync < firstPromote)
+    "the first blob was promoted at event \{intToString firstPromote}, before \{repo} was barriered at event \{intToString dataFsync}"
+
+-- A directory created by `mkdir`, and whether a barrier of its parent has
+-- followed.
+data Created = Created { path : String, parent : String, done : Bool }
+
+{- | The universal rule's state over one route's events.
+
+   `owed` is each directory a `rename` promoted into that no barrier has
+   followed yet, with that rename's event. `flushed` is whether a directory
+   barrier has been issued since the last rename: a writer may promote a
+   batch and then barrier the directories it touched, but once a barrier is
+   issued every owed directory must be barriered before the next rename
+   starts a new batch. -}
+data Barriers = Barriers {
+  created : List Created,
+  owed : List (String, String),
+  flushed : Bool,
+  renames : Int,
+  bad : List String,
+}
+
+-- A directory barrier discharges what that directory is owed. A staged-file
+-- barrier is the one whose own rename comes next, and discharges nothing.
+barrierEvent : String -> Option String -> Barriers -> Barriers
+barrierEvent path next st =
+  let staged = match next
+    Some n => startsWith "R \{path} " n
+    None => False
+  if staged then
+    st
+  else
+    let served = any (c => not c.done && c.parent == path) st.created
+    let created =
+      map
+        (c => if not c.done && c.parent == path then { c | done = True } else c)
+        st.created
+    if any (o => fst o == path) st.owed then
+      { st |
+        created = created,
+        owed = filter (o => fst o /= path) st.owed,
+        flushed = True,
+      }
+    else if served then
+      -- A barrier that only discharges a directory creation is not the
+      -- start of a promote batch.
+      { st | created = created }
+    else
+      { st | created = created, flushed = True }
+
+renameEvent : Option String -> String -> Barriers -> Barriers
+renameEvent prev ev st0 =
+  let st = { st0 | renames = st0.renames + 1 }
+  match words ev
+    _ :: src :: dst :: _ =>
+      if prev /= Some "F \{src}" then
+        let before = match prev
+          Some p => p
+          None => "<nothing>"
+        { st |
+          bad =
+            st.bad ++ ["UNBARRIERED PROMOTE: \{ev}\n  preceded by: \{before}"],
+        }
+      else
+        let (bad, owed) =
+          if st.flushed && st.owed /= [] then
+            (
+              st.bad
+                ++ map
+                  (o =>
+                    "ABANDONED DIRECTORY: \{snd o}\n  \{fst o} was still owed a barrier when \{ev} began")
+                  st.owed,
+              [],
+            )
+          else
+            (st.bad, st.owed)
+        let dir = parentOf dst
+        { st |
+          bad = bad,
+          owed = filter (o => fst o /= dir) owed ++ [(dir, ev)],
+          flushed = False,
+        }
+    _ => st
+
+gradeFrom : Option String -> List String -> Barriers -> Barriers
+gradeFrom _ [] st = st
+gradeFrom prev (ev :: rest) st =
+  let next = match rest
+    n :: _ => Some n
+    [] => None
+  let st2 = match stripPrefix "M " ev
+    Some p => { st |
+      created =
+        st.created ++ [Created { path = p, parent = parentOf p, done = False }],
+    }
+    None => match stripPrefix "F " ev
+      Some p => barrierEvent p next st
+      None => if startsWith "R " ev then renameEvent prev ev st else st
+  gradeFrom (Some ev) rest st2
+
+{- | The universal rule over one route's own trace: every `rename` is
+   immediately preceded by an `fsync` of the path it renames and followed by
+   an `fsync` of the directory it renames into, and every `mkdir` that
+   succeeded is followed by an `fsync` of its parent (#2952, #3056). A later
+   process's barrier of the same directory lands after this one reported its
+   write durable, so a route is never graded over another's trace.
+
+   Universal over renames rather than a list of expected paths, so a promote
+   path added later is graded the day it is written. Returns the rename
+   count, the creation count and every violation. -}
+gradeBarriers : List String -> (Int, Int, List String)
+gradeBarriers events =
+  let st = gradeFrom None events Barriers {
+    created = [],
+    owed = [],
+    flushed = False,
+    renames = 0,
+    bad = [],
+  }
+  let unowed =
+    map
+      (o =>
+        "UNBARRIERED DIRECTORY: \{snd o}\n  no fsync of \{fst o} follows it")
+      st.owed
+  let uncreated =
+    map
+      (c =>
+        "UNBARRIERED DIRECTORY CREATION: M \{c.path}\n  no fsync of \{c.parent} follows it")
+      (filter (c => not c.done) st.created)
+  (st.renames, length st.created, st.bad ++ unowed ++ uncreated)
+
+-- One route's violations, headed by the route and what was graded on it.
+routeViolations : (String, List String) -> List String
+routeViolations (route, events) =
+  let (renames, created, bad) = gradeBarriers events
+  if bad == [] then
+    []
+  else
+    [
+        "\{route}: graded \{intToString renames} rename(s) and \{intToString created} directory creation(s), \{intToString (length bad)} unbarriered",
+      ]
+      ++ bad
+
+{- | The per-path floors. The universal rule is silent about a promote or a
+   creation path that stopped running, so each is counted over every traced
+   route by the shape of what it renames into or creates; a traced run over
+   a directory that already had its shards would otherwise grade the
+   creation rule against nothing and pass. -}
+pathsExercised : List String -> Result String Unit
+pathsExercised everything = do
+  () <- eachOk
+    ((what, pattern) =>
+      require
+        (countOf "^R .* \{pattern}$" everything >= 1)
+        "no \{what} promote was traced; that path is no longer graded")
+    [
+      ("blockfile", ".*/blocks/[0-9a-f][0-9a-f]/[0-9a-f]*"),
+      ("blobfile sidecar", ".*/blobs/[0-9a-f][0-9a-f]/[0-9a-f]*\\.mime"),
+      ("blobfile bytes", ".*/blobs/[0-9a-f][0-9a-f]/[0-9a-f]*"),
+      ("eventlog entry", ".*/events/entries/.*"),
+      ("eventlog pointer", ".*/events/\\..*"),
+      ("persist head", ".*/head"),
+      ("persist preferences", ".*/preferences"),
+      ("persist credential", ".*/credential"),
+      ("persist sessions", ".*/sessions"),
+    ]
+  eachOk
+    ((what, pattern) =>
+      require
+        (countOf "^M \{pattern}$" everything >= 1)
+        "no \{what} directory was created under trace; that creation path is no longer graded")
+    [
+      ("blockfile shard", ".*/blocks/[0-9a-f][0-9a-f]"),
+      ("blobfile shard", ".*/blobs/[0-9a-f][0-9a-f]"),
+      ("eventlog entry", ".*/events/entries"),
+      ("staging", ".*/\\.staging"),
+    ]
+
+-- Without strace the barrier claim grades nothing, so its absence fails.
+straceMissing : Result String Unit
+straceMissing =
+  Err
+    "strace is not on PATH; the barrier test reads the promote paths' syscall order and grades nothing without it. Debian/Ubuntu: sudo apt-get install -y strace"
+
+traceAll : String -> String -> <Exec, FileRead, FileWrite> Result String Unit
+traceAll bin scratch = do
+  -- strace -y resolves an fd to its canonical path while `rename` reports
+  -- its literal arguments, so the traced directory must hold no symlink.
+  let traced = joinPath (canonicalizePath scratch) "traced"
+  let repo = joinPath traced "repo"
+  () <- makeDir traced
+  saved <- traceRoute bin scratch "save" repo
+  blobSaved <- traceRoute bin scratch "blob-save" repo
+  prefs <- traceRoute bin scratch "prefs-save" repo
+  sessions <- traceRoute bin scratch "sessions-save" repo
+  credential <- traceRoute bin scratch "credential-save" repo
+  owed <- traceRoute bin scratch "event-recover-owed" (joinPath traced "events")
+  -- The earlier generation is persisted before tracing starts, so the
+  -- transition's own trace holds `persistTransition` and nothing else.
+  let transitionDir = joinPath traced "transition"
+  _ <- runRoute bin "crash-save-old" transitionDir
+  transition <- traceRoute bin scratch "transition" transitionDir
+  () <- requireLast
+    "TRANSITION: PASS"
+    (fst transition)
+    "the traced transition route did not pass"
+  let routes = [
+    ("save", snd saved),
+    ("blob-save", snd blobSaved),
+    ("prefs-save", snd prefs),
+    ("sessions-save", snd sessions),
+    ("credential-save", snd credential),
+    ("event-recover-owed", snd owed),
+    ("transition", snd transition),
+  ]
+  let everything = flatMap snd routes
+  () <- require
+    (any (startsWith "R ") everything)
+    "the traced routes performed no promote at all"
+  -- The three order claims before the universal rule: a swapped transition
+  -- also strands `blobs/`'s dentry, and the universal rule would otherwise
+  -- report the consequence instead of the cause.
+  () <- halvesInCrashOrder (snd transition)
+  () <- shardBarriersBatched (snd saved)
+  () <- blobAreaBarriered repo (snd blobSaved)
+  let violations = flatMap routeViolations routes
+  () <- require
+    (violations == [])
+    "a rename or a mkdir published a name no barrier had put on disk:\n\{join "\n" violations}"
+  pathsExercised everything
+
+test "barriers: every promote and every created directory is barriered, and the halves of one write land in crash order" = inScratch
+  (bin scratch => match spawn 60 [] "strace" ["-V"]
+    Ok (0, _, _) => traceAll bin scratch
+    _ => straceMissing)
+
+-- # What one upload costs the disk
+
+-- `path inode size ctime` for every regular file under `dir/blobs`, sorted.
+-- Both halves of a promote produce a new inode, so a blob rewritten over
+-- itself moves its stamp exactly as a blob written for the first time does.
+blobStamps : String -> <Exec, FileRead> Result String (List String)
+blobStamps dir = do
+  files <- filesUnder (joinPath dir "blobs")
+  out <- match spawn runSeconds [] "stat" (["-c", "%n %i %s %Z"] ++ files)
+    Ok (0, gnu, "") => Ok gnu
+    _ =>
+      graded
+        "stat -f"
+        (spawn runSeconds [] "stat" (["-f", "%N %i %z %c"] ++ files))
+  Ok (sort (filter (/= "") (lines out)))
+
+{- | The blob area is stamped either side of one upload into an account that
+   already holds 99 blobs, and only the uploaded blob's two files may have
+   moved (#2692). The seed route persists the 99 one transition at a time,
+   the way a server does, and stamping between the two processes isolates the
+   hundredth. -}
+test "cost: the hundredth upload writes its own blob and sidecar, and no other blob's files" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "churn"
+    () <- makeDir dir
+    seed <- runRoute bin "blob-churn-seed" dir
+    () <- requireLast
+      "BLOB-CHURN-SEED: PASS"
+      seed
+      "the churn seed route did not pass"
+    before <- blobStamps dir
+    () <- require
+      (length before == 198)
+      "the seed left \{intToString (length before)} blob files, not the 198 that 99 blobs and their sidecars are"
+    add <- runRoute bin "blob-churn-add" dir
+    () <- requireLast
+      "BLOB-CHURN-ADD: PASS"
+      add
+      "the churn add route did not pass"
+    after <- blobStamps dir
+    () <- require
+      (length after == 200)
+      "the account holds \{intToString (length after)} blob files after the hundredth upload, not 200"
+    let written = filter (l => not (elem l before)) after
+    let writtenBytes =
+      sum
+        (map
+          (l => match get 2 (words l)
+            Some s => match toInt s
+              Some n => n
+              None => 0
+            None => 0)
+          written)
+    blobSize <- match map words (tagged "BLOB-CHURN-ADD size " add)
+      (s :: _) :: _ => match toInt s
+        Some n => Ok n
+        None =>
+          Err "the add route reported a blob size that is not a number: \{s}"
+      _ => Err "the add route did not report the blob size"
+    () <- require
+      (length written == 2)
+      "the hundredth upload wrote \{intToString (length written)} files; only its own bytes and sidecar are owed:\n\{join "\n" written}"
+    require
+      (writtenBytes < blobSize * 3)
+      "the hundredth upload wrote \{intToString writtenBytes} bytes for a blob of \{intToString blobSize}")
+
+{- | The one blob-half change a block count cannot see: bytes the account
+   already holds, uploaded again by a separate process under a different
+   declared MIME type. A transition graded on the count alone writes nothing
+   here, and the blob then reads back after a restart under a type it no
+   longer declares (#3263). -}
+test "retype: re-declaring a stored blob's MIME type reaches the disk at an unchanged file count" = inScratch
+  (bin scratch => do
+    let dir = joinPath scratch "retype"
+    () <- makeDir dir
+    seed <- runRoute bin "blob-retype-seed" dir
+    () <- requireLast
+      "BLOB-RETYPE-SEED: PASS"
+      seed
+      "the retype seed route did not pass"
+    files <- filesUnder (joinPath dir "blobs")
+    sidecar <- match filter isSidecar files
+      [one] => Ok one
+      more =>
+        Err
+          "the seed left \{intToString (length more)} blob sidecars to grade, expected 1"
+    seeded <- readText sidecar
+    () <- require
+      (seeded == "text/plain")
+      "the seeded sidecar declares \{debug seeded}, not text/plain"
+    add <- runRoute bin "blob-retype-add" dir
+    () <- requireLast
+      "BLOB-RETYPE-ADD: PASS"
+      add
+      "the retype add route did not pass"
+    after <- filesUnder (joinPath dir "blobs")
+    () <- require
+      (length after == length files)
+      "the re-declared upload moved the blob file count from \{intToString (length files)} to \{intToString (length after)}; the test wants a pure type change"
+    declared <- readText sidecar
+    require
+      (declared == "application/json")
+      "the sidecar still declares \{debug declared}; the re-declared type never reached the disk")
