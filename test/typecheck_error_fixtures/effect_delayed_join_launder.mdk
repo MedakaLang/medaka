@@ -1,0 +1,20 @@
+-- The delayed join (#3462) keeps `g` pure where a later use requires it:
+-- passing an effectful callback as `g` is still refused.
+runPure : (Unit -> Unit) -> Unit
+runPure k = k ()
+
+choose c f g =
+  let r = if c then f else g
+  let _ = runPure g
+  r
+
+loud : Unit -> <IO> Unit
+loud _ = println "x"
+
+quiet : Unit -> Unit
+quiet _ = ()
+
+use : Unit -> <IO> Unit
+use = choose True quiet loud
+
+main = println 1

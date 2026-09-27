@@ -3,8 +3,25 @@ IMPORT
 IDENT "array"
 DOT_LBRACE
 IDENT "get"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "bytes"
+AS
+UPPER "B"
+NEWLINE
+IMPORT
+IDENT "bytes"
+DOT_LBRACE
+UPPER "Bytes"
 COMMA
-IDENT "fromList"
+IDENT "encodeUtf8"
+COMMA
+IDENT "fromArrayAssumeByteDomain"
+COMMA
+IDENT "fromU8Array"
+COMMA
+IDENT "toArray"
 RBRACE
 NEWLINE
 IMPORT
@@ -16,34 +33,41 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
-IDENT "toUtf8"
-COMMA
 IDENT "fromUtf8"
 COMMA
 IDENT "toChars"
 RBRACE
 NEWLINE
+IMPORT
+IDENT "u8"
+AS
+UPPER "U8"
+NEWLINE
 IDENT "byteAt"
 COLON
 UPPER "Int"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 NEWLINE
 IDENT "byteAt"
 IDENT "i"
-IDENT "arr"
+IDENT "bs"
 EQUAL
 MATCH
+UPPER "B"
+DOT
 IDENT "get"
 IDENT "i"
-IDENT "arr"
+IDENT "bs"
 INDENT
 UPPER "Some"
 IDENT "b"
 FAT_ARROW
+UPPER "U8"
+DOT
+IDENT "toInt"
 IDENT "b"
 NEWLINE
 UPPER "None"
@@ -332,8 +356,7 @@ DEDENT
 NEWLINE
 IDENT "encodeGo"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
@@ -348,7 +371,7 @@ UPPER "List"
 UPPER "Char"
 NEWLINE
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 IDENT "i"
 IDENT "n"
 IDENT "urlSafe"
@@ -378,7 +401,7 @@ IDENT "b0"
 EQUAL
 IDENT "byteAt"
 IDENT "i"
-IDENT "bytes"
+IDENT "bs"
 NEWLINE
 LET
 IDENT "b1"
@@ -394,7 +417,7 @@ IDENT "i"
 PLUS
 INT 1
 RPAREN
-IDENT "bytes"
+IDENT "bs"
 ELSE
 INT 0
 NEWLINE
@@ -412,7 +435,7 @@ IDENT "i"
 PLUS
 INT 2
 RPAREN
-IDENT "bytes"
+IDENT "bs"
 ELSE
 INT 0
 NEWLINE
@@ -511,7 +534,7 @@ ELSE
 CHAR "="
 NEWLINE
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 LPAREN
 IDENT "i"
 PLUS
@@ -539,13 +562,12 @@ EXPORT
 NEWLINE
 IDENT "encode"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "String"
 NEWLINE
 IDENT "encode"
-IDENT "bytes"
+IDENT "bs"
 EQUAL
 INDENT
 IDENT "stringFromChars"
@@ -553,11 +575,13 @@ LPAREN
 IDENT "arrayFromList"
 LPAREN
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 INT 0
 LPAREN
-IDENT "arrayLength"
-IDENT "bytes"
+UPPER "B"
+DOT
+IDENT "length"
+IDENT "bs"
 RPAREN
 UPPER "False"
 LBRACKET
@@ -571,13 +595,12 @@ EXPORT
 NEWLINE
 IDENT "encodeUrlSafe"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "String"
 NEWLINE
 IDENT "encodeUrlSafe"
-IDENT "bytes"
+IDENT "bs"
 EQUAL
 INDENT
 IDENT "stringFromChars"
@@ -585,11 +608,13 @@ LPAREN
 IDENT "arrayFromList"
 LPAREN
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 INT 0
 LPAREN
-IDENT "arrayLength"
-IDENT "bytes"
+UPPER "B"
+DOT
+IDENT "length"
+IDENT "bs"
 RPAREN
 UPPER "True"
 LBRACKET
@@ -612,7 +637,7 @@ IDENT "s"
 EQUAL
 IDENT "encode"
 LPAREN
-IDENT "toUtf8"
+IDENT "encodeUtf8"
 IDENT "s"
 RPAREN
 NEWLINE
@@ -1029,10 +1054,7 @@ UPPER "Bool"
 ARROW
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "decodeWith"
 IDENT "s"
@@ -1066,7 +1088,15 @@ DEDENT
 ELSE
 INDENT
 IDENT "map"
+LPAREN
+IDENT "xs"
+FAT_ARROW
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayFromList"
+IDENT "xs"
+RPAREN
+RPAREN
 LPAREN
 IDENT "decodeGo"
 IDENT "chars"
@@ -1089,10 +1119,7 @@ UPPER "String"
 ARROW
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "decode"
 IDENT "s"
@@ -1109,10 +1136,7 @@ UPPER "String"
 ARROW
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "decodeUrlSafe"
 IDENT "s"
@@ -1135,23 +1159,33 @@ IDENT "decodeString"
 IDENT "s"
 EQUAL
 IDENT "map"
+LPAREN
+IDENT "bs"
+FAT_ARROW
 IDENT "fromUtf8"
+LPAREN
+IDENT "toArray"
+IDENT "bs"
+RPAREN
+RPAREN
 LPAREN
 IDENT "decode"
 IDENT "s"
 RPAREN
 NEWLINE
-IDENT "toByteArray"
+IDENT "toBytes"
 COLON
 UPPER "List"
 UPPER "Int"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 NEWLINE
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 EQUAL
+INDENT
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayFromList"
 LPAREN
 IDENT "map"
@@ -1170,9 +1204,12 @@ INT 256
 RPAREN
 IDENT "xs"
 RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PROP
-STRING "base64 round-trip: decode (encode bs) == Ok bs"
+STRING "base64 round-trip: decode (encode b) == Ok b"
 LPAREN
 IDENT "xs"
 COLON
@@ -1182,24 +1219,24 @@ RPAREN
 EQUAL
 INDENT
 LET
-IDENT "bs"
+IDENT "b"
 EQUAL
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 NEWLINE
 IDENT "decode"
 LPAREN
 IDENT "encode"
-IDENT "bs"
+IDENT "b"
 RPAREN
 EQ_EQ
 UPPER "Ok"
-IDENT "bs"
+IDENT "b"
 NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe bs) == Ok bs"
+STRING "base64 url-safe round-trip: decodeUrlSafe (encodeUrlSafe b) == Ok b"
 LPAREN
 IDENT "xs"
 COLON
@@ -1209,19 +1246,19 @@ RPAREN
 EQUAL
 INDENT
 LET
-IDENT "bs"
+IDENT "b"
 EQUAL
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 NEWLINE
 IDENT "decodeUrlSafe"
 LPAREN
 IDENT "encodeUrlSafe"
-IDENT "bs"
+IDENT "b"
 RPAREN
 EQ_EQ
 UPPER "Ok"
-IDENT "bs"
+IDENT "b"
 NEWLINE
 DEDENT
 NEWLINE
@@ -1236,15 +1273,15 @@ RPAREN
 EQUAL
 INDENT
 LET
-IDENT "bs"
+IDENT "b"
 EQUAL
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 NEWLINE
 IDENT "stringLength"
 LPAREN
 IDENT "encode"
-IDENT "bs"
+IDENT "b"
 RPAREN
 MOD
 INT 4

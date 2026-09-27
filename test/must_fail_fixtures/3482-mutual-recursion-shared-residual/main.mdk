@@ -1,0 +1,25 @@
+data Dir (d : Authority FileRead) = Dir (String @d)
+
+mk : (s : String) -> Dir s
+mk s = Dir s
+
+readUnder : Dir d -> (p : String @d) -> <FileRead d> Result String String
+readUnder _ p = readFile p
+
+cfg : Dir "cfg/*"
+cfg = mk "cfg/*"
+
+showR r = match r
+  Ok s => "READ: " ++ s
+  Err e => "ERR: " ++ e
+
+-- #3482: an honest mutually recursive pair over a captured handle. Each member
+-- reads only under `h`; the right answer is to accept it and print the read's
+-- result under `cfg/*`.
+outer h x = q1 3 x
+  where
+    q1 n d = match d
+      Dir p => if n <= 0 then readUnder h p else q2 (n - 1) d
+    q2 n d = q1 n d
+
+main = println (showR (outer cfg cfg))

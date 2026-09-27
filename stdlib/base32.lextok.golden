@@ -1,5 +1,22 @@
 NEWLINE
 IMPORT
+IDENT "bytes"
+AS
+UPPER "B"
+NEWLINE
+IMPORT
+IDENT "bytes"
+DOT_LBRACE
+UPPER "Bytes"
+COMMA
+IDENT "fromArrayAssumeByteDomain"
+COMMA
+IDENT "fromU8Array"
+COMMA
+IDENT "toArray"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "string"
 DOT_LBRACE
 IDENT "fromChars"
@@ -12,6 +29,11 @@ IDENT "list"
 DOT_LBRACE
 IDENT "reverse"
 RBRACE
+NEWLINE
+IMPORT
+IDENT "u8"
+AS
+UPPER "U8"
 NEWLINE
 IDENT "alphabet"
 COLON
@@ -47,8 +69,7 @@ RBRACKET
 NEWLINE
 IDENT "byteList"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
@@ -56,26 +77,31 @@ UPPER "List"
 UPPER "Int"
 NEWLINE
 IDENT "byteList"
-IDENT "bytes"
+IDENT "bs"
 IDENT "i"
 EQUAL
 INDENT
 IF
 IDENT "i"
 GEQ
-IDENT "arrayLength"
-IDENT "bytes"
+UPPER "B"
+DOT
+IDENT "length"
+IDENT "bs"
 THEN
 LBRACKET
 RBRACKET
 ELSE
-IDENT "bytes"
+UPPER "U8"
+DOT
+IDENT "toInt"
+IDENT "bs"
 LBRACKET_TIGHT
 IDENT "i"
 RBRACKET
 CONS
 IDENT "byteList"
-IDENT "bytes"
+IDENT "bs"
 LPAREN
 IDENT "i"
 PLUS
@@ -237,101 +263,28 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "validBytes"
-COLON
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Bool"
-NEWLINE
-IDENT "validBytes"
-IDENT "bytes"
-IDENT "i"
-EQUAL
-INDENT
-IF
-IDENT "i"
-GEQ
-IDENT "arrayLength"
-IDENT "bytes"
-THEN
-INDENT
-UPPER "True"
-NEWLINE
-DEDENT
-ELSE
-INDENT
-IDENT "bytes"
-LBRACKET_TIGHT
-IDENT "i"
-RBRACKET
-GEQ
-INT 0
-AND
-IDENT "bytes"
-LBRACKET_TIGHT
-IDENT "i"
-RBRACKET
-LEQ
-INT 255
-AND
-IDENT "validBytes"
-IDENT "bytes"
-LPAREN
-IDENT "i"
-PLUS
-INT 1
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
 EXPORT
 NEWLINE
 IDENT "base32Encode"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "String"
 NEWLINE
 IDENT "base32Encode"
-IDENT "bytes"
+IDENT "bs"
 EQUAL
-INDENT
-IF
-IDENT "not"
-LPAREN
-IDENT "validBytes"
-IDENT "bytes"
-INT 0
-RPAREN
-THEN
-INDENT
-IDENT "panic"
-STRING "base32: input element outside byte range 0..255"
-NEWLINE
-DEDENT
-ELSE
-INDENT
 IDENT "fromChars"
 LPAREN
 IDENT "encodeGo"
 LPAREN
 IDENT "byteList"
-IDENT "bytes"
+IDENT "bs"
 INT 0
 RPAREN
 INT 0
 INT 0
 RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "digit"
 COLON
@@ -621,10 +574,7 @@ UPPER "String"
 ARROW
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
 IDENT "base32Decode"
 IDENT "text"
@@ -672,8 +622,11 @@ INDENT
 LET
 IDENT "bytes"
 EQUAL
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayFromList"
 IDENT "decoded"
+RPAREN
 NEWLINE
 IF
 IDENT "base32Encode"
@@ -699,17 +652,19 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "toByteArray"
+IDENT "toBytes"
 COLON
 UPPER "List"
 UPPER "Int"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 NEWLINE
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 EQUAL
+INDENT
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayFromList"
 LPAREN
 IDENT "map"
@@ -728,9 +683,12 @@ INT 256
 RPAREN
 IDENT "xs"
 RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PROP
-STRING "base32 round-trip: decode (encode bs) == Ok bs"
+STRING "base32 round-trip: decode (encode b) == Ok b"
 LPAREN
 IDENT "xs"
 COLON
@@ -740,19 +698,19 @@ RPAREN
 EQUAL
 INDENT
 LET
-IDENT "bs"
+IDENT "b"
 EQUAL
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 NEWLINE
 IDENT "base32Decode"
 LPAREN
 IDENT "base32Encode"
-IDENT "bs"
+IDENT "b"
 RPAREN
 EQ_EQ
 UPPER "Ok"
-IDENT "bs"
+IDENT "b"
 NEWLINE
 DEDENT
 NEWLINE

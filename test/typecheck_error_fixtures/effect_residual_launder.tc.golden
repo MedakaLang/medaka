@@ -1,0 +1,1 @@
+TYPE ERROR: 'readIn' needs "/etc/shadow" to lie within "cfg/*" here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it

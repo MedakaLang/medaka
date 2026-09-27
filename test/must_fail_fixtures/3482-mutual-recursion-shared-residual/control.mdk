@@ -1,0 +1,22 @@
+data Dir (d : Authority FileRead) = Dir (String @d)
+
+mk : (s : String) -> Dir s
+mk s = Dir s
+
+readUnder : Dir d -> (p : String @d) -> <FileRead d> Result String String
+readUnder _ p = readFile p
+
+cfg : Dir "cfg/*"
+cfg = mk "cfg/*"
+
+showR r = match r
+  Ok s => "READ: " ++ s
+  Err e => "ERR: " ++ e
+
+-- #3482 control: the same read, recursing on itself instead of through a
+-- sibling. One member mentions the handle's relation, so it keeps a residual.
+outer h x =
+  let q1 n (Dir p) = if n <= 0 then readUnder h p else q1 (n - 1) (Dir p)
+  q1 3 x
+
+main = println (showR (outer cfg cfg))

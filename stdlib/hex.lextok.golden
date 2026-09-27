@@ -19,7 +19,11 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
+IDENT "encodeUtf8"
+COMMA
 IDENT "fromArrayAssumeByteDomain"
+COMMA
+IDENT "fromU8Array"
 COMMA
 IDENT "toArray"
 RBRACE
@@ -285,13 +289,13 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "encodeBytes"
+IDENT "encode"
 COLON
 UPPER "Bytes"
 ARROW
 UPPER "String"
 NEWLINE
-IDENT "encodeBytes"
+IDENT "encode"
 IDENT "b"
 EQUAL
 IDENT "encodeAs"
@@ -300,39 +304,17 @@ UPPER "False"
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "encode"
-COLON
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "String"
-NEWLINE
-IDENT "encode"
-IDENT "bytes"
-EQUAL
-IDENT "encodeBytes"
-LPAREN
-IDENT "fromArrayAssumeByteDomain"
-IDENT "bytes"
-RPAREN
-NEWLINE
-EXPORT
-NEWLINE
 IDENT "encodeUpper"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "String"
 NEWLINE
 IDENT "encodeUpper"
-IDENT "bytes"
+IDENT "b"
 EQUAL
 IDENT "encodeAs"
-LPAREN
-IDENT "fromArrayAssumeByteDomain"
-IDENT "bytes"
-RPAREN
+IDENT "b"
 UPPER "True"
 NEWLINE
 EXPORT
@@ -348,7 +330,7 @@ IDENT "s"
 EQUAL
 IDENT "encode"
 LPAREN
-IDENT "toUtf8"
+IDENT "encodeUtf8"
 IDENT "s"
 RPAREN
 NEWLINE
@@ -453,7 +435,7 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "decodeBytes"
+IDENT "decode"
 COLON
 UPPER "String"
 ARROW
@@ -461,7 +443,7 @@ UPPER "Result"
 UPPER "String"
 UPPER "Bytes"
 NEWLINE
-IDENT "decodeBytes"
+IDENT "decode"
 IDENT "s"
 EQUAL
 INDENT
@@ -513,29 +495,6 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "decode"
-COLON
-UPPER "String"
-ARROW
-UPPER "Result"
-UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
-NEWLINE
-IDENT "decode"
-IDENT "s"
-EQUAL
-IDENT "map"
-IDENT "toArray"
-LPAREN
-IDENT "decodeBytes"
-IDENT "s"
-RPAREN
-NEWLINE
-EXPORT
-NEWLINE
 IDENT "decodeString"
 COLON
 UPPER "String"
@@ -548,23 +507,33 @@ IDENT "decodeString"
 IDENT "s"
 EQUAL
 IDENT "map"
+LPAREN
+IDENT "bs"
+FAT_ARROW
 IDENT "fromUtf8"
 LPAREN
+IDENT "toArray"
+IDENT "bs"
+RPAREN
+RPAREN
+LPAREN
 IDENT "decode"
 IDENT "s"
 RPAREN
 NEWLINE
-IDENT "toByteArray"
+IDENT "toBytes"
 COLON
 UPPER "List"
 UPPER "Int"
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 NEWLINE
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 EQUAL
+INDENT
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayFromList"
 LPAREN
 IDENT "map"
@@ -583,9 +552,12 @@ INT 256
 RPAREN
 IDENT "xs"
 RPAREN
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PROP
-STRING "hex round-trip: decode (encode bs) == Ok bs"
+STRING "hex round-trip: decode (encode b) == Ok b"
 LPAREN
 IDENT "xs"
 COLON
@@ -595,19 +567,19 @@ RPAREN
 EQUAL
 INDENT
 LET
-IDENT "bs"
+IDENT "b"
 EQUAL
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 NEWLINE
 IDENT "decode"
 LPAREN
 IDENT "encode"
-IDENT "bs"
+IDENT "b"
 RPAREN
 EQ_EQ
 UPPER "Ok"
-IDENT "bs"
+IDENT "b"
 NEWLINE
 DEDENT
 NEWLINE
@@ -622,50 +594,22 @@ RPAREN
 EQUAL
 INDENT
 LET
-IDENT "bs"
+IDENT "b"
 EQUAL
-IDENT "toByteArray"
+IDENT "toBytes"
 IDENT "xs"
 NEWLINE
 IDENT "stringLength"
 LPAREN
 IDENT "encode"
-IDENT "bs"
+IDENT "b"
 RPAREN
 EQ_EQ
 INT 2
 STAR
-IDENT "arrayLength"
-IDENT "bs"
-NEWLINE
-DEDENT
-NEWLINE
-PROP
-STRING "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b"
-LPAREN
-IDENT "xs"
-COLON
-UPPER "List"
-UPPER "Int"
-RPAREN
-EQUAL
-INDENT
-LET
-IDENT "b"
-EQUAL
-IDENT "fromArrayAssumeByteDomain"
-LPAREN
-IDENT "toByteArray"
-IDENT "xs"
-RPAREN
-NEWLINE
-IDENT "decodeBytes"
-LPAREN
-IDENT "encodeBytes"
-IDENT "b"
-RPAREN
-EQ_EQ
-UPPER "Ok"
+UPPER "B"
+DOT
+IDENT "length"
 IDENT "b"
 NEWLINE
 DEDENT

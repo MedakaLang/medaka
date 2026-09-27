@@ -409,7 +409,23 @@ Checking an argument against `τ @κ` checks its underlying type and generates
 of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the
 least solution, variables bounded by each other collapsing to one representative
-first. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
+first. A variable the owning scope decides that nothing bounds below (no
+value ever reaches it: an unused partial application, a callback over an
+empty list) takes the least solution of all, the empty authority `⊥`, which
+every bound admits. It prints as the empty set, `{}` (`Dir {}`,
+`<FileRead {}>`, the label kept), and has no written form: nothing a program
+states needs it, and a signature names the authority a value is meant for. A
+host boundary renders it conservatively (a manifest charges the label). A
+variable a binding's type mentions is not decided this way inside a binding
+group: its scheme may quantify it, and each use supplies it. The module root
+decides every variable left, a monomorphic top-level binding's included, as
+the least solution over the module's own uses; a binding the module keeps
+private takes `⊥` for an authority nothing in the module bounds below. An
+EXPORTED binding whose type holds such an authority is refused
+(`T-EXPORT-UNSOLVED-AUTHORITY`): the value restriction keeps it from being
+generalized, an importer cannot supply the authority later, and any solution
+the module chose alone would be a guess. A signature, or a use in the module,
+determines it. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
 bound a joined qualifier writes) has no single least solution, and no member
 is chosen for it: such an obligation is decided once the join's members are
 known, so a value in `String @(p | q)` is built against written or otherwise
@@ -420,7 +436,13 @@ arm through the solve. An obligation over a variable no binding owns — a value
 monomorphic by the value restriction — is decided once over every use in the
 module. An unresolved constraint remains an obligation; it is not successful
 coverage. At a definition, universally bound `κ` is rigid: an unrelated literal
-cannot establish `literal ⊑ κ`. An honest wrapper may forward the argument or
+cannot establish `literal ⊑ κ`, and an obligation naming a binder of the
+group being closed (one of its own universals, or a variable its schemes
+generalize) is decided there, as a residual or a failure, never handed to an
+enclosing scope: outside the group the binder means nothing, and the
+enclosing scope would solve it as a flexible variable. An obligation naming
+an enclosing function's universal moves to that function's scope with the
+rest. An honest wrapper may forward the argument or
 perform a domain-preserving operation on it. Publication quantifies an authority
 variable only where the published type gives a caller a way to supply it, a
 qualified argument slot; a variable occurring only in rows has no source and
@@ -431,6 +453,44 @@ by top. `q₁ ⊔ q₂ ⊑ q` requires both operands to be covered; `q ⊑ q` an
 `q ⊑ q ⊔ q'` hold. Concrete operands use the domain algebra. Residual constraints
 must travel with a generalized scheme, sharing its substitution; no residual
 may refer to a rigid variable outside its scope.
+
+**Residual schemes.** An unsigned binding that generalizes keeps, as its
+scheme's context `C` (§6), every obligation it cannot prove between the
+authorities it quantifies and constants: `subIn h (Dir p) = sub h p`, with
+`sub : Dir d -> String @d -> Dir d`, is `(a <= d) => Dir d -> Dir a -> Dir d`,
+and `inCfg (Dir p) = sub cfg p` is `(d <= "cfg/*") => Dir d -> Dir "cfg/*"`.
+The quantified authorities are those publication keeps, the ones an argument
+supplies. Each use instantiates the context with the occurrence's one
+substitution and owes the instances as ordinary obligations of the using
+scope, which may prove them, keep them for its own scheme, or refuse them: a
+failure names the binding whose inferred type carried the relation. An
+obligation stays a residual when its constraint component (the local
+authorities it is linked to by shared obligations) relates one member's
+quantified authorities to constants and to authorities outside the binding's
+scope, an enclosing variable or universal or a monomorphic sibling's cell,
+which the residual names as it stands, as a scheme names its environment. An
+outside authority links nothing: two members may each owe a relation to one
+monomorphic cell, and each keeps its own residual over it: a local helper that uses a captured handle,
+`let inner (Dir p) = sub h p`, keeps `p <= d_h` and each use of `inner`
+owes it. A component that reaches a local variable the binding does not
+quantify, or that another member of its binding group mentions (after the
+group's first solve, which may have linked one member's variable to
+another's), is decided in the group: a residual on one member would leave the
+other quantifying the same variable with no relation. A binding group is a
+set of mutually dependent top-level definitions, or a whole `where` block, so
+a `where` sibling that only calls a residual-bearing helper shares it and the
+block decides the relation (splitting `where` blocks is #3487). Such a
+component is decided as before, and
+so is one bounded below by the domain's top, whose variable has no freedom
+left and is solved to it. A binding the value restriction keeps monomorphic
+has no context: the authorities of its type belong to the enclosing scope,
+which bounds them at its uses (`let p = subIn cfg` then `p app`). A
+residual renders in the context beside the class constraints, `(Num n, p <=
+d) =>`, a join as `p <= (a | b)`; one the solver has since proved (an upper
+bound solved to the top) is not printed. There is no written syntax for a residual
+yet, so a signature cannot state one: an unsigned binding can be more general
+than any signature for it, and a signature that quantifies two authorities
+independently still refuses a body that relates them.
 
 Every authority-index introduction must have a proof source: a qualified
 argument or field, a retained constructor constraint, a generative existential,
@@ -849,6 +909,26 @@ invariant and unknown parameters require equality. Effect-kind indices remain
 invariant. A checker that cannot establish a join must report a type error, not
 erase an effect or assume unknown variance is covariant.
 
+When no alternative has a shape yet (two parameters, `if c then f else g`),
+the join is recorded and decided at the end of the binding scope that owns
+it, not by equating the alternatives: a later use may shape one of them
+(`runPure g`), and the others are then shaped afresh from it, each keeping its
+own latent row, and joined. A use that shapes the join's result first (an
+application, an argument slot, an annotation) decides the join there, by
+equality, as before joins were delayed: a closed slot fixes a callback's row,
+which a caller-supplied row could meet only by equality. A join nothing
+shaped is decided by equality, as for values that never become functions or
+covariant data. A binding that generalizes
+decides the joins recorded in its scope first, so it never generalizes over
+an undecided join; a join whose alternatives are all variables of the
+enclosing scope is handed to it instead, its result kept at that scope's
+level. A join with any local alternative is decided in its own scope even
+when its result already flows outward: handed out, it would let the binding
+generalize that alternative while the join still ties it to the others. A top-level group decides every join it recorded. The result does not
+depend on which of two statements comes first. A join of two alternatives
+reaching each other only through an already generalized function (`sel : a
+-> a -> a`) is an ordinary application, which unifies its arguments.
+
 List and array literals join their element values before construction. Cons
 joins its head value with the existing list's element type. Joining already
 constructed mutable containers is different: `Array` and `Ref` remain invariant,
@@ -1112,12 +1192,13 @@ The active migration and its explicit completed/remaining work are recorded in
 [Effects within the typechecker](../../compiler/EFFECTS-ARCHITECTURE.md).
 The named-authority checkpoint there implements §4.1's named arrows, qualified
 values, resolved label identity, the abstraction `α`, the scoped authority
-solver and publication as far as a binding's own scope: a residual obligation
-over a variable no scope owns is decided over the module, not carried in a
-generalized scheme, so "residual constraints travel with a generalized scheme"
-is not implemented. Qualified data fields, constructor proof sources,
-carrying and authority-indexed existentials are implemented (the data-half
-and close-out checkpoints there). No conformance claim may turn a pending proof into success or
+solver and publication. Residual schemes and delayed joins (§4.1, §6.8) are
+implemented for inferred bindings (the residual-scheme checkpoint there); a
+residual obligation over a variable no scope owns (a binding the value
+restriction keeps monomorphic) is still decided over the module, and a
+written signature cannot state a residual. Qualified data fields, constructor
+proof sources, carrying and authority-indexed existentials are implemented
+(the data-half and close-out checkpoints there). No conformance claim may turn a pending proof into success or
 describe the whole effects system as laundering-free while a known channel
 remains. Issue status belongs in the issue tracker; the archived observations
 explain counterexamples but are not a live backlog.
