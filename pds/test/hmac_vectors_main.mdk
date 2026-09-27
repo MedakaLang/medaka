@@ -1,5 +1,5 @@
 {- | Driver for the Wycheproof HMAC-SHA256 corpus (S-hmac, #3362
-   S-more-answer-keys round 2). Grades `stdlib/crypto/hmac.mdk`'s `hmacSha256FixedBytes`
+   S-more-answer-keys round 2). Grades `stdlib/crypto/hmac.mdk`'s `hmacSha256`
    against `pds/test/vectors/wycheproof_hmac_sha256.txt` — never a
    self-captured golden (G5).
 
@@ -16,12 +16,10 @@
 
    Every row also computes the untruncated tag a second way, through
    `hmacSha256Key`/`hmacSha256WithKey`, and requires it byte-for-byte equal
-   to `hmacSha256FixedBytes`'s result on the same key and message (S-hmac-
+   to `hmacSha256`'s result on the same key and message (S-hmac-
    midstate, #3371 Part B). -}
 
-import crypto.hmac.{
-  ctEq, hmacSha256FixedBytes, hmacSha256Key, hmacSha256WithKey
-}
+import crypto.hmac.{ctEq, hmacSha256, hmacSha256Key, hmacSha256WithKey}
 import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import array.{take}
@@ -72,11 +70,17 @@ parseRows lns = somes (map parseLine lns)
 -- untruncated tag.
 rowHolds : Row -> Bool
 rowHolds r =
-  let full = hmacSha256FixedBytes r.key r.msg
+  let full =
+    toArray
+      (hmacSha256
+        (fromArrayAssumeByteDomain r.key)
+        (fromArrayAssumeByteDomain r.msg))
   let key = hmacSha256Key (fromArrayAssumeByteDomain r.key)
   let keyed = toArray (hmacSha256WithKey key (fromArrayAssumeByteDomain r.msg))
   let truncated = take (r.tagBits / 8) full
-  ctEq truncated r.tag == r.expectedValid && keyed == full
+  ctEq (fromArrayAssumeByteDomain truncated) (fromArrayAssumeByteDomain r.tag)
+      == r.expectedValid
+    && keyed == full
 
 checkRow : Row -> <IO> (Int, Int)
 checkRow r =

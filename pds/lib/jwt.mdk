@@ -47,7 +47,7 @@
    here is graded only against this implementation. -}
 
 import base64.{decodeUrlSafe, encodeUrlSafe}
-import bytes.{fromArray, toArray}
+import bytes.{encodeUtf8, fromArray, toArray}
 import crypto.hmac.{ctEq}
 import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
 import crypto.sha256.{sha256}
@@ -239,7 +239,7 @@ verifySegments : Array Int ->
   Result JwtError Claims
 verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg =
   let expected = hs256Signature secret "\{headerSeg}.\{claimsSeg}"
-  if not (ctEq (toUtf8 expected) (toUtf8 sigSeg)) then
+  if not (ctEq (encodeUtf8 expected) (encodeUtf8 sigSeg)) then
     Err JwtBadSignature
   else match checkAlg headerSeg
     Err algError => Err algError
@@ -357,7 +357,7 @@ es256kSignature : SecretKey -> String -> Result String String
 es256kSignature key signingInput =
   map
     (signature => b64uEncode (signatureCompact signature))
-    (signDigest key (sha256 (toUtf8 signingInput)))
+    (signDigest key (toArray (sha256 (encodeUtf8 signingInput))))
 
 {- | A service-auth token for `request`, signed with the issuing account's own
      repo key.

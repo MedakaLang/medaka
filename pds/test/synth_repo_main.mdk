@@ -21,7 +21,7 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{toArray}
+import bytes.{fromArray, toArray}
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
 import lib.blob.{blobCid}
@@ -162,7 +162,13 @@ unsignedValue did dataCid rev = DcMap [
 signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Array Int)
 signedCommit did secret rev dataCid =
   let unsigned = mustEncode (unsignedValue did dataCid rev)
-  let signature = match signDigest secret (sha256 unsigned)
+  let digest =
+    toArray
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (fromArray unsigned)))
+  let signature = match signDigest secret digest
     Ok value => value
     Err message => panic "synth_repo: signing failed: \{message}"
   let signed =

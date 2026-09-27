@@ -249,7 +249,7 @@ its input, not by convenience:
   like `charFromCode : Int -> Option Char`. Not masking, not a panic: an
   element outside `0`–`255` makes the whole call answer `None`.
 - **Vouched-for bulk data** — `fromArrayAssumeByteDomain : Array Int -> Bytes`,
-  naming the caller's promise the way `sha256AssumeByteDomain` already does. A
+  naming the caller's promise the way the retired `sha256AssumeByteDomain` did. A
   broken promise truncates (masks to the low eight bits), because a packed
   byte cannot hold `300`. This door is **transitional**: its own doc block
   names B6 as its removal, alongside `toUtf8`/`fromUtf8`.
@@ -372,11 +372,27 @@ comment (`stdlib/http.mdk:354-361`) says B5 removes; also unexported:
 | `net_async` | `recvBytesWithin` | `Duration -> Connection -> Int -> Async <Clock, Net "_" \| e> (Result String Bytes)` | unchanged — already packed |
 | `regex` | `isFullMatchBytes` | `Regex -> Array Int -> Int -> Int -> Bool` | B6: same name, `Array Int -> Bytes` — the licensed twin of `isFullMatch : Regex -> String -> Bool` |
 | `regex` | `findBytes` | `Regex -> Array Int -> Int -> Int -> Option Match` | B6: same name, `Array Int -> Bytes` — the licensed twin of `find : Regex -> String -> Option Match` |
-| `sha256` | `sha256FixedBytes` | `Array Int -> Array Int` | undecided — fixed-digest array, no `Bytes`-typed twin yet; not this ruling's call |
-| `hmac` | `hmacSha256FixedBytes` | `Array Int -> Array Int -> Array Int` | undecided — same reasoning as `sha256FixedBytes` |
+| `sha256` | `sha256FixedBytes` | `Array Int -> Array Int` | **2026-09-26: deleted** — `sha256 : Bytes -> Bytes` is now the only entry, and it is the unchecked one: the type carries the byte domain (Ruling 6) |
+| `hmac` | `hmacSha256FixedBytes` | `Array Int -> Array Int -> Array Int` | **2026-09-26: deleted** — `hmacSha256 : Bytes -> Bytes -> Bytes`, same reasoning; `ctEq` is `Bytes -> Bytes -> Bool` |
 
 The two 2026-09-21 rows are #3222's Half B: byteparser's `takeBytes` takes the
 packed name; bytebuilder's `emitBytes` and `appendBytes` swap roles, so the
 `Bytes`-taking bulk form keeps the name that already said "bytes." Every real
 caller (`sqlite/lib`, `gzip/lib`, `pds/lib`, `pds/shell/server.mdk`) was
 updated in the same change.
+
+The two 2026-09-26 rows retyped `crypto.sha256` and `crypto.hmac` in place
+under a no-regression-over-2% bar. The hash reads its message straight from
+the input's packed block (`lendByteBlockUnsafe`, then `byteBlockGetUnsafe`),
+builds its padded tail and its digest in blocks of its own, and no longer
+scans the message, so every path moved onto packed reads and none kept an
+`Array Int` kernel. Measured in `instructions:u`, each arm built by its own
+tree's compiler, three interleaved runs each, median shown:
+
+| Workload | Before | After | Change |
+|---|---|---|---|
+| SHA-256 over 16,448 blocks, including building the input | 200.1M | 191.8M | -4.0% |
+| 20k chained `hmacSha256WithKey` | 536.6M | 466.3M | -13.1% |
+| `pbkdf2HmacSha256`, 60,000 iterations | 1713.0M | 1496.2M | -12.7% |
+| JWT HS256 sign and verify, 10k times | 6606.9M | 6517.0M | -1.4% |
+| One ECDSA `signDigest`, including its self-verify | 108.5M | 108.7M | +0.2% |
