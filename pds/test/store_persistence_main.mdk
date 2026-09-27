@@ -18,12 +18,12 @@
    The `prefs-*` routes are the same save/load claim for the preferences half
    (`shell.persist`'s `persistPreferences`/`persistLoadPreferences`), written
    into the same data directory as the repository and blob halves so the
-   signing-key sweep in `store_persistence.sh` covers it too. `credential-save`
-   is the write half of the same claim for the account's password credential
-   (`shell.persist`'s `persistCredential`); there is no `credential-load` route
-   because reading it back is `pds/shell/server.mdk`'s job, not this shell's —
-   this route exists only so case 12's syscall trace sees the credential
-   file's promote.
+   signing-key sweep in `store_persistence_test.mdk` covers it too.
+   `credential-save` is the write half of the same claim for the account's
+   password credential (`shell.persist`'s `persistCredential`); there is no
+   `credential-load` route because reading it back is `pds/shell/server.mdk`'s
+   job, not this shell's — this route exists only so the barrier test's
+   syscall trace sees the credential file's promote.
 
    The remaining routes are for HALF-WRITTEN directories. None of them races a
    process kill: each write path here promotes with `rename`, so the states a
@@ -421,7 +421,8 @@ runPrefsSave dir = match persistPreferences dir fixturePrefs
 -- ── the credential half ─────────────────────────────────────────────────────
 
 -- A fixed record, persisted into the same data directory as the repository
--- and preferences halves so case 12's syscall trace covers it too.
+-- and preferences halves so the barrier test's syscall trace covers it
+-- too.
 fixtureCredentialSalt : Bytes
 fixtureCredentialSalt =
   resultOrPanic
@@ -458,10 +459,11 @@ runPrefsLoad dir = match persistLoadPreferences dir
 {- | Two open sessions of two families and one refresh token the second family
    consumed, replayed once inside the grace window into its open session,
    persisted into the same data directory as every other half so
-   the signing-key sweep in `store_persistence.sh` covers this file too. The
-   fingerprints are fixed rather than derived from tokens: these routes grade
-   the file's round trip, not `lib.store`'s `sessionFingerprint`, and a row is
-   digests plus instants whatever produced it. -}
+   the signing-key sweep in `store_persistence_test.mdk` covers this file
+   too. The fingerprints are fixed rather than derived from tokens: these
+   routes grade the file's round trip, not `lib.store`'s
+   `sessionFingerprint`, and a row is digests plus instants whatever produced
+   it. -}
 fixtureSessions : List SessionRow
 fixtureSessions = [
   OpenSessionRow
@@ -486,8 +488,9 @@ fixtureSessions = [
         "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110")),
 ]
 
--- The access and refresh fingerprints of the row `store_persistence.sh` writes
--- into a legacy sessions file, and that row's expiry.
+-- The access and refresh fingerprints of the row
+-- `store_persistence_test.mdk` writes into a legacy sessions file, and that
+-- row's expiry.
 legacyAccessHex : String
 legacyAccessHex =
   "4f4e4d4c4b4a494847464544434241404f4e4d4c4b4a49484746454443424140"
@@ -663,8 +666,8 @@ putBlobs ((cid, mimeType, bytes) :: rest) store =
    commit may name blob bytes and never the reverse, so a crash between the
    halves must be able to leave an unreferenced blob and never a committed
    record naming bytes that are not there. This route exists so
-   `store_persistence.sh` can read the order out of one trace rather than infer
-   it from five.
+   `store_persistence_test.mdk` can read the order out of one trace rather
+   than infer it from five.
 
    The gate persists the earlier generation through `crash-save-old` BEFORE it
    starts tracing, so what the trace holds is this transition alone. -}
@@ -1100,9 +1103,9 @@ mimeSuffixText = ".mime"
    third being the one a name-only rule cannot tell from its own data.
 
    The route asserts nothing. Each case prints what all four readers answered
-   and, for a refusal, the message; `store_persistence.sh` decides which of
-   those is correct, so that the expected disposition lives beside the prose
-   that states the rule rather than inside the driver. -}
+   and, for a refusal, the message; `store_persistence_test.mdk` decides
+   which of those is correct, so that the expected disposition lives beside
+   the prose that states the rule rather than inside the driver. -}
 runStrayEntries : String -> <IO, FileRead, FileWrite> Unit
 runStrayEntries root =
   let () = strayCase root "none" (_ => Ok "nothing")

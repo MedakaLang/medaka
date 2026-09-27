@@ -418,7 +418,7 @@ losing at most the one blob involved rather than refusing every later startup.
 Nothing collects an unreferenced blob (#2572 tracks that as a
 protocol-design question, not a filesystem one).
 
-`pds/test/serve_e2e.sh` and `pds/test/store_persistence.sh` extend their
+`pds/test/serve_e2e.sh` and `pds/test/store_persistence_test.mdk` extend their
 socket/restart coverage to blobs:
 upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
 tampered blob file is rejected at load; an oversize blob is refused with zero
