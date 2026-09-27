@@ -1,0 +1,72 @@
+-- #3463/#3468: what a host can make an entry perform.  Each charged entry
+-- sits beside a control that differs in one position; the manifest of each
+-- entry is pinned by effect_builtin_param_domain_test.mdk.
+data Sink a = Sink (a -> Unit)
+
+data Later (e : Effect) a = Now a | Step (Unit -> <e> Later e a)
+
+data Api = Api (Unit -> <FileRead "a/*"> Result String String)
+
+data Taker = Taker ((Unit -> <FileRead "k/*"> Result String String) -> Unit)
+
+-- #3463: the host supplies the callback a Sink takes, so it is not charged.
+sinkEntry : String -> Sink (Unit -> <FileRead "s/*"> Result String String)
+sinkEntry _ = Sink (_ => ())
+
+-- A function the entry returns may be invoked by the host: charged.
+returnedEntry : String -> Unit -> <FileRead "r/*"> Result String String
+returnedEntry _ = _ => readFile "r/x"
+
+-- An effect index in a covariant slot: charged.
+laterEntry : String -> Later <FileRead "l/*"> String
+laterEntry _ = Now "done"
+
+-- A function inside a returned tuple: charged.
+tupledEntry : String -> (Unit -> <FileRead "t/*"> Result String String, Int)
+tupledEntry _ = (_ => readFile "t/x", 1)
+
+-- A function inside a monomorphic constructor field: charged.
+apiEntry : String -> Api
+apiEntry _ = Api (_ => readFile "a/x")
+
+-- Control: the field is a callback the Taker's holder supplies.
+takerEntry : String -> Taker
+takerEntry _ = Taker (_ => ())
+
+-- A callback the entry hands to a host-supplied function: charged.
+passBack : String ->
+  ((Unit -> <FileRead "d/*"> Result String String) -> String) ->
+  String
+passBack _ k = k (_ => readFile "d/x")
+
+-- Control: a callback the host supplies directly is the host's own.
+hostCallback : String -> (Unit -> <FileRead "h/*"> Result String String) -> String
+hostCallback _ _ = "ok"
+
+-- A closure the entry writes into a host-supplied cell: charged.
+refArg : Ref (Unit -> <FileRead "c/*"> Result String String) -> String
+refArg r =
+  let _ = r := (_ => readFile "c/x")
+  "ok"
+
+-- An effect index is invariant: a cell of index-row callbacks the host
+-- supplies can be written by the entry, so its index is charged.
+data Cell (e : Effect) = Cell (Ref (Unit -> <e> Result String String))
+
+rowCellEntry : Cell <FileRead "e/*"> -> String
+rowCellEntry (Cell r) =
+  let _ = r := (_ => readFile "e/x")
+  "ok"
+
+-- An opened field reads under the head's own authority argument.
+data Rd (p : Authority FileRead) = Rd (Unit -> <FileRead p> Result String String)
+
+rdEntry : String -> Rd "i/*"
+rdEntry _ = Rd (_ => readFile "i/x")
+
+-- An authority the caller chooses: the grant is the whole label, and why.
+readUnder : (p : String) -> Unit -> <FileRead p> Result String String
+readUnder p = _ => readFile p
+
+main : <IO> Unit
+main = println "invocation positions"

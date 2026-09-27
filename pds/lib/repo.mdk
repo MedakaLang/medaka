@@ -3,7 +3,7 @@
    Every mutation returns a fresh state.  Record, MST, and commit blocks cross
    the verified blockstore boundary before the state becomes observable. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, toArray}
 import hex.{encode}
 import list.{reverse}
 import regex.{Regex, isFullMatchBytes, mustCompile}
@@ -21,7 +21,6 @@ import lib.car.{carEncode}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.mst.{
-  dagCborDecodeChecked,
   Mst,
   MstRangeQuery,
   mstDelete,
@@ -44,7 +43,7 @@ import lib.sign.{
   SecretKey,
   Signature,
   publicKeyForSecret,
-  secretKeyFromByteArray,
+  secretKeyFromBytes,
   signDigest,
   signatureCompact,
   signatureFromCompact,
@@ -52,20 +51,10 @@ import lib.sign.{
 }
 import lib.tid.{Tid, tidCompare, tidParse, tidToString}
 
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
-cidForDagCborDoor : Array Int -> Cid
-cidForDagCborDoor bytes =
-  cidForDagCbor
-    (optionOrPanic
-      "cidForDagCbor: every element must be a byte in 0..255"
-      (fromArray bytes))
-
 -- ── types ───────────────────────────────────────────────────────────────────
 
 -- | Immutable metadata for one signed repository commit.
-export data RepoCommit =
-  | RepoCommit Tid Cid Cid (Array Int) (Array Int) Signature
+export data RepoCommit = RepoCommit Tid Cid Cid Bytes Bytes Signature
 
 -- | Immutable repository state; its representation is private.
 export data Repo = Repo String SecretKey PublicKey Mst BlockStore RepoCommit
@@ -80,16 +69,11 @@ export data RepoMutation = RepoMutation Repo RepoCommit
    Constructors are public because `pds/lib/handlers.mdk` builds a batch from
    a request body and has to name the arm each element asked for. -}
 public export data RepoWrite =
-  | RepoWriteCreate (Array Int) DagCbor
-  | RepoWriteUpdate (Array Int) DagCbor
-  | RepoWriteDelete (Array Int)
+  | RepoWriteCreate Bytes DagCbor
+  | RepoWriteUpdate Bytes DagCbor
+  | RepoWriteDelete Bytes
 
 -- ── identifier and path validation ──────────────────────────────────────────
-
--- A repository path arrives as `Array Int`, whose elements are not
--- necessarily bytes; this admits only 0..255.
-byteRangeRe : Regex
-byteRangeRe = mustCompile "[\\x00-\\xff]*"
 
 -- `%` is admitted only as a percent-escape, which is what separates this
 -- identifier grammar from `lib.atsyntax`'s (that one admits a bare `%`).
@@ -184,8 +168,13 @@ normalizedAuthority path end =
 -- `0..end`); exported so `pds/test/atsyntax_vectors_main.mdk` can grade it
 -- against the official atproto interop NSID syntax corpus.
 export
-validateCollection : Array Int -> Int -> Result String Unit
-validateCollection path end = match validateNsidPrefix path end
+validateCollection : Bytes -> Int -> Result String Unit
+validateCollection path end = collectionAt (toArray path) end
+
+-- `lib.nsid` and `regex.isFullMatchBytes` read `Array Int`, so path
+-- validation runs over one `toArray` of the path.
+collectionAt : Array Int -> Int -> Result String Unit
+collectionAt path end = match validateNsidPrefix path end
   Ok () =>
     if normalizedAuthority path end then
       Ok ()
@@ -197,8 +186,11 @@ validateCollection path end = match validateNsidPrefix path end
 -- `pds/test/atsyntax_vectors_main.mdk` can grade it against the official
 -- atproto interop record-key syntax corpus.
 export
-validateRkey : Array Int -> Int -> Result String Unit
-validateRkey path start =
+validateRkey : Bytes -> Int -> Result String Unit
+validateRkey path start = rkeyAt (toArray path) start
+
+rkeyAt : Array Int -> Int -> Result String Unit
+rkeyAt path start =
   let size = arrayLength path - start
   if size < 1 || size > 512 then
     Err "repo: record key length must be 1..512 characters"
@@ -211,19 +203,18 @@ validateRkey path start =
   else
     Ok ()
 
-validatePath : Array Int -> Result String Unit
-validatePath path =
+validatePath : Bytes -> Result String Unit
+validatePath key =
+  let path = toArray key
   if arrayLength path == 0 then
     Err "repo: path must be non-empty"
-  else if not (isFullMatchBytes byteRangeRe path 0 (arrayLength path)) then
-    Err "repo: path element outside byte range 0..255"
   else do
     slash <- findPathSlash path 0 (-1)
     if slash <= 0 || slash >= arrayLength path - 1 then
       Err "repo: path must be collection/rkey"
     else do
-      () <- validateCollection path slash
-      validateRkey path (slash + 1)
+      () <- collectionAt path slash
+      rkeyAt path (slash + 1)
 
 validateRecord : DagCbor -> Result String Unit
 validateRecord (DcMap _) = Ok ()
@@ -250,28 +241,20 @@ signedValue did dataCid rev signature = DcMap [
   ("sig", DcBytes (signatureCompact signature)),
 ]
 
-encodeCommit : String -> DagCbor -> Result String (Array Int)
+encodeCommit : String -> DagCbor -> Result String Bytes
 encodeCommit label value =
   mapErr
     (message => "repo: \{label} commit encoding failed: \{message}")
-    (map toArray (dagCborEncode value))
-
--- Door, masked: `blockstore`/`car` speak `Bytes` and `repo`'s block lists are
--- `Array Int`. Every row passed here was produced by an encoder or read back
--- from the store, so it is in range by construction; persisted input goes
--- through `blockRowsChecked` instead.
-blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
-blockRowsToBytesDoor =
-  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
+    (dagCborEncode value)
 
 blockElementRangeMessage : String
 blockElementRangeMessage = "blockstore: block element outside byte range 0..255"
 
 {- | One `Array Int` block as `Bytes`, refused with the block store's own
    range message when an element is outside 0..255. The block store took
-   `Array Int` and made this check itself; a caller converting outside it
-   must make the same check or an out-of-range element is silently
-   truncated into bytes that can still match the CID. -}
+   `Array Int` and made this check itself; a caller still holding blocks as
+   `Array Int` must make the same check or an out-of-range element is
+   silently truncated into bytes that can still match the CID. -}
 export
 blockBytesChecked : Array Int -> Result String Bytes
 blockBytesChecked raw = toResult blockElementRangeMessage (fromArray raw)
@@ -299,23 +282,17 @@ buildCommit did secret rev tree store = do
   unsigned <- encodeCommit "unsigned" (unsignedValue did (mstRootCid tree) rev)
   signature <- mapErr
     (message => "repo: signing failed: \{message}")
-    (signDigest
-      secret
-      (sha256
-        (optionOrPanic
-          "sha256: every element must be a byte in 0..255"
-          (fromArray unsigned))))
+    (signDigest secret (sha256 unsigned))
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
-  let commitCid = cidForDagCborDoor signed
+  let commitCid = cidForDagCbor signed
   withTree <- mapErr
     (message => "repo: storing MST failed: \{message}")
-    (blockStoreAddMany (blockRowsToBytesDoor (mstNodeBlocks tree)) store)
-  -- Masked: `signed` is `dagCborEncode`'s output, in range by construction.
+    (blockStoreAddMany (mstNodeBlocks tree) store)
   complete <- mapErr
     (message => "repo: storing commit failed: \{message}")
-    (blockStorePut commitCid (fromArrayAssumeByteDomain signed) withTree)
+    (blockStorePut commitCid signed withTree)
   Ok (
     RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
     complete,
@@ -333,15 +310,15 @@ repoInit did secret rev = do
 
 -- | Key-byte convenience boundary; malformed signing keys fail loudly.
 export
-repoInitFromKeyBytes : String -> Array Int -> Tid -> Result String Repo
-repoInitFromKeyBytes did keyBytes rev = match secretKeyFromByteArray keyBytes
+repoInitFromKeyBytes : String -> Bytes -> Tid -> Result String Repo
+repoInitFromKeyBytes did keyBytes rev = match secretKeyFromBytes keyBytes
   Err message => Err "repo: bad signing key: \{message}"
   Ok secret => repoInit did secret rev
 
 rehydrate : String ->
   SecretKey ->
   Cid ->
-  Array Int ->
+  Bytes ->
   BlockStore ->
   Result String Repo
 rehydrate did secret commitCid signed store = do
@@ -378,18 +355,16 @@ export
 repoFromBlocks : String ->
   SecretKey ->
   Cid ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   Result String Repo
 repoFromBlocks did secret commitCid blocks = do
   () <- validateDid did
   store <- mapErr
     (message => "repo: invalid persisted blocks: \{message}")
-    (do
-      rows <- blockRowsChecked blocks
-      blockStoreFromBlocks rows)
+    (blockStoreFromBlocks blocks)
   match blockStoreGet commitCid store
     None => Err "repo: missing persisted commit block"
-    Some signed => rehydrate did secret commitCid (toArray signed) store
+    Some signed => rehydrate did secret commitCid signed store
 
 -- ── reading a repository ────────────────────────────────────────────────────
 
@@ -418,13 +393,13 @@ repoCommitCid (RepoCommit _ _ cid _ _ _) = cid
 
 -- | Canonical unsigned bytes (the signed map with only `sig` omitted).
 export
-repoCommitUnsignedBytes : RepoCommit -> Array Int
-repoCommitUnsignedBytes (RepoCommit _ _ _ bytes _ _) = arrayCopy bytes
+repoCommitUnsignedBytes : RepoCommit -> Bytes
+repoCommitUnsignedBytes (RepoCommit _ _ _ bytes _ _) = bytes
 
 -- | Canonical signed commit bytes.
 export
-repoCommitSignedBytes : RepoCommit -> Array Int
-repoCommitSignedBytes (RepoCommit _ _ _ _ bytes _) = arrayCopy bytes
+repoCommitSignedBytes : RepoCommit -> Bytes
+repoCommitSignedBytes (RepoCommit _ _ _ _ bytes _) = bytes
 
 -- | Compact low-S signature.
 export
@@ -463,7 +438,7 @@ repoTree (Repo _ _ _ tree _ _) = tree
    the CID and must be read BEFORE the write it describes, since afterwards
    the path names the new record or nothing at all. -}
 export
-repoRecordCid : Array Int -> Repo -> Result String (Option Cid)
+repoRecordCid : Bytes -> Repo -> Result String (Option Cid)
 repoRecordCid path (Repo _ _ _ tree _ _) = do
   () <- validatePath path
   Ok (mstLookup path tree)
@@ -498,7 +473,7 @@ stageRecord record store = do
   bytes <- mapErr
     (message => "repo: record encoding failed: \{message}")
     (dagCborEncode record)
-  let recordCid = cidForDagCborDoor (toArray bytes)
+  let recordCid = cidForDagCbor bytes
   withRecord <- mapErr
     (message => "repo: storing record failed: \{message}")
     (blockStorePut recordCid bytes store)
@@ -506,7 +481,7 @@ stageRecord record store = do
 
 -- | Create a previously absent record.
 export
-repoCreate : Array Int -> DagCbor -> Tid -> Repo -> Result String RepoMutation
+repoCreate : Bytes -> DagCbor -> Tid -> Repo -> Result String RepoMutation
 repoCreate path record rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- validateRecord record
@@ -519,7 +494,7 @@ repoCreate path record rev (Repo did secret publicKey tree store prior) = do
 
 -- | Replace an existing record.
 export
-repoUpdate : Array Int -> DagCbor -> Tid -> Repo -> Result String RepoMutation
+repoUpdate : Bytes -> DagCbor -> Tid -> Repo -> Result String RepoMutation
 repoUpdate path record rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- validateRecord record
@@ -532,7 +507,7 @@ repoUpdate path record rev (Repo did secret publicKey tree store prior) = do
 
 -- | Delete an existing record.
 export
-repoDelete : Array Int -> Tid -> Repo -> Result String RepoMutation
+repoDelete : Bytes -> Tid -> Repo -> Result String RepoMutation
 repoDelete path rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- ensureNewer rev prior
@@ -640,7 +615,7 @@ decodeAt cid store = match blockStoreGet cid store
 
 -- | Look up and strictly decode one record.
 export
-repoLookup : Array Int -> Repo -> Result String (Option DagCbor)
+repoLookup : Bytes -> Repo -> Result String (Option DagCbor)
 repoLookup path (Repo _ _ _ tree store _) = do
   () <- validatePath path
   match mstLookup path tree
@@ -654,7 +629,7 @@ repoLookup path (Repo _ _ _ tree store _) = do
    page's entries alone, so the cost of the answer is the page and not the
    repository; `repoList` is this plus a decode of every entry. -}
 export
-repoEntries : Repo -> List (Array Int, Cid)
+repoEntries : Repo -> List (Bytes, Cid)
 repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
 
 {- | The entries one bounded key range names, in the direction the query asks
@@ -664,7 +639,7 @@ repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
    costs the entries it returns plus one node per tree layer, so the cost of a
    page does not grow with the repository behind it. -}
 export
-repoEntriesRange : MstRangeQuery -> Repo -> List (Array Int, Cid)
+repoEntriesRange : MstRangeQuery -> Repo -> List (Bytes, Cid)
 repoEntriesRange query (Repo _ _ _ tree _ _) = mstRange query tree
 
 -- | Strictly decode the record one `repoEntries` entry names.
@@ -674,13 +649,13 @@ repoDecodeEntry cid (Repo _ _ _ _ store _) = decodeAt cid store
 
 -- | List canonical path order with decoded current records.
 export
-repoList : Repo -> Result String (List (Array Int, Cid, DagCbor))
+repoList : Repo -> Result String (List (Bytes, Cid, DagCbor))
 repoList (Repo _ _ _ tree store _) = listRecords (mstEntries tree) store []
 
-listRecords : List (Array Int, Cid) ->
+listRecords : List (Bytes, Cid) ->
   BlockStore ->
-  List (Array Int, Cid, DagCbor) ->
-  Result String (List (Array Int, Cid, DagCbor))
+  List (Bytes, Cid, DagCbor) ->
+  Result String (List (Bytes, Cid, DagCbor))
 listRecords [] _ acc = Ok (reverse acc)
 listRecords ((path, cid) :: rest) store acc = match decodeAt cid store
   Err message => Err message
@@ -745,10 +720,10 @@ nodeLinks bytes = match dagCborDecode bytes
 
 walkNodes : List Cid ->
   BlockStore ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   CidSeq ->
   Int ->
-  Result String (List (Cid, Array Int), List Cid)
+  Result String (List (Cid, Bytes), List Cid)
 walkNodes [] _ blocks leaves _ = Ok (reverse blocks, cidSeqList leaves)
 walkNodes frontier store blocks leaves traversal = do
   _ <- checkMstTraversalDepth traversal
@@ -762,8 +737,8 @@ walkLayer : List Cid ->
   BlockStore ->
   CidSeq ->
   CidSeq ->
-  List (Cid, Array Int) ->
-  Result String (List Cid, CidSeq, List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  Result String (List Cid, CidSeq, List (Cid, Bytes))
 walkLayer [] _ next leaves blocks = Ok (cidSeqList next, leaves, blocks)
 walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
   None => Err "repo: missing graph MST block"
@@ -773,36 +748,31 @@ walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
       let mergedChildren = fold (acc child => cidSeqAdd child acc) next children
       let mergedLeaves =
         fold (acc leaf => cidSeqAdd leaf acc) leaves foundLeaves
-      walkLayer
-        rest
-        store
-        mergedChildren
-        mergedLeaves
-        ((cid, toArray bytes) :: blocks)
+      walkLayer rest store mergedChildren mergedLeaves ((cid, bytes) :: blocks)
 
 recordBlocks : List Cid ->
   BlockStore ->
-  List (Cid, Array Int) ->
-  Result String (List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  Result String (List (Cid, Bytes))
 recordBlocks [] _ acc = Ok (reverse acc)
 recordBlocks (cid :: rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
-  Some bytes => recordBlocks rest store ((cid, toArray bytes) :: acc)
+  Some bytes => recordBlocks rest store ((cid, bytes) :: acc)
 
 {- | Validate a commit root and export this implementation's deterministic order:
    commit, breadth-first MST nodes, then reachable record leaves. -}
 export
 repoExportGraph : Cid ->
-  Array Int ->
+  Bytes ->
   Cid ->
   BlockStore ->
-  Result String (List (Cid, Array Int), Array Int)
+  Result String (List (Cid, Bytes), Bytes)
 repoExportGraph commitCid commitBytes dataRoot store =
   match blockStoreGet commitCid store
     None => Err "repo: missing graph commit block"
     Some storedCommit =>
-      if toArray storedCommit /= commitBytes
-        || not (cidEqual commitCid (cidForDagCborDoor commitBytes)) then
+      if storedCommit /= commitBytes
+        || not (cidEqual commitCid (cidForDagCbor commitBytes)) then
         Err "repo: tampered graph commit block"
       else match decodeSignedCommit commitBytes
         Err message => Err "repo: invalid graph commit: \{message}"
@@ -816,21 +786,20 @@ repoExportGraph commitCid commitBytes dataRoot store =
               Ok () => match recordBlocks leaves store []
                 Err message => Err message
                 Ok records =>
-                  let blocks =
-                    (commitCid, arrayCopy commitBytes) :: nodes ++ records
-                  match carEncode [commitCid] (blockRowsToBytesDoor blocks)
+                  let blocks = (commitCid, commitBytes) :: nodes ++ records
+                  match carEncode [commitCid] blocks
                     Err message => Err "repo: CAR export failed: \{message}"
-                    Ok bytes => Ok (blocks, toArray bytes)
+                    Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
 export
-repoExportCar : Repo -> Result String (Array Int)
+repoExportCar : Repo -> Result String Bytes
 repoExportCar (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
   map snd (repoExportGraph commitCid signed (mstRootCid tree) store)
 
 -- | Deterministic full repository CAR block order.
 export
-repoExportBlocks : Repo -> Result String (List (Cid, Array Int))
+repoExportBlocks : Repo -> Result String (List (Cid, Bytes))
 repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
   map fst (repoExportGraph commitCid signed (mstRootCid tree) store)
 
@@ -840,10 +809,8 @@ hasField : String -> List (String, DagCbor) -> Bool
 hasField _ [] = False
 hasField name ((key, _) :: rest) = name == key || hasField name rest
 
--- Checked: `repoValidateCommit` passes caller bytes here, and `dagCborDecode`
--- refused an out-of-range element when it took `Array Int`.
-decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
-decodeSignedCommit bytes = match dagCborDecodeChecked bytes
+decodeSignedCommit : Bytes -> Result String (String, Cid, Tid, Signature)
+decodeSignedCommit bytes = match dagCborDecode bytes
   Err message => Err "repo: invalid commit CBOR: \{message}"
   Ok (DcMap fields) =>
     if not (hasField "prev" fields) then
@@ -869,11 +836,7 @@ decodeSignedCommit bytes = match dagCborDecodeChecked bytes
 {- | Strictly validate signed v3 commit bytes against expected state and
    return the admitted compact signature. -}
 export
-repoValidateCommit : String ->
-  Cid ->
-  Tid ->
-  Array Int ->
-  Result String Signature
+repoValidateCommit : String -> Cid -> Tid -> Bytes -> Result String Signature
 repoValidateCommit expectedDid expectedData expectedRev bytes = do
   () <- validateDid expectedDid
   (did, dataCid, rev, signature) <- decodeSignedCommit bytes
@@ -894,10 +857,4 @@ repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signatu
     Err _ => False
     Ok parsed =>
       signatureCompact parsed == signatureCompact signature
-        && verifyDigest
-          publicKey
-          (sha256
-            (optionOrPanic
-              "sha256: every element must be a byte in 0..255"
-              (fromArray unsigned)))
-          signature
+        && verifyDigest publicKey (sha256 unsigned) signature

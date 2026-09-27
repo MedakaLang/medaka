@@ -35,7 +35,7 @@
 
    What is CLAIMED against the reference's block list is containment plus the
    CAR root, and the set/order/byte lines are reported beside it for
-   `pds/test/repo_vectors.sh` to assert per probe. The reference reaches
+   `pds/test/repo_vectors_test.mdk` to assert per probe. The reference reaches
    `MST.cidsForPath` — the root-down descent path — while this server answers
    `mstCoveringProofBlocks`, which covers the key's lexical neighbors too and
    walks leaf-up. That is a superset in a different order wherever the tree is
@@ -54,11 +54,11 @@
    is graded as text and not merely as a substring. -}
 
 import array.{sliceClamped}
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort, zip}
-import string.{contains, fromUtf8, join, split, startsWith, toLower, toUtf8}
+import string.{contains, fromUtf8, join, split, startsWith, toLower}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
@@ -162,15 +162,12 @@ testContext : RequestContext
 testContext =
   RequestContext { nowSeconds = 1700000000, nonce = [||], login = None }
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "sync_car_shapes: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "sync_car_shapes: malformed hex" (decode text)
 
-mustCbor : Array Int -> DagCbor
+mustCbor : Bytes -> DagCbor
 mustCbor bytes =
-  resultOrPanic
-    "sync_car_shapes: undecodable block"
-    (dagCborDecode (fromArrayAssumeByteDomain bytes))
+  resultOrPanic "sync_car_shapes: undecodable block" (dagCborDecode bytes)
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "sync_car_shapes: malformed TID" (tidParse text)
@@ -236,7 +233,7 @@ mustServer account =
    the one the record commit carries. The genesis commit and the empty tree's
    node stay in the block store afterwards, which is what makes a route that
    over-answers visible here. -}
-fixtureRepo : String -> List (Array Int, DagCbor) -> Tid -> Repo
+fixtureRepo : String -> List (Bytes, DagCbor) -> Tid -> Repo
 fixtureRepo did records rev =
   let genesis = match tidEncode (tidMicros rev - 1) (tidClockId rev)
     Ok tid => tid
@@ -308,7 +305,7 @@ emittedRootCount bytes =
     panic "sync_car_shapes: CAR header length is not a single-byte varint"
   else
     let header = arrayMakeWith bytes[0] (i => bytes[1 + i])
-    match mustCbor header
+    match mustCbor (fromArrayAssumeByteDomain header)
       DcMap fields => match lookup "roots" fields
         Some (DcArray roots) => length roots
         _ => panic "sync_car_shapes: CAR header has no roots array"
@@ -335,7 +332,7 @@ gradeRecordProbes server store did rows (tag :: rest) =
    The CLAIM is the framing, the CAR root, and containment of the reference's
    block list. Set equality, emission order and byte identity are reported
    beside it but not claimed here, because whether each holds depends on where
-   the key sits in the tree — `pds/test/repo_vectors.sh` asserts the ones that
+   the key sits in the tree — `pds/test/repo_vectors_test.mdk` asserts the ones that
    actually hold, per probe. -}
 gradeRecordShape : Server ->
   Store ->
@@ -465,9 +462,7 @@ gradeBlocksMissing server store did rows =
    `GETRECORD-PRESENT-D0` CAR is rooted at. -}
 fixtureFromCorpus : List (String, String) -> (String, Repo, String)
 fixtureFromCorpus rows =
-  let carBytes =
-    fromArrayAssumeByteDomain
-      (mustHex (rowValue rows "GETRECORD-PRESENT-D0-CAR"))
+  let carBytes = mustHex (rowValue rows "GETRECORD-PRESENT-D0-CAR")
   let car = match carDecode carBytes
     Ok value => value
     Err message => panic "sync_car_shapes: corpus CAR: \{message}"
@@ -485,7 +480,7 @@ fixtureFromCorpus rows =
 -- | The fixture's records, paired with the paths they were written at. The two
 -- rows are parallel lists in write order, so a length disagreement is a
 -- malformed corpus rather than a quietly truncated repository.
-fixtureWrites : List (String, String) -> List (Array Int, DagCbor)
+fixtureWrites : List (String, String) -> List (Bytes, DagCbor)
 fixtureWrites rows =
   let paths = split "," (rowValue rows "FIXTURE-RECORD-PATHS")
   let records = split "," (rowValue rows "FIXTURE-RECORD-CBORS")
@@ -493,19 +488,16 @@ fixtureWrites rows =
     panic
       "sync_car_shapes: corpus names \{intToString (length paths)} fixture paths and \{intToString (length records)} records"
   else
-    zip (map toUtf8 paths) (map (text => mustCbor (mustHex text)) records)
+    zip (map encodeUtf8 paths) (map (text => mustCbor (mustHex text)) records)
 
-blockBytes : Cid -> List (Cid, Bytes) -> Array Int
+blockBytes : Cid -> List (Cid, Bytes) -> Bytes
 blockBytes wanted blocks = namedBlockBytes (cidToString wanted) blocks
 
-namedBlockBytes : String -> List (Cid, Bytes) -> Array Int
+namedBlockBytes : String -> List (Cid, Bytes) -> Bytes
 namedBlockBytes wanted [] =
   panic "sync_car_shapes: corpus CAR does not carry block \{wanted}"
 namedBlockBytes wanted ((cid, bytes) :: rest) =
-  if cidToString cid == wanted then
-    toArray bytes
-  else
-    namedBlockBytes wanted rest
+  if cidToString cid == wanted then bytes else namedBlockBytes wanted rest
 
 main : <IO, Env, FileRead> Unit
 main = match args ()

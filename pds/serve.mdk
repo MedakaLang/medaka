@@ -83,7 +83,7 @@ import args.{
 }
 import array as A
 import async.{Async, liftIO, sleep, spawn}
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{isDir}
 import hex.{decode, encode}
 import io.{isPrivateMode, writeFilePrivate}
@@ -99,6 +99,8 @@ import lib.jwt.{serverSecretBytes}
 import lib.ratelimit.{TrustedProxy(..)}
 import lib.handlers.{makeServerLinks, pdsServer}
 import lib.proxy.{AppviewRoute, makeAppviewRoute, makeAppviewTable}
+import lib.repo.{blockBytesChecked}
+import lib.repo.{blockRowsChecked}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -110,7 +112,7 @@ import lib.repo.{
 import lib.server_core.{
   Server, accountDid, accountHostname, makeAccount, serverAccount
 }
-import lib.sign.{SecretKey, secretKeyFromByteArray}
+import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.cid.{Cid, cidToString}
 import lib.event_log_record.{eventLogRetentionSeconds}
 import lib.store.{
@@ -475,13 +477,13 @@ requirePrivateMode label path = do
 
 -- Neither key reaches a diagnostic: the mode and read errors name the path,
 -- and `hex.decode`'s own messages do not echo what they were given.
-readHexBytes : String -> String -> <FileRead> Result String (Array Int)
+readHexBytes : String -> String -> <FileRead> Result String Bytes
 readHexBytes label path = do
   () <- requirePrivateMode label path
   text <- match readFile path
     Err message => Err "unreadable \{label} \{path}: \{message}"
     Ok given => Ok given
-  match map toArray (decode (trim text))
+  match decode (trim text)
     Err message => Err "\{label} \{path} is not hex: \{message}"
     Ok bytes => Ok bytes
 
@@ -568,7 +570,8 @@ suppliedSessionSecret parsed dir = match flagValue "--token-secret" parsed
 readSessionSecret : String -> <FileRead> Result String (Array Int)
 readSessionSecret path = do
   bytes <- readHexBytes "session-token secret" path
-  admitSessionSecret path bytes
+  -- Door: the session secret is still `Array Int` here; `toArray` is total.
+  admitSessionSecret path (toArray bytes)
 
 -- The WRITE half: generate the secret only when the read half found none.
 establishSessionSecret : String ->
@@ -726,13 +729,18 @@ genesisTid u = tidEncode (floatToInt (now u * 1000000.0)) 0
    command cannot silently discard an account's history. -}
 initRepo : String ->
   String ->
-  Array Int ->
+  Bytes ->
   <Clock, FileRead, FileWrite> Result String Repo
 initRepo dir did keyBytes = do
   genesis <- genesisTid ()
   repo <- repoInitFromKeyBytes did keyBytes genesis
   blocks <- repoExportBlocks repo
-  () <- persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
+  -- Door: `lib.repo` exports `Bytes` blocks and `persistSave` writes
+  -- `Array Int` rows; `toArray` is total.
+  () <- persistSave
+    dir
+    (repoCommitCid (repoLatestCommit repo))
+    (map ((cid, bytes) => (cid, toArray bytes)) blocks)
   Ok repo
 
 {- | Every persisted blob, read back into the initial `Store` before a single
@@ -760,19 +768,30 @@ admitBlobRows [] store = Ok store
 admitBlobRows ((cid, mimeType, bytes) :: rest) store =
   if not (validMimeShape mimeType) then
     admitBlobRows rest store
-  else match storePutBlob cid mimeType bytes store
-    Err message => Err "persisted blob \{cidToString cid} rejected: \{message}"
-    Ok next => admitBlobRows rest next
+  else
+    let stored = do
+      checked <- blockBytesChecked bytes
+      storePutBlob cid mimeType checked store
+    match stored
+      Err message =>
+        Err "persisted blob \{cidToString cid} rejected: \{message}"
+      Ok next => admitBlobRows rest next
 
 loadRepo : String -> String -> SecretKey -> <FileRead> Result String Repo
 loadRepo dir did secret = do
-  (head, blocks) <- persistLoad dir
+  (head, rows) <- persistLoad dir
+  -- Door, checked: `persistLoad` reads `Array Int` rows and `repoFromBlocks`
+  -- takes `Bytes`. An element outside 0..255 is refused with the message
+  -- `repoFromBlocks` gave it when it took `Array Int`.
+  blocks <- mapErr
+    (message => "repo: invalid persisted blocks: \{message}")
+    (blockRowsChecked rows)
   repoFromBlocks did secret head blocks
 
 openRepo : Bool ->
   String ->
   String ->
-  Array Int ->
+  Bytes ->
   SecretKey ->
   <Clock, FileRead, FileWrite> Result String Repo
 openRepo False dir did _ secret = loadRepo dir did secret
@@ -823,7 +842,7 @@ configure parsed = do
   let version = versionString ()
   server <- pdsServer account links version
   keyBytes <- readHexBytes "signing key" keyPath
-  secret <- secretKeyFromByteArray keyBytes
+  secret <- secretKeyFromBytes keyBytes
   -- Admitted here, beside the other flag-supplied configuration and ahead of
   -- every generated secret, for the same reason `requireTrustedBind` is: a run
   -- refused for a malformed appview DID must leave no session secret on disk
@@ -897,7 +916,8 @@ configure parsed = do
   sessionSecret <- establishSessionSecret dir suppliedSecret
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
-  withSecret <- storeWithServerSecret sessionSecret withBlobs
+  let secretBytes = fromArrayAssumeByteDomain sessionSecret
+  withSecret <- storeWithServerSecret secretBytes withBlobs
   let withCredential = storeWithCredential credential withSecret
   prefs <- persistLoadPreferences dir
   -- Last, after the final step that can still refuse: the log is now

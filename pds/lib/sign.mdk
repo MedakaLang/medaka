@@ -52,33 +52,6 @@ secretKeyFromBytes bs =
   else
     Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
 
-{- | Admit a secret key held as an `Array Int` whose elements are not yet
-   known to be bytes. Transitional: it serves the callers that still carry a
-   key that way (`lib.repo`, `pds/serve.mdk`, `pds/shell/keygen.mdk`) and is
-   deleted when they move to `Bytes`.
-
-   An element outside `0` to `255` gets `secretKeyFromBytes`'s own refusal
-   rather than being truncated into some other key. Every element is folded
-   into one accumulator that is tested once, after the last element, so no
-   element's value decides how many are read. -}
-export
-secretKeyFromByteArray : Array Int -> Result String SecretKey
-secretKeyFromByteArray raw =
-  if outOfByteRange raw 0 0 == 0 then
-    secretKeyFromBytes (B.fromArrayAssumeByteDomain raw)
-  else
-    Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
-
--- Zero exactly when every element of `raw` from `i` on is a byte: shifted
--- right by 8, a byte is 0, a larger value is positive, and a negative value
--- stays negative.
-outOfByteRange : Array Int -> Int -> Int -> Int
-outOfByteRange raw i acc =
-  if i >= arrayLength raw then
-    acc
-  else
-    outOfByteRange raw (i + 1) (bitOr acc (shiftRight raw[i] 8))
-
 -- | Parse one public compressed SEC 1 key. Invalid wire values are rejected
 --   before a `PublicKey` exists.
 export

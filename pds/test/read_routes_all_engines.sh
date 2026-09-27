@@ -7,7 +7,7 @@
 # No cell builds a REPOSITORY, so nothing here signs a commit. That is what
 # makes an EVAL arm possible: one `repoInit` under the tree-walking interpreter
 # does not complete in 600s on this box (measured in P4-C), which is why
-# pds/test/repo_vectors.sh has no `medaka run` arm any more (#2208). A gate that
+# pds/test/repo_vectors_test.mdk has no eval arm (#2208). A gate that
 # built a repository here would move a seconds-long merge-queue check into the
 # >10-minute band #2181 removed from this project. A session secret and one
 # minted access token, which the proxy cells below need, cost an HMAC over a
@@ -16,7 +16,7 @@
 # The repository-BEARING read routes — getRecord/listRecords/describeRepo/
 # sync.getRepo/sync.getLatestCommit against a real signed repo, graded against
 # the pinned Phase-1 corpus — run on the compiled engines as an arm of
-# pds/test/repo_vectors.sh, next to the corpus they are graded by.
+# pds/test/repo_vectors_test.mdk, next to the corpus they are graded by.
 #
 # What this gate covers is exactly the part of P4-D that lives in the ROUTER
 # and needs no state: the two non-XRPC well-known paths as their own route

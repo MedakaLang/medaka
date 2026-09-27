@@ -17,7 +17,7 @@
    `validationStatus: "unknown"` — this server grades nothing against a
    lexicon and says so rather than claiming a check it never ran. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, toArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
 import io.{readLines}
@@ -85,18 +85,16 @@ accountHostText = "pds.example"
 collectionText : String
 collectionText = "app.bsky.feed.post"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "record_handlers: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "record_handlers: malformed hex" (decode text)
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "record_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text =
-  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
-    Ok value => dagCborToLexJson value
-    Err message => panic "record_handlers: malformed record: \{message}"
+mustRecordJson text = match dagCborDecode (mustHex text)
+  Ok value => dagCborToLexJson value
+  Err message => panic "record_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =
@@ -148,7 +146,7 @@ authorizedStore did store = match storeWithServerSecret testSecret store
 testToken : String -> String
 testToken did =
   mintToken
-    (fromArrayAssumeByteDomain testSecret)
+    testSecret
     did
     accountHostText
     "record_handlers-fixture-token"
@@ -176,7 +174,7 @@ runStep did server store opLine commitLine = match (
   split "\t" commitLine,
 )
   (["OP", kind, pathHex, recordHex, recordCid, rev], ["COMMIT", _, _, _, commitCid, _]) =>
-    let (collection, rkey) = splitPath (fromUtf8 (mustHex pathHex))
+    let (collection, rkey) = splitPath (fromUtf8 (toArray (mustHex pathHex)))
     let (nsid, body) = match kind
       "CREATE" => (
         "com.atproto.repo.createRecord",

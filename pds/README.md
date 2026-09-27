@@ -216,8 +216,8 @@ pinned official `@atproto/repo` that answers for the single-write transcript.
 `pds/test/record_handlers_main.mdk` replays the provenance-pinned reference
 transcript (`pds/test/vectors/repo_reference_corpus.txt`) through `handleBytes`
 end to end and compares every `uri`, record `cid`, `commit.cid`, and
-`commit.rev` against the corpus's pinned values. It runs as an arm of
-`pds/test/repo_vectors.sh`.
+`commit.rev` against the corpus's pinned values. It runs as a row of
+`pds/test/repo_vectors_test.mdk`.
 
 ### Reads, sync, and identity
 
@@ -244,8 +244,8 @@ exists, so a client that gets none knows it has seen the whole collection.
 second CAR emission. `pds/test/read_handlers_main.mdk` grades that three ways at
 once — response bytes == `repoExportCar`'s bytes == the pinned corpus `CAR` row
 (557 bytes for the reference transcript's final state) — because either
-equality alone could be satisfied by a wrong pair. It runs as an arm of
-`pds/test/repo_vectors.sh`, beside the write-side replay.
+equality alone could be satisfied by a wrong pair. It runs as a row of
+`pds/test/repo_vectors_test.mdk`, beside the write-side replay.
 
 ### The well-known route class
 
@@ -279,7 +279,7 @@ which is what makes an eval arm affordable at all (see "The Store is
 secret-bearing" for the 600s measurement). The `did:web` arm of
 `/.well-known/did.json` publishes the repository's signing key, so it is graded
 where a repository exists: `pds/test/read_handlers_main.mdk`, under
-`pds/test/repo_vectors.sh`.
+`pds/test/repo_vectors_test.mdk`.
 
 ### Blob routes
 
@@ -307,7 +307,7 @@ grades the three routes end to end against an EXTERNAL answer key: it uploads
 every row of `pds/test/vectors/blob_reference_corpus.txt` through the real
 `uploadBlob` route and compares the response's CID and whole `blob` ref JSON
 against the pinned official `@atproto/lex-data`'s own columns, then reads each
-row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors.sh`,
+row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors_test.mdk`,
 which takes the corpus path from the provenance ledger rather than naming it).
 `pds/test/blob_routes_test.mdk` carries the routes' remaining in-process
 behavior — the refusals, the MIME-shape rejection, and cursor pagination —
@@ -418,7 +418,7 @@ losing at most the one blob involved rather than refusing every later startup.
 Nothing collects an unreferenced blob (#2572 tracks that as a
 protocol-design question, not a filesystem one).
 
-`pds/test/serve_e2e.sh` and `pds/test/store_persistence.sh` extend their
+`pds/test/serve_e2e.sh` and `pds/test/store_persistence_test.mdk` extend their
 socket/restart coverage to blobs:
 upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
 tampered blob file is rejected at load; an oversize blob is refused with zero
@@ -775,9 +775,9 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
 `docs/design/ATPROTO-PDS-DESIGN.md` §5): **no golden is ever captured from our
 own implementation** in Phases 0–1, because on a protocol where correctness is
 defined by other people's implementations, a self-captured golden is not weak
-evidence but *anti*-evidence. The gate is `pds/test/vector_provenance.sh` — it
-runs a six-scenario self-test in a `mktemp -d` on every invocation, then checks
-the real tree. It is enrolled by name in a CI shard (`pds/test/*` is split
+evidence but *anti*-evidence. The gate is `pds/test/vector_provenance_test.mdk`
+— it runs the ledger checker against synthetic ledgers built to fail it, each in
+a scratch directory, then checks the real tree. It is enrolled by name in a CI shard (`pds/test/*` is split
 across several shards by cost — derive the current home, do not trust a shard
 name written down here: `grep -n 'pds/test' .github/workflows/ci.yml`).
 
@@ -814,11 +814,11 @@ are invisible to this enumeration by construction).
 **Run the gate locally:**
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/vector_provenance.sh
+./medaka test pds/test/vector_provenance_test.mdk
 ```
 
-No `medaka` binary needed — the gate only enumerates files, hashes them, and
-parses text.
+The gate builds natively, so it needs a built `medaka`; at run time it only
+enumerates files, hashes them, and parses text.
 
 ## Oracle
 
@@ -860,7 +860,7 @@ docker run --rm --entrypoint node \
 
 Run it from the repository root. The trailing argument pins `iat` so the minted
 token is reproducible; re-running must reproduce all three files byte-for-byte,
-which is what `pds/test/vector_provenance.sh` checks the committed digests
+which is what `pds/test/vector_provenance_test.mdk` checks the committed digests
 against.
 The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
@@ -952,7 +952,7 @@ Three things are specific to `pds/` and are NOT in the general policy:
     expensive arm is better expressed as its own check. It goes to
     `pds/nightly/` with `tiers = ["nightly"]` and `shard = "other-job"`.
     `pds/nightly/repo_vectors_eval_engine.sh` is the instance: the
-    1091.56s eval arm left `pds/test/repo_vectors.sh` and became a stronger
+    1091.56s eval arm left the `pds/test/repo_vectors` gate and became a stronger
     standalone differential, `cmp`ing the interpreter's bytes against native.
 
   Either way, name the script literally in a `.github/workflows/nightly.yml`

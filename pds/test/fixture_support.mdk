@@ -3,6 +3,7 @@
    builders and JSON-field accessors that many test mains built the same way
    under different names. -}
 
+import bytes as B
 import bytes.{Bytes}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
@@ -15,14 +16,14 @@ import lib.server_core.{RequestContext(..)}
 import lib.store.{Store, storeRepo}
 
 export
-testSecret : Array Int
-testSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
+testSecret : Bytes
+testSecret = B.fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 7 + 3)))
 
 -- | A second fixed secret, distinct from `testSecret`, for the tests that
 -- need two accounts with different credentials in the same run.
 export
-altTestSecret : Array Int
-altTestSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)
+altTestSecret : Bytes
+altTestSecret = B.fromU8Array (arrayMakeWith 32 (i => U8.truncate (i * 7 + 1)))
 
 export
 testNonce : Array Int

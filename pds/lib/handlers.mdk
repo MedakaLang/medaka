@@ -81,6 +81,7 @@ import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
 import string.{fromUtf8, join, split, startsWith, toInt, toLower, toUtf8}
+import string.{utf8ByteLength}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.blockstore.{blockStoreGet}
@@ -118,6 +119,7 @@ import lib.repo.{
   repoApplyWrites,
   validateCollection,
 }
+import lib.repo.{blockBytesChecked}
 import lib.credential.{
   CredentialRecord,
   LoginOutcome(..),
@@ -506,6 +508,19 @@ encodeRecord = encodeRecordField "record"
 recordPath : String -> String -> Array Int
 recordPath collection rkey = toUtf8 "\{collection}/\{rkey}"
 
+-- Door, checked: `lib.repo` takes `Bytes` paths and this module's record
+-- paths are `Array Int`. An element outside 0..255 is refused with the
+-- message `validatePath` gave it when it took `Array Int`.
+repoPathDoor : Array Int -> Result String Bytes
+repoPathDoor path =
+  toResult "repo: path element outside byte range 0..255" (fromArray path)
+
+-- Door: `lib.repo` entries carry `Bytes` paths and this module's path
+-- helpers read `Array Int`. `toArray` is total, so nothing is checked or
+-- masked.
+entriesToArrayDoor : List (Bytes, Cid) -> List (Array Int, Cid)
+entriesToArrayDoor = map ((path, cid) => (toArray path, cid))
+
 -- ── revision derivation ─────────────────────────────────────────────────────
 
 advanceTid : Tid -> Result Response Tid
@@ -533,13 +548,14 @@ currentCommitCid : Repo -> Cid
 currentCommitCid repo = repoCommitCid (repoLatestCommit repo)
 
 currentRecordCid : Array Int -> Repo -> Result Response (Option Cid)
-currentRecordCid path repo = match repoLookup path repo
-  Err message => Err (invalidRequest "Repository read rejected: \{message}")
-  Ok None => Ok None
-  Ok (Some value) => match dagCborEncode value
-    Err message =>
-      Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
-    Ok bytes => Ok (Some (cidForDagCborDoor (toArray bytes)))
+currentRecordCid path repo =
+  match andThen (repoPathDoor path) (key => repoLookup key repo)
+    Err message => Err (invalidRequest "Repository read rejected: \{message}")
+    Ok None => Ok None
+    Ok (Some value) => match dagCborEncode value
+      Err message =>
+        Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
+      Ok bytes => Ok (Some (cidForDagCborDoor (toArray bytes)))
 
 checkSwapCommit : Json -> Repo -> Result Response Unit
 checkSwapCommit body repo = match get "swapCommit" body
@@ -645,7 +661,8 @@ applyCreateRecord account store body = do
   () <- checkSwapCommit body repo
   () <- checkSwapRecord body path repo
   bytes <- encodeRecord record
-  mutation <- admitMutation (repoCreate path record rev repo)
+  mutation <- admitMutation
+    (andThen (repoPathDoor path) (key => repoCreate key record rev repo))
   Ok (
     repoMutationState mutation,
     writeOutput
@@ -672,8 +689,9 @@ applyPutRecord account store body = do
   bytes <- encodeRecord record
   existing <- currentRecordCid path repo
   let transition = match existing
-    None => repoCreate path record rev repo
-    Some _ => repoUpdate path record rev repo
+    None => andThen (repoPathDoor path) (key => repoCreate key record rev repo)
+    Some _ =>
+      andThen (repoPathDoor path) (key => repoUpdate key record rev repo)
   mutation <- admitMutation transition
   Ok (
     repoMutationState mutation,
@@ -714,7 +732,8 @@ applyDeleteRecord account store body = do
     None => Ok (repo, deleteOutput (repoLatestCommit repo))
     Some _ => do
       rev <- nextRevision repo
-      mutation <- admitMutation (repoDelete path rev repo)
+      mutation <- admitMutation
+        (andThen (repoPathDoor path) (key => repoDelete key rev repo))
       Ok (
         repoMutationState mutation,
         deleteOutput (repoMutationCommit mutation),
@@ -770,8 +789,9 @@ batchElement did rev auto element = do
         derived <- autoRkey rev auto
         Ok (derived, auto + 1)
     bytes <- encodeRecordField "value" record
+    key <- batchPathDoor (recordPath collection rkey)
     Ok (
-      RepoWriteCreate (recordPath collection rkey) record,
+      RepoWriteCreate key record,
       batchResult "createResult" did collection rkey (cidForDagCborDoor bytes),
       nextAuto,
     )
@@ -779,15 +799,17 @@ batchElement did rev auto element = do
     rkey <- requiredString "rkey" element
     record <- requireRecordField "value" element
     bytes <- encodeRecordField "value" record
+    key <- batchPathDoor (recordPath collection rkey)
     Ok (
-      RepoWriteUpdate (recordPath collection rkey) record,
+      RepoWriteUpdate key record,
       batchResult "updateResult" did collection rkey (cidForDagCborDoor bytes),
       auto,
     )
   else if kind == applyWritesType "delete" then do
     rkey <- requiredString "rkey" element
+    key <- batchPathDoor (recordPath collection rkey)
     Ok (
-      RepoWriteDelete (recordPath collection rkey),
+      RepoWriteDelete key,
       jObject [("$type", JString (applyWritesType "deleteResult"))],
       auto,
     )
@@ -795,6 +817,17 @@ batchElement did rev auto element = do
     Err
       (invalidRequest
         "Every 'writes' element must be a \{applyWritesType "create"}, \{applyWritesType "update"} or \{applyWritesType "delete"}")
+
+{- | Door, checked: `repoPathDoor` for a batch element, refused in the
+   envelope `admitMutation` gave the same message when `repoApplyWrites` took
+   `Array Int` paths. Every path here is `recordPath`'s UTF-8, so the refusal
+   cannot fire; if it did, it would fire before the elements after it are
+   parsed rather than after. -}
+batchPathDoor : Array Int -> Result Response Bytes
+batchPathDoor path =
+  mapErr
+    (message => invalidRequest "Repository write rejected: \{message}")
+    (repoPathDoor path)
 
 {- | Every element's operation and result row, plus the rkey-less-create
    counter left over at the end — the count the commit revision has to clear
@@ -885,7 +918,10 @@ applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
   let accountUsedBytes = storeBlobBytes store
   ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
-  next <- match storePutBlob (blobRefCid ref) mimeType bytes store
+  let stored = do
+    checked <- blockBytesChecked bytes
+    storePutBlob (blobRefCid ref) mimeType checked store
+  next <- match stored
     Err message =>
       Err (internalError "Admitted blob could not be stored: \{message}")
     Ok value => Ok value
@@ -1057,7 +1093,7 @@ lookupRecord : Array Int -> Repo -> Result Response (Option DagCbor)
 lookupRecord path repo =
   mapErr
     (message => invalidRequest "Repository read rejected: \{message}")
-    (repoLookup path repo)
+    (andThen (repoPathDoor path) (key => repoLookup key repo))
 
 {- | Decode the records of an ALREADY-SELECTED page, and no others.
 
@@ -1101,10 +1137,20 @@ afterKey key =
   let width = arrayLength key
   arrayMakeWith (width + 1) (i => if i == width then 0 else key[i])
 
+-- Door, checked: MST range bounds are `Bytes` and this module's record paths
+-- are `Array Int`. `mstRange` took any `Array Int` and had no refusal, so an
+-- out-of-range element panics rather than bounding the read at a byte no key
+-- holds.
+rangeKeyDoor : Array Int -> Bytes
+rangeKeyDoor key =
+  optionOrPanic
+    "mst: range key element outside byte range 0..255"
+    (fromArray key)
+
 -- | Read the one entry sorting at or after `from`, and nothing behind it.
 seekFrom : Option (Array Int) -> MstRangeQuery
 seekFrom from = MstRangeQuery {
-  start = from,
+  start = map rangeKeyDoor from,
   prefix = None,
   reverse = False,
   limit = Some 1,
@@ -1125,15 +1171,16 @@ pageRkeys ((path, cid) :: rest) = match splitRecordPath path
    one entry per collection and steps over every record inside one — the cost
    is the collections, not the repository. -}
 repoCollections : Repo -> Option (Array Int) -> List String -> List String
-repoCollections repo from seen = match repoEntriesRange (seekFrom from) repo
-  [] => reverseOnto seen []
-  (path, _) :: _ => match splitRecordPath path
-    Some (collection, _) =>
-      repoCollections
-        repo
-        (Some (afterPrefix (collectionPrefix collection)))
-        (collection :: seen)
-    None => repoCollections repo (Some (afterKey path)) seen
+repoCollections repo from seen =
+  match entriesToArrayDoor (repoEntriesRange (seekFrom from) repo)
+    [] => reverseOnto seen []
+    (path, _) :: _ => match splitRecordPath path
+      Some (collection, _) =>
+        repoCollections
+          repo
+          (Some (afterPrefix (collectionPrefix collection)))
+          (collection :: seen)
+      None => repoCollections repo (Some (afterKey path)) seen
 
 reverseOnto : List a -> List a -> List a
 reverseOnto [] acc = acc
@@ -1229,8 +1276,7 @@ lastRkey fallback (_ :: rest) = lastRkey fallback rest
    and the write endpoints apply. -}
 requireCollectionSyntax : String -> Result Response Unit
 requireCollectionSyntax collection =
-  let bytes = toUtf8 collection
-  match validateCollection bytes (arrayLength bytes)
+  match validateCollection (encodeUtf8 collection) (utf8ByteLength collection)
     Err message =>
       Err
         (invalidRequest
@@ -1253,13 +1299,15 @@ applyListRecords account store params = do
   -- read stops at that bound inside the tree, so selection reaches no further
   -- into the collection than the page it answers with.
   let query = MstRangeQuery {
-    start = map (recordPath collection) cursor,
-    prefix = Some (collectionPrefix collection),
+    start = map (rkey => rangeKeyDoor (recordPath collection rkey)) cursor,
+    prefix = Some (rangeKeyDoor (collectionPrefix collection)),
     reverse = not ascending,
     limit = Some (limit + 2),
   }
   let remaining =
-    dropCursorEntry cursor (pageRkeys (repoEntriesRange query repo))
+    dropCursorEntry
+      cursor
+      (pageRkeys (entriesToArrayDoor (repoEntriesRange query repo)))
   let probe = take (limit + 1) remaining
   let keys = take limit probe
   page <- pageRecords repo keys
@@ -1378,7 +1426,7 @@ applyGetRepo account store params = do
   () <- rejectUnimplementedParam "since" params
   match repoExportCar repo
     Err message => Err (invalidRequest "Repository export rejected: \{message}")
-    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
 
 -- ── com.atproto.sync.getLatestCommit ────────────────────────────────────────
 
@@ -1420,7 +1468,7 @@ applyGetBlob account store params = do
       let mimeType = match storeBlobMimeType cid store
         None => "application/octet-stream"
         Some declared => declared
-      Ok (blobOkResponse mimeType bytes)
+      Ok (blobOkResponse mimeType (toArray bytes))
 
 -- ── com.atproto.sync.listBlobs ──────────────────────────────────────────────
 
@@ -1566,7 +1614,7 @@ applyGetRepoStatus account store params = do
    answer can name blocks the reference's does not, and names them in a
    different order, while never omitting one the reference does — omission is
    the direction that would make the proof unsound, and the gate
-   (`pds/test/repo_vectors.sh`) asserts against it on every probe. The
+   (`pds/test/repo_vectors_test.mdk`) asserts against it on every probe. The
    reference's own `verifyProofs`/`verifyRecords` accept both answers
    identically, which is what makes the difference admissible (#3007). Order is
    not part of the claim.
@@ -1591,6 +1639,14 @@ blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
 blockRowsToBytesDoor =
   map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
 
+-- Door, checked: MST keys are `Bytes` and this module's record paths are
+-- `Array Int`. An out-of-range element is refused with the message
+-- `mstCoveringProofBlocks` returned for it when it took `Array Int`.
+mstProofDoor : Array Int -> Repo -> Result String (List (Cid, Bytes))
+mstProofDoor path repo = match fromArray path
+  None => Err "mst: key element outside byte range 0..255"
+  Some key => mstCoveringProofBlocks [key] (repoTree repo)
+
 applySyncGetRecord : Account ->
   Store ->
   List QueryParam ->
@@ -1602,18 +1658,21 @@ applySyncGetRecord account store params = do
   collection <- requiredParam "collection" params
   rkey <- requiredParam "rkey" params
   let path = recordPath collection rkey
-  proof <- match mstCoveringProofBlocks [path] (repoTree repo)
+  proof <- match mstProofDoor path repo
     Err message =>
       Err (invalidRequest "Record key is not admissible: \{message}")
     Ok blocks => Ok blocks
   found <- mapErr
     (message => internalError "Repository lookup failed: \{message}")
-    (repoRecordCid path repo)
+    (andThen (repoPathDoor path) (key => repoRecordCid key repo))
   record <- recordProofBlock found repo
   let commit = repoLatestCommit repo
   let commitCid = repoCommitCid commit
-  let blocks = (commitCid, repoCommitSignedBytes commit) :: proof ++ record
-  match carEncode [commitCid] (blockRowsToBytesDoor blocks)
+  let blocks =
+    [(commitCid, repoCommitSignedBytes commit)]
+      ++ proof
+      ++ blockRowsToBytesDoor record
+  match carEncode [commitCid] blocks
     Err message => Err (invalidRequest "Record proof rejected: \{message}")
     Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
 
@@ -1892,22 +1951,20 @@ refreshGraceSeconds = 7200
    the token that replaced it — distinct values. They differ from each other in
    audience and lifetime, which is what stops either being presented as the
    other. -}
-mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
+mintSessionTokens : Account -> Bytes -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
   let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
-  -- Masked, as before: the old HMAC key path masked this secret too.
-  let key = fromArrayAssumeByteDomain secret
   (
     mintToken
-      key
+      secret
       (accountDid account)
       (accessAudience account)
       tokenId
       issued
       (issued + accessTokenSeconds),
     mintToken
-      key
+      secret
       (accountDid account)
       (refreshAudience account)
       tokenId
@@ -2040,7 +2097,7 @@ applyRefreshSession account context presented store =
       let (access, refresh) = mintSessionTokens account secret context
       let rotation =
         storeSessionRotate
-          presented
+          (fromArrayAssumeByteDomain presented)
           (sessionFingerprint access)
           (sessionFingerprint refresh)
           (sessionExpiry context)
@@ -2066,7 +2123,8 @@ applyDeleteSession : RequestContext ->
   Result Response (Store, Json)
 applyDeleteSession context presented store =
   let pruned = storeSessionsPrune context.nowSeconds store
-  match storeSessionClose context.nowSeconds presented pruned
+  let fingerprint = fromArrayAssumeByteDomain presented
+  match storeSessionClose context.nowSeconds fingerprint pruned
     None => Err (invalidToken "Token could not be verified")
     Some next => Ok (next, jObject [])
 
