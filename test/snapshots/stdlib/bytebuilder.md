@@ -1,5 +1,5 @@
 # META
-source_lines=521
+source_lines=525
 stages=DESUGAR,MARK
 # SOURCE
 {- | A buffer for building byte arrays.
@@ -25,9 +25,11 @@ import byteparser.{
   leU16, leU32, leU64
 }
 import bytes.{
-  Bytes, adoptByteBlockUnsafe, fromArrayAssumeByteDomain, fromByteBlockPrefix,
-  lendByteBlockUnsafe, encodeUtf8, toArray
+  Bytes, fromArrayAssumeByteDomain, fromByteBlockPrefix, lendByteBlockUnsafe,
+  encodeUtf8, toArray
 }
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
 import u8 as U8
 import u16 as U16
 import u32 as U32
@@ -129,19 +131,21 @@ emitBytes src (Builder backing len) =
   let () = byteBlockBlit srcBlock 0 !backing !len n
   len := needed
 
-{- | The builder's backing block as a `Bytes`, and the number of bytes
-   emitted so far, without copying.
+{- | The builder's backing block, and the number of bytes emitted so far,
+   without copying.
 
-   The byte string is the builder's own block, so it may be longer than the
-   count, and bytes at or past the count are unwritten scratch. A later
-   emit writes into that block or replaces it, so read the counted bytes
-   before emitting again. `buildBytes` is the copying form.
+   The block is the builder's own, so it may be longer than the count, and
+   bytes at or past the count are unwritten scratch. A later emit writes
+   into that block or replaces it, so read the counted bytes before emitting
+   again. It is a `MutBytes` rather than a `Bytes` because it changes under
+   the builder: it cannot be compared, hashed or kept as a value.
+   `buildBytes` is the copying form.
 
    > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}
 export
-builderParts : Builder -> (Bytes, Int)
-builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
+builderParts : Builder -> (MutBytes, Int)
+builderParts (Builder backing len) = (MB.adoptByteBlockUnsafe !backing, !len)
 
 -- | Appends a `U16` as two bytes, most significant byte first. The inverse
 -- of `byteparser.beU16`.
@@ -526,7 +530,9 @@ prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "reverse" false "arrayReverse"))))
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false) (mem "beU16" false) (mem "beU32" false) (mem "beU64" false) (mem "leU16" false) (mem "leU32" false) (mem "leU64" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseAlias ("mut_bytes") "MB"))
+(DUse false (UseGroup ("mut_bytes") ((mem "MutBytes" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DUse false (UseAlias ("u16") "U16"))
 (DUse false (UseAlias ("u32") "U32"))
@@ -546,8 +552,8 @@ prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
 (DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
 (DTypeSig true "emitBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitBytes" ((PVar "src") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "srcBlock") (EApp (EVar "lendByteBlockUnsafe") (EVar "src"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "srcBlock"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "growTo") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EVar "needed")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "srcBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
-(DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "Bytes") (TyCon "Int"))))
-(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
+(DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "MutBytes") (TyCon "Int"))))
+(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "MB.adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
 (DTypeSig true "emitU16BE" (TyFun (TyCon "U16") (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitU16BE" ((PVar "v") (PVar "buf")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "U16.toInt") (EVar "v"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "n")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "n")) (EVar "buf")))))
 (DTypeSig true "emitU24BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
@@ -587,7 +593,9 @@ prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
 # MARK
 (DUse false (UseGroup ("array") ((mem "reverse" false "arrayReverse"))))
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false) (mem "beU16" false) (mem "beU32" false) (mem "beU64" false) (mem "leU16" false) (mem "leU32" false) (mem "leU64" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseAlias ("mut_bytes") "MB"))
+(DUse false (UseGroup ("mut_bytes") ((mem "MutBytes" false))))
 (DUse false (UseAlias ("u8") "U8"))
 (DUse false (UseAlias ("u16") "U16"))
 (DUse false (UseAlias ("u32") "U32"))
@@ -607,8 +615,8 @@ prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
 (DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
 (DTypeSig true "emitBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitBytes" ((PVar "src") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "srcBlock") (EApp (EVar "lendByteBlockUnsafe") (EVar "src"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "srcBlock"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "growTo") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EVar "needed")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "srcBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
-(DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "Bytes") (TyCon "Int"))))
-(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
+(DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "MutBytes") (TyCon "Int"))))
+(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "MB.adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
 (DTypeSig true "emitU16BE" (TyFun (TyCon "U16") (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitU16BE" ((PVar "v") (PVar "buf")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "U16.toInt") (EVar "v"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EApp (EApp (EVar "shiftRight") (EVar "n")) (ELit (LInt 8)))) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitLowByte") (EVar "n")) (EVar "buf")))))
 (DTypeSig true "emitU24BE" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))

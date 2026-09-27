@@ -46,7 +46,7 @@
    corpus it claims to copy — which is why this driver takes that corpus as its
    one argument. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, toArray}
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
 import json.{Json(..), jObject, get, parse}
@@ -569,7 +569,7 @@ routeText (Some table) did = match appviewRouteFor table did
 proxyOutcome : Option AppviewTable -> ProxyDecision -> String
 proxyOutcome _ NotProxied = "decision=not-proxied signed=none"
 proxyOutcome _ (ProxyRefused response) =
-  let bytes = serializeResponse response
+  let bytes = toArray (serializeResponse response)
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
 proxyOutcome table (ProxyAdmitted admission) =
   "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{fromUtf8 admission.body} port=\{routeText table admission.audience}"
@@ -979,7 +979,7 @@ serviceClaimText claims = "\{claimText claims} exp=\{expiryText claims.exp}"
 serviceAuthOutcome : ServiceAuthDecision -> String
 serviceAuthOutcome NotServiceAuth = "decision=not-service-auth signed=none"
 serviceAuthOutcome (ServiceAuthRefused response) =
-  let bytes = serializeResponse response
+  let bytes = toArray (serializeResponse response)
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
 serviceAuthOutcome (ServiceAuthMinted claims) =
   "decision=minted \{serviceClaimText claims}"

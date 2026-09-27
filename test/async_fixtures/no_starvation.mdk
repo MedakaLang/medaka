@@ -11,6 +11,7 @@ import net_async as A
 import net.{Connection, Listener, listen, listenPort, connect}
 import time.{millis}
 import string.{fromUtf8}
+import bytes.{Bytes, toArray}
 
 spins : Int
 spins = 200000
@@ -44,8 +45,8 @@ client port n = defer
       _ <- A.close c
       deferPure (showR rr ++ " early=" ++ display (!n < spins))
 
-showR : Result String (Array Int) -> String
-showR (Ok bs) = fromUtf8 bs
+showR : Result String Bytes -> String
+showR (Ok bs) = fromUtf8 (toArray bs)
 showR (Err e) = "Err " ++ e
 
 main : Async <Clock, Net, Stdout> Unit

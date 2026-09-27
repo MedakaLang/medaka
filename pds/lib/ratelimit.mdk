@@ -42,6 +42,7 @@
    caller refuses the request. Falling back would make the fallback bucket
    the reward for violating the ceiling. -}
 
+import bytes as B
 import http.{Header, headerName, headerValue, makeHeader}
 import list.{head, reverse}
 import map.{Map(..), get, has, set, size}
@@ -388,7 +389,7 @@ isXffHeader h = headerName h == "x-forwarded-for"
    allowance by sending its address twice. -}
 xffLastHop : List Header -> Result String (Option String)
 xffLastHop headers = match head (reverse (filter isXffHeader headers))
-  Some nearest => lastHopToken (headerValue nearest)
+  Some nearest => lastHopToken (B.toArray (headerValue nearest))
   None => Ok None
 
 {- | The nearest field's last hop, read from the RAW header bytes.
@@ -483,7 +484,7 @@ intHeader : String -> Int -> Header
 intHeader name value =
   resultOrPanic
     "ratelimit: internal rate-limit header error"
-    (makeHeader name (toUtf8 "\{value}"))
+    (makeHeader name (B.encodeUtf8 "\{value}"))
 
 -- | What a login refused because too many password derivations are already
 -- running is told. It is this server that is busy, not this identity over an

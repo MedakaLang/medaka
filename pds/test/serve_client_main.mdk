@@ -9,6 +9,7 @@
    that line and nothing else. -}
 
 import array.{concat, sliceClamped}
+import bytes as B
 import bytes.{fromArrayAssumeByteDomain}
 import hex as Hex
 import lib.cid.{cidForRaw, cidToString}
@@ -125,10 +126,10 @@ recvAtLeast conn buf need =
   else match recv conn 65536
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_client: connection closed mid-response"
       else
-        recvAtLeast conn (appendBytes buf chunk) need
+        recvAtLeast conn (appendBytes buf (B.toArray chunk)) need
 
 {- | Reads one complete HTTP response starting at the front of `pending`
    (bytes already buffered from a previous read, `[||]` for a fresh
@@ -155,10 +156,10 @@ readTypedResponse conn pending = match findHeaderEnd pending 0
   None => match recv conn 4096
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_client: connection closed before response headers"
       else
-        readTypedResponse conn (appendBytes pending chunk)
+        readTypedResponse conn (appendBytes pending (B.toArray chunk))
 
 {- | Same read as `readTypedResponse`, but keeps the raw header block text
    instead of parsing only the status and content type out of it — for the
@@ -184,10 +185,10 @@ readHeaderResponse conn pending = match findHeaderEnd pending 0
   None => match recv conn 4096
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_client: connection closed before response headers"
       else
-        readHeaderResponse conn (appendBytes pending chunk)
+        readHeaderResponse conn (appendBytes pending (B.toArray chunk))
 
 -- | The same read for the cases that do not care what media type came back.
 readResponse : Connection * ->
@@ -203,7 +204,7 @@ mustConnect port =
   resultOrPanic "serve_client: connect failed" (connect "127.0.0.1" port)
 
 mustSend : Connection * -> Array Int -> <Net> Unit
-mustSend conn bytes = match sendAll conn bytes
+mustSend conn bytes = match sendAll conn (fromArrayAssumeByteDomain bytes)
   Ok () => ()
   Err message => panic "serve_client: send failed: \{message}"
 
@@ -634,7 +635,7 @@ runOvercap port =
   --
   -- When a 413 IS read back it is graded on the allow-origin header too: this
   -- is the other `handleBytes` Err arm, and it reaches no `handle` exit either.
-  let sent = sendAll conn request
+  let sent = sendAll conn (fromArrayAssumeByteDomain request)
   let result = readHeaderResponse conn [||]
   let () = match result
     Ok (got, headerText, _, _) => corsVerdict "OVERCAP" 413 got headerText
@@ -665,8 +666,8 @@ runIdle port =
     Ok bytes =>
       report
         "IDLE"
-        (arrayLength bytes == 0)
-        "server closed after \{floatToString elapsed}s (\{intToString (arrayLength bytes)} bytes)"
+        (B.isEmpty bytes)
+        "server closed after \{floatToString elapsed}s (\{intToString (B.length bytes)} bytes)"
     Err message =>
       report
         "IDLE"
@@ -1304,7 +1305,7 @@ holdUnframedGo port count held =
     held
   else
     let conn = mustConnect port
-    let _ = sendAll conn unterminatedHeaders
+    let _ = sendAll conn (fromArrayAssumeByteDomain unterminatedHeaders)
     holdUnframedGo port (count - 1) (conn :: held)
 
 -- | How long one probe waits for its own answer, and how long the retry
@@ -1326,7 +1327,7 @@ probeOnce port = match connect "127.0.0.1" port
   Err _ => None
   Ok conn =>
     let _ = setTimeout conn probeReadCeiling
-    let _ = sendAll conn (getRequest atprotoDidPath)
+    let _ = sendAll conn (fromArrayAssumeByteDomain (getRequest atprotoDidPath))
     let result = readResponse conn [||]
     let () = ignoreResult (close conn)
     match result
@@ -1401,7 +1402,7 @@ holdBodyStallGo port count held =
     held
   else
     let conn = mustConnect port
-    let _ = sendAll conn declaredBodyNeverSent
+    let _ = sendAll conn (fromArrayAssumeByteDomain declaredBodyNeverSent)
     holdBodyStallGo port (count - 1) (conn :: held)
 
 {- | #2815: a stranger holds `sockets` connections open, each having terminated

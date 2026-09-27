@@ -667,6 +667,8 @@ A mutable string of bytes, fixed at its allocated length.
 - [`blit`](mut_bytes.md#blit)
 - [`freeze`](mut_bytes.md#freeze)
 - [`thaw`](mut_bytes.md#thaw)
+- [`adoptByteBlockUnsafe`](mut_bytes.md#adoptbyteblockunsafe)
+- [`lendByteBlockUnsafe`](mut_bytes.md#lendbyteblockunsafe)
 
 ## [`net`](net.md)
 
@@ -703,8 +705,6 @@ TCP connections and name resolution.
 - [`accept`](net_async.md#accept)
 - [`recv`](net_async.md#recv)
 - [`recvWithin`](net_async.md#recvwithin)
-- [`recvBytes`](net_async.md#recvbytes)
-- [`recvBytesWithin`](net_async.md#recvbyteswithin)
 - [`send`](net_async.md#send)
 - [`sendAll`](net_async.md#sendall)
 - [`sendAllWithin`](net_async.md#sendallwithin)

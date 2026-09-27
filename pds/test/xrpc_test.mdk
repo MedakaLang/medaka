@@ -1,6 +1,6 @@
 {- | Focused structural XRPC registry, routing, and canonical-error tests. -}
 
-import bytes.{fromArray}
+import bytes.{fromArray, toArray}
 import http.{
   maxJsonBodyBytes,
   maxRawBodyBytes,
@@ -113,7 +113,7 @@ failureValueMatches status code message failed =
   xrpcFailureStatus failed == status
     && xrpcFailureError failed == code
     && xrpcFailureMessage failed == message
-    && serializeResponse (xrpcFailureResponse failed)
+    && toArray (serializeResponse (xrpcFailureResponse failed))
       == expectedFailure status code message
 
 failureMatches : Int -> String -> String -> Request -> Bool

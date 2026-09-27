@@ -17,8 +17,9 @@
    stops one byte early truncates an upstream's answer with no error
    anywhere. -}
 
-import array.{sliceClamped}
-import string.{fromUtf8, toUtf8, repeat}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, sliceClamped, toArray}
+import string.{fromUtf8, repeat}
 import test.{
   expectAtMost,
   expectEach,
@@ -40,15 +41,15 @@ import lib.httpclient.{
 -- by the zero-length final chunk. Built and fully materialized BEFORE any
 -- `allocBytes` snapshot is taken, so the string concatenation this helper
 -- performs is never inside the measured window.
-chunkedResponseOf : Int -> Array Int
+chunkedResponseOf : Int -> Bytes
 chunkedResponseOf n =
-  toUtf8
+  encodeUtf8
     ("HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
       ++ repeat n "3\r\nabc\r\n"
       ++ "0\r\n\r\n")
 
 -- | Bytes allocated by parsing exactly one already-built chunked response.
-allocForParse : Array Int -> <IO> Float
+allocForParse : Bytes -> <IO> Float
 allocForParse input =
   let before = allocBytes ()
   let result = parseResponse input
@@ -93,100 +94,92 @@ chunkedBody =
 
 test "transfer coding is ASCII case-insensitive" =
   let input =
-    toUtf8
+    encodeUtf8
       "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
   expectOkThen
-    (response => expectEqual "hello" (fromUtf8 (responseBody response)))
+    (response =>
+      expectEqual "hello" (fromUtf8 (toArray (responseBody response))))
     (parseResponse input)
 
 test "unsupported transfer coding remains rejected" =
   expectTrue
     (isErr
       (parseResponse
-        (toUtf8 "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello")))
-
-test "a chunk body byte outside 0..255 is rejected, not a panic" =
-  -- Regression for the bytebuilder.emitU8 masking->panicking change: an
-  -- out-of-range byte in a chunked response body must reach the caller as
-  -- an Err, never abort the process (Medaka has no catchable panics).
-  expectTrue
-    (isErr
-      (parseResponse
-        (toUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n1\r\n"
-          ++ [|511|]
-          ++ toUtf8 "\r\n0\r\n\r\n")))
+        (encodeUtf8 "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello")))
 
 test "malformed response keeps the legacy PDS diagnostic and class" =
-  match parseResponseClassified [||]
+  match parseResponseClassified (encodeUtf8 "")
     Err (HttpClientMalformed message) =>
       expectEqual "httpclient: truncated status line; expected CRLF" message
     _ => fail "expected an HttpClientMalformed classification"
 
 test "resource response keeps the legacy PDS diagnostic and class" =
   let input =
-    toUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n100001\r\n"
+    encodeUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n100001\r\n"
   match parseResponseClassified input
     Err (HttpClientResourceExcess message) =>
       expectEqual "httpclient: chunk size exceeds resource limit" message
     _ => fail "expected an HttpClientResourceExcess classification"
 
 test "a response that declares its length ends where it said it would" =
-  let bytes = toUtf8 (declaredResponse "hello")
-  expectEqual (Some (arrayLength bytes)) (responseBoundary bytes)
+  let bytes = encodeUtf8 (declaredResponse "hello")
+  expectEqual (Some (B.length bytes)) (responseBoundary bytes)
 
 test "a declared body one byte short of its length has not ended" =
   -- The missing byte is PRESENT in the array and outside `avail`, which is
   -- what a still-filling backing array looks like: a scan that read it would
   -- report a response its caller has not received.
-  let bytes = toUtf8 (declaredResponse "hello")
-  expectEqual None (responseBoundaryWithin bytes (arrayLength bytes - 1))
+  let bytes = encodeUtf8 (declaredResponse "hello")
+  expectEqual None (responseBoundaryWithin bytes (B.length bytes - 1))
 
 test "a header section that has not arrived has not ended" =
   expectEqual
     None
-    (responseBoundary (toUtf8 "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n"))
+    (responseBoundary (encodeUtf8 "HTTP/1.1 200 OK\r\ncontent-length: 5\r\n"))
 
 test "a declared empty body ends at the end of the header section" =
-  let bytes = toUtf8 "HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n"
-  expectEqual (Some (arrayLength bytes)) (responseBoundary bytes)
+  let bytes = encodeUtf8 "HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n"
+  expectEqual (Some (B.length bytes)) (responseBoundary bytes)
 
 test "a 204 that declares no framing at all ends at the end of its headers" =
-  let bytes = toUtf8 "HTTP/1.1 204 No Content\r\nx-note: none\r\n\r\n"
-  expectEqual (Some (arrayLength bytes)) (responseBoundary bytes)
+  let bytes = encodeUtf8 "HTTP/1.1 204 No Content\r\nx-note: none\r\n\r\n"
+  expectEqual (Some (B.length bytes)) (responseBoundary bytes)
 
 test "a peer that sent on past its response ends where the response did" =
   let framed = declaredResponse "hello"
-  let bytes = toUtf8 (framed ++ "HTTP/1.1 200 OK\r\n")
+  let bytes = encodeUtf8 (framed ++ "HTTP/1.1 200 OK\r\n")
   expectEqual (Some (stringLength framed)) (responseBoundary bytes)
 
 test "a chunked response ends after its zero-length chunk and trailers" =
-  let bytes = toUtf8 chunkedBody
-  expectEqual (Some (arrayLength bytes)) (responseBoundary bytes)
+  let bytes = encodeUtf8 chunkedBody
+  expectEqual (Some (B.length bytes)) (responseBoundary bytes)
 
 test "a chunked response still short of its terminator has not ended" =
-  let bytes = toUtf8 chunkedBody
+  let bytes = encodeUtf8 chunkedBody
   -- Everything but the trailer section's final CRLF: the terminating chunk
   -- has arrived and the message has not.
-  expectEqual None (responseBoundaryWithin bytes (arrayLength bytes - 2))
+  expectEqual None (responseBoundaryWithin bytes (B.length bytes - 2))
 
 test "a chunked response missing its terminating chunk has not ended" =
   let bytes =
-    toUtf8
+    encodeUtf8
       "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n"
   expectEqual None (responseBoundary bytes)
 
 test "decoding a chunked response at its boundary yields the whole body" =
-  let bytes = toUtf8 chunkedBody
+  let bytes = encodeUtf8 chunkedBody
   match responseBoundary bytes
     None => fail "the chunked response boundary did not resolve"
     Some at =>
       expectOkThen
-        (response => expectEqual "abcde" (fromUtf8 (responseBody response)))
+        (response =>
+          expectEqual "abcde" (fromUtf8 (toArray (responseBody response))))
         (parseResponse (sliceClamped 0 at bytes))
 
 test "a response declaring no length of its own ends only at the close" =
   -- Correct HTTP/1.0-style framing, not a shortfall: these bytes are a whole
   -- message and there is still no boundary in them, so a reader must go on
   -- until its peer closes.
-  let bytes = toUtf8 "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\r\nhello"
+  let bytes =
+    encodeUtf8 "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\n\r\nhello"
   expectEqual None (responseBoundary bytes)
