@@ -520,35 +520,28 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 #           discharged only by a lowering that stops materialising one branch per
 #           head with the full wildcard tail (e.g. sharing the guard chain), which
 #           is a codegen change, not a data-structure swap.
-#   conlocal — the CONSTRAINED-BINDING shape's WHOLE-RUN allocation (issue #2030, the
-#           same `localPinPairs` mechanism its `conlocal:typecheck` / `conlocal:elaborate`
-#           OP rows are ledgered for in KNOWN_SLOW_OPS). Until #2705 the check path
-#           did not solve, so the typecheck stage's quadratic ALLOC sat under the
-#           ceiling and only elaborate's showed: the ledger note for the op row
-#           records total alloc r1 2.57 r2 2.89. #2705 makes every driver mark and
-#           solve — the typecheck stage now walks the same pinned-binding channels
-#           elaborate always did — and the whole-run ratio crossed the line by the
-#           width of that walk. MEASURED on this box, net alloc after BASE_ALLOC
-#           subtraction, N=400/800/1600, branch `typecheck-rearch-2` vs its base
-#           `2a0a1e0f3` (the base binary read 2.56 / 2.87 in the same session):
-#               561.7 -> 1500.9 -> 4504.0 MB   r1 2.67  r2 3.00
-#           OBSERVED RED before ledgering, verbatim:
+#   conlocal — HISTORICAL, DRAINED 2026-09-26. Was the CONSTRAINED-BINDING shape's
+#           WHOLE-RUN allocation (issue #2030), attributed to `localPinPairs`
+#           (`compiler/types/typecheck.mdk`) walking constrained top-level bindings
+#           times their locals — the same mechanism its `conlocal:typecheck` /
+#           `conlocal:elaborate` OP rows were ledgered for in KNOWN_SLOW_OPS.
+#           `localPinPairs` and the local-dict pin it served are DELETED tree-wide
+#           under #1082 (dictionary-abstracted locals, owner ruling D1): there is no
+#           pin bookkeeping left to walk. MEASURED on this box, net alloc after
+#           BASE_ALLOC subtraction, N=400/800/1600, at the #1082 landing:
+#               379.1 -> 863.9 MB (band r2 2.47) — LINEAR, PROMOTED and removed.
+#           Prior history, for context: OBSERVED RED before first ledgering:
 #               $ PERF_ONLY=conlocal sh test/diff_compiler_perf_scaling.sh
 #               conlocal  400  561.7 MB  1500.9 MB  4504.0 MB  2.67  3.00 \
 #                 ** SUPERLINEAR (ALLOC) ** (r2 > 3.0x)
-#           CEILING 3.30 = the measured r2 (3.00) + 10% (S-2's headroom convention),
-#           capped well under the 4.0 a pure quadratic converges to, so a worse
-#           regression on this shape still reds the row. FIXED 2.60 is the file-wide
-#           convention. It self-drains with the op rows: indexing the pin bookkeeping
-#           (#2030) drops all three under 2.60 and this row PROMOTES, demanding
-#           removal. A per-binding solve memo (#2719) does not drain it — the walk is
-#           per pinned binding, not per analyze.
+#           CEILING was 3.30 (measured r2 3.00 + 10%), FIXED 2.60 (file-wide
+#           convention). It self-drained with the two OP rows exactly as this note
+#           predicted: indexing the pin bookkeeping (here, deleting it outright)
+#           drops all three under 2.60 and each row PROMOTES, demanding removal.
 KNOWN_SUPERLINEAR="
 guardwild
-conlocal
 "
 KNOWN_CEIL_guardwild="${KNOWN_CEIL_guardwild:-3.68}";  KNOWN_FIXED_guardwild="${KNOWN_FIXED_guardwild:-2.60}"
-KNOWN_CEIL_conlocal="${KNOWN_CEIL_conlocal:-3.30}";    KNOWN_FIXED_conlocal="${KNOWN_FIXED_conlocal:-2.60}"
 
 # ── PERF_LEDGER_EXTRA: the DELIBERATE-RED SEAM for the ledger branches (#2150) ──
 #
@@ -2460,9 +2453,14 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 # ledgered on the alloc arm — it is under, deterministically, at this band.
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
+#
+# conlocal:typecheck / conlocal:elaborate — HISTORICAL, DRAINED 2026-09-26. Both rode
+# `localPinPairs`, deleted tree-wide under #1082 (dictionary-abstracted locals); with
+# no pin bookkeeping left to walk, both op rows PROMOTED (r2 under 2.60) the same run
+# the WHOLE-RUN alloc row above did. See the `conlocal` bullet above for the mechanism
+# and the alloc measurement; the prose below this var (through the `#2189`/elaborate
+# history) is kept as the record of how each row got here, not a live ledger entry.
 KNOWN_SLOW_OPS="
-conlocal:typecheck
-conlocal:elaborate
 "
 # Ceilings follow this file's op-arm convention (the drained manyifaces:mark /
 # match:resolve / manydefs:typecheck / conlocal:mark entries all used the same pair):
@@ -2472,7 +2470,7 @@ conlocal:elaborate
 # promote me" mark, 1.2 under the measured band, so no drift can false-PROMOTE either
 # row. Op counts are DETERMINISTIC, so these absorb source drift only, never runner
 # noise. Tied to CONLOCAL_N=400 — see that knob before moving the band.
-KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
+# DRAINED 2026-09-26 with the rest of `conlocal` (#1082) — ceiling pair removed.
 #
 # ── #2189: elaborate was quadratic on two independent shapes; ONE ROW LEFT ────
 #
@@ -2582,7 +2580,8 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 # paragraph above already states why a flat percentage is the wrong instrument for
 # an already-quadratic row. 3.31 stands, re-derived and unchanged. Do not "unify"
 # it with the flat-percentage rows; that would loosen it from 3.31 toward 3.5+.
-KNOWN_OCEIL_conlocal_elaborate="3.31";   KNOWN_OFIXED_conlocal_elaborate="2.60"
+# DRAINED 2026-09-26 with `conlocal:typecheck` and the whole-run alloc row (#1082
+# deleted `localPinPairs`) — ceiling pair removed.
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
 # scans are OrdMap-set membership now (uncounted) and `findExports`/provenance are Maps, so

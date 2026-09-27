@@ -97,6 +97,29 @@ route is listed under NOT YET COVERED below; it would add route-kind
 (`RKey`/`RLocal`) visibility that LLVM IR flattens.
 
 ## THE LEDGER -- rows pinned to a KNOWN divergence, newest first
+* s5-two-ifaces-one-type-defaults / -swapped -- #1265 (default selection keyed
+  only by `(method, tag)`, so two same-spelled defaults on different
+  interfaces implemented by one type picked the first-match survivor)
+  FIXED: `EvMethod`/`CMethod` carry the occurrence's interface identity, and
+  every default lookup is keyed by `(ifaceId, method, instance)`, so `sayA`
+  and `sayB` each reach their own interface's default (`A-default|B-default`);
+  `-swapped` pins the same answer with the interfaces declared in the other
+  order.
+* s5-xmod-default-same-spelled-iface -- #1619 (a cross-module interface
+  default silently hijacked by an unrelated same-spelled interface's explicit
+  method at the same head) FIXED by the same identity keying: `dtag` reaches
+  `di`'s own inherited default (7) and `otag` reaches `other`'s explicit body
+  (100), never crossing between the two same-spelled interfaces.
+* s5-xmod-default-sibling-amod-first / -bmod-first -- #1821 (sibling default
+  selection inside a `where`-shaped default body was cross-module
+  method-name first-match, import-order-dependent) FIXED: `dflt` resolves to
+  IA's own default body regardless of which module's same-spelled `dflt` is
+  imported first, printing 71 in both import orders. Drained from
+  `test/must_fail_fixtures/1265-*`, `1619-*`, `1821-*` (deleted at
+  `3580cf589`, s4-identity-keyed-defaults); `test/run_check_agreement_fixtures/accept_1265_
+  two_ifaces_one_type_defaults.mdk` / `accept_1619_xmod_default_same_spelled_
+  iface.mdk` / `accept_1821_xmod_default_sibling_import_order.mdk` are the
+  companion single-file rows in that harness.
 * s-instantiated-reselect-declared / -inferred / -general-sibling /
   -unsatisfiable-rejected -- #1909 (S0, a structured single-subject `=>` context
   committing to ONE impl at abstraction time and reusing it for every
@@ -463,12 +486,15 @@ NOT yet cover:
     refinement the single-evaluator law also binds.
   * §4.1 G1 (uniform dict abstraction at a local binder) for a LOCAL
     (`let`/`where`) constrained binding, as opposed to a top-level one --
-    UNIMPLEMENTED tree-wide (#1082 is the migration vehicle). #1052 (the
-    local-dict pin merging two distinct rigid signature variables) is CLOSED
-    (PR #2023); `g4-where-multi-type.mdk` and `g4-let-multi-type.mdk` now pin
-    its two spellings' current (rejecting) answer, with `g4-multi-type-
-    control.mdk` and the shipped over-rejection row
-    `g4-ground-type-local-over-reject.mdk` (#2032) beside them.
+    landed (#1082): `registerLocalAbs`/`localAbsCandidate` abstract every
+    local whose generalized scheme carries a residual predicate, mirroring
+    `isNonexpansive`'s candidacy shapes. #1052 (the local-dict pin merging two
+    distinct rigid signature variables) is CLOSED (PR #2023, superseded by the
+    pin's deletion under #1082); `g4-where-multi-type.mdk` and
+    `g4-let-multi-type.mdk` pin its two spellings' now-identical accepting
+    answer (3), with `g4-multi-type-control.mdk` (one dictionary shared, 2)
+    and `g4-ground-type-local-two-types.mdk` (#2032, two ground-typed uses of
+    an unannotated local, 1 then True) beside them.
   * The typed dict-passed Core-IR route kinds (`RKey`/`RLocal`, `CDict`), per
     the note above.
   * `run`'s STDERR on any row. The harness grades `check`'s diagnostic code (from

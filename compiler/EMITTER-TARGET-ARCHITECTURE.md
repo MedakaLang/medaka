@@ -154,7 +154,7 @@ open-bug pressure, not by layer.
 | F3 | Interface and type identity on dispatch nodes | the existing `ifaceIdentity` string (`module::Iface`) on `CImplDefault`, extended to `CMethod`, `CDict`, `CImplEntry`, `CImplTagged`; the head type carries its owner module the same way | `core_ir_lower` from declaration identity (`Ident` is already in the AST) | bare-spelling keys in `defaultFnName`/`defaultFnNameW`, `implFnSym`, `distinctKeysAtHead`, `headTagUniqueW` | emitted-symbol half of #1397; #1619; #2055; #1973; the symbol-keying half of #1265 | none for the string form; SC-1 (#2563) upgrades it to the typed key |
 | F4 | Semantic tail sites | tail flag on `CApp`/`CMethod` in tail position, computed once | `core_ir_lower` (the position is syntactic) | per-backend tail rediscovery in `emitAppTail` and its Wasm peer | #1349, #2577 | none |
 | F5 | Runtime types on binders, parameters, and returns | `RTInt`/`RTFloat`/`RTValue` (never `LTy`, never `(ref eq)`) on `CLam` params, `CLet` binders, `CBind` clauses | the #353 plan, unchanged: stamp what typecheck knew at lower time | `inferSigs`, `typeOf`, `paramUseTy`, `staticIsFloat`, `bodyFloatRet`, Wasm `cexprIsFloat`/`refMainKind` | #2545 and the N8 family (EMITTER-SEMANTICS section 9) | none; #353 is adopted as written |
-| F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | typechecker M2 (#2549) for evidence; B-1 (#993) for default-body evidence | route-word hedges, `emitDefaultRKey`, Wasm `implEntryRouteKeyW` recomputation, default synthesis | #1068, #1020, the route half of #1265, #1046 | BLOCKED on M2 and #993. `RNone` stays until #993 lands (ruling 4). X-E (#1403) is the consumer issue and does nothing before M2 |
+| F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | typechecker M2 (#2549) for evidence; B-1 (#993) for default-body evidence | route-word hedges, `emitDefaultRKey` (DELETED, s4-identity-keyed-defaults), Wasm `implEntryRouteKeyW` recomputation, default synthesis | #1068, #1020, the route half of #1265 (FIXED, s4), #1046 | STILL BLOCKED on M2 and #993 overall (no evidence terms on `CMethod`/`CDict` yet), but the ONE sanctioned `RNone` exception this row named — the default-body sibling/super-call guard — is already RETIRED (#1082, ahead of #993): every engine now selects a default through `compiler/types/disposition.mdk`'s table, not `emitDefaultRKey`'s lookup. X-E (#1403) is still the consumer issue for the remaining CMethod/CDict evidence terms and does nothing before M2 |
 | F7 | Capability manifest | a Core-level manifest field extracted before row erasure | effects checker | the reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | the effects manifest producer (EFFECTS sections 7-8) |
 
 **F5 and the N5 scalar slice (2026-09-26).** N5 of the integer epic (#3428)
@@ -251,9 +251,11 @@ Three facts this arc must carry that the old sections did not know:
    produced by lowering from the elaborated AST, which is what both build
    processes have.
 2. **`RNone` is a ruled-in optimization** (ruling 4), realized as
-   `narrowUnrouted` in `eval.mdk` and `emitDefaultRKey` in `llvm_emit.mdk`. L1
+   `narrowUnrouted` in `eval.mdk` and, historically, `emitDefaultRKey` in
+   `llvm_emit.mdk` — the latter is deleted (#1082, disposition table). L1
    still holds for every other missing fact; F6 records the one sanctioned
-   exception and its expiry (#993).
+   exception, now retired for default bodies specifically, and its expiry (#993)
+   for the rest.
 3. **Route answers and build-path acceptance move under the typechecker plan**
    (#2546 acceptance delta, #2548 route-table widening, #2549 node-arity change
    on `EMethodAt`). No comparison carrier in this arc may certify a fact against
