@@ -90,7 +90,7 @@ sameBlocks _ _ = False
 frameHeader : DagCbor -> Array Int
 frameHeader value =
   let header = mustHeader value
-  uvarintEncode (arrayLength header) ++ header
+  toArray (uvarintEncode (arrayLength header)) ++ header
 
 headerValue : List Cid -> Int -> DagCbor
 headerValue roots version =
@@ -99,8 +99,10 @@ headerValue roots version =
 encodeSections : List (Cid, Array Int) -> Array Int
 encodeSections [] = [||]
 encodeSections ((cid, bytes) :: rest) =
-  let payload = cidToBytes cid ++ bytes
-  uvarintEncode (arrayLength payload) ++ payload ++ encodeSections rest
+  let payload = toArray (cidToBytes cid) ++ bytes
+  toArray (uvarintEncode (arrayLength payload))
+    ++ payload
+    ++ encodeSections rest
 
 wireCar : List Cid -> Int -> List (Cid, Array Int) -> Array Int
 wireCar roots version blocks =
@@ -164,19 +166,19 @@ runSuccess (Fixture _ roots blocks expected) =
 runHostile : Fixture -> <IO> Int
 runHostile (Fixture _ roots blocks expected) =
   let header = mustHeader (headerValue roots 1)
-  let framed = uvarintEncode (arrayLength header) ++ header
+  let framed = toArray (uvarintEncode (arrayLength header)) ++ header
   let root = match roots
     item :: _ => item
     [] => panic "car_vectors: fixture must contain a root"
   let malformedCid = [|0|]
   let nonBlessedCid = [|1, 0x70, 0x12, 0x20|] ++ arrayMake 32 0
   let malformedSection =
-    uvarintEncode (arrayLength malformedCid) ++ malformedCid
+    toArray (uvarintEncode (arrayLength malformedCid)) ++ malformedCid
   let nonBlessedSection =
-    uvarintEncode (arrayLength nonBlessedCid) ++ nonBlessedCid
-  let mismatchPayload = cidToBytes root ++ [|0|]
+    toArray (uvarintEncode (arrayLength nonBlessedCid)) ++ nonBlessedCid
+  let mismatchPayload = toArray (cidToBytes root) ++ [|0|]
   let mismatchSection =
-    uvarintEncode (arrayLength mismatchPayload) ++ mismatchPayload
+    toArray (uvarintEncode (arrayLength mismatchPayload)) ++ mismatchPayload
   let truncated = take (arrayLength expected - 1) expected
   sum [
     rejectContains

@@ -19,7 +19,13 @@ import bytebuilder.{
   emitU8,
   newBuilder,
 }
-import bytes.{Bytes, fromArrayAssumeByteDomain, length as bytesLength, toArray}
+import bytes.{
+  Bytes,
+  drop as bytesDrop,
+  fromArrayAssumeByteDomain,
+  length as bytesLength,
+  toArray,
+}
 import byteparser.{
   BResult(..),
   ByteParser,
@@ -135,9 +141,9 @@ emitValueAt (DcLink cid) _ out =
   let bytes = cidToBytes cid
   emitU8 0xd8 out
   emitU8 0x2a out
-  emitArgument 2 (arrayLength bytes + 1) out
+  emitArgument 2 (bytesLength bytes + 1) out
   emitU8 0 out
-  emitBytes (fromArrayAssumeByteDomain bytes) out
+  emitBytes bytes out
   Ok ()
 
 emitValues : List DagCbor -> Int -> Builder -> Result String Unit
@@ -385,12 +391,11 @@ parseLink input pos =
           BErr _ errorPos =>
             BErr "dagcbor: truncated tag-42 link payload" errorPos
           BOk payload finalPos =>
-            let payloadArr = toArray payload
-            if arrayLength payloadArr == 0 || payloadArr[0] /= 0 then
+            if bytesLength payload == 0 || U8.toInt payload[0] /= 0 then
               BErr
                 "dagcbor: tag-42 link is missing the leading identity byte"
                 payloadPos
-            else match cidFromBytes (drop 1 payloadArr)
+            else match cidFromBytes (bytesDrop 1 payload)
               Err message => BErr "dagcbor: tag-42 CID: \{message}" payloadPos
               Ok cid => BOk (DcLink cid) finalPos
 

@@ -970,10 +970,10 @@ plantDir path = do
 -- stores keep this arithmetic private, and the gate has to plant INSIDE a
 -- shard that really exists for a leaf-level case to be a leaf-level case.
 shardOf : Cid -> String
-shardOf cid = take 2 (encode (fromArrayAssumeByteDomain (cidDigest cid)))
+shardOf cid = take 2 (encode (cidDigest cid))
 
 cidName : Cid -> String
-cidName cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+cidName cid = encode (cidToBytes cid)
 
 firstBlobCid : Cid
 firstBlobCid = match blobFixtures

@@ -2,6 +2,7 @@
    and node bytes remain exclusively in the provenance-ledgered corpus. -}
 
 import array as A
+import bytes.{fromU8Array}
 import list.{filter, reverse, take}
 import string.{fromUtf8, toUtf8}
 import test.{Expectation, expectEach, expectEqual, expectTrue}
@@ -50,10 +51,10 @@ key1 = [|
 |]
 
 value0 : Cid
-value0 = cidForDagCbor [|1|]
+value0 = cidForDagCbor (fromU8Array [|1|])
 
 value1 : Cid
-value1 = cidForDagCbor [|2|]
+value1 = cidForDagCbor (fromU8Array [|2|])
 
 test "empty MST is stable and validates" =
   expectEqual

@@ -48,18 +48,32 @@ main = match args ()
           "sha256: every element must be a byte in 0..255"
           (B.fromArray (arrayFromList [0, 255])))
     println "OK sha256-edges len=\{intToString (B.length d)}"
-  ["base58-over"] => println (base58btcEncode (arrayFromList [0, 256]))
-  ["base58-under"] => println (base58btcEncode (arrayFromList [0, 0 - 1]))
+  -- The byte-domain check lives at the `Array Int` -> `Bytes` door: a
+  -- `Bytes` value cannot hold an out-of-range element by construction, so
+  -- `base58btcEncode` itself has nothing left to check.
+  ["base58-over"] =>
+    println
+      (base58btcEncode
+        (optionOrPanic
+          "base58btcEncode: every element must be a byte in 0..255"
+          (B.fromArray (arrayFromList [0, 256]))))
+  ["base58-under"] =>
+    println
+      (base58btcEncode
+        (optionOrPanic
+          "base58btcEncode: every element must be a byte in 0..255"
+          (B.fromArray (arrayFromList [0, 0 - 1]))))
   ["base58-edges"] =>
-    println "OK base58-edges value=\{base58btcEncode (arrayFromList [0, 255])}"
+    println
+      "OK base58-edges value=\{base58btcEncode (optionOrPanic "base58btcEncode: every element must be a byte in 0..255" (B.fromArray (arrayFromList [0, 255])))}"
   -- unsigned-varint encodes non-negative values only.
   ["uvarint-neg"] =>
     let v = uvarintEncode (0 - 1)
-    println "REACHED uvarint-neg len=\{intToString (arrayLength v)}"
+    println "REACHED uvarint-neg len=\{intToString (B.length v)}"
   -- CONTROL. An ordinary two-byte value must still encode.
   ["uvarint-ok"] =>
     let v = uvarintEncode 300
-    println "OK uvarint-ok len=\{intToString (arrayLength v)}"
+    println "OK uvarint-ok len=\{intToString (B.length v)}"
   -- `readBufferAppend` packs an `Array Int` into the connection's byte
   -- buffer. Without the guard both cells alias into the byte domain — 300
   -- masks to 44 (`,`) and -1 to 255 — which is a byte on the wire the

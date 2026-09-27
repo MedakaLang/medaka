@@ -182,6 +182,16 @@ import lib.xrpc.{
   xrpcErrorResponse,
 }
 
+-- Door: `handlers` is not itself retyped this slice (its own `Array Int`
+-- moves in sprint C/D). `bytes` is checked into `Bytes` here, matching
+-- `cidForDagCbor`'s old callee behaviour.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
+
 createRecordNsid : String
 createRecordNsid = "com.atproto.repo.createRecord"
 
@@ -530,7 +540,7 @@ currentRecordCid path repo = match repoLookup path repo
   Ok (Some value) => match dagCborEncode value
     Err message =>
       Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
-    Ok bytes => Ok (Some (cidForDagCbor bytes))
+    Ok bytes => Ok (Some (cidForDagCborDoor bytes))
 
 checkSwapCommit : Json -> Repo -> Result Response Unit
 checkSwapCommit body repo = match get "swapCommit" body
@@ -643,7 +653,7 @@ applyCreateRecord account store body = do
       account
       collection
       rkey
-      (cidForDagCbor bytes)
+      (cidForDagCborDoor bytes)
       (repoMutationCommit mutation),
   )
 
@@ -672,7 +682,7 @@ applyPutRecord account store body = do
       account
       collection
       rkey
-      (cidForDagCbor bytes)
+      (cidForDagCborDoor bytes)
       (repoMutationCommit mutation),
   )
 
@@ -763,7 +773,7 @@ batchElement did rev auto element = do
     bytes <- encodeRecordField "value" record
     Ok (
       RepoWriteCreate (recordPath collection rkey) record,
-      batchResult "createResult" did collection rkey (cidForDagCbor bytes),
+      batchResult "createResult" did collection rkey (cidForDagCborDoor bytes),
       nextAuto,
     )
   else if kind == applyWritesType "update" then do
@@ -772,7 +782,7 @@ batchElement did rev auto element = do
     bytes <- encodeRecordField "value" record
     Ok (
       RepoWriteUpdate (recordPath collection rkey) record,
-      batchResult "updateResult" did collection rkey (cidForDagCbor bytes),
+      batchResult "updateResult" did collection rkey (cidForDagCborDoor bytes),
       auto,
     )
   else if kind == applyWritesType "delete" then do
@@ -1031,7 +1041,7 @@ recordView account collection rkey value = do
   Ok
     (jObject [
       ("uri", JString (recordUri account collection rkey)),
-      ("cid", JString (cidToString (cidForDagCbor bytes))),
+      ("cid", JString (cidToString (cidForDagCborDoor bytes))),
       ("value", dagCborToLexJson value),
     ])
 
@@ -1148,7 +1158,7 @@ applyGetRecord account store params = do
           "Record not found: \{recordUri account collection rkey}")
     Some value => Ok value
   bytes <- reencodeRecord value
-  let actual = cidToString (cidForDagCbor bytes)
+  let actual = cidToString (cidForDagCborDoor bytes)
   () <- match requested
     None => Ok ()
     Some wanted =>
