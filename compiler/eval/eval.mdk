@@ -42,7 +42,7 @@ import frontend.ast.{
   DataVis(..),
   TyConOrigin,
   ifaceIdentity,
-  isFixedWidthHead,
+  isTaggedFixedHead,
   fixedWidthMask,
   ifaceIdMatches,
 }
@@ -120,6 +120,9 @@ public export data Value (e : Effect) =
   -- is compiled with a 63-bit `Int`, so it cannot hold the value in one word
   -- (INTEGER-TYPES-DESIGN §6.2).  Its arithmetic is `eval/u64_halves.mdk`'s.
   | VU64 Int Int
+  -- an `I64`, as the halves of its two's complement pattern: `VU64`'s carrier
+  -- with its own constructor, so an untyped path can never read one as the other.
+  | VI64 Int Int
   | VCon String (List (Value e))
   | VRecord String (List (String, Value e))
   | VRef (Ref (Value e))
@@ -177,6 +180,7 @@ ppValue (VArray vs) =
 -- caller that wants bytes rendered goes through byteBlockToIntArray.
 ppValue (VByteBlock b) = "<byteblock:\{intToString (arrayLength b)}>"
 ppValue (VU64 hi lo) = H.toDecimal (hi, lo)
+ppValue (VI64 hi lo) = H.toDecimalI64 (hi, lo)
 ppValue (VCon name []) = displayCtorName name
 ppValue (VCon name vs) =
   "\{displayCtorName name} \{joinSp (map ppValueAtom vs)}"
@@ -625,6 +629,7 @@ runtimeTypeTag (VList _) = Some "List"
 runtimeTypeTag (VArray _) = Some "Array"
 runtimeTypeTag (VByteBlock _) = Some "ByteBlock"
 runtimeTypeTag (VU64 _ _) = Some "U64"
+runtimeTypeTag (VI64 _ _) = Some "I64"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
 runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
 -- #1292: a record value's head tag is its CONSTRUCTOR name, so the collision
@@ -960,14 +965,18 @@ valueEq (VArray a) (VArray b) = valueListEq (arrayToListG a) (arrayToListG b)
 -- byte-block arm (runtime/medaka_rt.c), which must give the same answer.
 valueEq (VByteBlock a) (VByteBlock b) = arrayToListG a == arrayToListG b
 valueEq (VU64 ah al) (VU64 bh bl) = ah == bh && al == bl
+valueEq (VI64 ah al) (VI64 bh bl) = ah == bh && al == bl
 valueEq (VCon n1 a1) (VCon n2 a2) = n1 == n2 && valueListEq a1 a2
 valueEq (VRecord n1 f1) (VRecord n2 f2) = n1 == n2 && fieldListEq f1 f2
 valueEq (VRef a) (VRef b) = valueEq !a !b
--- A `U64` meets only a `U64` in a typechecked program; anywhere else the
--- program was run without its types (an untyped eval path), and ordering the
--- two by `valueTag` would be a silent wrong answer, so it is refused.
+-- A `U64` meets only a `U64` in a typechecked program, and an `I64` only an
+-- `I64`; anywhere else the program was run without its types (an untyped eval
+-- path), and ordering the two by `valueTag` would be a silent wrong answer, so it
+-- is refused.
 valueEq (VU64 _ _) _ = u64ShapeMismatch ()
 valueEq _ (VU64 _ _) = u64ShapeMismatch ()
+valueEq (VI64 _ _) _ = u64ShapeMismatch ()
+valueEq _ (VI64 _ _) = u64ShapeMismatch ()
 valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
@@ -1005,6 +1014,7 @@ valueTag (VRecord _ _) = 10
 valueTag (VRef _) = 11
 valueTag (VByteBlock _) = 12
 valueTag (VU64 _ _) = 13
+valueTag (VI64 _ _) = 14
 valueTag _ = 99
 
 valueCompare : Value e -> Value e -> Ordering
@@ -1023,11 +1033,14 @@ valueCompare (VByteBlock a) (VByteBlock b) =
   compare (arrayToListG a) (arrayToListG b)
 valueCompare (VTuple a) (VTuple b) = compareValueLists a b
 valueCompare (VU64 ah al) (VU64 bh bl) = H.compareU64 (ah, al) (bh, bl)
+valueCompare (VI64 ah al) (VI64 bh bl) = H.compareI64 (ah, al) (bh, bl)
 valueCompare (VCon n1 a1) (VCon n2 a2) = match compare n1 n2
   Eq => compareValueLists a1 a2
   o => o
 valueCompare (VU64 _ _) _ = u64ShapeMismatch ()
 valueCompare _ (VU64 _ _) = u64ShapeMismatch ()
+valueCompare (VI64 _ _) _ = u64ShapeMismatch ()
+valueCompare _ (VI64 _ _) = u64ShapeMismatch ()
 valueCompare a b = compare (valueTag a) (valueTag b)
 
 u64ShapeMismatch : Unit -> a
@@ -1757,6 +1770,7 @@ eval _ (ENumLit n r _ _) = match !r
   None => VInt n
 eval _ (ELit (LFloat f)) = VFloat f
 eval _ (ELit (LU64 hi lo)) = VU64 hi lo
+eval _ (ELit (LI64 hi lo)) = VI64 hi lo
 eval _ (EWideLit hi lo _ _) = VU64 hi lo
 eval _ (ELit (LString s)) = VString s
 eval _ (ELit (LChar c)) = VChar c
@@ -1808,10 +1822,10 @@ eval env (EVariantUpdate con base fields) =
   evalVariantUpdate con (eval env base) (map (evalFieldAssign env) fields)
 eval env (EFieldAccess e "value" _) = evalValueField (eval env e)
 eval env (EFieldAccess e field _) = evalField (eval env e) field
--- a fixed-width arithmetic operator: typecheck stamped the operand's head, and
--- the `Int` result is reduced modulo 2^n (see `evalArithAt`).
+-- a tagged fixed-width arithmetic operator: typecheck stamped the operand's head,
+-- and the `Int` result is reduced modulo 2^n (see `evalArithAt`).
 eval env (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag }))
-  | isFixedWidthHead tag = evalArithAt tag op (eval env l) (eval env r)
+  | isTaggedFixedHead tag = evalArithAt tag op (eval env l) (eval env r)
 eval env (EAnnot e _) = eval env e
 eval env (EHeadAnnot e _) = eval env e
 eval env (EBlock stmts) = evalBlock env stmts
@@ -2400,6 +2414,7 @@ evalUnop "-" (VInt n)
   | otherwise = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (negFloatIEEE f)
 evalUnop "-" (VU64 hi lo) = u64Value (H.sub (0, 0) (hi, lo))
+evalUnop "-" (VI64 hi lo) = i64Value (H.negate64 (hi, lo))
 evalUnop "-" _ = panic "unary minus on non-number"
 -- #1739 half A: `!x` DEREFERENCES a Ref (it was boolean-not).  Routed to the very
 -- function `x.value` uses, because the two spellings are the same operation — a
@@ -2477,6 +2492,9 @@ evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
 evalArith op (VU64 ah al) (VU64 bh bl) = evalArithU64 op (ah, al) (bh, bl)
 evalArith _ (VU64 _ _) _ = u64ShapeMismatch ()
 evalArith _ _ (VU64 _ _) = u64ShapeMismatch ()
+evalArith op (VI64 ah al) (VI64 bh bl) = evalArithI64 op (ah, al) (bh, bl)
+evalArith _ (VI64 _ _) _ = u64ShapeMismatch ()
+evalArith _ _ (VI64 _ _) = u64ShapeMismatch ()
 evalArith "==" a b = VBool (valueEq a b)
 evalArith "/=" a b = VBool (not (valueEq a b))
 -- Float comparisons use IEEE ordered semantics directly (these compile to native
@@ -2517,6 +2535,30 @@ evalArithU64 op _ _ = panic ("unknown op '" ++ op ++ "' on U64")
 u64Value : (Int, Int) -> Value e
 u64Value (hi, lo) = VU64 hi lo
 
+-- `I64` arithmetic and comparison, modulo 2^64 and signed: `+`, `-` and `*` are
+-- the unsigned operations bit for bit, `/` and `%` truncate toward zero, and
+-- `minBound / -1` wraps to `minBound`.
+evalArithI64 : String -> (Int, Int) -> (Int, Int) -> Value e
+evalArithI64 "+" a b = i64Value (H.add a b)
+evalArithI64 "-" a b = i64Value (H.sub a b)
+evalArithI64 "*" a b = i64Value (H.mul a b)
+evalArithI64 "/" a b
+  | H.isZero b = runtimePanic "E-DIV-ZERO" "division by zero"
+  | otherwise = i64Value (fst (H.divModI64 a b))
+evalArithI64 "%" a b
+  | H.isZero b = runtimePanic "E-MOD-ZERO" "modulo by zero"
+  | otherwise = i64Value (snd (H.divModI64 a b))
+evalArithI64 "==" a b = VBool (H.compareI64 a b == Eq)
+evalArithI64 "/=" a b = VBool (H.compareI64 a b /= Eq)
+evalArithI64 "<" a b = VBool (H.compareI64 a b == Lt)
+evalArithI64 ">" a b = VBool (H.compareI64 a b == Gt)
+evalArithI64 "<=" a b = VBool (H.compareI64 a b /= Gt)
+evalArithI64 ">=" a b = VBool (H.compareI64 a b /= Lt)
+evalArithI64 op _ _ = panic ("unknown op '" ++ op ++ "' on I64")
+
+i64Value : (Int, Int) -> Value e
+i64Value (hi, lo) = VI64 hi lo
+
 -- `Int` arithmetic traps: a result outside `intMinBound .. intMaxBound` is the
 -- located E-INT-OVERFLOW runtime error, never a wrapped value.  The check comes
 -- first because the interpreter's own `Int` arithmetic traps too, and that
@@ -2542,7 +2584,9 @@ intOverflow operation =
 -- An arithmetic operator whose operands typecheck grounded to the scalar head
 -- [tag].  At a fixed-width head (`U8`/`U16`/`U32`) the `Int` result is reduced
 -- modulo 2^n: `+`, `-` and `*` wrap, and `/`/`%` of two in-range values are
--- already in range.  Every other tag is plain `evalArith`.
+-- already in range.  At `I32` the result is reduced the same way and read back
+-- sign-extended, which also makes `minBound / -1` wrap to `minBound`.  Every other
+-- tag is plain `evalArith`.
 export
 evalArithAt : String -> String -> Value e -> Value e -> Value e
 evalArithAt tag op l r = match fixedWidthMask tag
@@ -2554,7 +2598,23 @@ evalArithAt tag op l r = match fixedWidthMask tag
     _ => match evalArith op l r
       VInt n => VInt (bitAnd n mask)
       v => v
-  None => evalArith op l r
+  None =>
+    if tag == "I32" then match (op, l, r)
+      -- `-2^31 * -2^31` is 2^62, past `Int`: multiply in `U64` as `U32` does.
+      ("*", VInt a, VInt b) =>
+        VInt
+          (signExtend32 (U64.toIntTruncating (U64.truncate a * U64.truncate b)))
+      _ => match evalArith op l r
+        VInt n => VInt (signExtend32 n)
+        v => v
+    else
+      evalArith op l r
+
+-- The low 32 bits of an `Int`, read in two's complement: an `I32`'s word.
+signExtend32 : Int -> Int
+signExtend32 n =
+  let m = bitAnd n 4294967295
+  if m >= 2147483648 then m - 4294967296 else m
 
 -- ── program driver ────────────────────────────────────────────────────────
 export
@@ -3403,6 +3463,10 @@ externBindings _ = [
   ("u64ShiftLeft", prim2 (pU64Shift H.shiftLeft64)),
   ("u64ShiftRight", prim2 (pU64Shift H.shiftRight64)),
   ("u64MulHigh", prim2 (pU64Bin H.mulHigh)),
+  ("i32Truncate", prim1 pI32Truncate),
+  ("i32ToInt", prim1 pFixedToInt),
+  ("i64FromBits", prim1 pI64FromBits),
+  ("i64ToBits", prim1 pI64ToBits),
   ("intBitAnd", prim2 pBitAnd),
   ("intBitOr", prim2 pBitOr),
   ("intBitXor", prim2 pBitXor),
@@ -3590,6 +3654,20 @@ pU64Shift _ _ _ = panic "U64 shift: expected a U64 and an Int"
 pFixedToInt : Value e -> <e> Value e
 pFixedToInt (VInt a) = VInt a
 pFixedToInt _ = panic "toInt: not a fixed-width integer"
+
+pI32Truncate : Value e -> <e> Value e
+pI32Truncate (VInt a) = VInt (signExtend32 a)
+pI32Truncate _ = panic "i32Truncate: not an Int"
+
+-- The two doors between an `I64` and a `U64` keep the bits and change only how
+-- they are read.
+pI64FromBits : Value e -> <e> Value e
+pI64FromBits (VU64 hi lo) = VI64 hi lo
+pI64FromBits _ = panic "i64FromBits: not a U64"
+
+pI64ToBits : Value e -> <e> Value e
+pI64ToBits (VI64 hi lo) = VU64 hi lo
+pI64ToBits _ = panic "i64ToBits: not an I64"
 
 pIntToFloat : Value e -> <e> Value e
 pIntToFloat (VInt n) = VFloat (intToFloat n)

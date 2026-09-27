@@ -718,18 +718,15 @@ isIntMinLit n = n == intMinLit
 intLitTooBigMsg : String
 intLitTooBigMsg = intMinLiteralMsg
 
--- A literal above 2^62 (`TWideInt`) is a `U64` literal or nothing: no sign makes
--- it fit `Int`, and a literal PATTERN is typed `Int`/`U8`/`U16`/`U32` only
--- (INTEGER-TYPES-DESIGN §3.2 item 5; `U64` patterns are not built).  Both
--- messages keep the "integer literal too large" prefix `parseErrCode` keys
--- `L-INT-OVERFLOW` on.
-wideNegMsg : String -> String
-wideNegMsg lx =
-  "integer literal too large for Int (-\{lx} is below Int's minimum, -4611686018427387904, and a U64 is never negative)"
-
+-- A literal above 2^62 (`TWideInt`) is a `U64` or `I64` literal or nothing: no
+-- sign makes it fit `Int`, and a literal PATTERN is typed `Int`/`U8`/`U16`/`U32`/
+-- `I32` only (INTEGER-TYPES-DESIGN §3.2 item 5; `U64` and `I64` patterns are not
+-- built).  The message keeps the "integer literal too large" prefix
+-- `parseErrCode` keys `L-INT-OVERFLOW` on.  A negated one is an ordinary `-`
+-- applied to it, which the typechecker accepts only at `I64`.
 widePatMsg : String -> String
 widePatMsg lx =
-  "integer literal too large for a pattern (\{lx}): a literal pattern is an Int, U8, U16 or U32; match a U64 in a guard, `x if x == \{lx}`"
+  "integer literal too large for a pattern (\{lx}): a literal pattern is an Int, U8, U16, U32 or I32; match a U64 or I64 in a guard, `x if x == \{lx}`"
 
 -- 2^62 written without a sign is the one `TInt` that is really a wide literal:
 -- the lexer admits it for `-4611686018427387904`'s sake and it has wrapped to
@@ -769,7 +766,6 @@ negUnaryFor (TInt n lx)
     advance
     advance
     deferPure (ENumLit n (Ref None) (Ref RNone) ("-" ++ lx)))
-negUnaryFor (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
 negUnaryFor _ = defer
   advance
   e <- parseUnary
@@ -834,7 +830,10 @@ negLitArgFor TMinusTight (TInt n lx) = defer
   advance
   advance
   deferPure (ENumLit (negateLiteral n) (Ref None) (Ref RNone) ("-" ++ lx))
-negLitArgFor TMinusTight (TWideInt _ _ lx) = fatalP (wideNegMsg lx)
+negLitArgFor TMinusTight (TWideInt hi lo lx) = defer
+  advance
+  advance
+  deferPure (EUnOp "-" (EWideLit hi lo (Ref RNone) lx) (Ref RNone))
 negLitArgFor TMinusTight (TFloat f) = defer
   advance
   advance
