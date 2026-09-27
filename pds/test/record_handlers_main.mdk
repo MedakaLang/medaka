@@ -148,7 +148,7 @@ authorizedStore did store = match storeWithServerSecret testSecret store
 testToken : String -> String
 testToken did =
   mintToken
-    testSecret
+    (fromArrayAssumeByteDomain testSecret)
     did
     accountHostText
     "record_handlers-fixture-token"

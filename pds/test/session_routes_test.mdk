@@ -14,10 +14,11 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, fromU8Array, toArray}
 import http.{parseRequestClassified}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, fromUtf8, toUtf8}
+import u8 as U8
 import test.{
   expectAtLeast,
   expectEach,
@@ -106,7 +107,7 @@ credential : CredentialRecord
 credential =
   let derived =
     makeCredential
-      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
+      (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
       cheapIterations
       password
   match derived
@@ -127,7 +128,7 @@ outdatedStore : Store
 outdatedStore =
   let older =
     makeCredential
-      (arrayMakeWith 16 (i => (i * 5 + 9) % 256))
+      (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 5 + 9))))
       cheapIterations
       password
   match older
@@ -139,7 +140,7 @@ changedPasswordStore : Store
 changedPasswordStore =
   let changed =
     makeCredential
-      (arrayMakeWith 16 (i => (i * 13 + 3) % 256))
+      (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
       cheapIterations
       "a different password"
   match changed

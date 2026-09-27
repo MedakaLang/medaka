@@ -29,6 +29,22 @@ file = "pds/lib/blockstore.mdk"
 count = 0
 
 [[entry]]
+file = "pds/lib/sign.mdk"
+count = 3
+
+[[entry]]
+file = "pds/lib/pbkdf2.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/credential.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/jwt.mdk"
+count = 0
+
+[[entry]]
 file = "pds/lib/base58.mdk"
 count = 11
 
@@ -106,10 +122,6 @@ count = 0
 
 [[entry]]
 file = "pds/lib/hmac_sha256.mdk"
-count = 0
-
-[[entry]]
-file = "pds/lib/sign.mdk"
 count = 0
 
 [[entry]]

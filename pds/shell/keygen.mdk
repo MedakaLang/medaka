@@ -16,7 +16,9 @@ import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
 import lib.jwt.{serverSecretBytes}
-import lib.sign.{publicKeyCompressed, publicKeyForSecret, secretKeyFromBytes}
+import lib.sign.{
+  publicKeyCompressed, publicKeyForSecret, secretKeyFromByteArray
+}
 
 {- | How many candidate scalars `keygen` will draw before giving up.
 
@@ -27,9 +29,9 @@ keygenAttempts : Int
 keygenAttempts = 8
 
 {- | A fresh secp256k1 secret scalar, admitted by the same
-   `lib.sign.secretKeyFromBytes` the server admits `--key` with — so `keygen`
-   can produce no value `serve` would later refuse, and admits `d` only in
-   `[1, n)`.
+   `lib.sign.secretKeyFromByteArray` the server admits `--key` with — so
+   `keygen` can produce no value `serve` would later refuse, and admits `d`
+   only in `[1, n)`.
 
    The bytes come from `osEntropyBytes`, the OS entropy source, and never from
    `randomInt`, whose SplitMix64 generator is seeded deterministically and
@@ -43,7 +45,7 @@ keygenSecretBytes attempts =
       "the entropy source produced no scalar in 1..n-1; refusing to write a key"
   else
     let candidate = osEntropyBytes signingKeyBytes
-    match secretKeyFromBytes (fromArrayAssumeByteDomain candidate)
+    match secretKeyFromByteArray candidate
       Err _ => keygenSecretBytes (attempts - 1)
       Ok _ => Ok candidate
 
@@ -62,7 +64,7 @@ signingKeyBytes = 32
 export
 keygenSummary : Array Int -> Result String (String, String)
 keygenSummary bytes = do
-  secret <- secretKeyFromBytes (fromArrayAssumeByteDomain bytes)
+  secret <- secretKeyFromByteArray bytes
   let publicKey = publicKeyForSecret secret
   Ok (
     encode (publicKeyCompressed publicKey),

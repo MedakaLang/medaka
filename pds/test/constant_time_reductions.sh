@@ -700,9 +700,11 @@ cteq_tautologies() {
 # secret bytes only through crypto.hmac.ctEq. Per file: ctEq is the imported one (no
 # local definition shadows it), its occurrence count is the call-site roster,
 # and no `==`, `/=` or `compare` line names a secret-bearing identifier except
-# through `arrayLength`, whose value is public. Per comparing function: its
-# stated number of ctEq calls and no other comparison, XOR accumulation or
-# indexing beside them. The per-function roster is complete: each file's
+# through `arrayLength` or `B.length`, whose value is public (`B.length` since
+# 2026-09-27: the credential digest and the session secret are `Bytes` now,
+# and their length checks are the same public comparison). Per comparing
+# function: its stated number of ctEq calls and no other comparison, XOR
+# accumulation or indexing beside them. The per-function roster is complete: each file's
 # ctEq count is its import plus the roster's calls in that file, so a new
 # comparing function the roster does not name fails the census.
 # A `||` across session records stays legal -- it reveals which record matched,
@@ -749,7 +751,7 @@ secret_comparisons_ok() {
       /^[[:space:]]*--/ { next }
       /==|\/=|compare/ {
         line = " " $0 " "
-        gsub(/arrayLength [A-Za-z0-9_\047]+/, "", line)
+        gsub(/(arrayLength|B\.length) [A-Za-z0-9_\047]+/, "", line)
         k = split(secrets, ids, " ")
         for (j = 1; j <= k; j++) {
           if (match(line, "[^A-Za-z0-9_\047.]" ids[j] "[^A-Za-z0-9_\047]")) { n++ }
@@ -1294,12 +1296,31 @@ STORE="$ROOT/pds/lib/store.mdk"
 secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 pass 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 
+# The credential mutants below rewrite both comparison sites, credentialVerify's
+# and digestIs's, each as a `  ctEq digest derived` body line. Re-pinned
+# 2026-09-27: the record's digest and the derived key are `Bytes`, so neither
+# argument carries a byte-domain door any more, and the formatter keeps
+# digestIs's shorter call on its declaration line. `credential_split.mdk` moves
+# that call onto a body line of its own so both sites are rewritten, as they
+# were before. Both are needed: credentialVerify's call follows a `let` whose
+# last token is a word, which the census's layout-blind tokenizer reads as an
+# application, so a partially-applied mutant there is seen only at digestIs.
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) / {
-    sub(/ctEq \(fromArrayAssumeByteDomain digest\) /, "(fromArrayAssumeByteDomain digest) == ")
+  /^digestIs \(CredentialRecord _ _ digest\) derived = ctEq digest derived$/ {
+    print "digestIs (CredentialRecord _ _ digest) derived ="
+    print "  ctEq digest derived"
+    next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_eq_mutant.mdk"
+' "$CREDENTIAL" > "$WORK/credential_split.mdk"
+[ "$(grep -c '^  ctEq digest derived$' "$WORK/credential_split.mdk")" -eq 2 ] ||
+  fail 'credential mutation base has both comparison sites on body lines'
+awk '
+  /^  ctEq digest derived$/ {
+    sub(/ctEq digest /, "digest == ")
+  }
+  { print }
+' "$WORK/credential_split.mdk" > "$WORK/credential_eq_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_eq_mutant.mdk"; then
   fail 'credential early-exit mutation was constructed'
 fi
@@ -1335,8 +1356,8 @@ fi
 pass 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes)"
     next
   }
   { print }
@@ -1345,7 +1366,7 @@ awk '
     print "sameDigest : Array Int -> Array Int -> Bool"
     print "sameDigest a b = arrayToList a == arrayToList b"
   }
-' "$CREDENTIAL" > "$WORK/credential_wrapper_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_wrapper_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_wrapper_mutant.mdk"; then
   fail 'credential wrapper-indirection mutation was constructed'
 fi
@@ -1355,12 +1376,12 @@ fi
 pass 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_elem_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_elem_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_elem_mutant.mdk"; then
   fail 'credential tautological-ctEq-plus-elem mutation was constructed'
 fi
@@ -1370,12 +1391,12 @@ fi
 pass 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes)"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_ord_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_ord_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_ord_mutant.mdk"; then
   fail 'credential tautological-ctEq-plus-Ord mutation was constructed'
 fi
@@ -1385,8 +1406,8 @@ fi
 pass 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes)"
     next
   }
   { print }
@@ -1395,7 +1416,7 @@ awk '
     print "sameDigest : Array Int -> Array Int -> Bool"
     print "sameDigest a b = a == b"
   }
-' "$CREDENTIAL" > "$WORK/credential_tautology_wrapper_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_wrapper_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_wrapper_mutant.mdk"; then
   fail 'credential tautological-ctEq-plus-wrapper mutation was constructed'
 fi
@@ -1405,12 +1426,12 @@ fi
 pass 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq (digest) ( digest ) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  ctEq (digest) ( digest ) && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_paren_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_paren_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_paren_mutant.mdk"; then
   fail 'credential parenthesized tautological-ctEq mutation was constructed'
 fi
@@ -1420,13 +1441,13 @@ fi
 pass 'credential tautological ctEq with reparenthesized arguments is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
+  /^  ctEq digest derived$/ {
     print "  ctEq digest"
-    print "    digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    print "    digest && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_multiline_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_multiline_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_multiline_mutant.mdk"; then
   fail 'credential multi-line tautological-ctEq mutation was constructed'
 fi
@@ -1436,12 +1457,12 @@ fi
 pass 'credential tautological ctEq split across lines is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  (digest |> ctEq digest) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  (digest |> ctEq digest) && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_pipe_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_pipe_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_pipe_mutant.mdk"; then
   fail 'credential piped tautological-ctEq mutation was constructed'
 fi
@@ -1451,12 +1472,12 @@ fi
 pass 'credential tautological ctEq fed through |> is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  (ctEq digest) digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  (ctEq digest) digest && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_section_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_section_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_section_mutant.mdk"; then
   fail 'credential partially-applied tautological-ctEq mutation was constructed'
 fi

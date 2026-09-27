@@ -29,7 +29,12 @@ source_closure_ok() {
   # byte domain from the type, and the ladder reads its scalar bytes through
   # the `Bytes` index at the public counter `i / 8`. No source branch was
   # added on a secret value; the anchors below say where each moved.
-  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '117756289 4527' ] || return 1
+  # Re-audited 2026-09-27 for sign.mdk's transitional
+  # `secretKeyFromByteArray`: it folds every element's `shiftRight x 8` into
+  # one `bitOr` accumulator over the public length and branches once, on
+  # that aggregate, before handing the bytes to `secretKeyFromBytes`
+  # unchanged. Nothing on the arithmetic path calls it.
+  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '1970691876 5699' ] || return 1
   # Re-audited when Int began trapping on overflow (#3377): secp256k1.mdk's
   # secret condition bits combine through bitAnd/bitOr/bitXor instead of
   # `+ - *`, and the RFC 6979 byte blend runs on U64, so no Int overflow

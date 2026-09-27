@@ -294,7 +294,7 @@ verifiedCredential account policy context store token =
     Some secret =>
       let verified =
         verifyToken
-          secret
+          (fromArrayAssumeByteDomain secret)
           (accountDid account)
           (audienceFor account policy)
           context.nowSeconds
@@ -1159,10 +1159,7 @@ classifyLogin (Server account registry _) salt store request =
           )
             (Some (JString identifier), Some (JString presented), Some record) =>
               let offered =
-                if identifiesAccount account identifier then
-                  toArray salt
-                else
-                  [||]
+                if identifiesAccount account identifier then salt else empty
               Some (loginCheckBegin presented offered defaultIterations record)
             _ => None
         _ => None

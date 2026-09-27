@@ -50,7 +50,7 @@
    three stores list has a stated disposition for an entry no write path here
    can produce. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -412,8 +412,11 @@ runPrefsSave dir = match persistPreferences dir fixturePrefs
 
 -- A fixed record, persisted into the same data directory as the repository
 -- and preferences halves so case 12's syscall trace covers it too.
-fixtureCredentialSalt : Array Int
-fixtureCredentialSalt = mustHex "000102030405060708090a0b0c0d0e0f"
+fixtureCredentialSalt : Bytes
+fixtureCredentialSalt =
+  resultOrPanic
+    "store_persistence: malformed hex"
+    (decode "000102030405060708090a0b0c0d0e0f")
 
 fixtureCredential : CredentialRecord
 fixtureCredential =

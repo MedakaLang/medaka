@@ -46,7 +46,7 @@
    corpus it claims to copy — which is why this driver takes that corpus as its
    one argument. -}
 
-import bytes.{fromArray, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
 import json.{Json(..), jObject, get, parse}
@@ -438,7 +438,7 @@ proxySessionSecret = arrayMakeWith serverSecretBytes (i => (i * 13 + 7) % 256)
 proxyAccessToken : String
 proxyAccessToken =
   mintToken
-    proxySessionSecret
+    (fromArrayAssumeByteDomain proxySessionSecret)
     accountDidText
     (accessAudience mustAccount)
     "read-routes-proxy-cells"
