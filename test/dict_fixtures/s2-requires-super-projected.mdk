@@ -1,0 +1,19 @@
+-- An impl with `requires Hi a` whose body needs the SUPER of that requires (`Sz a`),
+-- and a call site that constructs the `Hi (Box Int)` dictionary (RKey with reqs).
+-- Expected value: 111 (hi (Box 5) = hi 5 + sz 5 = 1 + 10 = 11; useHi adds sz (Box 5) = 100 -> 111).
+interface Sz a where
+  sz : a -> Int
+interface Hi a requires Sz a where
+  hi : a -> Int
+data Box a = Box a
+impl Sz Int where
+  sz x = 10
+impl Hi Int where
+  hi x = 1
+impl Sz (Box a) requires Sz a where
+  sz (Box v) = 100
+impl Hi (Box a) requires Hi a where
+  hi (Box v) = hi v + sz v
+useHi : Hi a => a -> Int
+useHi x = hi x + sz x
+main = println (useHi (Box (5 : Int)))

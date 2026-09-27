@@ -1,0 +1,20 @@
+-- Same as main.mdk except Eq's `requires` clause is written in DECLARATION order
+-- (Eq a, Eq b, matching Ord's own Ord a, Ord b) instead of reversed.
+data P a b = P a b
+impl Eq (P a b) requires Eq a, Eq b where
+  eq (P a1 b1) (P a2 b2) = eq b1 b2 && eq a1 a2
+impl Ord (P a b) requires Ord a, Ord b where
+  compare (P a1 b1) (P a2 b2) = match compare a1 a2
+    Eq => compare b1 b2
+    o => o
+viaOrd : Ord a => a -> a -> Bool
+viaOrd x y = eq x y
+main =
+  println
+    (debug (viaOrd (P (1 : Int) "a") (P 1 "a"))
+      ++ "|"
+      ++ debug (viaOrd (P (1 : Int) "a") (P 1 "b"))
+      ++ "|"
+      ++ debug (viaOrd (P "x" (2 : Int)) (P "x" 2))
+      ++ "|"
+      ++ debug (viaOrd (P "x" (2 : Int)) (P "y" 2)))

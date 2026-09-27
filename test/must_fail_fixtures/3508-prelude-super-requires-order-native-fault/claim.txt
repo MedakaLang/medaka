@@ -1,0 +1,34 @@
+issue: 3508
+what: A prelude superclass call (Ord requires Eq) reads the sub-dictionary's `requires`
+what: fields POSITIONALLY, keyed on the SUPERCLASS's own declaration order, not on the
+what: field names or the particular impl's written order. Type `P a b` has separate
+what: user impls of Eq and Ord over the same two type parameters, and the two impls
+what: list their `requires` clauses in DIFFERENT orders (`Eq (P a b) requires Eq b, Eq a`
+what: vs. `Ord (P a b) requires Ord a, Ord b`). `medaka run` (the tree-walking
+what: interpreter) is unaffected and prints the correct `True|False|True|False`. The
+what: NATIVE binary instead reads past the end of (or through a mismatched slot in) the
+what: Ord dictionary's positional requires block when it dispatches into Eq, and the
+what: process dies with a segmentation fault before printing anything.
+cmd: build-run main.mdk
+exit: 139
+stdout-bytes:
+control: build-run control.mdk
+why-fixture: Measured on this branch's base (32e4b07f6) with MEDAKA_STRICT=1, both
+why-fixture: `medaka run` and `medaka build` + exec. `run` exits 0 printing
+why-fixture: `True|False|True|False`. `build` exits 0 (compiles cleanly, no diagnostic);
+why-fixture: executing the produced binary crashes with
+why-fixture: `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`
+why-fixture: at process exit 139, with empty stdout — the crash happens before `println`
+why-fixture: ever runs.
+why-control: control.mdk is main.mdk with Eq's `requires` clause reordered to match
+why-control: declaration order (`Eq a, Eq b` instead of `Eq b, Eq a`) — the ONE dimension
+why-control: this bug keys on: whichever `requires` order happens to agree with the
+why-control: positional read survives, and whichever disagrees corrupts the super call.
+why-control: Nothing else differs: same type, same two impls, same call sites. Measured:
+why-control: build exit 0, executed binary exit 0, stdout `True|False|True|False`.
+why-note: This is the S0 the `m-evidence-2` sprint's representation change (#993) targets
+why-note: directly: a prelude dictionary's super slots are read positionally rather than
+why-note: by an explicit per-superclass dictionary reference, so any writer-order
+why-note: mismatch between two independently-declared impls corrupts the call. The fix
+why-note: is the dictionary-carries-its-own-superclass-dicts representation tracked by
+why-note: #993/#679; this fixture pins the CURRENT crash so the fix's landing drains it.

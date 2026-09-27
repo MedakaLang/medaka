@@ -1,0 +1,29 @@
+-- Same as main.mdk but WITHOUT the specific `impl Named (Box Int)` -- there is only
+-- ONE candidate impl for `Named (Box a)` left, so there is no overlap for the default
+-- method's super call to resolve at all. This isolates the overlap itself: with no
+-- competing impl, `gen(int)` is the only legitimate answer, which is what main.mdk
+-- ALSO prints -- despite main.mdk having a MORE SPECIFIC impl available that a correct
+-- per-construction-goal resolution should have reached instead.
+interface Named a where
+  nm : a -> String
+interface Fmt a requires Named a where
+  fmt : a -> String
+  loud : a -> String
+  loud x = "[" ++ fmt x ++ ":" ++ nm x ++ "]"
+data Cat = Cat
+data Box a = Box a
+impl Named Cat where
+  nm _ = "cat"
+impl Named Int where
+  nm _ = "int"
+impl Fmt Cat where
+  fmt _ = "b"
+impl Fmt Int where
+  fmt _ = "b"
+impl Named (Box a) requires Named a where
+  nm (Box v) = "gen(" ++ nm v ++ ")"
+impl Fmt (Box a) requires Fmt a where
+  fmt (Box v) = fmt v
+shout : Fmt a => a -> String
+shout x = loud x
+main = println (shout (Box (1 : Int)) ++ "|" ++ shout (Box Cat))

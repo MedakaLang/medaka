@@ -2413,6 +2413,61 @@ table = [
     pinned = "(7, 100)\n",
     codes = [],
   },
+  Row {
+    entry = "s2-super-declared-single-level.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: one declared predicate `Hi a` whose super `Sz a` is needed in the body. Today's representation widens `useHi`'s emitted arity past its declared 1 dict + 1 value (pinned separately as a CURRENT-VALUE row in diff_compiler_dict_semantics_ir.sh); this row pins the VALUE only, so #993's flip is a visible arity-only golden move there, not a value regression here",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-super-chain3.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: a three-level super chain (Top requires Mid requires Base) reached through one declared `Top a =>` dict. Value is conformant today; the arity this call site's `useTop` widens to is pinned separately in diff_compiler_dict_semantics_ir.sh so the next slice's representation flip is a visible IR move rather than a silent one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "321\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-requires-super-projected.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: an impl with `requires Hi a` whose own body needs Hi's super `Sz a`, exercised through a dict constructed with its requires. Value is conformant today; the impl fn's widened arity is pinned separately in diff_compiler_dict_semantics_ir.sh",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "111\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-local-super-projected.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: a dict-abstracted local closure projecting a super at two different instance types, plus a polymorphic-recursive group member forwarding a super through recursion. Both values are conformant today under the representation #993 replaces",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11|1011|3\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-requires.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: a default method body calling a super method on the receiver, inherited by an instance carrying `requires` (the disposition-table specialization path). Conformant today for a receiver with no COMPETING more-specific super impl; #3509's pin (test/must_fail_fixtures) is the adjacent case where a more-specific impl exists and is silently skipped",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[b:cat]|[b:box(cat)]\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2424,7 +2479,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 208
+tableRows = 213
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
