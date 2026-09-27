@@ -1092,6 +1092,17 @@ on a built binary beside a control, and each answered by a rule, not a case):
   context; `stash : Dir d -> Unit` over a monomorphic cell is accepted as too
   general.
 
+**#3462 review round 4** (whole diff on `ba7f925c2`): the new eligibility
+rule is sound (no launder across 105 probes, impl and default methods, a
+three-member where cycle, two modules), but a `where` block was one binding
+group, so a sibling that only CALLED a residual-bearing helper was refused
+(`readAll h ds = go ds where rd (Dir p) = readUnder h p; go …`; `main` and
+round 3 accepted it; round 3 also read outside the bound in the same shape).
+A `where` block is now split into dependency components as the top level is
+(`letGroupComponents`), which accepts the honest shapes, keeps every launder
+refused, and makes a `where` helper polymorphic in its siblings (docs/spec/
+SYNTAX.md); the spec says "binding group", not "recursive group".
+
 **#3462 rulings** (Val, 2026-09-26, on Fable's advice; built on this branch):
 
 1. An exported binding the value restriction keeps monomorphic, whose type

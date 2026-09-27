@@ -348,6 +348,12 @@ classify x
     limit = 100
 ```
 
+A `where` block's bindings may refer to each other in any order, recursively
+or not. They are typed in dependency order, as top-level definitions are: a
+binding its siblings only use is generalized first, so two siblings may use it
+at two types (`a = g 1` beside `b = g True`); only bindings that reach each
+other share one group.
+
 ## Lambdas
 
 ```medaka

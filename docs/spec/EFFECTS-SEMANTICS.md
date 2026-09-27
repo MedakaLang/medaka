@@ -473,9 +473,12 @@ outside authority links nothing: two members may each owe a relation to one
 monomorphic cell, and each keeps its own residual over it: a local helper that uses a captured handle,
 `let inner (Dir p) = sub h p`, keeps `p <= d_h` and each use of `inner`
 owes it. A component that reaches a local variable the binding does not
-quantify, or that another member of a recursive group mentions (after the
+quantify, or that another member of its binding group mentions (after the
 group's first solve, which may have linked one member's variable to
-another's), is decided in the group: a residual on one member would leave the
+another's), is decided in the group. A binding group is a set of bindings that
+reach each other: top-level definitions and a `where` block's bindings are
+split into such groups in dependency order, so a helper a sibling only calls
+is generalized first and keeps its own residual: a residual on one member would leave the
 other quantifying the same variable with no relation. Such a component is
 decided as before, and
 so is one bounded below by the domain's top, whose variable has no freedom

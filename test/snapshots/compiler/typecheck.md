@@ -1,5 +1,5 @@
 # META
-source_lines=50679
+source_lines=50705
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -21650,8 +21650,34 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = processLetGroup env binds
+  let env2 = fold processLetGroup env (letGroupComponents binds)
   infer env2 body
+
+-- A `where` block is checked one dependency component at a time, a
+-- component's dependencies first, as a module's top level is: a binding that
+-- only USES a sibling sees it generalized, rather than sharing its type
+-- variables as a member of one recursive group would.  Without it an
+-- authority relation a helper owes (`rd (Dir p) = readUnder h p`) is shared
+-- by every sibling that calls the helper, and a group decides it (#3462).
+-- Members keep their source order inside a component.  A block that repeats a
+-- name stays one group: its components are not well defined.
+letGroupComponents : List LetBind -> List (List LetBind)
+letGroupComponents binds =
+  let names = map letBindName binds
+  let nameSet = namesToSet names omEmpty
+  if omSize nameSet < listLen names then
+    [binds]
+  else
+    let grouped =
+      fold
+        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
+        omEmpty
+        binds
+    map
+      (component =>
+        let members = namesToSet component omEmpty
+        filterList (b => omHasKey (letBindName b) members) binds)
+      (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -54294,7 +54320,9 @@ isTyAuth _ = False
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "g"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "te") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "lits") (EApp (EVar "takePatLits") (ELit LUnit))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EApp (EVar "fst") (EVar "pr"))) (EVar "te"))) (DoLet false false PWild (EApp (EVar "settlePatLits") (EVar "lits"))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr")))) (EVar "rest")))))
 (DTypeSig false "inferLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "processLetGroup") (EVar "env")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
+(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EVar "fold") (EVar "processLetGroup")) (EVar "env")) (EApp (EVar "letGroupComponents") (EVar "binds")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
+(DTypeSig false "letGroupComponents" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "LetBind")))))
+(DFunDef false "letGroupComponents" ((PVar "binds")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "omSize") (EVar "nameSet")) (EApp (EVar "listLen") (EVar "names"))) (EListLit (EVar "binds")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EVar "map") (EVar "funClausePair")) (EVar "clauses"))) (EVar "m")))) (EVar "omEmpty")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "component")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "namesToSet") (EVar "component")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "letBindName") (EVar "b"))) (EVar "members")))) (EVar "binds")))))) (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped"))))))))))
 (DTypeSig false "registerData" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "TcEnv"))))
 (DFunDef false "registerData" ((PVar "env") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d")))
 (DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataCtors" (PVar "variants")) (rf "dataCtorBinders" (PVar "binders")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EVar "anns")) (EVar "variants")) (EVar "binders")))
@@ -62300,7 +62328,9 @@ isTyAuth _ = False
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "g"))) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EVar "env")) (EVar "rest")))))
 (DFunDef false "inferArmGuards" ((PVar "env") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "te") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "lits") (EApp (EVar "takePatLits") (ELit LUnit))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EVar "bindFrom") (EApp (EVar "fst") (EVar "pr"))) (EVar "te"))) (DoLet false false PWild (EApp (EVar "settlePatLits") (EVar "lits"))) (DoExpr (EApp (EApp (EVar "inferArmGuards") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr")))) (EVar "rest")))))
 (DTypeSig false "inferLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "processLetGroup") (EVar "env")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
+(DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EMethodRef "fold") (EVar "processLetGroup")) (EVar "env")) (EApp (EVar "letGroupComponents") (EVar "binds")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
+(DTypeSig false "letGroupComponents" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "LetBind")))))
+(DFunDef false "letGroupComponents" ((PVar "binds")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "omSize") (EVar "nameSet")) (EApp (EVar "listLen") (EVar "names"))) (EListLit (EVar "binds")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "funClausePair")) (EVar "clauses"))) (EVar "m")))) (EVar "omEmpty")) (EVar "binds"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "component")) (EBlock (DoLet false false (PVar "members") (EApp (EApp (EVar "namesToSet") (EVar "component")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "letBindName") (EVar "b"))) (EVar "members")))) (EVar "binds")))))) (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EApp (EApp (EVar "depGraphMap") (EVar "names")) (EVar "grouped"))))))))))
 (DTypeSig false "registerData" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "TcEnv"))))
 (DFunDef false "registerData" ((PVar "env") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d")))
 (DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "anns")) (rf "dataCtors" (PVar "variants")) (rf "dataCtorBinders" (PVar "binders")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EVar "anns")) (EVar "variants")) (EVar "binders")))

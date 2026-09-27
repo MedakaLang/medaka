@@ -1658,6 +1658,7 @@ letBindName : LetBind -> String
 letBindNameTc : LetBind -> String
 letBindNamesTc : List LetBind -> List String
 letBindSites : LetBind -> List (Ref Route)
+letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letRecNonFunctionMsg : String -> String
 litType : Lit -> Mono

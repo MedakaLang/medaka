@@ -21646,8 +21646,34 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let env2 = processLetGroup env binds
+  let env2 = fold processLetGroup env (letGroupComponents binds)
   infer env2 body
+
+-- A `where` block is checked one dependency component at a time, a
+-- component's dependencies first, as a module's top level is: a binding that
+-- only USES a sibling sees it generalized, rather than sharing its type
+-- variables as a member of one recursive group would.  Without it an
+-- authority relation a helper owes (`rd (Dir p) = readUnder h p`) is shared
+-- by every sibling that calls the helper, and a group decides it (#3462).
+-- Members keep their source order inside a component.  A block that repeats a
+-- name stays one group: its components are not well defined.
+letGroupComponents : List LetBind -> List (List LetBind)
+letGroupComponents binds =
+  let names = map letBindName binds
+  let nameSet = namesToSet names omEmpty
+  if omSize nameSet < listLen names then
+    [binds]
+  else
+    let grouped =
+      fold
+        (m (LetBind n clauses) => omInsert n (map funClausePair clauses) m)
+        omEmpty
+        binds
+    map
+      (component =>
+        let members = namesToSet component omEmpty
+        filterList (b => omHasKey (letBindName b) members) binds)
+      (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
