@@ -958,13 +958,18 @@ done || exit 1
 # Match the whole condition inside its owning function. Embedded newlines in a
 # grep pattern are alternatives, so a multiline pattern would accept any one
 # surviving argument even if the visibility call itself had been removed.
-any_given_scope_guard='&& Scopes.givenVisibleFrom (currentScopeStore ()) scope (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'
+# The scan reads the use scope's ancestor chain once (`visibleChain`) and tests
+# each given's binder scope against it, so both halves are pinned.
 any_given_scope_body=$(sed -n '/^anyGivenMatches :/,/^isSemanticGivenAnswer :/p' "$predicate_slot_src" \
   | sed '/^[[:space:]]*--/d' | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')
-if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
-  echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
-  exit 1
-fi
+for any_given_scope_guard in \
+  'anyGivenOnChain request (Scopes.visibleChain (currentScopeStore ()) scope) givens' \
+  '&& Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder) && predicateRequestMatchesSlot request g.geSlot'; do
+  if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; then
+    echo "FAIL: #1318 anyGivenMatches dropped nominal scope visibility: $any_given_scope_guard"
+    exit 1
+  fi
+done
 
 # #2549 method-row preparation: declaration identity, scheme, and method-level slots
 # are built in one row walk.  The Module-only driver reads its visible rows from
