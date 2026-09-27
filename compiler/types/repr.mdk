@@ -15,7 +15,7 @@
 
 import types.effect_authority.{
   Authority(..), Authvar(..), authvarId, authvarName, authNorm, authIsTop,
-  renderAuthorityWith
+  authSub, renderAuthorityWith
 }
 import types.effect_rows.{
   renderAtoms,
@@ -196,12 +196,25 @@ public export data Tyvar =
 -- states the identity class it claims, so a reviewer grades a CALL rather than
 -- re-deriving what a bare third argument meant.
 
--- forall <quantified tyvar ids> <quantified effvar ids> <quantified authvar ids>. mono
+-- forall <quantified tyvar ids> <quantified effvar ids> <quantified authvar ids>
+-- <residual authority obligations>. mono
 -- A generalized term binding: type, row and authority binders scope over BOTH
 -- the value and its forcing effect and are instantiated together under one
 -- substitution. Strict locals, constructors and functions have an empty
 -- forcing row; lazy top-level initializers retain their evaluation row.
-public export data Scheme = Forall (List Int) (List Int) (List Int) EffRow Mono
+public export data Scheme =
+  | Forall (List Int) (List Int) (List Int) (List AuthResidual) EffRow Mono
+
+-- An obligation `arLower ⊑ arUpper` a generalized binding keeps between its
+-- own quantified authorities and constants (EFFECTS-SEMANTICS §6, `C ⇒ τ`).
+-- It is instantiated with the scheme's one substitution and re-emitted as an
+-- obligation of the scope that uses the binding.
+public export data AuthResidual = AuthResidual {
+  arLower : Authority,
+  arUpper : Authority,
+  -- one half of an index equality (reported as an index mismatch)
+  arExact : Bool,
+}
 
 -- #838 I1: the unified obligation record.  `pred.args` is the
 -- ALREADY-PROJECTED dispatch/argument vector — exactly the call channel's existing
@@ -330,7 +343,41 @@ normalizeLink cell t = match t
 -- ── rendering ─────────────────────────────────────────────────────────────
 export
 ppScheme : Scheme -> String
-ppScheme (Forall _ _ _ force t) = ppBinding (Ref []) (Ref 0) force t
+ppScheme (Forall _ _ _ residual force t) = match openResiduals residual
+  [] => ppBinding (Ref []) (Ref 0) force t
+  live =>
+    let ctx = Ref []
+    let cnt = Ref 0
+    let body = ppBinding ctx cnt force t
+    "\{contextText [] (renderResiduals ctx cnt live)} => \{body}"
+
+-- The residuals a scheme still states: one whose relation already holds (an
+-- upper bound the root solved to the domain's top, a lower one it solved to
+-- the empty authority) constrains no use, and is not printed.
+openResiduals : List AuthResidual -> List AuthResidual
+openResiduals residual =
+  filterList (r => not (authSub r.arLower r.arUpper)) residual
+
+-- A scheme's context: one class constraint alone reads bare (`Num a =>`); a
+-- residual, or several entries, are parenthesised (`(p <= d) =>`,
+-- `(Num n, p <= d) =>`).
+contextText : List String -> List String -> String
+contextText [c] [] = c
+contextText classes residuals =
+  "(" ++ joinWith ", " (classes ++ residuals) ++ ")"
+
+-- Each residual as `lower <= upper`, under the naming context the body was
+-- rendered in, so a binder reads the same on both sides of `=>`.
+export
+renderResiduals : Ref (List (Int, String)) ->
+  Ref Int ->
+  List AuthResidual ->
+  List String
+renderResiduals ctx cnt residual =
+  sortUniqS
+    (map
+      (r => "\{ppAuthArg ctx cnt r.arLower} <= \{ppAuthArg ctx cnt r.arUpper}")
+      residual)
 
 ppBinding : Ref (List (Int, String)) -> Ref Int -> EffRow -> Mono -> String
 ppBinding ctx cnt force t = match rowFlat force
@@ -365,15 +412,12 @@ ppEffectPrefix ctx cnt (labels, members) =
 export
 ppSchemeCon : List VecObl -> Scheme -> String
 ppSchemeCon [] s = ppScheme s
-ppSchemeCon cons (Forall _ _ _ force t) =
+ppSchemeCon cons (Forall _ _ _ residual force t) =
   let ctx = Ref []
   let cnt = Ref 0
   let body = ppBinding ctx cnt force t
-  let rendered = sortUniqS (renderConstraintCtx ctx cnt cons)
-  let ctxStr = match rendered
-    [c] => c
-    _ => "(" ++ joinWith ", " rendered ++ ")"
-  "\{ctxStr} => \{body}"
+  let classes = sortUniqS (renderConstraintCtx ctx cnt cons)
+  "\{contextText classes (renderResiduals ctx cnt (openResiduals residual))} => \{body}"
 
 -- a predicate renders with its WHOLE argument vector — `Ix a i =>`, not the
 -- `(Ix a, Ix i) =>` two-1-ary-facts rendering the shattered representation produced
@@ -583,11 +627,15 @@ ppFun ctx cnt prec a eff b =
 -- it, `(p : T)`, so a printed scheme is the signature a user would write.
 ppDomain : Ref (List (Int, String)) -> Ref Int -> Mono -> String
 ppDomain ctx cnt a = match normalize a
-  TQual inner (AVar cell) =>
-    if isSome (lookupAssocI (authvarId cell + 2000000) !ctx) then
-      ppGo ctx cnt 2 a
-    else
-      "(\{ppAuthvarName ctx cnt cell} : \{ppGo ctx cnt 0 inner})"
+  -- the qualifier read through its links: a cell solved to another variable
+  -- is that variable, never a fresh binder
+  TQual inner q => match authNorm q
+    AVar cell =>
+      if isSome (lookupAssocI (authvarId cell + 2000000) !ctx) then
+        ppGo ctx cnt 2 a
+      else
+        "(\{ppAuthvarName ctx cnt cell} : \{ppGo ctx cnt 0 inner})"
+    _ => ppGo ctx cnt 2 a
   _ => ppGo ctx cnt 2 a
 
 export

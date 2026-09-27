@@ -17,6 +17,10 @@ public export data ValueJoinOps c = ValueJoinOps {
   -- alternative's authority, the authority peer of a row allowance.
   vjoFreshAuth : Param -> Authority,
   vjoCollectAuth : List Authority -> Authority,
+  -- Alternatives none of which has a shape yet: the checker may record the
+  -- join to decide once shapes are known (EFFECTS-SEMANTICS §6.8), returning
+  -- the variable that stands for its result, rather than equate them now.
+  vjoDefer : List (c, Mono) -> Option Mono,
 }
 
 export
@@ -100,34 +104,45 @@ matchingValues ops witness ((value@(context, t)) :: rest) =
 
 joinNonempty : ValueJoinOps c -> List (c, Mono) -> Mono
 joinNonempty ops values = match concreteWitness values
+  None => match ops.vjoDefer values
+    Some result => result
+    None => equalValues ops values
+  Some witness => joinWithWitness ops witness values
+
+-- Decide a recorded join whose result nothing has shaped: the alternatives'
+-- own shapes where any has one; else equality, as for values that never take
+-- a shape.  [ops] must not defer again.
+export
+resolveDeferredJoin : ValueJoinOps c -> List (c, Mono) -> Mono
+resolveDeferredJoin ops values = match concreteWitness values
+  Some witness => joinWithWitness ops witness values
   None => equalValues ops values
-  Some witness => match witness
-    TFun _ _ _ =>
-      let alternatives =
-        matchingValues ops witness (map (shapeUnknown ops witness) values)
-      let domain = equalValues ops (map arrowDomain alternatives)
-      let rows = map arrowRow alternatives
-      let result = joinNonempty ops (map arrowResult alternatives)
-      TFun domain (ops.vjoCollectRows rows) result
-    TApp _ _ =>
-      let alternatives =
-        matchingValues ops witness (map (shapeUnknown ops witness) values)
-      joinApplications ops alternatives
-    -- Qualified alternatives join their value types and take one allowance
-    -- above every authority.  A plain alternative beside them is a value the
-    -- domain cannot bound, so the join forgets the qualifier: only the
-    -- expression-directed abstraction can recover more, and it does.
-    TQual _ _ =>
-      let shaped = map (shapeUnknown ops witness) values
-      if anyList (v => not (isQualified (snd v))) shaped then
-        joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
-      else
-        let inner =
-          joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
-        TQual inner (ops.vjoCollectAuth (map (v => qualAuth (snd v)) shaped))
-    _ =>
-      -- Concrete heads and effect indices have no covariant join rule.
-      equalValues ops values
+
+joinWithWitness : ValueJoinOps c -> Mono -> List (c, Mono) -> Mono
+joinWithWitness ops (witness@(TFun _ _ _)) values =
+  let alternatives =
+    matchingValues ops witness (map (shapeUnknown ops witness) values)
+  let domain = equalValues ops (map arrowDomain alternatives)
+  let rows = map arrowRow alternatives
+  let result = joinNonempty ops (map arrowResult alternatives)
+  TFun domain (ops.vjoCollectRows rows) result
+joinWithWitness ops (witness@(TApp _ _)) values =
+  let alternatives =
+    matchingValues ops witness (map (shapeUnknown ops witness) values)
+  joinApplications ops alternatives
+-- Qualified alternatives join their value types and take one allowance
+-- above every authority.  A plain alternative beside them is a value the
+-- domain cannot bound, so the join forgets the qualifier: only the
+-- expression-directed abstraction can recover more, and it does.
+joinWithWitness ops (witness@(TQual _ _)) values =
+  let shaped = map (shapeUnknown ops witness) values
+  if anyList (v => not (isQualified (snd v))) shaped then
+    joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
+  else
+    let inner = joinNonempty ops (map (v => (fst v, qualInner (snd v))) shaped)
+    TQual inner (ops.vjoCollectAuth (map (v => qualAuth (snd v)) shaped))
+-- Concrete heads and effect indices have no covariant join rule.
+joinWithWitness ops _ values = equalValues ops values
 
 equalValues : ValueJoinOps c -> List (c, Mono) -> Mono
 equalValues _ [] = panic "empty produced-value equality"

@@ -417,7 +417,7 @@ forcingFor source name =
     desugar (parseLocated (effectPrelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some (Forall _ _ _ force _) => renderAtoms (effrowLabels force)
+    Some (Forall _ _ _ _ force _) => renderAtoms (effrowLabels force)
     None => "<missing binding>"
 
 renderedFor : String -> String -> String
@@ -437,7 +437,7 @@ forcingTailCount source name =
     desugar (parseLocated (effectPrelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some (Forall _ _ _ force _) => length (snd (rowFlat force))
+    Some (Forall _ _ _ _ force _) => length (snd (rowFlat force))
     None => -1
 
 messagesFor : String -> List String
@@ -1225,4 +1225,113 @@ test "function alternatives join through if match list array and tuple values" =
         (errorsFor
           (source
             ++ "quiet : Unit -> Unit\nquiet _ =\n  let _ = ifValue\n  let _ = matchValue\n  let _ = listValue\n  let _ = arrayValue\n  tupleValue\n"))),
+  ]
+
+-- #3462 (b): alternatives with no shape yet are joined once a later use
+-- shapes one of them, not equated where they meet, so the order of two
+-- statements no longer decides a callback's row.  Every accepted use beside
+-- its laundering twin.
+delayedJoinHead : String
+delayedJoinHead =
+  "data Box a = Box a\n"
+    ++ "runPure : (Unit -> Unit) -> Unit\nrunPure k = k ()\n"
+    ++ "runPureBox : Box (Unit -> Unit) -> Unit\nrunPureBox (Box k) = k ()\n"
+    ++ "loud : Unit -> <Audit> Unit\nloud _ = emitAudit ()\n"
+    ++ "quiet : Unit -> Unit\nquiet _ = ()\n"
+    ++ "choose c f g =\n  let r = if c then f else g\n  let _ = runPure g\n  r\n"
+    ++ "chooseKnown c f g =\n  let _ = runPure g\n  let r = if c then f else g\n  r\n"
+    ++ "chooseBox c f g =\n  let r = if c then Box f else Box g\n  let _ = runPureBox (Box g)\n  r\n"
+    ++ "listBoth f g =\n  let xs = [f, g]\n  let _ = runPure g\n  xs\n"
+    ++ "chooseMatch c f g =\n  let r = match c\n    True => f\n    False => g\n  let _ = runPure g\n  r\n"
+
+delayed : String -> String
+delayed body = delayedJoinHead ++ body
+
+test "a join of unshaped alternatives is decided once a later use shapes one" = expectAll
+  [
+    expectEqual
+      (renderedFor delayedJoinHead "chooseKnown")
+      (renderedFor delayedJoinHead "choose"),
+    expectEqual
+      "Bool -> (Unit -> <a> Unit) -> (Unit -> Unit) -> Unit -> <a> Unit"
+      (renderedFor delayedJoinHead "choose"),
+    expectEqual
+      "Bool -> (Unit -> <a> Unit) -> (Unit -> Unit) -> Box (Unit -> <a> Unit)"
+      (renderedFor delayedJoinHead "chooseBox"),
+    expectEqual
+      "(Unit -> <a> Unit) -> (Unit -> Unit) -> List (Unit -> <a> Unit)"
+      (renderedFor delayedJoinHead "listBoth"),
+    expectEqual
+      (renderedFor delayedJoinHead "choose")
+      (renderedFor delayedJoinHead "chooseMatch"),
+  ]
+
+test "a delayed join accepts the honest use and refuses its launder" = expectAll
+  [
+    expectEqual [] (errorsFor (delayed "use = choose True loud quiet\n")),
+    expectNotEqual [] (errorsFor (delayed "use = choose True quiet loud\n")),
+    expectEqual [] (errorsFor (delayed "use = chooseBox True loud quiet\n")),
+    expectNotEqual [] (errorsFor (delayed "use = chooseBox True quiet loud\n")),
+    expectEqual [] (errorsFor (delayed "use = listBoth loud quiet\n")),
+    expectNotEqual [] (errorsFor (delayed "use = listBoth quiet loud\n")),
+    expectEqual [] (errorsFor (delayed "use = chooseMatch True loud quiet\n")),
+    expectNotEqual
+      []
+      (errorsFor (delayed "use = chooseMatch True quiet loud\n")),
+  ]
+
+-- A use that shapes the join's result first decides it, by equality, as
+-- before joins were delayed: a closed slot fixes the callback's row there,
+-- which a caller-supplied row could meet only by equality (review round 1).
+test "a join a later use shapes first is decided by that use" = expectAll [
+  expectEqual
+    []
+    (errorsFor
+      "apply2 : (Int -> Int -> Int) -> Int\napply2 k = k 1 2\nviaApply c f g = apply2 (if c then f else g)\n"),
+  expectEqual
+    []
+    (errorsFor
+      "runAll : List (Int -> Int) -> Int\nrunAll ks = 0\nboth f g = runAll [f, g]\n"),
+  expectEqual
+    []
+    (errorsFor
+      "annotated c f g =\n  let r : Int -> Int = if c then f else g\n  r 1\n"),
+  expectNotEqual
+    []
+    (errorsFor
+      "apply2 : (Unit -> Unit -> Unit) -> Unit\napply2 k = k () ()\nviaApply c f g = apply2 (if c then f else g)\nloud2 : Unit -> Unit -> <Audit> Unit\nloud2 _ _ = emitAudit ()\nuse = viaApply True loud2 (_ _ => ())\n"),
+]
+
+-- A join with a local alternative is decided before the binding
+-- generalizes, even when its result already flows outward: otherwise the
+-- binding generalizes the alternative the join still ties to [f] (review
+-- round 2).  The control passes [f] itself.
+test "a join with a local alternative is decided before its binding generalizes" =
+  let outer = "outer c f k =\n  let h x = k (if c then f else x)\n"
+  expectAll [
+    expectEqual
+      "Bool -> String -> (String -> <a> b) -> <a> b"
+      (renderedFor (outer ++ "  h \"hello\"\n") "outer"),
+    expectNotEqual
+      []
+      (errorsFor
+        (outer
+          ++ "  h \"hello\"\nuse : Int\nuse = outer False 100 (n => n)\n")),
+    expectEqual
+      []
+      (errorsFor
+        (outer ++ "  h f\nuse : Int\nuse = outer False 100 (n => n)\n")),
+  ]
+
+test "a join the result's own use shapes keeps each alternative's row" = expectAll
+  [
+    expectEqual
+      "Bool -> (Unit -> <a> b) -> (Unit -> <a> b) -> <a> b"
+      (renderedFor "pickApply c f g = (if c then f else g) ()\n" "pickApply"),
+    expectEqual
+      "<Audit> Unit"
+      (renderedFor
+        (delayed
+          "pickApply c f g = (if c then f else g) ()\nuse = pickApply True loud quiet\n")
+        "use"),
   ]

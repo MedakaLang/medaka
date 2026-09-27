@@ -1,0 +1,26 @@
+-- An unsigned wrapper keeps the relation between its two arguments'
+-- authorities as a residual of its scheme (#3462), and each use is checked
+-- against it: reading a path within the handle's authority is accepted, and
+-- the read is charged at the path, not at the wider handle.
+data Dir (d : Authority FileRead) = Dir (String @d)
+
+mk : (s : String) -> Dir s
+mk s = Dir s
+
+sub : Dir d -> (p : String @d) -> Dir d
+sub h _ = h
+
+readIn h (Dir p) =
+  let _ = sub h p
+  readFile p
+
+cfg : Dir "cfg/*"
+cfg = mk "cfg/*"
+
+app : Dir "cfg/app"
+app = mk "cfg/app"
+
+cfgApp : Unit -> <FileRead "cfg/app"> Result String String
+cfgApp _ = readIn cfg app
+
+main = println 1

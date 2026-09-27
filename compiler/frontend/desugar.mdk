@@ -1196,9 +1196,22 @@ qualifyAliasRefs prog = qualifyAliasRefsWith (moduleAliases prog) prog
 -- "A")) "f"`, never a bare `EVar`.
 rewriteAliasQual : List String -> Expr -> Expr
 rewriteAliasQual aliases (e@(EFieldAccess head f _)) = match stripLocE head
-  EVar a => if contains a aliases then EVar (qualifiedLocal a f) else e
+  EVar a =>
+    if contains a aliases then
+      qualifiedAt head f (EVar (qualifiedLocal a f))
+    else
+      e
   _ => e
 rewriteAliasQual _ e = e
+
+-- The qualified name is located from its alias head through the member
+-- (`V.toList`): the head's span is the only one the parser gave the
+-- reference, so without it a diagnostic about the occurrence would point at
+-- whatever was inferred last.
+qualifiedAt : Expr -> String -> Expr -> Expr
+qualifiedAt (ELoc (Loc file sl sc el ec) _) member e =
+  ELoc (Loc file sl sc el (ec + 1 + stringLength member)) e
+qualifiedAt _ _ e = e
 
 -- ── The pass pipeline ─────────────────────────────────────────────────────
 -- Ported in the reference order (later passes run last): merge_iface_defaults →
