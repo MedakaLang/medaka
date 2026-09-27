@@ -1,5 +1,5 @@
 # META
-source_lines=50214
+source_lines=50215
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -31539,6 +31539,7 @@ negatedI32Lit : Expr -> Option Int
 negatedI32Lit (ELoc _ e) = negatedI32Lit e
 negatedI32Lit (ELit (LInt n)) = negatedInI32 n
 negatedI32Lit (EApp (EMethodAt "fromInt" _ _) (ELit (LInt n))) = negatedInI32 n
+-- Every other operand is ordinary negation, which `Num I32` wraps.
 negatedI32Lit _ = None
 
 -- The range is tested on `n` before it is negated, so no `Int` negation traps.
