@@ -367,9 +367,11 @@ A `where` block's bindings may refer to each other in any order, recursively
 or not. They are typed in dependency order, as top-level definitions are: a
 binding its siblings only use is generalized first, so two siblings may use it
 at two types (`a = g 1` beside `b = g True`); only bindings that reach each
-other share one group. A numeric literal's type is still decided once for the
-whole block: `scale = 100` beside `go y = y / scale` makes `scale` a `Float`,
-and it defaults to `Int` only if nothing in the block fixes it.
+other share one group. A `where` function whose type mentions a numeric
+literal's type generalizes it (`two _ = 2` may be used at `Int` and `Float`); a
+`where` value stays one shared type, so a sibling or the body fixes it
+(`scale = 100` beside `go y = y / scale` makes `scale` a `Float`), and the
+enclosing definition defaults it to `Int` if nothing does.
 
 ## Lambdas
 

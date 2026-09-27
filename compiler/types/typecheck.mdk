@@ -21994,9 +21994,7 @@ inferArmGuards env ((GBind p e) :: rest) =
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetGroup env binds body =
   let _ = checkLetGroupBindsLocated binds  -- #799
-  let deferred = Ref []
-  let env2 = fold (processLetGroup deferred) env (letGroupComponents binds)
-  let _ = groundDeferredNum !deferred
+  let env2 = fold processLetGroup env (letGroupComponents binds)
   infer env2 body
 
 -- A `where` block is checked one dependency component at a time, a
@@ -22023,57 +22021,6 @@ letGroupComponents binds =
         let members = namesToSet component omEmpty
         filterList (b => omHasKey (letBindNameTc b) members) binds)
       (tarjanSCCs names (depGraphMap names grouped))
-
--- A split block decides a Num-only type once, at its end, as one group would:
--- a component's ambiguous Num variables are neither defaulted nor generalized
--- at the component's boundary but handed to the block, so a later sibling can
--- still fix one (`scale = 100` beside `go y = y / scale`).  Only the variables
--- the component itself owns are deferred, and at the block's end only those
--- are defaulted, and only where no member of the block reaches one from an
--- argument, the rule one group applies to all its members; an enclosing
--- binding's variable is never grounded here.
-deferGroupNum : Ref (List (List Int, List UObligation, List Mono)) ->
-  Int ->
-  List UObligation ->
-  List Mono ->
-  Unit
-deferGroupNum deferred owner obls monos =
-  let argIds = flatMap monoArgUnboundIds monos
-  let ids =
-    filterList
-      (id => not (containsI id argIds))
-      (unprotectedNumCandidates omEmpty obls)
-  let owned =
-    filterList
-      (id => match liveNumVarGo id obls
-        Some m => numDefaultOwnerAllows (Some owner) m
-        None => False)
-      ids
-  let _ =
-    fold
-      (_ id => match liveNumVarGo id obls
-        Some m => lowerTyvarLevel (owner - 1) m
-        None => ())
-      ()
-      owned
-  deferred := (owned, obls, monos) :: !deferred
-
-groundDeferredNum : List (List Int, List UObligation, List Mono) -> Unit
-groundDeferredNum entries =
-  let argIds =
-    flatMap
-      (e => match e
-        (_, _, monos) => flatMap monoArgUnboundIds monos)
-      entries
-  fold
-    (_ e => match e
-      (ids, obls, _) =>
-        groundNumVarsWith
-          None
-          obls
-          (filterList (id => not (containsI id argIds)) ids))
-    ()
-    entries
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
@@ -23326,12 +23273,9 @@ groupNames ((n, _) :: rest) seen = match omLookup n seen
   None => n :: groupNames rest (omInsert n () seen)
 
 -- process one dependency component of a where block: bind names, infer,
--- generalize.  Its ambiguous Num variables go to [deferred] (`deferGroupNum`).
-processLetGroup : Ref (List (List Int, List UObligation, List Mono)) ->
-  TcEnv ->
-  List LetBind ->
-  TcEnv
-processLetGroup deferred env binds =
+-- generalize
+processLetGroup : TcEnv -> List LetBind -> TcEnv
+processLetGroup env binds =
   let _ = enterLevel ()
   let _ = beginEffectSummaryScope ()
   let oblN0 = wMark perRun.value.implObls
@@ -23350,17 +23294,15 @@ processLetGroup deferred env binds =
       (map (letBindGeneralizes env) (zipL binds summaries))
   let _ = flushPendingEscapes ()
   let _ = exitLevel ()
-  -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
-  -- where-group boundary (and not arg-reachable from any member type) before the
-  -- group generalizes.  Scoped to this group's newly added obligations.
+  -- PLAN.md #11 / D4, as a where block narrows it (#3487): ground the Num-only
+  -- vars owned by this just-exited component that no member's type mentions
+  -- (nothing can generalize them).  One a member's type does mention, even in
+  -- return position, generalizes with its constraint, so a sibling or the
+  -- enclosing body instantiates it (`two _ = 2` beside `go y = y / two ()`);
+  -- the enclosing binding's boundary decides what its uses leave ambiguous.
+  -- Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
   let memberMonos = map (p => schemeMono (snd p)) placeholders
-  let _ =
-    deferGroupNum
-      deferred
-      (perRun.value.currentLevel.value + 1)
-      addedObls
-      memberMonos
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition = NumBoundaryOwnedGroup (perRun.value.currentLevel.value + 1),
     nbMembers = memberMonos,
@@ -23522,7 +23464,7 @@ numObligIds o = match o.oblProj
 -- These four policies preserve the existing candidate sets while making the
 -- outliving channels named data instead of positional arguments:
 --   * member: roots in one member, excluding its arguments;
---   * group: all roots, excluding arguments of any member;
+--   * group (a where component): roots no member's type mentions;
 --   * SCC: the group rule plus the existing per-member fallback;
 --   * body-local: roots absent from the boundary's explicit surviving-channel set.
 data NumBoundaryDisposition =
@@ -23562,7 +23504,7 @@ finalizeNumBoundary boundary =
           member
       _ => panic "NumBoundaryOwnedMember must carry exactly one member"
     NumBoundaryOwnedGroup _ =>
-      defaultGroupNumWith
+      defaultAbsentNumWith
         defaultOwnerPolicy
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
@@ -23629,6 +23571,22 @@ defaultGroupNumWith ownerPolicy protectedIds obls monos =
     ownerPolicy
     obls
     (filterList (id => not (containsI id argIds)) candidates)
+
+-- where-component defaulting: ground every unprotected Num-constrained var no
+-- member's type mentions (a var consumed inside a body, `n = length [1, 2]`).
+-- A var a member's type mentions generalizes with its constraint instead.
+defaultAbsentNumWith : Option Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  List Mono ->
+  Unit
+defaultAbsentNumWith ownerPolicy protectedIds obls monos =
+  let inTypes = flatMap monoUnboundIds monos
+  let candidates = unprotectedNumCandidates protectedIds obls
+  groundNumVarsWith
+    ownerPolicy
+    obls
+    (filterList (id => not (containsI id inTypes)) candidates)
 
 unprotectedNumCandidates : OrdMap Unit -> List UObligation -> List Int
 unprotectedNumCandidates protectedIds obls =
