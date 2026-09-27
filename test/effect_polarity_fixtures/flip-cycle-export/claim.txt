@@ -1,0 +1,11 @@
+issue: #3512
+shape: a flip cycle through four types exported by another module; the
+       variance fixpoint needs about twice as many rounds as there are types.
+spec: EFFECTS-SEMANTICS.md §9: only equality is sound through a
+      non-covariant parameter. `T4 y` occurs as `y -> Unit` and, under a
+      second flip, as `T1 (y -> Unit)`, so every slot in the cycle is invariant.
+status: REJECTED since the fixpoint iterates from "no occurrence yet" to
+  convergence. MEASURED on main @ 32e4b07f6 before the fix: `widen0` accepted,
+  `sneaky : String -> String` read `lk/x` at run time, and appending eight
+  unrelated functions to ty.mdk (more fuel for the capped iteration) made it
+  rejected.

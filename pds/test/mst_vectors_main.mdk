@@ -1,7 +1,7 @@
 {- | P1-B external MST corpus and hostile-structure driver. -}
 
 import array.{drop}
-import bytes.{toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse, sortBy}
@@ -161,14 +161,15 @@ runCorpus (line :: rest) current passed total =
 
 mustNode : DagCbor -> Array Int
 mustNode value =
-  resultOrPanic
-    "mst_vectors: hostile node encoding failed"
-    (dagCborEncode value)
+  toArray
+    (resultOrPanic
+      "mst_vectors: hostile node encoding failed"
+      (dagCborEncode value))
 
 entryValueWithTree : Array Int -> Int -> Cid -> DagCbor -> DagCbor
 entryValueWithTree key prefix value tree = DcMap [
   ("p", DcInt prefix),
-  ("k", DcBytes key),
+  ("k", DcBytes (fromArrayAssumeByteDomain key)),
   ("v", DcLink value),
   ("t", tree),
 ]
@@ -179,11 +180,20 @@ entryValue key prefix value = entryValueWithTree key prefix value DcNull
 nodeBytes : DagCbor -> List DagCbor -> Array Int
 nodeBytes left entries = mustNode (DcMap [("l", left), ("e", DcArray entries)])
 
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
+
 nodeBlock : Array Int -> (Cid, Array Int)
-nodeBlock bytes = (cidForDagCbor bytes, bytes)
+nodeBlock bytes = (cidForDagCborDoor bytes, bytes)
 
 nodeCid : Array Int -> Cid
-nodeCid bytes = cidForDagCbor bytes
+nodeCid bytes = cidForDagCborDoor bytes
 
 accepts : String -> Result String Unit -> <IO> Int
 accepts label (Ok ()) =

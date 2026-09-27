@@ -1350,3 +1350,55 @@ aliasResidualLine =
 
 test "an alias-qualified occurrence is located at its own name" =
   expectEqual (Some 6) aliasResidualLine
+
+-- A concatenation denotes its left operand plus the suffix. An exact element
+-- admits only itself, so an unknown suffix extends it to the pattern it
+-- begins and a known one is appended; a pattern already admits both.
+test "a concatenation extends an exact prefix; a literal suffix is appended" = expectAll
+  [
+    expectFalse
+      (accepts
+        "bad : String -> <Store \"cfg/\"> Int\nbad x = load (\"cfg/\" ++ x)\n"),
+    expectTrue
+      (accepts
+        "ok : String -> <Store \"cfg/*\"> Int\nok x = load (\"cfg/\" ++ x)\n"),
+    expectFalse
+      (accepts
+        "bad : String -> <Store \"cfg/\"> Int\nbad x =\n  let p = \"cfg/\" ++ x\n  load p\n"),
+    expectTrue
+      (accepts
+        "ok : Unit -> <Store \"cfg/app.toml\"> Int\nok _ = load (\"cfg/\" ++ \"app\" ++ \".toml\")\n"),
+    expectFalse
+      (accepts
+        "bad : Unit -> <Store \"cfg/app.toml\"> Int\nbad _ = load (\"cfg/\" ++ \"app\")\n"),
+    expectTrue
+      (accepts
+        "ok : String -> <Store \"cfg/*\"> Int\nok x = load ((\"cfg/\" ++ x) ++ \".toml\")\n"),
+    expectEqual
+      "String -> <Store \"cfg/*\"> Int"
+      (schemeOf "f x = load (\"cfg/\" ++ x)\n" "f"),
+  ]
+
+test "a concatenation extends a Product's primary axis; a literal chain is a literal" = expectAll
+  [
+    expectFalse
+      (accepts
+        ("effect Web Product (Host : Prefix, Method : Set)\n"
+          ++ "extern call : (u : String) -> <Web u> Unit\n"
+          ++ "bad : String -> <Web \"a.com/x\"> Unit\nbad s = call (\"a.com/x\" ++ s)\n")),
+    expectTrue
+      (accepts
+        ("effect Web Product (Host : Prefix, Method : Set)\n"
+          ++ "extern call : (u : String) -> <Web u> Unit\n"
+          ++ "ok : String -> <Web \"a.com/*\"> Unit\nok s = call (\"a.com/\" ++ s)\n")),
+    expectTrue
+      (accepts
+        ("effect M Product (Method : Set, Host : Prefix)\n"
+          ++ "extern call : (m : String) -> <M m> Unit\n"
+          ++ "ok : Unit -> <M \"GET\"> Unit\nok _ = call (\"GE\" ++ \"T\")\n")),
+    expectFalse
+      (accepts
+        ("effect M Product (Method : Set, Host : Prefix)\n"
+          ++ "extern call : (m : String) -> <M m> Unit\n"
+          ++ "bad : String -> <M \"GET\"> Unit\nbad s = call (\"GE\" ++ s)\n")),
+  ]

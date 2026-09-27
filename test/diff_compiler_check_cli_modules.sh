@@ -2115,12 +2115,13 @@ if [ "$x1280_rej_code" -ne 0 ] && printf '%s' "$x1280_rej_json" | grep -q 'T-TYP
 else
   fail=$((fail+1)); printf 'FAIL 1280/reject-absent-origin-bridge (exit %d, no T-TYPE-MISMATCH: [%s])\n' "$x1280_rej_code" "$x1280_rej"
 fi
-# The message must name BOTH modules.  Same argument as A-2.10/reject-names-both-
+# The message must name BOTH origins.  Same argument as A-2.10/reject-names-both-
 # modules: `Type mismatch: Option vs Option` is true and unactionable, and no other
-# gate reads this text once the must-fail fixture is deleted.
+# gate reads this text once the must-fail fixture is deleted.  The prelude's side
+# is named "the prelude" rather than its module id `core` (#3465).
 if printf '%s' "$x1280_rej" | grep -q "share the name 'Option'" \
   && printf '%s' "$x1280_rej" | grep -q "x1280_evil" \
-  && printf '%s' "$x1280_rej" | grep -q "core"; then
+  && printf '%s' "$x1280_rej" | grep -q "the prelude"; then
   pass=$((pass+1)); printf 'ok   1280/reject-names-both-modules\n'
 else
   fail=$((fail+1)); printf 'FAIL 1280/reject-names-both-modules (no actionable hint: [%s])\n' "$x1280_rej"

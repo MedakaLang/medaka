@@ -5,7 +5,7 @@
    decode-and-reencode, CID calculation, and CID text parse/render. -}
 
 import array as A
-import bytes.{toArray}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import io.{readLines}
 import string.{contains, split, startsWith, toUpper}
@@ -22,6 +22,9 @@ import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 mustHex : String -> Array Int
 mustHex text =
   toArray (resultOrPanic "dagcbor_cid_vectors: malformed hex" (decode text))
+
+decodeHex : String -> Result String DagCbor
+decodeHex hex = dagCborDecode (fromArrayAssumeByteDomain (mustHex hex))
 
 mustCid : String -> Cid
 mustCid text =
@@ -40,8 +43,8 @@ fixtureValue name = match name
   "array-65536" => DcArray [DcInt 65536]
   "array-9007199254740991" => DcArray [DcInt 9007199254740991]
   "array-empty" => DcArray []
-  "bytes-a1" => DcBytes [|0xa1|]
-  "bytes-empty" => DcBytes [||]
+  "bytes-a1" => DcBytes (fromArrayAssumeByteDomain [|0xa1|])
+  "bytes-empty" => DcBytes (fromArrayAssumeByteDomain [||])
   "map-1_pair" => DcMap [("a", DcInt 1)]
   "map-empty" => DcMap []
   "map-keysort" => DcMap [
@@ -82,11 +85,13 @@ runRow : String -> <IO> Int
 runRow line = match split "\t" line
   [name, cborHex, expectedCidText] =>
     let expectedBytes = mustHex cborHex
-    let constructed = dagCborEncode (fixtureValue name)
-    let decodedReencoded = match dagCborDecode expectedBytes
-      Err message => Err message
-      Ok value => dagCborEncode value
-    let calculatedCidText = cidToString (cidForDagCbor expectedBytes)
+    let constructed = map toArray (dagCborEncode (fixtureValue name))
+    let decodedReencoded =
+      match dagCborDecode (fromArrayAssumeByteDomain expectedBytes)
+        Err message => Err message
+        Ok value => map toArray (dagCborEncode value)
+    let calculatedCidText =
+      cidToString (cidForDagCbor (fromArrayAssumeByteDomain expectedBytes))
     let parsedCidText = match cidFromString expectedCidText
       Err message => "ERR:\{message}"
       Ok cid => cidToString cid
@@ -151,67 +156,64 @@ runMalformed =
     rejectContains
       "shortest-integer-positive"
       "shortest integer/length"
-      (dagCborDecode (mustHex "1817")),
+      (decodeHex "1817"),
     rejectContains
       "shortest-integer-negative"
       "shortest integer/length"
-      (dagCborDecode (mustHex "3817")),
+      (decodeHex "3817"),
     rejectContains
       "shortest-length-bytes"
       "shortest integer/length"
-      (dagCborDecode (mustHex "5800")),
+      (decodeHex "5800"),
     rejectContains
       "shortest-length-text"
       "shortest integer/length"
-      (dagCborDecode (mustHex "7800")),
+      (decodeHex "7800"),
     rejectContains
       "shortest-length-array"
       "shortest integer/length"
-      (dagCborDecode (mustHex "9800")),
+      (decodeHex "9800"),
     rejectContains
       "shortest-length-map"
       "shortest integer/length"
-      (dagCborDecode (mustHex "b800")),
+      (decodeHex "b800"),
     rejectContains
       "map-ordering"
       "deterministic order"
-      (dagCborDecode (mustHex "a2616201616102")),
+      (decodeHex "a2616201616102"),
     rejectContains
       "map-duplicate"
       "duplicate map key"
-      (dagCborDecode (mustHex "a2616101616102")),
+      (decodeHex "a2616101616102"),
     rejectContains
       "map-non-string-key"
       "map key is not a string"
-      (dagCborDecode (mustHex "a10101")),
-    rejectContains
-      "tag42-only"
-      "only tag 42"
-      (dagCborDecode (mustHex "d82b40")),
+      (decodeHex "a10101"),
+    rejectContains "tag42-only" "only tag 42" (decodeHex "d82b40"),
     rejectContains
       "tag42-shortest"
       "shortest integer/length"
-      (dagCborDecode (mustHex "d9002a40")),
+      (decodeHex "d9002a40"),
     rejectContains
       "tag42-identity"
       "leading identity byte"
-      (dagCborDecode (setAt 4 1 linkBytes)),
+      (dagCborDecode (fromArrayAssumeByteDomain (setAt 4 1 linkBytes))),
     rejectContains
       "tag42-cid-codec-route"
       "tag-42 CID: cid: codec"
-      (dagCborDecode (setAt 6 0x70 linkBytes)),
+      (dagCborDecode (fromArrayAssumeByteDomain (setAt 6 0x70 linkBytes))),
     rejectContains
       "cid-codec"
       "cid: codec"
-      (cidFromBytes (setAt 1 0x70 linkCidBytes)),
+      (cidFromBytes (fromArrayAssumeByteDomain (setAt 1 0x70 linkCidBytes))),
     rejectContains
       "cid-hash"
       "cid: hash code"
-      (cidFromBytes (setAt 2 0x13 linkCidBytes)),
+      (cidFromBytes (fromArrayAssumeByteDomain (setAt 2 0x13 linkCidBytes))),
     rejectContains
       "cid-length"
       "cid: SHA-256 digest length"
-      (cidFromBytes (setAt 3 0x1f linkCidBytes)),
+      (cidFromBytes (fromArrayAssumeByteDomain (setAt 3 0x1f linkCidBytes))),
     rejectContains
       "base32-padding"
       "padding is not allowed"
@@ -224,26 +226,11 @@ runMalformed =
       "base32-alphabet"
       "invalid alphabet character"
       (cidFromString "b1"),
-    rejectContains
-      "truncation"
-      "truncated value"
-      (dagCborDecode (mustHex "81")),
-    rejectContains
-      "trailing-bytes"
-      "trailing bytes"
-      (dagCborDecode (mustHex "f600")),
-    rejectContains
-      "indefinite-length"
-      "indefinite-length"
-      (dagCborDecode (mustHex "9f01ff")),
-    rejectContains
-      "float"
-      "floats"
-      (dagCborDecode (mustHex "fb0000000000000000")),
-    rejectContains
-      "invalid-utf8"
-      "invalid UTF-8"
-      (dagCborDecode (mustHex "61ff")),
+    rejectContains "truncation" "truncated value" (decodeHex "81"),
+    rejectContains "trailing-bytes" "trailing bytes" (decodeHex "f600"),
+    rejectContains "indefinite-length" "indefinite-length" (decodeHex "9f01ff"),
+    rejectContains "float" "floats" (decodeHex "fb0000000000000000"),
+    rejectContains "invalid-utf8" "invalid UTF-8" (decodeHex "61ff"),
   ]
   sum checks
 

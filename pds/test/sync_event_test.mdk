@@ -25,6 +25,7 @@
    the empty MST root node as well as the commit. -}
 
 import array.{sliceClamped}
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
 import list.{lookup, range, sort}
 import string.{toUtf8}
 import test.{expectEqual}
@@ -38,17 +39,20 @@ import lib.sync_event.{
   SyncRepoOp(..),
   syncAccountFrame,
   syncCommitBody,
+  syncCommitCar,
+  syncCommitFrame,
   syncCommitEventFor,
   syncIdentityFrame,
+  syncSyncBody,
   syncSyncFrame,
 }
 import lib.tid.{Tid, tidEncode}
 
 recordCid : Cid
-recordCid = cidForRaw (toUtf8 "record")
+recordCid = cidForRaw (encodeUtf8 "record")
 
 commitCid : Cid
-commitCid = cidForRaw (toUtf8 "commit")
+commitCid = cidForRaw (encodeUtf8 "commit")
 
 mustTid : Result String Tid -> Tid
 mustTid (Ok tid) = tid
@@ -139,16 +143,19 @@ frameParts : Result String (Array Int) -> (DagCbor, DagCbor)
 frameParts (Err message) = panic "sync_event: frame refused: \{message}"
 frameParts (Ok bytes) = partsAt bytes 1
 
+decodePart : Array Int -> Int -> Int -> Result String DagCbor
+decodePart bytes lo hi =
+  dagCborDecode (fromArrayAssumeByteDomain (sliceClamped lo hi bytes))
+
 partsAt : Array Int -> Int -> (DagCbor, DagCbor)
 partsAt bytes cut =
   if cut > arrayLength bytes then
     panic "sync_event: frame carries no decodable header object"
-  else match dagCborDecode (sliceClamped 0 cut bytes)
+  else match decodePart bytes 0 cut
     Err _ => partsAt bytes (cut + 1)
-    Ok header =>
-      match dagCborDecode (sliceClamped cut (arrayLength bytes) bytes)
-        Err _ => partsAt bytes (cut + 1)
-        Ok body => (header, body)
+    Ok header => match decodePart bytes cut (arrayLength bytes)
+      Err _ => partsAt bytes (cut + 1)
+      Ok body => (header, body)
 
 -- The body's keys in the order they were encoded, which DAG-CBOR fixes: by
 -- key length first, then bytewise. A key the builder must NOT emit is absent
@@ -167,7 +174,7 @@ boolOf : DagCbor -> String -> Option Bool
 boolOf value name = asBool (bodyField name value)
 
 -- A CAR's roots and its blocks, each as CID text, in the order it holds them.
-carCidsOf : Array Int -> (List String, List String)
+carCidsOf : Bytes -> (List String, List String)
 carCidsOf bytes = match carDecode bytes
   Ok car => (
     map cidToString (carRoots car),
@@ -241,7 +248,36 @@ genesisEvent =
    varied run to run would still be a defect. -}
 test "a genesis commit's CAR carries the empty MST root beside the commit" =
   let commit = cidToString (repoCommitCid (repoLatestCommit genesisRepo))
-  expectEqual (carCidsOf genesisEvent.blocksCar) (
+  expectEqual (carCidsOf (fromArrayAssumeByteDomain genesisEvent.blocksCar)) (
     [commit],
     sort [commit, cidToString (mstRootCid mstEmpty)],
   )
+
+-- # Elements outside the byte range
+
+-- `commitBytes` with 256 added to its first element. It masks back to
+-- `commitBytes`, whose raw CID is `commitCid`, so an encoder that masked would
+-- accept it.
+outOfRangeCommit : Array Int
+outOfRangeCommit = arrayMakeWith (arrayLength commitBytes) (i =>
+  if i == 0 then commitBytes[i] + 256 else commitBytes[i])
+
+carRangeError : String
+carRangeError = "car: blockstore: block element outside byte range 0..255"
+
+test "a #commit CAR refuses a block element outside the byte range" =
+  expectEqual
+    (Err carRangeError)
+    (syncCommitCar commitCid [(commitCid, outOfRangeCommit)])
+
+test "a #sync body refuses a commit element outside the byte range" =
+  expectEqual
+    (Err carRangeError)
+    (map
+      (_ => ())
+      (syncSyncBody sampleDid sampleRev commitCid outOfRangeCommit))
+
+test "a #commit frame refuses a CAR element outside the byte range" =
+  expectEqual
+    (Err "dagcbor: byte string element outside byte range 0..255")
+    (syncCommitFrame { eventWithOps 0 | blocksCar = [|256|] })

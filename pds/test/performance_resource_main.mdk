@@ -2,7 +2,7 @@
 
 import array.{drop}
 import bytes as B
-import bytes.{Bytes, encodeUtf8, toArray}
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain, toArray}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 import hex.{decode}
@@ -67,14 +67,37 @@ import crypto.sha256.{sha256}
 import string.{contains, fromUtf8, toInt, toUtf8}
 import test.fixture_support.{testNonce, testSecret}
 
-mustBytes : Result String (Array Int) -> Array Int
-mustBytes (Ok bytes) = bytes
+mustBytes : Result String Bytes -> Array Int
+mustBytes (Ok bytes) = toArray bytes
 mustBytes (Err message) =
   panic "performance_resource: encoding failed: \{message}"
+
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` and
+-- `cidForRaw` did.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (B.fromArray bytes))
+
+cidForRawDoor : Array Int -> Cid
+cidForRawDoor bytes =
+  cidForRaw
+    (optionOrPanic
+      "cidForRaw: every element must be a byte in 0..255"
+      (B.fromArray bytes))
 
 intBytes : Int -> Array Int
 intBytes n =
   [|bitAnd (shiftRight n 16) 255, bitAnd (shiftRight n 8) 255, bitAnd n 255|]
+
+-- Door: `car`/`blockstore` speak `Bytes` blocks; this driver's own block
+-- lists are still `Array Int`.
+blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
+blockRowsToBytesDoor =
+  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
 
 carRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
 carRows n i acc =
@@ -82,7 +105,7 @@ carRows n i acc =
     reverse acc
   else
     let bytes = intBytes i
-    carRows n (i + 1) ((cidForRaw bytes, bytes) :: acc)
+    carRows n (i + 1) ((cidForRawDoor bytes, bytes) :: acc)
 
 mstRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
 mstRows n i acc =
@@ -90,14 +113,13 @@ mstRows n i acc =
     reverse acc
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    mstRows n (i + 1) ((cidForDagCbor bytes, bytes) :: acc)
+    mstRows n (i + 1) ((cidForDagCborDoor bytes, bytes) :: acc)
 
 runCar : Int -> <IO> Unit
 runCar n = match carRows n 0 []
   [] => panic "performance_resource: CAR size must be positive"
-  rows@((root, _) :: _) => match carEncode [root] rows
-    Ok bytes =>
-      println "CAR \{intToString n} \{intToString (arrayLength bytes)}"
+  rows@((root, _) :: _) => match carEncode [root] (blockRowsToBytesDoor rows)
+    Ok bytes => println "CAR \{intToString n} \{intToString (B.length bytes)}"
     Err message => panic "performance_resource: CAR scaling failed: \{message}"
 
 runMst : Int -> <IO> Unit
@@ -121,15 +143,14 @@ perfSecretHex : String
 perfSecretHex =
   "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
-mustHexBytes : String -> Array Int
-mustHexBytes text =
-  toArray (resultOrPanic "performance_resource: malformed hex" (decode text))
-
 perfSecret : SecretKey
 perfSecret =
   resultOrPanic
     "performance_resource: bad signing key"
-    (secretKeyFromBytes (mustHexBytes perfSecretHex))
+    (secretKeyFromBytes
+      (resultOrPanic
+        "performance_resource: malformed hex"
+        (decode perfSecretHex)))
 
 perfDid : String
 perfDid = "did:plc:perfrouteidentity0000000"
@@ -153,7 +174,7 @@ perfRowsGo n i acc =
     reverse acc
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    perfRowsGo n (i + 1) ((intBytes i, cidForDagCbor bytes, bytes) :: acc)
+    perfRowsGo n (i + 1) ((intBytes i, cidForDagCborDoor bytes, bytes) :: acc)
 
 perfRows : Int -> List (Array Int, Cid, Array Int)
 perfRows n = perfRowsGo n 0 []
@@ -188,11 +209,10 @@ perfSignedCommit : Cid -> (Cid, Array Int)
 perfSignedCommit dataCid =
   let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
   let digest =
-    B.toArray
-      (sha256
-        (optionOrPanic
-          "sha256: every element must be a byte in 0..255"
-          (B.fromArray unsigned)))
+    sha256
+      (optionOrPanic
+        "sha256: every element must be a byte in 0..255"
+        (B.fromArray unsigned))
   let signature = match signDigest perfSecret digest
     Ok value => value
     Err message => panic "performance_resource: signing failed: \{message}"
@@ -207,7 +227,7 @@ perfSignedCommit dataCid =
           ("prev", DcNull),
           ("sig", DcBytes (signatureCompact signature)),
         ]))
-  (cidForDagCbor signed, signed)
+  (cidForDagCborDoor signed, signed)
 
 -- The commit-plus-graph block list every route below shares: the record
 -- blocks, the MST node blocks over them, and a signed commit pointing at the
@@ -226,7 +246,7 @@ insertAllGo n i tree =
     tree
   else
     let bytes = mustBytes (dagCborEncode (DcInt i))
-    match mstInsert (intBytes i) (cidForDagCbor bytes) tree
+    match mstInsert (intBytes i) (cidForDagCborDoor bytes) tree
       Ok next => insertAllGo n (i + 1) next
       Err message => panic "performance_resource: MST insert failed: \{message}"
 
@@ -246,7 +266,7 @@ runExport n =
   let dataCid = mstRootCid tree
   let (commitCid, signed) = perfSignedCommit dataCid
   let blocks = perfGraphBlocks rows tree commitCid signed
-  match blockStoreFromBlocks blocks
+  match blockStoreFromBlocks (blockRowsToBytesDoor blocks)
     Err message =>
       panic "performance_resource: export block store failed: \{message}"
     Ok store => match repoExportGraph commitCid signed dataCid store
@@ -325,7 +345,7 @@ nodeEntries n i prior value acc =
       Some previous => prefix3 previous key
     let entry = DcMap [
       ("p", DcInt prefix),
-      ("k", DcBytes (drop prefix key)),
+      ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
       ("v", DcLink value),
       ("t", DcNull),
     ]
@@ -337,7 +357,7 @@ framedHeader root =
     mustBytes
       (dagCborEncode
         (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)]))
-  uvarintEncode (arrayLength header) ++ header
+  toArray (uvarintEncode (arrayLength header)) ++ header
 
 depthNode : Array Int -> Cid -> Option Cid -> (Cid, Array Int)
 depthNode key value child =
@@ -354,14 +374,14 @@ depthNode key value child =
             DcArray [
               DcMap [
                 ("p", DcInt 0),
-                ("k", DcBytes key),
+                ("k", DcBytes (fromArrayAssumeByteDomain key)),
                 ("v", DcLink value),
                 ("t", DcNull),
               ],
             ],
           ),
         ]))
-  (cidForDagCbor bytes, bytes)
+  (cidForDagCborDoor bytes, bytes)
 
 depthCid : (Cid, Array Int) -> Cid
 depthCid (cid, _) = cid
@@ -418,15 +438,18 @@ runLimits =
     reject
       "car-container-over"
       "container exceeds"
-      (carDecode (arrayMake (maxCarBytes + 1) 0)),
+      (carDecode (fromArrayAssumeByteDomain (arrayMake (maxCarBytes + 1) 0))),
     reject
       "car-section-over"
       "section exceeds"
-      (carDecode (framedHeader root ++ uvarintEncode (maxCarSectionBytes + 1))),
+      (carDecode
+        (fromArrayAssumeByteDomain
+          (framedHeader root
+            ++ toArray (uvarintEncode (maxCarSectionBytes + 1))))),
     reject
       "car-blocks-over"
       "block count exceeds"
-      (carEncode [root] tooManyCar),
+      (carEncode [root] (blockRowsToBytesDoor tooManyCar)),
     reject
       "mst-blocks-over"
       "node block count exceeds"
@@ -483,7 +506,7 @@ inboundHandle = "perfroute.example"
 inboundToken : String
 inboundToken =
   mintToken
-    testSecret
+    (B.fromArrayAssumeByteDomain testSecret)
     perfDid
     inboundHost
     "inbound-alloc-probe-token"

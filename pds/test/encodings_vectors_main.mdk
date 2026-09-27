@@ -11,9 +11,9 @@
 -- the one documented, non-graded cell (see the base58 spec vectors arm
 -- below) and is not counted toward PASS or FAIL.
 
-import string.{lines, split, trim, toUtf8, startsWith, stripPrefix, toInt}
+import string.{lines, split, trim, startsWith, stripPrefix, toInt}
 import path.{basename}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, concat, encodeUtf8, fromU8Array, toArray}
 import hex.{encode, decode}
 import lib.base58.{base58btcAlphabet, base58btcEncode, base58btcDecode}
 import lib.multiformats.{
@@ -49,8 +49,11 @@ bytesToIntBEGo bytes i acc =
     bytesToIntBEGo bytes (i + 1) (acc * 256 + bytes[i])
 
 mustDecodeHex : String -> Array Int
-mustDecodeHex s =
-  toArray (resultOrPanic "encodings_vectors: bad hex '\{s}'" (decode s))
+mustDecodeHex s = toArray (mustDecodeHexBytes s)
+
+mustDecodeHexBytes : String -> Bytes
+mustDecodeHexBytes s =
+  resultOrPanic "encodings_vectors: bad hex '\{s}'" (decode s)
 
 -- A `0x`-prefixed (or bare) hex field -> Int, e.g. "0x1200" -> 4608.
 hexFieldToInt : String -> Int
@@ -94,7 +97,7 @@ erratum arm claimed actual = putStrLn "ERRATUM\t\{arm}\t\{claimed}\t\{actual}"
 -- with 0/1/2 leading 0x00 bytes) — an input is not an answer key, only the
 -- file's own base58btc ROW (the expected output) is graded from the file.
 
-multibaseArm : String -> Array Int -> <Stdout, FileRead> List Int
+multibaseArm : String -> Bytes -> <Stdout, FileRead> List Int
 multibaseArm fname bytes = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
@@ -110,7 +113,7 @@ multibaseArm fname bytes = match readFile fname
         actualEncode
         (expected == actualEncode)
     let decoded = multibaseBase58btcDecode expected
-    let expectedDecode = Ok bytes : Result String (Array Int)
+    let expectedDecode = Ok bytes : Result String Bytes
     let p2 =
       check
         "multibase-decode:\{fname}"
@@ -152,7 +155,7 @@ base58SpecArm fname = match readFile fname
 specVectorChecks : String -> <Stdout> List Int
 specVectorChecks line = match split "\t" line
   [hexInput, expectedB58] =>
-    let inputBytes = mustDecodeHex hexInput
+    let inputBytes = mustDecodeHexBytes hexInput
     let actualEncode = base58btcEncode inputBytes
     let p1 =
       check
@@ -161,7 +164,7 @@ specVectorChecks line = match split "\t" line
         actualEncode
         (expectedB58 == actualEncode)
     let decoded = base58btcDecode expectedB58
-    let expectedDecode = Ok inputBytes : Result String (Array Int)
+    let expectedDecode = Ok inputBytes : Result String Bytes
     let p2 =
       check
         "base58-spec-decode:\{expectedB58}"
@@ -175,7 +178,7 @@ erratumReports : List String -> <Stdout> Unit
 erratumReports [] = ()
 erratumReports (l :: rest) = match split "\t" l
   [hexInput, claimed, correctedExpected] =>
-    let encoded = base58btcEncode (mustDecodeHex hexInput)
+    let encoded = base58btcEncode (mustDecodeHexBytes hexInput)
     let () = erratum "base58-spec-erratum:\{hexInput}" claimed encoded
     -- Cross-check, and it now CHECKS. This block used to print the two
     -- values side by side and call that a "self-check" — a comparison a
@@ -244,13 +247,13 @@ varintExampleChecks : String -> <Stdout> List Int
 varintExampleChecks line = match split "\t" line
   [decStr, hexBytes] =>
     let value = mustParseInt decStr
-    let expectedBytes = mustDecodeHex hexBytes
+    let expectedBytes = mustDecodeHexBytes hexBytes
     let actualBytes = uvarintEncode value
     let p1 =
       check
         "varint-encode:\{decStr}"
         hexBytes
-        (encode (fromArrayAssumeByteDomain actualBytes))
+        (encode actualBytes)
         (expectedBytes == actualBytes)
     let decodedAll = uvarintDecodeAll expectedBytes
     let expectedDecode = Ok value : Result String Int
@@ -266,7 +269,7 @@ varintExampleChecks line = match split "\t" line
 varintRejectChecks : String -> <Stdout> List Int
 varintRejectChecks line = match split "\t" line
   [_, hexBytes] =>
-    let bytes = mustDecodeHex hexBytes
+    let bytes = mustDecodeHexBytes hexBytes
     let result = uvarintDecodeAll bytes
     let isErr = match result
       Err _ => True
@@ -278,11 +281,11 @@ varintRejectChecks line = match split "\t" line
 
 runVectorFile : String -> <Stdout, FileRead> List Int
 runVectorFile fname = match basename fname
-  "multibase_basic.csv" => multibaseArm fname (toUtf8 "yes mani !")
+  "multibase_basic.csv" => multibaseArm fname (encodeUtf8 "yes mani !")
   "multibase_leading_zero.csv" =>
-    multibaseArm fname (arrayFromList (0 :: toList (toUtf8 "yes mani !")))
+    multibaseArm fname (concat [fromU8Array [|0|], encodeUtf8 "yes mani !"])
   "multibase_two_leading_zeros.csv" =>
-    multibaseArm fname (arrayFromList (0 :: 0 :: toList (toUtf8 "yes mani !")))
+    multibaseArm fname (concat [fromU8Array [|0, 0|], encodeUtf8 "yes mani !"])
   "base58_draft_msporny_02.txt" => base58SpecArm fname
   "multicodec_table.csv" => multicodecArm fname
   "unsigned_varint_examples.txt" => varintArm fname

@@ -76,7 +76,7 @@ import http.{
   QueryParam(..),
   Response,
 }
-import bytes.{encodeUtf8, fromArray, fromArrayAssumeByteDomain}
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{last, take}
@@ -181,6 +181,15 @@ import lib.xrpc.{
   wellKnownPath,
   xrpcErrorResponse,
 }
+
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
 
 createRecordNsid : String
 createRecordNsid = "com.atproto.repo.createRecord"
@@ -489,7 +498,7 @@ encodeRecordField : String -> DagCbor -> Result Response (Array Int)
 encodeRecordField name record = match dagCborEncode record
   Err message =>
     Err (invalidRequest "Request field '\{name}' cannot be encoded: \{message}")
-  Ok bytes => Ok bytes
+  Ok bytes => Ok (toArray bytes)
 
 encodeRecord : DagCbor -> Result Response (Array Int)
 encodeRecord = encodeRecordField "record"
@@ -530,7 +539,7 @@ currentRecordCid path repo = match repoLookup path repo
   Ok (Some value) => match dagCborEncode value
     Err message =>
       Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
-    Ok bytes => Ok (Some (cidForDagCbor bytes))
+    Ok bytes => Ok (Some (cidForDagCborDoor (toArray bytes)))
 
 checkSwapCommit : Json -> Repo -> Result Response Unit
 checkSwapCommit body repo = match get "swapCommit" body
@@ -643,7 +652,7 @@ applyCreateRecord account store body = do
       account
       collection
       rkey
-      (cidForDagCbor bytes)
+      (cidForDagCborDoor bytes)
       (repoMutationCommit mutation),
   )
 
@@ -672,7 +681,7 @@ applyPutRecord account store body = do
       account
       collection
       rkey
-      (cidForDagCbor bytes)
+      (cidForDagCborDoor bytes)
       (repoMutationCommit mutation),
   )
 
@@ -763,7 +772,7 @@ batchElement did rev auto element = do
     bytes <- encodeRecordField "value" record
     Ok (
       RepoWriteCreate (recordPath collection rkey) record,
-      batchResult "createResult" did collection rkey (cidForDagCbor bytes),
+      batchResult "createResult" did collection rkey (cidForDagCborDoor bytes),
       nextAuto,
     )
   else if kind == applyWritesType "update" then do
@@ -772,7 +781,7 @@ batchElement did rev auto element = do
     bytes <- encodeRecordField "value" record
     Ok (
       RepoWriteUpdate (recordPath collection rkey) record,
-      batchResult "updateResult" did collection rkey (cidForDagCbor bytes),
+      batchResult "updateResult" did collection rkey (cidForDagCborDoor bytes),
       auto,
     )
   else if kind == applyWritesType "delete" then do
@@ -1023,7 +1032,7 @@ reencodeRecord : DagCbor -> Result Response (Array Int)
 reencodeRecord value = match dagCborEncode value
   Err message =>
     Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
-  Ok bytes => Ok bytes
+  Ok bytes => Ok (toArray bytes)
 
 recordView : Account -> String -> String -> DagCbor -> Result Response Json
 recordView account collection rkey value = do
@@ -1031,7 +1040,7 @@ recordView account collection rkey value = do
   Ok
     (jObject [
       ("uri", JString (recordUri account collection rkey)),
-      ("cid", JString (cidToString (cidForDagCbor bytes))),
+      ("cid", JString (cidToString (cidForDagCborDoor bytes))),
       ("value", dagCborToLexJson value),
     ])
 
@@ -1148,7 +1157,7 @@ applyGetRecord account store params = do
           "Record not found: \{recordUri account collection rkey}")
     Some value => Ok value
   bytes <- reencodeRecord value
-  let actual = cidToString (cidForDagCbor bytes)
+  let actual = cidToString (cidForDagCborDoor bytes)
   () <- match requested
     None => Ok ()
     Some wanted =>
@@ -1575,6 +1584,13 @@ applyGetRepoStatus account store params = do
    up: `com.atproto.repo.getRecord` returns the decoded value and refuses when
    there is none, because its caller wants the record. This one returns blocks
    a caller verifies for itself, so it has an answer either way. -}
+-- Door, masked: `car` speaks `Bytes` blocks and this module's block lists are
+-- `Array Int`. Every row passed here is read out of a `Repo`, whose blocks
+-- were range-checked on the way in, so it is in range by construction.
+blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
+blockRowsToBytesDoor =
+  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
+
 applySyncGetRecord : Account ->
   Store ->
   List QueryParam ->
@@ -1597,9 +1613,9 @@ applySyncGetRecord account store params = do
   let commit = repoLatestCommit repo
   let commitCid = repoCommitCid commit
   let blocks = (commitCid, repoCommitSignedBytes commit) :: proof ++ record
-  match carEncode [commitCid] blocks
+  match carEncode [commitCid] (blockRowsToBytesDoor blocks)
     Err message => Err (invalidRequest "Record proof rejected: \{message}")
-    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
 
 {- | The record block itself, as the zero-or-one-element tail of the proof.
    Absent is `[]` rather than a refusal; a key the MST names whose block is
@@ -1611,7 +1627,7 @@ recordProofBlock (Some cid) repo = match blockStoreGet cid (repoStore repo)
     Err
       (internalError
         "Repository names record block '\{cidToString cid}' but does not hold it")
-  Some bytes => Ok [(cid, bytes)]
+  Some bytes => Ok [(cid, toArray bytes)]
 
 -- ── com.atproto.sync.getBlocks ──────────────────────────────────────────────
 
@@ -1651,7 +1667,8 @@ partitionGo [] _ found = found
 partitionGo (cid :: rest) repo (blocks, missing) =
   match blockStoreGet cid (repoStore repo)
     None => partitionGo rest repo (blocks, cid :: missing)
-    Some bytes => partitionGo rest repo ((cid, bytes) :: blocks, missing)
+    Some bytes =>
+      partitionGo rest repo ((cid, toArray bytes) :: blocks, missing)
 
 -- | The same split, both halves back in request order.
 partitionBlocks : List Cid -> Repo -> (List (Cid, Array Int), List Cid)
@@ -1685,9 +1702,9 @@ applySyncGetBlocks account store params = do
       Err
         (invalidRequest
           "Could not find cids: \{join "," (map cidToString absent)}")
-  match carEncodeRootless blocks
+  match carEncodeRootless (blockRowsToBytesDoor blocks)
     Err message => Err (invalidRequest "Block export rejected: \{message}")
-    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
 
 -- ── com.atproto.identity.resolveHandle ──────────────────────────────────────
 
@@ -1879,16 +1896,18 @@ mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
   let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
+  -- Masked, as before: the old HMAC key path masked this secret too.
+  let key = fromArrayAssumeByteDomain secret
   (
     mintToken
-      secret
+      key
       (accountDid account)
       (accessAudience account)
       tokenId
       issued
       (issued + accessTokenSeconds),
     mintToken
-      secret
+      key
       (accountDid account)
       (refreshAudience account)
       tokenId

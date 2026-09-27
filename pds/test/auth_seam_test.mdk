@@ -22,7 +22,7 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
-import bytes.{encodeUtf8, fromArray, toArray}
+import bytes.{encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
 import http.{
   Header,
   makeHeader,
@@ -195,7 +195,7 @@ configuredStore =
 
 tokenFor : Array Int -> String -> String -> String -> Int -> Int -> String
 tokenFor secret sub aud tokenId from until =
-  mintToken secret sub aud tokenId from until
+  mintToken (fromArrayAssumeByteDomain secret) sub aud tokenId from until
 
 goodToken : String
 goodToken =

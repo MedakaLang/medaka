@@ -1,0 +1,223 @@
+{- | secp256k1 `did:key` values against the official-PDS corpus on eval,
+   native and Wasm, and a mutation self-test showing the gate can fail.
+
+   The value test grades the 16 external rows and the 14 named malformed
+   cells on eval, and requires native and Wasm to print the same bytes. The
+   Wasm arm is skipped on a host without the Wasm emitter, `node` or
+   `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
+
+   The mutation test copies `pds/` into a scratch tree, breaks one line of
+   the implementation or the driver at a time, and requires the driver,
+   built natively from that tree, to fail with that mutation's own witness
+   line. A mutant that passes means the corpus cannot see the defect; one
+   that fails without its witness means it failed for an unrelated reason.
+   Every mutation only changes runtime behaviour, so a mutant that does not
+   build is itself a finding. Native only: eval and native share the
+   typechecker ([D-RUN-VS-BUILD] in AGENTS.md), and a native build turns
+   each check from minutes into seconds. -}
+
+import test.vector_runner.{
+  Arm(..),
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  buildNative,
+  expectRow,
+  freshScratch,
+  reap,
+  runSeconds,
+  spawn,
+}
+import list.{somes}
+import string.{contains, countOccurrences, replace}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaRoot}
+
+gate : String
+gate = "pds/test/did_key_all_engines"
+
+driver : String
+driver = "pds/test/did_key_all_engines_main.mdk"
+
+corpusFile : String
+corpusFile = "pds/test/vectors/pds_did_key_corpus.txt"
+
+malformedCells : List String
+malformedCells = [
+  "wrong-method",
+  "wrong-method-case",
+  "missing-multibase",
+  "invalid-multibase",
+  "invalid-base58",
+  "wrong-codec",
+  "nonminimal-codec",
+  "empty-payload",
+  "short-payload",
+  "long-payload",
+  "trailing-payload",
+  "invalid-sec1-prefix",
+  "invalid-sec1-x",
+  "invalid-sec1-nonsquare",
+]
+
+arm : Engine -> List String -> Arm
+arm e needs = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = needs,
+  lastLine = Some "TOTAL: PASS",
+}
+
+row : Row
+row = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Explicit [corpusFile],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    arm
+      EvalEngine
+      (["external: 16/16 official-PDS rows", "malformed: 14/14 rejected"]
+        ++ map (l => "MALFORMED \{l} PASS") malformedCells),
+    arm NativeEngine [],
+    arm WasmEngine [],
+  ],
+  parity = True,
+}
+
+-- # Mutations
+
+{- | One deliberate break: in repo-relative `file`, the single occurrence of
+   `anchor` becomes `mutant`, and the built driver must then fail with
+   `witness` somewhere in its output. -}
+data Mutation = Mutation {
+  name : String,
+  file : String,
+  anchor : String,
+  mutant : String,
+  witness : String,
+}
+
+didKeyLib : String
+didKeyLib = "pds/lib/did_key.mdk"
+
+mutations : List Mutation
+mutations = [
+  Mutation {
+    name = "wrong-codec-prefix",
+    file = didKeyLib,
+    anchor = "secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub",
+    mutant = "secp256k1Prefix = multicodecPrefix 0x1200",
+    witness = "row 0 value mismatch",
+  },
+  Mutation {
+    name = "omitted-did-key",
+    file = didKeyLib,
+    anchor = "\"did:key:\" ++ didKeyMultibase publicKey",
+    mutant = "didKeyMultibase publicKey",
+    witness = "row 0 value mismatch",
+  },
+  Mutation {
+    name = "removed-codec-equality",
+    file = didKeyLib,
+    anchor = "if codec /= multicodecSecp256k1Pub then",
+    mutant = "if False then",
+    witness = "MALFORMED wrong-codec FAIL accepted",
+  },
+  Mutation {
+    name = "short-payload-accepted",
+    file = didKeyLib,
+    anchor = "publicKeyFromCompressed keyBytes",
+    mutant =
+      "if B.length keyBytes == 32 then publicKeyFromCompressed (keyBytes ++ B.fromU8Array [|0x98|]) else publicKeyFromCompressed keyBytes",
+    witness = "MALFORMED short-payload FAIL accepted",
+  },
+  Mutation {
+    name = "disconnected-corpus",
+    file = driver,
+    anchor = "let rowCount = runRows rows 0",
+    mutant = "let rowCount = runRows [] 0",
+    witness = "external row count expected 16, got 0",
+  },
+]
+
+-- The findings against one mutation, run in the scratch tree `tree`. The
+-- mutated file is put back afterwards, whatever the outcome, so the next
+-- mutation starts from an unbroken tree.
+mutationFindings : String ->
+  Mutation ->
+  <Exec, FileRead, FileWrite, IO> List String
+mutationFindings tree m =
+  let label = "\{gate} (mutation \{m.name})"
+  match readFile "\{medakaRoot}/\{m.file}"
+    Err e => ["\{label}: could not read \{m.file}: \{e}"]
+    Ok original =>
+      let anchors = countOccurrences m.anchor original
+      if anchors /= 1 then
+        [
+          "\{label}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
+        ]
+      else
+        let target = "\{tree}/\{m.file}"
+        let found = match writeFile target (replace m.anchor m.mutant original)
+          Err e => ["\{label}: could not write the mutant: \{e}"]
+          Ok _ => mutantFindings tree label m
+        match writeFile target original
+          Err e => found ++ ["\{label}: could not restore \{m.file}: \{e}"]
+          Ok _ => found
+
+-- The mutant must build, then fail, and fail with its own witness.
+mutantFindings : String -> String -> Mutation -> <Exec, IO> List String
+mutantFindings tree label m =
+  let bin = "\{tree}/mutant"
+  match buildNative label "\{tree}/\{driver}" bin
+    [] => match spawn runSeconds [] bin ["\{medakaRoot}/\{corpusFile}"]
+      Err e => ["\{label}: could not spawn the mutant: \{e}"]
+      Ok (0, _, _) => ["\{label}: the mutant passed; the corpus cannot see it"]
+      Ok (_, out, err) =>
+        if contains m.witness (out ++ err) then
+          []
+        else
+          [
+            "\{label}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
+          ]
+    fs => fs
+
+-- The scratch tree must end byte-identical to the source for every file a
+-- mutation touched, or a later mutation graded a doubly-broken tree.
+restoredFindings : String -> <FileRead, IO> List String
+restoredFindings tree = somes (map (restoredFinding tree) [didKeyLib, driver])
+
+restoredFinding : String -> String -> <FileRead, IO> Option String
+restoredFinding tree rel = match (
+  readFile "\{medakaRoot}/\{rel}",
+  readFile "\{tree}/\{rel}",
+)
+  (Ok a, Ok b) =>
+    if a == b then
+      None
+    else
+      Some "\{gate}: \{rel} was not restored in the mutation tree"
+  _ => Some "\{gate}: could not read \{rel} back to check its restoration"
+
+allMutationFindings : String -> <Exec, FileRead, FileWrite, IO> List String
+allMutationFindings tree =
+  match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
+    Ok (0, _, _) =>
+      flatMap (mutationFindings tree) mutations ++ restoredFindings tree
+    Ok (code, _, err) =>
+      ["\{gate}: copying pds/ exited \{intToString code}: \{err}"]
+    Err e => ["\{gate}: could not copy pds/: \{e}"]
+
+test "did:key: 16/16 external rows, 14/14 malformed cells, eval == native == Wasm" =
+  expectRow row
+
+test "did:key: each of 5 mutations turns the gate red with its own witness" = expectNoFindings
+  gate
+  (match freshScratch ()
+    Err e => Err "could not make a scratch directory: \{e}"
+    Ok tree => Ok (reap tree (allMutationFindings tree)))

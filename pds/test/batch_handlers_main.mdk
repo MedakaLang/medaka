@@ -110,9 +110,10 @@ mustTid : String -> Tid
 mustTid text = resultOrPanic "batch_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text = match dagCborDecode (mustHex text)
-  Ok value => dagCborToLexJson value
-  Err message => panic "batch_handlers: malformed record: \{message}"
+mustRecordJson text =
+  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
+    Ok value => dagCborToLexJson value
+    Err message => panic "batch_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =
@@ -145,7 +146,7 @@ testContext =
 testToken : String -> String
 testToken did =
   mintToken
-    testSecret
+    (fromArrayAssumeByteDomain testSecret)
     did
     accountHostText
     "batch_handlers-fixture-token"

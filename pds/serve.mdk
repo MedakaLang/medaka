@@ -83,7 +83,7 @@ import args.{
 }
 import array as A
 import async.{Async, liftIO, sleep, spawn}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{isDir}
 import hex.{decode, encode}
 import io.{isPrivateMode, writeFilePrivate}
@@ -110,7 +110,7 @@ import lib.repo.{
 import lib.server_core.{
   Server, accountDid, accountHostname, makeAccount, serverAccount
 }
-import lib.sign.{SecretKey, secretKeyFromBytes}
+import lib.sign.{SecretKey, secretKeyFromByteArray}
 import lib.cid.{Cid, cidToString}
 import lib.event_log_record.{eventLogRetentionSeconds}
 import lib.store.{
@@ -604,7 +604,11 @@ bootstrapCredential : String ->
   String ->
   <FileWrite, Rand> Result String CredentialRecord
 bootstrapCredential dir password = do
-  record <- makeCredential (osEntropyBytes saltBytes) defaultIterations password
+  let salt =
+    optionOrPanic
+      "makeCredential: every element must be a byte in 0..255"
+      (fromArray (osEntropyBytes saltBytes))
+  record <- makeCredential salt defaultIterations password
   () <- persistCredential dir record
   Ok record
 
@@ -621,8 +625,8 @@ loadCredential dir = do
           Err
             "credential \{credentialPath dir}: first line is not an iteration count"
         Some given => Ok given
-      salt <- map toArray (decode saltText)
-      digest <- map toArray (decode digestText)
+      salt <- decode saltText
+      digest <- decode digestText
       credentialFromParts salt iterations digest
     _ =>
       Err
@@ -819,7 +823,7 @@ configure parsed = do
   let version = versionString ()
   server <- pdsServer account links version
   keyBytes <- readHexBytes "signing key" keyPath
-  secret <- secretKeyFromBytes keyBytes
+  secret <- secretKeyFromByteArray keyBytes
   -- Admitted here, beside the other flag-supplied configuration and ahead of
   -- every generated secret, for the same reason `requireTrustedBind` is: a run
   -- refused for a malformed appview DID must leave no session secret on disk

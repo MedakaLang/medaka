@@ -54,7 +54,7 @@
    is graded as text and not merely as a substring. -}
 
 import array.{sliceClamped}
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort, zip}
@@ -168,7 +168,9 @@ mustHex text =
 
 mustCbor : Array Int -> DagCbor
 mustCbor bytes =
-  resultOrPanic "sync_car_shapes: undecodable block" (dagCborDecode bytes)
+  resultOrPanic
+    "sync_car_shapes: undecodable block"
+    (dagCborDecode (fromArrayAssumeByteDomain bytes))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "sync_car_shapes: malformed TID" (tidParse text)
@@ -373,7 +375,7 @@ rkeyOf path = match split "/" path
    claims, reported so the gate can assert each where it holds rather than
    dropping to containment everywhere. -}
 gradeDecoded : List (String, String) -> String -> Array Int -> <IO> Bool
-gradeDecoded rows tag body = match carDecode body
+gradeDecoded rows tag body = match carDecode (fromArrayAssumeByteDomain body)
   Err message =>
     let () =
       println "\{tag}-BLOCKS: FAIL emitted CAR does not decode: \{message}"
@@ -463,7 +465,10 @@ gradeBlocksMissing server store did rows =
    `GETRECORD-PRESENT-D0` CAR is rooted at. -}
 fixtureFromCorpus : List (String, String) -> (String, Repo, String)
 fixtureFromCorpus rows =
-  let car = match carDecode (mustHex (rowValue rows "GETRECORD-PRESENT-D0-CAR"))
+  let carBytes =
+    fromArrayAssumeByteDomain
+      (mustHex (rowValue rows "GETRECORD-PRESENT-D0-CAR"))
+  let car = match carDecode carBytes
     Ok value => value
     Err message => panic "sync_car_shapes: corpus CAR: \{message}"
   let commitCid = match carRoots car
@@ -490,14 +495,17 @@ fixtureWrites rows =
   else
     zip (map toUtf8 paths) (map (text => mustCbor (mustHex text)) records)
 
-blockBytes : Cid -> List (Cid, Array Int) -> Array Int
+blockBytes : Cid -> List (Cid, Bytes) -> Array Int
 blockBytes wanted blocks = namedBlockBytes (cidToString wanted) blocks
 
-namedBlockBytes : String -> List (Cid, Array Int) -> Array Int
+namedBlockBytes : String -> List (Cid, Bytes) -> Array Int
 namedBlockBytes wanted [] =
   panic "sync_car_shapes: corpus CAR does not carry block \{wanted}"
 namedBlockBytes wanted ((cid, bytes) :: rest) =
-  if cidToString cid == wanted then bytes else namedBlockBytes wanted rest
+  if cidToString cid == wanted then
+    toArray bytes
+  else
+    namedBlockBytes wanted rest
 
 main : <IO, Env, FileRead> Unit
 main = match args ()

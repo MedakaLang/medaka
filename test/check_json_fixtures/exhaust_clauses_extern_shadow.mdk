@@ -1,0 +1,15 @@
+-- #3465: a program's own `extern data Result`/`Option` has no constructors.
+-- The prelude's constructors in these clauses still find their own
+-- declaration's siblings, so the missing case is reported.
+extern data Result
+
+extern data Option
+
+onlyOk (Ok n) = n
+
+onlySome (Some n) = n
+
+viaMatch r = match r
+  Ok n => n
+
+main = println (intToString (onlyOk (Ok 3) + onlySome (Some 4) + viaMatch (Ok 5)))

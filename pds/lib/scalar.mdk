@@ -65,7 +65,9 @@
    Eval and Wasm retain value parity; Wasm's boxed `U64` carrier is outside
    this native constant-time claim. -}
 
-import array as A
+import bytes as B
+import mut_bytes as MB
+import u8 as U8
 import u64 as U64
 
 -- ── Constants ────────────────────────────────────────────────────────
@@ -90,8 +92,8 @@ import u64 as U64
 -- only (0x41 -> 0x3f).
 --   n   = fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 --   n-2 = fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f
-expNMinus2 : Array Int
-expNMinus2 = [|
+expNMinus2 : B.Bytes
+expNMinus2 = B.fromU8Array [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
   0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x3f
@@ -481,19 +483,19 @@ reduce256 v =
 
 -- ── Serialization ────────────────────────────────────────────────────
 
--- Four big-endian bytes as one limb. Callers pass bytes (0..255).
-beWord : Int -> Int -> Int -> Int -> Int
+-- Four big-endian bytes as one limb.
+beWord : U8 -> U8 -> U8 -> U8 -> Int
 beWord b0 b1 b2 b3 =
   U64.toIntTruncating
     (U64.bitOr
       (U64.bitOr
-        (U64.shiftLeft (U64.truncate b0) 24)
-        (U64.shiftLeft (U64.truncate b1) 16))
-      (U64.bitOr (U64.shiftLeft (U64.truncate b2) 8) (U64.truncate b3)))
+        (U64.shiftLeft (U64.fromU8 b0) 24)
+        (U64.shiftLeft (U64.fromU8 b1) 16))
+      (U64.bitOr (U64.shiftLeft (U64.fromU8 b2) 8) (U64.fromU8 b3)))
 
 -- 32 big-endian bytes -> the exact 256-bit value as 8 limbs (no reduction).
 -- Limb `i` is bytes `28 - 4i` (high) through `31 - 4i` (low).
-limbsOfBytes : Array Int -> Array Int
+limbsOfBytes : B.Bytes -> Array Int
 limbsOfBytes bs = [|
   beWord bs[28] bs[29] bs[30] bs[31],
   beWord bs[24] bs[25] bs[26] bs[27],
@@ -505,62 +507,25 @@ limbsOfBytes bs = [|
   beWord bs[0] bs[1] bs[2] bs[3],
 |]
 
--- Is this a well-formed 32-byte array with every element in 0..255?
-byteArrayOk : Array Int -> Bool
-byteArrayOk bs = arrayLength bs == 32 && byteRangeGo bs 0
-
-byteRangeGo : Array Int -> Int -> Bool
-byteRangeGo bs i =
-  if i >= 32 then
-    True
-  else
-    let b = bs[i]
-    if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
-
 -- | Fixed-control candidate parser for secret-key ingress. The length branch is
---   public; for a 32-element input every element is visited, masked into a
---   safe byte, and contributes arithmetically to one aggregate validity bit.
---   The returned scalar is always canonical, including on an invalid input.
+--   public; for a 32-byte input the range and nonzero tests combine
+--   arithmetically into one aggregate validity bit, with no branch on a byte.
+--   The byte domain is the `Bytes` type's, so no element needs checking. The
+--   returned scalar is always canonical, including on an invalid input.
 --   This is intentionally separate from the public, branch-bearing
 --   `scFromBytes` wire parser below.
 export
-scSecretCandidate : Array Int -> (Int, Sc)
+scSecretCandidate : B.Bytes -> (Int, Sc)
 scSecretCandidate bs =
-  if arrayLength bs /= 32 then (0, scZero) else scSecretCandidate32 bs
+  if B.length bs /= 32 then (0, scZero) else scSecretCandidate32 bs
 
-scSecretCandidate32 : Array Int -> (Int, Sc)
+scSecretCandidate32 : B.Bytes -> (Int, Sc)
 scSecretCandidate32 bs =
-  let safeBytes = arrayMake 32 0
-  let bytesBit = scanSecretBytes bs safeBytes 0 1
-  let limbs = limbsOfBytes safeBytes
+  let limbs = limbsOfBytes bs
   let rangeBit = secretBelowNBit limbs
   let nonzeroBit = secretNonzeroBit limbs
   let candidate = reduce256 limbs
-  (bitAnd bytesBit (bitAnd rangeBit nonzeroBit), candidate)
-
--- 1 exactly when `b` is a byte, 0 otherwise, with no Bool branch.
--- `U64.truncate` takes a negative `b` to at least 2^64 - 2^62, so the image
--- is below 256 exactly for `0 <= b <= 255`. Shifted right by 8 it is 0 for a
--- byte and in 1 .. 2^56 - 1 otherwise, and subtracting 1 sets bit 63 only in
--- the first case.
-secretByteBit : Int -> Int
-secretByteBit b =
-  U64.toIntTruncating
-    (U64.shiftRight (U64.shiftRight (U64.truncate b) 8 - 1) 63)
-
--- A rejected element is written as 0: the mask is 0 or 255 by the bit.
-scanSecretBytes : Array Int -> Array Int -> Int -> Int -> Int
-scanSecretBytes bs safeBytes i validBit =
-  if i >= 32 then
-    validBit
-  else
-    let b = bs[i]
-    let byteBit = secretByteBit b
-    let safe =
-      U64.toIntTruncating
-        (U64.bitAnd (U64.truncate b) 255 * U64.truncate byteBit)
-    let () = A.setInPlace i safe safeBytes
-    scanSecretBytes bs safeBytes (i + 1) (bitAnd validBit byteBit)
+  (bitAnd rangeBit nonzeroBit, candidate)
 
 -- The borrow out of `limbs - n`: 1 exactly when the raw 256-bit limbs are
 -- below `n`.
@@ -607,16 +572,13 @@ zeroLimbsBit v =
 --   signature component, and the reference corpus's `ovf` rows are exactly
 --   this rejection boundary (`ovf a` is 1 iff `scFromBytes a` is `Err`).
 --
---   The `0 <= b <= 255` element contract IS enforced here (and the length):
---   an out-of-range element is an `Err`, never silently taken mod 256.
+--   A length other than 32 is an `Err`.
 export
-scFromBytes : Array Int -> Result String Sc
+scFromBytes : B.Bytes -> Result String Sc
 scFromBytes bs =
-  if arrayLength bs /= 32 then
+  if B.length bs /= 32 then
     Err
-      "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
-  else if not (byteArrayOk bs) then
-    Err "scalar.scFromBytes: every element must be a byte in 0..255"
+      "scalar.scFromBytes: expected 32 bytes, got \{intToString (B.length bs)}"
   else
     let limbs = limbsOfBytes bs
     if secretBelowNBit limbs == 0 then
@@ -628,18 +590,13 @@ scFromBytes bs =
 --   `secp256k1_scalar_set_b32` and is what the reference corpus's `red` rows
 --   grade. Use `scFromBytes` when the input is supposed to be canonical.
 --
---   The element contract is enforced here too, but this function is not
---   `Result`-typed, so a violation PANICS rather than aliasing mod 256. A
---   loud abort is the point: silently masking an out-of-range element would
---   compute a different value than the caller wrote.
+--   This function is not `Result`-typed, so a length other than 32 PANICS.
 export
-scFromBytesReduce : Array Int -> Sc
+scFromBytesReduce : B.Bytes -> Sc
 scFromBytesReduce bs =
-  if arrayLength bs /= 32 then
+  if B.length bs /= 32 then
     panic
-      "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
-  else if not (byteArrayOk bs) then
-    panic "scalar.scFromBytesReduce: every element must be a byte in 0..255"
+      "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (B.length bs)}"
   else
     reduce256 (limbsOfBytes bs)
 
@@ -648,88 +605,33 @@ scFromBytesReduce bs =
 --   repeating the public validator here would make secret-derived bytes reach
 --   its branch-bearing early-exit scan.
 export
-scFromFixedBytesReduce : Array Int -> Sc
+scFromFixedBytesReduce : B.Bytes -> Sc
 scFromFixedBytesReduce bs = reduce256 (limbsOfBytes bs)
+
+-- Write a limb (below 2^32) as 4 big-endian bytes at `out[off .. off + 3]`.
+-- `off` is public.
+putLimb : MB.MutBytes -> Int -> U64 -> Unit
+putLimb out off l =
+  let () = MB.setInPlace off (U8.truncateU64 (U64.shiftRight l 24)) out
+  let () = MB.setInPlace (off + 1) (U8.truncateU64 (U64.shiftRight l 16)) out
+  let () = MB.setInPlace (off + 2) (U8.truncateU64 (U64.shiftRight l 8)) out
+  MB.setInPlace (off + 3) (U8.truncateU64 l) out
 
 -- | The canonical 32 big-endian bytes of a scalar.
 export
-scToBytes : Sc -> Array Int
+scToBytes : Sc -> B.Bytes
 scToBytes a =
   let v = rawSc a
-  let l0 = U64.truncate v[0]
-  let l1 = U64.truncate v[1]
-  let l2 = U64.truncate v[2]
-  let l3 = U64.truncate v[3]
-  let l4 = U64.truncate v[4]
-  let l5 = U64.truncate v[5]
-  let l6 = U64.truncate v[6]
-  let l7 = U64.truncate v[7]
-  let y73 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l7 24) 0xff)
-  let y72 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l7 16) 0xff)
-  let y71 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l7 8) 0xff)
-  let y70 = U64.toIntTruncating (U64.bitAnd l7 0xff)
-  let y63 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l6 24) 0xff)
-  let y62 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l6 16) 0xff)
-  let y61 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l6 8) 0xff)
-  let y60 = U64.toIntTruncating (U64.bitAnd l6 0xff)
-  let y53 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l5 24) 0xff)
-  let y52 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l5 16) 0xff)
-  let y51 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l5 8) 0xff)
-  let y50 = U64.toIntTruncating (U64.bitAnd l5 0xff)
-  let y43 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l4 24) 0xff)
-  let y42 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l4 16) 0xff)
-  let y41 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l4 8) 0xff)
-  let y40 = U64.toIntTruncating (U64.bitAnd l4 0xff)
-  let y33 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l3 24) 0xff)
-  let y32 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l3 16) 0xff)
-  let y31 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l3 8) 0xff)
-  let y30 = U64.toIntTruncating (U64.bitAnd l3 0xff)
-  let y23 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l2 24) 0xff)
-  let y22 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l2 16) 0xff)
-  let y21 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l2 8) 0xff)
-  let y20 = U64.toIntTruncating (U64.bitAnd l2 0xff)
-  let y13 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l1 24) 0xff)
-  let y12 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l1 16) 0xff)
-  let y11 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l1 8) 0xff)
-  let y10 = U64.toIntTruncating (U64.bitAnd l1 0xff)
-  let y03 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l0 24) 0xff)
-  let y02 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l0 16) 0xff)
-  let y01 = U64.toIntTruncating (U64.bitAnd (U64.shiftRight l0 8) 0xff)
-  let y00 = U64.toIntTruncating (U64.bitAnd l0 0xff)
-  [|
-    y73,
-    y72,
-    y71,
-    y70,
-    y63,
-    y62,
-    y61,
-    y60,
-    y53,
-    y52,
-    y51,
-    y50,
-    y43,
-    y42,
-    y41,
-    y40,
-    y33,
-    y32,
-    y31,
-    y30,
-    y23,
-    y22,
-    y21,
-    y20,
-    y13,
-    y12,
-    y11,
-    y10,
-    y03,
-    y02,
-    y01,
-    y00,
-  |]
+  let out = MB.make 32
+  let () = putLimb out 0 (U64.truncate v[7])
+  let () = putLimb out 4 (U64.truncate v[6])
+  let () = putLimb out 8 (U64.truncate v[5])
+  let () = putLimb out 12 (U64.truncate v[4])
+  let () = putLimb out 16 (U64.truncate v[3])
+  let () = putLimb out 20 (U64.truncate v[2])
+  let () = putLimb out 24 (U64.truncate v[1])
+  let () = putLimb out 28 (U64.truncate v[0])
+  MB.freeze out
 
 -- ── Comparison ───────────────────────────────────────────────────────
 
@@ -1240,5 +1142,5 @@ powGo base bitIdx acc =
 -- Bit `k` of n-2, read out of its 32 big-endian bytes.
 expBit : Int -> Bool
 expBit k =
-  let byte = expNMinus2[31 - shiftRight k 3]
+  let byte = U8.toInt expNMinus2[31 - shiftRight k 3]
   bitAnd (shiftRight byte (k - shiftLeft (shiftRight k 3) 3)) 1 == 1

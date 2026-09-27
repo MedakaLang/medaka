@@ -20,7 +20,7 @@
 
 import hex.{decode}
 import io.{readLines}
-import bytes.{fromArray, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), get, parse, stringify}
 import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, startsWith, toUtf8}
@@ -89,7 +89,7 @@ server =
 accessToken : String
 accessToken =
   mintToken
-    testSecret
+    (fromArrayAssumeByteDomain testSecret)
     accountDidText
     accountHostText
     "blob_handlers-fixture-token"

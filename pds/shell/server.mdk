@@ -650,9 +650,7 @@ persistCredentialHalf dir before after = match (
   (None, Some next) => persistCredential dir next
   (Some prior, Some next) =>
     if credentialIterations prior == credentialIterations next
-      && ctEq
-        (B.fromArrayAssumeByteDomain (credentialDigest prior))
-        (B.fromArrayAssumeByteDomain (credentialDigest next)) then
+      && ctEq (credentialDigest prior) (credentialDigest next) then
       Ok ()
     else
       persistCredential dir next

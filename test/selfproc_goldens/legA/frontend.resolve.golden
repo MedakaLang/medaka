@@ -129,7 +129,6 @@ dotDotMemberNames : List UseMember -> List String
 dottedBare : String -> String
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
-dupErr : String -> String -> ResError
 dupSigGo : List Decl -> Map String (Option Loc) -> List ResError
 dupSigName : ResError -> String
 dupSigOf : Decl -> Option (String, Option Loc)
@@ -259,6 +258,7 @@ mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
 moduleAliasNames : List Decl -> List String
 modulesExportingName : Env -> String -> List String
+namedLocs : (List Decl -> List String) -> List Decl -> List (String, Option Loc)
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
 noCarry : UsePath -> ModuleExports -> List a
@@ -284,6 +284,7 @@ originOfTyName : Map String TyConOrigin -> String -> TyConOrigin
 originTraceEnabled : Ref Bool
 originTraceLog : Ref (List (String, List Decl))
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
+ownDups : String -> List (String, Option Loc) -> Map String Unit -> List ResError
 ownEffOrigin : String -> String -> (String, TyConOrigin)
 ownIfaceOrigin : String -> String -> (String, TyConOrigin)
 ownInterfaceMethods : List Decl -> List (String, List String)
@@ -331,6 +332,7 @@ resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
 resErrorLoc : ResError -> Option Loc
 resErrorSexp : ResError -> String
+reservedClashes : String -> List String -> List (String, Option Loc) -> List ResError
 resolveModule : List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModuleG : List String -> Option (Int, Int) -> List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModulesErrors : List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError

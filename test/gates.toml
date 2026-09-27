@@ -477,11 +477,9 @@ shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-# Stays shell: embeds a wall-clock scaling-ratio assertion (small-vs-large
-# corpus timing bound) that `Row`/`Arm` cannot express.
-migration = "native-wrap"
-run = "pds/test/car_vectors.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/car_vectors_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -569,16 +567,16 @@ sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
-# Two unrelated sections (#2592, #2595). One is a three-engine value
-# differential over a ledgered corpus — the vector family's shape exactly. The
-# other is a MUTATION self-test: it copies the pds tree, replaces one anchor in
-# pds/lib/did_key.mdk or in the driver, and requires the rebuilt driver to FAIL
-# carrying a named witness. That section grades this gate's own assertions
-# rather than the implementation, and inverts both halves of the contract
-# pds/test/vector_runner.mdk is built on (a spawn exits 0 and writes nothing to
-# stderr): a mutation spawn must exit nonzero, and of the five witnesses one is
-# printed to stdout while four are panics on stderr, so it is graded against
-# the two streams together.
+# Two unrelated sections (#2592, #2595), two `test` blocks in one module. One
+# is a three-engine value differential over a ledgered corpus, a
+# pds/test/vector_runner.mdk row. The other is a MUTATION self-test: it copies
+# the pds tree, replaces one anchor in pds/lib/did_key.mdk or in the driver,
+# and requires the rebuilt driver to FAIL carrying a named witness. That
+# section grades this gate's own assertions rather than the implementation,
+# and inverts both halves of the row contract (a spawn exits 0 and writes
+# nothing to stderr): a mutation spawn must exit nonzero, and of the five
+# witnesses one is printed to stdout while four are panics on stderr, so it
+# is graded against the two streams together.
 [[gate]]
 name = "pds/test/did_key_all_engines"
 area = "engines"
@@ -586,9 +584,9 @@ shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "split-first"
-run = "pds/test/did_key_all_engines.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/did_key_all_engines_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -830,13 +828,9 @@ shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-# Stays shell: the eval arm reads a hand-derived subsample of the corpus
-# while the native arm reads the full corpus, and `Row.corpus` is one value
-# shared by every arm — a `vector_runner` row cannot give two arms
-# different corpora.
-migration = "native-wrap"
-run = "pds/test/secp256k1_point_vectors.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/secp256k1_point_vectors_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []

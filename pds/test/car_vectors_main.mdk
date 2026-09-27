@@ -1,7 +1,7 @@
 {- | P1-C external CAR corpus and hostile-wire driver. -}
 
 import array.{take}
-import bytes.{toArray}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import io.{readLines}
 import list.{reverse}
@@ -26,16 +26,30 @@ mustCid text = resultOrPanic "car_vectors: malformed CID" (cidFromString text)
 
 mustHeader : DagCbor -> Array Int
 mustHeader value =
-  resultOrPanic "car_vectors: header encoding failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "car_vectors: header encoding failed" (dagCborEncode value))
 
 mustCar : Result String Car -> Car
 mustCar (Ok car) = car
 mustCar (Err message) = panic "car_vectors: valid CAR failed: \{message}"
 
-mustCarBytes : Result String (Array Int) -> Array Int
+mustCarBytes : Result String Bytes -> Bytes
 mustCarBytes (Ok bytes) = bytes
 mustCarBytes (Err message) =
   panic "car_vectors: CAR encoding failed: \{message}"
+
+-- Door: this driver's block rows are `Array Int` and `lib.car` speaks `Bytes`.
+-- One conversion helper each way covers every whole-block-list call into and
+-- out of `lib.car`.
+blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
+blockRowsToBytesDoor =
+  map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
+
+blockRowsFromBytesDoor : List (Cid, Bytes) -> List (Cid, Array Int)
+blockRowsFromBytesDoor = map ((cid, bytes) => (cid, toArray bytes))
+
+hostileDecode : Array Int -> Result String Car
+hostileDecode bytes = carDecode (fromArrayAssumeByteDomain bytes)
 
 parseFixture : List String -> Option FixtureState -> Fixture
 parseFixture [] _ = panic "car_vectors: missing or unterminated fixture"
@@ -90,7 +104,7 @@ sameBlocks _ _ = False
 frameHeader : DagCbor -> Array Int
 frameHeader value =
   let header = mustHeader value
-  uvarintEncode (arrayLength header) ++ header
+  toArray (uvarintEncode (arrayLength header)) ++ header
 
 headerValue : List Cid -> Int -> DagCbor
 headerValue roots version =
@@ -99,33 +113,37 @@ headerValue roots version =
 encodeSections : List (Cid, Array Int) -> Array Int
 encodeSections [] = [||]
 encodeSections ((cid, bytes) :: rest) =
-  let payload = cidToBytes cid ++ bytes
-  uvarintEncode (arrayLength payload) ++ payload ++ encodeSections rest
+  let payload = toArray (cidToBytes cid) ++ bytes
+  toArray (uvarintEncode (arrayLength payload))
+    ++ payload
+    ++ encodeSections rest
 
 wireCar : List Cid -> Int -> List (Cid, Array Int) -> Array Int
 wireCar roots version blocks =
   frameHeader (headerValue roots version) ++ encodeSections blocks
 
 gradeExternal : Fixture -> <IO> Int
-gradeExternal (Fixture name roots blocks expected) = match carDecode expected
-  Err message =>
-    let () = println "CASE \{name} FAIL decode=\{message}"
-    0
-  Ok car =>
-    let reencoded = carEncode roots blocks
-    let ok =
-      sameRoots roots (carRoots car)
-        && sameBlocks blocks (carBlocks car)
-        && reencoded == Ok expected
-        && blockStoreSize (carStore car) == length blocks
-    if ok then
-      let () =
-        println
-          "CASE \{name} PASS roots=\{intToString (length roots)} blocks=\{intToString (length blocks)}"
-      1
-    else
-      let () = println "CASE \{name} FAIL decoded-or-reencoded-mismatch"
+gradeExternal (Fixture name roots blocks expected) =
+  match hostileDecode expected
+    Err message =>
+      let () = println "CASE \{name} FAIL decode=\{message}"
       0
+    Ok car =>
+      let reencoded =
+        map toArray (carEncode roots (blockRowsToBytesDoor blocks))
+      let ok =
+        sameRoots roots (carRoots car)
+          && sameBlocks blocks (blockRowsFromBytesDoor (carBlocks car))
+          && reencoded == Ok expected
+          && blockStoreSize (carStore car) == length blocks
+      if ok then
+        let () =
+          println
+            "CASE \{name} PASS roots=\{intToString (length roots)} blocks=\{intToString (length blocks)}"
+        1
+      else
+        let () = println "CASE \{name} FAIL decoded-or-reencoded-mismatch"
+        0
 
 success : String -> Bool -> <IO> Int
 success label True =
@@ -137,25 +155,35 @@ success label False =
 
 runSuccess : Fixture -> <IO> Int
 runSuccess (Fixture _ roots blocks expected) =
-  let decoded = mustCar (carDecode expected)
+  let decoded = mustCar (hostileDecode expected)
   let first = match blocks
     block :: _ => block
     [] => panic "car_vectors: fixture must contain blocks"
   let duplicateCar =
-    mustCar (carDecode (mustCarBytes (carEncode roots (blocks ++ [first]))))
+    mustCar
+      (carDecode
+        (mustCarBytes
+          (carEncode roots (blockRowsToBytesDoor (blocks ++ [first])))))
   let reordered = reverse blocks
   let reorderedCar =
-    mustCar (carDecode (mustCarBytes (carEncode roots reordered)))
+    mustCar
+      (carDecode
+        (mustCarBytes (carEncode roots (blockRowsToBytesDoor reordered))))
   let root = match roots
     item :: _ => item
     [] => panic "car_vectors: fixture must contain a root"
   sum [
-    success "canonical-reencode" (carEncode roots blocks == Ok expected),
+    success
+      "canonical-reencode"
+      (map toArray (carEncode roots (blockRowsToBytesDoor blocks))
+        == Ok expected),
     success
       "identical-duplicate"
       (length (carBlocks duplicateCar) == length blocks + 1
         && blockStoreSize (carStore duplicateCar) == length blocks),
-    success "arbitrary-order" (sameBlocks reordered (carBlocks reorderedCar)),
+    success
+      "arbitrary-order"
+      (sameBlocks reordered (blockRowsFromBytesDoor (carBlocks reorderedCar))),
     success
       "unrelated-block"
       (length blocks > length roots && blockStoreHas root (carStore decoded)),
@@ -164,66 +192,69 @@ runSuccess (Fixture _ roots blocks expected) =
 runHostile : Fixture -> <IO> Int
 runHostile (Fixture _ roots blocks expected) =
   let header = mustHeader (headerValue roots 1)
-  let framed = uvarintEncode (arrayLength header) ++ header
+  let framed = toArray (uvarintEncode (arrayLength header)) ++ header
   let root = match roots
     item :: _ => item
     [] => panic "car_vectors: fixture must contain a root"
   let malformedCid = [|0|]
   let nonBlessedCid = [|1, 0x70, 0x12, 0x20|] ++ arrayMake 32 0
   let malformedSection =
-    uvarintEncode (arrayLength malformedCid) ++ malformedCid
+    toArray (uvarintEncode (arrayLength malformedCid)) ++ malformedCid
   let nonBlessedSection =
-    uvarintEncode (arrayLength nonBlessedCid) ++ nonBlessedCid
-  let mismatchPayload = cidToBytes root ++ [|0|]
+    toArray (uvarintEncode (arrayLength nonBlessedCid)) ++ nonBlessedCid
+  let mismatchPayload = toArray (cidToBytes root) ++ [|0|]
   let mismatchSection =
-    uvarintEncode (arrayLength mismatchPayload) ++ mismatchPayload
+    toArray (uvarintEncode (arrayLength mismatchPayload)) ++ mismatchPayload
   let truncated = take (arrayLength expected - 1) expected
   sum [
     rejectContains
       "nonminimal-varint"
       "uvarint: non-minimal"
-      (carDecode
+      (hostileDecode
         ([|bitOr (arrayLength header) 0x80, 0|]
           ++ header
           ++ encodeSections blocks)),
     rejectContains
       "overflow-varint"
       "representable Int range"
-      (carDecode [|128, 128, 128, 128, 128, 128, 128, 128, 64|]),
+      (hostileDecode [|128, 128, 128, 128, 128, 128, 128, 128, 64|]),
     rejectContains
       "zero-section"
       "zero-length section"
-      (carDecode (framed ++ [|0|])),
+      (hostileDecode (framed ++ [|0|])),
     rejectContains
       "overlong-section"
       "overlong section"
-      (carDecode (framed ++ [|100|])),
-    rejectContains "truncation" "truncated" (carDecode truncated),
+      (hostileDecode (framed ++ [|100|])),
+    rejectContains "truncation" "truncated" (hostileDecode truncated),
     rejectContains
       "trailing-corruption"
       "trailing corruption"
-      (carDecode (expected ++ [|0x80|])),
+      (hostileDecode (expected ++ [|0x80|])),
     rejectContains
       "wrong-version"
       "version must be 1"
-      (carDecode (wireCar roots 2 blocks)),
+      (hostileDecode (wireCar roots 2 blocks)),
     rejectContains
       "wrong-header"
       "header must be exactly"
-      (carDecode (frameHeader (DcMap [("version", DcInt 1)]))),
+      (hostileDecode (frameHeader (DcMap [("version", DcInt 1)]))),
     rejectContains
       "malformed-cid"
       "CID codec"
-      (carDecode (framed ++ malformedSection)),
+      (hostileDecode (framed ++ malformedSection)),
     rejectContains
       "nonblessed-cid"
       "non-blessed CID"
-      (carDecode (framed ++ nonBlessedSection)),
-    rejectContains "missing-root" "root block is missing" (carDecode framed),
+      (hostileDecode (framed ++ nonBlessedSection)),
+    rejectContains
+      "missing-root"
+      "root block is missing"
+      (hostileDecode framed),
     rejectContains
       "cid-mismatch"
       "content does not match CID"
-      (carDecode (framed ++ mismatchSection)),
+      (hostileDecode (framed ++ mismatchSection)),
   ]
 
 main : <IO, Env, FileRead> Unit

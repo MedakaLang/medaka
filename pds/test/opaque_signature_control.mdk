@@ -1,10 +1,11 @@
 -- Positive opacity cell: the public compact ingress/egress remains usable
 -- without exposing the signature constructor or internal scalar carriers.
+import bytes as B
 import lib.sign.{Signature, signatureFromCompact, signatureCompact}
 
-consume : Signature -> Array Int
+consume : Signature -> B.Bytes
 consume signature = signatureCompact signature
 
-main = match signatureFromCompact (arrayMake 64 0)
-  Ok signature => println (arrayLength (consume signature))
+main = match signatureFromCompact (B.fromU8Array (arrayMake 64 0))
+  Ok signature => println (B.length (consume signature))
   Err _ => println 0

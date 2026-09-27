@@ -14,6 +14,8 @@
 
 import test.{expectEqual, expectErr, expectOk, expectTrue}
 import string.{repeat}
+import bytes.{Bytes, fromU8Array}
+import bytes as B
 import lib.base58.{base58btcEncode, base58btcDecode, base58btcMaxInputChars}
 import lib.multiformats.{
   uvarintEncode,
@@ -27,14 +29,14 @@ import lib.multiformats.{
 
 -- ── base58 round-trip, 0/1/3 leading zero bytes ────────────────────────────
 
-bytesNoZeros : Array Int
-bytesNoZeros = arrayFromList [72, 101, 108, 108, 111]
+bytesNoZeros : Bytes
+bytesNoZeros = fromU8Array [|72, 101, 108, 108, 111|]
 
-bytesOneZero : Array Int
-bytesOneZero = arrayFromList [0, 72, 101, 108, 108, 111]
+bytesOneZero : Bytes
+bytesOneZero = fromU8Array [|0, 72, 101, 108, 108, 111|]
 
-bytesThreeZeros : Array Int
-bytesThreeZeros = arrayFromList [0, 0, 0, 72, 101, 108, 108, 111]
+bytesThreeZeros : Bytes
+bytesThreeZeros = fromU8Array [|0, 0, 0, 72, 101, 108, 108, 111|]
 
 test "base58 round-trip: 0 leading zero bytes" =
   expectEqual (base58btcDecode (base58btcEncode bytesNoZeros)) (Ok bytesNoZeros)
@@ -70,7 +72,7 @@ test "base58 decode rejects embedded space" =
 -- into this slice's DEBT.md `unchecked:` field.
 
 test "base58 encode of empty input is empty string" =
-  expectEqual (base58btcEncode [||]) ""
+  expectEqual (base58btcEncode (fromU8Array [||])) ""
 
 -- ── uvarint 16383/16384 boundary as a LENGTH property (§3 deviation 2) ─────
 -- 16383 has no reachable in-family published vector (F-22); this is a
@@ -78,16 +80,16 @@ test "base58 encode of empty input is empty string" =
 -- published 7-bits-per-byte rule (F-8), not a transcribed answer key.
 
 test "uvarint length: 127 -> 1 byte" =
-  expectEqual (arrayLength (uvarintEncode 127)) 1
+  expectEqual (B.length (uvarintEncode 127)) 1
 
 test "uvarint length: 128 -> 2 bytes" =
-  expectEqual (arrayLength (uvarintEncode 128)) 2
+  expectEqual (B.length (uvarintEncode 128)) 2
 
 test "uvarint length: 16383 -> 2 bytes" =
-  expectEqual (arrayLength (uvarintEncode 16383)) 2
+  expectEqual (B.length (uvarintEncode 16383)) 2
 
 test "uvarint length: 16384 -> 3 bytes" =
-  expectEqual (arrayLength (uvarintEncode 16384)) 3
+  expectEqual (B.length (uvarintEncode 16384)) 3
 
 test "uvarint round-trip: 127" =
   expectEqual (uvarintDecodeAll (uvarintEncode 127)) (Ok 127)
@@ -104,14 +106,14 @@ test "uvarint round-trip: 16384" =
 -- ── uvarint truncated / over-long rejection ────────────────────────────────
 
 test "uvarint rejects truncated input (continuation bit set, no more bytes)" =
-  expectErr (uvarintDecodeAll (arrayFromList [0x80]))
+  expectErr (uvarintDecodeAll (fromU8Array [|0x80|]))
 
 test "uvarint rejects over-long input (>9 bytes, continuation bit set throughout)" =
   expectErr
     (uvarintDecodeAll
-      (arrayFromList [
+      (fromU8Array [|
         0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01
-      ]))
+      |]))
 
 -- ── multibase base58btc ─────────────────────────────────────────────────────
 
@@ -135,10 +137,10 @@ test "multibase base58btc round-trips" =
 test "multicodecPrefix secp256k1-pub == [0xe7, 0x01]" =
   expectEqual
     (multicodecPrefix multicodecSecp256k1Pub)
-    (arrayFromList [0xe7, 0x01])
+    (fromU8Array [|0xe7, 0x01|])
 
 test "multicodecPrefix p256-pub == [0x80, 0x24]" =
-  expectEqual (multicodecPrefix multicodecP256Pub) (arrayFromList [0x80, 0x24])
+  expectEqual (multicodecPrefix multicodecP256Pub) (fromU8Array [|0x80, 0x24|])
 
 -- ── trust-boundary guards [RUN-PDS0-036] ───────────────────────────────────
 --    Each guard gets BOTH directions: one cell proving it FIRES on the bad
@@ -171,14 +173,14 @@ test "base58btcDecode still accepts a realistic 60-character input" =
 test "uvarint rejects a value above intMaxBound, naming the range" =
   expectEqual
     (uvarintDecodeAll
-      (arrayFromList [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]))
+      (fromU8Array [|0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40|]))
     (Err "uvarint: value exceeds the representable Int range (max 2^62-1)")
 
 test "uvarint accepts intMaxBound itself (range guard is not off by one)" =
   expectEqual
     (uvarintDecodeAll
-      (arrayFromList [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]))
+      (fromU8Array [|0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f|]))
     (Ok 4611686018427387903)
 
 test "uvarintEncode does not reject intMaxBound" =
-  expectEqual (arrayLength (uvarintEncode 4611686018427387903)) 9
+  expectEqual (B.length (uvarintEncode 4611686018427387903)) 9

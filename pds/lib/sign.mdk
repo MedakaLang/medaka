@@ -29,7 +29,7 @@ export data SecretKey = SecretKey B.Bytes
 -- already in `[1, n)` and the fixed-control reducer returns that scalar
 -- exactly; the public branch-bearing `scFromBytes` validator is not reached.
 secretScalar : SecretKey -> Sc
-secretScalar (SecretKey stored) = scFromFixedBytesReduce (B.toArray stored)
+secretScalar (SecretKey stored) = scFromFixedBytesReduce stored
 
 -- | A parsed or derived secp256k1 public key. Its affine carrier and
 --   constructor stay private to this consumer boundary.
@@ -39,27 +39,55 @@ export data PublicKey = PublicKey AffinePoint
 --   both constructors stay private to this consumer boundary.
 export data Signature = Signature EcdsaSignature
 
--- | Admit exactly the scalars in `[1, n)`. Length is public; for a 32-element
---   input the scalar module completes its full fixed-control scan before this
---   one declassified aggregate-validity branch constructs a key or an error.
+-- | Admit exactly the scalars in `[1, n)`. Length is public; for a 32-byte
+--   input the scalar module computes its fixed-control validity bit before
+--   this one declassified aggregate-validity branch constructs a key or an
+--   error.
 export
-secretKeyFromBytes : Array Int -> Result String SecretKey
+secretKeyFromBytes : B.Bytes -> Result String SecretKey
 secretKeyFromBytes bs =
   let (validBit, candidate) = scSecretCandidate bs
   if validBit == 1 then
-    Ok (SecretKey (B.fromArrayAssumeByteDomain (scToBytes candidate)))
+    Ok (SecretKey (scToBytes candidate))
   else
     Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+{- | Admit a secret key held as an `Array Int` whose elements are not yet
+   known to be bytes. Transitional: it serves the callers that still carry a
+   key that way (`lib.repo`, `pds/serve.mdk`, `pds/shell/keygen.mdk`) and is
+   deleted when they move to `Bytes`.
+
+   An element outside `0` to `255` gets `secretKeyFromBytes`'s own refusal
+   rather than being truncated into some other key. Every element is folded
+   into one accumulator that is tested once, after the last element, so no
+   element's value decides how many are read. -}
+export
+secretKeyFromByteArray : Array Int -> Result String SecretKey
+secretKeyFromByteArray raw =
+  if outOfByteRange raw 0 0 == 0 then
+    secretKeyFromBytes (B.fromArrayAssumeByteDomain raw)
+  else
+    Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+-- Zero exactly when every element of `raw` from `i` on is a byte: shifted
+-- right by 8, a byte is 0, a larger value is positive, and a negative value
+-- stays negative.
+outOfByteRange : Array Int -> Int -> Int -> Int
+outOfByteRange raw i acc =
+  if i >= arrayLength raw then
+    acc
+  else
+    outOfByteRange raw (i + 1) (bitOr acc (shiftRight raw[i] 8))
 
 -- | Parse one public compressed SEC 1 key. Invalid wire values are rejected
 --   before a `PublicKey` exists.
 export
-publicKeyFromCompressed : Array Int -> Result String PublicKey
+publicKeyFromCompressed : B.Bytes -> Result String PublicKey
 publicKeyFromCompressed bytes = map PublicKey (pointFromCompressed bytes)
 
 -- | Serialize a public key in its fixed 33-byte compressed form.
 export
-publicKeyCompressed : PublicKey -> Array Int
+publicKeyCompressed : PublicKey -> B.Bytes
 publicKeyCompressed (PublicKey point) = pointCompressed point
 
 -- | Derive the public key for an admitted secret scalar via the fixed 256-bit
@@ -70,34 +98,24 @@ publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))
 
 -- | Parse exactly 64 public bytes as canonical nonzero low-S P1363 `r || s`.
 export
-signatureFromCompact : Array Int -> Result String Signature
+signatureFromCompact : B.Bytes -> Result String Signature
 signatureFromCompact compact = map Signature (ecdsaSignatureFromCompact compact)
 
 -- | Serialize a signature in its fixed 64-byte P1363 `r || s` form.
 export
-signatureCompact : Signature -> Array Int
+signatureCompact : Signature -> B.Bytes
 signatureCompact (Signature signature) = ecdsaSignatureCompact signature
 
-digestBytesOk : Array Int -> Int -> Bool
-digestBytesOk digest i =
-  if i >= arrayLength digest then
-    True
-  else
-    let byte = digest[i]
-    if byte < 0 || byte > 255 then False else digestBytesOk digest (i + 1)
-
--- | Sign exactly one public 32-byte SHA-256 digest. Public shape/domain errors
---   are rejected before the fixed two-candidate producer begins; only its
+-- | Sign exactly one public 32-byte SHA-256 digest. A public length error is
+--   rejected before the fixed two-candidate producer begins; only its
 --   final aggregate validity bit is declassified here. A produced signature
 --   is verified against the signer's own public key before it is returned;
 --   that check reads only public values (key, digest, signature).
 export
-signDigest : SecretKey -> Array Int -> Result String Signature
+signDigest : SecretKey -> B.Bytes -> Result String Signature
 signDigest key digest =
-  if arrayLength digest /= 32 then
+  if B.length digest /= 32 then
     Err "sign.signDigest: expected 32 digest bytes"
-  else if not (digestBytesOk digest 0) then
-    Err "sign.signDigest: every digest element must be a byte in 0..255"
   else
     let scalar = secretScalar key
     let (validBit, signature) = ecdsaSignDigest scalar digest
@@ -111,8 +129,8 @@ signDigest key digest =
       Err "RFC 6979 retry bound exhausted"
 
 -- | Verify one canonical signature against a public key and 32-byte digest.
---   Invalid digest shape/domain returns `False`.
+--   A digest of any other length returns `False`.
 export
-verifyDigest : PublicKey -> Array Int -> Signature -> Bool
+verifyDigest : PublicKey -> B.Bytes -> Signature -> Bool
 verifyDigest (PublicKey publicPoint) digest (Signature signature) =
   ecdsaVerifyDigest publicPoint digest signature

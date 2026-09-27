@@ -1,10 +1,11 @@
 -- Positive opacity cell: public byte ingress, sentinels, and arithmetic remain
 -- usable without exposing either module's mutable limb storage.
+import bytes.{fromU8Array}
 import lib.field.{feZero, feOne, feAdd, feEqual, feFromBytesReduce}
 import lib.scalar.{scZero, scOne, scAdd, scEqual, scFromBytesReduce}
 
 main =
-  let bytes = arrayMake 32 0
+  let bytes = fromU8Array (arrayMake 32 0)
   let fe = feFromBytesReduce bytes
   let sc = scFromBytesReduce bytes
   let fieldOk =

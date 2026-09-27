@@ -1,0 +1,20 @@
+issue: 3502
+what: a handle built in a match scrutinee carries a flexible authority
+what: variable while the arm is inferred. `p ++ x` keeps that variable, which
+what: is solved afterwards to the exact element "/etc", so `readAny` claims
+what: the single path "/etc" while it reads "/etc" ++ x. Correct verdict:
+what: REJECT, since an exact element admits only itself (EFFECTS-SEMANTICS
+what: §2.3) and alpha must over-approximate (§4). Observed: accepted at exit 0.
+what: Unlike 3501-signature-variable-extension there is no caller; a let-bound
+what: handle is already solved when alpha runs and is refused correctly.
+cmd: check main.mdk
+exit: 0
+stdout-line: readAny : String -> <FileRead "/etc"> Result String String
+stdout-line: main : <IO> Unit
+control: check control.mdk
+why-verb: `check`: the defect is an acceptance; there is no runtime value to
+why-verb: pin without reading a host file.
+why-stdout: `readAny`'s scheme is the false claim; `main` proves the dump ran.
+why-control: control.mdk reads the handle's path with no suffix, which the
+why-control: exact bound admits under every fix. If it breaks, handles or
+why-control: qualified fields broke, not #3502.
