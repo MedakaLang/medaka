@@ -1,5 +1,5 @@
 # META
-source_lines=49986
+source_lines=50016
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9448,7 +9448,8 @@ hadTypeErrors _ = !typeErrorsSticky
 -- forget.  A rollback of the channel owes the index the same pairing the counter
 -- states above; today there is none within a `perRun` lifetime (see there).
 recordTypeError : TcDiag -> Unit
-recordTypeError d =
+recordTypeError raw =
+  let d = writtenDiag raw
   typeErrorsSticky := True
   typeErrorsStickyDiags :=
     (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
@@ -14726,6 +14727,35 @@ localSourceName name
     first :: _ => first
     [] => name
   | otherwise = name
+
+-- Diagnostic text with every renamed local binder (`f$3$lb`) shown as written.
+writtenNames : String -> String
+writtenNames text = match splitOnChar '$' text
+  [only] => only
+  parts => dropRenameSuffixes parts
+
+dropRenameSuffixes : List String -> String
+dropRenameSuffixes [] = ""
+dropRenameSuffixes [a] = a
+dropRenameSuffixes (a :: n :: lb :: more)
+  | allDigits n && startsWith "lb" lb =
+    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
+dropRenameSuffixes (a :: rest) = a ++ "$" ++ dropRenameSuffixes rest
+
+allDigits : String -> Bool
+allDigits n = stringLength n > 0 && allDigitsFrom n 0
+
+allDigitsFrom : String -> Int -> Bool
+allDigitsFrom n i
+  | i >= stringLength n = True
+  | otherwise =
+    let c = stringSlice i (i + 1) n
+    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
+
+-- A diagnostic as the user reads it: binder names as written.
+writtenDiag : TcDiag -> TcDiag
+writtenDiag (TcDiag code sev loc msg help fix) =
+  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
 
 localAbsFor : String -> Option LocalAbs
 localAbsFor name = match omLookup name graphRun.value.localAbs.lasBinders.value
@@ -21283,7 +21313,7 @@ checkMatchExhaustive scrutTy arms =
   ] then
     let (msg, help) = nonExhaustiveMsg scrutTy rows
     driverState.value.matchWarnings :=
-      TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None
+      writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None)
         :: driverState.value.matchWarnings.value
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -26310,7 +26340,7 @@ pushMatchWarningOnceAt code loc msg help =
     ()
   else
     driverState.value.matchWarnings :=
-      TcDiag code 2 thisLoc msg help None
+      writtenDiag (TcDiag code 2 thisLoc msg help None)
         :: driverState.value.matchWarnings.value
 
 optLocEq : Option Loc -> Option Loc -> Bool
@@ -47934,7 +47964,7 @@ prependDiagOpt : String ->
   List TcDiag
 prependDiagOpt _ _ _ None ds = ds
 prependDiagOpt code sev help (Some msg) ds =
-  TcDiag code sev None msg help None :: ds
+  writtenDiag (TcDiag code sev None msg help None) :: ds
 
 -- render the entry report: type errors win (each `TYPE ERROR: …`), else the
 -- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.
@@ -51395,7 +51425,7 @@ isTyAuth _ = False
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadTypeErrors" (PWild) (EUnOp "!" (EVar "typeErrorsSticky")))
 (DTypeSig false "recordTypeError" (TyFun (TyCon "TcDiag") (TyCon "Unit")))
-(DFunDef false "recordTypeError" ((PVar "d")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DFunDef false "recordTypeError" ((PVar "raw")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "writtenDiag") (EVar "raw"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
 (DTypeSig false "noteTypeErrorDetected" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "noteTypeErrorDetected" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1)))))
 (DTypeSig false "erredDuring" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyTuple (TyCon "Bool") (TyVar "a"))))
@@ -52529,6 +52559,19 @@ isTyAuth _ = False
 (DFunDef false "isLocalAbsName" ((PVar "n")) (EApp (EApp (EVar "endsWith") (ELit (LString "$lb"))) (EVar "n")))
 (DTypeSig false "localSourceName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "localSourceName" ((PVar "name")) (EIf (EApp (EVar "isLocalAbsName") (EVar "name")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "name")) (arm (PCons (PVar "first") PWild) () (EVar "first")) (arm (PList) () (EVar "name"))) (EIf (EVar "otherwise") (EVar "name") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
+(DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "dropRenameSuffixes" ((PList)) (ELit (LString "")))
+(DFunDef false "dropRenameSuffixes" ((PList (PVar "a"))) (EVar "a"))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PCons (PVar "n") (PCons (PVar "lb") (PVar "more"))))) (EIf (EBinOp "&&" (EApp (EVar "allDigits") (EVar "n")) (EApp (EApp (EVar "startsWith") (ELit (LString "lb"))) (EVar "lb"))) (EBinOp "++" (EVar "a") (EApp (EVar "dropRenameSuffixes") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "lb"))) (EVar "lb")) (EVar "more")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EVar "a") (ELit (LString "$"))) (EApp (EVar "dropRenameSuffixes") (EVar "rest"))))
+(DTypeSig false "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (ELit (LInt 0)))))
+(DTypeSig false "allDigitsFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "allDigitsFrom" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "n"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "writtenDiag" (TyFun (TyCon "TcDiag") (TyCon "TcDiag")))
+(DFunDef false "writtenDiag" ((PCon "TcDiag" (PVar "code") (PVar "sev") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "loc")) (EApp (EVar "writtenNames") (EVar "msg"))) (EApp (EApp (EVar "map") (EVar "writtenNames")) (EVar "help"))) (EVar "fix")))
 (DTypeSig false "localAbsFor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))
 (DFunDef false "localAbsFor" ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "localAbs") "lasBinders") "value")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "forgetLocalAbs" (TyFun (TyCon "String") (TyCon "Unit")))
@@ -53584,7 +53627,7 @@ isTyAuth _ = False
 (DTypeSig false "nonExhaustiveMatchWarning" (TyCon "String"))
 (DFunDef false "nonExhaustiveMatchWarning" () (ELit (LString "Warning: non-exhaustive match. Not all cases are covered")))
 (DTypeSig false "checkMatchExhaustive" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))
-(DFunDef false "checkMatchExhaustive" ((PVar "scrutTy") (PVar "arms")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nonGuardedRows") (EVar "arms"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EVar "rows")) (EListLit (EVar "PWild"))) (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "help")) (EApp (EApp (EVar "nonExhaustiveMsg") (EVar "scrutTy")) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-NONEXHAUSTIVE"))) (ELit (LInt 2))) (EUnOp "!" (EVar "currentLoc"))) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))) (ELit LUnit)))))
+(DFunDef false "checkMatchExhaustive" ((PVar "scrutTy") (PVar "arms")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nonGuardedRows") (EVar "arms"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EVar "rows")) (EListLit (EVar "PWild"))) (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "help")) (EApp (EApp (EVar "nonExhaustiveMsg") (EVar "scrutTy")) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-NONEXHAUSTIVE"))) (ELit (LInt 2))) (EUnOp "!" (EVar "currentLoc"))) (EVar "msg")) (EVar "help")) (EVar "None"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))) (ELit LUnit)))))
 (DTypeSig false "unreachableArmWarning" (TyCon "String"))
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm. This pattern is already covered by an earlier arm")))
 (DTypeSig false "checkMatchRedundant" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))
@@ -54628,7 +54671,7 @@ isTyAuth _ = False
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "pushMatchWarningOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
+(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
 (DTypeSig false "optLocEq" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
 (DFunDef false "optLocEq" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EApp (EVar "locEq") (EVar "a")) (EVar "b")))
 (DFunDef false "optLocEq" ((PCon "None") (PCon "None")) (EVar "True"))
@@ -57730,7 +57773,7 @@ isTyAuth _ = False
 (DFunDef false "checkModulesEntryFullSplitK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "effectivePreludeKey") (PVar "effectiveCoreDecls0") (PVar "effectiveModules0")) (EMatch (EVar "modules0") (arm (PList (PTuple PWild (PVar "prog"))) () (EIf (EApp (EVar "programIsCore") (EVar "prog")) (ETuple (EVar "None") (EListLit) (EListLit (ETuple (ELit (LString "core")) (EVar "prog")))) (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0")))) (arm PWild () (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0"))))) (DoLet false false (PVar "g") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveGraphK") (EVar "GOutDiags")) (EVar "DrainRollback")) (EVar "effectivePreludeKey")) (EVar "runtimeDecls")) (EVar "effectiveCoreDecls0")) (EVar "effectiveModules0"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EVar "checkModulesEntryFromDiags") (EFieldAccess (EVar "g") "gdPerMod"))) (DoExpr (ETuple (EFieldAccess (EVar "g") "gdCoreSchemes") (EVar "schemes") (EVar "errs") (EVar "warns")))))
 (DTypeSig false "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
-(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None")) (EVar "ds")))
+(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 (DTypeSig true "checkModulesEntryReport" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryReport" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "warns"))))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig true "checkModulesEntryHasErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
@@ -59385,7 +59428,7 @@ isTyAuth _ = False
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadTypeErrors" (PWild) (EUnOp "!" (EVar "typeErrorsSticky")))
 (DTypeSig false "recordTypeError" (TyFun (TyCon "TcDiag") (TyCon "Unit")))
-(DFunDef false "recordTypeError" ((PVar "d")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DFunDef false "recordTypeError" ((PVar "raw")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "writtenDiag") (EVar "raw"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "typeErrorsStickyDiags")) (EBinOp "::" (ETuple (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value") (EVar "d")) (EFieldAccess (EVar "typeErrorsStickyDiags") "value")))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "tcMsg") (EVar "d"))) (ELit LUnit)) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrorMsgSetRef") "value")))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
 (DTypeSig false "noteTypeErrorDetected" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "noteTypeErrorDetected" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1)))))
 (DTypeSig false "erredDuring" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyTuple (TyCon "Bool") (TyVar "a"))))
@@ -60519,6 +60562,19 @@ isTyAuth _ = False
 (DFunDef false "isLocalAbsName" ((PVar "n")) (EApp (EApp (EVar "endsWith") (ELit (LString "$lb"))) (EVar "n")))
 (DTypeSig false "localSourceName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "localSourceName" ((PVar "name")) (EIf (EApp (EVar "isLocalAbsName") (EVar "name")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "name")) (arm (PCons (PVar "first") PWild) () (EVar "first")) (arm (PList) () (EVar "name"))) (EIf (EVar "otherwise") (EVar "name") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "writtenNames" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "writtenNames" ((PVar "text")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "text")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PVar "parts") () (EApp (EVar "dropRenameSuffixes") (EVar "parts")))))
+(DTypeSig false "dropRenameSuffixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "dropRenameSuffixes" ((PList)) (ELit (LString "")))
+(DFunDef false "dropRenameSuffixes" ((PList (PVar "a"))) (EVar "a"))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PCons (PVar "n") (PCons (PVar "lb") (PVar "more"))))) (EIf (EBinOp "&&" (EApp (EVar "allDigits") (EVar "n")) (EApp (EApp (EVar "startsWith") (ELit (LString "lb"))) (EVar "lb"))) (EBinOp "++" (EVar "a") (EApp (EVar "dropRenameSuffixes") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "lb"))) (EVar "lb")) (EVar "more")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "dropRenameSuffixes" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EVar "a") (ELit (LString "$"))) (EApp (EVar "dropRenameSuffixes") (EVar "rest"))))
+(DTypeSig false "allDigits" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "allDigits" ((PVar "n")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (ELit (LInt 0)))))
+(DTypeSig false "allDigitsFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "allDigitsFrom" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "n"))) (EVar "True") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9")))) (EApp (EApp (EVar "allDigitsFrom") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "writtenDiag" (TyFun (TyCon "TcDiag") (TyCon "TcDiag")))
+(DFunDef false "writtenDiag" ((PCon "TcDiag" (PVar "code") (PVar "sev") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "loc")) (EApp (EVar "writtenNames") (EVar "msg"))) (EApp (EApp (EMethodRef "map") (EVar "writtenNames")) (EVar "help"))) (EVar "fix")))
 (DTypeSig false "localAbsFor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LocalAbs"))))
 (DFunDef false "localAbsFor" ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "localAbs") "lasBinders") "value")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "forgetLocalAbs" (TyFun (TyCon "String") (TyCon "Unit")))
@@ -61574,7 +61630,7 @@ isTyAuth _ = False
 (DTypeSig false "nonExhaustiveMatchWarning" (TyCon "String"))
 (DFunDef false "nonExhaustiveMatchWarning" () (ELit (LString "Warning: non-exhaustive match. Not all cases are covered")))
 (DTypeSig false "checkMatchExhaustive" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))
-(DFunDef false "checkMatchExhaustive" ((PVar "scrutTy") (PVar "arms")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nonGuardedRows") (EVar "arms"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EVar "rows")) (EListLit (EVar "PWild"))) (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "help")) (EApp (EApp (EVar "nonExhaustiveMsg") (EVar "scrutTy")) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-NONEXHAUSTIVE"))) (ELit (LInt 2))) (EUnOp "!" (EVar "currentLoc"))) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))) (ELit LUnit)))))
+(DFunDef false "checkMatchExhaustive" ((PVar "scrutTy") (PVar "arms")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "nonGuardedRows") (EVar "arms"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "useful") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EVar "rows")) (EListLit (EVar "PWild"))) (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "help")) (EApp (EApp (EVar "nonExhaustiveMsg") (EVar "scrutTy")) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-NONEXHAUSTIVE"))) (ELit (LInt 2))) (EUnOp "!" (EVar "currentLoc"))) (EVar "msg")) (EVar "help")) (EVar "None"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))) (ELit LUnit)))))
 (DTypeSig false "unreachableArmWarning" (TyCon "String"))
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm. This pattern is already covered by an earlier arm")))
 (DTypeSig false "checkMatchRedundant" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))
@@ -62618,7 +62674,7 @@ isTyAuth _ = False
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "pushMatchWarningOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
+(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
 (DTypeSig false "optLocEq" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
 (DFunDef false "optLocEq" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EApp (EVar "locEq") (EVar "a")) (EVar "b")))
 (DFunDef false "optLocEq" ((PCon "None") (PCon "None")) (EVar "True"))
@@ -65720,7 +65776,7 @@ isTyAuth _ = False
 (DFunDef false "checkModulesEntryFullSplitK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "effectivePreludeKey") (PVar "effectiveCoreDecls0") (PVar "effectiveModules0")) (EMatch (EVar "modules0") (arm (PList (PTuple PWild (PVar "prog"))) () (EIf (EApp (EVar "programIsCore") (EVar "prog")) (ETuple (EVar "None") (EListLit) (EListLit (ETuple (ELit (LString "core")) (EVar "prog")))) (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0")))) (arm PWild () (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0"))))) (DoLet false false (PVar "g") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveGraphK") (EVar "GOutDiags")) (EVar "DrainRollback")) (EVar "effectivePreludeKey")) (EVar "runtimeDecls")) (EVar "effectiveCoreDecls0")) (EVar "effectiveModules0"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EVar "checkModulesEntryFromDiags") (EFieldAccess (EVar "g") "gdPerMod"))) (DoExpr (ETuple (EFieldAccess (EVar "g") "gdCoreSchemes") (EVar "schemes") (EVar "errs") (EVar "warns")))))
 (DTypeSig false "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
-(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None")) (EVar "ds")))
+(DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EVar "writtenDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None"))) (EVar "ds")))
 (DTypeSig true "checkModulesEntryReport" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryReport" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "warns"))))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig true "checkModulesEntryHasErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))

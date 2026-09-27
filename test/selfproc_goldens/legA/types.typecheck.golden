@@ -77,6 +77,8 @@ alignScopedSchemes : List ScopedMember -> List (String, Scheme) -> List ScopedSc
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
 allCoreFns : List String -> Bool
+allDigits : String -> Bool
+allDigitsFrom : String -> Int -> Bool
 allEVars : Expr -> List String
 allHeadArgsMatch : List (Ty, Mono) -> Bool
 allIfaceMethodNames : List Decl -> List String
@@ -838,6 +840,7 @@ dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
 dropMethodIdentCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))
 dropModSchemes : (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
 dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
+dropRenameSuffixes : List String -> String
 dtopFor : EffLabel -> Param
 eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
 eagerRefs : Expr -> List String
@@ -2845,6 +2848,8 @@ withDeclParamKinds : List Decl -> (Unit -> a) -> a
 withoutVar : Ref Authvar -> Authority -> List Authority
 writtenAxis : (String, EffParamTy) -> (String, Param)
 writtenBindingForce : SigVars -> Ty -> Option EffRow
+writtenDiag : TcDiag -> TcDiag
+writtenNames : String -> String
 writtenParam : Param -> EffParamTy -> Param
 writtenQualifiers : Ty -> List (List String, Option Loc)
 xmodOblArgId : Mono -> List Int

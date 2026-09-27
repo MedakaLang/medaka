@@ -3298,7 +3298,7 @@ test "a generalized local is dictionary-abstracted: each use applies it to the g
       _ => False),
   ]
 
--- #1112 A-3 (m-evidence S3): production-path observation of `buildDispositions`'
+-- #1112 A-3: production-path observation of `buildDispositions`'
 -- installed table, over a real multi-module elaboration. `elaborateModules`
 -- installs the table it built via `installDispositions` before returning
 -- (`types/typecheck.mdk`'s `driveGraphK`), so a caller reads it back with

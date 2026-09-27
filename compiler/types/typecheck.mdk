@@ -9444,7 +9444,8 @@ hadTypeErrors _ = !typeErrorsSticky
 -- forget.  A rollback of the channel owes the index the same pairing the counter
 -- states above; today there is none within a `perRun` lifetime (see there).
 recordTypeError : TcDiag -> Unit
-recordTypeError d =
+recordTypeError raw =
+  let d = writtenDiag raw
   typeErrorsSticky := True
   typeErrorsStickyDiags :=
     (driverState.value.currentModuleRef.value, d) :: typeErrorsStickyDiags.value
@@ -14723,6 +14724,35 @@ localSourceName name
     [] => name
   | otherwise = name
 
+-- Diagnostic text with every renamed local binder (`f$3$lb`) shown as written.
+writtenNames : String -> String
+writtenNames text = match splitOnChar '$' text
+  [only] => only
+  parts => dropRenameSuffixes parts
+
+dropRenameSuffixes : List String -> String
+dropRenameSuffixes [] = ""
+dropRenameSuffixes [a] = a
+dropRenameSuffixes (a :: n :: lb :: more)
+  | allDigits n && startsWith "lb" lb =
+    a ++ dropRenameSuffixes (stringSlice 2 (stringLength lb) lb :: more)
+dropRenameSuffixes (a :: rest) = "\{a}$\{dropRenameSuffixes rest}"
+
+allDigits : String -> Bool
+allDigits n = stringLength n > 0 && allDigitsFrom n 0
+
+allDigitsFrom : String -> Int -> Bool
+allDigitsFrom n i
+  | i >= stringLength n = True
+  | otherwise =
+    let c = stringSlice i (i + 1) n
+    c >= "0" && c <= "9" && allDigitsFrom n (i + 1)
+
+-- A diagnostic as the user reads it: binder names as written.
+writtenDiag : TcDiag -> TcDiag
+writtenDiag (TcDiag code sev loc msg help fix) =
+  TcDiag code sev loc (writtenNames msg) (map writtenNames help) fix
+
 localAbsFor : String -> Option LocalAbs
 localAbsFor name = match omLookup name graphRun.value.localAbs.lasBinders.value
   Some found => found
@@ -18716,6 +18746,7 @@ plainAppHead : TcEnv -> Expr -> Bool
 plainAppHead env (ELoc _ inner) = plainAppHead env inner
 plainAppHead env (hd@(EVar _)) = plainAppHeadVar env hd
 plainAppHead env (hd@(EVarId _ _)) = plainAppHeadVar env hd
+plainAppHead _ (EDictAt _ _) = True
 plainAppHead _ _ = False
 
 plainAppHeadVar : TcEnv -> Expr -> Bool
@@ -21279,7 +21310,7 @@ checkMatchExhaustive scrutTy arms =
   ] then
     let (msg, help) = nonExhaustiveMsg scrutTy rows
     driverState.value.matchWarnings :=
-      TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None
+      writtenDiag (TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None)
         :: driverState.value.matchWarnings.value
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -26306,7 +26337,7 @@ pushMatchWarningOnceAt code loc msg help =
     ()
   else
     driverState.value.matchWarnings :=
-      TcDiag code 2 thisLoc msg help None
+      writtenDiag (TcDiag code 2 thisLoc msg help None)
         :: driverState.value.matchWarnings.value
 
 optLocEq : Option Loc -> Option Loc -> Bool
@@ -47603,9 +47634,9 @@ dispositionRowsOfImpl ie r ce =
     (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
     (ieRowOrd r)
     ce)
-    None =>
-      panic
-        "disposition table: no interface declaration for \{iface.irName} visible to accepted impl at ordinal \{intToString (ieRowOrd r)}"
+    -- An impl whose interface is not visible has already been reported, and
+    -- `dispositionSlotsOfImpls` expects no slot for it either.
+    None => []
     Some ceRow =>
       map
         (d => (shape, ifaceWord, d))
@@ -47930,7 +47961,7 @@ prependDiagOpt : String ->
   List TcDiag
 prependDiagOpt _ _ _ None ds = ds
 prependDiagOpt code sev help (Some msg) ds =
-  TcDiag code sev None msg help None :: ds
+  writtenDiag (TcDiag code sev None msg help None) :: ds
 
 -- render the entry report: type errors win (each `TYPE ERROR: …`), else the
 -- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.

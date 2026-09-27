@@ -1,0 +1,7 @@
+-- A diagnostic names a local binder as it was written.  `loop` is a candidate for
+-- dictionary abstraction, so the typechecker renames it internally; the message
+-- must still say `'loop'`, never the internal spelling.
+f : Int -> Int
+f n =
+  let rec loop = loop
+  n

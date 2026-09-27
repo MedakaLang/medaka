@@ -316,8 +316,8 @@ for required in \
     exit 1
   }
 done
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7LocalDecls (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 9 ] || {
-  echo "FAIL H2B9-DIV-AUTHORITY: expected nine ref-local declaration callers"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7LocalDecls (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 8 ] || {
+  echo "FAIL H2B9-DIV-AUTHORITY: expected eight ref-local declaration callers"
   exit 1
 }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useRecUpdate True' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
