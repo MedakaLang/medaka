@@ -4,11 +4,12 @@
    secp256k1 order constants are inputs used to exercise the contract. -}
 
 import test.{expectEach, expectEqual, expectOkThen, expectTrue}
-import bytes.{Bytes, fromU8Array, length}
+import bytes.{Bytes, fromU8Array, length, toArray}
 import mut_bytes as MB
 import u8 as U8
 import hex.{decode}
 import lib.sign.{
+  secretKeyFromByteArray,
   secretKeyFromBytes,
   signatureFromCompact,
   signatureCompact,
@@ -156,6 +157,47 @@ test "public compact parsing rejects zero range and high-S components" = expectE
     (
       "a high-S signature is rejected",
       expectTrue (isErr (signatureFromCompact highSCompact)),
+    ),
+  ]
+
+byteArrayIngressErr : String
+byteArrayIngressErr =
+  "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+-- `SecretKey` has no `Eq`/`Debug` impl, so grade the `Err` message directly
+-- rather than the whole `Result`.
+byteArrayIngressMessage : Array Int -> String
+byteArrayIngressMessage raw = match secretKeyFromByteArray raw
+  Err e => e
+  Ok _ => "<admitted>"
+
+test "byte-array ingress rejects out-of-range elements and wrong lengths, admits a valid key" = expectEach
+  [
+    (
+      "an element of 256 is rejected",
+      expectEqual
+        byteArrayIngressErr
+        (byteArrayIngressMessage
+          (arrayMakeWith 32 (i => if i == 0 then 256 else 0))),
+    ),
+    (
+      "an element of -1 is rejected",
+      expectEqual
+        byteArrayIngressErr
+        (byteArrayIngressMessage
+          (arrayMakeWith 32 (i => if i == 0 then -1 else 0))),
+    ),
+    (
+      "a 31-element array is rejected",
+      expectEqual byteArrayIngressErr (byteArrayIngressMessage (arrayMake 31 0)),
+    ),
+    (
+      "a 33-element array is rejected",
+      expectEqual byteArrayIngressErr (byteArrayIngressMessage (arrayMake 33 0)),
+    ),
+    (
+      "a valid 32-byte key is admitted",
+      expectTrue (isOk (secretKeyFromByteArray (toArray oneBytes))),
     ),
   ]
 

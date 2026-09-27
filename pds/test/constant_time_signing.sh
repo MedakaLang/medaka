@@ -678,8 +678,8 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # `concat`/`concatFill`/`concatLength` (the ipad/opad concatenation, over a
 # two-element list). None of the eight reads a byte to decide anything; the
 # control grade below counts their branches. 123 definitions.
-# Re-derived 2026-09-27 when the signing stack moved to `Bytes`
-# (S-b-signing-bytes), symbol by symbol against the 123 above. Out: the field
+# Re-derived 2026-09-27 when the signing stack moved to `Bytes`, symbol by
+# symbol against the 123 above. Out: the field
 # and scalar public byte validators (`byteArrayOk`, `byteRangeGo` in each),
 # the scalar's per-element byte scan (`scanSecretBytes`, `secretByteBit`),
 # `copySignatureHalf` (the one `copyBytesInto` now serves), the guard's two
@@ -778,9 +778,9 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # digestBytes 9 -> 10, processTail 1 -> 2, sha256AssumeByteDomainFrom 4 -> 6,
 # keyPad 3 -> 6, and the guard hmacSha256FixedKey 2 -> 5 (its two unchecked
 # doors and the `toArray` back).
-# Re-derived 2026-09-27 for the signing stack on `Bytes` (S-b-signing-bytes),
-# row by row against the grade above; the closure change is the one at the
-# closure grade. No surviving row's branch column grew, and two fell:
+# Re-derived 2026-09-27 for the signing stack on `Bytes`, row by row
+# against the grade above; the closure change is the one at the closure
+# grade. No surviving row's branch column grew, and two fell:
 # feFromBytesReduce and scFromBytesReduce 2 -> 1, their byte-domain scan gone
 # (the one left is the public length test). Every row that left held only
 # public control or, in scanSecretBytes and secretByteBit, the fixed-control
@@ -1063,8 +1063,8 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # that `mdk_bytes__toArray` was already in this union (secretScalar reads the
 # at-rest key through it), so seven `mdk_bytes__` helpers enter here rather
 # than eight. 134 -> 136 definitions.
-# Re-derived 2026-09-27 for the signing stack on `Bytes` (S-b-signing-bytes):
-# the same closure and row changes as the internal grades above, plus three
+# Re-derived 2026-09-27 for the signing stack on `Bytes`: the same closure
+# and row changes as the internal grades above, plus three
 # rows that only the public consumer reaches. sign.digestBytesOk and
 # secp256k1.publicBytesOk leave (the digest's byte domain is the type's), so
 # signDigest falls 4 -> 3 branches and ecdsaVerifyDigest 7 -> 6, each keeping

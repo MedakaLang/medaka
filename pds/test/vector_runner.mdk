@@ -38,7 +38,7 @@
 
 import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
-import list.{get, last, somes}
+import list.{get, last, reverse, somes}
 import path.{stem}
 import string.{
   contains, indexOf, join, lines, take, toInt, trim, unlines, words
@@ -567,7 +567,7 @@ armCorpus : Corpus ->
 armCorpus (Lines _ keep) scratch [path] = match readFile path
   Err e => Err "could not read \{path} to sample it: \{e}"
   Ok text =>
-    let rows = lines text
+    let rows = contentLines text
     let sample = "\{scratch}/corpus_sample"
     match traverse (keptLine rows) keep
       Err e => Err "\{path}: \{e}"
@@ -575,6 +575,19 @@ armCorpus (Lines _ keep) scratch [path] = match readFile path
         Err e => Err "could not write the corpus sample: \{e}"
         Ok _ => Ok [sample]
 armCorpus _ _ paths = Ok paths
+
+{- | `lines` splits on "\n", so a file ending in a trailing newline carries
+   one extra "" element after the last real line. Left in, that ghost
+   element makes line N+1 of an N-line file index cleanly to "" instead of
+   failing as out of range. Dropped here, only when it is not the file's
+   only element, so `keptLine` sees exactly the file's real line count. -}
+-- Same declared signature as `string.lines` because it calls `lines` and
+-- adjusts its result — not a duplicate implementation.
+contentLines : String -> List String
+-- lint-disable-next-line rule-stdlib-reimpl
+contentLines text = match reverse (lines text)
+  "" :: rest@(_ :: _) => reverse rest
+  _ => lines text
 
 keptLine : List String -> Int -> Result String String
 keptLine rows n = match get (n - 1) rows
