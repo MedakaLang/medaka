@@ -1,0 +1,172 @@
+{- | The verified blockstore and strict atproto-profile CARv1 reader, on
+   eval, native and Wasm, plus the reader's resource ceilings and its
+   scaling bound, native only.
+
+   The value row grades the one ledgered official-atproto CAR corpus on all
+   three engines and requires their stdout to be byte-identical. The Wasm
+   arm is skipped on a host without the Wasm emitter, `node` or
+   `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`.
+
+   The resource test builds `performance_resource_main.mdk` once, checks
+   the `limits` controls, then times one decode of a 1000-block and a
+   2000-block CAR. A doubled input may take at most 3.2 times as long, and
+   the larger at most 12 seconds: a reader that went quadratic fails the
+   ratio, one that is linear but slow fails the ceiling. Each time is the
+   wall clock around the spawn, so it includes process start-up. While
+   both decodes take tens of milliseconds, start-up is a large share of
+   each, and the ratio can only catch a decode that has grown well past
+   it. -}
+
+import test.vector_runner.{
+  Arm(..),
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  buildNative,
+  expectRow,
+  freshScratch,
+  outputFindings,
+  reap,
+  runSeconds,
+  spawn,
+  spawnFindings,
+}
+import string.{contains}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaRoot}
+import time.{elapsedSince, monotonic}
+
+gate : String
+gate = "pds/test/car_vectors"
+
+successRoutes : List String
+successRoutes = [
+  "canonical-reencode",
+  "identical-duplicate",
+  "arbitrary-order",
+  "unrelated-block",
+]
+
+hostileRoutes : List String
+hostileRoutes = [
+  "nonminimal-varint",
+  "overflow-varint",
+  "zero-section",
+  "overlong-section",
+  "truncation",
+  "trailing-corruption",
+  "wrong-version",
+  "wrong-header",
+  "malformed-cid",
+  "nonblessed-cid",
+  "missing-root",
+  "cid-mismatch",
+]
+
+-- Every route by name, so a driver that stopped emitting one is a missing
+-- substring rather than a total that still happens to add up.
+routeNeeds : List String
+routeNeeds =
+  [
+      "external: 1/1 official-atproto CAR cases",
+      "success: 4/4 interoperability routes",
+      "hostile: 12/12 rejected on named routes",
+    ]
+    ++ map (l => "SUCCESS \{l} PASS") successRoutes
+    ++ map (l => "HOSTILE \{l} PASS route=") hostileRoutes
+
+arm : Engine -> List String -> Arm
+arm e needs = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = needs,
+  lastLine = Some "TOTAL: PASS",
+}
+
+row : Row
+row = Row {
+  gate = gate,
+  driver = "pds/test/car_vectors_main.mdk",
+  corpus = Ledgered "P1-C-CAR-STORE",
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm EvalEngine routeNeeds, arm NativeEngine [], arm WasmEngine []],
+  parity = True,
+}
+
+-- # Resource ceilings and scaling
+
+limitsArm : Arm
+limitsArm = Arm {
+  engine = NativeEngine,
+  driverArgs = ["limits"],
+  countFloor = None,
+  needs = ["limits: 7/7 adjacent controls; 7/7 hostile routes"],
+  lastLine = Some "LIMITS: PASS",
+}
+
+-- The bound a 2000-block decode must meet, in seconds, and against the
+-- 1000-block decode.
+largeCeiling : Float
+largeCeiling = 12.0
+
+ratioCeiling : Float
+ratioCeiling = 3.2
+
+-- The findings against one timed `car <size>` decode, and its wall time.
+timedCar : String -> Int -> <Clock, Exec> (Float, List String)
+timedCar bin size =
+  let label = "\{gate} (native car \{intToString size})"
+  let t0 = monotonic ()
+  let ran = spawn runSeconds [] bin ["car", intToString size]
+  let secs = elapsedSince t0
+  match spawnFindings label "the built driver" ran
+    (out, []) =>
+      if contains "CAR \{intToString size} " out then
+        (secs, [])
+      else
+        (
+          secs,
+          ["\{label}: the scaling route failed at \{intToString size} blocks"],
+        )
+    (_, fs) => (secs, fs)
+
+scalingFindings : String -> <Clock, Exec> List String
+scalingFindings bin = match timedCar bin 1000
+  (small, []) => match timedCar bin 2000
+    (large, []) =>
+      if large <= largeCeiling && large / small <= ratioCeiling then
+        []
+      else
+        [
+          "\{gate}: CAR scaling exceeded its bounds: 1000 blocks took \{floatToString small} s, 2000 took \{floatToString large} s (at most \{floatToString largeCeiling} s and \{floatToString ratioCeiling}x)",
+        ]
+    (_, fs) => fs
+  (_, fs) => fs
+
+resourceFindings : String -> <Clock, Exec, IO> List String
+resourceFindings scratch =
+  let bin = "\{scratch}/performance_resource"
+  let driver = "\{medakaRoot}/pds/test/performance_resource_main.mdk"
+  let label = "\{gate} (native limits)"
+  match buildNative label driver bin
+    [] =>
+      let ran = spawn runSeconds [] bin ["limits"]
+      match spawnFindings label "the built driver" ran
+        (out, []) => match outputFindings label limitsArm [] out
+          [] => scalingFindings bin
+          fs => fs
+        (_, fs) => fs
+    fs => fs
+
+test "CAR: 1 official-atproto fixture, 4 success routes, 12 hostile routes, eval == native == Wasm" =
+  expectRow row
+
+test "CAR: 7/7 resource ceilings; a doubled CAR decodes in at most 3.2x the time" = expectNoFindings
+  gate
+  (match freshScratch ()
+    Err e => Err "could not make a scratch directory: \{e}"
+    Ok scratch => Ok (reap scratch (resourceFindings scratch)))

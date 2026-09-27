@@ -351,7 +351,7 @@ multiplies a 40-second build by the file count.
 
 **Parity-plus-red rule for every migration PR.** Old script and new gate-test pass on the
 same tree once — and the new gate is shown RED on one deliberate break the old gate caught
-(a mutated fixture, a corrupted golden, a `did_key_all_engines.sh`-style mutation row),
+(a mutated fixture, a corrupted golden, a `did_key_all_engines_test.mdk`-style mutation row),
 then green again. "Both green once" is exactly the condition under which TESTING-DESIGN
 §0.0.2's gate-that-could-not-fail landed, and [WT-GOLDEN-ENSHRINES] says the same for
 goldens; the demonstrated red is the only cheap proof the migration carried the

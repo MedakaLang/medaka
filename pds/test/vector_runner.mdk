@@ -27,18 +27,24 @@
    `expectedStderr`, which fails once that spawn runs clean — a pin that
    drains itself rather than a redirect that hides.
 
+   A check a row cannot state (a wall-clock bound, a mutation self-test)
+   spawns through the same exported pieces: `freshScratch` and `reap` for
+   its directory, `buildNative`, `spawn`, `spawnFindings` and
+   `outputFindings` for its spawns, so it grades exit status, stderr and
+   stdout exactly as a row does.
+
    Runs under `medaka test --native`: every row spawns a subprocess, and the
    interpreter binds no subprocess extern. -}
 
 import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
-import list.{last, somes}
+import list.{get, last, somes}
 import path.{stem}
 import string.{
   contains, indexOf, join, lines, take, toInt, trim, unlines, words
 }
 import test.{Expectation, fail, pass}
-import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, scratchDir}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 -- # The row
 
@@ -69,11 +75,19 @@ public export data Bound = AtLeast Int | Exactly Int
    ledger does not vouch for. `Explicit` names repo-relative paths outright,
    for a corpus no ledger consumer id (or no consumer-id ordering) covers —
    each path is still re-hashed against the ledger the same way, just
-   looked up by its `file:` field instead of by consumer id. -}
--- Not a `Result`: both arms are a corpus, and neither is the error channel
--- of the other — resolving either one can itself fail.
--- lint-disable-next-line rule-clone-type
-public export data Corpus = Ledgered String | Explicit (List String)
+   looked up by its `file:` field instead of by consumer id.
+
+   `Lines` names one ledgered file and the 1-based line numbers to keep,
+   in the order given. The whole file is re-hashed against the ledger, and
+   the kept lines are written to a scratch file the arms read in its place.
+   It is for an engine too slow to sweep a corpus that another row of the
+   same gate sweeps whole: both rows name the same file, so the sample
+   cannot drift away from the corpus it was drawn from. A named line the
+   file does not have is a finding, not a shorter sample. -}
+public export data Corpus =
+  | Ledgered String
+  | Explicit (List String)
+  | Lines String (List Int)
 
 {- | One engine's run of the row's driver.
 
@@ -155,6 +169,7 @@ expectedStderr = []
 buildSeconds : Int
 buildSeconds = 900
 
+export
 runSeconds : Int
 runSeconds = 600
 
@@ -164,6 +179,7 @@ runSeconds = 600
    second `env` carrying assignments is how a spawn gets an environment
    without a shell — `MDK_ARGS` for the Wasm runner, `MEDAKA_ROOT` and
    `MEDAKA_STRICT` for the compiler. -}
+export
 spawn : Int ->
   List String ->
   String ->
@@ -199,6 +215,7 @@ commandPresent name = match spawn 60 [] name ["--version"]
 
    All three are read. `label` names the gate and arm so a finding says
    which spawn produced it, and keys the `expectedStderr` pin. -}
+export
 spawnFindings : String ->
   String ->
   Result String (Int, String, String) ->
@@ -293,6 +310,7 @@ lastLineOf out = match last (filter (/= "") (lines out))
 
 -- The findings against one arm's stdout: its floor, its substrings, and its
 -- final line.
+export
 outputFindings : String -> Arm -> List String -> String -> List String
 outputFindings label a extraNeeds out =
   floorFindings label a.countFloor out
@@ -404,15 +422,25 @@ nativeStdout : Row ->
   <Exec, IO> (String, List String)
 nativeStdout r a label driver corpusPaths scratch =
   let bin = "\{scratch}/\{stem r.driver}"
-  let build =
-    spawn buildSeconds medakaEnv medakaBin ["build", driver, "-o", bin]
-  match spawnFindings label "medaka build" build
-    (_, []) =>
+  match buildNative label driver bin
+    [] =>
       spawnFindings
         label
         "the built driver"
         (spawn runSeconds [] bin (a.driverArgs ++ corpusPaths))
-    (_, fs) => ("", fs)
+    fs => ("", fs)
+
+{- | The findings against building `driver` natively into `bin`: none when
+   the build exited 0 and wrote nothing to stderr. `label` heads each
+   finding. -}
+export
+buildNative : String -> String -> String -> <Exec, IO> List String
+buildNative label driver bin =
+  snd
+    (spawnFindings
+      label
+      "medaka build"
+      (spawn buildSeconds medakaEnv medakaBin ["build", driver, "-o", bin]))
 
 wasmStdout : Row ->
   Arm ->
@@ -528,6 +556,32 @@ differsFrom first a =
 corpusPathsOf : String -> Corpus -> <Exec, FileRead> Result String (List String)
 corpusPathsOf root (Ledgered consumer) = filesForConsumer root consumer
 corpusPathsOf root (Explicit rels) = validatePaths root rels
+corpusPathsOf root (Lines rel _) = validatePaths root [rel]
+
+{- | The corpus paths the arms read: the resolved paths themselves, or for
+   a `Lines` corpus the one scratch file holding the kept lines. -}
+armCorpus : Corpus ->
+  String ->
+  List String ->
+  <FileRead, FileWrite> Result String (List String)
+armCorpus (Lines _ keep) scratch [path] = match readFile path
+  Err e => Err "could not read \{path} to sample it: \{e}"
+  Ok text =>
+    let rows = lines text
+    let sample = "\{scratch}/corpus_sample"
+    match traverse (keptLine rows) keep
+      Err e => Err "\{path}: \{e}"
+      Ok kept => match writeFile sample (unlines kept)
+        Err e => Err "could not write the corpus sample: \{e}"
+        Ok _ => Ok [sample]
+armCorpus _ _ paths = Ok paths
+
+keptLine : List String -> Int -> Result String String
+keptLine rows n = match get (n - 1) rows
+  Some l => Ok l
+  None =>
+    Err
+      "the sample names line \{intToString n}, but the file has \{intToString (length rows)} lines"
 
 boundFinding : Bound -> Int -> Option String
 boundFinding (AtLeast n) got =
@@ -618,13 +672,15 @@ gradeRow r =
         None => runRow r (map (p => "\{medakaRoot}/\{p}") rels)
 
 runRow : Row -> List String -> <Exec, FileRead, FileWrite, IO> List String
-runRow r corpusPaths = match scratchDir
+runRow r corpusPaths = match freshScratch ()
   Err e => ["\{r.gate}: could not make a scratch directory: \{e}"]
-  Ok scratch => match oracleNeeds r scratch corpusPaths
-    (extraNeeds, []) =>
-      let rs = armResults r corpusPaths scratch extraNeeds
-      reap scratch (armFindings rs ++ parityFindings r.parity rs)
-    (_, oracleBad) => reap scratch oracleBad
+  Ok scratch => match armCorpus r.corpus scratch corpusPaths
+    Err e => reap scratch ["\{r.gate}: \{e}"]
+    Ok armPaths => match oracleNeeds r scratch armPaths
+      (extraNeeds, []) =>
+        let rs = armResults r armPaths scratch extraNeeds
+        reap scratch (armFindings rs ++ parityFindings r.parity rs)
+      (_, oracleBad) => reap scratch oracleBad
 
 -- Every arm's findings in arm order, so a red row names the engines in the
 -- order its own table lists them.
@@ -632,9 +688,23 @@ armFindings : List ArmResult -> List String
 armFindings [] = []
 armFindings (a :: rest) = a.findings ++ armFindings rest
 
--- The scratch directory is the caller's to remove (`scratchDir`'s own
--- contract). The spawn is wildcard-bound because a cleanup asserts nothing:
--- a failure to reap is not a finding about the gate's subject.
+{- | A directory nothing else holds, for one row or one check to write in.
+   The caller removes it with `reap`.
+
+   Not `test_process.scratchDir`: that is a top-level value, which a native
+   test process computes once, so every read after the first returns the
+   directory an earlier row has already removed. -}
+export
+freshScratch : Unit -> <Exec> Result String String
+freshScratch _ = match spawn 60 [] "mktemp" ["-d"]
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+  Err e => Err e
+
+-- The scratch directory is the caller's to remove. The spawn is
+-- wildcard-bound because a cleanup asserts nothing: a failure to reap is
+-- not a finding about the gate's subject.
+export
 reap : String -> List String -> <Exec> List String
 reap scratch findings =
   let _ = spawn 60 [] "rm" ["-rf", scratch]
