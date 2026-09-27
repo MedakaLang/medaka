@@ -62,6 +62,7 @@ import types.disposition.{
   DispositionTable,
   InstanceShape(..),
   inheritorsOf,
+  installedDispositions,
   installedDispositionsOpt,
 }
 import eval.eval.{
@@ -112,7 +113,7 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
           name
           iface
           arity
-          (RKey rr.rrWord [])
+          (RKey (receiverWordFor rr iface) [])
           rr.rrReqs
           (map (remapReceiver rr) methodRoutes)
       else
@@ -132,15 +133,23 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
 -- to `RKey <word>`, the word a dictionary for the inheriting instance carries — the
 -- typechecker's bare head unless that head is ambiguous, its canonical key when it
 -- is — so a method of the default's own interface reaches that instance's method
--- (supplied or inherited), and a superclass method is answered by head exactly as
--- through a `=>` given's dictionary.  The instance's `requires` dictionaries,
--- received as the specialization's own leading parameters, are supplied as the
--- call's impl dictionaries.
+-- (supplied or inherited).  A superclass method called on the receiver dispatches by
+-- its OWN instance's word (`rrSuperWords`, keyed by the method's interface word):
+-- under a head collision the two words differ, and the subclass word names no
+-- superclass method.  The instance's `requires` dictionaries, received as the
+-- specialization's own leading parameters, are supplied as the call's impl
+-- dictionaries.
 data ReceiverRemap = ReceiverRemap {
   rrSelf : String,
   rrWord : String,
+  rrSuperWords : List (String, String),
   rrReqs : List Route,
 }
+
+-- The word a method of interface [iface] dispatches by through the receiver.
+receiverWordFor : ReceiverRemap -> String -> String
+receiverWordFor rr iface =
+  optionOr rr.rrWord (lookupAssoc iface rr.rrSuperWords)
 
 receiverRemapRef : Ref (Option ReceiverRemap)
 receiverRemapRef = Ref None
@@ -722,13 +731,28 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- ── programs ───────────────────────────────────────────────────────────────
 -- Coalesce top-level multi-clause `DFunDef`s into one CBind per name (preserving
 -- first-appearance order, exactly as eval.mdk's funGroupNames), gather the ctor
--- arity + ctor→type tables.  Interfaces/impls are slice-5 (no dispatch yet).
+-- arity + ctor→type tables.
+--
+-- This form lowers WITHOUT the typechecker's disposition table, for the untyped
+-- probes (`core_ir_main`, `core_ir_prelude_main`, `core_ir_run_main`,
+-- `core_ir_roundtrip_main`, `core_ir_dump_main`, the snapshot tool's CORE_IR
+-- section).  It cannot see an inherited default: which instance inherits which
+-- default is instance identity, and only elaboration establishes that.  An impl that
+-- leaves a method of an interface declared in ANOTHER module to its default
+-- therefore gets no body for it here (desugar's `fillImplDefaults` still supplies a
+-- same-module one).  A driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog = lowerProgramWith None prog
 
+-- Lowering after an elaboration, against the table it published.  Refuses (panics)
+-- when none was published instead of silently lowering every inherited default away.
+export
+lowerTypedProgram : List Decl -> CProgram
+lowerTypedProgram prog = lowerProgramWith (Some (installedDispositions ())) prog
+
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
--- probe, which has no inherited slot to specialize).
+-- probe; see `lowerProgram`).
 lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
 lowerProgramWith dispositions prog =
   CProgram
@@ -2139,6 +2163,7 @@ inheritedDefaultEntry ifaceWord mname positions pats body shape =
   let rr = ReceiverRemap {
     rrSelf = defaultReceiverDict mname,
     rrWord = shape.isDictWord,
+    rrSuperWords = shape.isSuperWords,
     rrReqs = map RDict reqNames,
   }
   let saved = !receiverRemapRef

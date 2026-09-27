@@ -1,0 +1,22 @@
+-- An inherited default that calls a SUPERCLASS method through its receiver, where
+-- the interface's head collides with a same-spelled interface implemented at the
+-- same type.  The collision makes the `sa::Shape Sq` dictionary word canonical;
+-- `base` is a `Base` method, and must dispatch by the `Base Sq` instance's own word,
+-- not by the subclass's.
+-- Must print sq:4|9.
+import sa.{Base(..), Shape(..), size, describe, base}
+import sb as B
+
+data Sq = Sq
+
+impl Base Sq where
+  base _ = "sq"
+
+impl Shape Sq where
+  size _ = "4"
+
+impl B.Shape Sq where
+  other _ = "9"
+
+main : <IO> Unit
+main = putStrLn (describe Sq ++ "|" ++ B.other Sq)

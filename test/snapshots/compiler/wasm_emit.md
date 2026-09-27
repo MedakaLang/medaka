@@ -1,5 +1,5 @@
 # META
-source_lines=12684
+source_lines=12693
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -844,7 +844,7 @@ arityOfIndexW fnArs f = match omLookup f fnArs
 -- ── impl INDEX by method name (perf #382 — the #350/#349 twins) ───────────────
 -- The `Prog` carries every impl clause as one flat `List CImplEntry` (`progImpls`),
 -- and the emitter scans the WHOLE list per RKey/RDict dispatch site: `implForW`,
--- `methodImpls`, `implArityFor`,
+-- `methodImpls`, `implReqDictCount`,
 -- `methodReturnsBoolW`, and the `emitImplFns`/`gatherImplGroup` group builder all do
 -- `findByTagW`/`flatMap implClauseFor`/`flatMap methodImplKey` over one method bucket.
 -- EVERY one of those first filters by the METHOD name (`n == method`) — so restricting
@@ -5442,20 +5442,29 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
       (idt + 1)
     ++ indentBy idt ["end"]
 
--- The primary word and its canonical alias select one implementation. Keep the
+-- The words that select one implementation: its route word, and — the peer of
+-- llvm_emit's `implEntryRouteWords` — its canonical key and its bare head tag when
+-- some dictionary in the program carries them.  The arms are already narrowed to the
+-- site's interface (`methodImpls`), so the bare head names one of them even where the
+-- route word is canonical because another interface implements a same-spelled
+-- method at the head: a dictionary whose own interface sees no such collision (an
+-- instance inheriting that method's default) carries the bare head.  Keep the
 -- argument code in one arm: it may itself contain another dictionary dispatch.
 dispatchKeyTestW : Prog -> ImplArmW -> List String -> List String
 dispatchKeyTestW prog arm tagRead =
   let key = armRouteKeyW arm
-  let canonical = armKeyW arm
-  let primary = tagRead ++ ["i32.const " ++ intToString (dictTag key), "i32.eq"]
-  if key == canonical
-    || not (omHasKey canonical !(progEmit prog).usedDictRouteKeys) then
-    primary
-  else
-    primary
-      ++ tagRead
-      ++ ["i32.const " ++ intToString (dictTag canonical), "i32.eq", "i32.or"]
+  let used = !(progEmit prog).usedDictRouteKeys
+  let aliases =
+    filterList
+      (w => w /= key && omHasKey w used)
+      (dedupBy (w => w) [armKeyW arm, armHeadTagW arm])
+  tagRead
+    ++ ["i32.const " ++ intToString (dictTag key), "i32.eq"]
+    ++ flatMap
+      (w =>
+        tagRead
+          ++ ["i32.const " ++ intToString (dictTag w), "i32.eq", "i32.or"])
+      aliases
 
 -- load nested req dict `i` from the dict param $dpar's $dictcell (field 1 = $dictarr).
 -- Only reached for a constrained impl arm, where the in-scope dict IS a $dictcell.
@@ -5481,24 +5490,19 @@ loadReqDict dpar i =
     ]
     ++ ["end"]
 
--- leading `requires`-dict count for a method's impl at `tag`: the impl's SOURCE
--- clause pattern count (the dict-pass injects leading $dict_* params, BEFORE the
--- user args) minus the method's DECLARED user arity (methodArityOf).  This is the
--- llvm_emit `implReqCount` separation (listLen implPats - methodArityOf), NOT the
--- pre-W9b `arity - userArgs` heuristic: a point-free impl (`length`, raw pats 0,
--- method arity 1) now yields 0 (no requires) rather than a spurious count, and a
--- genuinely-constrained impl yields exactly its requires-dict count regardless of
--- how many args the call site supplies.  >= 0; 0 for the unconstrained impls.
+-- leading dictionary count for a method's impl at `tag`: the `$dict_*` patterns
+-- the dict-pass put at the front of the impl's clause, counted DIRECTLY — the peer of
+-- llvm_emit's `implReqCount` (`leadingDictPats (implPats ent)`), the same ruler the
+-- define is minted with.  Not the clause's pattern count less the method's declared
+-- arity: that is a different quantity for a POINT-FREE clause, whose value
+-- parameters are not patterns (an inherited `loud = x => …` at an instance with two
+-- expanded `requires` has two patterns and arity 1, and the difference loaded one
+-- dictionary where the define takes two).  0 when no impl answers [tag].
 implReqDictCount : Prog -> String -> String -> Int -> Int
 implReqDictCount prog method tag _userArgs =
-  let raw = implArityFor prog method tag
-  let ua = methodArityOfTagW prog method tag
-  if raw > ua then raw - ua else 0
-
-implArityFor : Prog -> String -> String -> Int
-implArityFor prog method tag =
-  implGroupArity
-    (flatMap (implClauseFor method tag) (methodEntriesW prog method))
+  match findByTagW method tag (methodEntriesW prog method)
+    Some ent => implLeadingDictCountOfEntryW ent
+    None => 0
 
 implLeadingDictCountOfEntryW : CImplEntry -> Int
 implLeadingDictCountOfEntryW ent = wLeadingDictPats (implEntryPatsW ent)
@@ -6040,8 +6044,8 @@ applyEtaArgsW body (_ :: rest) = applyEtaArgsW body rest
 
 -- clauses of (method, tag) where [tag] is EITHER the head tycon OR the canonical key
 -- (#324): the def-side grouping passes a canonical key (selecting exactly one impl's
--- clauses even when it shares a head with an overlapping sibling), while arity probes
--- (implArityFor) pass a route's head tag.  Matching on `t == tag || k == tag` (as
+-- clauses even when it shares a head with an overlapping sibling), while a route's
+-- probes (`findByTagW`) pass its head tag.  Matching on `t == tag || k == tag` (as
 -- findByTagW does) serves both; a canonical key contains `|` so it never spuriously
 -- equals a bare head, and vice versa.
 implClauseFor : String -> String -> CImplEntry -> List CClause
@@ -6252,20 +6256,24 @@ emitClausesImpl prog fnName params arity clauses =
   emitClausesRef prog fnName params arity clauses
 
 -- One dispatch arm: the entry's symbol tag (memo naming), the route word its
--- dictionary witness carries, its canonical key, and the function the arm calls.
-data ImplArmW = ImplArmW String String String String
+-- dictionary witness carries, its canonical key, the function the arm calls, and
+-- its head tag.
+data ImplArmW = ImplArmW String String String String String
 
 armSymTagW : ImplArmW -> String
-armSymTagW (ImplArmW symTag _ _ _) = symTag
+armSymTagW (ImplArmW symTag _ _ _ _) = symTag
 
 armRouteKeyW : ImplArmW -> String
-armRouteKeyW (ImplArmW _ routeKey _ _) = routeKey
+armRouteKeyW (ImplArmW _ routeKey _ _ _) = routeKey
 
 armKeyW : ImplArmW -> String
-armKeyW (ImplArmW _ _ key _) = key
+armKeyW (ImplArmW _ _ key _ _) = key
 
 armFnSymW : ImplArmW -> String
-armFnSymW (ImplArmW _ _ _ fnSym) = fnSym
+armFnSymW (ImplArmW _ _ _ fnSym _) = fnSym
+
+armHeadTagW : ImplArmW -> String
+armHeadTagW (ImplArmW _ _ _ _ tag) = tag
 
 -- The candidate implementations of the interface a site resolved to ([iface]; `""`
 -- narrows nothing), one arm per implementation, first-seen order.  A sibling method's
@@ -6291,6 +6299,7 @@ methodImplArm prog entries method ent =
     (implEntryRouteKeyW entries method t k)
     k
     (implEntrySymW prog method ent)
+    t
 
 -- one arm per called function, first-seen order
 dedupArmsW : List ImplArmW -> OrdMap Unit -> List ImplArmW
@@ -13600,13 +13609,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitDispatchChain" (PWild PWild (PList) PWild PWild PWild PWild PWild PWild) (EListLit))
 (DFunDef false "emitDispatchChain" ((PVar "prog") (PVar "name") (PCons (PVar "arm") (PVar "rest")) (PVar "blk") (PVar "tagRead") (PVar "dpar") (PVar "argInstrs") (PVar "nArgs") (PVar "idt")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "armRouteKeyW") (EVar "arm"))) (DoLet false false (PVar "reqDicts") (EApp (EApp (EApp (EApp (EVar "implReqDictCount") (EVar "prog")) (EVar "name")) (EVar "key")) (EVar "nArgs"))) (DoLet false false (PVar "reqLoads") (EApp (EApp (EVar "flatMap") (EApp (EVar "loadReqDict") (EVar "dpar"))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "reqDicts")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispatchKeyTestW") (EVar "prog")) (EVar "arm")) (EVar "tagRead")) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "reqLoads") (EVar "argInstrs")) (EApp (EApp (EApp (EApp (EVar "dispatchCallSeqW") (EVar "prog")) (EVar "arm")) (EVar "name")) (EVar "nArgs"))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "blk")))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchChain") (EVar "prog")) (EVar "name")) (EVar "rest")) (EVar "blk")) (EVar "tagRead")) (EVar "dpar")) (EVar "argInstrs")) (EVar "nArgs")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end"))))))))
 (DTypeSig false "dispatchKeyTestW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplArmW") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dispatchKeyTestW" ((PVar "prog") (PVar "arm") (PVar "tagRead")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "armRouteKeyW") (EVar "arm"))) (DoLet false false (PVar "canonical") (EApp (EVar "armKeyW") (EVar "arm"))) (DoLet false false (PVar "primary") (EBinOp "++" (EVar "tagRead") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "key")))) (ELit (LString "i32.eq"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (EVar "canonical")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "canonical")) (EUnOp "!" (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "usedDictRouteKeys"))))) (EVar "primary") (EBinOp "++" (EBinOp "++" (EVar "primary") (EVar "tagRead")) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "canonical")))) (ELit (LString "i32.eq")) (ELit (LString "i32.or"))))))))
+(DFunDef false "dispatchKeyTestW" ((PVar "prog") (PVar "arm") (PVar "tagRead")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "armRouteKeyW") (EVar "arm"))) (DoLet false false (PVar "used") (EUnOp "!" (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "usedDictRouteKeys"))) (DoLet false false (PVar "aliases") (EApp (EApp (EVar "filterList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "/=" (EVar "w") (EVar "key")) (EApp (EApp (EVar "omHasKey") (EVar "w")) (EVar "used"))))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "w")) (EVar "w"))) (EListLit (EApp (EVar "armKeyW") (EVar "arm")) (EApp (EVar "armHeadTagW") (EVar "arm")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "tagRead") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "key")))) (ELit (LString "i32.eq")))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "w")) (EBinOp "++" (EVar "tagRead") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "w")))) (ELit (LString "i32.eq")) (ELit (LString "i32.or")))))) (EVar "aliases"))))))
 (DTypeSig false "loadReqDict" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "loadReqDict" ((PVar "dpar") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar"))) (ELit (LString "ref.test (ref i31)")) (ELit (LString "if (result (ref eq))"))) (EApp (EVar "indent") (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar"))) (ELit (LString "ref.cast (ref $dictcell)")) (ELit (LString "struct.get $dictcell 1")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "array.get $dictarr")) (ELit (LString "ref.as_non_null"))))) (EListLit (ELit (LString "end")))))
 (DTypeSig false "implReqDictCount" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "implReqDictCount" ((PVar "prog") (PVar "method") (PVar "tag") (PVar "_userArgs")) (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "implArityFor") (EVar "prog")) (EVar "method")) (EVar "tag"))) (DoLet false false (PVar "ua") (EApp (EApp (EApp (EVar "methodArityOfTagW") (EVar "prog")) (EVar "method")) (EVar "tag"))) (DoExpr (EIf (EBinOp ">" (EVar "raw") (EVar "ua")) (EBinOp "-" (EVar "raw") (EVar "ua")) (ELit (LInt 0))))))
-(DTypeSig false "implArityFor" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int")))))
-(DFunDef false "implArityFor" ((PVar "prog") (PVar "method") (PVar "tag")) (EApp (EVar "implGroupArity") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "implClauseFor") (EVar "method")) (EVar "tag"))) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method")))))
+(DFunDef false "implReqDictCount" ((PVar "prog") (PVar "method") (PVar "tag") (PVar "_userArgs")) (EMatch (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (arm (PCon "Some" (PVar "ent")) () (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "ent"))) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig false "implLeadingDictCountOfEntryW" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implLeadingDictCountOfEntryW" ((PVar "ent")) (EApp (EVar "wLeadingDictPats") (EApp (EVar "implEntryPatsW") (EVar "ent"))))
 (DTypeSig false "takeRoutesW" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
@@ -13774,19 +13781,21 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "anyNumStmt" ((PVar "p") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "anyNumStmt") (EVar "p")) (EVar "rest")))
 (DTypeSig false "emitClausesImpl" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitClausesImpl" ((PVar "prog") (PVar "fnName") (PVar "params") (PVar "arity") (PVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EVar "emitClausesRef") (EVar "prog")) (EVar "fnName")) (EVar "params")) (EVar "arity")) (EVar "clauses")))
-(DData Private "ImplArmW" () ((variant "ImplArmW" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))) ())
+(DData Private "ImplArmW" () ((variant "ImplArmW" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "armSymTagW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armSymTagW" ((PCon "ImplArmW" (PVar "symTag") PWild PWild PWild)) (EVar "symTag"))
+(DFunDef false "armSymTagW" ((PCon "ImplArmW" (PVar "symTag") PWild PWild PWild PWild)) (EVar "symTag"))
 (DTypeSig false "armRouteKeyW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armRouteKeyW" ((PCon "ImplArmW" PWild (PVar "routeKey") PWild PWild)) (EVar "routeKey"))
+(DFunDef false "armRouteKeyW" ((PCon "ImplArmW" PWild (PVar "routeKey") PWild PWild PWild)) (EVar "routeKey"))
 (DTypeSig false "armKeyW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armKeyW" ((PCon "ImplArmW" PWild PWild (PVar "key") PWild)) (EVar "key"))
+(DFunDef false "armKeyW" ((PCon "ImplArmW" PWild PWild (PVar "key") PWild PWild)) (EVar "key"))
 (DTypeSig false "armFnSymW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armFnSymW" ((PCon "ImplArmW" PWild PWild PWild (PVar "fnSym"))) (EVar "fnSym"))
+(DFunDef false "armFnSymW" ((PCon "ImplArmW" PWild PWild PWild (PVar "fnSym") PWild)) (EVar "fnSym"))
+(DTypeSig false "armHeadTagW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
+(DFunDef false "armHeadTagW" ((PCon "ImplArmW" PWild PWild PWild PWild (PVar "tag"))) (EVar "tag"))
 (DTypeSig false "methodImpls" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ImplArmW"))))))
 (DFunDef false "methodImpls" ((PVar "prog") (PVar "method") (PVar "iface")) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (DoExpr (EApp (EApp (EVar "dedupArmsW") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "methodImplArm") (EVar "prog")) (EVar "mEntries")) (EVar "method"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryMethodW") (EVar "ent")) (EVar "method")))) (EApp (EApp (EVar "narrowByIfaceW") (EVar "iface")) (EVar "mEntries"))))) (EVar "omEmpty")))))
 (DTypeSig false "methodImplArm" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "ImplArmW"))))))
-(DFunDef false "methodImplArm" ((PVar "prog") (PVar "entries") (PVar "method") (PVar "ent")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "implEntryTagW") (EVar "ent"))) (DoLet false false (PVar "k") (EApp (EVar "implEntryKeyW") (EVar "ent"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ImplArmW") (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EVar "k")) (EApp (EApp (EApp (EVar "implEntrySymW") (EVar "prog")) (EVar "method")) (EVar "ent"))))))
+(DFunDef false "methodImplArm" ((PVar "prog") (PVar "entries") (PVar "method") (PVar "ent")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "implEntryTagW") (EVar "ent"))) (DoLet false false (PVar "k") (EApp (EVar "implEntryKeyW") (EVar "ent"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ImplArmW") (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EVar "k")) (EApp (EApp (EApp (EVar "implEntrySymW") (EVar "prog")) (EVar "method")) (EVar "ent"))) (EVar "t")))))
 (DTypeSig false "dedupArmsW" (TyFun (TyApp (TyCon "List") (TyCon "ImplArmW")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ImplArmW")))))
 (DFunDef false "dedupArmsW" ((PList) PWild) (EListLit))
 (DFunDef false "dedupArmsW" ((PCons (PVar "arm") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "armFnSymW") (EVar "arm"))) (EVar "seen")) (EApp (EApp (EVar "dedupArmsW") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "arm") (EApp (EApp (EVar "dedupArmsW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "armFnSymW") (EVar "arm"))) (ELit LUnit)) (EVar "seen"))))))
@@ -15927,13 +15936,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitDispatchChain" (PWild PWild (PList) PWild PWild PWild PWild PWild PWild) (EListLit))
 (DFunDef false "emitDispatchChain" ((PVar "prog") (PVar "name") (PCons (PVar "arm") (PVar "rest")) (PVar "blk") (PVar "tagRead") (PVar "dpar") (PVar "argInstrs") (PVar "nArgs") (PVar "idt")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "armRouteKeyW") (EVar "arm"))) (DoLet false false (PVar "reqDicts") (EApp (EApp (EApp (EApp (EVar "implReqDictCount") (EVar "prog")) (EVar "name")) (EVar "key")) (EVar "nArgs"))) (DoLet false false (PVar "reqLoads") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "loadReqDict") (EVar "dpar"))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "reqDicts")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispatchKeyTestW") (EVar "prog")) (EVar "arm")) (EVar "tagRead")) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "reqLoads") (EVar "argInstrs")) (EApp (EApp (EApp (EApp (EVar "dispatchCallSeqW") (EVar "prog")) (EVar "arm")) (EVar "name")) (EVar "nArgs"))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "blk")))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchChain") (EVar "prog")) (EVar "name")) (EVar "rest")) (EVar "blk")) (EVar "tagRead")) (EVar "dpar")) (EVar "argInstrs")) (EVar "nArgs")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end"))))))))
 (DTypeSig false "dispatchKeyTestW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplArmW") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dispatchKeyTestW" ((PVar "prog") (PVar "arm") (PVar "tagRead")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "armRouteKeyW") (EVar "arm"))) (DoLet false false (PVar "canonical") (EApp (EVar "armKeyW") (EVar "arm"))) (DoLet false false (PVar "primary") (EBinOp "++" (EVar "tagRead") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "key")))) (ELit (LString "i32.eq"))))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "key") (EVar "canonical")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "canonical")) (EUnOp "!" (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "usedDictRouteKeys"))))) (EVar "primary") (EBinOp "++" (EBinOp "++" (EVar "primary") (EVar "tagRead")) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "canonical")))) (ELit (LString "i32.eq")) (ELit (LString "i32.or"))))))))
+(DFunDef false "dispatchKeyTestW" ((PVar "prog") (PVar "arm") (PVar "tagRead")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "armRouteKeyW") (EVar "arm"))) (DoLet false false (PVar "used") (EUnOp "!" (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "usedDictRouteKeys"))) (DoLet false false (PVar "aliases") (EApp (EApp (EVar "filterList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "/=" (EVar "w") (EVar "key")) (EApp (EApp (EVar "omHasKey") (EVar "w")) (EVar "used"))))) (EApp (EApp (EVar "dedupBy") (ELam ((PVar "w")) (EVar "w"))) (EListLit (EApp (EVar "armKeyW") (EVar "arm")) (EApp (EVar "armHeadTagW") (EVar "arm")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "tagRead") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "key")))) (ELit (LString "i32.eq")))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "w")) (EBinOp "++" (EVar "tagRead") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "w")))) (ELit (LString "i32.eq")) (ELit (LString "i32.or")))))) (EVar "aliases"))))))
 (DTypeSig false "loadReqDict" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "loadReqDict" ((PVar "dpar") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar"))) (ELit (LString "ref.test (ref i31)")) (ELit (LString "if (result (ref eq))"))) (EApp (EVar "indent") (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar"))) (ELit (LString "ref.cast (ref $dictcell)")) (ELit (LString "struct.get $dictcell 1")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "array.get $dictarr")) (ELit (LString "ref.as_non_null"))))) (EListLit (ELit (LString "end")))))
 (DTypeSig false "implReqDictCount" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "implReqDictCount" ((PVar "prog") (PVar "method") (PVar "tag") (PVar "_userArgs")) (EBlock (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "implArityFor") (EVar "prog")) (EVar "method")) (EVar "tag"))) (DoLet false false (PVar "ua") (EApp (EApp (EApp (EVar "methodArityOfTagW") (EVar "prog")) (EVar "method")) (EVar "tag"))) (DoExpr (EIf (EBinOp ">" (EVar "raw") (EVar "ua")) (EBinOp "-" (EVar "raw") (EVar "ua")) (ELit (LInt 0))))))
-(DTypeSig false "implArityFor" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int")))))
-(DFunDef false "implArityFor" ((PVar "prog") (PVar "method") (PVar "tag")) (EApp (EVar "implGroupArity") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "implClauseFor") (EVar "method")) (EVar "tag"))) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method")))))
+(DFunDef false "implReqDictCount" ((PVar "prog") (PVar "method") (PVar "tag") (PVar "_userArgs")) (EMatch (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (arm (PCon "Some" (PVar "ent")) () (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "ent"))) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig false "implLeadingDictCountOfEntryW" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implLeadingDictCountOfEntryW" ((PVar "ent")) (EApp (EVar "wLeadingDictPats") (EApp (EVar "implEntryPatsW") (EVar "ent"))))
 (DTypeSig false "takeRoutesW" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
@@ -16101,19 +16108,21 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "anyNumStmt" ((PVar "p") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "anyNumStmt") (EVar "p")) (EVar "rest")))
 (DTypeSig false "emitClausesImpl" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitClausesImpl" ((PVar "prog") (PVar "fnName") (PVar "params") (PVar "arity") (PVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EVar "emitClausesRef") (EVar "prog")) (EVar "fnName")) (EVar "params")) (EVar "arity")) (EVar "clauses")))
-(DData Private "ImplArmW" () ((variant "ImplArmW" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))) ())
+(DData Private "ImplArmW" () ((variant "ImplArmW" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "armSymTagW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armSymTagW" ((PCon "ImplArmW" (PVar "symTag") PWild PWild PWild)) (EVar "symTag"))
+(DFunDef false "armSymTagW" ((PCon "ImplArmW" (PVar "symTag") PWild PWild PWild PWild)) (EVar "symTag"))
 (DTypeSig false "armRouteKeyW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armRouteKeyW" ((PCon "ImplArmW" PWild (PVar "routeKey") PWild PWild)) (EVar "routeKey"))
+(DFunDef false "armRouteKeyW" ((PCon "ImplArmW" PWild (PVar "routeKey") PWild PWild PWild)) (EVar "routeKey"))
 (DTypeSig false "armKeyW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armKeyW" ((PCon "ImplArmW" PWild PWild (PVar "key") PWild)) (EVar "key"))
+(DFunDef false "armKeyW" ((PCon "ImplArmW" PWild PWild (PVar "key") PWild PWild)) (EVar "key"))
 (DTypeSig false "armFnSymW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
-(DFunDef false "armFnSymW" ((PCon "ImplArmW" PWild PWild PWild (PVar "fnSym"))) (EVar "fnSym"))
+(DFunDef false "armFnSymW" ((PCon "ImplArmW" PWild PWild PWild (PVar "fnSym") PWild)) (EVar "fnSym"))
+(DTypeSig false "armHeadTagW" (TyFun (TyCon "ImplArmW") (TyCon "String")))
+(DFunDef false "armHeadTagW" ((PCon "ImplArmW" PWild PWild PWild PWild (PVar "tag"))) (EVar "tag"))
 (DTypeSig false "methodImpls" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ImplArmW"))))))
 (DFunDef false "methodImpls" ((PVar "prog") (PVar "method") (PVar "iface")) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (DoExpr (EApp (EApp (EVar "dedupArmsW") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "methodImplArm") (EVar "prog")) (EVar "mEntries")) (EVar "method"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryMethodW") (EVar "ent")) (EVar "method")))) (EApp (EApp (EVar "narrowByIfaceW") (EVar "iface")) (EVar "mEntries"))))) (EVar "omEmpty")))))
 (DTypeSig false "methodImplArm" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "ImplArmW"))))))
-(DFunDef false "methodImplArm" ((PVar "prog") (PVar "entries") (PVar "method") (PVar "ent")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "implEntryTagW") (EVar "ent"))) (DoLet false false (PVar "k") (EApp (EVar "implEntryKeyW") (EVar "ent"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ImplArmW") (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EVar "k")) (EApp (EApp (EApp (EVar "implEntrySymW") (EVar "prog")) (EVar "method")) (EVar "ent"))))))
+(DFunDef false "methodImplArm" ((PVar "prog") (PVar "entries") (PVar "method") (PVar "ent")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "implEntryTagW") (EVar "ent"))) (DoLet false false (PVar "k") (EApp (EVar "implEntryKeyW") (EVar "ent"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ImplArmW") (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (EVar "k")) (EApp (EApp (EApp (EVar "implEntrySymW") (EVar "prog")) (EVar "method")) (EVar "ent"))) (EVar "t")))))
 (DTypeSig false "dedupArmsW" (TyFun (TyApp (TyCon "List") (TyCon "ImplArmW")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ImplArmW")))))
 (DFunDef false "dedupArmsW" ((PList) PWild) (EListLit))
 (DFunDef false "dedupArmsW" ((PCons (PVar "arm") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "armFnSymW") (EVar "arm"))) (EVar "seen")) (EApp (EApp (EVar "dedupArmsW") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "arm") (EApp (EApp (EVar "dedupArmsW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "armFnSymW") (EVar "arm"))) (ELit LUnit)) (EVar "seen"))))))

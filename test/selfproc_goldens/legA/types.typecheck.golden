@@ -1263,9 +1263,11 @@ ieProbeBlobHead : HeadKey
 ieProbeEnv : ImplEnv
 ieProbeKey : String -> RegKey
 ieRowAdmittedBy : IfaceRef -> Option IfaceRef -> Bool
+ieRowAnswersMethod : ImplRow -> List String -> String -> Option IfaceRef -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
 ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
+ieRowInheritsDefault : ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef
 ieRowMethodHeadCollides : ImplEnv -> ImplRow -> Bool
 ieRowMethodNames : ImplRow -> List String
@@ -1550,6 +1552,7 @@ insertVariantIdents : TcEnv -> String -> TyConOrigin -> List Variant -> (Map Str
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
+instanceSuperWords : ImplEnv -> IfaceRef -> List Ty -> List (String, String)
 instantiate : Scheme -> Mono
 instantiateCtorPattern : Scheme -> Mono
 instantiateLegacyVarTracked : String -> Int -> Scheme -> MethodTrackedInstantiation
@@ -2663,6 +2666,7 @@ superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
 superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
 superLookup : IfaceRef -> Option (List String, List Super)
 superMsgFor : List ImplRow -> String -> List Ty -> List (String, Ty) -> Super -> List String
+superWordOfNode : ImplEnv -> List (String, Mono) -> SuperNode (List Ty) -> List (String, String)
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String

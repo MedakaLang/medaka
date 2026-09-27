@@ -258,7 +258,7 @@ rows = [
     prelude = [runtimeMod, coreMod],
     shape = FileStem,
     batched = False,
-    fixtures = 12,
+    fixtures = 13,
   },
   Row {
     gate = "diff_compiler_eval_typed_batch",
@@ -267,7 +267,7 @@ rows = [
     prelude = [runtimeMod, coreMod],
     shape = FileStem,
     batched = True,
-    fixtures = 12,
+    fixtures = 13,
   },
   Row {
     gate = "diff_compiler_eval_dict_batch",

@@ -1,0 +1,30 @@
+-- A point-free default inherited by an instance whose `requires` expands to TWO
+-- dictionaries (`Fmt a` and its superclass `Named a`), reached through a dictionary
+-- parameter.  The dispatch arm must load as many dictionaries as the
+-- specialization's leading `$dict_*` parameters, not the pattern count less the
+-- method's arity (a point-free clause has no value patterns).
+-- Must print c! / <b(c)>!.
+import pfmt.{Named(..), nm, Fmt(..), fmt, loud}
+
+data Cat = Cat
+data Box a = Box a
+
+impl Named Cat where
+  nm _ = "N-cat"
+
+impl Fmt Cat where
+  fmt _ = "c"
+
+impl Named (Box a) requires Named a where
+  nm (Box v) = "N-box"
+
+impl Fmt (Box a) requires Fmt a where
+  fmt (Box v) = "<b(" ++ fmt v ++ ")>"
+
+shout : Fmt a => a -> String
+shout x = loud x
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (shout Cat)
+  putStrLn (shout (Box Cat))

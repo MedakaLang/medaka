@@ -1,5 +1,5 @@
 # META
-source_lines=4793
+source_lines=4796
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2417,6 +2417,9 @@ declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeA
 declImplEntries env disp (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
   match installedDispositionsOpt ()
     Some dt => flatMap (inheritedDefaultEntries env disp dt o ifaceName) methods
+    -- untyped eval: no elaboration, so no instance identity to specialize for; an
+    -- impl inheriting another module's default has no body for it here (the same
+    -- limit `core_ir_lower.lowerProgram` documents for the untyped Core-IR probes)
     None => []
 declImplEntries _ _ _ = []
 

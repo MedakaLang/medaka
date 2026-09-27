@@ -1,0 +1,38 @@
+-- A default reached through a DICTIONARY PARAMETER while a second interface spells
+-- the same method.  `Dog` inherits `Speak.speak` and supplies `Greet.speak`, so a
+-- `speak` body exists for both interfaces at `Dog`; the `Speak Dog` dictionary still
+-- has to select the inherited `Speak` default.  `Cat` and `Owl` supply both.
+-- Must print Dog: A-default / Cat: catA / Owl: owlA.
+import sifa as A
+import sifb as B
+
+data Dog = Dog
+data Cat = Cat
+data Owl = Owl
+
+impl A.Speak Dog where
+
+
+impl B.Greet Dog where
+  speak _ = "dogB"
+
+impl A.Speak Cat where
+  speak _ = "catA"
+
+impl B.Greet Cat where
+  speak _ = "catB"
+
+impl A.Speak Owl where
+  speak _ = "owlA"
+
+impl B.Greet Owl where
+  speak _ = "owlB"
+
+gen : A.Speak a => a -> String
+gen v = A.speak v
+
+main : <IO> Unit
+main =
+  let _ = putStrLn ("Dog: " ++ gen Dog)
+  let _ = putStrLn ("Cat: " ++ gen Cat)
+  putStrLn ("Owl: " ++ gen Owl)

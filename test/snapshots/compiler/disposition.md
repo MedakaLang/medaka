@@ -1,5 +1,5 @@
 # META
-source_lines=255
+source_lines=264
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -90,8 +90,14 @@ public export data InstanceShape = InstanceShape {
   isTys : List Ty,
   -- the word a dictionary for this instance carries (the typechecker's
   -- predicate route word: the bare head unless the head collides), which a
-  -- superclass call projected from the receiver dispatches by
+  -- call of a method of the instance's own interface through the receiver
+  -- dispatches by
   isDictWord : String,
+  -- the same word for each superclass instance at these type arguments, keyed
+  -- by the superclass's interface word: a superclass method reached through the
+  -- receiver dispatches by its own instance's word, which differs from
+  -- `isDictWord` whenever either head collides
+  isSuperWords : List (String, String),
   -- how many `requires` dictionaries the instance's methods take after their
   -- method-level ones (the expanded requires list's length)
   isReqCount : Int,
@@ -252,8 +258,11 @@ installedDispositions _ = match !dispositionsRef
   Some table => table
 
 -- For a lowering driver that may run without an elaboration (the untyped Core-IR
--- probes): `None` there means the program was never typechecked, so it has no
--- inherited slot a specialization could serve.
+-- and eval probes): `None` there means the program was never typechecked, so no
+-- instance's inherited defaults are known and none is specialized — an impl that
+-- leaves another module's interface method to its default has no body for it on
+-- that path (see `core_ir_lower.lowerProgram`).  A typechecked driver reads
+-- `installedDispositions`, which refuses a missing table.
 export
 installedDispositionsOpt : Unit -> Option DispositionTable
 installedDispositionsOpt _ = !dispositionsRef
@@ -279,7 +288,7 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionMethod" ((PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (EVar "m"))
 (DTypeSig true "dispositionKey" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dispositionKey" ((PVar "inst") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "instIdMid") (EVar "inst")))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "instIdSeq") (EVar "inst"))))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
-(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isReqCount" (TyCon "Int"))))) ())
+(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSuperWords" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "isReqCount" (TyCon "Int"))))) ())
 (DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))) ())
 (DTypeSig true "emptyDispositionTable" (TyCon "DispositionTable"))
 (DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")))))
@@ -339,7 +348,7 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionMethod" ((PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (EVar "m"))
 (DTypeSig true "dispositionKey" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dispositionKey" ((PVar "inst") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "instIdMid") (EVar "inst")))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "instIdSeq") (EVar "inst"))))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
-(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isReqCount" (TyCon "Int"))))) ())
+(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSuperWords" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "isReqCount" (TyCon "Int"))))) ())
 (DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))) ())
 (DTypeSig true "emptyDispositionTable" (TyCon "DispositionTable"))
 (DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")))))

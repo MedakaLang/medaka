@@ -1,5 +1,5 @@
 # META
-source_lines=49986
+source_lines=50051
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -29345,11 +29345,41 @@ ieEntriesForMethod : List ImplRow ->
   List KeyEntry
 ieEntriesForMethod [] _ _ _ = []
 ieEntriesForMethod ((r@(ImplRow _ _ ir tys _ ms)) :: rest) name admitted goals
-  | contains name ms
-    && ieRowAdmittedBy ir admitted
-    && ieRowHeadMatches tys goals =
+  | ieRowAdmittedBy ir admitted
+    && ieRowHeadMatches tys goals
+    && ieRowAnswersMethod r ms name admitted =
     keyEntryOfRow r ++ ieEntriesForMethod rest name admitted goals
   | otherwise = ieEntriesForMethod rest name admitted goals
+
+-- Does [r] answer [name]: does a call of [name] at this instance reach a body?  It
+-- does for every method the impl supplies ([ms]), and for every method its
+-- interface declares with a default the impl does not override — the slot the
+-- disposition table publishes as `InheritedDefault` and lowering specializes for
+-- this instance, so the call site owes that body the instance's `requires`
+-- dictionaries exactly as it owes a supplied method them.  The inherited half is
+-- read only when the occurrence's interface is known ([admitted]): without it the
+-- scan cannot tell a default of the occurrence's interface from a same-spelled
+-- method of another one.
+ieRowAnswersMethod : ImplRow -> List String -> String -> Option IfaceRef -> Bool
+ieRowAnswersMethod _ ms name None = contains name ms
+ieRowAnswersMethod r ms name (Some _) =
+  contains name ms || ieRowInheritsDefault r name
+
+-- [name] is a defaulted method of [r]'s interface, as the impl's own module sees
+-- that interface (the disposition producer's lookup, `dispositionRowsOfImpl`).  A
+-- miss — an envelope with no interface registry — answers False, the supplied-only
+-- reading.
+ieRowInheritsDefault : ImplRow -> String -> Bool
+ieRowInheritsDefault r name =
+  let (iface, _, _) = ieRowTriple r
+  match (ceLookupAt
+    (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
+    (ieRowOrd r)
+    driverState.value.declEnvsRef.value.deIfaces)
+    None => False
+    Some ceRow =>
+      contains name (ceRowMethodNames ceRow)
+        && not (contains name (ceRowRequired ceRow))
 
 -- The head-plus-headless union, on `IE`: the goal head's own bucket merged with the
 -- headless one, since a fully-general `impl C a` matches every goal but heads at
@@ -47599,6 +47629,7 @@ dispositionRowsOfImpl ie r ce =
     isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
     isTys = tys,
     isDictWord = predicateRouteKeyForRow ie r,
+    isSuperWords = instanceSuperWords ie iface tys,
     isReqCount = listLen (expandImplRequires reqs),
   }
   let ifaceWord = ifaceWordOf iface.irOrigin iface.irName
@@ -47619,6 +47650,40 @@ dispositionRowsOfImpl ie r ce =
           supplied
           (ceRowRequired ceRow)
           (ceRowMethodNames ceRow))
+
+-- For each interface in [iface]'s superclass closure, the dictionary word of its
+-- instance at [tys] — the instance a superclass method called through an
+-- `iface tys` receiver runs.  A superclass with no selectable instance is left out
+-- (the receiver's own word stands in, as before); acceptance already demanded one.
+instanceSuperWords : ImplEnv -> IfaceRef -> List Ty -> List (String, String)
+instanceSuperWords ie iface tys =
+  let rigid = map (n => (n, TRigid n)) (dedup (flatMap tyVarNames tys))
+  let nodes =
+    superClosure
+      superLookup
+      implRequireSuperStep
+      (i args => implRequireKey rigid (requireOfSuper i args))
+      [(iface, tys)]
+  flatMap
+    (superWordOfNode ie rigid)
+    (filter (n => listLen n.superPath > 1) nodes)
+
+superWordOfNode : ImplEnv ->
+  List (String, Mono) ->
+  SuperNode (List Ty) ->
+  List (String, String)
+superWordOfNode ie rigid n =
+  match (ieSelectRowByIface
+    ie
+    n.superIface
+    (map (fromAstType rigid) n.superPayload))
+    Some row => [
+      (
+        ifaceWordOf n.superIface.irOrigin n.superIface.irName,
+        predicateRouteKeyForRow ie row,
+      ),
+    ]
+    None => []
 
 dispositionRowsOfMethods : InstId ->
   IfaceRef ->
@@ -55080,7 +55145,12 @@ isTyAuth _ = False
 (DFunDef false "ieEntriesForIface" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild)) (PVar "rest")) (PVar "iface") (PVar "goals")) (EIf (EBinOp "&&" (EApp (EApp (EVar "ieRowIfaceMatches") (EVar "ir")) (EVar "iface")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieEntriesForMethod" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry")))))))
 (DFunDef false "ieEntriesForMethod" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "ieEntriesForMethod" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms"))) (PVar "rest")) (PVar "name") (PVar "admitted") (PVar "goals")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ieEntriesForMethod" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms"))) (PVar "rest")) (PVar "name") (PVar "admitted") (PVar "goals")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ieRowAnswersMethod" (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyCon "Bool"))))))
+(DFunDef false "ieRowAnswersMethod" (PWild (PVar "ms") (PVar "name") (PCon "None")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")))
+(DFunDef false "ieRowAnswersMethod" ((PVar "r") (PVar "ms") (PVar "name") (PCon "Some" PWild)) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")) (EApp (EApp (EVar "ieRowInheritsDefault") (EVar "r")) (EVar "name"))))
+(DTypeSig false "ieRowInheritsDefault" (TyFun (TyCon "ImplRow") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ieRowInheritsDefault" ((PVar "r") (PVar "name")) (EBlock (DoLet false false (PTuple (PVar "iface") PWild PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deIfaces")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "ceRow")) () (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowMethodNames") (EVar "ceRow"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))))))))))
 (DTypeSig false "ieCandidatesForIface" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "HeadKey") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry")))))))
 (DFunDef false "ieCandidatesForIface" ((PVar "env") (PVar "hk") (PVar "iface") (PVar "goals")) (EApp (EApp (EVar "mergeByDeclIdx") (EApp (EApp (EApp (EVar "ieEntriesForIface") (EApp (EApp (EVar "ieHeadRows") (EApp (EVar "Some") (EVar "hk"))) (EVar "env"))) (EVar "iface")) (EVar "goals"))) (EApp (EApp (EApp (EVar "ieEntriesForIface") (EApp (EApp (EVar "ieHeadRows") (EVar "None")) (EVar "env"))) (EVar "iface")) (EVar "goals"))))
 (DTypeSig false "ieCandidatesForMethod" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry"))))))))
@@ -57699,7 +57769,11 @@ isTyAuth _ = False
 (DFunDef false "dispositionRowsOfImpls" (PWild (PList) PWild) (EListLit))
 (DFunDef false "dispositionRowsOfImpls" ((PVar "ie") (PCons (PVar "r") (PVar "rest")) (PVar "ce")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispositionRowsOfImpl") (EVar "ie")) (EVar "r")) (EVar "ce")) (EApp (EApp (EApp (EVar "dispositionRowsOfImpls") (EVar "ie")) (EVar "rest")) (EVar "ce"))))
 (DTypeSig false "dispositionRowsOfImpl" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplRow") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition")))))))
-(DFunDef false "dispositionRowsOfImpl" ((PVar "ie") (PVar "r") (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tys") (PVar "reqs")) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "shape") (ERecordCreate "InstanceShape" ((fa "isWord" (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EVar "tys")) (EVar "None"))) (fa "isTys" (EVar "tys")) (fa "isDictWord" (EApp (EApp (EVar "predicateRouteKeyForRow") (EVar "ie")) (EVar "r"))) (fa "isReqCount" (EApp (EVar "listLen") (EApp (EVar "expandImplRequires") (EVar "reqs"))))))) (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: no interface declaration for ")) (EApp (EVar "display") (EFieldAccess (EVar "iface") "irName"))) (ELit (LString " visible to accepted impl at ordinal "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "ieRowOrd") (EVar "r"))))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EVar "shape") (EVar "ifaceWord") (EVar "d")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow")))))))))
+(DFunDef false "dispositionRowsOfImpl" ((PVar "ie") (PVar "r") (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tys") (PVar "reqs")) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "shape") (ERecordCreate "InstanceShape" ((fa "isWord" (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EVar "tys")) (EVar "None"))) (fa "isTys" (EVar "tys")) (fa "isDictWord" (EApp (EApp (EVar "predicateRouteKeyForRow") (EVar "ie")) (EVar "r"))) (fa "isSuperWords" (EApp (EApp (EApp (EVar "instanceSuperWords") (EVar "ie")) (EVar "iface")) (EVar "tys"))) (fa "isReqCount" (EApp (EVar "listLen") (EApp (EVar "expandImplRequires") (EVar "reqs"))))))) (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: no interface declaration for ")) (EApp (EVar "display") (EFieldAccess (EVar "iface") "irName"))) (ELit (LString " visible to accepted impl at ordinal "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "ieRowOrd") (EVar "r"))))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EVar "shape") (EVar "ifaceWord") (EVar "d")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow")))))))))
+(DTypeSig false "instanceSuperWords" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "instanceSuperWords" ((PVar "ie") (PVar "iface") (PVar "tys")) (EBlock (DoLet false false (PVar "rigid") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "TRigid") (EVar "n"))))) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EVar "tyVarNames")) (EVar "tys"))))) (DoLet false false (PVar "nodes") (EApp (EApp (EApp (EApp (EVar "superClosure") (EVar "superLookup")) (EVar "implRequireSuperStep")) (ELam ((PVar "i") (PVar "args")) (EApp (EApp (EVar "implRequireKey") (EVar "rigid")) (EApp (EApp (EVar "requireOfSuper") (EVar "i")) (EVar "args"))))) (EListLit (ETuple (EVar "iface") (EVar "tys"))))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "superWordOfNode") (EVar "ie")) (EVar "rigid"))) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EFieldAccess (EVar "n") "superPath")) (ELit (LInt 1))))) (EVar "nodes"))))))
+(DTypeSig false "superWordOfNode" (TyFun (TyCon "ImplEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "SuperNode") (TyApp (TyCon "List") (TyCon "Ty"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "superWordOfNode" ((PVar "ie") (PVar "rigid") (PVar "n")) (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "ie")) (EFieldAccess (EVar "n") "superIface")) (EApp (EApp (EVar "map") (EApp (EVar "fromAstType") (EVar "rigid"))) (EFieldAccess (EVar "n") "superPayload"))) (arm (PCon "Some" (PVar "row")) () (EListLit (ETuple (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EFieldAccess (EVar "n") "superIface") "irOrigin")) (EFieldAccess (EFieldAccess (EVar "n") "superIface") "irName")) (EApp (EApp (EVar "predicateRouteKeyForRow") (EVar "ie")) (EVar "row"))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "dispositionRowsOfMethods" (TyFun (TyCon "InstId") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "MethodDisposition"))))))))
 (DFunDef false "dispositionRowsOfMethods" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "dispositionRowsOfMethods" ((PVar "inst") (PVar "iface") (PVar "supplied") (PVar "required") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false (PVar "restRows") (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EVar "required")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EVar "supplied")) (EBinOp "::" (ERecordCreate "Supplied" ((fa "instance" (EVar "inst")) (fa "iface" (EVar "iface")) (fa "method" (EVar "m")))) (EVar "restRows")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EVar "required"))) (EBinOp "::" (ERecordCreate "InheritedDefault" ((fa "instance" (EVar "inst")) (fa "iface" (EVar "iface")) (fa "method" (EVar "m")))) (EVar "restRows")) (EVar "restRows"))))))
@@ -63070,7 +63144,12 @@ isTyAuth _ = False
 (DFunDef false "ieEntriesForIface" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild)) (PVar "rest")) (PVar "iface") (PVar "goals")) (EIf (EBinOp "&&" (EApp (EApp (EVar "ieRowIfaceMatches") (EVar "ir")) (EVar "iface")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ieEntriesForIface") (EVar "rest")) (EVar "iface")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ieEntriesForMethod" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry")))))))
 (DFunDef false "ieEntriesForMethod" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "ieEntriesForMethod" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms"))) (PVar "rest")) (PVar "name") (PVar "admitted") (PVar "goals")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")) (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted"))) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ieEntriesForMethod" ((PCons (PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild (PVar "ms"))) (PVar "rest")) (PVar "name") (PVar "admitted") (PVar "goals")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "ieRowAdmittedBy") (EVar "ir")) (EVar "admitted")) (EApp (EApp (EVar "ieRowHeadMatches") (EVar "tys")) (EVar "goals"))) (EApp (EApp (EApp (EApp (EVar "ieRowAnswersMethod") (EVar "r")) (EVar "ms")) (EVar "name")) (EVar "admitted"))) (EBinOp "++" (EApp (EVar "keyEntryOfRow") (EVar "r")) (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "ieEntriesForMethod") (EVar "rest")) (EVar "name")) (EVar "admitted")) (EVar "goals")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ieRowAnswersMethod" (TyFun (TyCon "ImplRow") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyCon "Bool"))))))
+(DFunDef false "ieRowAnswersMethod" (PWild (PVar "ms") (PVar "name") (PCon "None")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")))
+(DFunDef false "ieRowAnswersMethod" ((PVar "r") (PVar "ms") (PVar "name") (PCon "Some" PWild)) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EVar "ms")) (EApp (EApp (EVar "ieRowInheritsDefault") (EVar "r")) (EVar "name"))))
+(DTypeSig false "ieRowInheritsDefault" (TyFun (TyCon "ImplRow") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ieRowInheritsDefault" ((PVar "r") (PVar "name")) (EBlock (DoLet false false (PTuple (PVar "iface") PWild PWild) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deIfaces")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "ceRow")) () (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowMethodNames") (EVar "ceRow"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))))))))))
 (DTypeSig false "ieCandidatesForIface" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "HeadKey") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry")))))))
 (DFunDef false "ieCandidatesForIface" ((PVar "env") (PVar "hk") (PVar "iface") (PVar "goals")) (EApp (EApp (EVar "mergeByDeclIdx") (EApp (EApp (EApp (EVar "ieEntriesForIface") (EApp (EApp (EVar "ieHeadRows") (EApp (EVar "Some") (EVar "hk"))) (EVar "env"))) (EVar "iface")) (EVar "goals"))) (EApp (EApp (EApp (EVar "ieEntriesForIface") (EApp (EApp (EVar "ieHeadRows") (EVar "None")) (EVar "env"))) (EVar "iface")) (EVar "goals"))))
 (DTypeSig false "ieCandidatesForMethod" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "HeadKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "KeyEntry"))))))))
@@ -65689,7 +65768,11 @@ isTyAuth _ = False
 (DFunDef false "dispositionRowsOfImpls" (PWild (PList) PWild) (EListLit))
 (DFunDef false "dispositionRowsOfImpls" ((PVar "ie") (PCons (PVar "r") (PVar "rest")) (PVar "ce")) (EBinOp "++" (EApp (EApp (EApp (EVar "dispositionRowsOfImpl") (EVar "ie")) (EVar "r")) (EVar "ce")) (EApp (EApp (EApp (EVar "dispositionRowsOfImpls") (EVar "ie")) (EVar "rest")) (EVar "ce"))))
 (DTypeSig false "dispositionRowsOfImpl" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplRow") (TyFun (TyCon "ClassEnv") (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition")))))))
-(DFunDef false "dispositionRowsOfImpl" ((PVar "ie") (PVar "r") (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tys") (PVar "reqs")) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "shape") (ERecordCreate "InstanceShape" ((fa "isWord" (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EVar "tys")) (EVar "None"))) (fa "isTys" (EVar "tys")) (fa "isDictWord" (EApp (EApp (EVar "predicateRouteKeyForRow") (EVar "ie")) (EVar "r"))) (fa "isReqCount" (EApp (EVar "listLen") (EApp (EVar "expandImplRequires") (EVar "reqs"))))))) (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: no interface declaration for ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "iface") "irName"))) (ELit (LString " visible to accepted impl at ordinal "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "ieRowOrd") (EVar "r"))))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EVar "shape") (EVar "ifaceWord") (EVar "d")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow")))))))))
+(DFunDef false "dispositionRowsOfImpl" ((PVar "ie") (PVar "r") (PVar "ce")) (EBlock (DoLet false false (PTuple (PVar "iface") (PVar "tys") (PVar "reqs")) (EApp (EVar "ieRowTriple") (EVar "r"))) (DoLet false false (PVar "inst") (EApp (EApp (EVar "InstId") (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "instRefSeq") (EApp (EVar "ieRowInst") (EVar "r"))))) (DoLet false false (PVar "shape") (ERecordCreate "InstanceShape" ((fa "isWord" (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")) (EVar "tys")) (EVar "None"))) (fa "isTys" (EVar "tys")) (fa "isDictWord" (EApp (EApp (EVar "predicateRouteKeyForRow") (EVar "ie")) (EVar "r"))) (fa "isSuperWords" (EApp (EApp (EApp (EVar "instanceSuperWords") (EVar "ie")) (EVar "iface")) (EVar "tys"))) (fa "isReqCount" (EApp (EVar "listLen") (EApp (EVar "expandImplRequires") (EVar "reqs"))))))) (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoLet false false (PVar "supplied") (EApp (EVar "ieRowMethodNames") (EVar "r"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName")))) (EApp (EVar "ieRowOrd") (EVar "r"))) (EVar "ce")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: no interface declaration for ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "iface") "irName"))) (ELit (LString " visible to accepted impl at ordinal "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "ieRowOrd") (EVar "r"))))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ceRow")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EVar "shape") (EVar "ifaceWord") (EVar "d")))) (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EApp (EVar "ceRowRequired") (EVar "ceRow"))) (EApp (EVar "ceRowMethodNames") (EVar "ceRow")))))))))
+(DTypeSig false "instanceSuperWords" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "instanceSuperWords" ((PVar "ie") (PVar "iface") (PVar "tys")) (EBlock (DoLet false false (PVar "rigid") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "TRigid") (EVar "n"))))) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EVar "tyVarNames")) (EVar "tys"))))) (DoLet false false (PVar "nodes") (EApp (EApp (EApp (EApp (EVar "superClosure") (EVar "superLookup")) (EVar "implRequireSuperStep")) (ELam ((PVar "i") (PVar "args")) (EApp (EApp (EVar "implRequireKey") (EVar "rigid")) (EApp (EApp (EVar "requireOfSuper") (EVar "i")) (EVar "args"))))) (EListLit (ETuple (EVar "iface") (EVar "tys"))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "superWordOfNode") (EVar "ie")) (EVar "rigid"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EFieldAccess (EVar "n") "superPath")) (ELit (LInt 1))))) (EVar "nodes"))))))
+(DTypeSig false "superWordOfNode" (TyFun (TyCon "ImplEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "SuperNode") (TyApp (TyCon "List") (TyCon "Ty"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "superWordOfNode" ((PVar "ie") (PVar "rigid") (PVar "n")) (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "ie")) (EFieldAccess (EVar "n") "superIface")) (EApp (EApp (EMethodRef "map") (EApp (EVar "fromAstType") (EVar "rigid"))) (EFieldAccess (EVar "n") "superPayload"))) (arm (PCon "Some" (PVar "row")) () (EListLit (ETuple (EApp (EApp (EVar "ifaceWordOf") (EFieldAccess (EFieldAccess (EVar "n") "superIface") "irOrigin")) (EFieldAccess (EFieldAccess (EVar "n") "superIface") "irName")) (EApp (EApp (EVar "predicateRouteKeyForRow") (EVar "ie")) (EVar "row"))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "dispositionRowsOfMethods" (TyFun (TyCon "InstId") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "MethodDisposition"))))))))
 (DFunDef false "dispositionRowsOfMethods" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "dispositionRowsOfMethods" ((PVar "inst") (PVar "iface") (PVar "supplied") (PVar "required") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false (PVar "restRows") (EApp (EApp (EApp (EApp (EApp (EVar "dispositionRowsOfMethods") (EVar "inst")) (EVar "iface")) (EVar "supplied")) (EVar "required")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "m")) (EVar "supplied")) (EBinOp "::" (ERecordCreate "Supplied" ((fa "instance" (EVar "inst")) (fa "iface" (EVar "iface")) (fa "method" (EVar "m")))) (EVar "restRows")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EVar "required"))) (EBinOp "::" (ERecordCreate "InheritedDefault" ((fa "instance" (EVar "inst")) (fa "iface" (EVar "iface")) (fa "method" (EVar "m")))) (EVar "restRows")) (EVar "restRows"))))))

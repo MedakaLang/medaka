@@ -29341,11 +29341,41 @@ ieEntriesForMethod : List ImplRow ->
   List KeyEntry
 ieEntriesForMethod [] _ _ _ = []
 ieEntriesForMethod ((r@(ImplRow _ _ ir tys _ ms)) :: rest) name admitted goals
-  | contains name ms
-    && ieRowAdmittedBy ir admitted
-    && ieRowHeadMatches tys goals =
+  | ieRowAdmittedBy ir admitted
+    && ieRowHeadMatches tys goals
+    && ieRowAnswersMethod r ms name admitted =
     keyEntryOfRow r ++ ieEntriesForMethod rest name admitted goals
   | otherwise = ieEntriesForMethod rest name admitted goals
+
+-- Does [r] answer [name]: does a call of [name] at this instance reach a body?  It
+-- does for every method the impl supplies ([ms]), and for every method its
+-- interface declares with a default the impl does not override — the slot the
+-- disposition table publishes as `InheritedDefault` and lowering specializes for
+-- this instance, so the call site owes that body the instance's `requires`
+-- dictionaries exactly as it owes a supplied method them.  The inherited half is
+-- read only when the occurrence's interface is known ([admitted]): without it the
+-- scan cannot tell a default of the occurrence's interface from a same-spelled
+-- method of another one.
+ieRowAnswersMethod : ImplRow -> List String -> String -> Option IfaceRef -> Bool
+ieRowAnswersMethod _ ms name None = contains name ms
+ieRowAnswersMethod r ms name (Some _) =
+  contains name ms || ieRowInheritsDefault r name
+
+-- [name] is a defaulted method of [r]'s interface, as the impl's own module sees
+-- that interface (the disposition producer's lookup, `dispositionRowsOfImpl`).  A
+-- miss — an envelope with no interface registry — answers False, the supplied-only
+-- reading.
+ieRowInheritsDefault : ImplRow -> String -> Bool
+ieRowInheritsDefault r name =
+  let (iface, _, _) = ieRowTriple r
+  match (ceLookupAt
+    (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
+    (ieRowOrd r)
+    driverState.value.declEnvsRef.value.deIfaces)
+    None => False
+    Some ceRow =>
+      contains name (ceRowMethodNames ceRow)
+        && not (contains name (ceRowRequired ceRow))
 
 -- The head-plus-headless union, on `IE`: the goal head's own bucket merged with the
 -- headless one, since a fully-general `impl C a` matches every goal but heads at
@@ -47595,6 +47625,7 @@ dispositionRowsOfImpl ie r ce =
     isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
     isTys = tys,
     isDictWord = predicateRouteKeyForRow ie r,
+    isSuperWords = instanceSuperWords ie iface tys,
     isReqCount = listLen (expandImplRequires reqs),
   }
   let ifaceWord = ifaceWordOf iface.irOrigin iface.irName
@@ -47615,6 +47646,40 @@ dispositionRowsOfImpl ie r ce =
           supplied
           (ceRowRequired ceRow)
           (ceRowMethodNames ceRow))
+
+-- For each interface in [iface]'s superclass closure, the dictionary word of its
+-- instance at [tys] — the instance a superclass method called through an
+-- `iface tys` receiver runs.  A superclass with no selectable instance is left out
+-- (the receiver's own word stands in, as before); acceptance already demanded one.
+instanceSuperWords : ImplEnv -> IfaceRef -> List Ty -> List (String, String)
+instanceSuperWords ie iface tys =
+  let rigid = map (n => (n, TRigid n)) (dedup (flatMap tyVarNames tys))
+  let nodes =
+    superClosure
+      superLookup
+      implRequireSuperStep
+      (i args => implRequireKey rigid (requireOfSuper i args))
+      [(iface, tys)]
+  flatMap
+    (superWordOfNode ie rigid)
+    (filter (n => listLen n.superPath > 1) nodes)
+
+superWordOfNode : ImplEnv ->
+  List (String, Mono) ->
+  SuperNode (List Ty) ->
+  List (String, String)
+superWordOfNode ie rigid n =
+  match (ieSelectRowByIface
+    ie
+    n.superIface
+    (map (fromAstType rigid) n.superPayload))
+    Some row => [
+      (
+        ifaceWordOf n.superIface.irOrigin n.superIface.irName,
+        predicateRouteKeyForRow ie row,
+      ),
+    ]
+    None => []
 
 dispositionRowsOfMethods : InstId ->
   IfaceRef ->
