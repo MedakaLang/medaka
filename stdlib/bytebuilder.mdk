@@ -276,15 +276,15 @@ emitLeUint n v buf =
 -- ---------------------------------------------------------------------------
 
 -- Build bytes by running an emit action on a fresh builder and return the
--- resulting `Array Int`.  Used in round-trip doctests below.
-build1 : (Builder -> Unit) -> Array Int
+-- resulting `Bytes`.  Used in round-trip doctests below.
+build1 : (Builder -> Unit) -> Bytes
 build1 f =
   let buf = newBuilder ()
   f buf
-  buildArray buf
+  buildBytes buf
 
 -- ---------------------------------------------------------------------------
--- Doctests — round-trip: emit → buildArray → runByteParser decoder == value
+-- Doctests — round-trip: emit → buildBytes → runByteParser decoder == value
 -- ---------------------------------------------------------------------------
 
 -- emitU8 ↔ beUint 1
@@ -515,7 +515,7 @@ prop "emitU16BE reversed bytes, leU16 agrees with beU16" (v : Int) =
   match runByteParser (takeBytes 2) (build1 (emitU16BE w))
     Err _ => False
     Ok bytes =>
-      let reversedArr = arrayReverse (toArray bytes)
-      match runByteParser leU16 reversedArr
+      let reversed = fromArrayAssumeByteDomain (arrayReverse (toArray bytes))
+      match runByteParser leU16 reversed
         Ok got => got == w
         Err _ => False

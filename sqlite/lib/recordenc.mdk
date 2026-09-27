@@ -53,6 +53,7 @@
 
 import byteparser.{runByteParser}
 import bytebuilder.{newBuilder, emitBeSint, buildArray}
+import bytes.{fromArrayAssumeByteDomain}
 import lib.varint.{sqVarintBytes, sqVarintSize}
 import lib.recordfmt.{
   Cell(..),
@@ -175,7 +176,7 @@ encodeToList cells = map toList (encodeRecord cells)
 roundTripShow : List Cell -> String
 roundTripShow cells = match encodeRecord cells
   Err e => "Err: " ++ e
-  Ok bs => showCells (runByteParser parseRecord bs)
+  Ok bs => showCells (runByteParser parseRecord (fromArrayAssumeByteDomain bs))
 
 -- ---------------------------------------------------------------------------
 -- Doctests

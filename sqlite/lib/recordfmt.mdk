@@ -20,10 +20,11 @@ import byteparser.{
   runBP,
   runByteParser,
   beSint,
-  takeSlice,
+  takeBytes,
   failWith,
   beFloat64,
 }
+import bytes.{Bytes, fromU8Array, toArray}
 import lib.varint.{sqVarint}
 import list.{reverse}
 import array
@@ -92,19 +93,19 @@ serialOf n
 -- A real sqlite3 record for the row (id-as-NULL, "Carol", 25): header-length 4,
 -- serial 0 (NULL), serial 23 (text, (23-13)/2 = 5 bytes), serial 1 (int8):
 --
--- > showCells (runByteParser parseRecord (arrayFromList [4, 0, 23, 1, 67, 97, 114, 111, 108, 25]))
+-- > showCells (runByteParser parseRecord (fromU8Array [|4, 0, 23, 1, 67, 97, 114, 111, 108, 25|]))
 -- "NULL|Carol|25"
 --
 -- A two-int record (header 3, serial 1, serial 2): bytes 0x09 then 0x0100=256:
 --
--- > showCells (runByteParser parseRecord (arrayFromList [3, 1, 2, 9, 1, 0]))
+-- > showCells (runByteParser parseRecord (fromU8Array [|3, 1, 2, 9, 1, 0|]))
 -- "9|256"
 --
 -- A single float column (serial 7, 8-byte big-endian IEEE 754):
 -- bytes [2, 7] are header (len=2, serial=7); then [63, 248, 0, 0, 0, 0, 0, 0]
 -- is the big-endian encoding of 1.5:
 --
--- > showCells (runByteParser parseRecord (arrayFromList [2, 7, 63, 248, 0, 0, 0, 0, 0, 0]))
+-- > showCells (runByteParser parseRecord (fromU8Array [|2, 7, 63, 248, 0, 0, 0, 0, 0, 0|]))
 -- "1.5"
 export
 parseRecord : ByteParser (List Cell)
@@ -124,19 +125,20 @@ nthCell [] _ = CNull
 nthCell (c :: rest) i = if i <= 0 then c else nthCell rest (i - 1)
 
 -- The pure driver: we drop to BResult-level position threading so we can
--- compute the header boundary precisely.
-parseRecordGo : Array Int -> Int -> BResult (List Cell)
-parseRecordGo input pos =
+-- compute the header boundary precisely. `end` is unused: `parseRecord` is
+-- only ever run full-range, never through `runByteParserWithin`.
+parseRecordGo : Bytes -> Int -> Int -> BResult (List Cell)
+parseRecordGo input pos _end =
   onOk (runBP sqVarint input pos) (parseRecordAfterHdr input pos)
 
-parseRecordAfterHdr : Array Int -> Int -> Int -> Int -> BResult (List Cell)
+parseRecordAfterHdr : Bytes -> Int -> Int -> Int -> BResult (List Cell)
 parseRecordAfterHdr input pos hdrLen hdrStart =
   let headerEnd = pos + hdrLen
   onOk (readSerialTypes input hdrStart headerEnd []) (sts _ =>
     readBodies input headerEnd sts [])
 
 -- Read serial-type varints until `pos >= headerEnd`.
-readSerialTypes : Array Int ->
+readSerialTypes : Bytes ->
   Int ->
   Int ->
   List SerialType ->
@@ -151,11 +153,7 @@ readSerialTypes input pos headerEnd acc
     Ok st => readSerialTypes input pos2 headerEnd (st :: acc))
 
 -- Read the body bytes for each serial type in order.
-readBodies : Array Int ->
-  Int ->
-  List SerialType ->
-  List Cell ->
-  BResult (List Cell)
+readBodies : Bytes -> Int -> List SerialType -> List Cell -> BResult (List Cell)
 readBodies input pos [] acc = BOk (reverse acc) pos
 readBodies input pos (st :: rest) acc = onOk (readBody
   input
@@ -164,13 +162,13 @@ readBodies input pos (st :: rest) acc = onOk (readBody
   readBodies input pos2 rest (cell :: acc))
 
 -- Read one cell's body given its serial type.
-readBody : Array Int -> Int -> SerialType -> BResult Cell
+readBody : Bytes -> Int -> SerialType -> BResult Cell
 readBody input pos STNull = BOk CNull pos
 readBody input pos STIntZero = BOk (CInt 0) pos
 readBody input pos STIntOne = BOk (CInt 1) pos
 readBody input pos (STInt nbytes) = map CInt (runBP (beSint nbytes) input pos)
 readBody input pos (STText nbytes) =
-  map (bs => CText (fromUtf8 bs)) (runBP (takeSlice nbytes) input pos)
+  map (bs => CText (fromUtf8 (toArray bs))) (runBP (takeBytes nbytes) input pos)
 readBody input pos (STBlob nbytes) =
-  map CBlob (runBP (takeSlice nbytes) input pos)
+  map (bs => CBlob (toArray bs)) (runBP (takeBytes nbytes) input pos)
 readBody input pos STFloat = map CFloat (runBP beFloat64 input pos)

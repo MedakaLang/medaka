@@ -1107,8 +1107,7 @@ ARROW
 UPPER "Unit"
 RPAREN
 ARROW
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 NEWLINE
 IDENT "build1"
 IDENT "f"
@@ -1124,7 +1123,7 @@ NEWLINE
 IDENT "f"
 IDENT "buf"
 NEWLINE
-IDENT "buildArray"
+IDENT "buildBytes"
 IDENT "buf"
 NEWLINE
 DEDENT
@@ -1429,18 +1428,21 @@ IDENT "bytes"
 FAT_ARROW
 INDENT
 LET
-IDENT "reversedArr"
+IDENT "reversed"
 EQUAL
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayReverse"
 LPAREN
 IDENT "toArray"
 IDENT "bytes"
 RPAREN
+RPAREN
 NEWLINE
 MATCH
 IDENT "runByteParser"
 IDENT "leU16"
-IDENT "reversedArr"
+IDENT "reversed"
 INDENT
 UPPER "Ok"
 IDENT "got"

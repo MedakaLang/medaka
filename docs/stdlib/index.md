@@ -136,7 +136,7 @@ A buffer for building byte arrays.
 
 ## [`byteparser`](byteparser.md)
 
-Parser combinators over byte arrays.
+Parser combinators over `Bytes`.
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParserE`](byteparser.md#byteparsere)
@@ -160,7 +160,6 @@ Parser combinators over byte arrays.
 - [`choice`](byteparser.md#choice)
 - [`chainl1`](byteparser.md#chainl1)
 - [`takeBytes`](byteparser.md#takebytes)
-- [`takeSlice`](byteparser.md#takeslice)
 - [`beUint`](byteparser.md#beuint)
 - [`beSint`](byteparser.md#besint)
 - [`beFloat64`](byteparser.md#befloat64)
@@ -174,6 +173,7 @@ Parser combinators over byte arrays.
 - [`leU32`](byteparser.md#leu32)
 - [`leU64`](byteparser.md#leu64)
 - [`runByteParser`](byteparser.md#runbyteparser)
+- [`runByteParserWithin`](byteparser.md#runbyteparserwithin)
 
 ## [`bytes`](bytes.md)
 

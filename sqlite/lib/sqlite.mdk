@@ -17,6 +17,7 @@
 -- `usableOf` derives from the parsed file header.
 
 import byteparser.{runByteParser}
+import bytes.{Bytes, fromArrayAssumeByteDomain}
 import lib.header.{
   DbHeader,
   parseHeader,
@@ -37,14 +38,14 @@ import lib.recordfmt.{Cell(..), cellToString}
 import list.{reverse}
 
 -- | An open database: the parsed header plus the whole-file bytes.
-public export data Db = Db DbHeader (Array Int)
+public export data Db = Db DbHeader Bytes
 
 export
 dbHeader : Db -> DbHeader
 dbHeader (Db h _) = h
 
 export
-dbBytes : Db -> Array Int
+dbBytes : Db -> Bytes
 dbBytes (Db _ b) = b
 
 -- | A schema-table entry (one row of sqlite_master).
@@ -73,15 +74,21 @@ schemaSql : SchemaEntry -> String
 schemaSql e = e.sql
 
 -- | Parse a whole-file byte image into a `Db`.  PURE — no IO.
+--
+-- Takes `Array Int` because that is what `readFileBytes` and every in-memory
+-- test/demo builder hands it; the packed `Bytes` conversion happens once
+-- here, not once per page or per cell downstream.
 export
 fromBytes : Array Int -> Result String Db
-fromBytes bytes = match runByteParser parseHeader bytes
-  Err e => Err "header: \{e}"
-  Ok h =>
-    if headerReadVersion h == 2 then
-      Err "WAL-mode databases are not supported (read version 2)"
-    else
-      Ok (Db h bytes)
+fromBytes rawBytes =
+  let bytes = fromArrayAssumeByteDomain rawBytes
+  match runByteParser parseHeader bytes
+    Err e => Err "header: \{e}"
+    Ok h =>
+      if headerReadVersion h == 2 then
+        Err "WAL-mode databases are not supported (read version 2)"
+      else
+        Ok (Db h bytes)
 
 -- | Open a database file: read its bytes, then parse.  Carries <FileRead>.
 export
