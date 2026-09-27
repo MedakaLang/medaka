@@ -3189,7 +3189,7 @@ test "a construction goal packs its prerequisite into the instance route (#2095 
   expectTrue (match constructed
     [e] =>
       e.eoeOutcome == EOKInstance
-        && e.eoeInstanceKey == Some "Box"
+        && e.eoeInstanceKey == Some "evidence_observation.Box"
         && e.eoePrerequisites == ["RKey Int"]
     _ => False)
 
@@ -3217,17 +3217,24 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
       expectAll [
         expectTrue
           (evidenceEntryMatches
-            (EOKInstance, Some "Box", ["RKey Int"], scopeN)
+            (EOKInstance, Some "evidence_observation.Box", ["RKey Int"], scopeN)
             e),
         expectFalse
           (evidenceEntryMatches
             (EOKInstance, Some "SomethingElse", ["RKey Int"], scopeN)
             e),
         expectFalse
-          (evidenceEntryMatches (EOKInstance, Some "Box", [], scopeN) e),
+          (evidenceEntryMatches
+            (EOKInstance, Some "evidence_observation.Box", [], scopeN)
+            e),
         expectFalse
           (evidenceEntryMatches
-            (EOKInstance, Some "Box", ["RKey Int"], scopeN + 1)
+            (
+              EOKInstance,
+              Some "evidence_observation.Box",
+              ["RKey Int"],
+              scopeN + 1,
+            )
             e),
       ]
     _ => fail "expected exactly one Box Int construction goal"

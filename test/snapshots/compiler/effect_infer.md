@@ -1,5 +1,5 @@
 # META
-source_lines=189
+source_lines=190
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -80,6 +80,7 @@ alphaSyntax _ _ _ (EBinOp _ _ _ _) = None
 alphaSyntax top vt lets (EVar x) = varAuthority top vt lets x
 alphaSyntax top vt lets (EVarId x _) = varAuthority top vt lets x
 alphaSyntax top vt lets (EVarAt x _) = varAuthority top vt lets x
+alphaSyntax top vt lets (EDictAt x _) = varAuthority top vt lets x
 alphaSyntax top vt lets (ELet _ _ (PVar x _) e1 e2) =
   alphaSyntax top vt ((x, ALet e1) :: lets) e2
 alphaSyntax top vt lets (ELet _ _ pat _ e2) =
@@ -219,6 +220,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EVarAt" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
+(DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EDictAt" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "ELet" PWild PWild (PCon "PVar" (PVar "x") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "vt")) (EBinOp "::" (ETuple (EVar "x") (EApp (EVar "ALet") (EVar "e1"))) (EVar "lets"))) (EVar "e2")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "ELet" PWild PWild (PVar "pat") PWild (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "alphaUnder") (EVar "top")) (EVar "vt")) (EVar "lets")) (EApp (EVar "patBoundNames") (EVar "pat"))) (EVar "e2")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "vt")) (EApp (EApp (EVar "collectBinds") (EVar "binds")) (EApp (EApp (EVar "shadowed") (EApp (EApp (EVar "flatMap") (EVar "letBindName")) (EVar "binds"))) (EVar "lets")))) (EVar "body")))
@@ -285,6 +287,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EVarAt" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
+(DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "EDictAt" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "varAuthority") (EVar "top")) (EVar "vt")) (EVar "lets")) (EVar "x")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "ELet" PWild PWild (PCon "PVar" (PVar "x") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "vt")) (EBinOp "::" (ETuple (EVar "x") (EApp (EVar "ALet") (EVar "e1"))) (EVar "lets"))) (EVar "e2")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "ELet" PWild PWild (PVar "pat") PWild (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "alphaUnder") (EVar "top")) (EVar "vt")) (EVar "lets")) (EApp (EVar "patBoundNames") (EVar "pat"))) (EVar "e2")))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "vt") (PVar "lets") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "vt")) (EApp (EApp (EVar "collectBinds") (EVar "binds")) (EApp (EApp (EVar "shadowed") (EApp (EApp (EDictApp "flatMap") (EVar "letBindName")) (EVar "binds"))) (EVar "lets")))) (EVar "body")))
