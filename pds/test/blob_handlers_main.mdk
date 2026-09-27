@@ -124,7 +124,9 @@ getQuery nsid query =
 
 send : Store -> Array Int -> (Store, Array Int)
 send store bytes = match fromArray bytes
-  Some packed => handleBytes server testContext store packed
+  Some packed =>
+    let (next, response) = handleBytes server testContext store packed
+    (next, toArray response)
   None => panic "blob_handlers: request fixture holds a non-byte element"
 
 -- ── response reading ────────────────────────────────────────────────────────

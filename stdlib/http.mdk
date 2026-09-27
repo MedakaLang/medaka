@@ -1971,10 +1971,21 @@ responseScanEnd input avail = do
    ends only when the connection closes.
 
    Bytes at or past `avail` are never read. The offset is less than `avail`
-   when another message follows the response. -}
+   when another message follows the response. An `avail` outside the buffer
+   answers `None`.
+
+   `input` is a buffer still being written, such as the block
+   `bytebuilder.builderParts` hands out, and it is read in place, so a
+   response whose header declares its length costs the header, not the body.
+
+   > responseBoundaryWithin (MB.thaw (encodeUtf8 "HTTP/1.1 204 No Content\r\n\r\nX")) 27
+   Some 27 -}
 export
-responseBoundaryWithin : Bytes -> Int -> Option Int
-responseBoundaryWithin input avail =
+responseBoundaryWithin : MutBytes -> Int -> Option Int
+responseBoundaryWithin input avail = responseBoundaryIn (liveView input) avail
+
+responseBoundaryIn : Bytes -> Int -> Option Int
+responseBoundaryIn input avail =
   if avail < 0 || avail > B.length input then
     None
   else match responseScanEnd input avail
@@ -1984,7 +1995,7 @@ responseBoundaryWithin input avail =
 -- | `responseBoundaryWithin` over all bytes in `input`.
 export
 responseBoundary : Bytes -> Option Int
-responseBoundary input = responseBoundaryWithin input (B.length input)
+responseBoundary input = responseBoundaryIn input (B.length input)
 
 -- # Response building
 

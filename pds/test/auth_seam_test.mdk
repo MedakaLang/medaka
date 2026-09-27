@@ -22,7 +22,7 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
-import bytes.{encodeUtf8, fromArray}
+import bytes.{encodeUtf8, fromArray, toArray}
 import http.{
   Header,
   makeHeader,
@@ -81,7 +81,9 @@ handleFixture : Server ->
   Array Int ->
   (Store, Array Int)
 handleFixture httpServer context store request = match fromArray request
-  Some packed => handleBytes httpServer context store packed
+  Some packed =>
+    let (next, response) = handleBytes httpServer context store packed
+    (next, toArray response)
   None => panic "auth_seam: request fixture holds a non-byte element"
 
 -- ── fixtures ────────────────────────────────────────────────────────────────

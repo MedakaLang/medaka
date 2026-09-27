@@ -561,7 +561,7 @@ repeatInbound server store request n acc =
     acc
   else
     let (_, responseBytes) = handleBytes server inboundContext store request
-    repeatInbound server store request (n - 1) (acc + arrayLength responseBytes)
+    repeatInbound server store request (n - 1) (acc + B.length responseBytes)
 
 {- | `retainedBytes` is not printed: this tree has no GC-forcing extern to
    read a steady-state figure cheaply (checked: no `gc`/`collect` entry in
@@ -581,7 +581,7 @@ runInboundAlloc n bodyBytes =
   let checksum = repeatInbound server store request n 0
   let a1 = allocBytes ()
   println
-    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine first}"
+    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine (toArray first)}"
 
 main : <IO, Env> Unit
 main = match args ()
