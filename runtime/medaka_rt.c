@@ -474,6 +474,42 @@ static long long mdk_box_u64(unsigned long long x) {
  * interpreter's `ppValue (VU64 …)` renders it. */
 void mdk_print_u64(long long w) { printf("%llu\n", mdk_u64_payload(w)); }
 
+/* I64 REPRESENTATION — the boxed 64-bit signed integer behind the `I64` builtin:
+ * U64's cell shape and payload, the 64 bits read in two's complement, under a
+ * header of its own (reserved type-id 6, `i64CellTag` in
+ * compiler/backend/llvm_emit.mdk, pinned to MDK_TAG(6, 0) below).  The distinct
+ * header is what lets the type-lost discriminators order, divide and print an
+ * I64 signed where a U64 is unsigned. */
+#define MDK_I64_TAG ((65536LL + 6LL) * 4294967296LL)
+
+static int mdk_is_i64(long long w) {
+  return ((w & 1) == 0) && ((const long long *)w)[0] == MDK_I64_TAG;
+}
+
+static long long mdk_i64_payload(long long w) {
+  return ((const long long *)w)[1];
+}
+
+static long long mdk_box_i64(long long x) {
+  long long *c = (long long *)mdk_alloc_atomic(16);
+  c[0] = MDK_I64_TAG;
+  c[1] = x;
+  return (long long)c;
+}
+
+/* `/` and `%` at I64: truncating, as C's, with `minBound / -1` wrapping to
+ * minBound and `minBound % -1` giving 0 (C's own quotient there is undefined). */
+static long long mdk_i64_div(long long a, long long b) {
+  return b == -1 ? (long long)(0ULL - (unsigned long long)a) : a / b;
+}
+
+static long long mdk_i64_mod(long long a, long long b) {
+  return b == -1 ? 0 : a % b;
+}
+
+/* The auto-print sink for an `I64` result: the signed decimal value. */
+void mdk_print_i64(long long w) { printf("%lld\n", mdk_i64_payload(w)); }
+
 /* Byte-block content discriminators, used by mdk_value_eq / mdk_value_cmp_raw /
  * mdk_append below; defined with the rest of the byte-block family, beside the
  * array leaf helpers it mirrors. */
@@ -591,6 +627,7 @@ long long mdk_value_eq(long long a, long long b) {
   /* A U64 compares by payload: two cells holding one value are distinct
    * addresses. */
   if (mdk_is_u64(a)) return mdk_u64_payload(a) == mdk_u64_payload(b) ? 3 : 1;
+  if (mdk_is_i64(a)) return mdk_i64_payload(a) == mdk_i64_payload(b) ? 3 : 1;
   int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
@@ -1515,12 +1552,15 @@ long long mdk_string_to_lower(long long s) {
 
 /* Reserved type-id 4 is the `ByteBlock` cell header, not an ADT: it is stamped by
  * mdk_byteblock_alloc, which runs long before this block, so it carries its own
- * spelling.  The two must be the same word, and the next runtime ADT takes id 5. */
+ * spelling.  The two must be the same word, and the next runtime ADT takes id 7. */
 _Static_assert(MDK_BYTEBLOCK_TAG == MDK_TAG(4, 0),
                "ByteBlock header must be reserved type-id 4, ordinal 0");
-/* Reserved type-id 5 is the `U64` cell header, likewise not an ADT. */
+/* Reserved type-id 5 is the `U64` cell header, likewise not an ADT, and 6 the
+ * `I64` cell header. */
 _Static_assert(MDK_U64_TAG == MDK_TAG(5, 0),
                "U64 header must be reserved type-id 5, ordinal 0");
+_Static_assert(MDK_I64_TAG == MDK_TAG(6, 0),
+               "I64 header must be reserved type-id 6, ordinal 0");
 
 /* mdk_append's list discriminator and its fail-closed arm (forward-declared with
  * the byte-block ones, up beside MDK_STR_TAG): a List word is either the Nil
@@ -1598,8 +1638,17 @@ static long long mdk_box_float(double d) {
  * operand's tag suffices.  Int untag = >>1 (arithmetic); re-tag = (n<<1)|1.
  * A boxed U64 (header MDK_U64_TAG) is the third shape: it wraps modulo 2^64 and
  * divides unsigned, as the typecheck-stamped inline U64 path does, and must be
- * tested before the Float fallback, which would read its payload as a double. */
+ * tested before the Float fallback, which would read its payload as a double.
+ * A boxed I64 (MDK_I64_TAG) is the fourth: the same bits for `+ - *`, boxed back
+ * under its own header, and a signed, truncating `/` and `%`. */
 static inline int mdk_is_int(long long w) { return (w & 1) != 0; }
+
+static int mdk_is_w64(long long w) { return mdk_is_u64(w) || mdk_is_i64(w); }
+
+/* a 64-bit result under the header of `like`, a U64 or I64 cell. */
+static long long mdk_box_w64_like(long long like, unsigned long long x) {
+  return mdk_is_i64(like) ? mdk_box_i64((long long)x) : mdk_box_u64(x);
+}
 
 /* Int's arithmetic here traps as the inline path does (mdk_int_overflow): on
    the tagged words, (2a+1) + 2b = 2(a+b)+1 overflows 64 bits exactly when a+b
@@ -1610,7 +1659,7 @@ long long mdk_num_add(long long l, long long r) {
     if (__builtin_add_overflow(l, r - 1, &s)) mdk_int_overflow(0, l >> 1, r >> 1);
     return s;
   }
-  if (mdk_is_u64(l)) return mdk_box_u64(mdk_u64_payload(l) + mdk_u64_payload(r));
+  if (mdk_is_w64(l)) return mdk_box_w64_like(l, mdk_u64_payload(l) + mdk_u64_payload(r));
   return mdk_box_float(((double *)l)[1] + ((double *)r)[1]);
 }
 long long mdk_num_sub(long long l, long long r) {
@@ -1619,7 +1668,7 @@ long long mdk_num_sub(long long l, long long r) {
     if (__builtin_sub_overflow(l, r - 1, &s)) mdk_int_overflow(1, l >> 1, r >> 1);
     return s;
   }
-  if (mdk_is_u64(l)) return mdk_box_u64(mdk_u64_payload(l) - mdk_u64_payload(r));
+  if (mdk_is_w64(l)) return mdk_box_w64_like(l, mdk_u64_payload(l) - mdk_u64_payload(r));
   return mdk_box_float(((double *)l)[1] - ((double *)r)[1]);
 }
 long long mdk_num_mul(long long l, long long r) {
@@ -1628,7 +1677,7 @@ long long mdk_num_mul(long long l, long long r) {
     if (__builtin_mul_overflow(l >> 1, r - 1, &p)) mdk_int_overflow(2, l >> 1, r >> 1);
     return p | 1;
   }
-  if (mdk_is_u64(l)) return mdk_box_u64(mdk_u64_payload(l) * mdk_u64_payload(r));
+  if (mdk_is_w64(l)) return mdk_box_w64_like(l, mdk_u64_payload(l) * mdk_u64_payload(r));
   return mdk_box_float(((double *)l)[1] * ((double *)r)[1]);
 }
 long long mdk_num_div(long long l, long long r) {
@@ -1643,6 +1692,10 @@ long long mdk_num_div(long long l, long long r) {
     if (mdk_u64_payload(r) == 0) mdk_div_zero();
     return mdk_box_u64(mdk_u64_payload(l) / mdk_u64_payload(r));
   }
+  if (mdk_is_i64(l)) {
+    if (mdk_i64_payload(r) == 0) mdk_div_zero();
+    return mdk_box_i64(mdk_i64_div(mdk_i64_payload(l), mdk_i64_payload(r)));
+  }
   return mdk_box_float(((double *)l)[1] / ((double *)r)[1]);
 }
 long long mdk_num_mod(long long l, long long r) {
@@ -1653,6 +1706,10 @@ long long mdk_num_mod(long long l, long long r) {
   if (mdk_is_u64(l)) {
     if (mdk_u64_payload(r) == 0) mdk_mod_zero();
     return mdk_box_u64(mdk_u64_payload(l) % mdk_u64_payload(r));
+  }
+  if (mdk_is_i64(l)) {
+    if (mdk_i64_payload(r) == 0) mdk_mod_zero();
+    return mdk_box_i64(mdk_i64_mod(mdk_i64_payload(l), mdk_i64_payload(r)));
   }
   double a = ((double *)l)[1], b = ((double *)r)[1];
   /* #345: fmod, not `a - b*trunc(a/b)`.  The trunc-cast overflows i64 when
@@ -1697,6 +1754,7 @@ double mdk_hypot(double a, double b) { return hypot(a, b); }
 void mdk_print_num(long long w) {
   if (mdk_is_int(w)) mdk_print_int(w >> 1);
   else if (mdk_is_u64(w)) mdk_print_u64(w);
+  else if (mdk_is_i64(w)) mdk_print_i64(w);
   else mdk_print_float(((double *)w)[1]);
 }
 
@@ -1782,6 +1840,11 @@ long long mdk_value_cmp_raw(long long a, long long b) {
   if (mdk_is_u64(a)) {
     unsigned long long ua = mdk_u64_payload(a), ub = mdk_u64_payload(b);
     return ua < ub ? -1 : ua > ub ? 1 : 0;
+  }
+  /* An I64 is the same payload read signed. */
+  if (mdk_is_i64(a)) {
+    long long sa = mdk_i64_payload(a), sb = mdk_i64_payload(b);
+    return sa < sb ? -1 : sa > sb ? 1 : 0;
   }
   int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
   if (a_flt) {
