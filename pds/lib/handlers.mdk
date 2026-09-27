@@ -118,6 +118,7 @@ import lib.repo.{
   repoApplyWrites,
   validateCollection,
 }
+import lib.repo.{blockBytesChecked}
 import lib.credential.{
   CredentialRecord,
   LoginOutcome(..),
@@ -885,7 +886,10 @@ applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
   let accountUsedBytes = storeBlobBytes store
   ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
-  next <- match storePutBlob (blobRefCid ref) mimeType bytes store
+  let stored = do
+    checked <- blockBytesChecked bytes
+    storePutBlob (blobRefCid ref) mimeType checked store
+  next <- match stored
     Err message =>
       Err (internalError "Admitted blob could not be stored: \{message}")
     Ok value => Ok value
@@ -1420,7 +1424,7 @@ applyGetBlob account store params = do
       let mimeType = match storeBlobMimeType cid store
         None => "application/octet-stream"
         Some declared => declared
-      Ok (blobOkResponse mimeType bytes)
+      Ok (blobOkResponse mimeType (toArray bytes))
 
 -- ── com.atproto.sync.listBlobs ──────────────────────────────────────────────
 
@@ -1892,22 +1896,20 @@ refreshGraceSeconds = 7200
    the token that replaced it — distinct values. They differ from each other in
    audience and lifetime, which is what stops either being presented as the
    other. -}
-mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
+mintSessionTokens : Account -> Bytes -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
   let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
-  -- Masked, as before: the old HMAC key path masked this secret too.
-  let key = fromArrayAssumeByteDomain secret
   (
     mintToken
-      key
+      secret
       (accountDid account)
       (accessAudience account)
       tokenId
       issued
       (issued + accessTokenSeconds),
     mintToken
-      key
+      secret
       (accountDid account)
       (refreshAudience account)
       tokenId
@@ -2040,7 +2042,7 @@ applyRefreshSession account context presented store =
       let (access, refresh) = mintSessionTokens account secret context
       let rotation =
         storeSessionRotate
-          presented
+          (fromArrayAssumeByteDomain presented)
           (sessionFingerprint access)
           (sessionFingerprint refresh)
           (sessionExpiry context)
@@ -2066,7 +2068,8 @@ applyDeleteSession : RequestContext ->
   Result Response (Store, Json)
 applyDeleteSession context presented store =
   let pruned = storeSessionsPrune context.nowSeconds store
-  match storeSessionClose context.nowSeconds presented pruned
+  let fingerprint = fromArrayAssumeByteDomain presented
+  match storeSessionClose context.nowSeconds fingerprint pruned
     None => Err (invalidToken "Token could not be verified")
     Some next => Ok (next, jObject [])
 

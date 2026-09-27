@@ -16,7 +16,7 @@ import http.{
   Response,
 }
 import string.{repeat, toUtf8}
-import lib.cid.{Cid, cidForRaw}
+import lib.cid.{cidForRaw}
 import lib.httpclient as HC
 import lib.httpclient.{HttpClientParseFailure(..)}
 import lib.resource_limits.{
@@ -48,15 +48,6 @@ import lib.xrpc.{
 }
 import test.fixture_support.{appendBytes, testNonce}
 import test.response_support.{expectedError, expectedTextResponse}
-
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForRaw` did.
-cidForRawDoor : Array Int -> Cid
-cidForRawDoor bytes =
-  cidForRaw
-    (optionOrPanic
-      "cidForRaw: every element must be a byte in 0..255"
-      (fromArray bytes))
 
 -- | `handleBytes` over a request fixture this driver still holds as an
 -- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
@@ -147,7 +138,11 @@ handler _ _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
   else
     panic "protocol_all_engines: raw media/body preservation mismatch"
 handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
-  match storePut (cidForRawDoor bytes) bytes store
+  let packed =
+    optionOrPanic
+      "cidForRaw: every element must be a byte in 0..255"
+      (fromArray bytes)
+  match storePut (cidForRaw packed) packed store
     Err message =>
       panic "protocol_all_engines: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
@@ -175,17 +170,17 @@ testContext =
 server : Server
 server = makeServer account registry handler
 
-seedBytes : Array Int
-seedBytes = toUtf8 "seed"
+seedBytes : Bytes
+seedBytes = encodeUtf8 "seed"
 
 seededStore : Store
-seededStore = match storePut (cidForRawDoor seedBytes) seedBytes storeEmpty
+seededStore = match storePut (cidForRaw seedBytes) seedBytes storeEmpty
   Ok store => store
   Err message =>
     panic "protocol_all_engines: seed store setup failed: \{message}"
 
 seedPreserved : Store -> Bool
-seedPreserved store = storeGet (cidForRawDoor seedBytes) store == Some seedBytes
+seedPreserved store = storeGet (cidForRaw seedBytes) store == Some seedBytes
 
 fixedQuery : Array Int
 fixedQuery =
@@ -276,11 +271,11 @@ checkFixedQuery =
 
 checkChunkedUpdate : <IO> Unit
 checkChunkedUpdate =
-  let expectedBody = toUtf8 "abc"
+  let expectedBody = encodeUtf8 "abc"
   let (next, response) = handleFixture server testContext seededStore chunkedPut
   if storeSize next == 2
     && seedPreserved next
-    && storeGet (cidForRawDoor expectedBody) next == Some expectedBody
+    && storeGet (cidForRaw expectedBody) next == Some expectedBody
     && response == expectedTextResponse 201 "Created" "stored" then
     println "CELL chunked-update PASS status=201 state=1->2 body=abc"
   else

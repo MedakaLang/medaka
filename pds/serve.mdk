@@ -99,6 +99,7 @@ import lib.jwt.{serverSecretBytes}
 import lib.ratelimit.{TrustedProxy(..)}
 import lib.handlers.{makeServerLinks, pdsServer}
 import lib.proxy.{AppviewRoute, makeAppviewRoute, makeAppviewTable}
+import lib.repo.{blockBytesChecked}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -760,9 +761,14 @@ admitBlobRows [] store = Ok store
 admitBlobRows ((cid, mimeType, bytes) :: rest) store =
   if not (validMimeShape mimeType) then
     admitBlobRows rest store
-  else match storePutBlob cid mimeType bytes store
-    Err message => Err "persisted blob \{cidToString cid} rejected: \{message}"
-    Ok next => admitBlobRows rest next
+  else
+    let stored = do
+      checked <- blockBytesChecked bytes
+      storePutBlob cid mimeType checked store
+    match stored
+      Err message =>
+        Err "persisted blob \{cidToString cid} rejected: \{message}"
+      Ok next => admitBlobRows rest next
 
 loadRepo : String -> String -> SecretKey -> <FileRead> Result String Repo
 loadRepo dir did secret = do
@@ -897,7 +903,8 @@ configure parsed = do
   sessionSecret <- establishSessionSecret dir suppliedSecret
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
-  withSecret <- storeWithServerSecret sessionSecret withBlobs
+  let secretBytes = fromArrayAssumeByteDomain sessionSecret
+  withSecret <- storeWithServerSecret secretBytes withBlobs
   let withCredential = storeWithCredential credential withSecret
   prefs <- persistLoadPreferences dir
   -- Last, after the final step that can still refuse: the log is now

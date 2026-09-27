@@ -1329,22 +1329,24 @@ if secret_comparisons_ok "$WORK/credential_eq_mutant.mdk" "$JWT" "$STORE" "$WORK
 fi
 pass 'credential early-exit == mutation is rejected by the secret-comparison census'
 
+# The store mutants below anchor on hasAccess's comparison and on
+# liveRefresh's. Re-pinned 2026-09-27: the session fingerprints are `Bytes`, so
+# neither comparison carries a byte-domain door any more, and the formatter
+# keeps each on one line: hasAccess's whole disjunction on its body line,
+# liveRefresh's `&& ctEq wanted refresh` on its match arm.
 awk '
   /^hasAccess :/ {
-    print "sameBytes : Array Int -> Array Int -> Int -> Bool"
+    print "sameBytes : Bytes -> Bytes -> Int -> Bool"
     print "sameBytes a b i ="
-    print "  if i >= arrayLength a then True"
+    print "  if i >= B.length a then True"
     print "  else if a[i] /= b[i] then False"
     print "  else sameBytes a b (i + 1)"
     print ""
   }
-  /^  now < expires$/ {
-    print "  now < expires && (arrayLength wanted == arrayLength access && sameBytes wanted access 0) || hasAccess now wanted rest"
-    skip = 1
+  /^  now < expires && ctEq wanted access \|\| hasAccess now wanted rest$/ {
+    print "  now < expires && (B.length wanted == B.length access && sameBytes wanted access 0) || hasAccess now wanted rest"
     next
   }
-  skip && /^    \|\| hasAccess now wanted rest$/ { skip = 0; next }
-  skip { next }
   { print }
 ' "$STORE" > "$WORK/store_loop_mutant.mdk"
 if cmp -s "$STORE" "$WORK/store_loop_mutant.mdk"; then
@@ -1492,10 +1494,9 @@ awk '
     print "import crypto.hmac as H"
     next
   }
-  /^          && ctEq$/ && !aliased {
-    print "          && H.ctEq"
+  / && ctEq wanted refresh\)$/ && !aliased {
+    sub(/ctEq wanted refresh\)$/, "H.ctEq wanted refresh)")
     aliased = 1
-    next
   }
   { print }
 ' "$STORE" > "$WORK/store_alias_mutant.mdk"

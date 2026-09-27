@@ -46,7 +46,8 @@
    corpus it claims to copy — which is why this driver takes that corpus as its
    one argument. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromU8Array, toArray}
+import u8 as U8
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
 import json.{Json(..), jObject, get, parse}
@@ -432,13 +433,14 @@ configuredAudiences =
    token, and the two halves of a session are distinct fingerprints, so giving
    this one the access token's value would say something untrue about the store
    rather than nothing. -}
-proxySessionSecret : Array Int
-proxySessionSecret = arrayMakeWith serverSecretBytes (i => (i * 13 + 7) % 256)
+proxySessionSecret : Bytes
+proxySessionSecret =
+  fromU8Array (arrayMakeWith serverSecretBytes (i => U8.truncate (i * 13 + 7)))
 
 proxyAccessToken : String
 proxyAccessToken =
   mintToken
-    (fromArrayAssumeByteDomain proxySessionSecret)
+    proxySessionSecret
     accountDidText
     (accessAudience mustAccount)
     "read-routes-proxy-cells"
