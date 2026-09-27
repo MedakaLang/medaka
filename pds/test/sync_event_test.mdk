@@ -24,10 +24,9 @@
    The last is the genesis `#commit`'s own `blocks` CAR, which has to carry
    the empty MST root node as well as the commit. -}
 
-import array.{sliceClamped}
-import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array, sliceClamped}
 import list.{lookup, range, sort}
-import string.{toUtf8}
 import test.{expectEqual}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidForRaw, cidToString}
@@ -39,11 +38,8 @@ import lib.sync_event.{
   SyncRepoOp(..),
   syncAccountFrame,
   syncCommitBody,
-  syncCommitCar,
-  syncCommitFrame,
   syncCommitEventFor,
   syncIdentityFrame,
-  syncSyncBody,
   syncSyncFrame,
 }
 import lib.tid.{Tid, tidEncode}
@@ -65,7 +61,9 @@ sampleRev = mustTid (tidEncode 1 1)
 -- pass by accident.
 opAt : Int -> SyncRepoOp
 opAt i =
-  SyncOpCreate (toUtf8 ("app.bsky.feed.post/rec-" ++ intToString i)) recordCid
+  SyncOpCreate
+    (encodeUtf8 ("app.bsky.feed.post/rec-" ++ intToString i))
+    recordCid
 
 -- A commit carrying `count` creates. `blocksCar` is empty because nothing
 -- here grades the CAR: the cap under test is on `ops` alone.
@@ -78,7 +76,7 @@ eventWithOps count = SyncCommitEvent {
   rev = sampleRev,
   since = None,
   prevData = None,
-  blocksCar = [||],
+  blocksCar = fromU8Array [||],
   ops = map opAt (range 0 count),
 }
 
@@ -124,8 +122,8 @@ sampleDid = "did:plc:medakaexamplerepo"
 sampleHandle : String
 sampleHandle = "gate.medaka.example.invalid"
 
-commitBytes : Array Int
-commitBytes = toUtf8 "commit"
+commitBytes : Bytes
+commitBytes = encodeUtf8 "commit"
 
 -- The position in the stream every frame below is stamped with. The builders
 -- take it rather than invent it, so these are the caller's values and the
@@ -139,21 +137,20 @@ sampleTime = "2026-09-13T18:34:14.000Z"
 {- | A frame's two objects. `dagCborDecode` decodes exactly one canonical value
    and refuses trailing bytes, so the boundary between them is the shortest
    prefix that decodes and leaves a decodable remainder. -}
-frameParts : Result String (Array Int) -> (DagCbor, DagCbor)
+frameParts : Result String Bytes -> (DagCbor, DagCbor)
 frameParts (Err message) = panic "sync_event: frame refused: \{message}"
 frameParts (Ok bytes) = partsAt bytes 1
 
-decodePart : Array Int -> Int -> Int -> Result String DagCbor
-decodePart bytes lo hi =
-  dagCborDecode (fromArrayAssumeByteDomain (sliceClamped lo hi bytes))
+decodePart : Bytes -> Int -> Int -> Result String DagCbor
+decodePart bytes lo hi = dagCborDecode (sliceClamped lo hi bytes)
 
-partsAt : Array Int -> Int -> (DagCbor, DagCbor)
+partsAt : Bytes -> Int -> (DagCbor, DagCbor)
 partsAt bytes cut =
-  if cut > arrayLength bytes then
+  if cut > B.length bytes then
     panic "sync_event: frame carries no decodable header object"
   else match decodePart bytes 0 cut
     Err _ => partsAt bytes (cut + 1)
-    Ok header => match decodePart bytes cut (arrayLength bytes)
+    Ok header => match decodePart bytes cut (B.length bytes)
       Err _ => partsAt bytes (cut + 1)
       Ok body => (header, body)
 
@@ -227,7 +224,8 @@ mustEvent (Err message) = panic "sync_event: event refused: \{message}"
 -- A repository at its first commit: created, never written to.
 genesisRepo : Repo
 genesisRepo =
-  mustRepo (repoInitFromKeyBytes sampleDid (arrayMake 32 1) sampleRev)
+  mustRepo
+    (repoInitFromKeyBytes sampleDid (fromU8Array (arrayMake 32 1)) sampleRev)
 
 {- | The genesis event. `None` for the prior repository is what
    `pds/shell/server.mdk` hands `syncCommitEventFor` when it announces a new
@@ -248,36 +246,7 @@ genesisEvent =
    varied run to run would still be a defect. -}
 test "a genesis commit's CAR carries the empty MST root beside the commit" =
   let commit = cidToString (repoCommitCid (repoLatestCommit genesisRepo))
-  expectEqual (carCidsOf (fromArrayAssumeByteDomain genesisEvent.blocksCar)) (
+  expectEqual (carCidsOf genesisEvent.blocksCar) (
     [commit],
     sort [commit, cidToString (mstRootCid mstEmpty)],
   )
-
--- # Elements outside the byte range
-
--- `commitBytes` with 256 added to its first element. It masks back to
--- `commitBytes`, whose raw CID is `commitCid`, so an encoder that masked would
--- accept it.
-outOfRangeCommit : Array Int
-outOfRangeCommit = arrayMakeWith (arrayLength commitBytes) (i =>
-  if i == 0 then commitBytes[i] + 256 else commitBytes[i])
-
-carRangeError : String
-carRangeError = "car: blockstore: block element outside byte range 0..255"
-
-test "a #commit CAR refuses a block element outside the byte range" =
-  expectEqual
-    (Err carRangeError)
-    (syncCommitCar commitCid [(commitCid, outOfRangeCommit)])
-
-test "a #sync body refuses a commit element outside the byte range" =
-  expectEqual
-    (Err carRangeError)
-    (map
-      (_ => ())
-      (syncSyncBody sampleDid sampleRev commitCid outOfRangeCommit))
-
-test "a #commit frame refuses a CAR element outside the byte range" =
-  expectEqual
-    (Err "dagcbor: byte string element outside byte range 0..255")
-    (syncCommitFrame { eventWithOps 0 | blocksCar = [|256|] })

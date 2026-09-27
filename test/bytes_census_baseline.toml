@@ -34,7 +34,7 @@ count = 0
 
 [[entry]]
 file = "pds/lib/sign.mdk"
-count = 3
+count = 0
 
 [[entry]]
 file = "pds/lib/pbkdf2.mdk"
@@ -62,7 +62,7 @@ count = 0
 
 [[entry]]
 file = "pds/shell/server.mdk"
-count = 5
+count = 4
 
 [[entry]]
 file = "pds/lib/server_core.mdk"
@@ -134,4 +134,12 @@ count = 0
 
 [[entry]]
 file = "pds/lib/mst.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/repo.mdk"
+count = 13
+
+[[entry]]
+file = "pds/lib/sync_event.mdk"
 count = 0

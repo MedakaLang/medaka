@@ -225,7 +225,9 @@ refuseFuture budget conn wanted newest =
       "cursor \{intToString wanted} is ahead of this repository's newest event \{intToString newest}"
   match framed
     Err message => deferPure (Err message)
-    Ok payload => sendPayloadThenClose budget conn payload
+    -- Door: frames are `Bytes` and this module's payloads are `Array Int`;
+    -- `toArray` is total.
+    Ok payload => sendPayloadThenClose budget conn (toArray payload)
 
 announceOutdated : String ->
   Duration ->
@@ -241,8 +243,9 @@ announceOutdated dir budget conn wanted pending replay =
       "cursor \{intToString wanted} is older than this repository's retained event window"
   match framed
     Err message => deferPure (Err message)
+    -- Door: the same total `toArray` crossing.
     Ok payload => defer
-      sent <- sendPayload budget conn payload
+      sent <- sendPayload budget conn (toArray payload)
       match sent
         Err message => deferPure (Err message)
         Ok () => replayThenTail dir budget conn wanted pending replay

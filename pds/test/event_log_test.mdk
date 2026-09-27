@@ -26,11 +26,10 @@
      whole-set rewrite would fail. -}
 
 import array.{drop}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
-import string.{toUtf8}
 import test.{Expectation(..), expectEach, expectEqual, expectFalse, expectTrue}
 import test_process.{scratchDir}
 import lib.cid.{cidToString}
@@ -637,7 +636,10 @@ genesis : Repo
 genesis =
   resultOrPanic
     "event_log_test: repo init failed"
-    (repoInitFromKeyBytes testDid (arrayMake 32 1) (mustTid 1000000))
+    (repoInitFromKeyBytes
+      testDid
+      (fromU8Array (arrayMake 32 1))
+      (mustTid 1000000))
 
 written : Repo
 written =
@@ -645,7 +647,7 @@ written =
     ("$type", DcString "app.bsky.feed.post"),
     ("text", DcString "hello"),
   ]
-  let path = toUtf8 "app.bsky.feed.post/self"
+  let path = encodeUtf8 "app.bsky.feed.post/self"
   match repoCreate path record (mustTid 2000000) genesis
     Ok mutation => repoMutationState mutation
     Err message => panic "event_log_test: repo write failed: \{message}"
@@ -661,7 +663,7 @@ liveFrameHex =
     Err message => panic "event_log_test: event assembly failed: \{message}"
     Ok event => match syncCommitFrame event
       Err message => panic "event_log_test: frame encoding failed: \{message}"
-      Ok bytes => encode (fromArrayAssumeByteDomain bytes)
+      Ok bytes => encode bytes
 
 writtenHead : String
 writtenHead = cidToString (repoCommitCid (repoLatestCommit written))

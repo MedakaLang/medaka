@@ -50,7 +50,8 @@
    three stores list has a stated disposition for an entry no write path here
    can produce. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -69,6 +70,7 @@ import lib.event_log_record.{
 import lib.repo.{
   Repo,
   blockBytesChecked,
+  blockRowsChecked,
   repoCommitCid,
   repoCreate,
   repoExportBlocks,
@@ -161,7 +163,7 @@ write path text rev repo =
   mustRepo
     (map
       repoMutationState
-      (repoCreate (toUtf8 path) (post text) (mustTid rev) repo))
+      (repoCreate (encodeUtf8 path) (post text) (mustTid rev) repo))
 
 {- | The generation before the one `save` persists: two records at fixed
    revisions. It exists so the crash routes have a real EARLIER head to rewind
@@ -174,7 +176,7 @@ olderRepo =
     mustRepo
       (repoInitFromKeyBytes
         accountDid
-        (toArray (mustHex secretHex))
+        (mustHex secretHex)
         (mustTid "3lba2s5ykxs2a"))
   let one =
     write "app.bsky.feed.post/3lba2s5ykxs2b" "first" "3lba2s5ykxs2b" base
@@ -186,7 +188,7 @@ fixtureRepo : Repo
 fixtureRepo =
   write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" olderRepo
 
-mustCar : Repo -> Array Int
+mustCar : Repo -> Bytes
 mustCar repo =
   resultOrPanic "store_persistence: CAR export failed" (repoExportCar repo)
 
@@ -199,7 +201,7 @@ summary label repo =
   let records = match repoList repo
     Ok rows => length rows
     Err message => panic "store_persistence: listing failed: \{message}"
-  let roots = match carDecode (fromArrayAssumeByteDomain car)
+  let roots = match carDecode car
     Ok _ => "decodes"
     Err message =>
       panic "store_persistence: exported CAR does not decode: \{message}"
@@ -209,12 +211,17 @@ summary label repo =
   let () = println "\{label} records \{intToString records}"
   let () =
     println
-      "\{label} car \{intToString (arrayLength car)} \{encode (sha256 (optionOrPanic "sha256: every element must be a byte in 0..255" (fromArray car)))} \{roots}"
+      "\{label} car \{intToString (B.length car)} \{encode (sha256 car)} \{roots}"
   ()
 
+-- `persistSave` writes `Array Int` rows; `toArray` is total.
 blocksOf : Repo -> List (Cid, Array Int)
 blocksOf repo =
-  resultOrPanic "store_persistence: block export failed" (repoExportBlocks repo)
+  map
+    ((cid, bytes) => (cid, toArray bytes))
+    (resultOrPanic
+      "store_persistence: block export failed"
+      (repoExportBlocks repo))
 
 runSave : String -> <IO, FileRead, FileWrite> Unit
 runSave dir =
@@ -240,7 +247,10 @@ runCrashSaveOld dir =
 
 reload : String -> <FileRead> Result String Repo
 reload dir = do
-  (head, blocks) <- persistLoad dir
+  (head, rows) <- persistLoad dir
+  blocks <- mapErr
+    (message => "repo: invalid persisted blocks: \{message}")
+    (blockRowsChecked rows)
   repoFromBlocks accountDid mustSecret head blocks
 
 runLoad : String -> <IO, FileRead> Unit

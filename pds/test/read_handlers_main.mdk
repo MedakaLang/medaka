@@ -33,7 +33,8 @@
    OWN `did:web` carries the repository's signing key, so that arm needs a
    repository and is graded here, against the corpus's key. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -95,18 +96,16 @@ accountHostText = "pds.example"
 collectionText : String
 collectionText = "app.bsky.feed.post"
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "read_handlers: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "read_handlers: malformed hex" (decode text)
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "read_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
-mustRecordJson text =
-  match dagCborDecode (fromArrayAssumeByteDomain (mustHex text))
-    Ok value => dagCborToLexJson value
-    Err message => panic "read_handlers: malformed record: \{message}"
+mustRecordJson text = match dagCborDecode (mustHex text)
+  Ok value => dagCborToLexJson value
+  Err message => panic "read_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
 mustAccount did =
@@ -225,7 +224,7 @@ splitPath text = match split "/" text
 runStep : String -> Server -> Store -> String -> <IO> Store
 runStep did server store opLine = match split "\t" opLine
   ["OP", kind, pathHex, recordHex, _, _] =>
-    let (collection, rkey) = splitPath (fromUtf8 (mustHex pathHex))
+    let (collection, rkey) = splitPath (fromUtf8 (toArray (mustHex pathHex)))
     let (nsid, body) = match kind
       "CREATE" => (
         "com.atproto.repo.createRecord",
@@ -300,13 +299,11 @@ carCell server store did corpusHex =
     Err message => panic "read_handlers: repoExportCar failed: \{message}"
   let corpus = mustHex corpusHex
   let servedHex = encode (fromArrayAssumeByteDomain served)
-  let ok =
-    servedHex == encode (fromArrayAssumeByteDomain exported)
-      && servedHex == encode (fromArrayAssumeByteDomain corpus)
+  let ok = servedHex == encode exported && servedHex == encode corpus
   check
     "sync-getRepo-car-bytes"
     ok
-    "served=\{intToString (arrayLength served)}B exported=\{intToString (arrayLength exported)}B corpus=\{intToString (arrayLength corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
+    "served=\{intToString (arrayLength served)}B exported=\{intToString (B.length exported)}B corpus=\{intToString (B.length corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
 
 firstHex : String -> String
 firstHex text = stringSlice 0 32 text

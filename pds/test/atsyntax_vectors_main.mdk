@@ -7,8 +7,10 @@
    exported for anything but this grading). Ends with `TOTAL: PASS` only when
    every graded corpus (all 7, plus both repo.mdk cross-checks) is 100%. -}
 
+import bytes as B
+import bytes.{encodeUtf8}
 import io.{readLines}
-import string.{startsWith, toUtf8}
+import string.{startsWith}
 import lib.atsyntax.{
   validateAtIdentifier,
   validateAtUri,
@@ -27,12 +29,12 @@ tidValidate : String -> Result String Unit
 tidValidate text = map (_ => ()) (tidParse text)
 
 repoRkeyValidate : String -> Result String Unit
-repoRkeyValidate key = validateRkey (toUtf8 key) 0
+repoRkeyValidate key = validateRkey (encodeUtf8 key) 0
 
 repoCollectionValidate : String -> Result String Unit
 repoCollectionValidate collection =
-  let bytes = toUtf8 collection
-  validateCollection bytes (arrayLength bytes)
+  let bytes = encodeUtf8 collection
+  validateCollection bytes (B.length bytes)
 
 isSkippable : String -> Bool
 isSkippable line = line == "" || startsWith "#" line

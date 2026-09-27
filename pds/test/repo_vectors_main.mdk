@@ -1,10 +1,12 @@
 {- | P1-D official repository transcript and named rejection driver. -}
 
 import array as A
-import bytes.{fromArray, fromArrayAssumeByteDomain, fromU8Array, toArray}
+import bytes.{
+  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, toArray
+}
 import hex.{decode}
 import io.{readLines}
-import string.{contains, join, repeat, split, toInt, toUtf8}
+import string.{contains, join, repeat, split, toInt}
 import lib.blockstore.{BlockStore, blockStoreEmpty, blockStorePut}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
@@ -49,18 +51,8 @@ import lib.tid.{
   tidToString,
 }
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "repo_vectors: malformed hex" (decode text))
-
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
-cidForDagCborDoor : Array Int -> Cid
-cidForDagCborDoor bytes =
-  cidForDagCbor
-    (optionOrPanic
-      "cidForDagCbor: every element must be a byte in 0..255"
-      (fromArray bytes))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "repo_vectors: malformed hex" (decode text)
 
 mustCid : String -> Cid
 mustCid text = resultOrPanic "repo_vectors: malformed CID" (cidFromString text)
@@ -80,14 +72,11 @@ mustSecret text =
 
 mustRecord : String -> DagCbor
 mustRecord text =
-  resultOrPanic
-    "repo_vectors: malformed record"
-    (dagCborDecode (fromArrayAssumeByteDomain (mustHex text)))
+  resultOrPanic "repo_vectors: malformed record" (dagCborDecode (mustHex text))
 
-mustEncode : DagCbor -> Array Int
+mustEncode : DagCbor -> Bytes
 mustEncode value =
-  toArray
-    (resultOrPanic "repo_vectors: test encoding failed" (dagCborEncode value))
+  resultOrPanic "repo_vectors: test encoding failed" (dagCborEncode value)
 
 mustRepo : Result String Repo -> Repo
 mustRepo (Ok repo) = repo
@@ -137,8 +126,7 @@ gradeCommit _ line _ commit = match split "\t" line
         && cidEqual commitCid (repoCommitCid commit)
         && repoCommitUnsignedBytes commit == mustHex unsignedHex
         && repoCommitSignedBytes commit == mustHex signedHex
-        && toArray (signatureCompact (repoCommitSignature commit))
-          == mustHex signatureHex
+        && signatureCompact (repoCommitSignature commit) == mustHex signatureHex
     if ok then
       let () =
         println
@@ -172,17 +160,15 @@ applyOperation line repo = match split "\t" line
 gradeOperation : String -> Repo -> <IO> Int
 gradeOperation line repo = gradeOperationParts (split "\t" line) repo
 
-observedRecord : Array Int -> Repo -> Option (Cid, Array Int)
+observedRecord : Bytes -> Repo -> Option (Cid, Bytes)
 observedRecord path repo = match repoLookup path repo
   Ok (Some value) => match dagCborEncode value
-    Ok bytes =>
-      let arr = toArray bytes
-      Some (cidForDagCborDoor arr, arr)
+    Ok bytes => Some (cidForDagCbor bytes, bytes)
     Err _ => None
   Ok None => None
   Err _ => None
 
-recordMatches : Option Cid -> Option (Cid, Array Int) -> String -> Bool
+recordMatches : Option Cid -> Option (Cid, Bytes) -> String -> Bool
 recordMatches None None _ = True
 recordMatches (Some expected) (Some (actual, bytes)) recordHex =
   cidEqual expected actual && bytes == mustHex recordHex
@@ -227,14 +213,16 @@ acceptLaterFailure label _ (Ok _) =
   let () = println "CONTROL \{label} FAIL missing-later-rejection"
   0
 
-uppercaseFirst : Array Int -> Array Int
+-- `changed` holds `path`'s bytes with at most one lowered by 32, so every
+-- element is still a byte.
+uppercaseFirst : Bytes -> Bytes
 uppercaseFirst path =
-  let changed = arrayCopy path
+  let changed = toArray path
   let byte = changed[0]
   let () = if byte >= 97 && byte <= 122 then A.setInPlace 0 (byte - 32) changed
-  changed
+  fromArrayAssumeByteDomain changed
 
-repoIdentityControl : Repo -> Array Int -> DagCbor -> <IO> Int
+repoIdentityControl : Repo -> Bytes -> DagCbor -> <IO> Int
 repoIdentityControl repo lowerPath record =
   let mixedPath = uppercaseFirst lowerPath
   let next = futureTid (repoLatestCommit repo) 1
@@ -273,11 +261,11 @@ setField name value ((key, old) :: rest) =
   else
     (key, old) :: setField name value rest
 
-mustPut : Cid -> Array Int -> BlockStore -> BlockStore
+mustPut : Cid -> Bytes -> BlockStore -> BlockStore
 mustPut cid bytes store =
   resultOrPanic
     "repo_vectors: test block insertion failed"
-    (blockStorePut cid (fromArrayAssumeByteDomain bytes) store)
+    (blockStorePut cid bytes store)
 
 testCommitFields : String -> Cid -> List (String, DagCbor)
 testCommitFields did dataCid = [
@@ -286,19 +274,18 @@ testCommitFields did dataCid = [
   (
     "sig",
     DcBytes
-      (fromArrayAssumeByteDomain
-        (mustHex
-          "aaa6e79c2c161c48050d7439ae42a57637ccc38395614cfcd1a32d2836a5f6f32cb486409b88623d294c92f4557e1b92332957d4efd8cba967f79f4231f85aaa")),
+      (mustHex
+        "aaa6e79c2c161c48050d7439ae42a57637ccc38395614cfcd1a32d2836a5f6f32cb486409b88623d294c92f4557e1b92332957d4efd8cba967f79f4231f85aaa"),
   ),
   ("data", DcLink dataCid),
   ("prev", DcNull),
   ("version", DcInt 3),
 ]
 
-malformedBoundExport : Result String (List (Cid, Array Int), Array Int)
+malformedBoundExport : Result String (List (Cid, Bytes), Bytes)
 malformedBoundExport =
   let recordBytes = mustEncode (DcMap [])
-  let recordCid = cidForDagCborDoor recordBytes
+  let recordCid = cidForDagCbor recordBytes
   let rootBytes =
     mustEncode
       (DcMap [
@@ -315,9 +302,9 @@ malformedBoundExport =
           ],
         ),
       ])
-  let rootCid = cidForDagCborDoor rootBytes
+  let rootCid = cidForDagCbor rootBytes
   let commitBytes = mustEncode (DcMap (testCommitFields "did:x1:a" rootCid))
-  let commitCid = cidForDagCborDoor commitBytes
+  let commitCid = cidForDagCbor commitBytes
   let store =
     mustPut
       commitCid
@@ -334,10 +321,9 @@ removeField name ((key, value) :: rest) =
   if key == name then rest else (key, value) :: removeField name rest
 
 commitFields : RepoCommit -> List (String, DagCbor)
-commitFields commit =
-  match dagCborDecode (fromArrayAssumeByteDomain (repoCommitSignedBytes commit))
-    Ok (DcMap fields) => fields
-    _ => panic "repo_vectors: latest commit did not decode"
+commitFields commit = match dagCborDecode (repoCommitSignedBytes commit)
+  Ok (DcMap fields) => fields
+  _ => panic "repo_vectors: latest commit did not decode"
 
 futureTid : RepoCommit -> Int -> Tid
 futureTid commit offset =
@@ -346,7 +332,7 @@ futureTid commit offset =
     Ok value => value
     Err message => panic "repo_vectors: future TID failed: \{message}"
 
-runHostile : String -> SecretKey -> Repo -> Array Int -> DagCbor -> <IO> Int
+runHostile : String -> SecretKey -> Repo -> Bytes -> DagCbor -> <IO> Int
 runHostile did secret repo path presentRecord =
   let commit = repoLatestCommit repo
   let publicKey = repoPublicKey repo
@@ -364,14 +350,15 @@ runHostile did secret repo path presentRecord =
           "sig"
           (DcBytes (fromArrayAssumeByteDomain (arrayMake 64 0)))
           fields))
+  -- Flipping the low bit of a byte leaves a byte.
   let tampered =
-    let bytes = arrayCopy signed
+    let bytes = toArray signed
     let () =
       A.setInPlace
         (arrayLength bytes - 1)
         (bitXor bytes[arrayLength bytes - 1] 1)
         bytes
-    bytes
+    fromArrayAssumeByteDomain bytes
   sum [
     rejectContains "tid-alphabet" "alphabet" (tidParse "3ke6kg3wk2220"),
     rejectContains "tid-length" "13" (tidParse "3ke6kg3wk222"),
@@ -400,7 +387,7 @@ runHostile did secret repo path presentRecord =
     rejectContains
       "invalid-path"
       "non-empty"
-      (repoCreate [||] presentRecord next repo),
+      (repoCreate (fromU8Array [||]) presentRecord next repo),
     rejectContains
       "invalid-record"
       "record must"
@@ -408,7 +395,7 @@ runHostile did secret repo path presentRecord =
     rejectContains
       "bad-key"
       "bad signing key"
-      (repoInitFromKeyBytes did (arrayMake 32 0) next),
+      (repoInitFromKeyBytes did (fromU8Array (arrayMake 32 0)) next),
     rejectContains
       "bad-sign"
       "compact signature"
@@ -573,7 +560,7 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
   let () =
     println
       "representative-external: \{intToString external}/6 official-atproto initialization/create/CAR checks"
-  let pathPrefix = toUtf8 "app.bsky.feed.post/"
+  let pathPrefix = encodeUtf8 "app.bsky.feed.post/"
   let oldCommit = repoLatestCommit initial
   let newCommit = repoLatestCommit changed
   let mismatchData = cidForDagCbor (fromU8Array [|1|])
@@ -621,43 +608,43 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     rejectContains
       "nsid-too-short"
       "collection"
-      (repoLookup (toUtf8 "com.example/r") initial),
+      (repoLookup (encodeUtf8 "com.example/r") initial),
     rejectContains
       "nsid-uppercase-authority"
       "normalized lowercase"
-      (repoLookup (toUtf8 "Com.example.post/r") initial),
+      (repoLookup (encodeUtf8 "Com.example.post/r") initial),
     rejectContains
       "nsid-empty-segment"
       "segment length"
-      (repoLookup (toUtf8 "com..post/r") initial),
+      (repoLookup (encodeUtf8 "com..post/r") initial),
     rejectContains
       "nsid-leading-hyphen"
       "hyphen"
-      (repoLookup (toUtf8 "com.-example.post/r") initial),
+      (repoLookup (encodeUtf8 "com.-example.post/r") initial),
     rejectContains
       "nsid-numeric-tld"
       "top-level"
-      (repoLookup (toUtf8 "1com.example.post/r") initial),
+      (repoLookup (encodeUtf8 "1com.example.post/r") initial),
     rejectContains
       "nsid-digit-name"
       "name start"
-      (repoLookup (toUtf8 "com.example.3/r") initial),
+      (repoLookup (encodeUtf8 "com.example.3/r") initial),
     rejectContains
       "nsid-hyphen-name"
       "name characters"
-      (repoLookup (toUtf8 "com.example.foo-bar/r") initial),
+      (repoLookup (encodeUtf8 "com.example.foo-bar/r") initial),
     rejectContains
       "rkey-question"
       "record key"
-      (repoLookup (pathPrefix ++ toUtf8 "?") initial),
+      (repoLookup (pathPrefix ++ encodeUtf8 "?") initial),
     rejectContains
       "rkey-dot"
       "must not"
-      (repoLookup (pathPrefix ++ toUtf8 ".") initial),
+      (repoLookup (pathPrefix ++ encodeUtf8 ".") initial),
     rejectContains
       "rkey-dotdot"
       "must not"
-      (repoLookup (pathPrefix ++ toUtf8 "..") initial),
+      (repoLookup (pathPrefix ++ encodeUtf8 "..") initial),
     rejectContains
       "rkey-empty"
       "collection/rkey"
@@ -665,23 +652,23 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     rejectContains
       "path-extra-segment"
       "exactly one slash"
-      (repoLookup (pathPrefix ++ toUtf8 "a/b") initial),
+      (repoLookup (pathPrefix ++ encodeUtf8 "a/b") initial),
     rejectContains
       "path-empty-collection"
       "collection/rkey"
-      (repoLookup (toUtf8 "/a") initial),
+      (repoLookup (encodeUtf8 "/a") initial),
     rejectContains
       "rkey-too-long"
       "1..512"
-      (repoLookup (pathPrefix ++ arrayMake 513 97) initial),
+      (repoLookup (pathPrefix ++ fromU8Array (arrayMake 513 97)) initial),
     rejectContains
       "rkey-control"
       "record key"
-      (repoLookup (pathPrefix ++ [|10|]) initial),
+      (repoLookup (pathPrefix ++ fromU8Array [|10|]) initial),
     rejectContains
       "rkey-non-ascii"
       "record key"
-      (repoLookup (pathPrefix ++ [|0xc3, 0xa9|]) initial),
+      (repoLookup (pathPrefix ++ fromU8Array [|0xc3, 0xa9|]) initial),
     rejectContains
       "commit-data-root"
       "commit data mismatch"
@@ -716,16 +703,16 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
         mismatchData
         (repoCommitTid oldCommit)
         (repoCommitSignedBytes oldCommit)),
-    acceptResult "rkey-min" (repoLookup (pathPrefix ++ toUtf8 "a") initial),
+    acceptResult "rkey-min" (repoLookup (pathPrefix ++ encodeUtf8 "a") initial),
     acceptResult
       "rkey-max"
-      (repoLookup (pathPrefix ++ arrayMake 512 97) initial),
+      (repoLookup (pathPrefix ++ fromU8Array (arrayMake 512 97)) initial),
     acceptResult
       "rkey-punctuation"
-      (repoLookup (pathPrefix ++ toUtf8 "~1.2-3_") initial),
+      (repoLookup (pathPrefix ++ encodeUtf8 "~1.2-3_") initial),
     acceptResult
       "rkey-colon"
-      (repoLookup (pathPrefix ++ toUtf8 "pre:fix") initial),
+      (repoLookup (pathPrefix ++ encodeUtf8 "pre:fix") initial),
     acceptResult
       "commit-data-root"
       (repoExportGraph
@@ -782,7 +769,7 @@ recordFromOp line = match split "\t" line
   ["OP", _, _, recordHex, _, _] => mustRecord recordHex
   _ => panic "repo_vectors: malformed surviving record"
 
-pathFromOp : String -> Array Int
+pathFromOp : String -> Bytes
 pathFromOp line = match split "\t" line
   ["OP", _, pathHex, _, _, _] => mustHex pathHex
   _ => panic "repo_vectors: malformed surviving path"

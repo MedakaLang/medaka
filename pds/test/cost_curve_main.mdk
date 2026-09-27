@@ -26,7 +26,7 @@ import string.{fromUtf8, toInt, toUtf8}
 import lib.cid.{Cid}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
-import lib.repo.{Repo, blockBytesChecked, repoFromBlocks}
+import lib.repo.{Repo, blockBytesChecked, blockRowsChecked, repoFromBlocks}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -73,9 +73,12 @@ corpusSecret =
 
 loadRepo : String -> <FileRead> Repo
 loadRepo dir =
-  let (head, blocks) = match persistLoad dir
+  let (head, rows) = match persistLoad dir
     Ok value => value
     Err message => panic "cost_curve: corpus load failed: \{message}"
+  let blocks = match blockRowsChecked rows
+    Ok checked => checked
+    Err message => panic "cost_curve: corpus block rejected: \{message}"
   match repoFromBlocks corpusDid corpusSecret head blocks
     Ok repo => repo
     Err message => panic "cost_curve: corpus repository rejected: \{message}"
