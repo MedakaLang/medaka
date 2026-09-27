@@ -34298,17 +34298,33 @@ bucketAnyLonger [] _ = False
 bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 
 -- an undetermined-var check per argument of the predicate (at arity 1 this is exactly
--- the old single call).
+-- the old single call).  A goal that a given visible from its scope answers as a whole
+-- predicate is determined by that given, whichever kind of binder carries it — a
+-- default body's receiver has no tyvar-keyed registration for the per-argument rule
+-- to find.
 checkUndeterminedObligations : ImplUniverse ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkUndeterminedObligations _ _ [] _ _ = ()
-checkUndeterminedObligations univ iface (a :: rest) loc scope =
+checkUndeterminedObligations univ iface args loc scope =
+  let request = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+  if isSome (activeFunDictPredOf request scope) then
+    ()
+  else
+    checkUndeterminedArgs univ iface args loc scope
+
+checkUndeterminedArgs : ImplUniverse ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkUndeterminedArgs _ _ [] _ _ = ()
+checkUndeterminedArgs univ iface (a :: rest) loc scope =
   let _ = checkUndeterminedObligation univ iface a loc scope
-  checkUndeterminedObligations univ iface rest loc scope
+  checkUndeterminedArgs univ iface rest loc scope
 
 -- WS-1c: a constrained call whose constraint var stays UNDETERMINED (pinned by
 -- neither arg nor result, `roundtrip 14` where `roundtrip : Sub a => Int -> Int`).

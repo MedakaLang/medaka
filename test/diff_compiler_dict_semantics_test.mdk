@@ -2315,6 +2315,17 @@ table = [
     codes = [],
   },
   Row {
+    entry = "g4-default-body-local-two-types.mdk",
+    label =
+      "§4.1 G4 (#1082): the abstracted `let` sited in an interface DEFAULT body, used at the receiver and at Cat. The receiver use is answered by the default body's receiver given (it was rejected T-AMBIGUOUS-INSTANCE once two impls existed), the Cat use by its impl, directly and through a `Tagged a =>` wrapper. A dictionary shared by the two uses would print dog!dog! or cat!cat! for Dog",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "cat!cat!|dog!cat!|dog!cat!\n",
+    codes = [],
+  },
+  Row {
     entry = "g4-multi-type-control.mdk",
     label =
       "§4.1 G4 (#2095) control for the two rows above: the same abstracted `where` helper used at ONE type, so both applications forward `both`'s single given: 1 + 1 = 2",
@@ -2413,7 +2424,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 207
+tableRows = 208
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

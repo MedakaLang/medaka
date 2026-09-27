@@ -1,0 +1,28 @@
+-- A dictionary-abstracted local inside an interface DEFAULT body, applied to the
+-- receiver.  `g` generalizes over its own `Tagged b`; the use `g x` wants `Tagged a`
+-- at the receiver type, which the default body's receiver given answers for whichever
+-- instance inherits it -- exactly as the enclosing slot answers it in a `Tagged a =>`
+-- function.  Two impls, so the goal is not answered by counting instances.
+--
+-- Ground truth, derived from the source: `both Cat` = "cat!" ++ "cat" and
+-- `both Dog` = "dog!" ++ "dog", so the program prints `cat!cat / dog!dog`.
+--
+-- Verdict: ACCEPT.
+interface Tagged a where
+  label : a -> String
+  both : a -> String
+  both x =
+    let g = y => label y ++ "!"
+    g x ++ label x
+
+data Cat = Cat
+data Dog = Dog
+
+impl Tagged Cat where
+  label _ = "cat"
+
+impl Tagged Dog where
+  label _ = "dog"
+
+main : <IO> Unit
+main = println (both Cat ++ " / " ++ both Dog)

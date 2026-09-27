@@ -467,6 +467,7 @@ checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) ->
 checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkSurvivorDispatchMonos : String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
 checkSurvivorObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List UObligation -> Option Loc -> Unit
+checkUndeterminedArgs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> ScopeId -> Unit
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit

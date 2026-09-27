@@ -1,5 +1,5 @@
 # META
-source_lines=49986
+source_lines=50002
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -34302,17 +34302,33 @@ bucketAnyLonger [] _ = False
 bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 
 -- an undetermined-var check per argument of the predicate (at arity 1 this is exactly
--- the old single call).
+-- the old single call).  A goal that a given visible from its scope answers as a whole
+-- predicate is determined by that given, whichever kind of binder carries it — a
+-- default body's receiver has no tyvar-keyed registration for the per-argument rule
+-- to find.
 checkUndeterminedObligations : ImplUniverse ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkUndeterminedObligations _ _ [] _ _ = ()
-checkUndeterminedObligations univ iface (a :: rest) loc scope =
+checkUndeterminedObligations univ iface args loc scope =
+  let request = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+  if isSome (activeFunDictPredOf request scope) then
+    ()
+  else
+    checkUndeterminedArgs univ iface args loc scope
+
+checkUndeterminedArgs : ImplUniverse ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkUndeterminedArgs _ _ [] _ _ = ()
+checkUndeterminedArgs univ iface (a :: rest) loc scope =
   let _ = checkUndeterminedObligation univ iface a loc scope
-  checkUndeterminedObligations univ iface rest loc scope
+  checkUndeterminedArgs univ iface rest loc scope
 
 -- WS-1c: a constrained call whose constraint var stays UNDETERMINED (pinned by
 -- neither arg nor result, `roundtrip 14` where `roundtrip : Sub a => Int -> Int`).
@@ -55694,8 +55710,10 @@ isTyAuth _ = False
 (DFunDef false "bucketAnyLonger" ((PList) PWild) (EVar "False"))
 (DFunDef false "bucketAnyLonger" ((PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "n")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EVar "tys")) (EVar "n")) (EApp (EApp (EVar "bucketAnyLonger") (EVar "rest")) (EVar "n"))))
 (DTypeSig false "checkUndeterminedObligations" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
-(DFunDef false "checkUndeterminedObligations" (PWild PWild (PList) PWild PWild) (ELit LUnit))
-(DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")) (EVar "scope")))))
+(DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PVar "args") (PVar "loc") (PVar "scope")) (EBlock (DoLet false false (PVar "request") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoExpr (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "activeFunDictPredOf") (EVar "request")) (EVar "scope"))) (ELit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedArgs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope"))))))
+(DTypeSig false "checkUndeterminedArgs" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
+(DFunDef false "checkUndeterminedArgs" (PWild PWild (PList) PWild PWild) (ELit LUnit))
+(DFunDef false "checkUndeterminedArgs" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedArgs") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")) (EVar "scope")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
 (DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc") (PVar "scope")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "activeDictVarOf") (EVar "occ")) (EVar "scope"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))
@@ -63684,8 +63702,10 @@ isTyAuth _ = False
 (DFunDef false "bucketAnyLonger" ((PList) PWild) (EVar "False"))
 (DFunDef false "bucketAnyLonger" ((PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "n")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EVar "tys")) (EVar "n")) (EApp (EApp (EVar "bucketAnyLonger") (EVar "rest")) (EVar "n"))))
 (DTypeSig false "checkUndeterminedObligations" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
-(DFunDef false "checkUndeterminedObligations" (PWild PWild (PList) PWild PWild) (ELit LUnit))
-(DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")) (EVar "scope")))))
+(DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PVar "args") (PVar "loc") (PVar "scope")) (EBlock (DoLet false false (PVar "request") (ERecordCreate "PredicateRequest" ((fa "prIface" (EVar "iface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoExpr (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "activeFunDictPredOf") (EVar "request")) (EVar "scope"))) (ELit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedArgs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EVar "scope"))))))
+(DTypeSig false "checkUndeterminedArgs" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
+(DFunDef false "checkUndeterminedArgs" (PWild PWild (PList) PWild PWild) (ELit LUnit))
+(DFunDef false "checkUndeterminedArgs" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedArgs") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")) (EVar "scope")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
 (DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc") (PVar "scope")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "activeDictVarOf") (EVar "occ")) (EVar "scope"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))

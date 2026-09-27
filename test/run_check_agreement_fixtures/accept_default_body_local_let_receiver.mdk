@@ -1,0 +1,35 @@
+-- A plain (never generalized) `let` inside an interface DEFAULT body whose
+-- right-hand side calls a sibling method on the receiver, once at the top of the
+-- body and once inside a match arm.  The `Tagged a` goal each raises is answered by
+-- the default body's receiver given, as the same `let` is answered in a
+-- `Tagged a =>` function.  Two impls, so the goal is not answered by counting
+-- instances.
+--
+-- Ground truth, derived from the source: `twice Cat` = "catcat", `twice Dog` =
+-- "dogdog", `pick Dog 0` = "dog", so the program prints `catcat|dogdog|dog`.
+--
+-- Verdict: ACCEPT.
+interface Tagged a where
+  label : a -> String
+  twice : a -> String
+  twice x =
+    let g = label x
+    g ++ g
+  pick : a -> Int -> String
+  pick x n = match n
+    0 =>
+      let s = label x
+      s
+    _ => ""
+
+data Cat = Cat
+data Dog = Dog
+
+impl Tagged Cat where
+  label _ = "cat"
+
+impl Tagged Dog where
+  label _ = "dog"
+
+main : <IO> Unit
+main = println (twice Cat ++ "|" ++ twice Dog ++ "|" ++ pick Dog 0)
