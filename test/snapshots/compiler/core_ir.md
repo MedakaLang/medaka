@@ -1,5 +1,5 @@
 # META
-source_lines=243
+source_lines=244
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -199,6 +199,7 @@ public export data CHead =
 -- one block statement (mirrors ast.DoStmt, post-desugar core subset)
 public export data CStmt =
   | CSExpr CExpr
+  -- `let [rec] pat = e`; the flag is `rec`, as on `CLet`
   | CSLet Bool Pat CExpr
   | CSAssign String CExpr
 

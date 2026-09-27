@@ -3,6 +3,7 @@ binderScope : EvidenceBinderId -> ScopeId
 captureScopeCursor : ScopeCursor -> ScopeId
 closeScopeCursor : ScopeStore -> ScopeCursor -> ScopeCursor
 copyScopeStore : ScopeStore -> ScopeStore
+declarationScope : ScopeStore -> ScopeId -> ScopeId
 enclosingDefaultBody : ScopeStore -> ScopeId -> Option DefaultBodyIdentity
 freshScope : ScopeStore -> Option ScopeId -> Int -> String -> ScopeOwner -> ScopeId
 freshScopeStore : Unit -> ScopeStore

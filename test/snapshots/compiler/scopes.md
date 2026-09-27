@@ -1,5 +1,5 @@
 # META
-source_lines=159
+source_lines=178
 stages=DESUGAR,MARK
 # SOURCE
 -- Nominal lexical scope storage for one typechecking graph.  Raw ScopeIds are
@@ -8,6 +8,7 @@ stages=DESUGAR,MARK
 
 import types.evidence.{EvidenceBinderId(..), ScopeId(..)}
 import types.repr.{IfaceRef}
+import support.util.{splitOnChar}
 
 public export data DefaultBodyIdentity = DefaultBodyIdentity {
   dbiIface : IfaceRef,
@@ -17,6 +18,7 @@ public export data DefaultBodyIdentity = DefaultBodyIdentity {
 public export data ScopeOwner =
   | ModuleOwner
   | BindingOwner String
+  | LocalBindingOwner String
   | DefaultBodyOwner DefaultBodyIdentity
   | PropOwner String
   | TestOwner String
@@ -120,6 +122,18 @@ enclosingDefaultBody store sid =
       Some parent => enclosingDefaultBody store parent
       None => None
 
+-- The nearest enclosing scope that is not a local binding's own scope: the
+-- scope whose binder owns the enclosing declaration's dictionary parameters.
+export
+declarationScope : ScopeStore -> ScopeId -> ScopeId
+declarationScope store sid =
+  let frame = scopeFrame store sid
+  match frame.sfOwner
+    LocalBindingOwner _ => match frame.sfParent
+      Some parent => declarationScope store parent
+      None => sid
+    _ => sid
+
 export
 binderAt : ScopeId -> Int -> EvidenceBinderId
 binderAt sid ordinal = EvidenceBinderId sid ordinal
@@ -148,6 +162,11 @@ export
 scopeOwnerLabel : ScopeOwner -> String
 scopeOwnerLabel ModuleOwner = "module"
 scopeOwnerLabel (BindingOwner name) = "binding:" ++ name
+-- A local binder's owner name is its renamed binder (`f$3$lb`); the label shows the
+-- name it was written with.
+scopeOwnerLabel (LocalBindingOwner name) = match splitOnChar '$' name
+  written :: _ => "local:" ++ written
+  [] => "local:" ++ name
 scopeOwnerLabel (DefaultBodyOwner owner) = "default:" ++ owner.dbiMethod
 scopeOwnerLabel (PropOwner name) = "prop:" ++ name
 scopeOwnerLabel (TestOwner name) = "test:" ++ name
@@ -164,8 +183,9 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 # DESUGAR
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false))))
+(DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DData Public "DefaultBodyIdentity" () ((variant "DefaultBodyIdentity" (ConNamed (field "dbiIface" (TyCon "IfaceRef")) (field "dbiMethod" (TyCon "String"))))) ())
-(DData Public "ScopeOwner" () ((variant "ModuleOwner" (ConPos)) (variant "BindingOwner" (ConPos (TyCon "String"))) (variant "DefaultBodyOwner" (ConPos (TyCon "DefaultBodyIdentity"))) (variant "PropOwner" (ConPos (TyCon "String"))) (variant "TestOwner" (ConPos (TyCon "String")))) ())
+(DData Public "ScopeOwner" () ((variant "ModuleOwner" (ConPos)) (variant "BindingOwner" (ConPos (TyCon "String"))) (variant "LocalBindingOwner" (ConPos (TyCon "String"))) (variant "DefaultBodyOwner" (ConPos (TyCon "DefaultBodyIdentity"))) (variant "PropOwner" (ConPos (TyCon "String"))) (variant "TestOwner" (ConPos (TyCon "String")))) ())
 (DData Public "ScopeCursor" () ((variant "ScopeClosed" (ConPos)) (variant "ScopeOpen" (ConPos (TyCon "ScopeId")))) ())
 (DData Public "ScopeFrame" () ((variant "ScopeFrame" (ConNamed (field "sfId" (TyCon "ScopeId")) (field "sfParent" (TyApp (TyCon "Option") (TyCon "ScopeId"))) (field "sfLevel" (TyCon "Int")) (field "sfModuleId" (TyCon "String")) (field "sfOwner" (TyCon "ScopeOwner"))))) ())
 (DData Abstract "ScopeStore" () ((variant "ScopeStore" (ConNamed (field "ssFrames" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "ScopeFrame"))))) (field "ssNext" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
@@ -183,6 +203,8 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DFunDef false "givenVisibleFrom" ((PVar "store") (PVar "useScope") (PVar "binderScope")) (EIf (EBinOp "==" (EVar "useScope") (EVar "binderScope")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EFieldAccess (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "useScope")) "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EApp (EVar "givenVisibleFrom") (EVar "store")) (EVar "parent")) (EVar "binderScope"))) (arm (PCon "None") () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "enclosingDefaultBody" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "DefaultBodyIdentity")))))
 (DFunDef false "enclosingDefaultBody" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "sid"))) (DoExpr (EMatch (EFieldAccess (EVar "frame") "sfOwner") (arm (PCon "DefaultBodyOwner" (PVar "owner")) () (EApp (EVar "Some") (EVar "owner"))) (arm PWild () (EMatch (EFieldAccess (EVar "frame") "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EVar "enclosingDefaultBody") (EVar "store")) (EVar "parent"))) (arm (PCon "None") () (EVar "None"))))))))
+(DTypeSig true "declarationScope" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyCon "ScopeId"))))
+(DFunDef false "declarationScope" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "sid"))) (DoExpr (EMatch (EFieldAccess (EVar "frame") "sfOwner") (arm (PCon "LocalBindingOwner" PWild) () (EMatch (EFieldAccess (EVar "frame") "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EVar "declarationScope") (EVar "store")) (EVar "parent"))) (arm (PCon "None") () (EVar "sid")))) (arm PWild () (EVar "sid"))))))
 (DTypeSig true "binderAt" (TyFun (TyCon "ScopeId") (TyFun (TyCon "Int") (TyCon "EvidenceBinderId"))))
 (DFunDef false "binderAt" ((PVar "sid") (PVar "ordinal")) (EApp (EApp (EVar "EvidenceBinderId") (EVar "sid")) (EVar "ordinal")))
 (DTypeSig true "binderScope" (TyFun (TyCon "EvidenceBinderId") (TyCon "ScopeId")))
@@ -198,6 +220,7 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DTypeSig true "scopeOwnerLabel" (TyFun (TyCon "ScopeOwner") (TyCon "String")))
 (DFunDef false "scopeOwnerLabel" ((PCon "ModuleOwner")) (ELit (LString "module")))
 (DFunDef false "scopeOwnerLabel" ((PCon "BindingOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "binding:")) (EVar "name")))
+(DFunDef false "scopeOwnerLabel" ((PCon "LocalBindingOwner" (PVar "name"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "name")) (arm (PCons (PVar "written") PWild) () (EBinOp "++" (ELit (LString "local:")) (EVar "written"))) (arm (PList) () (EBinOp "++" (ELit (LString "local:")) (EVar "name")))))
 (DFunDef false "scopeOwnerLabel" ((PCon "DefaultBodyOwner" (PVar "owner"))) (EBinOp "++" (ELit (LString "default:")) (EFieldAccess (EVar "owner") "dbiMethod")))
 (DFunDef false "scopeOwnerLabel" ((PCon "PropOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "prop:")) (EVar "name")))
 (DFunDef false "scopeOwnerLabel" ((PCon "TestOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "test:")) (EVar "name")))
@@ -208,8 +231,9 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 # MARK
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false))))
+(DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DData Public "DefaultBodyIdentity" () ((variant "DefaultBodyIdentity" (ConNamed (field "dbiIface" (TyCon "IfaceRef")) (field "dbiMethod" (TyCon "String"))))) ())
-(DData Public "ScopeOwner" () ((variant "ModuleOwner" (ConPos)) (variant "BindingOwner" (ConPos (TyCon "String"))) (variant "DefaultBodyOwner" (ConPos (TyCon "DefaultBodyIdentity"))) (variant "PropOwner" (ConPos (TyCon "String"))) (variant "TestOwner" (ConPos (TyCon "String")))) ())
+(DData Public "ScopeOwner" () ((variant "ModuleOwner" (ConPos)) (variant "BindingOwner" (ConPos (TyCon "String"))) (variant "LocalBindingOwner" (ConPos (TyCon "String"))) (variant "DefaultBodyOwner" (ConPos (TyCon "DefaultBodyIdentity"))) (variant "PropOwner" (ConPos (TyCon "String"))) (variant "TestOwner" (ConPos (TyCon "String")))) ())
 (DData Public "ScopeCursor" () ((variant "ScopeClosed" (ConPos)) (variant "ScopeOpen" (ConPos (TyCon "ScopeId")))) ())
 (DData Public "ScopeFrame" () ((variant "ScopeFrame" (ConNamed (field "sfId" (TyCon "ScopeId")) (field "sfParent" (TyApp (TyCon "Option") (TyCon "ScopeId"))) (field "sfLevel" (TyCon "Int")) (field "sfModuleId" (TyCon "String")) (field "sfOwner" (TyCon "ScopeOwner"))))) ())
 (DData Abstract "ScopeStore" () ((variant "ScopeStore" (ConNamed (field "ssFrames" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "ScopeFrame"))))) (field "ssNext" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
@@ -227,6 +251,8 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DFunDef false "givenVisibleFrom" ((PVar "store") (PVar "useScope") (PVar "binderScope")) (EIf (EBinOp "==" (EVar "useScope") (EVar "binderScope")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EFieldAccess (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "useScope")) "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EApp (EVar "givenVisibleFrom") (EVar "store")) (EVar "parent")) (EVar "binderScope"))) (arm (PCon "None") () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "enclosingDefaultBody" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "DefaultBodyIdentity")))))
 (DFunDef false "enclosingDefaultBody" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "sid"))) (DoExpr (EMatch (EFieldAccess (EVar "frame") "sfOwner") (arm (PCon "DefaultBodyOwner" (PVar "owner")) () (EApp (EVar "Some") (EVar "owner"))) (arm PWild () (EMatch (EFieldAccess (EVar "frame") "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EVar "enclosingDefaultBody") (EVar "store")) (EVar "parent"))) (arm (PCon "None") () (EVar "None"))))))))
+(DTypeSig true "declarationScope" (TyFun (TyCon "ScopeStore") (TyFun (TyCon "ScopeId") (TyCon "ScopeId"))))
+(DFunDef false "declarationScope" ((PVar "store") (PVar "sid")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "scopeFrame") (EVar "store")) (EVar "sid"))) (DoExpr (EMatch (EFieldAccess (EVar "frame") "sfOwner") (arm (PCon "LocalBindingOwner" PWild) () (EMatch (EFieldAccess (EVar "frame") "sfParent") (arm (PCon "Some" (PVar "parent")) () (EApp (EApp (EVar "declarationScope") (EVar "store")) (EVar "parent"))) (arm (PCon "None") () (EVar "sid")))) (arm PWild () (EVar "sid"))))))
 (DTypeSig true "binderAt" (TyFun (TyCon "ScopeId") (TyFun (TyCon "Int") (TyCon "EvidenceBinderId"))))
 (DFunDef false "binderAt" ((PVar "sid") (PVar "ordinal")) (EApp (EApp (EVar "EvidenceBinderId") (EVar "sid")) (EVar "ordinal")))
 (DTypeSig true "binderScope" (TyFun (TyCon "EvidenceBinderId") (TyCon "ScopeId")))
@@ -242,6 +268,7 @@ scopeFrameStats store = (store.ssNext.value, arrayLength store.ssFrames.value)
 (DTypeSig true "scopeOwnerLabel" (TyFun (TyCon "ScopeOwner") (TyCon "String")))
 (DFunDef false "scopeOwnerLabel" ((PCon "ModuleOwner")) (ELit (LString "module")))
 (DFunDef false "scopeOwnerLabel" ((PCon "BindingOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "binding:")) (EVar "name")))
+(DFunDef false "scopeOwnerLabel" ((PCon "LocalBindingOwner" (PVar "name"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "$"))) (EVar "name")) (arm (PCons (PVar "written") PWild) () (EBinOp "++" (ELit (LString "local:")) (EVar "written"))) (arm (PList) () (EBinOp "++" (ELit (LString "local:")) (EVar "name")))))
 (DFunDef false "scopeOwnerLabel" ((PCon "DefaultBodyOwner" (PVar "owner"))) (EBinOp "++" (ELit (LString "default:")) (EFieldAccess (EVar "owner") "dbiMethod")))
 (DFunDef false "scopeOwnerLabel" ((PCon "PropOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "prop:")) (EVar "name")))
 (DFunDef false "scopeOwnerLabel" ((PCon "TestOwner" (PVar "name"))) (EBinOp "++" (ELit (LString "test:")) (EVar "name")))

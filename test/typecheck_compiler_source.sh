@@ -290,8 +290,7 @@ originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
-compiler/types/typecheck.mdk
-compiler/types/typecheck_test.mdk"
+compiler/types/typecheck.mdk"
 tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
   echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
@@ -411,20 +410,17 @@ if [ "$originun_actual" != "$originun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved constructor site(s)"
 
-# Keep the sibling test's filename allowance restricted to its read-only observer.
-# A new sentinel-producing expression in the same file must still fail the gate.
-tctest_originun_allowed='OriginUnresolved => "<unresolved>"'
+# The sibling test mints no unresolved sentinel and observes none.
 tctest_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck_test.mdk" \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
   | LC_ALL=C sort)
-if [ "$tctest_originun_actual" != "$tctest_originun_allowed" ]; then
-  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck_test.mdk changed."
-  echo "  Only the default-origin observer's pattern is allowed; no sentinel mint."
+if [ -n "$tctest_originun_actual" ]; then
+  echo "FAIL: compiler/types/typecheck_test.mdk names OriginUnresolved; no sentinel mint."
   printf '%s\n' "$tctest_originun_actual" | sed 's/^/    /'
   exit 1
 fi
-echo "  ok: typecheck_test.mdk only observes OriginUnresolved"
+echo "  ok: typecheck_test.mdk names no OriginUnresolved"
 
 # The extracted scope service has its own total default-origin observer.
 scopetest_originun_allowed='OriginUnresolved =>'
@@ -1320,7 +1316,7 @@ done || exit 1
 # Eval sizes an elaborated impl definition from its leading dictionary patterns and
 # registers both route words.  Interface declaration arity was a second, colliding
 # authority and must not return.
-eval_req_count_required='buildMethodReqCounts prog = flatMap implMethodReqCounts prog
+eval_req_count_required='flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
 DImpl { iface, tys, methods, implOrigin, ... }
 let key = implRouteKeyWord implOrigin iface tys None
 [((mname, tag), count), ((mname, key), count)]

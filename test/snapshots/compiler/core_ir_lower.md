@@ -719,7 +719,7 @@ lowerClause (FunClause pats body) = CClause pats (lower body)
 
 lowerStmt : DoStmt -> CStmt
 lowerStmt (DoExpr e) = CSExpr (lower e)
-lowerStmt (DoLet b _ pat e) = CSLet b pat (lower e)
+lowerStmt (DoLet _ recFlag pat e) = CSLet recFlag pat (lower e)
 lowerStmt (DoAssign x e) = CSAssign x (lower e)
 lowerStmt _ = panic "core_ir lower: unsupported block statement"
 
@@ -2944,7 +2944,7 @@ nodeTag _ = "?"
 (DFunDef false "lowerClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))
 (DTypeSig false "lowerStmt" (TyFun (TyCon "DoStmt") (TyCon "CStmt")))
 (DFunDef false "lowerStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EVar "lower") (EVar "e"))))
-(DFunDef false "lowerStmt" ((PCon "DoLet" (PVar "b") PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "b")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))))
+(DFunDef false "lowerStmt" ((PCon "DoLet" PWild (PVar "recFlag") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
@@ -3699,7 +3699,7 @@ nodeTag _ = "?"
 (DFunDef false "lowerClause" ((PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))
 (DTypeSig false "lowerStmt" (TyFun (TyCon "DoStmt") (TyCon "CStmt")))
 (DFunDef false "lowerStmt" ((PCon "DoExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EVar "lower") (EVar "e"))))
-(DFunDef false "lowerStmt" ((PCon "DoLet" (PVar "b") PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "b")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))))
+(DFunDef false "lowerStmt" ((PCon "DoLet" PWild (PVar "recFlag") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "recFlag")) (EVar "pat")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EVar "lower") (EVar "e"))))
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))

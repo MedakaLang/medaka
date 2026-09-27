@@ -1,5 +1,5 @@
 # META
-source_lines=1682
+source_lines=1684
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -111,7 +111,9 @@ freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CMethod _ _ _ route implRoutes methRoutes) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
-freeVars b (CDict _ routes) = routeDictNames b routes
+-- The head names a local closure when a let binder abstracted dictionaries.
+freeVars b (CDict n routes) =
+  (if contains n b then [] else [n]) ++ routeDictNames b routes
 freeVars _ _ = []
 
 -- collect the captured dict-param names (RDict/RDictFwd) from a list of Routes.
@@ -1725,7 +1727,7 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" PWild (PVar "routes"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes")))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes"))))
 (DFunDef false "freeVars" (PWild PWild) (EListLit))
 (DTypeSig true "routeDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "routeDictNames" (PWild (PList)) (EListLit))
@@ -2183,7 +2185,7 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" PWild (PVar "routes"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes")))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes"))))
 (DFunDef false "freeVars" (PWild PWild) (EListLit))
 (DTypeSig true "routeDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "routeDictNames" (PWild (PList)) (EListLit))

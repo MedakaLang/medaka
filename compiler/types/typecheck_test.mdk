@@ -2994,9 +2994,9 @@ test "mixed default answers its argument-position sibling by the receiver" =
         (
           ATDirectPredicate,
           receiverOrdinal,
+          "local:local",
           "default:mixed",
-          "default:mixed",
-          True,
+          False,
         ),
       ],
       0,

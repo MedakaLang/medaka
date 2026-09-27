@@ -1,5 +1,5 @@
 # META
-source_lines=735
+source_lines=749
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -382,16 +382,30 @@ cevalLet env pat e1 e2 = match matchPat pat (ceval env e1)
 cevalBlock : EvalEnv (Value e) -> List CStmt -> <e> Value e
 cevalBlock _ [] = VUnit
 cevalBlock env [CSExpr e] = ceval env e
+cevalBlock env [CSLet True (PVar f _) e] =
+  let _ = cBlockRecEnv env f e
+  VUnit
 cevalBlock env [CSLet _ pat e] = cBlockLetLast env pat e
 cevalBlock env ((CSExpr e) :: rest) =
   let _ = ceval env e
   cevalBlock env rest
+cevalBlock env ((CSLet True (PVar f _) e) :: rest) =
+  cevalBlock (cBlockRecEnv env f e) rest
 cevalBlock env ((CSLet _ pat e) :: rest) = cBlockLet env pat e rest
 cevalBlock env [CSAssign _ e] =
   let _ = ceval env e
   VUnit
 cevalBlock env ((CSAssign x e) :: rest) =
   cevalBlock (extendEnv env [(x, ceval env e)]) rest
+
+-- A recursive block binding sees itself, exactly as `cevalRecLet` does for an
+-- expression `let rec`.
+cBlockRecEnv : EvalEnv (Value e) -> String -> CExpr -> <e> EvalEnv (Value e)
+cBlockRecEnv env f e =
+  let cell = Ref VUnit
+  let recEnv = pushFrame env [(f, cell)]
+  cell := ceval recEnv e
+  recEnv
 
 cBlockLetLast : EvalEnv (Value e) -> Pat -> CExpr -> <e> Value e
 cBlockLetLast env pat e = match matchPat pat (ceval env e)
@@ -854,11 +868,15 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cevalBlock" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cevalBlock" (PWild (PList)) (EVar "VUnit"))
 (DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e")))
+(DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSLet" (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "cBlockRecEnv") (EVar "env")) (EVar "f")) (EVar "e"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSLet" PWild (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "cBlockLetLast") (EVar "env")) (EVar "pat")) (EVar "e")))
 (DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "cevalBlock") (EVar "env")) (EVar "rest")))))
+(DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSLet" (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "cevalBlock") (EApp (EApp (EApp (EVar "cBlockRecEnv") (EVar "env")) (EVar "f")) (EVar "e"))) (EVar "rest")))
 (DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "cBlockLet") (EVar "env")) (EVar "pat")) (EVar "e")) (EVar "rest")))
 (DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSAssign" PWild (PVar "e")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "cevalBlock") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EListLit (ETuple (EVar "x") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e")))))) (EVar "rest")))
+(DTypeSig false "cBlockRecEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DFunDef false "cBlockRecEnv" ((PVar "env") (PVar "f") (PVar "e")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "VUnit"))) (DoLet false false (PVar "recEnv") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "f") (EVar "cell"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "ceval") (EVar "recEnv")) (EVar "e")))) (DoExpr (EVar "recEnv"))))
 (DTypeSig false "cBlockLetLast" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cBlockLetLast" ((PVar "env") (PVar "pat") (PVar "e")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "let pattern match failure in block")))) (arm (PCon "Some" PWild) () (EVar "VUnit"))))
 (DTypeSig false "cBlockLet" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
@@ -1045,11 +1063,15 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cevalBlock" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cevalBlock" (PWild (PList)) (EVar "VUnit"))
 (DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e")))
+(DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSLet" (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "cBlockRecEnv") (EVar "env")) (EVar "f")) (EVar "e"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSLet" PWild (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "cBlockLetLast") (EVar "env")) (EVar "pat")) (EVar "e")))
 (DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "cevalBlock") (EVar "env")) (EVar "rest")))))
+(DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSLet" (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "cevalBlock") (EApp (EApp (EApp (EVar "cBlockRecEnv") (EVar "env")) (EVar "f")) (EVar "e"))) (EVar "rest")))
 (DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "cBlockLet") (EVar "env")) (EVar "pat")) (EVar "e")) (EVar "rest")))
 (DFunDef false "cevalBlock" ((PVar "env") (PList (PCon "CSAssign" PWild (PVar "e")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "cevalBlock" ((PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "cevalBlock") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EListLit (ETuple (EVar "x") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e")))))) (EVar "rest")))
+(DTypeSig false "cBlockRecEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DFunDef false "cBlockRecEnv" ((PVar "env") (PVar "f") (PVar "e")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "VUnit"))) (DoLet false false (PVar "recEnv") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EListLit (ETuple (EVar "f") (EVar "cell"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EVar "ceval") (EVar "recEnv")) (EVar "e")))) (DoExpr (EVar "recEnv"))))
 (DTypeSig false "cBlockLetLast" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cBlockLetLast" ((PVar "env") (PVar "pat") (PVar "e")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "let pattern match failure in block")))) (arm (PCon "Some" PWild) () (EVar "VUnit"))))
 (DTypeSig false "cBlockLet" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
