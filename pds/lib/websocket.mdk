@@ -21,9 +21,10 @@
 
 import array.{blit, get, make, setInPlace}
 import base64.{decode, encode}
+import bytes.{encodeUtf8, toArray}
 import list.{reverse}
 import string.{toUtf8}
-import lib.sha1.{sha1FixedBytes}
+import lib.sha1.{sha1}
 import u64 as U64
 
 -- ── The opening handshake ────────────────────────────────────────────
@@ -53,7 +54,7 @@ handshakeAccept key = match decode key
       Err
         "Sec-WebSocket-Key decodes to \{intToString (arrayLength nonce)} bytes, expected \{intToString keyNonceBytes}"
     else
-      Ok (encode (sha1FixedBytes (toUtf8 "\{key}\{handshakeGuid}")))
+      Ok (encode (toArray (sha1 (encodeUtf8 "\{key}\{handshakeGuid}"))))
 
 {- | The complete bytes of the opening handshake's `101 Switching Protocols`
    response, answering a client whose `Sec-WebSocket-Key` computed `accept`

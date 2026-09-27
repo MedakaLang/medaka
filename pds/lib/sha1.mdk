@@ -1,8 +1,6 @@
-{- | SHA-1 hashing of a byte array (FIPS 180-4 §6.1, RFC 3174).
+{- | SHA-1 hashing of a byte string (FIPS 180-4 §6.1, RFC 3174).
 
-   A message is an `Array Int` with each element from `0` to `255`, the same
-   form `readFileBytes` and `hex.decode` use. The digest is 20 bytes, most
-   significant byte of each word first.
+   The digest is 20 bytes, most significant byte of each word first.
 
    SHA-1 is here for ONE reason: RFC 6455 §4.2.2 defines the WebSocket
    opening handshake's `Sec-WebSocket-Accept` as a SHA-1 of the client key
@@ -11,20 +9,14 @@
    Nothing else in this server may hash with it; `stdlib/crypto/sha256.mdk` is the
    hash for every content-addressing and signing path.
 
-   `sha1` panics when any element is outside `0` to `255`. Reducing such an
-   element modulo 256 would map two different messages onto one digest.
-   `sha1FixedBytes` is the same hash without that scan, for a caller whose
-   bytes are already known to be in range.
-
    There is no incremental form. A message is hashed in one call. -}
 
--- Arithmetic contract, identical to `stdlib/crypto/sha256.mdk`'s. Every word is an
--- `Int` in [0, 2^32). `mask32 x = bitAnd x 4294967295`, and every `+`,
--- `shiftLeft` and `bitNot` result is immediately followed by `mask32`.
--- `shiftRight` needs no mask: it is logical/unsigned (`stdlib/runtime.mdk`)
--- and its input is already masked. A sum of five 32-bit values is < 2^35,
--- well inside the 63-bit fixnum, so no intermediate overflows; the mask
--- enforces the modulus, not fixnum safety.
+-- Arithmetic contract, identical to `stdlib/crypto/sha256.mdk`'s. Every word is a
+-- `U32`, so `+` is addition modulo 2^32 and every bit operation, shift and
+-- rotate stays within 32 bits. Bytes stay `U8`: a word is assembled from
+-- four bytes through `U32.fromU8`, and a digest word leaves through
+-- `U32.toBytesBE`. Neither conversion branches, and neither can wrap the
+-- byte domain — `Bytes` already guarantees every element is `0` to `255`.
 --
 -- Message words are big-endian (FIPS 180-4 §3.1) and the digest is emitted in
 -- H0..H4 order.
@@ -42,16 +34,21 @@
 -- lint-disable-file rule-stdlib-reimpl
 -- lint-disable-file rule-duplicate-body
 
-import array.{blit, get, make, setInPlace}
+import array.{make, setInPlace}
+import bytes as B
+import bytes.{Bytes}
+import mut_bytes as MB
+import u8 as U8
+import u32 as U32
 
 -- ── Constants ────────────────────────────────────────────────────────
 
 -- FIPS 180-4 §5.3.1 initial hash value H(0).
-h0Init : (Int, Int, Int, Int, Int)
+h0Init : (U32, U32, U32, U32, U32)
 h0Init = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0)
 
 -- FIPS 180-4 §4.2.1 round constants, one per twenty-round quarter.
-roundConstant : Int -> Int
+roundConstant : Int -> U32
 roundConstant t =
   if t < 20 then
     0x5a827999
@@ -62,52 +59,36 @@ roundConstant t =
   else
     0xca62c1d6
 
--- ── Bit / word arithmetic ────────────────────────────────────────────
-
-mask32 : Int -> Int
-mask32 x = bitAnd x 4294967295
-
-rotl32 : Int -> Int -> Int
-rotl32 n x = mask32 (bitOr (shiftLeft x n) (shiftRight x (32 - n)))
-
 -- FIPS 180-4 §4.1.1 f(t, b, c, d), by quarter.
-roundF : Int -> Int -> Int -> Int -> Int
+roundF : Int -> U32 -> U32 -> U32 -> U32
 roundF t b c d =
   if t < 20 then
-    bitOr (bitAnd b c) (bitAnd (mask32 (bitNot b)) d)
+    U32.bitOr (U32.bitAnd b c) (U32.bitAnd (U32.bitNot b) d)
   else if t < 40 then
-    bitXor (bitXor b c) d
+    U32.bitXor (U32.bitXor b c) d
   else if t < 60 then
-    bitOr (bitOr (bitAnd b c) (bitAnd b d)) (bitAnd c d)
+    U32.bitOr (U32.bitOr (U32.bitAnd b c) (U32.bitAnd b d)) (U32.bitAnd c d)
   else
-    bitXor (bitXor b c) d
-
--- In-bounds indexing via the safe `Array.get`, panicking on a miss. Every
--- call site below only ever indexes within a known length, so the `None`
--- arm is unreachable (same idiom as `stdlib/crypto/sha256.mdk`'s `byteAt`).
-byteAt : Array Int -> Int -> Int
-byteAt arr i = optionOrPanic "sha1: byteAt index out of bounds" (get i arr)
-
-wordAt : Array Int -> Int -> Int
-wordAt arr i = optionOrPanic "sha1: wordAt index out of bounds" (get i arr)
+    U32.bitXor (U32.bitXor b c) d
 
 -- ── Message schedule ─────────────────────────────────────────────────
 
 -- Big-endian 32-bit word starting at byte index `i*4`, read through an
 -- arbitrary byte accessor (so the caller decides whether bytes come from
 -- the original message or a synthesized tail block).
-scheduleWord : (Int -> Int) -> Int -> Int
+scheduleWord : (Int -> U8) -> Int -> U32
 scheduleWord byteOf i =
-  let b0 = byteOf (i * 4)
-  let b1 = byteOf (i * 4 + 1)
-  let b2 = byteOf (i * 4 + 2)
-  let b3 = byteOf (i * 4 + 3)
-  mask32
-    (bitOr
-      (bitOr (bitOr (shiftLeft b0 24) (shiftLeft b1 16)) (shiftLeft b2 8))
-      b3)
+  let b0 = U32.fromU8 (byteOf (i * 4))
+  let b1 = U32.fromU8 (byteOf (i * 4 + 1))
+  let b2 = U32.fromU8 (byteOf (i * 4 + 2))
+  let b3 = U32.fromU8 (byteOf (i * 4 + 3))
+  U32.bitOr
+    (U32.bitOr
+      (U32.bitOr (U32.shiftLeft b0 24) (U32.shiftLeft b1 16))
+      (U32.shiftLeft b2 8))
+    b3
 
-fillFirst16 : Array Int -> (Int -> Int) -> Int -> Unit
+fillFirst16 : Array U32 -> (Int -> U8) -> Int -> Unit
 fillFirst16 w byteOf i =
   if i >= 16 then
     ()
@@ -117,65 +98,54 @@ fillFirst16 w byteOf i =
 
 -- FIPS 180-4 §6.1.2 step 1: W[t] = ROTL^1(W[t-3] xor W[t-8] xor W[t-14]
 -- xor W[t-16]).
-extendSchedule : Array Int -> Int -> Unit
+extendSchedule : Array U32 -> Int -> Unit
 extendSchedule w i =
   if i >= 80 then
     ()
   else
     let x =
-      bitXor
-        (bitXor
-          (bitXor (wordAt w (i - 3)) (wordAt w (i - 8)))
-          (wordAt w (i - 14)))
-        (wordAt w (i - 16))
-    setInPlace i (rotl32 1 x) w
+      U32.bitXor (U32.bitXor (U32.bitXor w[i - 3] w[i - 8]) w[i - 14]) w[i - 16]
+    setInPlace i (U32.rotateLeft x 1) w
     extendSchedule w (i + 1)
 
 -- Build the 80-word message schedule for one block from a byte accessor
 -- covering that block's 64 bytes (offsets 0..63).
-buildSchedule : (Int -> Int) -> Array Int
+buildSchedule : (Int -> U8) -> Array U32
 buildSchedule byteOf =
-  let w = make 80 0
+  let w = make 80 (0 : U32)
   fillFirst16 w byteOf 0
   extendSchedule w 16
   w
 
 -- ── Compression ──────────────────────────────────────────────────────
 
-type State = (Int, Int, Int, Int, Int)
+type State = (U32, U32, U32, U32, U32)
 
-compressRounds : Array Int -> State -> Int -> State
-compressRounds w (a, b, c, d, e) t =
+-- The five working variables are separate parameters rather than one
+-- `State` tuple, mirroring `stdlib/crypto/sha256.mdk`'s `compressRounds`: the 80
+-- rounds are a self tail call on words and allocate nothing; the tuple is
+-- built once, after the last round.
+compressRounds : Array U32 -> U32 -> U32 -> U32 -> U32 -> U32 -> Int -> State
+compressRounds w a b c d e t =
   if t >= 80 then
     (a, b, c, d, e)
   else
-    let tv =
-      mask32
-        (mask32
-            (mask32 (mask32 (rotl32 5 a + roundF t b c d) + e)
-              + roundConstant t)
-          + wordAt w t)
-    compressRounds w (tv, a, rotl32 30 b, c, d) (t + 1)
+    let tv = U32.rotateLeft a 5 + roundF t b c d + e + roundConstant t + w[t]
+    compressRounds w tv a (U32.rotateLeft b 30) c d (t + 1)
 
 -- One 64-byte block, addressed via `byteOf` (offsets 0..63 relative to the
 -- block start), folded into the running hash state.
-compressBlock : (Int -> Int) -> State -> State
+compressBlock : (Int -> U8) -> State -> State
 compressBlock byteOf (h0, h1, h2, h3, h4) =
   let w = buildSchedule byteOf
-  let (a, b, c, d, e) = compressRounds w (h0, h1, h2, h3, h4) 0
-  (
-    mask32 (h0 + a),
-    mask32 (h1 + b),
-    mask32 (h2 + c),
-    mask32 (h3 + d),
-    mask32 (h4 + e),
-  )
+  let (a, b, c, d, e) = compressRounds w h0 h1 h2 h3 h4 0
+  (h0 + a, h1 + b, h2 + c, h3 + d, h4 + e)
 
 -- ── Driving the blocks ───────────────────────────────────────────────
 
 -- Fold every FULL 64-byte block of `msg` directly by offset — no copy of
 -- the message is ever made.
-processFullBlocks : Array Int -> Int -> State -> Int -> State
+processFullBlocks : Bytes -> Int -> State -> Int -> State
 processFullBlocks msg numFull st blockIdx =
   if blockIdx >= numFull then
     st
@@ -184,18 +154,21 @@ processFullBlocks msg numFull st blockIdx =
     processFullBlocks
       msg
       numFull
-      (compressBlock (j => byteAt msg (base + j)) st)
+      (compressBlock (j => msg[base + j]) st)
       (blockIdx + 1)
 
 -- The message's bit length, big-endian, into the last 8 bytes of the
 -- synthesized padded region.
-writeLenGo : Array Int -> Int -> Int -> Int -> Unit
+writeLenGo : MB.MutBytes -> Int -> Int -> Int -> Unit
 writeLenGo out offset bitLen i =
   if i >= 8 then
     ()
   else
     let shiftAmt = (7 - i) * 8
-    setInPlace (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
+    MB.setInPlace
+      (offset + i)
+      (U8.truncate (bitAnd (shiftRight bitLen shiftAmt) 255))
+      out
     writeLenGo out offset bitLen (i + 1)
 
 -- The number of bytes in the final, padded region (one block if the tail
@@ -203,83 +176,52 @@ writeLenGo out offset bitLen i =
 padLength : Int -> Int
 padLength tailLen = if tailLen + 1 + 8 <= 64 then 64 else 128
 
+-- Copies `n` bytes of `src` starting at `srcOff` into `dst` starting at
+-- `dstOff`, one byte at a time: the only crossing from the immutable `Bytes`
+-- message into the mutable tail buffer being synthesized, and `n` is at most
+-- 63 (the tail is always shorter than one block).
+blitBytesIntoMut : Bytes -> Int -> MB.MutBytes -> Int -> Int -> Unit
+blitBytesIntoMut src srcOff dst dstOff n
+  | n <= 0 = ()
+  | otherwise =
+    MB.setInPlace dstOff src[srcOff] dst
+    blitBytesIntoMut src (srcOff + 1) dst (dstOff + 1) (n - 1)
+
 -- Synthesize the final one-or-two padded blocks: `tailLen` message bytes
--- (copied via `blit`, never the whole message), then `0x80`, then zero
+-- (copied a byte at a time, never the whole message), then `0x80`, then zero
 -- bytes, then the 64-bit big-endian bit length of the WHOLE message.
-buildTail : Array Int -> Int -> Int -> Array Int
+buildTail : Bytes -> Int -> Int -> Bytes
 buildTail msg len tailLen =
   let size = padLength tailLen
-  let out = make size 0
-  blit msg (len - tailLen) out 0 tailLen
-  setInPlace tailLen 0x80 out
-  writeLenGo out (size - 8) (len * 8) 0
-  out
+  let mb = MB.make size
+  blitBytesIntoMut msg (len - tailLen) mb 0 tailLen
+  MB.setInPlace tailLen (0x80 : U8) mb
+  writeLenGo mb (size - 8) (len * 8) 0
+  MB.freeze mb
 
-processTail : Array Int -> State -> State
+processTail : Bytes -> State -> State
 processTail tail st =
-  let numBlocks = arrayLength tail / 64
+  let numBlocks = B.length tail / 64
   processFullBlocks tail numBlocks st 0
 
-digestWord : Array Int -> Int -> Int -> Unit
-digestWord out i word =
-  setInPlace (i * 4) (bitAnd (shiftRight word 24) 255) out
-  setInPlace (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
-  setInPlace (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
-  setInPlace (i * 4 + 3) (bitAnd word 255) out
+digestBytes : State -> Bytes
+digestBytes (h0, h1, h2, h3, h4) = B.concat [
+  U32.toBytesBE h0,
+  U32.toBytesBE h1,
+  U32.toBytesBE h2,
+  U32.toBytesBE h3,
+  U32.toBytesBE h4,
+]
 
-digestBytes : State -> Array Int
-digestBytes (h0, h1, h2, h3, h4) =
-  let out = make 20 0
-  digestWord out 0 h0
-  digestWord out 1 h1
-  digestWord out 2 h2
-  digestWord out 3 h3
-  digestWord out 4 h4
-  out
+-- ── Public entry point ───────────────────────────────────────────────
 
--- ── Public entry points ──────────────────────────────────────────────
-
-sha1AssumeByteDomain : Array Int -> Array Int
-sha1AssumeByteDomain msg =
-  let len = arrayLength msg
+{- | The 20-byte SHA-1 digest of `msg`. -}
+export
+sha1 : Bytes -> Bytes
+sha1 msg =
+  let len = B.length msg
   let numFull = len / 64
   let tailLen = len - numFull * 64
   let afterFull = processFullBlocks msg numFull h0Init 0
   let tail = buildTail msg len tailLen
   digestBytes (processTail tail afterFull)
-
--- Is every element of `msg[0 .. len)` inside the `0..255` byte domain? A
--- tail-recursive index scan over safe indexing, allocating nothing.
---
--- This must stay a full-arity self tail call: native lowers that shape to
--- `musttail`, and the tree-walking interpreter does not TCO at all, so a
--- non-tail rewrite here is a stack overflow rather than a slowdown.
-byteDomainOk : Array Int -> Int -> Int -> Bool
-byteDomainOk msg len i =
-  if i >= len then
-    True
-  else
-    let b = msg[i]
-    if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)
-
-{- | The 20-byte SHA-1 digest of `msg`, skipping the byte-domain check.
-
-   Every element of `msg` must still be in `0` to `255`. Nothing here checks
-   that, and an element outside the range silently digests as some other
-   message. Prefer `sha1` unless the bytes come from a source that already
-   guarantees the range. -}
-export
-sha1FixedBytes : Array Int -> Array Int
-sha1FixedBytes msg = sha1AssumeByteDomain msg
-
-{- | The 20-byte SHA-1 digest of `msg`.
-
-   Panics when any element of `msg` is outside `0` to `255`. -}
-export
-sha1 : Array Int -> Array Int
-sha1 msg =
-  let len = arrayLength msg
-  if not (byteDomainOk msg len 0) then
-    panic "sha1: every element must be a byte in 0..255"
-  else
-    sha1AssumeByteDomain msg
