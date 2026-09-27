@@ -23,8 +23,8 @@
      reading a log wants the route rather than its arguments. -}
 
 import bytes as B
-import bytes.{Bytes, encodeUtf8}
-import string.{fromUtf8, indexOf, take, toUtf8}
+import bytes.{Bytes, decodeUtf8Lossy, encodeUtf8}
+import string.{indexOf, take}
 import u8 as U8
 
 {- | One finished request, as the log records it.
@@ -62,9 +62,13 @@ printableHigh = 125
 substituteByte : Int
 substituteByte = 46
 
-sanitizeByte : Int -> Int
+sanitizeByte : U8 -> U8
 sanitizeByte b =
-  if b >= printableLow && b <= printableHigh then b else substituteByte
+  let byte = U8.toInt b
+  if byte >= printableLow && byte <= printableHigh then
+    b
+  else
+    U8.truncate substituteByte
 
 {- | One field's value, made safe to put in a line: every unprintable byte
    replaced, the whole capped at `limit` bytes, and an empty value written as
@@ -76,14 +80,12 @@ sanitizeByte b =
 export
 logField : Int -> String -> String
 logField limit text =
-  let bytes = toUtf8 text
-  let n = arrayLength bytes
-  if n == 0 then
-    "-"
-  else if n <= limit then
-    fromUtf8 (arrayMakeWith n (i => sanitizeByte bytes[i]))
-  else
-    fromUtf8 (arrayMakeWith limit (i => sanitizeByte bytes[i])) ++ "~"
+  let bytes = encodeUtf8 text
+  let n = B.length bytes
+  -- Log text, and every sanitized byte is printable ASCII, so the lossy
+  -- decode never has an ill-formed sequence to replace.
+  let render count = decodeUtf8Lossy (B.map sanitizeByte (B.take count bytes))
+  if n == 0 then "-" else if n <= limit then render n else render limit ++ "~"
 
 {- | The route half of a request target, with the query string dropped.
 

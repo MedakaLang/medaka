@@ -206,12 +206,20 @@ egressRequestBytes port admission minted = do
   authorization <- makeRequestHeader "authorization" ("Bearer " ++ minted)
   accept <- makeRequestHeader "accept" "application/json"
   closing <- makeRequestHeader "connection" "close"
-  serializeRequest
-    admission.verb
-    admission.target
-    (egressHostValue port)
-    (relayed ++ [authorization, accept, closing])
-    admission.body
+  -- Door: the admitted body is still `Array Int`; an element outside 0..255
+  -- is refused here, under the serializer's own message, rather than packed.
+  body <- toResult
+    "httpclient: request body element outside byte range 0..255"
+    (B.fromArray admission.body)
+  -- Door: the serialized request is `Bytes`; `toArray` is total.
+  map
+    B.toArray
+    (serializeRequest
+      admission.verb
+      admission.target
+      (egressHostValue port)
+      (relayed ++ [authorization, accept, closing])
+      body)
 
 -- The relayed pairs `lib.server_core` selected, in the outbound serializer's
 -- own `Header` type. `makeRequestHeader` grades them a second time and cannot
@@ -230,7 +238,8 @@ relayedRequestFieldsOf fields =
 relayedAnswerFields : List Header -> List String -> List (String, Array Int)
 relayedAnswerFields _ [] = []
 relayedAnswerFields headers (name :: rest) = match findHeader name headers
-  Some value => (name, value) :: relayedAnswerFields headers rest
+  -- Door: `UpstreamAnswer` still carries `Array Int`; `toArray` is total.
+  Some value => (name, B.toArray value) :: relayedAnswerFields headers rest
   None => relayedAnswerFields headers rest
 
 {- | Decode one complete upstream buffer.
@@ -248,7 +257,7 @@ decodeUpstream buffer = match parseResponse buffer
       (UpstreamAnswer
         (responseStatus response)
         (responseReason response)
-        (findHeader "content-type" (responseHeaders response))
+        (map B.toArray (findHeader "content-type" (responseHeaders response)))
         (relayedAnswerFields (responseHeaders response) relayedResponseFields)
         (B.toArray (responseBody response)))
 

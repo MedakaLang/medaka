@@ -3,8 +3,10 @@
    Validation reports a typed cause. Callers own their diagnostic prefix and
    may deliberately collapse details at a protocol boundary. -}
 
+import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import regex.{Regex, isFullMatchBytes, mustCompile}
-import string.{fromUtf8, toUtf8}
+import u8 as U8
 
 public export data NsidError =
   | NsidTooLong
@@ -28,6 +30,9 @@ digitByte byte = byte >= 48 && byte <= 57
 alphaByte : Int -> Bool
 alphaByte byte = lowerByte byte || byte >= 65 && byte <= 90
 
+byteAt : Bytes -> Int -> Int
+byteAt bytes i = U8.toInt bytes[i]
+
 -- Each rule below reports its own cause, so only the character-set SCANS are
 -- patterns; the length, hyphen and first-byte rules stay separate.
 authorityCharsRe : Regex
@@ -36,55 +41,47 @@ authorityCharsRe = mustCompile "[a-zA-Z0-9-]*"
 nameCharsRe : Regex
 nameCharsRe = mustCompile "[a-zA-Z0-9]*"
 
-validateAuthoritySegment : Array Int ->
-  Int ->
-  Int ->
-  Bool ->
-  Result NsidError Unit
+validateAuthoritySegment : Bytes -> Int -> Int -> Bool -> Result NsidError Unit
 validateAuthoritySegment bytes start end first =
   let size = end - start
   if size < 1 || size > 63 then
     Err NsidAuthoritySegmentLength
-  else if bytes[start] == 45 || bytes[end - 1] == 45 then
+  else if byteAt bytes start == 45 || byteAt bytes (end - 1) == 45 then
     Err NsidAuthoritySegmentHyphen
-  else if first && digitByte bytes[start] then
+  else if first && digitByte (byteAt bytes start) then
     Err NsidTopLevelStartsWithDigit
   else if not (isFullMatchBytes authorityCharsRe bytes start end) then
     Err NsidAuthorityNotNormalized
   else
     Ok ()
 
-validateAuthority : Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Result NsidError Int
+validateAuthority : Bytes -> Int -> Int -> Int -> Int -> Result NsidError Int
 validateAuthority bytes i end segmentStart segments =
   if i >= end then do
     () <- validateAuthoritySegment bytes segmentStart end (segments == 0)
     Ok (segments + 1)
-  else if bytes[i] == 46 then do
+  else if byteAt bytes i == 46 then do
     () <- validateAuthoritySegment bytes segmentStart i (segments == 0)
     validateAuthority bytes (i + 1) end (i + 1) (segments + 1)
   else
     validateAuthority bytes (i + 1) end segmentStart segments
 
-lastDotBefore : Array Int -> Int -> Int -> Int -> Int
+lastDotBefore : Bytes -> Int -> Int -> Int -> Int
 lastDotBefore bytes i end last =
   if i >= end then
     last
-  else if bytes[i] == 46 then
+  else if byteAt bytes i == 46 then
     lastDotBefore bytes (i + 1) end i
   else
     lastDotBefore bytes (i + 1) end last
 
-validateName : Array Int -> Int -> Int -> Result NsidError Unit
+validateName : Bytes -> Int -> Int -> Result NsidError Unit
 validateName bytes start end =
   let size = end - start
   if size < 1 || size > 63 then
     Err NsidNameLength
-  else if digitByte bytes[start] || not (alphaByte bytes[start]) then
+  else if digitByte (byteAt bytes start)
+    || not (alphaByte (byteAt bytes start)) then
     Err NsidNameStart
   else if not (isFullMatchBytes nameCharsRe bytes start end) then
     Err NsidNameCharacters
@@ -94,9 +91,9 @@ validateName bytes start end =
 -- | Validate the first `end` bytes as one NSID. The prefix form
 -- lets repository paths validate their collection without copying the rkey.
 export
-validateNsidPrefix : Array Int -> Int -> Result NsidError Unit
+validateNsidPrefix : Bytes -> Int -> Result NsidError Unit
 validateNsidPrefix bytes end =
-  if end < 0 || end > arrayLength bytes then
+  if end < 0 || end > B.length bytes then
     Err NsidMalformed
   else if end > 317 then
     Err NsidTooLong
@@ -115,19 +112,19 @@ validateNsidPrefix bytes end =
 export
 validateNsid : String -> Result NsidError Unit
 validateNsid nsid =
-  let bytes = toUtf8 nsid
-  validateNsidPrefix bytes (arrayLength bytes)
+  let bytes = encodeUtf8 nsid
+  validateNsidPrefix bytes (B.length bytes)
 
 foldAuthorityByte : Int -> Int
 foldAuthorityByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
 
-sameIdentityBytes : Array Int -> Array Int -> Int -> Int -> Bool
+sameIdentityBytes : Bytes -> Bytes -> Int -> Int -> Bool
 sameIdentityBytes left right authorityEnd i =
-  if i >= arrayLength left then
+  if i >= B.length left then
     True
   else
-    let leftByte = left[i]
-    let rightByte = right[i]
+    let leftByte = byteAt left i
+    let rightByte = byteAt right i
     let same =
       if i < authorityEnd then
         foldAuthorityByte leftByte == foldAuthorityByte rightByte
@@ -140,10 +137,10 @@ sameIdentityBytes left right authorityEnd i =
 export
 sameNsidIdentity : String -> String -> Bool
 sameNsidIdentity left right =
-  let leftBytes = toUtf8 left
-  let rightBytes = toUtf8 right
-  let leftSize = arrayLength leftBytes
-  let rightSize = arrayLength rightBytes
+  let leftBytes = encodeUtf8 left
+  let rightBytes = encodeUtf8 right
+  let leftSize = B.length leftBytes
+  let rightSize = B.length rightBytes
   let leftDot = lastDotBefore leftBytes 0 leftSize (-1)
   let rightDot = lastDotBefore rightBytes 0 rightSize (-1)
   leftSize == rightSize
@@ -163,16 +160,29 @@ sameNsidIdentity left right =
 
    The input is assumed to have passed `validateNsid`; a string with no dot is
    returned unchanged rather than rejected, since nothing here decides
-   admission. -}
+   admission. So is one whose bytes are not UTF-8, which `validateNsid` would
+   have refused: folding changes only ASCII letters, so the folded bytes
+   decode exactly when the input's do.
+
+   > canonicalNsid "Com.Example.getThing"
+   "com.example.getThing"
+   > canonicalNsid "noDot"
+   "noDot" -}
 export
 canonicalNsid : String -> String
 canonicalNsid nsid =
-  let bytes = toUtf8 nsid
-  let size = arrayLength bytes
-  let authorityEnd = lastDotBefore bytes 0 size (-1)
-  fromUtf8
-    (arrayMakeWith size (i =>
-      if i < authorityEnd then foldAuthorityByte bytes[i] else bytes[i]))
+  let bytes = encodeUtf8 nsid
+  let authorityEnd = lastDotBefore bytes 0 (B.length bytes) (-1)
+  let folded =
+    B.fromU8Array
+      (arrayMakeWith (B.length bytes) (i =>
+        if i < authorityEnd then
+          U8.truncate (foldAuthorityByte (byteAt bytes i))
+        else
+          bytes[i]))
+  match decodeUtf8 folded
+    Some canonical => canonical
+    None => nsid
 
 -- | Stable repository-facing wording retained while the validation authority
 -- moves into this shared module.

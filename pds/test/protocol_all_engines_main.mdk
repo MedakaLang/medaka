@@ -125,24 +125,20 @@ handler _ _ store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
   let mediaSubtype = mediaTypeSubtype media
   if mediaType == "text"
     && mediaSubtype == "plain"
-    && bytes == toUtf8 "hello" then
+    && bytes == encodeUtf8 "hello" then
     (store, mustResponse 200 "OK" "raw-text")
   else if mediaType == "application"
     && mediaSubtype == "json"
-    && bytes == toUtf8 "{nope}" then
+    && bytes == encodeUtf8 "{nope}" then
     (store, mustResponse 200 "OK" "raw-json")
   else if mediaType == "application"
     && mediaSubtype == "octet-stream"
-    && bytes == [|0, 128, 255|] then
+    && toArray bytes == [|0, 128, 255|] then
     (store, mustResponse 200 "OK" "raw-opaque")
   else
     panic "protocol_all_engines: raw media/body preservation mismatch"
 handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
-  let packed =
-    optionOrPanic
-      "cidForRaw: every element must be a byte in 0..255"
-      (fromArray bytes)
-  match storePut (cidForRaw packed) packed store
+  match storePut (cidForRaw bytes) bytes store
     Err message =>
       panic "protocol_all_engines: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
@@ -477,7 +473,7 @@ checkClientFixedLength = match HC.parseResponse clientFixedResponse
       && HC.responseReason response == "OK"
       && HC.responseBody response == encodeUtf8 "hello"
       && HC.findHeader "content-type" (HC.responseHeaders response)
-        == Some (toUtf8 "text/plain") then
+        == Some (encodeUtf8 "text/plain") then
       println "CELL client-fixed-length PASS status=200 body=hello"
     else
       panic "protocol_all_engines: client fixed-length mismatch"
@@ -497,7 +493,7 @@ checkClientChunked = match HC.parseResponse clientChunkedResponse
     if HC.responseStatus response == 200
       && HC.responseBody response == encodeUtf8 "foobar"
       && HC.findHeader "x-trailer" (HC.responseTrailers response)
-        == Some (toUtf8 "done") then
+        == Some (encodeUtf8 "done") then
       println "CELL client-chunked PASS chunks=2 body=foobar trailer=done"
     else
       panic "protocol_all_engines: client chunked mismatch"

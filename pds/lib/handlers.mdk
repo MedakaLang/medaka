@@ -119,7 +119,6 @@ import lib.repo.{
   repoApplyWrites,
   validateCollection,
 }
-import lib.repo.{blockBytesChecked}
 import lib.credential.{
   CredentialRecord,
   LoginOutcome(..),
@@ -910,18 +909,12 @@ finishWrite store (Ok (repo, output)) =
    record the admitted bytes and declared MIME type in the Store's blob half.
    No request field names an account; this server hosts exactly one, and the
    auth layer has already required a session before this handler ever runs. -}
-applyUploadBlob : Store ->
-  MediaType ->
-  Array Int ->
-  Result Response (Store, Json)
+applyUploadBlob : Store -> MediaType -> Bytes -> Result Response (Store, Json)
 applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
   let accountUsedBytes = storeBlobBytes store
   ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
-  let stored = do
-    checked <- blockBytesChecked bytes
-    storePutBlob (blobRefCid ref) mimeType checked store
-  next <- match stored
+  next <- match storePutBlob (blobRefCid ref) mimeType bytes store
     Err message =>
       Err (internalError "Admitted blob could not be stored: \{message}")
     Ok value => Ok value

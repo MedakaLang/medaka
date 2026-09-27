@@ -8,7 +8,14 @@
    session secret and credential but no repository, the same shape
    `pds/test/session_routes_test.mdk` already uses. -}
 
-import bytes.{Bytes, fromArray, fromU8Array, toArray}
+import bytes.{
+  Bytes,
+  encodeUtf8,
+  fromArray,
+  fromArrayAssumeByteDomain,
+  fromU8Array,
+  toArray,
+}
 import http.{parseRequestClassified}
 import json.{Json(..), get, parse}
 import list.{sort}
@@ -212,7 +219,8 @@ uploadedMimeType : String
 uploadedMimeType = "image/png"
 
 uploadedCidText : String
-uploadedCidText = cidToString (blobCid uploadedBytes)
+uploadedCidText =
+  cidToString (blobCid (fromArrayAssumeByteDomain uploadedBytes))
 
 -- | The store and response after one successful authenticated upload. Every
 -- cell that reads back what was uploaded starts here — the read-back happens
@@ -288,7 +296,7 @@ test "getBlob for an unknown CID is refused" =
       (getQuery
         ""
         getBlobNsid
-        "?did=\{accountDidText}&cid=\{cidToString (blobCid [|99, 98, 97|])}")
+        "?did=\{accountDidText}&cid=\{cidToString (blobCid (encodeUtf8 "cba"))}")
   expectEqual (outcome response) "400 Bad Request BlobNotFound"
 
 test "getBlob needs no credential" =
@@ -356,7 +364,10 @@ pagedStore = uploadPaged 0 sessionStore
 
 pagedCids : List String
 pagedCids =
-  sort (map (n => cidToString (blobCid (pagedBytes n))) [0..pagedCount])
+  sort
+    (map
+      (n => cidToString (blobCid (fromArrayAssumeByteDomain (pagedBytes n))))
+      [0..pagedCount])
 
 pagedQuery : String -> String
 pagedQuery "" = "?did=\{accountDidText}&limit=3"

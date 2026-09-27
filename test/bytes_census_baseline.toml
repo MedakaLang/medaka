@@ -17,6 +17,50 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "pds/lib/nsid.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/atsyntax.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/blob.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/cors.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/ratelimit.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/xrpc.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/websocket.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/httpclient.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/accesslog.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/repo.mdk"
+count = 6
+
+[[entry]]
+file = "pds/lib/store.mdk"
+count = 0
+
+[[entry]]
 file = "pds/lib/did_key.mdk"
 count = 0
 
@@ -129,16 +173,8 @@ file = "pds/lib/hmac_sha256.mdk"
 count = 0
 
 [[entry]]
-file = "pds/lib/store.mdk"
-count = 0
-
-[[entry]]
 file = "pds/lib/mst.mdk"
 count = 0
-
-[[entry]]
-file = "pds/lib/repo.mdk"
-count = 13
 
 [[entry]]
 file = "pds/lib/sync_event.mdk"
