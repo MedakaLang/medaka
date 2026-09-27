@@ -1,8 +1,8 @@
 -- ORGAN 4 (P4), THE HALF WHERE THE WORD IS EXPECTED TO MOVE.
 --
 -- Identical to `b1-p4-super-slot-unique-heads` except that `Base` has TWO impls
--- at the head tycon `Box`.  The collision gate is therefore True at the appended
--- `Base` super slot and False at the declared `Deriv` slot, so the two dict words
+-- at the head tycon `Box`.  The collision gate is therefore True for the `Base`
+-- super cell and False for the declared `Deriv` dictionary, so the two dict words
 -- differ -- which is the mechanism the sibling fixture proves is INVISIBLE while
 -- every head is unique.
 --

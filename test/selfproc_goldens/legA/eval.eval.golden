@@ -423,6 +423,7 @@ prim3 : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
 prim3M : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
 prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a) -> Value a
 progArgsRef : Ref (List String)
+projectDict : Value a -> List Int -> Value a
 pubReexports : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
@@ -431,10 +432,13 @@ rangeListMk : List Int -> Value a
 reTag : String -> String -> List Int -> Int -> Value a -> Value a
 receiverBodyApplied : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> List (Value a) -> <a> Value a
 receiverBoundDefault : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> String -> InstanceShape -> Value a
+receiverDict : InstanceShape -> List (Value a) -> Value a
 receiverParam : List String -> List String
+receiverSuperDict : List (Value a) -> Route -> Value a
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
+reqParamValue : List (Value a) -> String -> Int -> Value a
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 resultToValue : Result String (Value a) -> Value a
 rngDraw : Unit -> U64

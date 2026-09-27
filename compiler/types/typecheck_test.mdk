@@ -82,7 +82,7 @@ import types.typecheck.{
   tcCode,
   tcMsg,
 }
-import support.util.{contains, joinNl, listLen, lookupAssoc}
+import support.util.{contains, joinNl, joinWith, listLen, lookupAssoc}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -101,12 +101,14 @@ data NumericTraceView = NumericTraceView {
 
 numericRouteView : Route -> String
 numericRouteView RNone = "none"
-numericRouteView (RKey key prerequisites) =
+numericRouteView (RKey key prerequisites _) =
   "\{key}[\{joinNl (map numericRouteView prerequisites)}]"
 numericRouteView (RDict name) = "dict:" ++ name
 numericRouteView (RDictFwd name) = "given:" ++ name
 numericRouteView (RLocal name _) = "local:" ++ name
 numericRouteView (RScalar name) = "scalar:" ++ name
+numericRouteView (RProj route path) =
+  "projected:\{numericRouteView route}.\{joinWith "." (map intToString path)}"
 
 numericTraceView : NumericPredicateTraceEntry -> NumericTraceView
 numericTraceView entry =
@@ -1619,7 +1621,7 @@ test "ordinary return instance evidence retains selected prerequisites" =
       _ => False),
     expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
-        Some (RKey _ _) => listLen stamped.mrtPrerequisites == 1
+        Some (RKey _ _ _) => listLen stamped.mrtPrerequisites == 1
         _ => False
       _ => False),
   ]
@@ -1930,9 +1932,10 @@ methodOutcomeSemanticView entry = match methodOutcomeView entry
 
 methodRouteKind : MethodReturnTraceEntry -> String
 methodRouteKind entry = match entry.mrtRoute
-  Some (RKey _ _) => "instance"
+  Some (RKey _ _ _) => "instance"
   Some (RDict _) => "given"
   Some (RDictFwd _) => "given-forwarded"
+  Some (RProj _ _) => "given-projected"
   Some (RLocal _ _) => "local"
   Some (RScalar _) => "scalar"
   Some RNone => "none"
@@ -3239,7 +3242,10 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
       ]
     _ => fail "expected exactly one Box Int construction goal"
 
-test "an appended super slot at an instance construction goal is solved at that goal (#2095, DICT §3 construction)" =
+-- The super `A Int` takes no slot of its own: it is solved at this same goal and
+-- carried inside the `B Int` dictionary (#993), which `dict_semantics_ir` pins as the
+-- constant's super segment.
+test "a super at an instance construction goal rides inside that goal's one slot (#2095, #993, DICT §3 construction)" =
   let trace =
     evidenceObservationTrace
       (joinNl [
@@ -3258,11 +3264,11 @@ test "an appended super slot at an instance construction goal is solved at that 
       ])
   let slots = evidenceEntriesOfKind "GKDictApp" trace
   expectAll [
-    expectEqual 2 (listLen slots),
+    expectEqual 1 (listLen slots),
     expectTrue
       (all
         (e =>
-          e.eoeArity == 2
+          e.eoeArity == 1
             && e.eoeOutcome == EOKInstance
             && e.eoeInstanceKey == Some "Int")
         slots),

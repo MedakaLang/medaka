@@ -1,5 +1,5 @@
 # META
-source_lines=264
+source_lines=296
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -19,7 +19,7 @@ stages=DESUGAR,MARK
 -- dispatches like the instance's own methods) and eval's install (one specialized
 -- candidate per row).  Neither chooses a default: the row says which interface's
 -- body serves which instance's slot.
-import frontend.ast.{Ty}
+import frontend.ast.{Route, Ty}
 import types.repr.{IfaceRef(..)}
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import support.util.{reverseL}
@@ -93,15 +93,25 @@ public export data InstanceShape = InstanceShape {
   -- call of a method of the instance's own interface through the receiver
   -- dispatches by
   isDictWord : String,
-  -- the same word for each superclass instance at these type arguments, keyed
-  -- by the superclass's interface word: a superclass method reached through the
-  -- receiver dispatches by its own instance's word, which differs from
-  -- `isDictWord` whenever either head collides
-  isSuperWords : List (String, String),
+  -- the dictionary of each DIRECT superinterface at these type arguments, in
+  -- declaration order, solved at this instance's own head: the receiver's super
+  -- segment.  A route reads the instance's k-th `requires` dictionary through the
+  -- placeholder parameter `instanceReqParam k`, which a pass binds to that
+  -- dictionary before building the receiver.
+  isSupers : List Route,
   -- how many `requires` dictionaries the instance's methods take after their
-  -- method-level ones (the expanded requires list's length)
+  -- method-level ones (one per declared `requires` predicate)
   isReqCount : Int,
 }
+
+-- The placeholder parameter an `InstanceShape.isSupers` route reads the instance's
+-- [k]-th `requires` dictionary through.
+--
+-- > instanceReqParam 1
+-- "$req_1"
+export
+instanceReqParam : Int -> String
+instanceReqParam k = "$req_\{intToString k}"
 
 export data DispositionTable = DispositionTable {
   dtRows : List MethodDisposition,
@@ -109,6 +119,10 @@ export data DispositionTable = DispositionTable {
   -- the instances inheriting each (interface word, method) slot, keyed by
   -- `slotKey`, in producer order
   dtInheritors : OrdMap (List InstanceShape),
+  -- each interface's DIRECT superinterface count, keyed by interface word: the
+  -- length of the super segment a dictionary of that interface stores ahead of its
+  -- `requires` dictionaries
+  dtIfaceSuperCounts : OrdMap Int,
 }
 
 export
@@ -117,6 +131,7 @@ emptyDispositionTable = DispositionTable {
   dtRows = [],
   dtIndex = omEmpty,
   dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 export
@@ -133,20 +148,37 @@ buildDispositionTable rows = DispositionTable {
   dtRows = rows,
   dtIndex = insertDispositions rows omEmpty,
   dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 -- The producer's builder: each row with its instance's shape and its interface's
--- word (`route_key.ifaceWordOf`), which also fills the inheritor index.
+-- word (`route_key.ifaceWordOf`), which also fills the inheritor index, and each
+-- interface word with its direct superinterface count.
 export
 buildDispositionTableWithShapes : List (InstanceShape, String, MethodDisposition) ->
+  List (String, Int) ->
   DispositionTable
-buildDispositionTableWithShapes shaped =
+buildDispositionTableWithShapes shaped superCounts =
   let rows = map ((_, _, d) => d) shaped
   DispositionTable {
     dtRows = rows,
     dtIndex = insertDispositions rows omEmpty,
     dtInheritors = insertInheritors (reverseL shaped) omEmpty,
+    dtIfaceSuperCounts = insertSuperCounts superCounts omEmpty,
   }
+
+insertSuperCounts : List (String, Int) -> OrdMap Int -> OrdMap Int
+insertSuperCounts [] acc = acc
+insertSuperCounts ((word, n) :: rest) acc =
+  insertSuperCounts rest (omInsert word n acc)
+
+-- How many superinterface dictionaries a dictionary of the interface with word
+-- [ifaceWord] stores ahead of its `requires` dictionaries.  An interface the table
+-- does not know has none.
+export
+ifaceSuperCount : String -> DispositionTable -> Int
+ifaceSuperCount ifaceWord table =
+  optionOr 0 (omLookup ifaceWord table.dtIfaceSuperCounts)
 
 insertInheritors : List (InstanceShape, String, MethodDisposition) ->
   OrdMap (List InstanceShape) ->
@@ -267,7 +299,7 @@ export
 installedDispositionsOpt : Unit -> Option DispositionTable
 installedDispositionsOpt _ = !dispositionsRef
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Route" false) (mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -288,16 +320,23 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionMethod" ((PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (EVar "m"))
 (DTypeSig true "dispositionKey" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dispositionKey" ((PVar "inst") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "instIdMid") (EVar "inst")))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "instIdSeq") (EVar "inst"))))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
-(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSuperWords" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "isReqCount" (TyCon "Int"))))) ())
-(DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))) ())
+(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSupers" (TyApp (TyCon "List") (TyCon "Route"))) (field "isReqCount" (TyCon "Int"))))) ())
+(DTypeSig true "instanceReqParam" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "instanceReqParam" ((PVar "k")) (EBinOp "++" (EBinOp "++" (ELit (LString "$req_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString ""))))
+(DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape")))) (field "dtIfaceSuperCounts" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
 (DTypeSig true "emptyDispositionTable" (TyCon "DispositionTable"))
-(DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")))))
+(DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
 (DTypeSig true "dispositionRows" (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "MethodDisposition"))))
 (DFunDef false "dispositionRows" ((PVar "table")) (EFieldAccess (EVar "table") "dtRows"))
 (DTypeSig true "buildDispositionTable" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyCon "DispositionTable")))
-(DFunDef false "buildDispositionTable" ((PVar "rows")) (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EVar "omEmpty")))))
-(DTypeSig true "buildDispositionTableWithShapes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyCon "DispositionTable")))
-(DFunDef false "buildDispositionTableWithShapes" ((PVar "shaped")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PTuple PWild PWild (PVar "d"))) (EVar "d"))) (EVar "shaped"))) (DoExpr (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EApp (EApp (EVar "insertInheritors") (EApp (EVar "reverseL") (EVar "shaped"))) (EVar "omEmpty"))))))))
+(DFunDef false "buildDispositionTable" ((PVar "rows")) (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
+(DTypeSig true "buildDispositionTableWithShapes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DispositionTable"))))
+(DFunDef false "buildDispositionTableWithShapes" ((PVar "shaped") (PVar "superCounts")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "map") (ELam ((PTuple PWild PWild (PVar "d"))) (EVar "d"))) (EVar "shaped"))) (DoExpr (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EApp (EApp (EVar "insertInheritors") (EApp (EVar "reverseL") (EVar "shaped"))) (EVar "omEmpty"))) (fa "dtIfaceSuperCounts" (EApp (EApp (EVar "insertSuperCounts") (EVar "superCounts")) (EVar "omEmpty"))))))))
+(DTypeSig false "insertSuperCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "insertSuperCounts" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "insertSuperCounts" ((PCons (PTuple (PVar "word") (PVar "n")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertSuperCounts") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EVar "n")) (EVar "acc"))))
+(DTypeSig true "ifaceSuperCount" (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyCon "Int"))))
+(DFunDef false "ifaceSuperCount" ((PVar "ifaceWord") (PVar "table")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ifaceWord")) (EFieldAccess (EVar "table") "dtIfaceSuperCounts"))))
 (DTypeSig false "insertInheritors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))
 (DFunDef false "insertInheritors" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertInheritors" ((PCons (PTuple (PVar "shape") (PVar "ifaceWord") (PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "insertInheritors") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "shape") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc"))))) (EVar "acc"))))))
@@ -327,7 +366,7 @@ installedDispositionsOpt _ = !dispositionsRef
 (DTypeSig true "installedDispositionsOpt" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
 (DFunDef false "installedDispositionsOpt" (PWild) (EUnOp "!" (EVar "dispositionsRef")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Route" false) (mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -348,16 +387,23 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionMethod" ((PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (EVar "m"))
 (DTypeSig true "dispositionKey" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dispositionKey" ((PVar "inst") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "instIdMid") (EVar "inst")))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "instIdSeq") (EVar "inst"))))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
-(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSuperWords" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "isReqCount" (TyCon "Int"))))) ())
-(DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))) ())
+(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSupers" (TyApp (TyCon "List") (TyCon "Route"))) (field "isReqCount" (TyCon "Int"))))) ())
+(DTypeSig true "instanceReqParam" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "instanceReqParam" ((PVar "k")) (EBinOp "++" (EBinOp "++" (ELit (LString "$req_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString ""))))
+(DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape")))) (field "dtIfaceSuperCounts" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
 (DTypeSig true "emptyDispositionTable" (TyCon "DispositionTable"))
-(DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")))))
+(DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
 (DTypeSig true "dispositionRows" (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "MethodDisposition"))))
 (DFunDef false "dispositionRows" ((PVar "table")) (EFieldAccess (EVar "table") "dtRows"))
 (DTypeSig true "buildDispositionTable" (TyFun (TyApp (TyCon "List") (TyCon "MethodDisposition")) (TyCon "DispositionTable")))
-(DFunDef false "buildDispositionTable" ((PVar "rows")) (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EVar "omEmpty")))))
-(DTypeSig true "buildDispositionTableWithShapes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyCon "DispositionTable")))
-(DFunDef false "buildDispositionTableWithShapes" ((PVar "shaped")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild PWild (PVar "d"))) (EVar "d"))) (EVar "shaped"))) (DoExpr (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EApp (EApp (EVar "insertInheritors") (EApp (EVar "reverseL") (EVar "shaped"))) (EVar "omEmpty"))))))))
+(DFunDef false "buildDispositionTable" ((PVar "rows")) (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
+(DTypeSig true "buildDispositionTableWithShapes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DispositionTable"))))
+(DFunDef false "buildDispositionTableWithShapes" ((PVar "shaped") (PVar "superCounts")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild PWild (PVar "d"))) (EVar "d"))) (EVar "shaped"))) (DoExpr (ERecordCreate "DispositionTable" ((fa "dtRows" (EVar "rows")) (fa "dtIndex" (EApp (EApp (EVar "insertDispositions") (EVar "rows")) (EVar "omEmpty"))) (fa "dtInheritors" (EApp (EApp (EVar "insertInheritors") (EApp (EVar "reverseL") (EVar "shaped"))) (EVar "omEmpty"))) (fa "dtIfaceSuperCounts" (EApp (EApp (EVar "insertSuperCounts") (EVar "superCounts")) (EVar "omEmpty"))))))))
+(DTypeSig false "insertSuperCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "insertSuperCounts" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "insertSuperCounts" ((PCons (PTuple (PVar "word") (PVar "n")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertSuperCounts") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EVar "n")) (EVar "acc"))))
+(DTypeSig true "ifaceSuperCount" (TyFun (TyCon "String") (TyFun (TyCon "DispositionTable") (TyCon "Int"))))
+(DFunDef false "ifaceSuperCount" ((PVar "ifaceWord") (PVar "table")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ifaceWord")) (EFieldAccess (EVar "table") "dtIfaceSuperCounts"))))
 (DTypeSig false "insertInheritors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstanceShape") (TyCon "String") (TyCon "MethodDisposition"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape"))))))
 (DFunDef false "insertInheritors" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertInheritors" ((PCons (PTuple (PVar "shape") (PVar "ifaceWord") (PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "insertInheritors") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EBinOp "::" (EVar "shape") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "acc"))))) (EVar "acc"))))))

@@ -1,5 +1,5 @@
 # META
-source_lines=2725
+source_lines=2754
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -68,6 +68,7 @@ import types.disposition.{
   inheritorsOf,
   installedDispositions,
   installedDispositionsOpt,
+  instanceReqParam,
 }
 import eval.eval.{
   buildCtorToType,
@@ -112,14 +113,19 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
   match !receiverRemapRef
     None => CMethod name iface arity route implRoutes methodRoutes
     Some rr =>
-      if receiverOf rr route then
-        CMethod
-          name
-          iface
-          arity
-          (RKey (receiverWordFor rr iface) [])
-          rr.rrReqs
-          (map (remapReceiver rr) methodRoutes)
+      if routeReadsReceiver rr route then match remapReceiver rr route
+        -- a method dispatched on a dictionary built here selects that dictionary's
+        -- instance and takes its `requires` dictionaries as impl dictionaries
+        RKey word reqs _ =>
+          CMethod
+            name
+            iface
+            arity
+            (RKey word [] [])
+            reqs
+            (map (remapReceiver rr) methodRoutes)
+        dict =>
+          CMethod name iface arity dict [] (map (remapReceiver rr) methodRoutes)
       else
         CMethod
           name
@@ -134,42 +140,61 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
 -- (`ast.defaultReceiverDict`), so a sibling or superclass call inside it is routed
 -- `RDict`/`RDictFwd` to that receiver.  The receiver is not a parameter: each
 -- `InheritedDefault` row lowers the body again with the receiver's routes rewritten
--- to `RKey <word>`, the word a dictionary for the inheriting instance carries — the
--- typechecker's bare head unless that head is ambiguous, its canonical key when it
--- is — so a method of the default's own interface reaches that instance's method
--- (supplied or inherited).  A superclass method called on the receiver dispatches by
--- its OWN instance's word (`rrSuperWords`, keyed by the method's interface word):
--- under a head collision the two words differ, and the subclass word names no
--- superclass method.  The instance's `requires` dictionaries, received as the
--- specialization's own leading parameters, are supplied as the call's impl
--- dictionaries.
-data ReceiverRemap = ReceiverRemap {
-  rrSelf : String,
-  rrWord : String,
-  rrSuperWords : List (String, String),
-  rrReqs : List Route,
-}
-
--- The word a method of interface [iface] dispatches by through the receiver.
-receiverWordFor : ReceiverRemap -> String -> String
-receiverWordFor rr iface =
-  optionOr rr.rrWord (lookupAssoc iface rr.rrSuperWords)
+-- to the dictionary the inheriting instance's receiver denotes: `RKey <word>`, the
+-- word such a dictionary carries — the typechecker's bare head unless that head is
+-- ambiguous, its canonical key when it is — so a method of the default's own
+-- interface reaches that instance's method (supplied or inherited).  The instance's
+-- `requires` dictionaries, received as the specialization's own leading parameters,
+-- are supplied as the call's impl dictionaries, and its supers are the instance's
+-- own (`InstanceShape.isSupers`) over those parameters, so a superclass method
+-- called on the receiver projects the super segment of that dictionary and
+-- dispatches by the super instance's own word.
+data ReceiverRemap = ReceiverRemap { rrSelf : String, rrDict : Route }
 
 receiverRemapRef : Ref (Option ReceiverRemap)
 receiverRemapRef = Ref None
 
-receiverOf : ReceiverRemap -> Route -> Bool
-receiverOf rr (RDict d) = d == rr.rrSelf
-receiverOf rr (RDictFwd d) = d == rr.rrSelf
-receiverOf _ _ = False
+-- Does [route] read the receiver, directly or through a projection?
+routeReadsReceiver : ReceiverRemap -> Route -> Bool
+routeReadsReceiver rr (RDict d) = d == rr.rrSelf
+routeReadsReceiver rr (RDictFwd d) = d == rr.rrSelf
+routeReadsReceiver rr (RProj r _) = routeReadsReceiver rr r
+routeReadsReceiver _ _ = False
 
 remapReceiver : ReceiverRemap -> Route -> Route
 remapReceiver rr (RDict d)
-  | d == rr.rrSelf = RKey rr.rrWord rr.rrReqs
+  | d == rr.rrSelf = rr.rrDict
 remapReceiver rr (RDictFwd d)
-  | d == rr.rrSelf = RKey rr.rrWord rr.rrReqs
-remapReceiver rr (RKey w rs) = RKey w (map (remapReceiver rr) rs)
+  | d == rr.rrSelf = rr.rrDict
+remapReceiver rr (RKey w rs sups) =
+  RKey w (map (remapReceiver rr) rs) (map (remapReceiver rr) sups)
+remapReceiver rr (RProj r path) = projectRoute (remapReceiver rr r) path
 remapReceiver _ r = r
+
+-- A projection of a dictionary built here is the super route it stores.
+projectRoute : Route -> List Int -> Route
+projectRoute r [] = r
+projectRoute (RKey w rs sups) (i :: rest) = match drop i sups
+  s :: _ => projectRoute s rest
+  [] => panic "dictionary projection past its superinterfaces"
+projectRoute (RProj r path) more = RProj r (path ++ more)
+projectRoute r path = RProj r path
+
+-- An instance-shape route with its `requires` placeholders bound to [reqNames].
+bindReqParams : List String -> Route -> Route
+bindReqParams reqNames (RDict d) = match reqParamIndex d reqNames 0
+  Some name => RDict name
+  None => RDict d
+bindReqParams reqNames (RKey w rs sups) =
+  RKey w (map (bindReqParams reqNames) rs) (map (bindReqParams reqNames) sups)
+bindReqParams reqNames (RProj r path) = RProj (bindReqParams reqNames r) path
+bindReqParams _ r = r
+
+reqParamIndex : String -> List String -> Int -> Option String
+reqParamIndex _ [] _ = None
+reqParamIndex d (name :: rest) k
+  | d == instanceReqParam k = Some name
+  | otherwise = reqParamIndex d rest (k + 1)
 
 -- The dictionary routes of a constrained-function occurrence, remapped likewise.
 lowerDictRoutes : List Route -> List Route
@@ -1315,7 +1340,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
 
 memoCafBind : (String, String) -> CBind
 memoCafBind (tag, method) = CBind (memoBindName tag method) [
-  CClause [] (CMethod method "" 0 (RKey tag []) [] []),
+  CClause [] (CMethod method "" 0 (RKey tag [] []) [] []),
 ]
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
@@ -1343,12 +1368,12 @@ hoistImpl st (CImplEntry n s (CImplDefault ifaceId tag key pos pats body)) =
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
 hoistExpr : LowerState -> CExpr -> CExpr
-hoistExpr st (CMethod name iface 0 (RKey tag []) [] []) =
+hoistExpr st (CMethod name iface 0 (RKey tag [] sups) [] []) =
   if isMemoKey st.memoKeysAll name tag then
     let _ = recordMemoRef st tag name
     CVar (memoBindName tag name) AGlobal
   else
-    CMethod name iface 0 (RKey tag []) [] []
+    CMethod name iface 0 (RKey tag [] sups) [] []
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
 -- (RDictFwd from a polymorphic caller forwarding a concrete dict, or a plain RDict)
 -- resolves — when the method has exactly one impl and no default — statically to
@@ -1360,6 +1385,8 @@ hoistExpr st (CMethod name iface 0 (RDict d) [] []) =
   hoistDictNullary st name iface (RDict d)
 hoistExpr st (CMethod name iface 0 (RDictFwd d) [] []) =
   hoistDictNullary st name iface (RDictFwd d)
+hoistExpr st (CMethod name iface 0 (RProj r path) [] []) =
+  hoistDictNullary st name iface (RProj r path)
 hoistExpr _ (CMethod name iface arity r ir mr) =
   CMethod name iface arity r ir mr
 hoistExpr _ (CLit l) = CLit l
@@ -2170,9 +2197,11 @@ inheritedDefaultEntry ifaceWord mname positions pats body shape =
       (range nMethodDicts (nMethodDicts + shape.isReqCount))
   let rr = ReceiverRemap {
     rrSelf = defaultReceiverDict mname,
-    rrWord = shape.isDictWord,
-    rrSuperWords = shape.isSuperWords,
-    rrReqs = map RDict reqNames,
+    rrDict =
+      RKey
+        shape.isDictWord
+        (map RDict reqNames)
+        (map (bindReqParams reqNames) shape.isSupers),
   }
   let saved = !receiverRemapRef
   receiverRemapRef := Some rr
@@ -2731,7 +2760,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
+(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false) (mem "instanceReqParam" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
@@ -2740,21 +2769,34 @@ nodeTag _ = "?"
 (DTypeSig false "composeVar" (TyCon "String"))
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
 (DTypeSig true "cmethodOf" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "CExpr"))))
-(DFunDef false "cmethodOf" ((PVar "name") (PTuple (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EMatch (EUnOp "!" (EVar "receiverRemapRef")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes"))) (arm (PCon "Some" (PVar "rr")) () (EIf (EApp (EApp (EVar "receiverOf") (EVar "rr")) (EVar "route")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EApp (EApp (EVar "RKey") (EApp (EApp (EVar "receiverWordFor") (EVar "rr")) (EVar "iface"))) (EListLit))) (EFieldAccess (EVar "rr") "rrReqs")) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "implRoutes"))) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes")))))))
-(DData Private "ReceiverRemap" () ((variant "ReceiverRemap" (ConNamed (field "rrSelf" (TyCon "String")) (field "rrWord" (TyCon "String")) (field "rrSuperWords" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "rrReqs" (TyApp (TyCon "List") (TyCon "Route")))))) ())
-(DTypeSig false "receiverWordFor" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "receiverWordFor" ((PVar "rr") (PVar "iface")) (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "rr") "rrWord")) (EApp (EApp (EVar "lookupAssoc") (EVar "iface")) (EFieldAccess (EVar "rr") "rrSuperWords"))))
+(DFunDef false "cmethodOf" ((PVar "name") (PTuple (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EMatch (EUnOp "!" (EVar "receiverRemapRef")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes"))) (arm (PCon "Some" (PVar "rr")) () (EIf (EApp (EApp (EVar "routeReadsReceiver") (EVar "rr")) (EVar "route")) (EMatch (EApp (EApp (EVar "remapReceiver") (EVar "rr")) (EVar "route")) (arm (PCon "RKey" (PVar "word") (PVar "reqs") PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EApp (EApp (EApp (EVar "RKey") (EVar "word")) (EListLit)) (EListLit))) (EVar "reqs")) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes")))) (arm (PVar "dict") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "dict")) (EListLit)) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "implRoutes"))) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes")))))))
+(DData Private "ReceiverRemap" () ((variant "ReceiverRemap" (ConNamed (field "rrSelf" (TyCon "String")) (field "rrDict" (TyCon "Route"))))) ())
 (DTypeSig false "receiverRemapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ReceiverRemap"))))
 (DFunDef false "receiverRemapRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "receiverOf" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "Route") (TyCon "Bool"))))
-(DFunDef false "receiverOf" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
-(DFunDef false "receiverOf" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
-(DFunDef false "receiverOf" (PWild PWild) (EVar "False"))
+(DTypeSig false "routeReadsReceiver" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "Route") (TyCon "Bool"))))
+(DFunDef false "routeReadsReceiver" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
+(DFunDef false "routeReadsReceiver" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
+(DFunDef false "routeReadsReceiver" ((PVar "rr") (PCon "RProj" (PVar "r") PWild)) (EApp (EApp (EVar "routeReadsReceiver") (EVar "rr")) (EVar "r")))
+(DFunDef false "routeReadsReceiver" (PWild PWild) (EVar "False"))
 (DTypeSig false "remapReceiver" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "Route") (TyCon "Route"))))
-(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EApp (EApp (EVar "RKey") (EFieldAccess (EVar "rr") "rrWord")) (EFieldAccess (EVar "rr") "rrReqs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EApp (EApp (EVar "RKey") (EFieldAccess (EVar "rr") "rrWord")) (EFieldAccess (EVar "rr") "rrReqs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RKey" (PVar "w") (PVar "rs"))) (EApp (EApp (EVar "RKey") (EVar "w")) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "rs"))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EFieldAccess (EVar "rr") "rrDict") (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EFieldAccess (EVar "rr") "rrDict") (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RKey" (PVar "w") (PVar "rs") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "w")) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "rs"))) (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "sups"))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectRoute") (EApp (EApp (EVar "remapReceiver") (EVar "rr")) (EVar "r"))) (EVar "path")))
 (DFunDef false "remapReceiver" (PWild (PVar "r")) (EVar "r"))
+(DTypeSig false "projectRoute" (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Route"))))
+(DFunDef false "projectRoute" ((PVar "r") (PList)) (EVar "r"))
+(DFunDef false "projectRoute" ((PCon "RKey" (PVar "w") (PVar "rs") (PVar "sups")) (PCons (PVar "i") (PVar "rest"))) (EMatch (EApp (EApp (EVar "drop") (EVar "i")) (EVar "sups")) (arm (PCons (PVar "s") PWild) () (EApp (EApp (EVar "projectRoute") (EVar "s")) (EVar "rest"))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "dictionary projection past its superinterfaces"))))))
+(DFunDef false "projectRoute" ((PCon "RProj" (PVar "r") (PVar "path")) (PVar "more")) (EApp (EApp (EVar "RProj") (EVar "r")) (EBinOp "++" (EVar "path") (EVar "more"))))
+(DFunDef false "projectRoute" ((PVar "r") (PVar "path")) (EApp (EApp (EVar "RProj") (EVar "r")) (EVar "path")))
+(DTypeSig false "bindReqParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
+(DFunDef false "bindReqParams" ((PVar "reqNames") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "reqParamIndex") (EVar "d")) (EVar "reqNames")) (ELit (LInt 0))) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "RDict") (EVar "name"))) (arm (PCon "None") () (EApp (EVar "RDict") (EVar "d")))))
+(DFunDef false "bindReqParams" ((PVar "reqNames") (PCon "RKey" (PVar "w") (PVar "rs") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "w")) (EApp (EApp (EVar "map") (EApp (EVar "bindReqParams") (EVar "reqNames"))) (EVar "rs"))) (EApp (EApp (EVar "map") (EApp (EVar "bindReqParams") (EVar "reqNames"))) (EVar "sups"))))
+(DFunDef false "bindReqParams" ((PVar "reqNames") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "RProj") (EApp (EApp (EVar "bindReqParams") (EVar "reqNames")) (EVar "r"))) (EVar "path")))
+(DFunDef false "bindReqParams" (PWild (PVar "r")) (EVar "r"))
+(DTypeSig false "reqParamIndex" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "reqParamIndex" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "reqParamIndex" ((PVar "d") (PCons (PVar "name") (PVar "rest")) (PVar "k")) (EIf (EBinOp "==" (EVar "d") (EApp (EVar "instanceReqParam") (EVar "k"))) (EApp (EVar "Some") (EVar "name")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "reqParamIndex") (EVar "d")) (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lowerDictRoutes" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "lowerDictRoutes" ((PVar "routes")) (EMatch (EUnOp "!" (EVar "receiverRemapRef")) (arm (PCon "None") () (EVar "routes")) (arm (PCon "Some" (PVar "rr")) () (EApp (EApp (EVar "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "routes")))))
 (DTypeSig false "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
@@ -3123,7 +3165,7 @@ nodeTag _ = "?"
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
 (DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false (PVar "st") (ERecordCreate "LowerState" ((fa "memoKeysAll" (EVar "keys")) (fa "soleKeys" (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys"))) (fa "memoRefs" (EApp (EVar "Ref") (EListLit)))))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "st"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "st"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "st") "memoRefs"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
-(DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (ELit (LString ""))) (ELit (LInt 0))) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
+(DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (ELit (LString ""))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "dedupPairs" ((PVar "ps")) (EApp (EApp (EVar "dedupBy") (EVar "memoRefKey")) (EVar "ps")))
 (DTypeSig false "memoRefKey" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
@@ -3136,9 +3178,10 @@ nodeTag _ = "?"
 (DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
 (DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
 (DTypeSig false "hoistExpr" (TyFun (TyCon "LowerState") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
-(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RKey" (PVar "tag") (PList)) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EFieldAccess (EVar "st") "memoKeysAll")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (ELit (LInt 0))) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RKey" (PVar "tag") (PList) (PVar "sups")) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EFieldAccess (EVar "st") "memoKeysAll")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EVar "sups"))) (EListLit)) (EListLit))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RDict" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EVar "iface")) (EApp (EVar "RDict") (EVar "d"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RDictFwd" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EVar "iface")) (EApp (EVar "RDictFwd") (EVar "d"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RProj" (PVar "r") (PVar "path")) (PList) (PList))) (EApp (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EVar "iface")) (EApp (EApp (EVar "RProj") (EVar "r")) (EVar "path"))))
 (DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
 (DFunDef false "hoistExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "hoistExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -3303,7 +3346,7 @@ nodeTag _ = "?"
 (DFunDef false "lowerInheritedDefault" (PWild PWild PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "lowerInheritedDefault" ((PVar "disp") (PVar "dt") (PVar "o") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBlock (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "inheritedDefaultEntry") (EVar "ifaceWord")) (EVar "mname")) (EVar "positions")) (EVar "pats")) (EVar "body"))) (EApp (EApp (EApp (EVar "inheritorsOf") (EVar "ifaceWord")) (EVar "mname")) (EVar "dt"))))))
 (DTypeSig false "inheritedDefaultEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "InstanceShape") (TyCon "CImplEntry"))))))))
-(DFunDef false "inheritedDefaultEntry" ((PVar "ifaceWord") (PVar "mname") (PVar "positions") (PVar "pats") (PVar "body") (PVar "shape")) (EBlock (DoLet false false (PVar "nMethodDicts") (EApp (EVar "leadingDictParams") (EVar "pats"))) (DoLet false false (PVar "reqNames") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))) (EApp (EApp (EVar "range") (EVar "nMethodDicts")) (EBinOp "+" (EVar "nMethodDicts") (EFieldAccess (EVar "shape") "isReqCount"))))) (DoLet false false (PVar "rr") (ERecordCreate "ReceiverRemap" ((fa "rrSelf" (EApp (EVar "defaultReceiverDict") (EVar "mname"))) (fa "rrWord" (EFieldAccess (EVar "shape") "isDictWord")) (fa "rrSuperWords" (EFieldAccess (EVar "shape") "isSuperWords")) (fa "rrReqs" (EApp (EApp (EVar "map") (EVar "RDict")) (EVar "reqNames")))))) (DoLet false false (PVar "saved") (EUnOp "!" (EVar "receiverRemapRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EApp (EVar "Some") (EVar "rr")))) (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EVar "saved"))) (DoLet false false (PVar "reqPats") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "PVar") (EVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "reqNames"))) (DoLet false false (PVar "allPats") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EVar "nMethodDicts")) (EVar "pats")) (EVar "reqPats")) (EApp (EApp (EVar "drop") (EVar "nMethodDicts")) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceWord")) (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (EVar "allPats")) (EVar "lowered"))))))
+(DFunDef false "inheritedDefaultEntry" ((PVar "ifaceWord") (PVar "mname") (PVar "positions") (PVar "pats") (PVar "body") (PVar "shape")) (EBlock (DoLet false false (PVar "nMethodDicts") (EApp (EVar "leadingDictParams") (EVar "pats"))) (DoLet false false (PVar "reqNames") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))) (EApp (EApp (EVar "range") (EVar "nMethodDicts")) (EBinOp "+" (EVar "nMethodDicts") (EFieldAccess (EVar "shape") "isReqCount"))))) (DoLet false false (PVar "rr") (ERecordCreate "ReceiverRemap" ((fa "rrSelf" (EApp (EVar "defaultReceiverDict") (EVar "mname"))) (fa "rrDict" (EApp (EApp (EApp (EVar "RKey") (EFieldAccess (EVar "shape") "isDictWord")) (EApp (EApp (EVar "map") (EVar "RDict")) (EVar "reqNames"))) (EApp (EApp (EVar "map") (EApp (EVar "bindReqParams") (EVar "reqNames"))) (EFieldAccess (EVar "shape") "isSupers"))))))) (DoLet false false (PVar "saved") (EUnOp "!" (EVar "receiverRemapRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EApp (EVar "Some") (EVar "rr")))) (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EVar "saved"))) (DoLet false false (PVar "reqPats") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "PVar") (EVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "reqNames"))) (DoLet false false (PVar "allPats") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EVar "nMethodDicts")) (EVar "pats")) (EVar "reqPats")) (EApp (EApp (EVar "drop") (EVar "nMethodDicts")) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceWord")) (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (EVar "allPats")) (EVar "lowered"))))))
 (DTypeSig false "leadingDictParams" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "leadingDictParams" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictParams") (EVar "rest"))) (ELit (LInt 0))))
 (DFunDef false "leadingDictParams" (PWild) (ELit (LInt 0)))
@@ -3491,7 +3534,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
-(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
+(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false) (mem "instanceReqParam" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
@@ -3500,21 +3543,34 @@ nodeTag _ = "?"
 (DTypeSig false "composeVar" (TyCon "String"))
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
 (DTypeSig true "cmethodOf" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "CExpr"))))
-(DFunDef false "cmethodOf" ((PVar "name") (PTuple (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EMatch (EUnOp "!" (EVar "receiverRemapRef")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes"))) (arm (PCon "Some" (PVar "rr")) () (EIf (EApp (EApp (EVar "receiverOf") (EVar "rr")) (EVar "route")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EApp (EApp (EVar "RKey") (EApp (EApp (EVar "receiverWordFor") (EVar "rr")) (EVar "iface"))) (EListLit))) (EFieldAccess (EVar "rr") "rrReqs")) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes")))))))
-(DData Private "ReceiverRemap" () ((variant "ReceiverRemap" (ConNamed (field "rrSelf" (TyCon "String")) (field "rrWord" (TyCon "String")) (field "rrSuperWords" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "rrReqs" (TyApp (TyCon "List") (TyCon "Route")))))) ())
-(DTypeSig false "receiverWordFor" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "receiverWordFor" ((PVar "rr") (PVar "iface")) (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "rr") "rrWord")) (EApp (EApp (EVar "lookupAssoc") (EVar "iface")) (EFieldAccess (EVar "rr") "rrSuperWords"))))
+(DFunDef false "cmethodOf" ((PVar "name") (PTuple (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EMatch (EUnOp "!" (EVar "receiverRemapRef")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes"))) (arm (PCon "Some" (PVar "rr")) () (EIf (EApp (EApp (EVar "routeReadsReceiver") (EVar "rr")) (EVar "route")) (EMatch (EApp (EApp (EVar "remapReceiver") (EVar "rr")) (EVar "route")) (arm (PCon "RKey" (PVar "word") (PVar "reqs") PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EApp (EApp (EApp (EVar "RKey") (EVar "word")) (EListLit)) (EListLit))) (EVar "reqs")) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes")))) (arm (PVar "dict") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "dict")) (EListLit)) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "methodRoutes")))))))
+(DData Private "ReceiverRemap" () ((variant "ReceiverRemap" (ConNamed (field "rrSelf" (TyCon "String")) (field "rrDict" (TyCon "Route"))))) ())
 (DTypeSig false "receiverRemapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ReceiverRemap"))))
 (DFunDef false "receiverRemapRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "receiverOf" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "Route") (TyCon "Bool"))))
-(DFunDef false "receiverOf" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
-(DFunDef false "receiverOf" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
-(DFunDef false "receiverOf" (PWild PWild) (EVar "False"))
+(DTypeSig false "routeReadsReceiver" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "Route") (TyCon "Bool"))))
+(DFunDef false "routeReadsReceiver" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
+(DFunDef false "routeReadsReceiver" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")))
+(DFunDef false "routeReadsReceiver" ((PVar "rr") (PCon "RProj" (PVar "r") PWild)) (EApp (EApp (EVar "routeReadsReceiver") (EVar "rr")) (EVar "r")))
+(DFunDef false "routeReadsReceiver" (PWild PWild) (EVar "False"))
 (DTypeSig false "remapReceiver" (TyFun (TyCon "ReceiverRemap") (TyFun (TyCon "Route") (TyCon "Route"))))
-(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EApp (EApp (EVar "RKey") (EFieldAccess (EVar "rr") "rrWord")) (EFieldAccess (EVar "rr") "rrReqs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EApp (EApp (EVar "RKey") (EFieldAccess (EVar "rr") "rrWord")) (EFieldAccess (EVar "rr") "rrReqs")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RKey" (PVar "w") (PVar "rs"))) (EApp (EApp (EVar "RKey") (EVar "w")) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "rs"))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDict" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EFieldAccess (EVar "rr") "rrDict") (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RDictFwd" (PVar "d"))) (EIf (EBinOp "==" (EVar "d") (EFieldAccess (EVar "rr") "rrSelf")) (EFieldAccess (EVar "rr") "rrDict") (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RKey" (PVar "w") (PVar "rs") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "w")) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "rs"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "sups"))))
+(DFunDef false "remapReceiver" ((PVar "rr") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectRoute") (EApp (EApp (EVar "remapReceiver") (EVar "rr")) (EVar "r"))) (EVar "path")))
 (DFunDef false "remapReceiver" (PWild (PVar "r")) (EVar "r"))
+(DTypeSig false "projectRoute" (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Route"))))
+(DFunDef false "projectRoute" ((PVar "r") (PList)) (EVar "r"))
+(DFunDef false "projectRoute" ((PCon "RKey" (PVar "w") (PVar "rs") (PVar "sups")) (PCons (PVar "i") (PVar "rest"))) (EMatch (EApp (EApp (EVar "drop") (EVar "i")) (EVar "sups")) (arm (PCons (PVar "s") PWild) () (EApp (EApp (EVar "projectRoute") (EVar "s")) (EVar "rest"))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "dictionary projection past its superinterfaces"))))))
+(DFunDef false "projectRoute" ((PCon "RProj" (PVar "r") (PVar "path")) (PVar "more")) (EApp (EApp (EVar "RProj") (EVar "r")) (EBinOp "++" (EVar "path") (EVar "more"))))
+(DFunDef false "projectRoute" ((PVar "r") (PVar "path")) (EApp (EApp (EVar "RProj") (EVar "r")) (EVar "path")))
+(DTypeSig false "bindReqParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
+(DFunDef false "bindReqParams" ((PVar "reqNames") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "reqParamIndex") (EVar "d")) (EVar "reqNames")) (ELit (LInt 0))) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "RDict") (EVar "name"))) (arm (PCon "None") () (EApp (EVar "RDict") (EVar "d")))))
+(DFunDef false "bindReqParams" ((PVar "reqNames") (PCon "RKey" (PVar "w") (PVar "rs") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "w")) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindReqParams") (EVar "reqNames"))) (EVar "rs"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindReqParams") (EVar "reqNames"))) (EVar "sups"))))
+(DFunDef false "bindReqParams" ((PVar "reqNames") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "RProj") (EApp (EApp (EVar "bindReqParams") (EVar "reqNames")) (EVar "r"))) (EVar "path")))
+(DFunDef false "bindReqParams" (PWild (PVar "r")) (EVar "r"))
+(DTypeSig false "reqParamIndex" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "reqParamIndex" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "reqParamIndex" ((PVar "d") (PCons (PVar "name") (PVar "rest")) (PVar "k")) (EIf (EBinOp "==" (EVar "d") (EApp (EVar "instanceReqParam") (EVar "k"))) (EApp (EVar "Some") (EVar "name")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "reqParamIndex") (EVar "d")) (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lowerDictRoutes" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "lowerDictRoutes" ((PVar "routes")) (EMatch (EUnOp "!" (EVar "receiverRemapRef")) (arm (PCon "None") () (EVar "routes")) (arm (PCon "Some" (PVar "rr")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "remapReceiver") (EVar "rr"))) (EVar "routes")))))
 (DTypeSig false "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
@@ -3883,7 +3939,7 @@ nodeTag _ = "?"
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
 (DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false (PVar "st") (ERecordCreate "LowerState" ((fa "memoKeysAll" (EVar "keys")) (fa "soleKeys" (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys"))) (fa "memoRefs" (EApp (EVar "Ref") (EListLit)))))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "st"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "st"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "st") "memoRefs"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
-(DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (ELit (LString ""))) (ELit (LInt 0))) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
+(DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (ELit (LString ""))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "dedupPairs" ((PVar "ps")) (EApp (EApp (EVar "dedupBy") (EVar "memoRefKey")) (EVar "ps")))
 (DTypeSig false "memoRefKey" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
@@ -3896,9 +3952,10 @@ nodeTag _ = "?"
 (DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
 (DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
 (DTypeSig false "hoistExpr" (TyFun (TyCon "LowerState") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
-(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RKey" (PVar "tag") (PList)) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EFieldAccess (EVar "st") "memoKeysAll")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (ELit (LInt 0))) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RKey" (PVar "tag") (PList) (PVar "sups")) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EFieldAccess (EVar "st") "memoKeysAll")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EVar "sups"))) (EListLit)) (EListLit))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RDict" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EVar "iface")) (EApp (EVar "RDict") (EVar "d"))))
 (DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RDictFwd" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EVar "iface")) (EApp (EVar "RDictFwd") (EVar "d"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PVar "iface") (PLit (LInt 0)) (PCon "RProj" (PVar "r") (PVar "path")) (PList) (PList))) (EApp (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EVar "iface")) (EApp (EApp (EVar "RProj") (EVar "r")) (EVar "path"))))
 (DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
 (DFunDef false "hoistExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "hoistExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -4063,7 +4120,7 @@ nodeTag _ = "?"
 (DFunDef false "lowerInheritedDefault" (PWild PWild PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "lowerInheritedDefault" ((PVar "disp") (PVar "dt") (PVar "o") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBlock (DoLet false false (PVar "ifaceWord") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "inheritedDefaultEntry") (EVar "ifaceWord")) (EVar "mname")) (EVar "positions")) (EVar "pats")) (EVar "body"))) (EApp (EApp (EApp (EVar "inheritorsOf") (EVar "ifaceWord")) (EVar "mname")) (EVar "dt"))))))
 (DTypeSig false "inheritedDefaultEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "InstanceShape") (TyCon "CImplEntry"))))))))
-(DFunDef false "inheritedDefaultEntry" ((PVar "ifaceWord") (PVar "mname") (PVar "positions") (PVar "pats") (PVar "body") (PVar "shape")) (EBlock (DoLet false false (PVar "nMethodDicts") (EApp (EVar "leadingDictParams") (EVar "pats"))) (DoLet false false (PVar "reqNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))) (EApp (EApp (EVar "range") (EVar "nMethodDicts")) (EBinOp "+" (EVar "nMethodDicts") (EFieldAccess (EVar "shape") "isReqCount"))))) (DoLet false false (PVar "rr") (ERecordCreate "ReceiverRemap" ((fa "rrSelf" (EApp (EVar "defaultReceiverDict") (EVar "mname"))) (fa "rrWord" (EFieldAccess (EVar "shape") "isDictWord")) (fa "rrSuperWords" (EFieldAccess (EVar "shape") "isSuperWords")) (fa "rrReqs" (EApp (EApp (EMethodRef "map") (EVar "RDict")) (EVar "reqNames")))))) (DoLet false false (PVar "saved") (EUnOp "!" (EVar "receiverRemapRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EApp (EVar "Some") (EVar "rr")))) (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EVar "saved"))) (DoLet false false (PVar "reqPats") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "PVar") (EVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "reqNames"))) (DoLet false false (PVar "allPats") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EVar "nMethodDicts")) (EVar "pats")) (EVar "reqPats")) (EApp (EApp (EVar "drop") (EVar "nMethodDicts")) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceWord")) (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (EVar "allPats")) (EVar "lowered"))))))
+(DFunDef false "inheritedDefaultEntry" ((PVar "ifaceWord") (PVar "mname") (PVar "positions") (PVar "pats") (PVar "body") (PVar "shape")) (EBlock (DoLet false false (PVar "nMethodDicts") (EApp (EVar "leadingDictParams") (EVar "pats"))) (DoLet false false (PVar "reqNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))) (EApp (EApp (EVar "range") (EVar "nMethodDicts")) (EBinOp "+" (EVar "nMethodDicts") (EFieldAccess (EVar "shape") "isReqCount"))))) (DoLet false false (PVar "rr") (ERecordCreate "ReceiverRemap" ((fa "rrSelf" (EApp (EVar "defaultReceiverDict") (EVar "mname"))) (fa "rrDict" (EApp (EApp (EApp (EVar "RKey") (EFieldAccess (EVar "shape") "isDictWord")) (EApp (EApp (EMethodRef "map") (EVar "RDict")) (EVar "reqNames"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindReqParams") (EVar "reqNames"))) (EFieldAccess (EVar "shape") "isSupers"))))))) (DoLet false false (PVar "saved") (EUnOp "!" (EVar "receiverRemapRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EApp (EVar "Some") (EVar "rr")))) (DoLet false false (PVar "lowered") (EApp (EVar "lower") (EVar "body"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "receiverRemapRef")) (EVar "saved"))) (DoLet false false (PVar "reqPats") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "PVar") (EVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "reqNames"))) (DoLet false false (PVar "allPats") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "take") (EVar "nMethodDicts")) (EVar "pats")) (EVar "reqPats")) (EApp (EApp (EVar "drop") (EVar "nMethodDicts")) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceWord")) (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (EVar "allPats")) (EVar "lowered"))))))
 (DTypeSig false "leadingDictParams" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "leadingDictParams" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictParams") (EVar "rest"))) (ELit (LInt 0))))
 (DFunDef false "leadingDictParams" (PWild) (ELit (LInt 0)))

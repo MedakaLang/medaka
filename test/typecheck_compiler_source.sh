@@ -875,14 +875,14 @@ data PendingMethodDict = PendingMethodDict {
 registerReqSlots : ScopeId ->
   List (String, Mono) ->
   Int ->
-  List (Require, List Int) ->
+  List Require ->
   Unit
     psArgs = PSArgsKnown argMonos,
     psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
-expandPredicateSlots : List PredicateSlot -> List PredicateSlot
+dedupPredicateSlotEntry : (String, List PredicateSlot) ->
 predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
 && sameIfaceDecl request.prIface slot.psIface
 monoVecSameGiven requestArgs slotArgs
@@ -1132,6 +1132,13 @@ done || exit 1
 # `SuperclassEvidence`), never a separately registered alias answering on its own.
 if grep -rqE 'LegacySuperclassAlias|LegacySuperAlias|ATLegacySuperclass' "$ROOT/compiler"; then
   echo "FAIL: a retired superclass-alias given kind is back; supers are projections of their given"
+  exit 1
+fi
+# #993/#679: a superinterface takes no dict slot of its own — a dictionary carries its
+# supers (`RKey`'s third list) and a given's super is its projection (`RProj`).  The
+# flat super-slot expansion and the per-instance super-word table are retired.
+if grep -rqwE 'expandSupersTable|expandSupersVecs|expandFunPredicateSlots|expandPredicateSlots|userSuperLookup|userIfaceNamesRef|expandImplRequires|expandImplRequiresPaths|argExpandedImplReqRoutes|instanceSuperWords|isSuperWords|rrSuperWords' --include='*.mdk' "$ROOT/compiler"; then
+  echo "FAIL: a retired flat super-slot name is back; a dictionary carries its supers and a given's super is an RProj"
   exit 1
 fi
 if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then

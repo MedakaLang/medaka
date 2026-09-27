@@ -1,5 +1,5 @@
 # META
-source_lines=281
+source_lines=282
 stages=DESUGAR,MARK
 # SOURCE
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
@@ -253,11 +253,12 @@ refsE (CDict name routes) = name :: flatMap refsRoute routes
 -- carry an RLocal, so recurse.
 refsRoute : Route -> List String
 refsRoute RNone = []
-refsRoute (RKey _ reqs) = flatMap refsRoute reqs
+refsRoute (RKey _ reqs sups) = flatMap refsRoute (reqs ++ sups)
 refsRoute (RDict _) = []
 refsRoute (RDictFwd _) = []
 refsRoute (RLocal sym reqs) = sym :: flatMap refsRoute reqs
 refsRoute (RScalar _) = []
+refsRoute (RProj r _) = refsRoute r
 
 refsBind : CBind -> List String
 refsBind (CBind _ clauses) = flatMap refsClause clauses
@@ -348,11 +349,12 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EVar "routes"))))
 (DTypeSig false "refsRoute" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsRoute" ((PCon "RNone")) (EListLit))
-(DFunDef false "refsRoute" ((PCon "RKey" PWild (PVar "reqs"))) (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EVar "reqs")))
+(DFunDef false "refsRoute" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "refsRoute" ((PCon "RDict" PWild)) (EListLit))
 (DFunDef false "refsRoute" ((PCon "RDictFwd" PWild)) (EListLit))
 (DFunDef false "refsRoute" ((PCon "RLocal" (PVar "sym") (PVar "reqs"))) (EBinOp "::" (EVar "sym") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EVar "reqs"))))
 (DFunDef false "refsRoute" ((PCon "RScalar" PWild)) (EListLit))
+(DFunDef false "refsRoute" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "refsRoute") (EVar "r")))
 (DTypeSig false "refsBind" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsBind" ((PCon "CBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMap") (EVar "refsClause")) (EVar "clauses")))
 (DTypeSig false "refsClause" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -436,11 +438,12 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EVar "routes"))))
 (DTypeSig false "refsRoute" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsRoute" ((PCon "RNone")) (EListLit))
-(DFunDef false "refsRoute" ((PCon "RKey" PWild (PVar "reqs"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EVar "reqs")))
+(DFunDef false "refsRoute" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "refsRoute" ((PCon "RDict" PWild)) (EListLit))
 (DFunDef false "refsRoute" ((PCon "RDictFwd" PWild)) (EListLit))
 (DFunDef false "refsRoute" ((PCon "RLocal" (PVar "sym") (PVar "reqs"))) (EBinOp "::" (EVar "sym") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EVar "reqs"))))
 (DFunDef false "refsRoute" ((PCon "RScalar" PWild)) (EListLit))
+(DFunDef false "refsRoute" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "refsRoute") (EVar "r")))
 (DTypeSig false "refsBind" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsBind" ((PCon "CBind" PWild (PVar "clauses"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsClause")) (EVar "clauses")))
 (DTypeSig false "refsClause" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))

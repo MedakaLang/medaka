@@ -1,7 +1,10 @@
--- Same as main.mdk except Eq's `requires` clause is written in DECLARATION order
--- (Eq a, Eq b, matching Ord's own Ord a, Ord b) instead of reversed.
+-- #3508: a prelude super chain (Ord requires Eq) over a user type whose Eq and Ord
+-- impls list their `requires` in DIFFERENT orders.  `viaOrd`'s `eq` projects the
+-- `Eq (P a b)` dictionary its `Ord (P a b)` dictionary carries, built at the call
+-- site with Eq's own requires in Eq's own order, so every verb prints
+-- True|False|True|False (native faulted before the dictionary carried its supers).
 data P a b = P a b
-impl Eq (P a b) requires Eq a, Eq b where
+impl Eq (P a b) requires Eq b, Eq a where
   eq (P a1 b1) (P a2 b2) = eq b1 b2 && eq a1 a2
 impl Ord (P a b) requires Ord a, Ord b where
   compare (P a1 b1) (P a2 b2) = match compare a1 a2
