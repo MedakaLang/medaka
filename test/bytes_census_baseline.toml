@@ -50,7 +50,7 @@ count = 10
 
 [[entry]]
 file = "gzip/lib/container.mdk"
-count = 2
+count = 0
 
 [[entry]]
 file = "gzip/lib/huffman.mdk"
@@ -62,20 +62,44 @@ count = 0
 
 [[entry]]
 file = "gzip/lib/crc32.mdk"
-count = 1
+count = 0
 
 [[entry]]
 file = "stdlib/hex.mdk"
-count = 6
+count = 0
 
 [[entry]]
 file = "stdlib/http.mdk"
-count = 82
+count = 0
 
 [[entry]]
 file = "stdlib/net.mdk"
-count = 13
+count = 9
 
 [[entry]]
 file = "stdlib/net_async.mdk"
-count = 20
+count = 9
+
+[[entry]]
+file = "pds/lib/field.mdk"
+count = 8
+
+[[entry]]
+file = "pds/lib/scalar.mdk"
+count = 8
+
+[[entry]]
+file = "pds/lib/secp256k1.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/hmac_sha256.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/sign.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/did_key.mdk"
+count = 1

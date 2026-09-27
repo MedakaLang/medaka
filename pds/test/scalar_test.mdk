@@ -26,7 +26,11 @@
 import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
 import test.fixture_support.{bitBytes, decBytes}
-import array as A
+import bytes.{Bytes, fromU8Array}
+import bytes as B
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
+import u8 as U8
 import lib.scalar.{
   Sc,
   scZero,
@@ -52,99 +56,100 @@ import lib.scalar.{
 -- ── Input construction (inputs, not answer keys) ──────────────────────
 
 -- 32 big-endian bytes, incremented by one.
-incBytes : Array Int -> Array Int
+incBytes : Bytes -> Bytes
 incBytes bs =
-  let out = arrayCopy bs
+  let out = MB.thaw bs
   let () = incGo out 31
-  out
+  MB.freeze out
 
-incGo : Array Int -> Int -> Unit
+incGo : MutBytes -> Int -> Unit
 incGo out i =
   if i < 0 then
     ()
   else
-    let v = out[i]
+    let v = U8.toInt out[i]
     if v == 255 then
-      out[i] := 0
+      let () = MB.setInPlace i 0 out
       incGo out (i - 1)
     else
-      A.setInPlace i (v + 1) out
+      MB.setInPlace i (U8.truncate (v + 1)) out
 
 -- 32 big-endian bytes, halved (v >> 1).
-halveBytes : Array Int -> Array Int
+halveBytes : Bytes -> Bytes
 halveBytes bs =
-  let out = arrayMake 32 0
+  let out = MB.make 32
   let () = halveGo bs out 0 0
-  out
+  MB.freeze out
 
-halveGo : Array Int -> Array Int -> Int -> Int -> Unit
+halveGo : Bytes -> MutBytes -> Int -> Int -> Unit
 halveGo bs out i carry =
   if i >= 32 then
     ()
   else
-    let cur = bs[i]
-    out[i] := shiftRight cur 1 + shiftLeft carry 7
+    let cur = U8.toInt bs[i]
+    let () =
+      MB.setInPlace i (U8.truncate (shiftRight cur 1 + shiftLeft carry 7)) out
     halveGo bs out (i + 1) (bitAnd cur 1)
 
 -- 32 big-endian bytes, a - b (a >= b, which every input here satisfies).
-subBytes : Array Int -> Array Int -> Array Int
+subBytes : Bytes -> Bytes -> Bytes
 subBytes a b =
-  let out = arrayMake 32 0
+  let out = MB.make 32
   let () = subGo a b out 31 0
-  out
+  MB.freeze out
 
-subGo : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
+subGo : Bytes -> Bytes -> MutBytes -> Int -> Int -> Unit
 subGo a b out i borrow =
   if i < 0 then
     ()
   else
-    let v = a[i] - b[i] - borrow
+    let v = U8.toInt a[i] - U8.toInt b[i] - borrow
     if v < 0 then
-      out[i] := v + 256
+      let () = MB.setInPlace i (U8.truncate (v + 256)) out
       subGo a b out (i - 1) 1
     else
-      out[i] := v
+      let () = MB.setInPlace i (U8.truncate v) out
       subGo a b out (i - 1) 0
 
 -- 32 big-endian bytes, a + b (the sum below 2^256, which every input here
 -- satisfies).
-addBytes : Array Int -> Array Int -> Array Int
+addBytes : Bytes -> Bytes -> Bytes
 addBytes a b =
-  let out = arrayMake 32 0
+  let out = MB.make 32
   let () = addGo a b out 31 0
-  out
+  MB.freeze out
 
-addGo : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
+addGo : Bytes -> Bytes -> MutBytes -> Int -> Int -> Unit
 addGo a b out i carry =
   if i < 0 then
     ()
   else
-    let v = a[i] + b[i] + carry
-    out[i] := bitAnd v 255
+    let v = U8.toInt a[i] + U8.toInt b[i] + carry
+    let () = MB.setInPlace i (U8.truncate (bitAnd v 255)) out
     addGo a b out (i - 1) (shiftRight v 8)
 
-allOnes : Array Int
-allOnes = arrayMake 32 255
+allOnes : Bytes
+allOnes = fromU8Array (arrayMake 32 255)
 
 -- n, the secp256k1 group order (SEC 2 v2 §2.4.1). Used here ONLY as a
 -- rejection input and as the base for the derived boundary values below —
 -- never as an expected answer.
-nBytes : Array Int
-nBytes = [|
+nBytes : Bytes
+nBytes = fromU8Array [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
   0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41
 |]
 
-nPlus1Bytes : Array Int
+nPlus1Bytes : Bytes
 nPlus1Bytes = incBytes nBytes
 
-nMinus1Bytes : Array Int
+nMinus1Bytes : Bytes
 nMinus1Bytes = decBytes nBytes
 
 -- n_h = floor(n/2) = (n-1)/2, DERIVED rather than typed out. `n` is odd, so
 -- halving n-1 is exact.
-nHalfBytes : Array Int
+nHalfBytes : Bytes
 nHalfBytes = halveBytes nMinus1Bytes
 
 nHalf : Sc
@@ -162,7 +167,7 @@ limbBits : List Int
 limbBits = [16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
 
 -- One representative element per limb boundary, plus a few small ones.
-sampleBytes : List (Array Int)
+sampleBytes : List Bytes
 sampleBytes =
   [bitBytes 0, bitBytes 1, bitBytes 255]
     ++ map bitBytes limbBits
@@ -327,7 +332,7 @@ test "(n - 1) + (n - 1) = -2, a sum that carries out of 256 bits" =
 
 -- ── Serialization ─────────────────────────────────────────────────────
 
-roundTrips : Array Int -> Bool
+roundTrips : Bytes -> Bool
 roundTrips bs = match scFromBytes bs
   Ok s => scToBytes s == bs
   Err _ => False
@@ -339,7 +344,7 @@ test "toBytes is 32 bytes" =
   expectSatisfies
     "every sample to encode to 32 bytes"
     (all (n => n == 32))
-    (map (a => arrayLength (scToBytes a)) samples)
+    (map (a => B.length (scToBytes a)) samples)
 
 test "fromBytes REJECTS n" = expectTrue (match scFromBytes nBytes
   Err _ => True
@@ -359,12 +364,12 @@ test "fromBytes ACCEPTS n-1 (the last canonical value)" = expectTrue
     Err _ => False)
 
 test "fromBytes REJECTS a short input" = expectTrue
-  (match scFromBytes (arrayMake 31 0)
+  (match scFromBytes (fromU8Array (arrayMake 31 0))
     Err _ => True
     Ok _ => False)
 
-test "fromBytes REJECTS an out-of-range element" = expectTrue
-  (match scFromBytes (arrayMake 32 256)
+test "fromBytes REJECTS a long input" = expectTrue
+  (match scFromBytes (fromU8Array (arrayMake 33 0))
     Err _ => True
     Ok _ => False)
 
@@ -380,7 +385,7 @@ test "fromBytesReduce ACCEPTS 2^256-1" =
 -- Every value in [n, 2^256) is below 2n, so it reduces to x - n. The inputs
 -- span that range: its bottom (n, n + 1), limb boundaries above n, and its top
 -- (2^256 - 1); x - n is computed on the bytes, not by the module.
-aboveN : List (Array Int)
+aboveN : List Bytes
 aboveN = [
   nBytes,
   nPlus1Bytes,
@@ -392,7 +397,7 @@ aboveN = [
   allOnes,
 ]
 
-reducesToDifference : Array Int -> Bool
+reducesToDifference : Bytes -> Bool
 reducesToDifference x = match scFromBytes (subBytes x nBytes)
   Ok d => scEqual (scFromBytesReduce x) d
   Err _ => False

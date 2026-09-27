@@ -53,7 +53,7 @@ import lib.scalar.{
   scIsHigh,
 }
 import array as A
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes}
 import hex.{decode, encode}
 import string.{split, startsWith, toInt, trim}
 import io.{readLines}
@@ -97,8 +97,8 @@ bump arr i = A.setInPlace i (arr[i] + 1) arr
 
 -- ── Row evaluation ───────────────────────────────────────────────────
 
-mustHex : String -> Array Int
-mustHex s = toArray (resultOrPanic "scalar_vectors: bad hex '\{s}'" (decode s))
+mustHex : String -> Bytes
+mustHex s = resultOrPanic "scalar_vectors: bad hex '\{s}'" (decode s)
 
 loadSc : String -> Sc
 loadSc s = scFromBytesReduce (mustHex s)
@@ -131,7 +131,7 @@ applyBit op a =
 -- for the cell, and update the counters.
 grade : Array Int -> Array Int -> String -> String -> Sc -> String -> <IO> Unit
 grade counts totals label op actual expected =
-  let got = encode (fromArrayAssumeByteDomain (scToBytes actual))
+  let got = encode (scToBytes actual)
   let () = bump totals 0
   if got == expected then
     let () = bump counts (opIndex op)

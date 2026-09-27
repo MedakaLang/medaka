@@ -13,7 +13,7 @@ import lib.secp256k1.{
   pointRawFixedGeneratorIsCanonicalInfinityForTest,
 }
 import array as A
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes}
 import hex.{decode, encode}
 import io.{readLines}
 import string.{split, trim}
@@ -29,13 +29,13 @@ neg = "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 three : String
 three = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
 
-bytes : String -> Array Int
+bytes : String -> Bytes
 bytes s = match decode s
-  Ok b => toArray b
+  Ok b => b
   Err _ => panic "point corpus malformed hex"
 
-hexOf : Array Int -> String
-hexOf x = encode (fromArrayAssumeByteDomain x)
+hexOf : Bytes -> String
+hexOf x = encode x
 
 token : String -> Bool
 token s =

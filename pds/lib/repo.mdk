@@ -247,7 +247,7 @@ signedValue did dataCid rev signature = DcMap [
   ("data", DcLink dataCid),
   ("rev", DcString (tidToString rev)),
   ("prev", DcNull),
-  ("sig", DcBytes (signatureCompact signature)),
+  ("sig", DcBytes (toArray (signatureCompact signature))),
 ]
 
 encodeCommit : String -> DagCbor -> Result String (Array Int)
@@ -268,11 +268,10 @@ buildCommit did secret rev tree store = do
     (message => "repo: signing failed: \{message}")
     (signDigest
       secret
-      (toArray
-        (sha256
-          (optionOrPanic
-            "sha256: every element must be a byte in 0..255"
-            (fromArray unsigned)))))
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (fromArray unsigned))))
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
@@ -301,9 +300,10 @@ repoInit did secret rev = do
 -- | Key-byte convenience boundary; malformed signing keys fail loudly.
 export
 repoInitFromKeyBytes : String -> Array Int -> Tid -> Result String Repo
-repoInitFromKeyBytes did keyBytes rev = match secretKeyFromBytes keyBytes
-  Err message => Err "repo: bad signing key: \{message}"
-  Ok secret => repoInit did secret rev
+repoInitFromKeyBytes did keyBytes rev =
+  match secretKeyFromBytes (fromArrayAssumeByteDomain keyBytes)
+    Err message => Err "repo: bad signing key: \{message}"
+    Ok secret => repoInit did secret rev
 
 rehydrate : String ->
   SecretKey ->
@@ -817,7 +817,10 @@ decodeSignedCommit bytes = match dagCborDecode bytes
             (tidParse revText)
           signature <- mapErr
             (message => "repo: invalid compact signature: \{message}")
-            (signatureFromCompact compact)
+            (signatureFromCompact
+              (optionOrPanic
+                "sign.signatureFromCompact: every element must be a byte in 0..255"
+                (fromArray compact)))
           Ok (did, dataCid, rev, signature)
       _ =>
         Err
@@ -854,9 +857,8 @@ repoVerifyCommit did publicKey (RepoCommit rev dataCid _ unsigned signed signatu
       signatureCompact parsed == signatureCompact signature
         && verifyDigest
           publicKey
-          (toArray
-            (sha256
-              (optionOrPanic
-                "sha256: every element must be a byte in 0..255"
-                (fromArray unsigned))))
+          (sha256
+            (optionOrPanic
+              "sha256: every element must be a byte in 0..255"
+              (fromArray unsigned)))
           signature

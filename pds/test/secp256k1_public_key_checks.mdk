@@ -2,7 +2,9 @@
    constants are SEC 2 multiples of G, not values captured from this code. -}
 
 import test.{expectEach, expectEqual, expectTrue}
-import array as A
+import bytes.{Bytes, fromU8Array}
+import mut_bytes as MB
+import u8 as U8
 import lib.sign.{
   secretKeyFromBytes,
   publicKeyFromCompressed,
@@ -10,8 +12,8 @@ import lib.sign.{
   publicKeyForSecret,
 }
 
-keyBytes : Int -> Array Int
-keyBytes n = [|
+keyBytes : Int -> Bytes
+keyBytes n = fromU8Array [|
   0,
   0,
   0,
@@ -43,47 +45,47 @@ keyBytes n = [|
   0,
   0,
   0,
-  n,
+  U8.truncate n,
 |]
 
-generatorCompressed : Array Int
-generatorCompressed = [|
+generatorCompressed : Bytes
+generatorCompressed = fromU8Array [|
   0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95,
   0xce, 0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59,
   0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98
 |]
 
-twoGCompressed : Array Int
-twoGCompressed = [|
+twoGCompressed : Bytes
+twoGCompressed = fromU8Array [|
   0x02, 0xc6, 0x04, 0x7f, 0x94, 0x41, 0xed, 0x7d, 0x6d, 0x30, 0x45, 0x40, 0x6e,
   0x95, 0xc0, 0x7c, 0xd8, 0x5c, 0x77, 0x8e, 0x4b, 0x8c, 0xef, 0x3c, 0xa7, 0xab,
   0xac, 0x09, 0xb9, 0x5c, 0x70, 0x9e, 0xe5
 |]
 
-threeGCompressed : Array Int
-threeGCompressed = [|
+threeGCompressed : Bytes
+threeGCompressed = fromU8Array [|
   0x02, 0xf9, 0x30, 0x8a, 0x01, 0x92, 0x58, 0xc3, 0x10, 0x49, 0x34, 0x4f, 0x85,
   0xf8, 0x9d, 0x52, 0x29, 0xb5, 0x31, 0xc8, 0x45, 0x83, 0x6f, 0x99, 0xb0, 0x86,
   0x01, 0xf1, 0x13, 0xbc, 0xe0, 0x36, 0xf9
 |]
 
-fourGCompressed : Array Int
-fourGCompressed = [|
+fourGCompressed : Bytes
+fourGCompressed = fromU8Array [|
   0x02, 0xe4, 0x93, 0xdb, 0xf1, 0xc1, 0x0d, 0x80, 0xf3, 0x58, 0x1e, 0x49, 0x04,
   0x93, 0x0b, 0x14, 0x04, 0xcc, 0x6c, 0x13, 0x90, 0x0e, 0xe0, 0x75, 0x84, 0x74,
   0xfa, 0x94, 0xab, 0xe8, 0xc4, 0xcd, 0x13
 |]
 
-withPrefix : Int -> Array Int -> Array Int
+withPrefix : U8 -> Bytes -> Bytes
 withPrefix prefix encoded =
-  let out = arrayCopy encoded
-  let () = A.setInPlace 0 prefix out
-  out
+  let out = MB.thaw encoded
+  let () = MB.setInPlace 0 prefix out
+  MB.freeze out
 
-derivedCompressed : Int -> Array Int
+derivedCompressed : Int -> Bytes
 derivedCompressed n = match secretKeyFromBytes (keyBytes n)
   Ok secret => publicKeyCompressed (publicKeyForSecret secret)
-  Err _ => [||]
+  Err _ => fromU8Array [||]
 
 test "compressed G, 2G, and 3G decode and re-encode exactly" = expectEach [
   (
@@ -154,11 +156,13 @@ test "public decoding rejects lengths, prefixes, and compressed infinity" = expe
   [
     (
       "rejects a 32-byte input",
-      expectTrue (isErr (publicKeyFromCompressed (arrayMake 32 0))),
+      expectTrue
+        (isErr (publicKeyFromCompressed (fromU8Array (arrayMake 32 0)))),
     ),
     (
       "rejects a 34-byte input",
-      expectTrue (isErr (publicKeyFromCompressed (arrayMake 34 0))),
+      expectTrue
+        (isErr (publicKeyFromCompressed (fromU8Array (arrayMake 34 0)))),
     ),
     (
       "rejects prefix 0",
@@ -172,12 +176,16 @@ test "public decoding rejects lengths, prefixes, and compressed infinity" = expe
     ),
     (
       "rejects a 1-byte input",
-      expectTrue (isErr (publicKeyFromCompressed [|0|])),
+      expectTrue (isErr (publicKeyFromCompressed (fromU8Array [|0|]))),
     ),
   ]
 
 test "public decoding rejects x at or above p" =
-  expectTrue (isErr (publicKeyFromCompressed (withPrefix 2 (arrayMake 33 255))))
+  expectTrue
+    (isErr
+      (publicKeyFromCompressed (withPrefix 2 (fromU8Array (arrayMake 33 255)))))
 
 test "public decoding rejects the known nonsquare RHS at x zero" =
-  expectTrue (isErr (publicKeyFromCompressed (withPrefix 2 (arrayMake 33 0))))
+  expectTrue
+    (isErr
+      (publicKeyFromCompressed (withPrefix 2 (fromU8Array (arrayMake 33 0)))))

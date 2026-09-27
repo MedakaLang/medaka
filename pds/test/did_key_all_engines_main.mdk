@@ -16,11 +16,16 @@ import lib.multiformats.{
   uvarintDecode,
 }
 import lib.sign.{publicKeyCompressed, publicKeyFromCompressed}
+import bytes.{Bytes}
 
 mustHex : String -> Array Int
 mustHex text =
   toArray
     (resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text))
+
+mustHexBytes : String -> Bytes
+mustHexBytes text =
+  resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text)
 
 mustInt : String -> Int
 mustInt text =
@@ -55,7 +60,8 @@ runRow expectedId line = match split " " (trim line)
       panic "did_key_all_engines: row id \{idText} out of order"
     else
       let keyBytes = mustHex keyHex
-      match publicKeyFromCompressed keyBytes
+      let keyBlock = mustHexBytes keyHex
+      match publicKeyFromCompressed keyBlock
         Err message =>
           panic
             "did_key_all_engines: row \{idText} public key rejected: \{message}"
@@ -69,7 +75,7 @@ runRow expectedId line = match split " " (trim line)
               let recompressed = publicKeyCompressed decoded
               let ok =
                 encoded == expectedDid
-                  && recompressed == keyBytes
+                  && recompressed == keyBlock
                   && didKeyFromPublicKey decoded == expectedDid
                   && canonicalPayload expectedDid keyBytes
               if ok then
