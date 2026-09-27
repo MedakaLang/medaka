@@ -1069,8 +1069,11 @@ declared variance (§6.4). Starting positive at the entry's type:
   opened: each constructor field is read at the type's own position, so a
   row written inside a monomorphic field is charged. Only the type's
   authority arguments are substituted into its fields, once per distinct
-  authority arguments; a type or row argument is charged where it lands, by
-  the slot's variance, so the opening need not see it. A builtin type, and a type whose constructors another module
+  authority arguments. A type or row argument is charged where it lands, by
+  the slot's variance, so the opening need not see it; that requires the
+  variance of every slot to be the least fixpoint of the declaration's
+  occurrences (§6.4), never a more covariant approximation. A builtin
+  type, and a type whose constructors another module
   keeps (an abstract or private type, or any newtype declared elsewhere), is
   read through its variance only: the host holds such a value but cannot
   apply anything inside it, though the declaring module's own functions

@@ -1172,7 +1172,9 @@ through it.
   the head's position, once per (head, position, authority arguments), with
   only the authority parameters substituted. Type and row arguments are
   charged where they land by the argument walk at the slot's variance, so
-  substituting them adds nothing; keying on them made the opening count and
+  substituting them adds nothing, provided the variance table is converged:
+  review round 4 found the checker's capped fixpoint was not (#3512, fixed
+  by #3513, which lands first). Keying on them made the opening count and
   the key size grow exponentially with nested and fanned-out types (review
   rounds 2 and 3). Authorities cannot grow structurally, so the walk is
   bounded.

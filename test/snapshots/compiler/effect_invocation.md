@@ -1,5 +1,5 @@
 # META
-source_lines=149
+source_lines=153
 stages=DESUGAR,MARK
 # SOURCE
 -- The invocation summary: the effects a host can make an entry perform.
@@ -18,7 +18,11 @@ stages=DESUGAR,MARK
 -- substituted into its fields, and an opening is done once per (head,
 -- position, authority arguments): a type or row argument is already
 -- charged where it lands, by the argument walk at the slot's variance, so
--- substituting it would add nothing but a key that grows with the type. An
+-- substituting it would add nothing but a key that grows with the type.
+-- That rests on the checker's variance table being the least fixpoint of
+-- the declarations' occurrences, which `declEnvPolarityEntriesFix` computes
+-- to convergence: a slot read as more covariant than its fields use it would
+-- drop a charge here. An
 -- abstract or builtin head has no visible fields and is read through its
 -- variance only.
 import types.repr.{
