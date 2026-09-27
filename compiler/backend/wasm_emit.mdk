@@ -191,7 +191,7 @@ import frontend.ast.{
   Route(..),
   Loc(..),
   ifaceIdMatches,
-  isFixedWidthHead,
+  isTaggedFixedHead,
   fixedWidthMask,
 }
 import ir.core_ir.{
@@ -296,7 +296,9 @@ import backend.wasm_preamble.{
   valueDivRuntimeLines,
   valueModRuntimeLines,
   valueCmpNumRuntimeLines,
+  Wide64W(..),
   u64RuntimeLines,
+  i64RuntimeLines,
   rngStateGlobalLines,
   rngRuntimeLines,
   hashRuntimeLines,
@@ -402,6 +404,7 @@ data WasmEmit = WasmEmit {
   useStrLeaf : Ref Bool,
   useFloat : Ref Bool,
   useU64 : Ref Bool,
+  useI64 : Ref Bool,
   useStrSearch : Ref Bool,
   useValueAdd : Ref Bool,
   useValueSub : Ref Bool,
@@ -470,6 +473,7 @@ freshWasmEmit mode = WasmEmit {
   useStrLeaf = Ref False,
   useFloat = Ref False,
   useU64 = Ref False,
+  useI64 = Ref False,
   useStrSearch = Ref False,
   useValueAdd = Ref False,
   useValueSub = Ref False,
@@ -1439,6 +1443,7 @@ emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
       || !emit.useHash
       || !emit.useFloat
       || !emit.useU64
+      || !emit.useI64
       || !emit.useStrSearch
       || !emit.useCharClass
       || !emit.useIO
@@ -1843,6 +1848,12 @@ isLeafExternW name = contains
     "u64ShiftLeft",
     "u64ShiftRight",
     "u64MulHigh",
+    -- the signed kernels: `I32` is an Int word held sign-extended, and the
+    -- `I64` doors move a 64-bit payload between a `$u64` and an `$i64` cell.
+    "i32Truncate",
+    "i32ToInt",
+    "i64FromBits",
+    "i64ToBits",
     -- #101: libm math externs.  IEEE-exact ops lower to native f64 opcodes
     -- (sqrt/floor/ceil/trunc → f64.sqrt/floor/ceil/trunc; round → $mdk_round, C-round
     -- half-away-from-zero); transcendentals lower to JS `Math.*` HOST IMPORTS ($mdk_<name>,
@@ -1889,6 +1900,11 @@ isU64ExternW name = contains name [
   "u64ShiftRight",
   "u64MulHigh",
 ]
+
+-- the `I64` kernel externs: each moves the payload between a `$u64` and an
+-- `$i64` cell, so each demands both types.
+isI64ExternW : String -> Bool
+isI64ExternW name = name == "i64FromBits" || name == "i64ToBits"
 
 -- #101: the libm math externs whose wasm lowering is a JS `Math.*` HOST IMPORT
 -- (transcendentals + the two-arg pow/atan2/hypot).  These force WasmEmit.useMath so the
@@ -2357,8 +2373,10 @@ scanExprW7 emit (CMethod _ _ route implRoutes methRoutes) =
 -- extern, OR a Float-kinded main, post-scan in emitProgram.)
 scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
 -- A `U64` value is born from a literal, a `U64` operator, or a `u64` kernel
--- extern (noteW8Extern), so those three demand the `$u64` type and runtime.
+-- extern (noteW8Extern), so those three demand the `$u64` type and runtime; an
+-- `I64` the same way demands `$i64`.
 scanExprW7 emit (CLit (LU64 _ _)) = setRef emit.useU64 True
+scanExprW7 emit (CLit (LI64 _ _)) = setRef emit.useI64 True
 -- A String/Char literal forces the $str rep.  `programUsesStr` already sees
 -- literals in top-level bindings; this scan is the only one that walks impl
 -- method bodies, so without this arm a prelude impl such as
@@ -2370,6 +2388,7 @@ scanExprW7 emit (CLit (LChar _)) = setRef emit.useStr True
 scanExprW7 emit (CLam _ b) = scanExprW7 emit b
 scanExprW7 emit (CBinPrim op l r tag) =
   let _ = if tag == "U64" then setRef emit.useU64 True
+  let _ = if tag == "I64" then setRef emit.useI64 True
   let _ = noteW8Binop emit op
   let _ = scanExprW7 emit l
   scanExprW7 emit r
@@ -2456,6 +2475,9 @@ noteW8Extern emit name =
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
   let _ = if isFloatMathExternW name then setRef emit.useFloat True
   let _ = if isU64ExternW name then setRef emit.useU64 True
+  let _ =
+    if isI64ExternW name then
+      let _ = setRef emit.useU64 True in setRef emit.useI64 True
   -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
   -- force emit.useMath so mathHostImportLines is declared.
   let _ = if isMathHostExternW name then setRef emit.useMath True
@@ -3288,6 +3310,8 @@ emitLitI32 emit (LChar _) =
   gapLTy emit "Char literal is W6 (string/unicode slice)"
 emitLitI32 emit (LU64 _ _) =
   gapLTy emit "U64 literal (a boxed $u64 cell) needs ref-mode"
+emitLitI32 emit (LI64 _ _) =
+  gapLTy emit "I64 literal (a boxed $i64 cell) needs ref-mode"
 
 emitVarI32 : WasmEmit ->
   List String ->
@@ -3381,6 +3405,8 @@ emitTruncateRef prog env d head a = match fixedWidthMask head
 -- (`docs/design/INTEGER-TYPES-DESIGN.md` §4).  The mask is applied to the raw i64
 -- result, whose low 32 bits are exact even when the Int product overflowed 64 bits.
 -- `/` and `%` of in-range operands are already in range and take the Int path as is.
+-- An `I32` site sign-extends the low 32 bits instead, which also wraps
+-- `minBound / -1` (2^31 in the i64) back to `minBound`; its `%` cannot leave range.
 fixedWidthWrapW : String -> String -> List String
 fixedWidthWrapW tag op = match fixedWidthMask tag
   Some mask =>
@@ -3388,7 +3414,11 @@ fixedWidthWrapW tag op = match fixedWidthMask tag
       ["i64.const " ++ intToString mask, "i64.and"]
     else
       []
-  None => []
+  None =>
+    if tag == "I32" && contains op ["+", "-", "*", "/"] then
+      ["i64.extend32_s"]
+    else
+      []
 
 emitBinI32 : WasmEmit ->
   List String ->
@@ -3406,7 +3436,7 @@ emitBinI32 emit fnNames valNames env op l r tag =
   -- (E-INT-OVERFLOW).  A fixed-width site computes the i64 op and keeps its low
   -- bits (`fixedWidthWrapW`); the sign-extend ahead of the mask cannot change them.
   let opInstrs =
-    if isFixedWidthHead tag then
+    if isTaggedFixedHead tag then
       [wasmBinOp64 emit op]
         ++ (if intOpCanOverflow op then normInt64 else [])
         ++ fixedWidthWrapW tag op
@@ -3645,35 +3675,39 @@ emitRefProgram prog groups =
   -- layer-9: $mdk_value_eq / $mdk_value_cmp (runtime-shape-dispatched comparison).
   -- Needs $str (forced via useStr when this is set) + $mdk_str_compare (forced via
   -- useStrSearch in emitValueCmpRef).
-  -- A U64 program splices a `$u64` arm into each shape-dispatched helper below.
+  -- A U64 or I64 program splices a `$u64` or `$i64` arm into each
+  -- shape-dispatched helper below.
   let u64 = (progEmit prog).useU64.value
+  let i64 = (progEmit prog).useI64.value
+  let wide = Wide64W u64 i64
   let valueCmpRt =
-    if (progEmit prog).useValueCmp.value then valueEqRuntimeLines u64 else []
+    if (progEmit prog).useValueCmp.value then valueEqRuntimeLines wide else []
   -- A0: runtime value-tag-dispatched arithmetic helpers ($mdk_value_add/…), emitted only
   -- when a poly-`Num` operand actually routes to THAT operator's helper (A1). Split
   -- per-operator (S2/#2359 correction) so e.g. a program using only `-` doesn't also
   -- define $mdk_value_add/mul/div/mod. Reference $float/$boxint (always declared) +
   -- $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
   let valueAddRt =
-    if (progEmit prog).useValueAdd.value then valueAddRuntimeLines u64 else []
+    if (progEmit prog).useValueAdd.value then valueAddRuntimeLines wide else []
   let valueSubRt =
-    if (progEmit prog).useValueSub.value then valueSubRuntimeLines u64 else []
+    if (progEmit prog).useValueSub.value then valueSubRuntimeLines wide else []
   let valueMulRt =
-    if (progEmit prog).useValueMul.value then valueMulRuntimeLines u64 else []
+    if (progEmit prog).useValueMul.value then valueMulRuntimeLines wide else []
   let valueDivRt =
-    if (progEmit prog).useValueDiv.value then valueDivRuntimeLines u64 else []
+    if (progEmit prog).useValueDiv.value then valueDivRuntimeLines wide else []
   let valueModRt =
-    if (progEmit prog).useValueMod.value then valueModRuntimeLines u64 else []
+    if (progEmit prog).useValueMod.value then valueModRuntimeLines wide else []
   -- A1 (poly-`Ord`-on-Float, string-free): the num-only cmp sextet (eq_num/cmp_num/
   -- lt_num/le_num/gt_num/ge_num), gated as ONE block (mirrors valueCmpRt's precedent
   -- for the $str-capable sibling) — independent of which arith op(s), if any, are
   -- also demanded in this emission.
   let valueCmpNumRt =
     if (progEmit prog).useValueCmpNum.value then
-      valueCmpNumRuntimeLines u64
+      valueCmpNumRuntimeLines wide
     else
       []
   let u64Rt = if u64 then u64RuntimeLines else []
+  let i64Rt = if i64 then i64RuntimeLines else []
   let stderrRt =
     if (progEmit prog).useEPut.value then stderrRuntimeLines else []
   let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
@@ -3785,6 +3819,7 @@ emitRefProgram prog groups =
       ++ valueModRt
       ++ valueCmpNumRt
       ++ u64Rt
+      ++ i64Rt
       ++ stderrRt
       ++ rngRt
       ++ hashRt
@@ -3914,7 +3949,11 @@ emitW7Types emit =
   -- unsigned, and a separate type keeps every `ref.test` on the other shapes false.
   let u64T =
     if !emit.useU64 then ["    (type $u64 (sub (struct (field i64))))"] else []
-  listT ++ tupTs ++ arrT ++ refT ++ u64T
+  -- an `I64` is an `$i64` cell: the same payload as `$u64`, read signed, and a
+  -- type of its own so a shape-dispatched helper never reads one as the other.
+  let i64T =
+    if !emit.useI64 then ["    (type $i64 (sub (struct (field i64))))"] else []
+  listT ++ tupTs ++ arrT ++ refT ++ u64T ++ i64T
 
 tupleTypeDecl : Int -> List String
 tupleTypeDecl n =
@@ -6845,6 +6884,9 @@ emitLitRef _ (LFloat f) = ["f64.const " ++ floatToString f, "struct.new $float"]
 -- signed spelling.
 emitLitRef _ (LU64 hi lo) =
   ["i64.const 0x" ++ u64HalvesHex hi lo, "struct.new $u64"]
+-- an `I64` literal's halves are its two's complement pattern, spelled the same way.
+emitLitRef _ (LI64 hi lo) =
+  ["i64.const 0x" ++ u64HalvesHex hi lo, "struct.new $i64"]
 -- W6: a String literal is a §3.3 `$str` boxed value.  Its UTF-8 bytes go in a
 -- passive data segment (the §11-preferred non-const-array init), read at run time by
 -- `array.new_data`; the cached cp_count is computed at emit time (UTF-8 codepoint
@@ -7200,10 +7242,12 @@ emitBinRef prog env d op l r tag =
   -- the structural Float test and the poly-`Num` value dispatch below: an impl
   -- method's unsigned params (`add a b = a + b`) look poly to the emitter, and
   -- `$mdk_value_add` would not wrap.
-  if isArithOp op && isFixedWidthHead tag then
+  if isArithOp op && isTaggedFixedHead tag then
     emitIntBinRef prog env d op l r tag
   else if isArithOrCmp op && tag == "U64" then
     emitU64BinRef prog env d op l r
+  else if isArithOrCmp op && tag == "I64" then
+    emitI64BinRef prog env d op l r
   else if isArithOrCmp op
     && (tag == "Float"
       || cexprIsFloat prog env l
@@ -7281,9 +7325,9 @@ emitIntBinRef prog env d op l r tag =
   -- N4 (#3377): an `Int` `+ - * /` runs its checked operator BEFORE the rebox, so an
   -- out-of-range result stops with E-INT-OVERFLOW rather than reaching
   -- `$mdk_box_int`'s sign-extend.  A fixed-width site keeps the plain i64 op and
-  -- its mask (`fixedWidthWrapW`): the U types wrap.
+  -- its wrap (`fixedWidthWrapW`): the fixed-width types wrap.
   let opInstrs =
-    if intOpCanOverflow op && not (isFixedWidthHead tag) then
+    if intOpCanOverflow op && not (isTaggedFixedHead tag) then
       intChkCall (progEmit prog) op
     else
       [wasmBinOp64 (progEmit prog) op]
@@ -7294,6 +7338,7 @@ emitIntBinRef prog env d op l r tag =
       ++ ri
       ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
       ++ opInstrs
+      ++ fixedWidthWrapW tag op
       ++ ["call $mdk_box_int"]
   else if isCmpOp op then
     li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "ref.i31"]
@@ -7326,6 +7371,35 @@ emitU64BinRef prog env d op l r =
 
 unboxU64W : List String
 unboxU64W = ["ref.cast (ref $u64)", "struct.get $u64 0"]
+
+-- An `I64` operator (stamped `I64` at arithmetic and comparison sites alike):
+-- `U64`'s shape with the signed operations.  `+ - *` are the same bits either
+-- way; `/` goes through `$mdk_i64_div`, since `i64.div_s` traps on
+-- `minBound / -1`, and `i64.rem_s` already answers 0 there.
+emitI64BinRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  CExpr ->
+  CExpr ->
+  List String
+emitI64BinRef prog env d op l r =
+  let li = emitRefExpr prog env d l ++ unboxI64W
+  let ri = emitRefExpr prog env d r ++ unboxI64W
+  let instr =
+    if op == "/" then "call $mdk_i64_div" else wasmBinOp64 (progEmit prog) op
+  if op == "/" || op == "%" then
+    li
+      ++ ri
+      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ [instr, "struct.new $i64"]
+  else if isCmpOp op then
+    li ++ ri ++ [instr, "ref.i31"]
+  else
+    li ++ ri ++ [instr, "struct.new $i64"]
+
+unboxI64W : List String
+unboxI64W = ["ref.cast (ref $i64)", "struct.get $i64 0"]
 
 -- a binary `U64` kernel: both payloads, one i64 instruction (or helper call), reboxed.
 emitU64KernelRef : Prog ->
@@ -7601,8 +7675,9 @@ cexprIsFloat prog env (CVar x _) =
 -- Float binop whose operands are type-lost but the typecheck stamped the node).
 cexprIsFloat prog env (CBinPrim op l r tag) =
   isArithOp op
-    && not (isFixedWidthHead tag)
+    && not (isTaggedFixedHead tag)
     && tag /= "U64"
+    && tag /= "I64"
     && (tag == "Float" || cexprIsFloat prog env l || cexprIsFloat prog env r)
 cexprIsFloat prog env (CUnOp "-" x) = cexprIsFloat prog env x
 cexprIsFloat prog env (CLet _ (PVar x _) _ b) = cexprIsFloat prog (x :: env) b
@@ -8378,6 +8453,17 @@ emitLeafExternRef prog env d "u32Truncate" [a] =
 emitLeafExternRef prog env d "u8ToInt" [a] = emitRefExpr prog env d a
 emitLeafExternRef prog env d "u16ToInt" [a] = emitRefExpr prog env d a
 emitLeafExternRef prog env d "u32ToInt" [a] = emitRefExpr prog env d a
+-- `i32Truncate` sign-extends the Int's low 32 bits, so a negative `I32` stays an
+-- i31 or `$boxint` word like any Int; `i32ToInt` is the identity on that word.
+emitLeafExternRef prog env d "i32Truncate" [a] =
+  emitRefExpr prog env d a
+    ++ ["call $mdk_unbox_int", "i64.extend32_s", "call $mdk_box_int"]
+emitLeafExternRef prog env d "i32ToInt" [a] = emitRefExpr prog env d a
+-- the `I64` doors keep the 64 bits and change the cell they are read from.
+emitLeafExternRef prog env d "i64FromBits" [a] =
+  emitRefExpr prog env d a ++ unboxU64W ++ ["struct.new $i64"]
+emitLeafExternRef prog env d "i64ToBits" [a] =
+  emitRefExpr prog env d a ++ unboxI64W ++ ["struct.new $u64"]
 -- `u64Truncate` boxes the Int's sign-extended i64, which is its value modulo
 -- 2^64; `u64TruncateToInt` reboxes the payload as an Int, and `$mdk_box_int`'s
 -- renormalization from bit 62 is exactly "the low 63 bits, bit 62 the sign".

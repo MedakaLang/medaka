@@ -103,6 +103,7 @@ mixGo (s :: rest) i acc =
 renderCell : Cell -> String
 renderCell CNull = ""
 renderCell (CInt n) = intToString n
+renderCell (CInt64 x) = display x
 renderCell (CText s) = s
 renderCell (CBlob a) = encodeUpper a
 renderCell (CFloat f) = floatToString f

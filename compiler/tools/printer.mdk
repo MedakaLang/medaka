@@ -77,8 +77,8 @@ import frontend.ast.{
   Attr(..),
 }
 import support.util.{
-  u64HalvesHex, zipL, joinWith, listLen, allList, isEmptyL, isNonEmptyL,
-  escOneHex2
+  u64HalvesHex, i64HalvesLiteral, zipL, joinWith, listLen, allList, isEmptyL,
+  isNonEmptyL, escOneHex2
 }
 import list.{last, sortBy}
 import support.char.{isUpper}
@@ -951,12 +951,14 @@ printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
 printLit (LU64 hi lo) = text ("0x" ++ u64HalvesHex hi lo)
+printLit (LI64 hi lo) = text (i64HalvesLiteral hi lo)
 
 isNegLit : Lit -> Bool
 isNegLit (LInt n) = n < 0
 isNegLit (LFloat f) =
   let s = floatToString f
   stringLength s > 0 && stringSlice 0 1 s == "-"
+isNegLit (LI64 hi _) = hi >= 2147483648
 isNegLit _ = False
 
 -- ── Types ─────────────────────────────────────────
@@ -2055,6 +2057,8 @@ headIsNumericHead (ENumLit _ _ _ _) = True
 headIsNumericHead (EWideLit _ _ _ _) = True
 headIsNumericHead (ELit (LInt _)) = True
 headIsNumericHead (ELit (LFloat _)) = True
+headIsNumericHead (ELit (LU64 _ _)) = True
+headIsNumericHead (ELit (LI64 _ _)) = True
 headIsNumericHead _ = False
 
 collectApp : List Expr -> Expr -> (Expr, List Expr)

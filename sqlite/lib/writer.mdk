@@ -32,6 +32,7 @@ import lib.dbwriter.{
   buildDatabaseMultiWithIndexes,
 }
 import lib.recordfmt.{Cell(..)}
+import lib.wideint as W
 import string.{join, toUpper}
 import list.{findIndex, reverse, get}
 
@@ -391,6 +392,7 @@ rowidOfRow : Option Int -> Int -> List Cell -> Result String Int
 rowidOfRow None auto _ = Ok auto
 rowidOfRow (Some p) _ cells = match get p cells
   Some (CInt v) => Ok v
+  Some (CInt64 x) => Err (W.rowidRangeMessage x)
   _ =>
     Err
       "INTEGER PRIMARY KEY column must be a non-NULL integer to build an index"

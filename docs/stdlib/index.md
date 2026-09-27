@@ -487,6 +487,43 @@ HTTP/1.1 message framing: request parsing, response building, and response parsi
 - [`parseMediaType`](http.md#parsemediatype)
 - [`decodeRequestBody`](http.md#decoderequestbody)
 
+## [`i32`](i32.md)
+
+Signed 32-bit integers, the `I32` type.
+
+- [`tryFromInt`](i32.md#tryfromint)
+- [`truncate`](i32.md#truncate)
+- [`toInt`](i32.md#toint)
+- [`fromU8`](i32.md#fromu8)
+- [`fromU16`](i32.md#fromu16)
+- [`truncateI64`](i32.md#truncatei64)
+- [`fromBits`](i32.md#frombits)
+- [`toBits`](i32.md#tobits)
+- [`bitAnd`](i32.md#bitand)
+- [`bitOr`](i32.md#bitor)
+- [`bitXor`](i32.md#bitxor)
+- [`bitNot`](i32.md#bitnot)
+- [`shiftLeft`](i32.md#shiftleft)
+- [`shiftRight`](i32.md#shiftright)
+
+## [`i64`](i64.md)
+
+Signed 64-bit integers, the `I64` type.
+
+- [`toInt`](i64.md#toint)
+- [`fromU8`](i64.md#fromu8)
+- [`fromU16`](i64.md#fromu16)
+- [`fromU32`](i64.md#fromu32)
+- [`fromI32`](i64.md#fromi32)
+- [`fromBits`](i64.md#frombits)
+- [`toBits`](i64.md#tobits)
+- [`bitAnd`](i64.md#bitand)
+- [`bitOr`](i64.md#bitor)
+- [`bitXor`](i64.md#bitxor)
+- [`bitNot`](i64.md#bitnot)
+- [`shiftLeft`](i64.md#shiftleft)
+- [`shiftRight`](i64.md#shiftright)
+
 ## [`io`](io.md)
 
 Output to standard error, debug printing, and helpers for files and the environment.

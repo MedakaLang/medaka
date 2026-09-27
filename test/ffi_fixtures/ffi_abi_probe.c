@@ -18,6 +18,8 @@
  * expected values are hand-computed in that file's header, not captured. */
 
 #include <string.h>
+#include <stdint.h>
+#include <stdio.h>
 
 /* §2.1 immediates — plain int64_t both directions, no tag anywhere. */
 long long ffiAddInts(long long a, long long b) { return a + b; }
@@ -141,4 +143,38 @@ long long cCharSurrogate(void) { return 0xD800; }
  * before: 99 * 3 = 297, versus 1 + 2 + 3 = 6 for the untouched array. */
 void ffiFill99(long long *xs, long long n) {
   for (long long i = 0; i < n; i++) xs[i] = 99;
+}
+
+/* Cell 14: the fixed-width C twins (FFI-ABI.md §2.1b).  Each function prints the
+ * value it RECEIVED, formatted at its own C type, so a missing or doubled
+ * extension shows as a wrong line on the C side before Medaka prints the result;
+ * each returns a value one step past its argument in its own type's wrap. */
+uint8_t ffiFwU8(uint8_t x) { printf("C u8 %u\n", (unsigned)x); fflush(stdout); return (uint8_t)(x + 1u); }
+uint16_t ffiFwU16(uint16_t x) { printf("C u16 %u\n", (unsigned)x); fflush(stdout); return (uint16_t)(x + 1u); }
+uint32_t ffiFwU32(uint32_t x) { printf("C u32 %u\n", x); fflush(stdout); return x + 1u; }
+int32_t ffiFwI32(int32_t x) {
+  printf("C i32 %d\n", x); fflush(stdout);
+  return x == INT32_MAX ? INT32_MIN : x + 1;
+}
+uint64_t ffiFwU64(uint64_t x) { printf("C u64 %llu\n", (unsigned long long)x); fflush(stdout); return x + 1u; }
+int64_t ffiFwI64(int64_t x) {
+  printf("C i64 %lld\n", (long long)x); fflush(stdout);
+  return x == INT64_MAX ? INT64_MIN : x + 1;
+}
+/* Returns at each type's far edge, where a sign extension in place of a zero
+ * extension (or the reverse) changes the number. */
+uint32_t ffiFwU32Max(void) { return UINT32_MAX; }
+int32_t ffiFwI32Min(void) { return INT32_MIN; }
+uint64_t ffiFwU64Max(void) { return UINT64_MAX; }
+int64_t ffiFwI64Min(void) { return INT64_MIN; }
+
+/* Cell 15 (#3477): an int64_t that an `Int` result cannot hold, and one it can. */
+int64_t ffiIntTooBig(void) { return INT64_MAX; }
+int64_t ffiIntLowest(void) { return -((int64_t)1 << 62); }
+
+/* Cell 16: a copy-back word an `Array Int` cannot hold.  Only element 1 is out of
+ * range; the call must stop the program rather than store any of them. */
+void ffiFillBig(long long *xs, long long n) {
+  for (long long i = 0; i < n; i++) xs[i] = 7;
+  if (n > 1) xs[1] = INT64_MAX;
 }

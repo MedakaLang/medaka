@@ -35,11 +35,10 @@ so it also covers `UPDATE ... SET x = <text> + n` (via `lib.mutate`).
 
 ### Deliberately UNMATCHED edges (documented, never a wrong-looking answer)
 
-- **Integer magnitude in `(2^62, 2^63)`.** Medaka's `Int` is 63-bit
-  (`intMaxBound = 2^62 - 1`); SQLite's is 64-bit. A text integer that fits int64
-  but not Medaka's `Int` (e.g. `'9223372036854775807'`) overflows and falls back
-  to `CFloat` here, where SQLite keeps it an integer. Smaller magnitudes, and the
-  overflow-past-int64 case (`'99999999999999999999' → 1.0e+20`, real in both), agree.
+- **Integer magnitude in `(2^62, 2^63)`: now matched.** A text integer that fits
+  int64 but not Medaka's 63-bit `Int` (e.g. `'9223372036854775807'`) is a
+  `CInt64` (an `I64`) and stays an integer, as in SQLite. The overflow-past-int64
+  case (`'99999999999999999999' → 1.0e+20`, real in both) agrees as before.
 - **Giant-integer float FORMATTING.** `'99999999999999999999' + 0` denotes the
   same double in both engines but prints `1e+20` (Medaka shortest-round-trip,
   issue #57) vs `1.0e+20` (sqlite3 `%g`). Same class as the existing avg-float
