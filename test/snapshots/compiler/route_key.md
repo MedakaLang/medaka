@@ -1,5 +1,5 @@
 # META
-source_lines=612
+source_lines=615
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -532,9 +532,12 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "Show" [TyApp rkTyList rkTyInt] None == implRouteKeyWord OriginUnresolved "Show" [rkTyList, rkTyInt] None
 -- False
 
--- A type argument's own origin is NOT in the word.
+-- A type argument's declaring module IS in the word (#1397): module `m`'s own
+-- `Int` is not the builtin one.
+-- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None
+-- "Show|m.Int|"
 -- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None == implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
--- True
+-- False
 
 -- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution
 -- (NOT #1182 — see the header). Applied by `B-2.2-b1` at `keyForSite`.

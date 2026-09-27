@@ -65,8 +65,9 @@ test "method requires counts recognize bare and canonical route words" =
   let forgeKey = implRouteKeyWord forgeOrigin "Forge" [boxTy] None
   expectAll
     [
-      -- The short route keeps declaration-order behavior.
-      expectEqual (Some 1) (lookupCount ("fromInt", "Box") counts),
+      -- The short route keeps declaration-order behavior; it is the type's
+      -- word, qualified by its module (#1397).
+      expectEqual (Some 1) (lookupCount ("fromInt", "fixture.Box") counts),
       -- Canonical collision routes recover the selected definition's own ABI.
       expectEqual (Some 1) (lookupCount ("fromInt", numKey) counts),
       expectEqual (Some 2) (lookupCount ("fromInt", forgeKey) counts),

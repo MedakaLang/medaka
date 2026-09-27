@@ -1,5 +1,5 @@
 # META
-source_lines=50140
+source_lines=50146
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -6785,19 +6785,24 @@ ieRowsOwnedBy cur env = filterList (r => ieRowOrd r == cur) env.ieRows
 -- `AGENTS.md` names the program-global table as this tree's most expensive shape
 -- and demands the key's scope be PROVEN.  The corpus below is the adversarial
 -- case: TWO UNRELATED MODULES that declare the same-spelled interface `Same` and
--- each impl it at the same-spelled type `Blob`.  Under a bare-name key the two
+-- each impl it at ONE type, `amod`'s `Blob`.  Under a bare-name key the two
 -- collapse into one bucket and one index — which is exactly the collapse A-3 is
 -- removing — so every assertion here is fail-capable in the direction that
--- matters.
-ieTyBlob : String -> Ty
-ieTyBlob m =
-  TyCon { tyConName = "Blob", tyConLoc = None, tyConOrigin = OriginModule m }
+-- matters.  The type is shared on purpose: a head's key carries the TYPE's
+-- module (`headKeyTag`, #1397), so two modules' own `Blob`s are two heads and
+-- would test nothing about the interface half.
+ieTyBlob : Ty
+ieTyBlob = TyCon {
+  tyConName = "Blob",
+  tyConLoc = None,
+  tyConOrigin = OriginModule "amod",
+}
 
 ieSameImplIn : String -> Decl
 ieSameImplIn m = DImpl {
   pub = True,
   iface = "Same",
-  tys = [ieTyBlob m],
+  tys = [ieTyBlob],
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
@@ -6809,12 +6814,12 @@ ieSameImplIn m = DImpl {
 ieProbeKey : String -> RegKey
 ieProbeKey m = regKeyNTab [
   oblIfaceKey IfaceRef { irName = "Same", irOrigin = OriginModule m },
-  dispHeadTab (headKeyOfCon (OriginModule m) "Blob"),
+  dispHeadTab (headKeyOfCon (OriginModule "amod") "Blob"),
 ]
 
--- The COMPATIBILITY leg's key: bare interface spelling, and a head that is bare
--- anyway (`dispHeadTab` is spelling-keyed by the #1317 T1 rule), so it is the
--- SAME key for both modules — which is exactly why both rows land in it.
+-- The COMPATIBILITY leg's key: bare interface spelling over the one shared head,
+-- so it is the SAME key for both modules — which is exactly why both rows land
+-- in it.
 ieProbeBareKey : RegKey
 ieProbeBareKey = regKeyNTab [
   TkBare NsIface "Same",
@@ -6944,7 +6949,7 @@ ieOtherImplIn : String -> Decl
 ieOtherImplIn m = DImpl {
   pub = True,
   iface = "Other",
-  tys = [ieTyBlob m],
+  tys = [ieTyBlob],
   reqs = [],
   methods = [],
   implOrigin = OriginModule m,
@@ -6970,7 +6975,7 @@ ieLooseImplIn : String -> Decl
 ieLooseImplIn m = DImpl {
   pub = True,
   iface = "Loose",
-  tys = [ieTyBlob m],
+  tys = [ieTyBlob],
   reqs = [],
   methods = [],
   implOrigin = OriginUnresolved,
@@ -7018,7 +7023,8 @@ ieHeadProbeEnv = buildImplEnv [
 --    6d. IMMUNE TO THE ARM-KEYING ASYMMETRY (RUN-B-025 F1).  Seq 4's interface mints
 --        ONE `oblIfaceKeys` leg where 0/1/2 mint two, and it is in the bucket all the
 --        same — because this key has no interface component.  An index that grew one
---        (or that keyed the head through anything origin-bearing) drops seq 4 here.
+--        drops seq 4 here.  (The head itself carries the TYPE's module, `amod`'s
+--        `Blob` for every row, #1397; an interface's origin never enters it.)
 -- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows (Some ieProbeBlobHead) ieHeadProbeEnv)
 -- [0, 1, 2, 4]
 --
@@ -51192,12 +51198,12 @@ isTyAuth _ = False
 (DFunDef false "ieRowsAll" ((PVar "env")) (EFieldAccess (EVar "env") "ieRows"))
 (DTypeSig false "ieRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow")))))
 (DFunDef false "ieRowsOwnedBy" ((PVar "cur") (PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "ieRowOrd") (EVar "r")) (EVar "cur")))) (EFieldAccess (EVar "env") "ieRows")))
-(DTypeSig false "ieTyBlob" (TyFun (TyCon "String") (TyCon "Ty")))
-(DFunDef false "ieTyBlob" ((PVar "m")) (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Blob"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DTypeSig false "ieTyBlob" (TyCon "Ty"))
+(DFunDef false "ieTyBlob" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Blob"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (ELit (LString "amod")))))))
 (DTypeSig false "ieSameImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
-(DFunDef false "ieSameImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Same"))) (fa "tys" (EListLit (EApp (EVar "ieTyBlob") (EVar "m")))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DFunDef false "ieSameImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Same"))) (fa "tys" (EListLit (EVar "ieTyBlob"))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
 (DTypeSig false "ieProbeKey" (TyFun (TyCon "String") (TyCon "RegKey")))
-(DFunDef false "ieProbeKey" ((PVar "m")) (EApp (EVar "regKeyNTab") (EListLit (EApp (EVar "oblIfaceKey") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "Same"))) (fa "irOrigin" (EApp (EVar "OriginModule") (EVar "m")))))) (EApp (EVar "dispHeadTab") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (EVar "m"))) (ELit (LString "Blob")))))))
+(DFunDef false "ieProbeKey" ((PVar "m")) (EApp (EVar "regKeyNTab") (EListLit (EApp (EVar "oblIfaceKey") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "Same"))) (fa "irOrigin" (EApp (EVar "OriginModule") (EVar "m")))))) (EApp (EVar "dispHeadTab") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "amod")))) (ELit (LString "Blob")))))))
 (DTypeSig false "ieProbeBareKey" (TyCon "RegKey"))
 (DFunDef false "ieProbeBareKey" () (EApp (EVar "regKeyNTab") (EListLit (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (ELit (LString "Same"))) (EApp (EVar "dispHeadTab") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "amod")))) (ELit (LString "Blob")))))))
 (DTypeSig false "ieProbeEnv" (TyCon "ImplEnv"))
@@ -51205,11 +51211,11 @@ isTyAuth _ = False
 (DTypeSig false "ieUnivConcreteOf" (TyFun (TyCon "ImplUniverse") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))
 (DFunDef false "ieUnivConcreteOf" ((PCon "ImplUniverse" (PVar "conc") PWild PWild)) (EVar "conc"))
 (DTypeSig false "ieOtherImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
-(DFunDef false "ieOtherImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Other"))) (fa "tys" (EListLit (EApp (EVar "ieTyBlob") (EVar "m")))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DFunDef false "ieOtherImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Other"))) (fa "tys" (EListLit (EVar "ieTyBlob"))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
 (DTypeSig false "ieGenImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
 (DFunDef false "ieGenImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Gen"))) (fa "tys" (EListLit (EApp (EVar "TyVar") (ELit (LString "a"))))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
 (DTypeSig false "ieLooseImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
-(DFunDef false "ieLooseImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Loose"))) (fa "tys" (EListLit (EApp (EVar "ieTyBlob") (EVar "m")))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EVar "OriginUnresolved")))))
+(DFunDef false "ieLooseImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Loose"))) (fa "tys" (EListLit (EVar "ieTyBlob"))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "ieHeadProbeAmod" (TyApp (TyCon "List") (TyCon "Decl")))
 (DFunDef false "ieHeadProbeAmod" () (EListLit (EApp (EVar "ieSameImplIn") (ELit (LString "amod"))) (EApp (EVar "ieOtherImplIn") (ELit (LString "amod")))))
 (DTypeSig false "ieHeadProbeZmod" (TyApp (TyCon "List") (TyCon "Decl")))
@@ -59127,12 +59133,12 @@ isTyAuth _ = False
 (DFunDef false "ieRowsAll" ((PVar "env")) (EFieldAccess (EVar "env") "ieRows"))
 (DTypeSig false "ieRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow")))))
 (DFunDef false "ieRowsOwnedBy" ((PVar "cur") (PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "==" (EApp (EVar "ieRowOrd") (EVar "r")) (EVar "cur")))) (EFieldAccess (EVar "env") "ieRows")))
-(DTypeSig false "ieTyBlob" (TyFun (TyCon "String") (TyCon "Ty")))
-(DFunDef false "ieTyBlob" ((PVar "m")) (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Blob"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DTypeSig false "ieTyBlob" (TyCon "Ty"))
+(DFunDef false "ieTyBlob" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Blob"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (ELit (LString "amod")))))))
 (DTypeSig false "ieSameImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
-(DFunDef false "ieSameImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Same"))) (fa "tys" (EListLit (EApp (EVar "ieTyBlob") (EVar "m")))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DFunDef false "ieSameImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Same"))) (fa "tys" (EListLit (EVar "ieTyBlob"))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
 (DTypeSig false "ieProbeKey" (TyFun (TyCon "String") (TyCon "RegKey")))
-(DFunDef false "ieProbeKey" ((PVar "m")) (EApp (EVar "regKeyNTab") (EListLit (EApp (EVar "oblIfaceKey") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "Same"))) (fa "irOrigin" (EApp (EVar "OriginModule") (EVar "m")))))) (EApp (EVar "dispHeadTab") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (EVar "m"))) (ELit (LString "Blob")))))))
+(DFunDef false "ieProbeKey" ((PVar "m")) (EApp (EVar "regKeyNTab") (EListLit (EApp (EVar "oblIfaceKey") (ERecordCreate "IfaceRef" ((fa "irName" (ELit (LString "Same"))) (fa "irOrigin" (EApp (EVar "OriginModule") (EVar "m")))))) (EApp (EVar "dispHeadTab") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "amod")))) (ELit (LString "Blob")))))))
 (DTypeSig false "ieProbeBareKey" (TyCon "RegKey"))
 (DFunDef false "ieProbeBareKey" () (EApp (EVar "regKeyNTab") (EListLit (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (ELit (LString "Same"))) (EApp (EVar "dispHeadTab") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "amod")))) (ELit (LString "Blob")))))))
 (DTypeSig false "ieProbeEnv" (TyCon "ImplEnv"))
@@ -59140,11 +59146,11 @@ isTyAuth _ = False
 (DTypeSig false "ieUnivConcreteOf" (TyFun (TyCon "ImplUniverse") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))
 (DFunDef false "ieUnivConcreteOf" ((PCon "ImplUniverse" (PVar "conc") PWild PWild)) (EVar "conc"))
 (DTypeSig false "ieOtherImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
-(DFunDef false "ieOtherImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Other"))) (fa "tys" (EListLit (EApp (EVar "ieTyBlob") (EVar "m")))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
+(DFunDef false "ieOtherImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Other"))) (fa "tys" (EListLit (EVar "ieTyBlob"))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
 (DTypeSig false "ieGenImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
 (DFunDef false "ieGenImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Gen"))) (fa "tys" (EListLit (EApp (EVar "TyVar") (ELit (LString "a"))))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EApp (EVar "OriginModule") (EVar "m"))))))
 (DTypeSig false "ieLooseImplIn" (TyFun (TyCon "String") (TyCon "Decl")))
-(DFunDef false "ieLooseImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Loose"))) (fa "tys" (EListLit (EApp (EVar "ieTyBlob") (EVar "m")))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EVar "OriginUnresolved")))))
+(DFunDef false "ieLooseImplIn" ((PVar "m")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (ELit (LString "Loose"))) (fa "tys" (EListLit (EVar "ieTyBlob"))) (fa "reqs" (EListLit)) (fa "methods" (EListLit)) (fa "implOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "ieHeadProbeAmod" (TyApp (TyCon "List") (TyCon "Decl")))
 (DFunDef false "ieHeadProbeAmod" () (EListLit (EApp (EVar "ieSameImplIn") (ELit (LString "amod"))) (EApp (EVar "ieOtherImplIn") (ELit (LString "amod")))))
 (DTypeSig false "ieHeadProbeZmod" (TyApp (TyCon "List") (TyCon "Decl")))

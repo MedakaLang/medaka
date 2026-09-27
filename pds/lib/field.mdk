@@ -1,151 +1,116 @@
 {- | Arithmetic modulo the secp256k1 field prime `p = 2^256 - 2^32 - 977`,
-   on **10 limbs in base 2^26**: limbs 0..8 hold 26 bits each and limb 9 holds
-   22 (9*26 + 22 = 256, non-redundant), least-significant limb first.
+   on **5 limbs in base 2^52**: limbs 0..3 hold 52 bits each and limb 4 holds
+   48 (4*52 + 48 = 256, non-redundant), least-significant limb first.
 
    ── Why this representation ──────────────────────────────────────────
-   Design decision P10 (`docs/design/ATPROTO-PDS-DESIGN.md`): it is the
-   layout `libsecp256k1`'s `field_10x26_impl.h`
-   uses, so the subtlest arithmetic in this project is cross-checkable
-   ELEMENT BY ELEMENT against an audited implementation of the identical
-   representation. The answer key lives at
-   `pds/test/vectors/field_reference_corpus.txt` with its provenance row in
-   `pds/test/VECTOR-PROVENANCE.txt` — never as inline literals here (G5).
+   Design decision P10 (`docs/design/ATPROTO-PDS-DESIGN.md`), as revised for
+   integer milestone N5: it is the layout of `libsecp256k1`'s
+   `field_5x52_impl.h`, the reference's 64-bit build, and `feMul` is a
+   straight-line port of that file's `secp256k1_fe_mul_inner`. The answer key
+   lives at `pds/test/vectors/field_reference_corpus.txt` with its provenance
+   row in `pds/test/VECTOR-PROVENANCE.txt` — never as inline literals here
+   (G5). Its rows are values, so they grade any limb layout.
 
-   An element privately holds an `Array Int` of exactly 10 limbs. Not a record
-   and not a tuple: tuples top out at arity 5, and a record forbids the indexed
-   loops the schoolbook multiply is written as. The reference unrolls its limbs
-   into a struct FOR SPEED, and speed is out of scope in Phase 0.
+   An element privately holds an `Array Int` of exactly 5 limbs. Every
+   operation reads the limbs it needs into `U64` registers once, computes in
+   straight-line code, and builds its result with one array literal. The
+   result limbs are narrowed into `Int` lets first: a `U64` named inside an
+   array literal is boxed by the native backend.
 
    ── The canonical invariant ──────────────────────────────────────────
    Every value produced by every public operation here is CANONICAL: fully
-   reduced, `0 <= v < p`, hence `n[i] <= 2^26 - 1` for `i` in 0..8 and
-   `n[9] <= 2^22 - 1`. That is magnitude 1 in the reference's vocabulary, and
-   then some. No weakly-normalized or higher-magnitude element is ever
-   exposed. Normalization here is EAGER, at every public boundary.
+   reduced, `0 <= v < p`, hence `n[i] <= 2^52 - 1` for `i` in 0..3 and
+   `n[4] <= 2^48 - 1`. No weakly-normalized or higher-magnitude element is
+   ever exposed. Normalization here is EAGER, at every public boundary.
 
    `Array` is mutable, so every operation allocates a fresh result array and
    NEVER writes into an argument. `Fe` is an abstract data type: only this
    module can unwrap the limb array, so callers cannot mutate sentinels or
-   fabricate non-canonical raw limbs. `feZero`, `feOne`, and the private
-   `pLimbs` are therefore safe shared constants.
+   fabricate non-canonical raw limbs. `feZero` and `feOne` are therefore safe
+   shared constants.
 
    ── Stored as Int, computed as U64 ───────────────────────────────────
-   Limbs, columns and carries are stored as non-negative `Int`s. Each
-   arithmetic step on them is one `U64` expression: its operands widen
-   through `U64.truncate`, it computes modulo 2^64 with no overflow check and
-   no branch, and its result narrows through `U64.toIntTruncating` before it
-   is stored or bound. An `Int` `+ - *` would check for overflow, and that
-   check is a branch on its operands, so no limb value ever meets one; the
-   only `Int` arithmetic here is on public loop counters and indexes. A
-   narrowing keeps 63 bits and is exact only below 2^62, so that is the
-   ceiling every stored value is bounded against below. Inside one
-   expression an intermediate may exceed it, or wrap below zero, and the
-   narrowed result is still exact.
+   Limbs are stored as non-negative `Int`s below 2^52. Arithmetic on them is
+   `U64`: a limb widens through `U64.truncate`, every step wraps modulo 2^64
+   with no overflow check and no branch, and a result narrows through
+   `U64.toIntTruncating` only when it is stored. A product needs 104 bits, so
+   `feMul` takes it as a `(hi, lo)` register pair from `U64.mulWide` and adds
+   pairs with an explicit, branch-free carry (`carryOut`). The functions whose
+   signatures take or return `U64` pass those values in registers.
 
-   ── The headroom chain (derived against THIS code) ───────────────────
-     limb                a_i < 2^26  (i <= 8),  a_9 < 2^22
-     partial product     a_i * b_j < 2^52
-     worst column        `feMul`'s schoolbook column k = 8 has NINE terms whose
-                         two indices are both <= 8, so c_8 < 9 * (2^26-1)^2
-                         < 2^55.170. Column k = 9 is wider (ten terms) but two
-                         of them involve the 22-bit limb 9, giving
-                         8*(2^26-1)^2 + 2*(2^26-1)*(2^22-1) < 2^55.022 — so
-                         k = 8, not k = 9, is the worst column.
-     plus its carry      the carry into a column is < 9*2^52 / 2^26 < 2^29.2,
-                         so column-plus-carry < 2^55.171.
-     headroom            2^62 / 2^55.171 = 2^6.83 — about 6.8 bits clear.
+   An `Int` `+ - *` would check for overflow, and that check is a branch on
+   its operands, so no limb value ever meets one. The only `Int` arithmetic
+   here is on public byte offsets and loop counters.
 
-   After the fold, the largest limb is `e[0] < 2^42.4` (see `foldHigh`), far
-   below the column sums, so the schoolbook column IS the peak intermediate.
+   ── The headroom chain ───────────────────────────────────────────────
+   Derived against this code in `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`
+   §3, §3.1 and §5.1. In short: `feMul` takes canonical operands, so a
+   partial product is below 2^104 and the wider of its two 128-bit
+   accumulators stays below 2^106.03, 21.97 bits under 2^128. Only result
+   limbs are stored, each below 2^52, ten bits under the 2^62 ceiling of an
+   exact narrowing. The raw limbs `canonicalizeLimbs` admits are below 2^53
+   (2^49 at limb 4), and one fold/carry round leaves their value below 2p.
 
-   ── Carry BEFORE fold — the other order overflows ────────────────────
-   The high half is folded back with `2^256 = 2^32 + 977 (mod p)`, i.e.
-   `2^260 = R1*2^26 + R0` with `R1 = 1024`, `R0 = 15632` — the reference's own
-   constants (`field_10x26_impl.h`: `R0 = 0x3D10`, `R1 = 0x400`). Folding an
-   UNCARRIED column would compute `c_k * R0 < 2^55.17 * 2^13.94 = 2^69.1`,
-   seven bits over the 2^62 storage ceiling and five over `U64`'s 2^64, and it
-   would wrap with no signal. So `feMul`
-   carry-propagates all 19 columns down below 2^26 FIRST and only then folds —
-   the same `u0 = d & M; ... c += u0 * R0` order the reference uses.
+   The fold constant is `R = 0x1000003D10 = 2^260 mod p` (`2^256 = 2^32 +
+   977 (mod p)`, times 16), the reference's own. `feMul` folds with `R`,
+   `R >> 4 = 2^256 mod p` and `R << 12`; `canonicalizeLimbs` folds with
+   `R >> 4`.
 
-   ── THE BOUND IS NOT A TRIPWIRE. Read this before skipping a normalize ─
-   At magnitude 2 (limbs up to `2*(2^26-1)`) the worst column is
-   `9*(2*(2^26-1))^2 < 2^57.170` — STILL 4.83 BITS CLEAR of `2^62`. So a
-   missed normalization does NOT overflow and does NOT fail fast: it fails
-   only after several operations have accumulated past the invariant, by which
-   point the wrong answer has no visible relationship to the site that caused
-   it. Eager normalization is therefore enforced STRUCTURALLY — by this
-   module's own discipline (every public operation ends in canonicalization) and
-   by the reference corpus — and must NEVER be left to overflow to catch a
-   violation. What breaks the chain: admitting inputs above magnitude 1 (at
-   magnitude 8 the column sum is `9*2^58 = 2^61.17`, 0.83 bits clear, and the
-   carry eats into that); folding before carrying; and any "accumulate several
-   products, reduce once" restructuring.
-
-   ── Two bounds that do NOT apply here ────────────────────────────────
-   The retired `bits64` module's published `< 2^35` is a FOUR-limb column of
-   16-bit limbs inside a 64-bit value. This module is ten limbs of 26 bits
-   inside a 256-bit value; that number has nothing to do with this one.
-
-   And the REFERENCE'S OWN PROOF DOES NOT TRANSFER. `secp256k1_fe_mul_inner`
-   admits 30-bit limbs (`VERIFY_BITS(a[i], 30)`) and all EIGHTEEN of its
-   64-bit accumulator assertions are commented out in the pinned source — its
-   accumulator genuinely reaches a full 64 bits, which is fine for a `uint64`
-   and fatal for this module's 63-bit `Int` storage. The reference's ORDER of
-   operations transfers; its magnitudes do not.
+   Those bounds are for canonical operands. The reference's `fe_mul_inner`
+   admits magnitude 8, where its accumulators reach 116 bits, still inside a
+   register pair; this module does not use that slack. Eager normalization is
+   what the bounds and the one-round proof assume, and nothing here checks it
+   at run time.
 
    ── Constant-time boundary ───────────────────────────────────────────
    The native reduction path implements the fixed-control contract in
-   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`:
-   exactly three carry/fold rounds and an unconditional arithmetic
-   subtract-and-select. `feInverse`'s exponent ladder is also fixed-shape;
-   its exponent is a public compile-time constant. Every shift of a limb
-   value is by a literal amount (that document, §5.1).
+   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`: exactly one fold/carry round
+   and an unconditional arithmetic subtract-and-select, all straight-line.
+   `feInverse`'s exponent ladder is also fixed-shape; its exponent is a
+   public compile-time constant. Every shift of a limb value is by a literal
+   amount (that document, §5.1).
 
    This does NOT certify every exported helper or a future signing module.
-   `feEqual`, `feIsZero`, and the general negation path still contain
-   value-dependent control. Their `*Bit`/`*Ct` siblings below are the
-   fixed-control building blocks for the signing path; P15 still requires
-   that path to close every transitive native callee before it ships.
-   Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
-   outside this native constant-time claim. -}
+   `feEqual`, `feIsZero`, `feIsOdd` and `feFromBytes` contain value-dependent
+   control; `feNegate` is straight-line but outside the audited set. Their
+   `*Bit`/`*Ct` siblings below are the fixed-control building blocks for the
+   signing path; P15 still requires that path to close every transitive
+   native callee before it ships. Eval/Wasm retain value parity; Wasm's
+   ordinary boxed `Int` carrier is outside this native constant-time claim. -}
 
-import array.{setInPlace, blit}
+import array.{setInPlace}
 import u64 as U64
 
 -- ── Constants ────────────────────────────────────────────────────────
 
--- 2^26 - 1: the mask for limbs 0..8.
-limbMask : U64
-limbMask = 0x3ffffff
+-- 2^52 - 1: the mask for limbs 0..3.
+mask52 : U64
+mask52 = 0xfffffffffffff
 
--- 2^22 - 1: the mask for limb 9 (the 26/22 seam).
-topMask : U64
-topMask = 0x3fffff
+-- 2^48 - 1: the mask for limb 4.
+mask48 : U64
+mask48 = 0xffffffffffff
 
--- p = 2^256 - 2^32 - 977 in this layout. Derived from (2^256 - 1) - (2^32 +
--- 976): limb 0 loses 976 = 0x3d0 and limb 1 loses 2^32 / 2^26 = 64.
-pLimbs : Array Int
-pLimbs = [|
-  0x3fffc2f, 0x3ffffbf, 0x3ffffff, 0x3ffffff, 0x3ffffff, 0x3ffffff, 0x3ffffff,
-  0x3ffffff, 0x3ffffff, 0x3fffff
-|]
+-- Limb 0 of p. Limbs 1..3 of p are `mask52` and limb 4 is `mask48`:
+-- p = (2^256 - 1) - (2^32 + 976), and 2^32 + 976 lies inside limb 0.
+p0 : U64
+p0 = 0xffffefffffc2f
 
--- 2^256 = 2^32 + 977 (mod p), expressed at limb granularity: a unit of weight
--- 2^256 contributes 977 to limb 0 and 2^32 / 2^26 = 64 to limb 1.
-foldLow : U64
-foldLow = 977
+-- 2^256 mod p = 2^32 + 977, the weight of one unit carried out of limb 4.
+-- It is the reference's `R >> 4`.
+foldC : U64
+foldC = 0x1000003d1
 
-foldHi : U64
-foldHi = 64
+-- R = 2^260 mod p = 16 * (2^32 + 977): a unit of weight 2^260, which is
+-- 2^52 above limb 4's base 2^208, folds back as R units of limb 0's weight.
+foldR : U64
+foldR = 0x1000003d10
 
--- 2^260 = R1 * 2^26 + R0 (mod p) — 2^4 * (2^32 + 977) = 2^36 + 15632. These
--- are `field_10x26_impl.h`'s R0 = 0x3D10 and R1 = 0x400.
-r0 : U64
-r0 = 15632
-
-r1 : U64
-r1 = 1024
+-- R << 12, for the high word of a 128-bit accumulator at limb 3's position:
+-- that word has weight 2^(156 + 64) = 2^220 = 2^260 * 2^(-52) * 2^12 above
+-- limb 4.
+foldR12 : U64
+foldR12 = 0x1000003d10000
 
 -- p - 2, the Fermat exponent for `feInverse`, as 32 big-endian bytes.
 --   p   = ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff fffffffe fffffc2f
@@ -157,8 +122,8 @@ expPMinus2 = [|
   0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2d
 |]
 
--- | A field element: exactly 10 limbs, base 2^26, least-significant first,
---   limb 9 holding 22 bits. Every value handed out by this module is
+-- | A field element: exactly 5 limbs, base 2^52, least-significant first,
+--   limb 4 holding 48 bits. Every value handed out by this module is
 --   canonical (`0 <= v < p`). Its constructor is private so callers can only
 --   obtain canonical values through this module's byte and arithmetic API.
 export data Fe = Fe (Array Int)
@@ -169,191 +134,144 @@ rawFe (Fe limbs) = limbs
 -- | The additive identity.
 export
 feZero : Fe
-feZero = Fe [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+feZero = Fe [|0, 0, 0, 0, 0|]
 
 -- | The multiplicative identity.
 export
 feOne : Fe
-feOne = Fe [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+feOne = Fe [|1, 0, 0, 0, 0|]
 
--- ── Carrying, folding, canonicalizing ────────────────────────────────
+-- ── Register helpers ─────────────────────────────────────────────────
 
--- Propagate carries through limbs 0..8 and mask limb 9 to 22 bits, IN PLACE.
--- Returns the overflow above bit 255 (the units of weight 2^256), which the
--- caller folds back. Every limb is < 2^26 (limb 9 < 2^22) on return.
-carryPass : Array Int -> Int
-carryPass n = carryPassGo n 0
+-- The carry out of `s = x + y` modulo 2^64, as 0 or 1: the top bit of
+-- `(x & y) | ((x | y) & ~s)`. No comparison, so no branch.
+carryOut : U64 -> U64 -> U64 -> U64
+carryOut x y s =
+  U64.shiftRight
+    (U64.bitOr (U64.bitAnd x y) (U64.bitAnd (U64.bitOr x y) (U64.bitNot s)))
+    63
 
-carryPassGo : Array Int -> Int -> Int
-carryPassGo n i =
-  if i >= 9 then
-    let hi = n[9]
-    let top = U64.toIntTruncating (U64.bitAnd (U64.truncate hi) topMask)
-    let () = setInPlace 9 top n
-    U64.toIntTruncating (U64.shiftRight (U64.truncate hi) 22)
-  else
-    let v = n[i]
-    let low = U64.toIntTruncating (U64.bitAnd (U64.truncate v) limbMask)
-    let () = setInPlace i low n
-    let next =
-      U64.toIntTruncating
-        (U64.truncate n[i + 1] + U64.shiftRight (U64.truncate v) 26)
-    let () = setInPlace (i + 1) next n
-    carryPassGo n (i + 1)
+-- 1 when `v` is 0 and 0 otherwise, for any `v < 2^52` (a limb, or an OR or
+-- XOR of limbs): `v + 2^52 - 1` reaches bit 52 exactly when `v >= 1`.
+zeroBitOf : U64 -> U64
+zeroBitOf v = 1 - U64.shiftRight (v + mask52) 52
 
--- One unconditional carry-and-fold round. IN PLACE.
+-- ── Canonicalizing ───────────────────────────────────────────────────
+
+-- The canonical representative of `t0 + t1*2^52 + t2*2^104 + t3*2^156 +
+-- t4*2^208` mod p.
 --
--- The overflow is multiplied arithmetically even when zero: skipping the
--- writes would make the round's control shape depend on the field value.
-carryFoldRound : Array Int -> Unit
-carryFoldRound n =
-  let x = carryPass n
-  let lo = U64.toIntTruncating (U64.truncate n[0] + U64.truncate x * foldLow)
-  let () = setInPlace 0 lo n
-  let hi = U64.toIntTruncating (U64.truncate n[1] + U64.truncate x * foldHi)
-  setInPlace 1 hi n
-
--- Exactly three unconditional carry-and-fold rounds. The proof in
--- docs/design/ATPROTO-PDS-CONSTANT-TIME.md §3 covers every admitted producer
--- under this module's conservative raw-limb bound (< 2^43): round 1 returns
--- at most 2^21, round 2 at most 1, and round 3 exactly 0. IN PLACE.
-reduceCarry : Array Int -> Unit
-reduceCarry n =
-  let () = carryFoldRound n
-  let () = carryFoldRound n
-  carryFoldRound n
-
--- Is the carried limb array >= p? Compared most-significant limb first.
-gtePLimbs : Array Int -> Bool
-gtePLimbs n = gtePGo n 9
-
-gtePGo : Array Int -> Int -> Bool
-gtePGo n i =
-  if i < 0 then
-    True
-  else
-    let a = n[i]
-    let b = pLimbs[i]
-    if a > b then True else if a < b then False else gtePGo n (i - 1)
-
--- Compute n - p into `diff` with a fixed-width, branchless borrow chain.
--- Limbs 0..8 use base 2^26. The top limb is handled separately at base
--- 2^22, avoiding a secret-derived choice of width.
-subPCandidate : Array Int -> Array Int -> Int -> Int -> Int
-subPCandidate n diff i borrow =
-  if i >= 9 then
-    let t =
-      U64.toIntTruncating
-        (U64.truncate n[9]
-          + topMask
-          + 1
-          - U64.truncate pLimbs[9]
-          - U64.truncate borrow)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) topMask)
-    let () = setInPlace 9 masked diff
-    U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 22)
-  else
-    let t =
-      U64.toIntTruncating
-        (U64.truncate n[i]
-          + limbMask
-          + 1
-          - U64.truncate pLimbs[i]
-          - U64.truncate borrow)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) limbMask)
-    let () = setInPlace i masked diff
-    subPCandidate
-      n
-      diff
-      (i + 1)
-      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 26))
-
--- Blend the unconditional subtraction candidate back into n. `keepDiff` is
--- 1 exactly when n >= p and 0 otherwise; arithmetic selection avoids an
--- input-derived branch or Bool-to-Int conversion. `diff[i] - original`
--- wraps modulo 2^64 when negative, and the narrowed sum is the exact limb.
-selectPCandidate : Array Int -> Array Int -> Int -> Int -> Unit
-selectPCandidate n diff keepDiff i =
-  if i >= 10 then
-    ()
-  else
-    let original = n[i]
-    let blended =
-      U64.toIntTruncating
-        (U64.truncate original
-          + U64.truncate keepDiff
-            * (U64.truncate diff[i] - U64.truncate original))
-    let () = setInPlace i blended n
-    selectPCandidate n diff keepDiff (i + 1)
-
-subPSelect : Array Int -> Unit
-subPSelect n =
-  let diff = arrayMake 10 0
-  let borrow = subPCandidate n diff 0 0
-  selectPCandidate n diff (U64.toIntTruncating (1 - U64.truncate borrow)) 0
-
--- Reduce an internal 10-limb array to the canonical representative of its
--- value mod p. The argument is NOT modified.
+--   Precondition: t0..t3 < 2^53 and t4 < 2^49. Every producer in this module
+--   meets it (docs/design/ATPROTO-PDS-CONSTANT-TIME.md §2); nothing checks
+--   it here.
 --
---   Each limb must be non-negative and small enough that the carry chain
---   stays below the 2^62 storage ceiling — every producer in this module
---   keeps limbs below 2^43 (see the module header).
+-- Exactly one fold/carry round, then `subPSelect`. The round folds the bits
+-- of limb 4 above 48 back into limb 0 (at most 1 unit, weighted 2^32 + 977)
+-- and carries limbs 0..3 down to 52 bits. Afterwards limbs 0..3 are below
+-- 2^52, limb 4 is at most 2^48 + 1, and the value is below 2^256 + 2^209 <
+-- 2p, which is what one unconditional subtraction of p needs (§3).
+canonicalizeLimbs : U64 -> U64 -> U64 -> U64 -> U64 -> Fe
+canonicalizeLimbs t0 t1 t2 t3 t4 =
+  let x = U64.shiftRight t4 48
+  let u0 = t0 + x * foldC
+  let u1 = t1 + U64.shiftRight u0 52
+  let u2 = t2 + U64.shiftRight u1 52
+  let u3 = t3 + U64.shiftRight u2 52
+  let u4 = U64.bitAnd t4 mask48 + U64.shiftRight u3 52
+  subPSelect
+    (U64.bitAnd u0 mask52)
+    (U64.bitAnd u1 mask52)
+    (U64.bitAnd u2 mask52)
+    (U64.bitAnd u3 mask52)
+    u4
+
+-- The unconditional subtract-and-select (§5): compute n - p with a
+-- fixed-width borrow chain, keep it exactly when it did not borrow, and blend
+-- every limb arithmetically. Each `s` is `n[i] + 2^WIDTH - p[i] - borrow`,
+-- non-negative and below 2^(WIDTH + 1); its bit WIDTH is 1 exactly when
+-- there was no borrow. `d - n` wraps modulo 2^64 when negative, and `keep *`
+-- it added back to `n` is the exact limb.
 --
---   Only module-owned work arrays reach this boundary; opaque `Fe` prevents
---   callers from introducing malformed or non-canonical limb arrays.
+--   Precondition: n0..n3 < 2^52, n4 < 2^49 and the value is below 2p.
+subPSelect : U64 -> U64 -> U64 -> U64 -> U64 -> Fe
+subPSelect n0 n1 n2 n3 n4 =
+  let s0 = n0 + mask52 + 1 - p0
+  let s1 = n1 + mask52 + 1 - mask52 - (1 - U64.shiftRight s0 52)
+  let s2 = n2 + mask52 + 1 - mask52 - (1 - U64.shiftRight s1 52)
+  let s3 = n3 + mask52 + 1 - mask52 - (1 - U64.shiftRight s2 52)
+  let s4 = n4 + mask48 + 1 - mask48 - (1 - U64.shiftRight s3 52)
+  let keep = U64.shiftRight s4 48
+  let d0 = U64.bitAnd s0 mask52
+  let d1 = U64.bitAnd s1 mask52
+  let d2 = U64.bitAnd s2 mask52
+  let d3 = U64.bitAnd s3 mask52
+  let d4 = U64.bitAnd s4 mask48
+  let o0 = U64.toIntTruncating (n0 + keep * (d0 - n0))
+  let o1 = U64.toIntTruncating (n1 + keep * (d1 - n1))
+  let o2 = U64.toIntTruncating (n2 + keep * (d2 - n2))
+  let o3 = U64.toIntTruncating (n3 + keep * (d3 - n3))
+  let o4 = U64.toIntTruncating (n4 + keep * (d4 - n4))
+  Fe [|o0, o1, o2, o3, o4|]
+
+-- Reduce a module-owned 5-limb array (same precondition as
+-- `canonicalizeLimbs`). The argument is NOT modified.
 canonicalize : Array Int -> Fe
 canonicalize raw =
-  let n = arrayCopy raw
-  let () = reduceCarry n
-  -- After reduceCarry the value is < 2^256, and 2^256 - p = 2^32 + 977 < p,
-  -- so one unconditional subtract-and-select is enough.
-  let () = subPSelect n
-  Fe n
+  canonicalizeLimbs
+    (U64.truncate raw[0])
+    (U64.truncate raw[1])
+    (U64.truncate raw[2])
+    (U64.truncate raw[3])
+    (U64.truncate raw[4])
 
 -- ── Serialization ────────────────────────────────────────────────────
 
--- 32 big-endian bytes -> the exact 256-bit value as 10 limbs (no reduction).
--- The accumulator stays below 2^34. The shift amount `accBits` is a public
--- counter, never a byte.
+-- The big-endian 64-bit word in `bs[off .. off + 7]`. `off` is public.
+wordAt : Array Int -> Int -> U64
+wordAt bs off =
+  U64.bitOr
+    (U64.bitOr
+      (U64.bitOr
+        (U64.shiftLeft (U64.truncate bs[off]) 56)
+        (U64.shiftLeft (U64.truncate bs[off + 1]) 48))
+      (U64.bitOr
+        (U64.shiftLeft (U64.truncate bs[off + 2]) 40)
+        (U64.shiftLeft (U64.truncate bs[off + 3]) 32)))
+    (U64.bitOr
+      (U64.bitOr
+        (U64.shiftLeft (U64.truncate bs[off + 4]) 24)
+        (U64.shiftLeft (U64.truncate bs[off + 5]) 16))
+      (U64.bitOr
+        (U64.shiftLeft (U64.truncate bs[off + 6]) 8)
+        (U64.truncate bs[off + 7])))
+
+-- 32 big-endian bytes -> the exact 256-bit value as 5 limbs (no reduction).
+-- The four 64-bit words w0 (least significant) .. w3 split at 52-bit limb
+-- boundaries.
 limbsOfBytes : Array Int -> Array Int
 limbsOfBytes bs =
-  let n = arrayMake 10 0
-  let () = limbsOfBytesGo bs n 31 0 0 0
-  n
-
-limbsOfBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Int -> Unit
-limbsOfBytesGo bs n bpos acc accBits li =
-  if li >= 10 then
-    ()
-  else if accBits >= 26 then
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate acc) limbMask)
-    let () = setInPlace li masked n
-    limbsOfBytesGo
-      bs
-      n
-      bpos
-      (U64.toIntTruncating (U64.shiftRight (U64.truncate acc) 26))
-      (accBits - 26)
-      (li + 1)
-  else if bpos >= 0 then
-    limbsOfBytesGo
-      bs
-      n
-      (bpos - 1)
-      (U64.toIntTruncating
-        (U64.truncate acc + U64.shiftLeft (U64.truncate bs[bpos]) accBits))
-      (accBits + 8)
-      li
-  else
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate acc) limbMask)
-    let () = setInPlace li masked n
-    limbsOfBytesGo
-      bs
-      n
-      bpos
-      (U64.toIntTruncating (U64.shiftRight (U64.truncate acc) 26))
-      0
-      (li + 1)
+  let w3 = wordAt bs 0
+  let w2 = wordAt bs 8
+  let w1 = wordAt bs 16
+  let w0 = wordAt bs 24
+  let n0 = U64.toIntTruncating (U64.bitAnd w0 mask52)
+  let n1 =
+    U64.toIntTruncating
+      (U64.bitAnd
+        (U64.bitOr (U64.shiftRight w0 52) (U64.shiftLeft w1 12))
+        mask52)
+  let n2 =
+    U64.toIntTruncating
+      (U64.bitAnd
+        (U64.bitOr (U64.shiftRight w1 40) (U64.shiftLeft w2 24))
+        mask52)
+  let n3 =
+    U64.toIntTruncating
+      (U64.bitAnd
+        (U64.bitOr (U64.shiftRight w2 28) (U64.shiftLeft w3 36))
+        mask52)
+  let n4 = U64.toIntTruncating (U64.shiftRight w3 16)
+  [|n0, n1, n2, n3, n4|]
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
 byteArrayOk : Array Int -> Bool
@@ -383,11 +301,14 @@ feFromBytes bs =
   else if not (byteArrayOk bs) then
     Err "field.feFromBytes: every element must be a byte in 0..255"
   else
-    let n = limbsOfBytes bs
-    if gtePLimbs n then
-      Err "field.feFromBytes: value is not canonical (>= p)"
+    let raw = limbsOfBytes bs
+    let reduced = canonicalize raw
+    -- The raw limbs are already normalized, so reduction leaves them
+    -- unchanged exactly when the value is below p.
+    if feEqual (Fe raw) reduced then
+      Ok reduced
     else
-      Ok (Fe n)
+      Err "field.feFromBytes: value is not canonical (>= p)"
 
 -- | Parse ANY 32 big-endian bytes, reducing mod p. This mirrors
 --   `secp256k1_fe_set_b32_mod` and is what the reference corpus's `red` rows
@@ -408,49 +329,65 @@ feFromBytesReduce bs =
   else
     canonicalize (limbsOfBytes bs)
 
+-- Write `w` as 8 big-endian bytes at `out[off .. off + 7]`. `off` is public.
+putWord : Array Int -> Int -> U64 -> Unit
+putWord out off w =
+  let () =
+    setInPlace
+      off
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 56) 255))
+      out
+  let () =
+    setInPlace
+      (off + 1)
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 48) 255))
+      out
+  let () =
+    setInPlace
+      (off + 2)
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 40) 255))
+      out
+  let () =
+    setInPlace
+      (off + 3)
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 32) 255))
+      out
+  let () =
+    setInPlace
+      (off + 4)
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 24) 255))
+      out
+  let () =
+    setInPlace
+      (off + 5)
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 16) 255))
+      out
+  let () =
+    setInPlace
+      (off + 6)
+      (U64.toIntTruncating (U64.bitAnd (U64.shiftRight w 8) 255))
+      out
+  setInPlace (off + 7) (U64.toIntTruncating (U64.bitAnd w 255)) out
+
 -- | The canonical 32 big-endian bytes of a field element.
 export
 feToBytes : Fe -> Array Int
 feToBytes a =
   let n = rawFe a
+  let n0 = U64.truncate n[0]
+  let n1 = U64.truncate n[1]
+  let n2 = U64.truncate n[2]
+  let n3 = U64.truncate n[3]
+  let n4 = U64.truncate n[4]
   let out = arrayMake 32 0
-  let () = toBytesGo n out 0 0 0 31
+  let () =
+    putWord out 0 (U64.bitOr (U64.shiftRight n3 36) (U64.shiftLeft n4 16))
+  let () =
+    putWord out 8 (U64.bitOr (U64.shiftRight n2 24) (U64.shiftLeft n3 28))
+  let () =
+    putWord out 16 (U64.bitOr (U64.shiftRight n1 12) (U64.shiftLeft n2 40))
+  let () = putWord out 24 (U64.bitOr n0 (U64.shiftLeft n1 52))
   out
-
--- The accumulator stays below 2^34; `accBits` is a public counter.
-toBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Int -> Unit
-toBytesGo n out li acc accBits pos =
-  if pos < 0 then
-    ()
-  else if accBits >= 8 then
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate acc) 255)
-    let () = setInPlace pos masked out
-    toBytesGo
-      n
-      out
-      li
-      (U64.toIntTruncating (U64.shiftRight (U64.truncate acc) 8))
-      (accBits - 8)
-      (pos - 1)
-  else if li < 10 then
-    toBytesGo
-      n
-      out
-      (li + 1)
-      (U64.toIntTruncating
-        (U64.truncate acc + U64.shiftLeft (U64.truncate n[li]) accBits))
-      (accBits + 26)
-      pos
-  else
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate acc) 255)
-    let () = setInPlace pos masked out
-    toBytesGo
-      n
-      out
-      li
-      (U64.toIntTruncating (U64.shiftRight (U64.truncate acc) 8))
-      0
-      (pos - 1)
 
 -- ── Comparison ───────────────────────────────────────────────────────
 
@@ -462,7 +399,7 @@ feEqual a b = equalGo (rawFe a) (rawFe b) 0
 
 equalGo : Array Int -> Array Int -> Int -> Bool
 equalGo a b i =
-  if i >= 10 then True else if a[i] /= b[i] then False else equalGo a b (i + 1)
+  if i >= 5 then True else if a[i] /= b[i] then False else equalGo a b (i + 1)
 
 -- | Is this element zero?
 export
@@ -471,84 +408,61 @@ feIsZero a = isZeroGo (rawFe a) 0
 
 isZeroGo : Array Int -> Int -> Bool
 isZeroGo a i =
-  if i >= 10 then True else if a[i] /= 0 then False else isZeroGo a (i + 1)
+  if i >= 5 then True else if a[i] /= 0 then False else isZeroGo a (i + 1)
 
 -- | Fixed-control zero predicate for secret-bearing arithmetic. Returns the
---   arithmetic bit 1 exactly for zero and 0 otherwise. The borrow chain
---   subtracts one from the complete ten-limb value without an early exit or
---   Bool conversion; its loop depends only on the public limb index.
+--   arithmetic bit 1 exactly for zero and 0 otherwise. The limbs are ORed
+--   together and tested once, without an early exit or Bool conversion.
 export
 feZeroBit : Fe -> Int
-feZeroBit a = feZeroBorrow (rawFe a) 0 1
-
-feZeroBorrow : Array Int -> Int -> Int -> Int
-feZeroBorrow a i borrow =
-  if i >= 9 then
-    U64.toIntTruncating
-      (1
-        - U64.shiftRight
-          (U64.truncate a[9] + topMask + 1 - U64.truncate borrow)
-          22)
-  else
-    feZeroBorrow
-      a
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate a[i] + limbMask + 1 - U64.truncate borrow)
-            26))
+feZeroBit a =
+  let n = rawFe a
+  U64.toIntTruncating
+    (zeroBitOf
+      (U64.bitOr
+        (U64.bitOr
+          (U64.bitOr (U64.truncate n[0]) (U64.truncate n[1]))
+          (U64.bitOr (U64.truncate n[2]) (U64.truncate n[3])))
+        (U64.truncate n[4])))
 
 -- | Fixed-control equality predicate for secret-bearing arithmetic. Returns
 --   1 exactly when the canonical limb arrays agree and 0 otherwise.
 export
 feEqualBit : Fe -> Fe -> Int
-feEqualBit a b = feEqualBorrow (rawFe a) (rawFe b) 0 1
-
-feEqualBorrow : Array Int -> Array Int -> Int -> Int -> Int
-feEqualBorrow a b i borrow =
-  if i >= 9 then
-    let x =
-      U64.toIntTruncating (U64.bitXor (U64.truncate a[9]) (U64.truncate b[9]))
-    U64.toIntTruncating
-      (1
-        - U64.shiftRight
-          (U64.truncate x + topMask + 1 - U64.truncate borrow)
-          22)
-  else
-    let x =
-      U64.toIntTruncating (U64.bitXor (U64.truncate a[i]) (U64.truncate b[i]))
-    feEqualBorrow
-      a
-      b
-      (i + 1)
-      (U64.toIntTruncating
-        (1
-          - U64.shiftRight
-            (U64.truncate x + limbMask + 1 - U64.truncate borrow)
-            26))
+feEqualBit a b =
+  let x = rawFe a
+  let y = rawFe b
+  U64.toIntTruncating
+    (zeroBitOf
+      (U64.bitOr
+        (U64.bitOr
+          (U64.bitOr
+            (U64.bitXor (U64.truncate x[0]) (U64.truncate y[0]))
+            (U64.bitXor (U64.truncate x[1]) (U64.truncate y[1])))
+          (U64.bitOr
+            (U64.bitXor (U64.truncate x[2]) (U64.truncate y[2]))
+            (U64.bitXor (U64.truncate x[3]) (U64.truncate y[3]))))
+        (U64.bitXor (U64.truncate x[4]) (U64.truncate y[4]))))
 
 -- | Fixed-control selection. `bit` must be 0 or 1; 0 selects `a` and 1
---   selects `b`. Every limb is visited and the inputs remain unmodified.
+--   selects `b`. Every limb is blended and the inputs remain unmodified.
 export
 feSelect : Int -> Fe -> Fe -> Fe
 feSelect bit a b =
-  let out = arrayMake 10 0
-  let () = feSelectGo bit (rawFe a) (rawFe b) out 0
-  Fe out
-
-feSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
-feSelectGo bit a b out i =
-  if i >= 10 then
-    ()
-  else
-    let x = a[i]
-    let blended =
-      U64.toIntTruncating
-        (U64.truncate x
-          + U64.truncate bit * (U64.truncate b[i] - U64.truncate x))
-    let () = setInPlace i blended out
-    feSelectGo bit a b out (i + 1)
+  let x = rawFe a
+  let y = rawFe b
+  let s = U64.truncate bit
+  let x0 = U64.truncate x[0]
+  let x1 = U64.truncate x[1]
+  let x2 = U64.truncate x[2]
+  let x3 = U64.truncate x[3]
+  let x4 = U64.truncate x[4]
+  let o0 = U64.toIntTruncating (x0 + s * (U64.truncate y[0] - x0))
+  let o1 = U64.toIntTruncating (x1 + s * (U64.truncate y[1] - x1))
+  let o2 = U64.toIntTruncating (x2 + s * (U64.truncate y[2] - x2))
+  let o3 = U64.toIntTruncating (x3 + s * (U64.truncate y[3] - x3))
+  let o4 = U64.toIntTruncating (x4 + s * (U64.truncate y[4] - x4))
+  Fe [|o0, o1, o2, o3, o4|]
 
 -- | Is the canonical representative odd? (The low bit of limb 0.)
 export
@@ -557,85 +471,62 @@ feIsOdd a = bitAnd (rawFe a)[0] 1 == 1
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
 
--- | Addition mod p. Limb-wise, then canonicalization: each sum is < 2^27.
+-- | Addition mod p. Limb-wise, then canonicalization: each sum is below
+--   2^53 (2^49 at limb 4).
 export
 feAdd : Fe -> Fe -> Fe
 feAdd a b =
-  let e = arrayMake 10 0
-  let () = addGo (rawFe a) (rawFe b) e 0
-  canonicalize e
+  let x = rawFe a
+  let y = rawFe b
+  canonicalizeLimbs
+    (U64.truncate x[0] + U64.truncate y[0])
+    (U64.truncate x[1] + U64.truncate y[1])
+    (U64.truncate x[2] + U64.truncate y[2])
+    (U64.truncate x[3] + U64.truncate y[3])
+    (U64.truncate x[4] + U64.truncate y[4])
 
-addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
-addGo a b e i =
-  if i >= 10 then
-    ()
-  else
-    let sum = U64.toIntTruncating (U64.truncate a[i] + U64.truncate b[i])
-    let () = setInPlace i sum e
-    addGo a b e (i + 1)
-
--- | Additive inverse mod p, computed as `p - a` with borrow. `a` is canonical
---   so `0 <= a < p`, hence `0 < p - a <= p`; canonicalization maps the `a = 0`
---   case (`p - 0 = p`) back to 0.
+-- | Additive inverse mod p, computed as `2p - a` limb by limb — the
+--   reference's `secp256k1_fe_negate` at magnitude 1. `a` is canonical, so
+--   every limb of `2p` is at least the matching limb of `a` and no limb
+--   borrows; `p < 2p - a <= 2p`, and canonicalization maps it to `p - a`,
+--   and the `a = 0` case (`2p`) to 0.
 export
 feNegate : Fe -> Fe
 feNegate a =
-  let e = arrayMake 10 0
-  let () = negateGo (rawFe a) e 0 0
-  canonicalize e
-
--- The branch-bearing public path: `Int` arithmetic, adding back 2^26 on a
--- borrow. No secret-bearing caller reaches it (`feNegateCt` is theirs).
-negateGo : Array Int -> Array Int -> Int -> Int -> Unit
-negateGo a e i borrow =
-  if i >= 10 then
-    ()
-  else
-    let d = pLimbs[i] - a[i] - borrow
-    if d < 0 then
-      let () = setInPlace i (d + 0x4000000) e
-      negateGo a e (i + 1) 1
-    else
-      let () = setInPlace i d e
-      negateGo a e (i + 1) 0
+  let x = rawFe a
+  canonicalizeLimbs
+    (2 * p0 - U64.truncate x[0])
+    (2 * mask52 - U64.truncate x[1])
+    (2 * mask52 - U64.truncate x[2])
+    (2 * mask52 - U64.truncate x[3])
+    (2 * mask48 - U64.truncate x[4])
 
 -- | Fixed-control additive inverse for secret-bearing arithmetic. The full
---   modulus subtraction always runs; arithmetic selection maps the `a = 0`
---   candidate `p` to canonical zero without calling branch-bearing
---   `feNegate` or converting the zero bit to Bool.
+--   modulus subtraction `p - a` always runs, with the §5 borrow chain; for
+--   `a = 0` it gives `p`, which the zero bit of `a` blends to canonical zero
+--   without a branch or a Bool.
 export
 feNegateCt : Fe -> Fe
 feNegateCt a =
-  let out = arrayMake 10 0
-  let () = feNegateCtGo (rawFe a) out 0 0
-  feSelect (feZeroBit a) (Fe out) feZero
-
-feNegateCtGo : Array Int -> Array Int -> Int -> Int -> Unit
-feNegateCtGo a out i borrow =
-  if i >= 9 then
-    let t =
-      U64.toIntTruncating
-        (U64.truncate pLimbs[9]
-          + topMask
-          + 1
-          - U64.truncate a[9]
-          - U64.truncate borrow)
-    setInPlace 9 (U64.toIntTruncating (U64.bitAnd (U64.truncate t) topMask)) out
-  else
-    let t =
-      U64.toIntTruncating
-        (U64.truncate pLimbs[i]
-          + limbMask
-          + 1
-          - U64.truncate a[i]
-          - U64.truncate borrow)
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate t) limbMask)
-    let () = setInPlace i masked out
-    feNegateCtGo
-      a
-      out
-      (i + 1)
-      (U64.toIntTruncating (1 - U64.shiftRight (U64.truncate t) 26))
+  let x = rawFe a
+  let a0 = U64.truncate x[0]
+  let a1 = U64.truncate x[1]
+  let a2 = U64.truncate x[2]
+  let a3 = U64.truncate x[3]
+  let a4 = U64.truncate x[4]
+  let s0 = p0 + mask52 + 1 - a0
+  let s1 = mask52 + mask52 + 1 - a1 - (1 - U64.shiftRight s0 52)
+  let s2 = mask52 + mask52 + 1 - a2 - (1 - U64.shiftRight s1 52)
+  let s3 = mask52 + mask52 + 1 - a3 - (1 - U64.shiftRight s2 52)
+  let s4 = mask48 + mask48 + 1 - a4 - (1 - U64.shiftRight s3 52)
+  let keep =
+    1 - zeroBitOf (U64.bitOr (U64.bitOr (U64.bitOr a0 a1) (U64.bitOr a2 a3)) a4)
+  let o0 = U64.toIntTruncating (keep * U64.bitAnd s0 mask52)
+  let o1 = U64.toIntTruncating (keep * U64.bitAnd s1 mask52)
+  let o2 = U64.toIntTruncating (keep * U64.bitAnd s2 mask52)
+  let o3 = U64.toIntTruncating (keep * U64.bitAnd s3 mask52)
+  let o4 = U64.toIntTruncating (keep * U64.bitAnd s4 mask48)
+  Fe [|o0, o1, o2, o3, o4|]
 
 -- | Subtraction mod p. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_fe_sub` either.
@@ -643,107 +534,173 @@ export
 feSub : Fe -> Fe -> Fe
 feSub a b = feAdd a (feNegate b)
 
--- | Multiplication mod p: schoolbook columns, then CARRY, then fold.
---
---   The three steps and their bounds are the module header's headroom chain.
---   The order is load-bearing: folding an uncarried column would reach
---   2^69.1 against a 2^62 ceiling and wrap silently.
+-- | Multiplication mod p: a straight-line port of `libsecp256k1`'s
+--   `secp256k1_fe_mul_inner` (`field_5x52_int128_impl.h`), with each of its
+--   two 128-bit accumulators `c` and `d` held as a `(hi, lo)` register pair.
+--   `pk` is the sum of the partial products `a[i] * b[k - i]`; the fold
+--   constants are the module's `foldR`, `foldC` (`R >> 4`) and `foldR12`
+--   (`R << 12`). The steps' bounds are
+--   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §3.1's table; the result
+--   limbs meet `canonicalizeLimbs`'s precondition, which reduces them.
 export
 feMul : Fe -> Fe -> Fe
 feMul a b =
-  -- Step 1 — the 19 schoolbook columns (index 19 receives the final carry).
-  -- Peak: column 8, nine terms, < 2^55.170.
-  let c = arrayMake 20 0
-  let () = mulAccum (rawFe a) (rawFe b) c 0
-  -- Step 2 — carry EVERY column below 2^26 before anything is folded.
-  let () = carryChain c 0
-  -- Step 3 — fold the high half back with 2^260 = r1 * 2^26 + r0.
-  let e = arrayMake 11 0
-  let () = foldHigh c e
-  let res = arrayMake 10 0
-  let () = blit e 0 res 0 10
-  canonicalize res
+  let x = rawFe a
+  let y = rawFe b
+  let a0 = U64.truncate x[0]
+  let a1 = U64.truncate x[1]
+  let a2 = U64.truncate x[2]
+  let a3 = U64.truncate x[3]
+  let a4 = U64.truncate x[4]
+  let b0 = U64.truncate y[0]
+  let b1 = U64.truncate y[1]
+  let b2 = U64.truncate y[2]
+  let b3 = U64.truncate y[3]
+  let b4 = U64.truncate y[4]
+  -- d = p3
+  let (d1h, d1l) = U64.mulWide a0 b3
+  let (h1, l1) = U64.mulWide a1 b2
+  let d2l = d1l + l1
+  let d2h = d1h + h1 + carryOut d1l l1 d2l
+  let (h2, l2) = U64.mulWide a2 b1
+  let d3l = d2l + l2
+  let d3h = d2h + h2 + carryOut d2l l2 d3l
+  let (h3, l3) = U64.mulWide a3 b0
+  let d4l = d3l + l3
+  let d4h = d3h + h3 + carryOut d3l l3 d4l
+  -- c = p8
+  let (c1h, c1l) = U64.mulWide a4 b4
+  -- d += R * low64(c); c >>= 64
+  let (h4, l4) = U64.mulWide foldR c1l
+  let d5l = d4l + l4
+  let d5h = d4h + h4 + carryOut d4l l4 d5l
+  -- t3 = low52(d); d >>= 52
+  let t3 = U64.bitAnd d5l mask52
+  let d6l = U64.bitOr (U64.shiftRight d5l 52) (U64.shiftLeft d5h 12)
+  let d6h = U64.shiftRight d5h 52
+  -- d += p4
+  let (h5, l5) = U64.mulWide a0 b4
+  let d7l = d6l + l5
+  let d7h = d6h + h5 + carryOut d6l l5 d7l
+  let (h6, l6) = U64.mulWide a1 b3
+  let d8l = d7l + l6
+  let d8h = d7h + h6 + carryOut d7l l6 d8l
+  let (h7, l7) = U64.mulWide a2 b2
+  let d9l = d8l + l7
+  let d9h = d8h + h7 + carryOut d8l l7 d9l
+  let (h8, l8) = U64.mulWide a3 b1
+  let d10l = d9l + l8
+  let d10h = d9h + h8 + carryOut d9l l8 d10l
+  let (h9, l9) = U64.mulWide a4 b0
+  let d11l = d10l + l9
+  let d11h = d10h + h9 + carryOut d10l l9 d11l
+  -- d += (R << 12) * c
+  let (h10, l10) = U64.mulWide foldR12 c1h
+  let d12l = d11l + l10
+  let d12h = d11h + h10 + carryOut d11l l10 d12l
+  -- t4 = low52(d); d >>= 52; tx = t4 >> 48; t4 &= 2^48 - 1
+  let t4w = U64.bitAnd d12l mask52
+  let d13l = U64.bitOr (U64.shiftRight d12l 52) (U64.shiftLeft d12h 12)
+  let d13h = U64.shiftRight d12h 52
+  let tx = U64.shiftRight t4w 48
+  let t4 = U64.bitAnd t4w mask48
+  -- c = p0
+  let (c2h, c2l) = U64.mulWide a0 b0
+  -- d += p5
+  let (h11, l11) = U64.mulWide a1 b4
+  let d14l = d13l + l11
+  let d14h = d13h + h11 + carryOut d13l l11 d14l
+  let (h12, l12) = U64.mulWide a2 b3
+  let d15l = d14l + l12
+  let d15h = d14h + h12 + carryOut d14l l12 d15l
+  let (h13, l13) = U64.mulWide a3 b2
+  let d16l = d15l + l13
+  let d16h = d15h + h13 + carryOut d15l l13 d16l
+  let (h14, l14) = U64.mulWide a4 b1
+  let d17l = d16l + l14
+  let d17h = d16h + h14 + carryOut d16l l14 d17l
+  -- u0 = low52(d); d >>= 52; u0 = (u0 << 4) | tx
+  let u0w = U64.bitAnd d17l mask52
+  let d18l = U64.bitOr (U64.shiftRight d17l 52) (U64.shiftLeft d17h 12)
+  let d18h = U64.shiftRight d17h 52
+  let u0 = U64.bitOr (U64.shiftLeft u0w 4) tx
+  -- c += u0 * (R >> 4)
+  let (h15, l15) = U64.mulWide u0 foldC
+  let c3l = c2l + l15
+  let c3h = c2h + h15 + carryOut c2l l15 c3l
+  -- r0 = low52(c); c >>= 52
+  let r0 = U64.bitAnd c3l mask52
+  let c4l = U64.bitOr (U64.shiftRight c3l 52) (U64.shiftLeft c3h 12)
+  let c4h = U64.shiftRight c3h 52
+  -- c += p1
+  let (h16, l16) = U64.mulWide a0 b1
+  let c5l = c4l + l16
+  let c5h = c4h + h16 + carryOut c4l l16 c5l
+  let (h17, l17) = U64.mulWide a1 b0
+  let c6l = c5l + l17
+  let c6h = c5h + h17 + carryOut c5l l17 c6l
+  -- d += p6
+  let (h18, l18) = U64.mulWide a2 b4
+  let d19l = d18l + l18
+  let d19h = d18h + h18 + carryOut d18l l18 d19l
+  let (h19, l19) = U64.mulWide a3 b3
+  let d20l = d19l + l19
+  let d20h = d19h + h19 + carryOut d19l l19 d20l
+  let (h20, l20) = U64.mulWide a4 b2
+  let d21l = d20l + l20
+  let d21h = d20h + h20 + carryOut d20l l20 d21l
+  -- c += low52(d) * R; d >>= 52
+  let dm = U64.bitAnd d21l mask52
+  let (h21, l21) = U64.mulWide dm foldR
+  let c7l = c6l + l21
+  let c7h = c6h + h21 + carryOut c6l l21 c7l
+  let d22l = U64.bitOr (U64.shiftRight d21l 52) (U64.shiftLeft d21h 12)
+  let d22h = U64.shiftRight d21h 52
+  -- r1 = low52(c); c >>= 52
+  let r1 = U64.bitAnd c7l mask52
+  let c8l = U64.bitOr (U64.shiftRight c7l 52) (U64.shiftLeft c7h 12)
+  let c8h = U64.shiftRight c7h 52
+  -- c += p2
+  let (h22, l22) = U64.mulWide a0 b2
+  let c9l = c8l + l22
+  let c9h = c8h + h22 + carryOut c8l l22 c9l
+  let (h23, l23) = U64.mulWide a1 b1
+  let c10l = c9l + l23
+  let c10h = c9h + h23 + carryOut c9l l23 c10l
+  let (h24, l24) = U64.mulWide a2 b0
+  let c11l = c10l + l24
+  let c11h = c10h + h24 + carryOut c10l l24 c11l
+  -- d += p7
+  let (h25, l25) = U64.mulWide a3 b4
+  let d23l = d22l + l25
+  let d23h = d22h + h25 + carryOut d22l l25 d23l
+  let (h26, l26) = U64.mulWide a4 b3
+  let d24l = d23l + l26
+  let d24h = d23h + h26 + carryOut d23l l26 d24l
+  -- c += R * low64(d); d >>= 64
+  let (h27, l27) = U64.mulWide foldR d24l
+  let c12l = c11l + l27
+  let c12h = c11h + h27 + carryOut c11l l27 c12l
+  -- r2 = low52(c); c >>= 52
+  let r2 = U64.bitAnd c12l mask52
+  let c13l = U64.bitOr (U64.shiftRight c12l 52) (U64.shiftLeft c12h 12)
+  let c13h = U64.shiftRight c12h 52
+  -- c += (R << 12) * d + t3
+  let (h28, l28) = U64.mulWide foldR12 d24h
+  let c14l = c13l + l28
+  let c14h = c13h + h28 + carryOut c13l l28 c14l
+  let c15l = c14l + t3
+  let c15h = c14h + carryOut c14l t3 c15l
+  -- r3 = low52(c); c >>= 52; r4 = c + t4
+  let r3 = U64.bitAnd c15l mask52
+  let c16l = U64.bitOr (U64.shiftRight c15l 52) (U64.shiftLeft c15h 12)
+  let r4 = c16l + t4
+  canonicalizeLimbs r0 r1 r2 r3 r4
 
-mulAccum : Array Int -> Array Int -> Array Int -> Int -> Unit
-mulAccum a b c i =
-  if i >= 10 then
-    ()
-  else
-    let () = mulAccumRow a b c i 0
-    mulAccum a b c (i + 1)
-
-mulAccumRow : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
-mulAccumRow a b c i j =
-  if j >= 10 then
-    ()
-  else
-    let k = i + j
-    let column =
-      U64.toIntTruncating
-        (U64.truncate c[k] + U64.truncate a[i] * U64.truncate b[j])
-    let () = setInPlace k column c
-    mulAccumRow a b c i (j + 1)
-
--- Carry columns 0..18 down below 2^26, depositing the last carry in c[19].
-carryChain : Array Int -> Int -> Unit
-carryChain c i =
-  if i >= 19 then
-    ()
-  else
-    let v = c[i]
-    let masked = U64.toIntTruncating (U64.bitAnd (U64.truncate v) limbMask)
-    let () = setInPlace i masked c
-    let next =
-      U64.toIntTruncating
-        (U64.truncate c[i + 1] + U64.shiftRight (U64.truncate v) 26)
-    let () = setInPlace (i + 1) next c
-    carryChain c (i + 1)
-
--- Fold columns 10..19 (weight >= 2^260) into columns 0..10, then fold the
--- one column-10 residue (from c[19]'s r1 term) once more.
---
--- Bounds, with every c[q] < 2^26 after `carryChain` and c[19] < 2^18 (the
--- product of two values < 2^256 is < 2^512 = 2^18 * 2^494):
---   e[m] for m >= 2 : < 2^26 + 2^26*r0 + 2^26*r1               < 2^40.1
---   e[1]            : the above + (c[19]*r1)*r1                < 2^40.3
---   e[0]            : < 2^26 + 2^26*r0 + (c[19]*r1)*r0         < 2^42.4
--- all far below the step-1 column sums, so the schoolbook column remains the
--- peak intermediate of the whole operation.
-foldHigh : Array Int -> Array Int -> Unit
-foldHigh c e =
-  let () = foldCopy c e 0
-  let () = foldGo c e 10
-  let hi = e[10]
-  let () = setInPlace 10 0 e
-  let lo = U64.toIntTruncating (U64.truncate e[0] + U64.truncate hi * r0)
-  let () = setInPlace 0 lo e
-  let next = U64.toIntTruncating (U64.truncate e[1] + U64.truncate hi * r1)
-  setInPlace 1 next e
-
-foldCopy : Array Int -> Array Int -> Int -> Unit
-foldCopy c e m =
-  if m >= 10 then
-    ()
-  else
-    let () = setInPlace m c[m] e
-    foldCopy c e (m + 1)
-
-foldGo : Array Int -> Array Int -> Int -> Unit
-foldGo c e q =
-  if q >= 20 then
-    ()
-  else
-    let v = c[q]
-    let lo = U64.toIntTruncating (U64.truncate e[q - 10] + U64.truncate v * r0)
-    let () = setInPlace (q - 10) lo e
-    let hi = U64.toIntTruncating (U64.truncate e[q - 9] + U64.truncate v * r1)
-    let () = setInPlace (q - 9) hi e
-    foldGo c e (q + 1)
-
--- | Squaring mod p. Deliberately `feMul a a`: the reference splits squaring out
---   FOR SPEED, and a separate carry chain would be a second thing to prove.
---   The bound is identical — a doubled cross term `2*a_i*a_j` replaces the two
---   equal terms it stands for, so no column grows.
+-- | Squaring mod p. Deliberately `feMul a a`: the reference splits squaring
+--   out FOR SPEED (`secp256k1_fe_sqr_inner` shares doubled cross products),
+--   and a second 128-bit schedule would be a second chain of bounds to
+--   derive. Its bounds are `feMul`'s.
 export
 feSquare : Fe -> Fe
 feSquare a = feMul a a
@@ -756,8 +713,8 @@ feSquare a = feMul a a
 --   true inverse: the value 0 is returned for the input 0. That matches
 --   `libsecp256k1` (`secp256k1_fe_inv` of zero is zero, not an error) and it is
 --   pinned executably by the `inv 0` row of the reference corpus — diverging on
---   that one cell would weaken exactly the element-by-element
---   cross-checkability the 10x2^26 layout was chosen for.
+--   that one cell would weaken the element-by-element cross-checkability
+--   against the reference that P10 chose this layout for.
 --
 --   CALLERS MUST ESTABLISH NON-ZERONESS THEMSELVES before relying on the
 --   result being a true inverse. A zero result is NOT evidence of anything; in
