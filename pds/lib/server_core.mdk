@@ -292,6 +292,7 @@ verifiedCredential account policy context store token =
   match storeServerSecret store
     None => InvalidCredential
     Some secret =>
+      -- Masked, as before: the old HMAC key path masked this secret too.
       let verified =
         verifyToken
           (fromArrayAssumeByteDomain secret)

@@ -38,9 +38,9 @@ mustCarBytes (Ok bytes) = bytes
 mustCarBytes (Err message) =
   panic "car_vectors: CAR encoding failed: \{message}"
 
--- Door: this driver is not itself retyped this slice (its own `Array Int`
--- moves in sprint C). One conversion helper each way covers every
--- whole-block-list call into/out of `lib.car`.
+-- Door: this driver's block rows are `Array Int` and `lib.car` speaks `Bytes`.
+-- One conversion helper each way covers every whole-block-list call into and
+-- out of `lib.car`.
 blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
 blockRowsToBytesDoor =
   map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))

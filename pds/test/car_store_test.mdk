@@ -17,6 +17,7 @@ import lib.blockstore.{
 }
 import lib.car.{Car, carBlocks, carDecode, carEncode, carRoots, carStore}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidForRaw, cidToString}
+import lib.store.{storeEmpty, storePut, storePutBlob}
 
 mustStore : Result String BlockStore -> BlockStore
 mustStore (Ok store) = store
@@ -156,3 +157,30 @@ test "decoded root identity is preserved" =
   match carRoots car
     [decoded] => expectTrue (cidEqual rootCid decoded)
     _ => fail "expected exactly one decoded root"
+
+-- # The blob half's own range check
+
+-- `[256, 1]` masks to `[0, 1]`, whose raw CID this is, so a put that masked
+-- instead of checking would be accepted rather than refused.
+maskedToRawCid : Cid
+maskedToRawCid = cidForRaw (fromU8Array [|0, 1|])
+
+blockRangeError : Result String Unit
+blockRangeError = Err "blockstore: block element outside byte range 0..255"
+
+test "a store put refuses an element outside the byte range" = expectEach [
+  (
+    "storePut",
+    expectEqual
+      blockRangeError
+      (map (_ => ()) (storePut maskedToRawCid [|256, 1|] storeEmpty)),
+  ),
+  (
+    "storePutBlob",
+    expectEqual
+      blockRangeError
+      (map
+        (_ => ())
+        (storePutBlob maskedToRawCid "text/plain" [|256, 1|] storeEmpty)),
+  ),
+]

@@ -66,7 +66,7 @@ import lib.blockstore.{
 import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord}
 import lib.jwt.{serverSecretBytes}
-import lib.repo.{Repo}
+import lib.repo.{Repo, blockBytesChecked}
 import bytes.{encodeUtf8, fromArrayAssumeByteDomain, toArray}
 import crypto.hmac.{ctEq}
 import crypto.sha256.{sha256}
@@ -168,17 +168,17 @@ blobHalfPut : Cid ->
   Array Int ->
   BlobHalf ->
   Result String BlobHalf
-blobHalfPut cid declared bytes (BlobHalf blocks index total version) =
+blobHalfPut cid declared bytes (BlobHalf blocks index total version) = do
   let stored =
     if blockStoreHas cid blocks then total else total + arrayLength bytes
-  map
-    (next =>
-      BlobHalf
-        next
-        (set (cidToString cid) (cid, declared) index)
-        stored
-        (version + 1))
-    (blockStorePut cid (fromArrayAssumeByteDomain bytes) blocks)
+  checked <- blockBytesChecked bytes
+  next <- blockStorePut cid checked blocks
+  Ok
+    (BlobHalf
+      next
+      (set (cidToString cid) (cid, declared) index)
+      stored
+      (version + 1))
 
 -- | Immutable verified protocol state. Its representation is private.
 export data Store = Store BlobHalf (Option Repo) Auth (List Json)

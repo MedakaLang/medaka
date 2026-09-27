@@ -182,9 +182,8 @@ import lib.xrpc.{
   xrpcErrorResponse,
 }
 
--- Door: `handlers` is not itself retyped this slice (its own `Array Int`
--- moves in sprint C/D). `bytes` is checked into `Bytes` here, matching
--- `cidForDagCbor`'s old callee behaviour.
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
 cidForDagCborDoor : Array Int -> Cid
 cidForDagCborDoor bytes =
   cidForDagCbor
@@ -1585,9 +1584,9 @@ applyGetRepoStatus account store params = do
    up: `com.atproto.repo.getRecord` returns the decoded value and refuses when
    there is none, because its caller wants the record. This one returns blocks
    a caller verifies for itself, so it has an answer either way. -}
--- Door: `car` speaks `Bytes` blocks; this module's own block lists are still
--- `Array Int` (`lib.repo` moves in a later slice). One conversion helper
--- covers every whole-block-list call into `carEncode`/`carEncodeRootless`.
+-- Door, masked: `car` speaks `Bytes` blocks and this module's block lists are
+-- `Array Int`. Every row passed here is read out of a `Repo`, whose blocks
+-- were range-checked on the way in, so it is in range by construction.
 blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
 blockRowsToBytesDoor =
   map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
@@ -1897,6 +1896,7 @@ mintSessionTokens : Account -> Array Int -> RequestContext -> (String, String)
 mintSessionTokens account secret context =
   let tokenId = Hex.encode (fromArrayAssumeByteDomain context.nonce)
   let issued = context.nowSeconds
+  -- Masked, as before: the old HMAC key path masked this secret too.
   let key = fromArrayAssumeByteDomain secret
   (
     mintToken

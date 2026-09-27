@@ -23,9 +23,8 @@ import bytes.{fromArray, fromU8Array}
 -- | Content-address a blob's raw bytes with the raw codec (reuses
 -- `cidForRaw`; blobs are not a new CID kind).
 --
--- Door: `blob.mdk` is not itself retyped this slice, so its `Array Int`
--- bytes are checked into `Bytes` here, matching `cidForRaw`'s old callee
--- behaviour (a panic on an out-of-range element).
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForRaw` did.
 export
 blobCid : Array Int -> Cid
 blobCid bytes =

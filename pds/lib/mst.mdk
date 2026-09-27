@@ -305,9 +305,8 @@ buildNode reuse entries layer =
     buildWireEntries reuse first layer None
   let bytes =
     mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
-  -- Door: `mst` is not itself retyped this slice (its own `Array Int` moves
-  -- in sprint C). `bytes` is checked into `Bytes` here, matching
-  -- `cidForDagCbor`'s old callee behaviour.
+  -- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+  -- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
   let cid =
     cidForDagCbor
       (optionOrPanic
@@ -336,6 +335,7 @@ buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
   let prefix = match previous
     None => 0
     Some prior => commonPrefix prior key
+  -- Masked: every key was range-checked by `mstKeyDepth` on the way in.
   let wire = DcMap [
     ("p", DcInt prefix),
     ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
@@ -733,8 +733,18 @@ decodeEntries (value :: rest) previous acc = match value
             _ => Err "mst: entry order is not strictly lexical"
   _ => Err "mst: invalid node entry form"
 
+{- | `dagCborDecode` over `Array Int`, refused with the decoder's own range
+   message when an element is outside 0..255. The decoder took `Array Int`
+   and made this check itself; masking instead truncates the element into a
+   byte that can still decode. -}
+export
+dagCborDecodeChecked : Array Int -> Result String DagCbor
+dagCborDecodeChecked bytes = match fromArray bytes
+  None => Err "dagcbor: input element outside byte range 0..255"
+  Some checked => dagCborDecode checked
+
 decodeNode : Array Int -> Result String DecodedNode
-decodeNode bytes = match dagCborDecode (fromArrayAssumeByteDomain bytes)
+decodeNode bytes = match dagCborDecodeChecked bytes
   Err message => Err "mst: \{message}"
   Ok value => match value
     DcMap [("e", DcArray entries), ("l", left)] =>

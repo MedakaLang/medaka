@@ -21,6 +21,7 @@ import lib.car.{carEncode}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.mst.{
+  dagCborDecodeChecked,
   Mst,
   MstRangeQuery,
   mstDelete,
@@ -51,9 +52,8 @@ import lib.sign.{
 }
 import lib.tid.{Tid, tidCompare, tidParse, tidToString}
 
--- Door: `repo` is not itself retyped this slice (its own `Array Int` moves
--- in sprint C). `bytes` is checked into `Bytes` here, matching
--- `cidForDagCbor`'s old callee behaviour.
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
 cidForDagCborDoor : Array Int -> Cid
 cidForDagCborDoor bytes =
   cidForDagCbor
@@ -256,12 +256,38 @@ encodeCommit label value =
     (message => "repo: \{label} commit encoding failed: \{message}")
     (map toArray (dagCborEncode value))
 
--- Door: `blockstore`/`car` speak `Bytes`; `repo`'s own block lists are still
--- `Array Int` (`lib.repo` moves in a later slice). One conversion helper
--- covers every whole-block-list call.
+-- Door, masked: `blockstore`/`car` speak `Bytes` and `repo`'s block lists are
+-- `Array Int`. Every row passed here was produced by an encoder or read back
+-- from the store, so it is in range by construction; persisted input goes
+-- through `blockRowsChecked` instead.
 blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
 blockRowsToBytesDoor =
   map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
+
+blockElementRangeMessage : String
+blockElementRangeMessage = "blockstore: block element outside byte range 0..255"
+
+{- | One `Array Int` block as `Bytes`, refused with the block store's own
+   range message when an element is outside 0..255. The block store took
+   `Array Int` and made this check itself; a caller converting outside it
+   must make the same check or an out-of-range element is silently
+   truncated into bytes that can still match the CID. -}
+export
+blockBytesChecked : Array Int -> Result String Bytes
+blockBytesChecked raw = toResult blockElementRangeMessage (fromArray raw)
+
+blockRowsCheckedGo : List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
+  Result String (List (Cid, Bytes))
+blockRowsCheckedGo [] acc = Ok (reverse acc)
+blockRowsCheckedGo ((cid, raw) :: rest) acc = match fromArray raw
+  None => Err blockElementRangeMessage
+  Some bytes => blockRowsCheckedGo rest ((cid, bytes) :: acc)
+
+-- | `blockBytesChecked` over a whole block list, in order.
+export
+blockRowsChecked : List (Cid, Array Int) -> Result String (List (Cid, Bytes))
+blockRowsChecked rows = blockRowsCheckedGo rows []
 
 buildCommit : String ->
   SecretKey ->
@@ -286,6 +312,7 @@ buildCommit did secret rev tree store = do
   withTree <- mapErr
     (message => "repo: storing MST failed: \{message}")
     (blockStoreAddMany (blockRowsToBytesDoor (mstNodeBlocks tree)) store)
+  -- Masked: `signed` is `dagCborEncode`'s output, in range by construction.
   complete <- mapErr
     (message => "repo: storing commit failed: \{message}")
     (blockStorePut commitCid (fromArrayAssumeByteDomain signed) withTree)
@@ -357,7 +384,9 @@ repoFromBlocks did secret commitCid blocks = do
   () <- validateDid did
   store <- mapErr
     (message => "repo: invalid persisted blocks: \{message}")
-    (blockStoreFromBlocks (blockRowsToBytesDoor blocks))
+    (do
+      rows <- blockRowsChecked blocks
+      blockStoreFromBlocks rows)
   match blockStoreGet commitCid store
     None => Err "repo: missing persisted commit block"
     Some signed => rehydrate did secret commitCid (toArray signed) store
@@ -811,8 +840,10 @@ hasField : String -> List (String, DagCbor) -> Bool
 hasField _ [] = False
 hasField name ((key, _) :: rest) = name == key || hasField name rest
 
+-- Checked: `repoValidateCommit` passes caller bytes here, and `dagCborDecode`
+-- refused an out-of-range element when it took `Array Int`.
 decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
-decodeSignedCommit bytes = match dagCborDecode (fromArrayAssumeByteDomain bytes)
+decodeSignedCommit bytes = match dagCborDecodeChecked bytes
   Err message => Err "repo: invalid commit CBOR: \{message}"
   Ok (DcMap fields) =>
     if not (hasField "prev" fields) then

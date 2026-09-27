@@ -39,8 +39,11 @@ import lib.sync_event.{
   SyncRepoOp(..),
   syncAccountFrame,
   syncCommitBody,
+  syncCommitCar,
+  syncCommitFrame,
   syncCommitEventFor,
   syncIdentityFrame,
+  syncSyncBody,
   syncSyncFrame,
 }
 import lib.tid.{Tid, tidEncode}
@@ -249,3 +252,32 @@ test "a genesis commit's CAR carries the empty MST root beside the commit" =
     [commit],
     sort [commit, cidToString (mstRootCid mstEmpty)],
   )
+
+-- # Elements outside the byte range
+
+-- `commitBytes` with 256 added to its first element. It masks back to
+-- `commitBytes`, whose raw CID is `commitCid`, so an encoder that masked would
+-- accept it.
+outOfRangeCommit : Array Int
+outOfRangeCommit = arrayMakeWith (arrayLength commitBytes) (i =>
+  if i == 0 then commitBytes[i] + 256 else commitBytes[i])
+
+carRangeError : String
+carRangeError = "car: blockstore: block element outside byte range 0..255"
+
+test "a #commit CAR refuses a block element outside the byte range" =
+  expectEqual
+    (Err carRangeError)
+    (syncCommitCar commitCid [(commitCid, outOfRangeCommit)])
+
+test "a #sync body refuses a commit element outside the byte range" =
+  expectEqual
+    (Err carRangeError)
+    (map
+      (_ => ())
+      (syncSyncBody sampleDid sampleRev commitCid outOfRangeCommit))
+
+test "a #commit frame refuses a CAR element outside the byte range" =
+  expectEqual
+    (Err "dagcbor: byte string element outside byte range 0..255")
+    (syncCommitFrame { eventWithOps 0 | blocksCar = [|256|] })

@@ -54,9 +54,8 @@ mustHeader name value =
     "server_core_test: header setup failed"
     (makeHeader name (encodeUtf8 value))
 
--- Door: this test is not itself retyped this slice (its own `Array Int`
--- moves in sprint D). `bytes` is checked into `Bytes` here, matching
--- `cidForRaw`'s old callee behaviour.
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForRaw` did.
 cidForRawDoor : Array Int -> Cid
 cidForRawDoor bytes =
   cidForRaw
