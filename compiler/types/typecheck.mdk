@@ -479,7 +479,8 @@ import types.disposition.{
   InstanceShape(..),
   buildDispositionTableWithShapes,
   installDispositions,
-  instanceReqParam,
+  installedDispositionsOpt,
+  restoreDispositions,
   validateDispositionTable,
 }
 
@@ -24596,11 +24597,11 @@ exactReturnRoutes name encl scope isReturnPosition resolution = match (
     RProj (givenRoute isReturnPosition parent) path,
     [],
   )
-  (Solved (InstanceEvidence _ _ prerequisites _), Some row) => (
+  (Solved (InstanceEvidence _ args prerequisites _), Some row) => (
     RKey
       (methodRouteKeyForRow name perRun.value.bodyImplEnvRef.value row)
       []
-      [],
+      (selectedCallSupers name (Some row) encl scope args),
     methodReturnEvidenceRoutes encl scope prerequisites,
   )
   (Deferred _ _, None) => match resolution.mrrFallbackTag
@@ -24664,7 +24665,7 @@ resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin 
   ()
 
 numericReturnRoute : Route -> List Route -> Route
-numericReturnRoute (RKey key _ _) routes = RKey key routes []
+numericReturnRoute (RKey key _ sups) routes = RKey key routes sups
 numericReturnRoute route _ = route
 
 -- Recover the FULL list of interface-type-parameter monos for a method occurrence,
@@ -25759,7 +25760,8 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
     -- singleton — entryHeadMatches then takes its arg-0 fallback, byte-identical
     -- to the pre-#609 scan.  Every operator interface (Eq/Ord/Num) is single-param
     -- anyway, where the singleton IS the full vector.
-    let key = optionOr tag (keyForSite method [operandMono])
+    let (siteKey, selected) = keyForSite method [operandMono]
+    let key = optionOr tag siteKey
     -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
     -- The head projection is `headTyconMono operandMono`, i.e. the `HeadKey` whose
     -- `headKeyName` IS the `tag` this arm was passed (`entail` derives both from the
@@ -25783,7 +25785,10 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
       tag
       operandMono
       [operandMono]
-    RKey key reqs []
+    RKey
+      key
+      reqs
+      (selectedCallSupers method selected encl useScope [operandMono])
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
@@ -25832,7 +25837,11 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
       Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
         let reqs = implDictRoutesForRow encl useScope goals row
         let key = methodRouteKeyForRow method env row
-        let route = RKey key reqs []
+        let route =
+          RKey
+            key
+            reqs
+            (selectedCallSupers method (Some row) encl useScope goals)
         let _ =
           noteNumericPredicateTrace
             NPTArithmetic
@@ -26801,9 +26810,9 @@ foreachUnit f (x :: xs) =
 --     default Some) into ONE `IfaceMethod` carrying the merged Option MethodDefault.
 --     PRE-merge the sig-only `None` entry would make every defaulted method (Ord's
 --     lt/gt/…) look REQUIRED → hundreds of false positives across core/stdlib.
---   • desugar's fillImplDefaults has synthesized same-module default clauses INTO
---     the impl — which only ADDS to the defined set, never removes a required one,
---     so it cannot mask a genuinely-missing required method.
+--   • an impl's defined set is exactly what it writes: a method it leaves to its
+--     interface's default is a disposition row, not a clause, so the defined set
+--     cannot mask a genuinely-missing required method.
 -- The interface decl is resolved out of stage K's `CE` at the reading module's
 -- ordinal (`ceRequiredAt`), so an IMPORTED interface resolves exactly as a local one
 -- does; [iterDecls] (this module's own decls) are the impls to check.  Unknown
@@ -29085,10 +29094,13 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- cheapest-looking fix and the wrong one for a single bite: surfacing every
 -- elaborate-only type error on the `check` route narrows acceptance for every program in
 -- the tree.
-keyForSite : String -> List Mono -> Option String
+-- The site's route word and the row it names, selected once: a caller that also
+-- needs the row (`selectedCallSupers`) must not select a second time.
+keyForSite : String -> List Mono -> (Option String, Option ImplRow)
 keyForSite name goals =
   let env = perRun.value.bodyImplEnvRef.value
-  methodRouteKeyOfSelection name env (ieSelectRowByMethod env name goals)
+  let selected = ieSelectRowByMethod env name goals
+  (methodRouteKeyOfSelection name env selected, selected)
 
 methodRouteKeyOfSelection : String -> ImplEnv -> Option ImplRow -> Option String
 methodRouteKeyOfSelection _ _ None = None
@@ -30799,7 +30811,13 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
       Some row =>
         let routeKey = methodRouteKeyForRow name env row
         let routes = implDictRoutesForRow encl useScope goals row
-        (RKey routeKey [] [], routes)
+        (
+          RKey
+            routeKey
+            []
+            (selectedCallSupers name (Some row) encl useScope goals),
+          routes,
+        )
       None => (RKey tag [] [], [])
     -- A method without predicate-vector metadata retains the scalar result-head
     -- selection and substitution used by the compatibility path.
@@ -30807,14 +30825,21 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
       Some row =>
         let routeKey = methodRouteKeyForRow name env row
         let routes = legacyReturnReqRoutesForRow encl useScope m row
-        (RKey routeKey [] [], routes)
+        (
+          RKey
+            routeKey
+            []
+            (selectedCallSupers name (Some row) encl useScope [m]),
+          routes,
+        )
       None => (RKey tag [] [], [])
 entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env predicate.predicateInterface goals
     Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
-      let route = RKey (methodRouteKeyForRow name env row) [] []
+      let sups = selectedCallSupers name (Some row) encl useScope goals
+      let route = RKey (methodRouteKeyForRow name env row) [] sups
       let routes = implDictRoutesForRow encl useScope goals row
       let _ =
         noteNumericEntailment kind useScope (Some selectedIface) route routes
@@ -30864,7 +30889,8 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ prevSize spent rest) =
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
 entailInst name m encl useScope tag (EKArg fullMono) =
   let goals = optionOr [m] (ifaceParamMonos name fullMono)
-  let routeKey = optionOr tag (keyForSite name goals)
+  let (siteKey, selected) = keyForSite name goals
+  let routeKey = optionOr tag siteKey
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
   -- which carries the measured repro.  The head is `headTyconMono m`, the `HeadKey`
   -- whose name IS this arm's `tag` (`entail` derives `tag` from the same `m` via
@@ -30880,7 +30906,7 @@ entailInst name m encl useScope tag (EKArg fullMono) =
     else
       innerDefaultMethod name
   (
-    RKey routeKey [] [],
+    RKey routeKey [] (selectedCallSupers name selected encl useScope goals),
     argImplDictRoutesForEncl encl useScope dictName tag m goals,
   )
 entailInst name m encl useScope tag (EKOp isBinop _) =
@@ -30915,6 +30941,24 @@ superRouteAt encl useScope prevSize spent (superIface, superArgs) =
     Some (g0 :: gs) =>
       routeOfD superIface encl useScope KeepNone g0 gs prevSize spent
     _ => RNone
+
+-- The super segment of a method-call primary `RKey`.  A call whose selected instance
+-- supplies [name] only selects it, so the route carries none; a call whose instance
+-- inherits [name]'s default hands that default the instance's dictionary itself (the
+-- default's receiver), so the route carries the dictionary's supers, solved at the
+-- goal like any dictionary's.
+selectedCallSupers : String ->
+  Option ImplRow ->
+  String ->
+  ScopeId ->
+  List Mono ->
+  List Route
+selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope goals =
+  if contains name supplied then
+    []
+  else
+    superRoutesAt iface encl useScope goals 0 0
+selectedCallSupers _ None _ _ _ = []
 
 entailFallback : ScopeId -> EntailKind -> Route
 entailFallback _ (EKReturn _ _) = RNone
@@ -31681,7 +31725,7 @@ fixedWidthLiteralFits _ _ = False
 -- eval read leading dict words) rather than the route reqs (which the RKey call
 -- path ignores).  A non-RKey / empty-reqs route forwards no dicts.
 binopRouteSplit : Route -> (Route, List Route)
-binopRouteSplit (RKey tag reqs _) = (RKey tag [] [], reqs)
+binopRouteSplit (RKey tag reqs sups) = (RKey tag [] sups, reqs)
 binopRouteSplit r = (r, [])
 
 binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
@@ -36171,8 +36215,7 @@ checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls adde
     loc
 
 -- B1 (adversarial review): the GENERIC default-method path is the checking seam
--- for a cross-module impl that inherits an interface default (fillImplDefaults
--- is same-module only, deliberately), and it had NO rigidity guard — a default
+-- for every impl that inherits an interface default, and it had NO rigidity guard — a default
 -- `mk d = "not-a-b"` under `mk : a -> b` sailed through and the importer's
 -- built binary reinterpreted the String as Int.  Same W3 rule, two twists:
 --   * ALL the signature's quantified vars are survivors here — the interface
@@ -48199,20 +48242,23 @@ dispositionRowsOfImpls ie (r :: rest) ce =
   dispositionRowsOfImpl ie r ce ++ dispositionRowsOfImpls ie rest ce
 
 -- Each row carries its instance's shape and its interface's word.  The shape's
--- route words are minted by the same calls the lowering and eval install passes make
+-- route word is minted by the same call the lowering and eval install passes make
 -- on the impl's declaration (`implRouteKeyWord` over the impl's own origin and type
--- arguments) and that a call site makes when it builds this instance's dictionary
--- (`predicateRouteKeyForRow`), so a specialization is named and reached exactly as
--- the instance's supplied methods are.
+-- arguments), so an inherited slot's entry is named and reached exactly as the
+-- instance's supplied methods are.
 dispositionRowsOfImpl : ImplEnv ->
   ImplRow ->
   ClassEnv ->
   List (InstanceShape, String, MethodDisposition)
-dispositionRowsOfImpl ie r ce =
-  let (iface, tys, reqs) = ieRowTriple r
+dispositionRowsOfImpl _ r ce =
+  let (iface, tys, _) = ieRowTriple r
   let inst = InstId (instRefMid (ieRowInst r)) (instRefSeq (ieRowInst r))
   let ifaceWord = ifaceWordOf iface.irOrigin iface.irName
   let supplied = ieRowMethodNames r
+  let shape = InstanceShape {
+    isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
+    isTys = tys,
+  }
   match (ceLookupAt
     (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
     (ieRowOrd r)
@@ -48221,31 +48267,14 @@ dispositionRowsOfImpl ie r ce =
     -- `dispositionSlotsOfImpls` expects no slot for it either.
     None => []
     Some ceRow =>
-      let rows =
-        dispositionRowsOfMethods
+      map
+        (d => (shape, ifaceWord, d))
+        (dispositionRowsOfMethods
           inst
           iface
           supplied
           (ceRowRequired ceRow)
-          (ceRowMethodNames ceRow)
-      -- only an inheriting instance's shape is read (`inheritorsOf`), so only it
-      -- pays for solving its receiver's super segment
-      let shape = InstanceShape {
-        isWord = implRouteKeyWord iface.irOrigin iface.irName tys None,
-        isTys = tys,
-        isDictWord = predicateRouteKeyForRow ie r,
-        isSupers =
-          if anyList isInheritedRow rows then
-            instanceSuperRoutes ie iface tys reqs
-          else
-            [],
-        isReqCount = listLen reqs,
-      }
-      map (d => (shape, ifaceWord, d)) rows
-
-isInheritedRow : MethodDisposition -> Bool
-isInheritedRow (InheritedDefault { ... }) = True
-isInheritedRow _ = False
+          (ceRowMethodNames ceRow))
 
 -- The interface word of [r]'s interface with its direct superinterface count: the
 -- super segment every dictionary of that interface stores.
@@ -48256,104 +48285,6 @@ ifaceSuperCountOfRow r =
     ifaceWordOf iface.irOrigin iface.irName,
     listLen (directSuperGoals iface []),
   )
-
--- The receiver's super segment for an instance `reqs => iface tys`: each direct super
--- at the instance's own head, solved over the instance's `requires` as givens (the
--- k-th read through `instanceReqParam k`), `assum` before `inst` as a construction
--- goal is.  The head's type variables are rigid: the specialization is one body for
--- every instantiation of the head.
-instanceSuperRoutes : ImplEnv ->
-  IfaceRef ->
-  List Ty ->
-  List Require ->
-  List Route
-instanceSuperRoutes ie iface tys reqs =
-  let names = dedup (flatMap tyVarNames tys ++ flatMap requireTyVarNames reqs)
-  let rigid = map (n => (n, TRigid n)) names
-  let givens = instanceReqGivens rigid 0 reqs
-  map
-    (instanceGoalRoute ie givens requiresNonShrinkingFuel)
-    (directSuperGoals iface (map (fromAstType rigid) tys))
-
-requireTyVarNames : Require -> List String
-requireTyVarNames (Require { requireArgs = args, ... }) =
-  flatMap tyVarNames args
-
-instanceReqGivens : List (String, Mono) ->
-  Int ->
-  List Require ->
-  List (Int, IfaceRef, List Mono)
-instanceReqGivens _ _ [] = []
-instanceReqGivens rigid k ((Require { requireHead = h, requireArgs = args, requireOrigin = o }) :: rest) =
-  (k, IfaceRef { irName = h, irOrigin = o }, map (fromAstType rigid) args)
-    :: instanceReqGivens rigid (k + 1) rest
-
--- One goal of the receiver's super segment: a `requires` given or a super of one,
--- else the selected instance with its own `requires` and supers solved the same way.
-instanceGoalRoute : ImplEnv ->
-  List (Int, IfaceRef, List Mono) ->
-  Int ->
-  (IfaceRef, Option (List Mono)) ->
-  Route
-instanceGoalRoute _ _ fuel (_, None) = RNone
-instanceGoalRoute ie givens fuel (goalIface, Some args) =
-  match instanceGivenRoute givens goalIface args
-    Some route => route
-    None =>
-      if fuel <= 0 then
-        RNone
-      else match ieSelectRowByIface ie goalIface args
-        Some (row@(ImplRow _ _ rowIface (headTy :: implTys) rowReqs _)) =>
-          match (headSubstWithParams
-            headTy
-            (headTy :: implTys)
-            (firstOr args)
-            args)
-            Some subst =>
-              RKey
-                (predicateRouteKeyForRow ie row)
-                (map
-                  (instanceGoalRoute ie givens (fuel - 1))
-                  (map (requireGoalAt subst) rowReqs))
-                (map
-                  (instanceGoalRoute ie givens (fuel - 1))
-                  (directSuperGoals rowIface args))
-            None => RNone
-        _ => RNone
-
-firstOr : List Mono -> Mono
-firstOr (m :: _) = m
-firstOr [] = tconBuiltin "Unit"
-
-requireGoalAt : List (String, Mono) -> Require -> (IfaceRef, Option (List Mono))
-requireGoalAt subst (Require { requireHead = h, requireArgs = args, requireOrigin = o }) = (
-  IfaceRef { irName = h, irOrigin = o },
-  Some (map (fromAstType subst) args),
-)
-
--- The `requires` given answering [goalIface args] directly, or through its supers.
-instanceGivenRoute : List (Int, IfaceRef, List Mono) ->
-  IfaceRef ->
-  List Mono ->
-  Option Route
-instanceGivenRoute [] _ _ = None
-instanceGivenRoute ((k, giveIface, giveArgs) :: rest) goalIface args =
-  let param = RDict (instanceReqParam k)
-  if sameIfaceDecl giveIface goalIface && monoVecSameGiven giveArgs args then
-    Some param
-  else
-    let closure = superClosure superLookup predicateSuperStep predicateNodeKey [
-      (giveIface, giveArgs),
-    ]
-    let hit =
-      find
-        (n =>
-          sameIfaceDecl n.superIface goalIface
-            && monoVecSameGiven n.superPayload args)
-        closure
-    match hit
-      Some n => Some (RProj param (drop 1 n.superPath))
-      None => instanceGivenRoute rest goalIface args
 
 dispositionRowsOfMethods : InstId ->
   IfaceRef ->
@@ -48798,7 +48729,9 @@ checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
 -- RESTORED across it.  General over any module-list shape (`checkModulesEntryFullK`
 -- already is: it harvests only the graph's terminal/entry module's own report, one
 -- or many modules alike), so a single caller serves both the single-file and the
--- multi-module case.
+-- multi-module case.  The installed disposition table is restored the same way:
+-- `medaka run` evaluates the user's program after this re-check, and its
+-- interpreter reads that table to find which instances inherit each default.
 --
 -- WHY THIS EXISTS.  `checkModulesEntryFullSplit` records the entry module's `main`
 -- scheme in `mainSchemeRef` (#2155, see the SET-OR-CLEAR comment there), which is the
@@ -48824,9 +48757,11 @@ checkOneDiagsSynthetic : List Decl ->
   (List TcDiag, List TcDiag)
 checkOneDiagsSynthetic runtimeDecls coreDecls modules =
   let savedMain = driverState.value.mainSchemeRef.value
+  let savedDispositions = installedDispositionsOpt ()
   let (_, errs, warns) =
     checkModulesEntryFullK None runtimeDecls coreDecls modules
   driverState.value.mainSchemeRef := savedMain
+  let _ = restoreDispositions savedDispositions
   (errs, warns)
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching

@@ -1079,7 +1079,6 @@ firstIfaceMethodLoc : List IfaceMethod -> Option Loc
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstMethodRow : List MethodSchemeRow -> MethodSchemeRow
 firstMid : List String -> String
-firstOr : List Mono -> Mono
 firstOrZero : List Int -> Int
 firstPredAtOnChain : GivenScope -> Int -> PredicateRequest -> List Int -> List GivenEntry -> Option AssumAnswer
 firstPredForEncl : PredicateRequest -> ScopeId -> List GivenEntry -> Option AssumAnswer
@@ -1560,11 +1559,7 @@ insertVariantIdents : TcEnv -> String -> TyConOrigin -> List Variant -> (Map Str
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
-instanceGivenRoute : List (Int, IfaceRef, List Mono) -> IfaceRef -> List Mono -> Option Route
-instanceGoalRoute : ImplEnv -> List (Int, IfaceRef, List Mono) -> Int -> (IfaceRef, Option (List Mono)) -> Route
-instanceReqGivens : List (String, Mono) -> Int -> List Require -> List (Int, IfaceRef, List Mono)
 instanceSuperEvidence : IfaceRef -> List Mono -> List SuperEvidence
-instanceSuperRoutes : ImplEnv -> IfaceRef -> List Ty -> List Require -> List Route
 instantiate : Scheme -> Mono
 instantiateCtorPattern : Scheme -> Mono
 instantiateLegacyVarTracked : String -> Int -> Scheme -> MethodTrackedInstantiation
@@ -1602,7 +1597,6 @@ isDirectInterfaceDecl : Decl -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
-isInheritedRow : MethodDisposition -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
 isLocalAbsName : String -> Bool
@@ -1643,7 +1637,7 @@ keepGroupNames : Map String Unit -> List String -> List String
 keyEntryIdx : KeyEntry -> Int
 keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
-keyForSite : String -> List Mono -> Option String
+keyForSite : String -> List Mono -> (Option String, Option ImplRow)
 kindAnnAtom : KindAnn -> Kind
 kindAnnHasEffect : KindAnn -> Bool
 kindAnnSlots : KindAnn -> List Kind
@@ -2421,8 +2415,6 @@ reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, Lis
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
-requireGoalAt : List (String, Mono) -> Require -> (IfaceRef, Option (List Mono))
-requireTyVarNames : Require -> List String
 requiredMethodNames : List IfaceMethod -> List String
 requiresDepthMsg : IfaceRef -> List Mono -> String
 requiresKindMsg : String -> String -> String
@@ -2572,6 +2564,7 @@ seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
+selectedCallSupers : String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
 selectedRowReqMatch : List Mono -> ImplRow -> Option (List (String, Mono), List Require)
 selfBinding : String -> (String, String)
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)

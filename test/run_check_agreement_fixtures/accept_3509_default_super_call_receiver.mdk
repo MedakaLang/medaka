@@ -1,9 +1,10 @@
--- Same as main.mdk but WITHOUT the specific `impl Named (Box Int)` -- there is only
--- ONE candidate impl for `Named (Box a)` left, so there is no overlap for the default
--- method's super call to resolve at all. This isolates the overlap itself: with no
--- competing impl, `gen(int)` is the only legitimate answer, which is what main.mdk
--- ALSO prints -- despite main.mdk having a MORE SPECIFIC impl available that a correct
--- per-construction-goal resolution should have reached instead.
+-- #3509 (drained from its must-fail pin): an inherited default calls a SUPER method on
+-- its receiver; the super has a general instance AND a more specific one at the
+-- receiver's type.  DICT §2/§3: `shout` builds the `Fmt (Box Int)` dictionary at its
+-- call site, solving the `Named` super at that goal (the SPECIFIC `Named (Box Int)`);
+-- the inherited `loud` receives that dictionary and projects the super out of it.
+-- `Box Cat` has no specific `Named` impl, so the general one answers.
+-- Expected: [b:spec]|[b:gen(cat)]
 interface Named a where
   nm : a -> String
 interface Fmt a requires Named a where
@@ -22,6 +23,8 @@ impl Fmt Int where
   fmt _ = "b"
 impl Named (Box a) requires Named a where
   nm (Box v) = "gen(" ++ nm v ++ ")"
+impl Named (Box Int) where
+  nm (Box v) = "spec"
 impl Fmt (Box a) requires Fmt a where
   fmt (Box v) = fmt v
 shout : Fmt a => a -> String

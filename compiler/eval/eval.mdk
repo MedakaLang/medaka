@@ -59,7 +59,6 @@ import types.disposition.{
   InstanceShape(..),
   inheritorsOf,
   installedDispositionsOpt,
-  instanceReqParam,
 }
 import support.util.{
   contains,
@@ -80,7 +79,7 @@ import support.util.{
   startsWith,
   zipL,
 }
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import list.{drop}
 import eval.u64_halves as H
 import u64 as U64
@@ -389,7 +388,38 @@ installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
   methodReqCountRef := methodReqCountIndex (buildMethodReqCounts allDecls)
+  inheritedEntryRef :=
+    methodReqCountIndex
+      (flatMap (inheritedEntryRows (installedDispositionsOpt ())) allDecls)
   disp
+
+-- Per (method, instance word): the entries that are an inherited default rather
+-- than a method the instance supplies.  Such an entry's leading dictionary after
+-- its method-level ones is its RECEIVER -- the dictionary that selected it -- where
+-- a supplied method takes that dictionary's `requires` (`applyMethodDicts`).
+inheritedEntryRef : Ref (OrdMap (OrdMap Int))
+inheritedEntryRef = Ref omEmpty
+
+inheritedEntryRows : Option DispositionTable ->
+  Decl ->
+  List ((String, String), Int)
+inheritedEntryRows dt (DAttrib _ d) = inheritedEntryRows dt d
+inheritedEntryRows (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
+  flatMap
+    (m =>
+      map
+        (shape => ((ifaceMethodName m, shape.isWord), 1))
+        (inheritorsOf (ifaceWordOf ifaceOrigin name) (ifaceMethodName m) dt))
+    methods
+inheritedEntryRows _ _ = []
+
+ifaceMethodName : IfaceMethod -> String
+ifaceMethodName (IfaceMethod mname _ _ _) = mname
+
+isInheritedEntry : String -> String -> Bool
+isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
+  Some words => omHasKey word words
+  None => False
 
 export
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
@@ -407,8 +437,8 @@ implMethodReqCounts _ (DImpl { iface, tys, methods, implOrigin, ... }) =
   let tag = optionOr noneHeadTag (headTyconHead tys)
   let key = implRouteKeyWord implOrigin iface tys None
   flatMap (implMethodReqCountEntries tag key) methods
--- an inherited default's specialization takes the instance's `requires`
--- dictionaries after its own method-level ones (`inheritedDefaultEntries`)
+-- an inherited default's entry takes its receiver after its own method-level
+-- dictionaries (`inheritedDefaultEntries`)
 implMethodReqCounts (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
   flatMap (inheritedDefaultReqCounts dt (ifaceWordOf ifaceOrigin name)) methods
 implMethodReqCounts _ _ = []
@@ -420,7 +450,7 @@ inheritedDefaultReqCounts : DispositionTable ->
 inheritedDefaultReqCounts dt ifaceWord (IfaceMethod mname _ (Some (MethodDefault pats _)) _) =
   flatMap
     (shape =>
-      let count = leadingImplDictPats pats + shape.isReqCount
+      let count = leadingImplDictPats pats + 1
       [
         ((mname, optionOr noneHeadTag (headTyconHead shape.isTys)), count),
         ((mname, shape.isWord), count),
@@ -477,9 +507,8 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 --     reads none) ⇒ the call site's impl dicts must be DROPPED, or the dict lands in
 --     the first value param.  That is #413.
 --   * None  = no entry answers, and the call site's dicts pass through unchanged.
--- Every inherited default has an entry too: its per-instance specialization takes
--- its method-level and then the instance's `requires` dictionaries, exactly as a
--- supplied method does (`inheritedDefaultReqCounts`).
+-- Every inherited default has an entry too: it takes its method-level dictionaries
+-- and then one more, its receiver (`inheritedDefaultReqCounts`).
 -- Callers take the indexed Option once and derive every consumer from it (see
 -- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
@@ -1709,14 +1738,28 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   -- absent/present distinction.  A narrowed candidate is asked by its own canonical
   -- key, which names one interface's impl where the route tag may name a head
   -- several interfaces implement.
-  let reqCount = lookupMethodReqCountOpt name (narrowedWord env route narrowed)
+  let word = narrowedWord env route narrowed
+  let reqCount = lookupMethodReqCountOpt name word
   let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs narrowed then
     let v1 = applyDicts env narrowed methodRoutes
-    let v2 = applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
-    applyValues v2 fwdReqs
+    if isInheritedEntry name word then
+      applyValues v1 [receiverOf env route implRoutes]
+    else
+      let v2 =
+        applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
+      applyValues v2 fwdReqs
   else
     narrowed
+
+-- The dictionary that selected an inherited default, which the default receives as
+-- its receiver: a dictionary route denotes it directly; a statically selected
+-- instance's is built from its word, its `requires` (the site's impl routes) and
+-- its supers.
+receiverOf : EvalEnv (Value e) -> Route -> List Route -> <e> Value e
+receiverOf env (RKey key _ sups) implRoutes =
+  VDict key (map (dictOfRoute env) implRoutes) (map (dictOfRoute env) sups)
+receiverOf env route _ = dictOfRoute env route
 
 narrowedWord : EvalEnv (Value e) -> Route -> Value e -> <e> String
 narrowedWord _ _ (VTypedImpl _ k _ _ _) = k
@@ -2499,10 +2542,11 @@ declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
 -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
 declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (implMethodEntry env disp o ifaceName typeArgs) methods
--- An interface installs one specialization of each default per instance the
--- disposition table says inherits it, closed over the INTERFACE module's env (the
--- body's names resolve there) and tagged with the instance's head and key, so it is
--- dispatched exactly like the instance's own methods and nothing chooses a default.
+-- An interface installs one entry for each default per instance the disposition
+-- table says inherits it, all sharing one value closed over the INTERFACE module's
+-- env (the body's names resolve there), each tagged with the instance's head and
+-- key, so it is dispatched exactly like the instance's own methods and nothing
+-- chooses a default.
 -- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
 -- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
 -- BUILD process share), the spelling the table's producer keys the slot by.
@@ -2540,12 +2584,11 @@ headTyconHead : List Ty -> Option String
 headTyconHead [] = None
 headTyconHead (t :: _) = headTycon t
 
--- One inheriting instance's specialization of a default: the body with its receiver
--- (`ast.defaultReceiverDict`) bound to a dictionary for the instance, so a sibling
--- or superclass call inside it dispatches on that instance.  Like the instance's own
--- methods it takes its method-level dictionaries and then the instance's `requires`
--- dictionaries (`implMethodReqCounts` reports that count); the latter are what the
--- receiver's dictionary carries.
+-- Each inheriting instance's entry for a default: the interface's one shared value,
+-- filed under the instance's tag and word.  It takes its method-level dictionaries
+-- and then its receiver -- the dictionary that selected the entry
+-- (`applyMethodDicts`) -- so a sibling or superclass call inside the body reads the
+-- caller's dictionary, never one rebuilt for the instance.
 inheritedDefaultEntries : EvalEnv (Value e) ->
   List ((String, String, String), List Int) ->
   DispositionTable ->
@@ -2556,6 +2599,7 @@ inheritedDefaultEntries : EvalEnv (Value e) ->
 inheritedDefaultEntries env disp dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let shared = sharedDefaultValue env positions pats body mname
   map
     (shape => (
       mname,
@@ -2566,94 +2610,29 @@ inheritedDefaultEntries env disp dt o ifaceName (IfaceMethod mname _ (Some (Meth
           shape.isWord
           positions
           0
-          (receiverBoundDefault env positions pats body mname shape),
+          shared,
       ),
     ))
     (inheritorsOf (ifaceWordOf o ifaceName) mname dt)
 inheritedDefaultEntries _ _ _ _ _ _ = []
 
-receiverBoundDefault : EvalEnv (Value e) ->
+-- The interface's one value for a default, shared by every inheritor: its
+-- method-level dictionaries, then its receiver (`defaultReceiverDict`), then its own
+-- value patterns.
+sharedDefaultValue : EvalEnv (Value e) ->
   List Int ->
   List Pat ->
   Expr ->
   String ->
-  InstanceShape ->
   Value e
-receiverBoundDefault env positions pats body mname shape =
+sharedDefaultValue env positions pats body mname =
   let nMethod = leadingImplDictPats pats
-  let receiverEnv =
-    reqs => extendEnv env [(defaultReceiverDict mname, receiverDict shape reqs)]
-  if nMethod + shape.isReqCount == 0 then
-    implMethodValue (receiverEnv []) positions pats body
-  else
-    collectDicts (nMethod + shape.isReqCount) [] (dicts =>
-      receiverBodyApplied
-        (receiverEnv (drop nMethod dicts))
-        positions
-        pats
-        body
-        (takeN nMethod dicts))
-
--- The dictionary the receiver denotes for an instance whose `requires`
--- dictionaries are [reqs]: its supers are the shape's routes over those
--- dictionaries.
-receiverDict : InstanceShape -> List (Value e) -> Value e
-receiverDict shape reqs =
-  VDict shape.isDictWord reqs (map (receiverSuperDict reqs) shape.isSupers)
-
--- One receiver super route over the instance's `requires` dictionaries [reqs]: the
--- only dictionary parameters such a route reads are the `instanceReqParam`
--- placeholders.
-receiverSuperDict : List (Value e) -> Route -> Value e
-receiverSuperDict reqs (RKey key rs sups) =
-  VDict
-    key
-    (map (receiverSuperDict reqs) rs)
-    (map (receiverSuperDict reqs) sups)
-receiverSuperDict reqs (RDict d) = reqParamValue reqs d 0
-receiverSuperDict reqs (RProj r path) =
-  projectDict (receiverSuperDict reqs r) path
-receiverSuperDict _ _ = VDict "" [] []
-
-reqParamValue : List (Value e) -> String -> Int -> Value e
-reqParamValue [] _ _ = VDict "" [] []
-reqParamValue (v :: rest) d k =
-  if d == instanceReqParam k then v else reqParamValue rest d (k + 1)
-
--- the body once every leading dictionary has arrived: its method-level ones bound to
--- its own dictionary parameters, then run (a nullary body) or left awaiting its
--- value arguments
-receiverBodyApplied : EvalEnv (Value e) ->
-  List Int ->
-  List Pat ->
-  Expr ->
-  List (Value e) ->
-  <e> Value e
-receiverBodyApplied env positions pats body methodDicts =
-  let nMethod = listLen methodDicts
-  let valuePats = drop nMethod pats
-  let dictEnv =
-    extendEnv env (zipL (map patVarName (takeN nMethod pats)) methodDicts)
-  if isEmptyL valuePats then
-    if isEmptyL positions then
-      eval dictEnv body
-    else
-      implMethodValue dictEnv positions [] body
-  else
-    VClosure dictEnv valuePats body
-
-patVarName : Pat -> String
-patVarName (PVar x _) = x
-patVarName _ = panic "a dictionary parameter is always a variable pattern"
-
--- a curried value that gathers [n] arguments, then hands them in order to [k]
-collectDicts : Int ->
-  List (Value e) ->
-  (List (Value e) -> <e> Value e) ->
-  Value e
-collectDicts n acc k
-  | n <= 1 = VPrim (d => k (reverseL (d :: acc)))
-  | otherwise = VPrim (d => collectDicts (n - 1) (d :: acc) k)
+  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0)
+  implMethodValue
+    env
+    positions
+    (takeN nMethod pats ++ [receiver] ++ drop nMethod pats)
+    body
 
 -- coalesce all candidates for each method name into one VMulti, most-specific
 -- (fewest type vars) first
@@ -2695,7 +2674,7 @@ implDeclNames : Decl -> List String
 implDeclNames (DAttrib _ d) = implDeclNames d
 implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- A default method's name needs its cell even when no impl supplies it, because
--- every inheriting instance's specialization installs under it
+-- every inheriting instance's entry installs under it
 -- (`inheritedDefaultEntries`); `evalModules`/`cevalModules` both build
 -- `globalCells` from this, and `installConsts`' `findCell` PANICS on a name with no
 -- cell, so the two halves cannot be split.

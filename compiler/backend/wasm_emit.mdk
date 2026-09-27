@@ -5149,7 +5149,7 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes 
         name
         iface
         siteArity
-        tag
+        route
         implRoutes
         methRoutes
         (take valArity args)
@@ -5163,7 +5163,7 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes 
       name
       iface
       siteArity
-      tag
+      route
       implRoutes
       methRoutes
       args
@@ -5281,12 +5281,13 @@ emitMethodRKeyCallRef : Prog ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List Route ->
   List CExpr ->
   List String
-emitMethodRKeyCallRef prog env d name iface siteArity tag implRoutes methRoutes args =
+emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoutes args =
+  let tag = routeKeyWordW route
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   -- `RKey tag` selects a STATIC impl (peer of llvm_emit's emitMethod RKey arm): the
   -- entry of the occurrence's interface at [tag] — a supplied method, or an inherited
@@ -5303,23 +5304,70 @@ emitMethodRKeyCallRef prog env d name iface siteArity tag implRoutes methRoutes 
     -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
     -- all its dicts is byte-identical.
     Some entry =>
-      let keep = implLeadingDictCountOfEntryW entry
       let keptWords =
         flatMap
           (routeWitness prog env d)
-          (takeRoutesW keep (methRoutes ++ implRoutes))
+          (staticEntryDictRoutesW entry route methRoutes implRoutes)
       keptWords ++ argInstrs ++ ["call $" ++ implEntrySymW prog name entry]
     None =>
       emitGeneralRKeyRef
         prog
         env
         d
-        (methRoutes ++ implRoutes)
+        route
+        methRoutes
+        implRoutes
         argInstrs
         name
         iface
         siteArity
-        tag
+
+-- The leading dictionaries a static call to [ent] passes after its method-level
+-- ones (llvm_emit's `staticEntryDictRoutes`): a supplied method's kept `requires`,
+-- or an inherited default's RECEIVER, the selected instance's dictionary built from
+-- the site's word, `requires` routes and the supers the route carries for this case.
+staticEntryDictRoutesW : CImplEntry ->
+  Route ->
+  List Route ->
+  List Route ->
+  List Route
+staticEntryDictRoutesW ent route methRoutes implRoutes =
+  if isInheritedEntryW ent then
+    methRoutes ++ [receiverRouteW route implRoutes]
+  else
+    takeRoutesW (implLeadingDictCountOfEntryW ent) (methRoutes ++ implRoutes)
+
+receiverRouteW : Route -> List Route -> Route
+receiverRouteW (RKey word _ sups) implRoutes = RKey word implRoutes sups
+receiverRouteW route _ = route
+
+routeKeyWordW : Route -> String
+routeKeyWordW (RKey word _ _) = word
+routeKeyWordW _ = ""
+
+-- an inherited default's per-instance entry (a forwarder to the shared body)
+isInheritedEntryW : CImplEntry -> Bool
+isInheritedEntryW (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntryW _ = False
+
+-- is the entry a dispatch arm at [key] reaches an inherited default?
+implIsInheritedW : Prog -> String -> String -> Bool
+implIsInheritedW prog method key =
+  match findByTagW method key (methodEntriesW prog method)
+    Some ent => isInheritedEntryW ent
+    None => False
+
+-- The dictionaries a dispatch arm loads for its impl after the method-level ones:
+-- an inherited default receives the dictionary that selected it; a supplied method
+-- its `requires`, which follow the dictionary's super segment.
+armDictLoadsW : Prog -> String -> String -> String -> Int -> List String
+armDictLoadsW prog name key dpar nArgs =
+  if implIsInheritedW prog name key then
+    ["local.get $" ++ gname dpar]
+  else
+    let reqDicts = implReqDictCount prog name key nArgs
+    let supers = implSuperCountW prog name key
+    flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
 
 -- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
 -- it, then if-chain over the method's candidate impls comparing the loaded tag
@@ -5398,10 +5446,7 @@ emitGeneralArm : Prog ->
   List String
 emitGeneralArm _ _ None _ _ _ _ = []
 emitGeneralArm prog name (Some arm) blk dpar argInstrs nArgs =
-  let reqDicts = implReqDictCount prog name (armRouteKeyW arm) nArgs
-  let supers = implSuperCountW prog name (armRouteKeyW arm)
-  let reqLoads =
-    flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
+  let reqLoads = armDictLoadsW prog name (armRouteKeyW arm) dpar nArgs
   reqLoads
     ++ argInstrs
     ++ dispatchCallSeqW prog arm name nArgs
@@ -5480,10 +5525,7 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
   -- reaching this arm is a $dictcell whose field-1 $dictarr carries those nested req dicts in
   -- order (built by routeWitness).  Load field 0..reqDicts-1 and prepend them as the impl fn's
   -- leading dict args, mirroring llvm_emit's loadReqDicts (fields 1..n of the boxed cell).
-  let reqDicts = implReqDictCount prog name key nArgs
-  let supers = implSuperCountW prog name key
-  let reqLoads =
-    flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
+  let reqLoads = armDictLoadsW prog name key dpar nArgs
   indentBy idt (dispatchKeyTestW prog arm tagRead ++ ["if"])
     ++ indentBy
       (idt + 1)
@@ -6475,22 +6517,26 @@ findByTagW method tag (entry :: rest)
 emitGeneralRKeyRef : Prog ->
   List String ->
   Int ->
+  Route ->
+  List Route ->
   List Route ->
   List String ->
   String ->
   String ->
   Int ->
-  String ->
   List String
-emitGeneralRKeyRef prog env d routes argInstrs name iface siteArity tag =
+emitGeneralRKeyRef prog env d route methRoutes implRoutes argInstrs name iface siteArity =
   match implForWSite prog name iface noneHeadTag siteArity
     Some entry =>
-      let keep = implLeadingDictCountOfEntryW entry
       let keptWords =
-        flatMap (routeWitness prog env d) (takeRoutesW keep routes)
+        flatMap
+          (routeWitness prog env d)
+          (staticEntryDictRoutesW entry route methRoutes implRoutes)
       keptWords ++ argInstrs ++ ["call $" ++ implEntrySymW prog name entry]
     None =>
-      gapLP prog "wasm layer-15: no impl of method '\{name}' for type '\{tag}'"
+      gapLP
+        prog
+        "wasm layer-15: no impl of method '\{name}' for type '\{routeKeyWordW route}'"
 
 -- `hashName` (djb2, seed 5381) lives in `backend.private_mangle`, shared verbatim
 -- with the LLVM emitter so the dict-witness tag matches across backends + the

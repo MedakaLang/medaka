@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=282
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -19,7 +19,7 @@ stages=DESUGAR,MARK
 -- dispatches like the instance's own methods) and eval's install (one specialized
 -- candidate per row).  Neither chooses a default: the row says which interface's
 -- body serves which instance's slot.
-import frontend.ast.{Route, Ty}
+import frontend.ast.{Ty}
 import types.repr.{IfaceRef(..)}
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import support.util.{reverseL}
@@ -78,40 +78,19 @@ dispositionKey : InstId -> String -> String
 dispositionKey inst method =
   "\{instIdMid inst}#\{intToString (instIdSeq inst)}@\{method}"
 
--- What a pass needs to build one instance's specialization of an inherited
--- default, named the way every engine already names the instance.
+-- What a pass needs to give one instance an entry for an inherited default, named
+-- the way every engine already names the instance.  The entry is a forwarder to the
+-- interface's one shared default body; the instance's dictionary reaches that body
+-- as its receiver argument, so nothing about the instance's dictionary is kept here.
 public export data InstanceShape = InstanceShape {
   -- the canonical route word (`route_key.implRouteKeyWord` of the impl's own
   -- interface origin and type arguments, no method): the key its supplied
-  -- methods carry, so a specialization sits beside them under the same word
+  -- methods carry, so an inherited entry sits beside them under the same word
   isWord : String,
   -- the impl head's type arguments, from which a pass derives the head tag and
   -- specificity score exactly as it does for the impl's own methods
   isTys : List Ty,
-  -- the word a dictionary for this instance carries (the typechecker's
-  -- predicate route word: the bare head unless the head collides), which a
-  -- call of a method of the instance's own interface through the receiver
-  -- dispatches by
-  isDictWord : String,
-  -- the dictionary of each DIRECT superinterface at these type arguments, in
-  -- declaration order, solved at this instance's own head: the receiver's super
-  -- segment.  A route reads the instance's k-th `requires` dictionary through the
-  -- placeholder parameter `instanceReqParam k`, which a pass binds to that
-  -- dictionary before building the receiver.
-  isSupers : List Route,
-  -- how many `requires` dictionaries the instance's methods take after their
-  -- method-level ones (one per declared `requires` predicate)
-  isReqCount : Int,
 }
-
--- The placeholder parameter an `InstanceShape.isSupers` route reads the instance's
--- [k]-th `requires` dictionary through.
---
--- > instanceReqParam 1
--- "$req_1"
-export
-instanceReqParam : Int -> String
-instanceReqParam k = "$req_\{intToString k}"
 
 export data DispositionTable = DispositionTable {
   dtRows : List MethodDisposition,
@@ -298,8 +277,15 @@ installedDispositions _ = match !dispositionsRef
 export
 installedDispositionsOpt : Unit -> Option DispositionTable
 installedDispositionsOpt _ = !dispositionsRef
+
+-- Put back a table read with `installedDispositionsOpt`, for a driver that
+-- elaborates a program it derived from the user's and must leave the user's own
+-- elaboration's table installed for the engine that runs next.
+export
+restoreDispositions : Option DispositionTable -> Unit
+restoreDispositions saved = dispositionsRef := saved
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Route" false) (mem "Ty" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -320,9 +306,7 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionMethod" ((PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (EVar "m"))
 (DTypeSig true "dispositionKey" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dispositionKey" ((PVar "inst") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "instIdMid") (EVar "inst")))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "instIdSeq") (EVar "inst"))))) (ELit (LString "@"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
-(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSupers" (TyApp (TyCon "List") (TyCon "Route"))) (field "isReqCount" (TyCon "Int"))))) ())
-(DTypeSig true "instanceReqParam" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "instanceReqParam" ((PVar "k")) (EBinOp "++" (EBinOp "++" (ELit (LString "$req_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString ""))))
+(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty")))))) ())
 (DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape")))) (field "dtIfaceSuperCounts" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
 (DTypeSig true "emptyDispositionTable" (TyCon "DispositionTable"))
 (DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
@@ -365,8 +349,10 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "installedDispositions" (PWild) (EMatch (EUnOp "!" (EVar "dispositionsRef")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "disposition table: no elaboration has published one")))) (arm (PCon "Some" (PVar "table")) () (EVar "table"))))
 (DTypeSig true "installedDispositionsOpt" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
 (DFunDef false "installedDispositionsOpt" (PWild) (EUnOp "!" (EVar "dispositionsRef")))
+(DTypeSig true "restoreDispositions" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyCon "Unit")))
+(DFunDef false "restoreDispositions" ((PVar "saved")) (EApp (EApp (EVar "setRef") (EVar "dispositionsRef")) (EVar "saved")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Route" false) (mem "Ty" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
@@ -387,9 +373,7 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionMethod" ((PRec "InheritedDefault" ((rf "method" (PVar "m"))) false)) (EVar "m"))
 (DTypeSig true "dispositionKey" (TyFun (TyCon "InstId") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dispositionKey" ((PVar "inst") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "instIdMid") (EVar "inst")))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "instIdSeq") (EVar "inst"))))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
-(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "isDictWord" (TyCon "String")) (field "isSupers" (TyApp (TyCon "List") (TyCon "Route"))) (field "isReqCount" (TyCon "Int"))))) ())
-(DTypeSig true "instanceReqParam" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "instanceReqParam" ((PVar "k")) (EBinOp "++" (EBinOp "++" (ELit (LString "$req_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString ""))))
+(DData Public "InstanceShape" () ((variant "InstanceShape" (ConNamed (field "isWord" (TyCon "String")) (field "isTys" (TyApp (TyCon "List") (TyCon "Ty")))))) ())
 (DData Abstract "DispositionTable" () ((variant "DispositionTable" (ConNamed (field "dtRows" (TyApp (TyCon "List") (TyCon "MethodDisposition"))) (field "dtIndex" (TyApp (TyCon "OrdMap") (TyCon "MethodDisposition"))) (field "dtInheritors" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "InstanceShape")))) (field "dtIfaceSuperCounts" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
 (DTypeSig true "emptyDispositionTable" (TyCon "DispositionTable"))
 (DFunDef false "emptyDispositionTable" () (ERecordCreate "DispositionTable" ((fa "dtRows" (EListLit)) (fa "dtIndex" (EVar "omEmpty")) (fa "dtInheritors" (EVar "omEmpty")) (fa "dtIfaceSuperCounts" (EVar "omEmpty")))))
@@ -432,3 +416,5 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "installedDispositions" (PWild) (EMatch (EUnOp "!" (EVar "dispositionsRef")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "disposition table: no elaboration has published one")))) (arm (PCon "Some" (PVar "table")) () (EVar "table"))))
 (DTypeSig true "installedDispositionsOpt" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
 (DFunDef false "installedDispositionsOpt" (PWild) (EUnOp "!" (EVar "dispositionsRef")))
+(DTypeSig true "restoreDispositions" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyCon "Unit")))
+(DFunDef false "restoreDispositions" ((PVar "saved")) (EApp (EApp (EVar "setRef") (EVar "dispositionsRef")) (EVar "saved")))

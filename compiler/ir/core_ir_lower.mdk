@@ -64,7 +64,6 @@ import types.disposition.{
   inheritorsOf,
   installedDispositions,
   installedDispositionsOpt,
-  instanceReqParam,
 }
 import eval.eval.{
   buildCtorToType,
@@ -101,102 +100,10 @@ composeVar : String
 composeVar = "$cf"
 
 -- ── expressions ────────────────────────────────────────────────────────────
-export
--- The published answer for a method occurrence, as the IR node carries it —
--- rewritten through the receiver remap while a default body is being specialized.
+-- The published answer for a method occurrence, as the IR node carries it.
 cmethodOf : String -> (String, Int, Route, List Route, List Route) -> CExpr
 cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
-  match !receiverRemapRef
-    None => CMethod name iface arity route implRoutes methodRoutes
-    Some rr =>
-      if routeReadsReceiver rr route then match remapReceiver rr route
-        -- a method dispatched on a dictionary built here selects that dictionary's
-        -- instance and takes its `requires` dictionaries as impl dictionaries
-        RKey word reqs _ =>
-          CMethod
-            name
-            iface
-            arity
-            (RKey word [] [])
-            reqs
-            (map (remapReceiver rr) methodRoutes)
-        dict =>
-          CMethod name iface arity dict [] (map (remapReceiver rr) methodRoutes)
-      else
-        CMethod
-          name
-          iface
-          arity
-          route
-          (map (remapReceiver rr) implRoutes)
-          (map (remapReceiver rr) methodRoutes)
-
--- ── specializing an inherited default for one instance (#1265, #1821, #1619) ──
--- A default body is inferred ONCE, with its receiver as a given
--- (`ast.defaultReceiverDict`), so a sibling or superclass call inside it is routed
--- `RDict`/`RDictFwd` to that receiver.  The receiver is not a parameter: each
--- `InheritedDefault` row lowers the body again with the receiver's routes rewritten
--- to the dictionary the inheriting instance's receiver denotes: `RKey <word>`, the
--- word such a dictionary carries — the typechecker's bare head unless that head is
--- ambiguous, its canonical key when it is — so a method of the default's own
--- interface reaches that instance's method (supplied or inherited).  The instance's
--- `requires` dictionaries, received as the specialization's own leading parameters,
--- are supplied as the call's impl dictionaries, and its supers are the instance's
--- own (`InstanceShape.isSupers`) over those parameters, so a superclass method
--- called on the receiver projects the super segment of that dictionary and
--- dispatches by the super instance's own word.
-data ReceiverRemap = ReceiverRemap { rrSelf : String, rrDict : Route }
-
-receiverRemapRef : Ref (Option ReceiverRemap)
-receiverRemapRef = Ref None
-
--- Does [route] read the receiver, directly or through a projection?
-routeReadsReceiver : ReceiverRemap -> Route -> Bool
-routeReadsReceiver rr (RDict d) = d == rr.rrSelf
-routeReadsReceiver rr (RDictFwd d) = d == rr.rrSelf
-routeReadsReceiver rr (RProj r _) = routeReadsReceiver rr r
-routeReadsReceiver _ _ = False
-
-remapReceiver : ReceiverRemap -> Route -> Route
-remapReceiver rr (RDict d)
-  | d == rr.rrSelf = rr.rrDict
-remapReceiver rr (RDictFwd d)
-  | d == rr.rrSelf = rr.rrDict
-remapReceiver rr (RKey w rs sups) =
-  RKey w (map (remapReceiver rr) rs) (map (remapReceiver rr) sups)
-remapReceiver rr (RProj r path) = projectRoute (remapReceiver rr r) path
-remapReceiver _ r = r
-
--- A projection of a dictionary built here is the super route it stores.
-projectRoute : Route -> List Int -> Route
-projectRoute r [] = r
-projectRoute (RKey w rs sups) (i :: rest) = match drop i sups
-  s :: _ => projectRoute s rest
-  [] => panic "dictionary projection past its superinterfaces"
-projectRoute (RProj r path) more = RProj r (path ++ more)
-projectRoute r path = RProj r path
-
--- An instance-shape route with its `requires` placeholders bound to [reqNames].
-bindReqParams : List String -> Route -> Route
-bindReqParams reqNames (RDict d) = match reqParamIndex d reqNames 0
-  Some name => RDict name
-  None => RDict d
-bindReqParams reqNames (RKey w rs sups) =
-  RKey w (map (bindReqParams reqNames) rs) (map (bindReqParams reqNames) sups)
-bindReqParams reqNames (RProj r path) = RProj (bindReqParams reqNames r) path
-bindReqParams _ r = r
-
-reqParamIndex : String -> List String -> Int -> Option String
-reqParamIndex _ [] _ = None
-reqParamIndex d (name :: rest) k
-  | d == instanceReqParam k = Some name
-  | otherwise = reqParamIndex d rest (k + 1)
-
--- The dictionary routes of a constrained-function occurrence, remapped likewise.
-lowerDictRoutes : List Route -> List Route
-lowerDictRoutes routes = match !receiverRemapRef
-  None => routes
-  Some rr => map (remapReceiver rr) routes
+  CMethod name iface arity route implRoutes methodRoutes
 
 lower : Expr -> CExpr
 lower (ELit l) = CLit l
@@ -271,7 +178,7 @@ lower (EHeadAnnot e _) = lower e
 -- #2705: the occurrence's answer is read from the published evidence table, the
 -- same seam `EDictAt` crosses on the next line.
 lower (EMethodAt name _ ev) = cmethodOf name (evMethodRoutes ev)
-lower (EDictAt name ev) = CDict name (lowerDictRoutes (evDictRoutes ev))
+lower (EDictAt name ev) = CDict name (evDictRoutes ev)
 -- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
 -- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
 -- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
@@ -764,9 +671,8 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- `core_ir_roundtrip_main`, `core_ir_dump_main`, the snapshot tool's CORE_IR
 -- section).  It cannot see an inherited default: which instance inherits which
 -- default is instance identity, and only elaboration establishes that.  An impl that
--- leaves a method of an interface declared in ANOTHER module to its default
--- therefore gets no body for it here (desugar's `fillImplDefaults` still supplies a
--- same-module one).  A driver that typechecks lowers through `lowerTypedProgram`.
+-- leaves a method to its interface's default therefore gets no body for it here.  A
+-- driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog = lowerProgramWith None prog
@@ -782,7 +688,7 @@ lowerTypedProgram prog = lowerProgramWith (Some (installedDispositions ())) prog
 lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
 lowerProgramWith dispositions prog =
   CProgram
-    (lowerGroups prog)
+    (lowerGroups prog ++ lowerSharedDefaults dispositions prog)
     (ctorArities prog)
     (buildCtorToType prog)
     (lowerImplsWith (installDispatchTables prog) dispositions prog)
@@ -1572,9 +1478,6 @@ lgToBind ((n, _), cs) = CBind n cs
 -- inherited method emitted an ARM-LESS dispatcher ending in `unreachable`
 -- (SIGSEGV), and a method with exactly one tagged impl elsewhere took the
 -- `soleImplDirect` shortcut straight into the WRONG impl (silent wrongness).
--- Only the CROSS-MODULE case is affected: desugar's `fillImplDefaults` is
--- same-module only, so a same-module impl gets a specialized (and therefore
--- tagged, and therefore visible) clause for each inherited default.
 --
 -- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
 -- (`optionOr noneHeadTag (headTyconHead tys)`), the canonical key EXACTLY as it
@@ -2128,11 +2031,11 @@ lowerDeclImpl disp dt (DAttrib _ d) = lowerDeclImpl disp dt d
 -- same field for the same reason.
 lowerDeclImpl disp _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (lowerImplMethod disp o ifaceName typeArgs) methods
--- An interface lowers one specialization of each default per instance the table says
--- inherits it — lowered HERE, beside the interface's other code, because the body is
--- the interface module's (its names resolve there).  Every inherited slot therefore
--- has its own entry, cross-module included, and no engine is left to choose a
--- default.  The interface word is read straight off `DInterface.ifaceOrigin`
+-- An interface lowers one forwarder entry for each default per instance the table
+-- says inherits it — lowered HERE, beside the interface's other code and its shared
+-- default bodies (`lowerSharedDefaults`), because the body is the interface module's
+-- (its names resolve there).  Every inherited slot therefore has its own entry, and
+-- no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
 -- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
 -- same spelling the table's producer keys the slot by.
 lowerDeclImpl disp (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
@@ -2170,41 +2073,33 @@ lowerInheritedDefault disp dt o ifaceName (IfaceMethod mname _ (Some (MethodDefa
   let ifaceWord = ifaceWordOf o ifaceName
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let valueCount =
+    listLen pats - leadingDictParams pats + listLen (lamParams body)
   map
-    (inheritedDefaultEntry ifaceWord mname positions pats body)
+    (inheritedDefaultEntry ifaceWord mname positions pats valueCount)
     (inheritorsOf ifaceWord mname dt)
 
--- One inheriting instance's copy of the default: the body lowered with its receiver
--- remapped (see `ReceiverRemap`), taking the instance's `requires` dictionaries after
--- its method-level ones — the parameter order of the instance's own supplied methods
--- (`typecheck.implDictPassMethods`) — so a call site passes it what it passes them.
+-- One inheriting instance's entry for a default: a forwarder to the interface's one
+-- shared body (`sharedDefaultName`).  It takes the default's method-level
+-- dictionaries, then the RECEIVER -- the dictionary of the instance whose slot it
+-- fills, handed over by whichever call selected this entry -- then the default's
+-- value arguments.  The receiver sits where a supplied method's first `requires`
+-- dictionary sits and is named like one, so every engine's count of an entry's
+-- leading dictionaries covers it; an engine differs only in passing the selecting
+-- dictionary itself there rather than the dictionary's `requires`.
 inheritedDefaultEntry : String ->
   String ->
   List Int ->
   List Pat ->
-  Expr ->
+  Int ->
   InstanceShape ->
   CImplEntry
-inheritedDefaultEntry ifaceWord mname positions pats body shape =
+inheritedDefaultEntry ifaceWord mname positions pats valueCount shape =
   let nMethodDicts = leadingDictParams pats
-  let reqNames =
-    map
-      (i => "$dict_\{mname}_\{intToString i}")
-      (range nMethodDicts (nMethodDicts + shape.isReqCount))
-  let rr = ReceiverRemap {
-    rrSelf = defaultReceiverDict mname,
-    rrDict =
-      RKey
-        shape.isDictWord
-        (map RDict reqNames)
-        (map (bindReqParams reqNames) shape.isSupers),
-  }
-  let saved = !receiverRemapRef
-  receiverRemapRef := Some rr
-  let lowered = lower body
-  receiverRemapRef := saved
-  let reqPats = map (n => PVar n (Loc "" 0 0 0 0)) reqNames
-  let allPats = take nMethodDicts pats ++ reqPats ++ drop nMethodDicts pats
+  let methodNames = map patName (take nMethodDicts pats)
+  let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
+  let valueNames = map (i => "$dv_\{intToString i}") (range 0 valueCount)
+  let params = methodNames ++ [receiver] ++ valueNames
   CImplEntry
     mname
     (tyvarsInArgs shape.isTys)
@@ -2213,8 +2108,67 @@ inheritedDefaultEntry ifaceWord mname positions pats body shape =
       (optionOr noneHeadTag (headTyconHead shape.isTys))
       shape.isWord
       positions
-      allPats
-      lowered)
+      (map (n => PVar n (Loc "" 0 0 0 0)) params)
+      (applyNamed (CVar (sharedDefaultName ifaceWord mname) AGlobal) params))
+
+-- the interface's one body for the default of [method], shared by every inheritor
+-- of the interface with word [ifaceWord]
+export
+sharedDefaultName : String -> String -> String
+sharedDefaultName ifaceWord method = "$dm_\{method}_\{injectiveIdent ifaceWord}"
+
+applyNamed : CExpr -> List String -> CExpr
+applyNamed f [] = f
+applyNamed f (n :: rest) = applyNamed (CApp f (CVar n AGlobal)) rest
+
+patName : Pat -> String
+patName (PVar n _) = n
+patName _ = panic "a dictionary parameter is always a variable pattern"
+
+-- The shared body of every interface default, one per (interface word, method),
+-- lowered ONCE from the body inferred once: its method-level dictionaries, then its
+-- receiver (`ast.defaultReceiverDict`, which the body's sibling and superclass calls
+-- read as a given), then its own value patterns -- and, for a point-free default
+-- (`loud = x => …`), its lambda's, so every forwarder call is saturated.  Every default gets one whether or
+-- not this program inherits it, so an interface's bodies depend on its own module
+-- alone (the prelude object carries the prelude's).  A program lowered without a
+-- disposition table has no inherited entries to forward to one.
+lowerSharedDefaults : Option DispositionTable -> List Decl -> List CBind
+lowerSharedDefaults None _ = []
+lowerSharedDefaults (Some _) prog = flatMap sharedDefaultsOf prog
+
+sharedDefaultsOf : Decl -> List CBind
+sharedDefaultsOf (DAttrib _ d) = sharedDefaultsOf d
+sharedDefaultsOf (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (sharedDefaultOf (ifaceWordOf o ifaceName)) methods
+sharedDefaultsOf _ = []
+
+sharedDefaultOf : String -> IfaceMethod -> List CBind
+sharedDefaultOf _ (IfaceMethod _ _ None _) = []
+sharedDefaultOf ifaceWord (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
+  let nMethodDicts = leadingDictParams pats
+  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0)
+  [
+    CBind (sharedDefaultName ifaceWord mname) [
+      CClause
+        (take nMethodDicts pats
+          ++ [receiver]
+          ++ drop nMethodDicts pats
+          ++ lamParams body)
+        (lower (underLam body)),
+    ],
+  ]
+
+-- a default body's leading lambda parameters, and the body under them
+lamParams : Expr -> List Pat
+lamParams (ELoc _ e) = lamParams e
+lamParams (ELam ps _) = ps
+lamParams _ = []
+
+underLam : Expr -> Expr
+underLam (ELoc _ e) = underLam e
+underLam (ELam _ b) = b
+underLam e = e
 
 -- the leading `$dict_*` parameters dict-passing prepended to a default's clause
 leadingDictParams : List Pat -> Int

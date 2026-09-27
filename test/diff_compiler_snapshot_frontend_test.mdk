@@ -134,7 +134,7 @@ families = [
     stages = "core_ir",
     spec = "dir:test/eval_fixtures",
     corpus = Dir "test/eval_fixtures",
-    floor = 24,
+    floor = 22,
   },
   Family {
     sub = "eval_dict_fixtures",

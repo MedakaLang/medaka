@@ -2460,12 +2460,67 @@ table = [
   Row {
     entry = "s2-default-super-requires.mdk",
     label =
-      "#679/#993 BEFORE-PICTURE: a default method body calling a super method on the receiver, inherited by an instance carrying `requires` (the disposition-table specialization path). Conformant today for a receiver with no COMPETING more-specific super impl; #3509's pin (test/must_fail_fixtures) is the adjacent case where a more-specific impl exists and is silently skipped",
+      "#679/#993: a default method body calling a super method on the receiver, inherited by an instance carrying `requires`. The super is projected out of the receiver dictionary the caller built; `s2-default-super-call-receiver` is the adjacent case where a more-specific super impl exists and must be the one reached",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
     mode = AllExact,
     pinned = "[b:cat]|[b:box(cat)]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-call-receiver.mdk",
+    label =
+      "#3509 (drained from its must-fail pin), #993 A2: an inherited default's super call on its receiver, with a more-specific super impl at the receiver's type. The caller builds `Fmt (Box Int)` with its `Named` super solved at that goal; the default receives that dictionary as a real parameter and projects the SPECIFIC `Named (Box Int)` out of it, never a super pre-baked per instance",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[b:spec]|[b:gen(cat)]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-call-receiver-xmod/main.mdk",
+    label =
+      "#3509 CROSS-MODULE twin of the row above: interface and default in `fmtlib`, instances in the entry module. Same answer -- where the interface is declared does not decide how a default reaches its receiver's supers",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[b:spec]|[b:gen(cat)]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-head-collision/main.mdk",
+    label =
+      "Review F5 (m-evidence): an inherited default's super call on its receiver while the interface's head collides with a same-spelled interface at the same type, so the receiver dictionary's word is its canonical key. The super is projected out of that dictionary and dispatches by its own instance's word",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "sq4|9\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-ord-requires-two-types.mdk",
+    label =
+      "Every `Ord` default inherited by one `requires`-carrying instance used at two element types in one module (the Ord shape desugar's retired same-module default copy used to cover): each shared default body reads `compare` and the element dictionary through its receiver",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True|True|True|False|2,9|x,z|False\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-foldable-eta-short.mdk",
+    label =
+      "`Foldable`'s ETA-SHORT `foldMap` default (plus `length`/`isEmpty`) inherited by a same-module instance and reached through the receiver at two monoids (the Foldable shape desugar's retired same-module default copy used to cover)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "123|[4, 4, 5, 5]|3|True\n",
     codes = [],
   },
 ]
@@ -2479,7 +2534,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 213
+tableRows = 218
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

@@ -1,5 +1,5 @@
 # META
-source_lines=4935
+source_lines=4914
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -63,7 +63,6 @@ import types.disposition.{
   InstanceShape(..),
   inheritorsOf,
   installedDispositionsOpt,
-  instanceReqParam,
 }
 import support.util.{
   contains,
@@ -84,7 +83,7 @@ import support.util.{
   startsWith,
   zipL,
 }
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import list.{drop}
 import eval.u64_halves as H
 import u64 as U64
@@ -393,7 +392,38 @@ installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
   methodReqCountRef := methodReqCountIndex (buildMethodReqCounts allDecls)
+  inheritedEntryRef :=
+    methodReqCountIndex
+      (flatMap (inheritedEntryRows (installedDispositionsOpt ())) allDecls)
   disp
+
+-- Per (method, instance word): the entries that are an inherited default rather
+-- than a method the instance supplies.  Such an entry's leading dictionary after
+-- its method-level ones is its RECEIVER -- the dictionary that selected it -- where
+-- a supplied method takes that dictionary's `requires` (`applyMethodDicts`).
+inheritedEntryRef : Ref (OrdMap (OrdMap Int))
+inheritedEntryRef = Ref omEmpty
+
+inheritedEntryRows : Option DispositionTable ->
+  Decl ->
+  List ((String, String), Int)
+inheritedEntryRows dt (DAttrib _ d) = inheritedEntryRows dt d
+inheritedEntryRows (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
+  flatMap
+    (m =>
+      map
+        (shape => ((ifaceMethodName m, shape.isWord), 1))
+        (inheritorsOf (ifaceWordOf ifaceOrigin name) (ifaceMethodName m) dt))
+    methods
+inheritedEntryRows _ _ = []
+
+ifaceMethodName : IfaceMethod -> String
+ifaceMethodName (IfaceMethod mname _ _ _) = mname
+
+isInheritedEntry : String -> String -> Bool
+isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
+  Some words => omHasKey word words
+  None => False
 
 export
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
@@ -411,8 +441,8 @@ implMethodReqCounts _ (DImpl { iface, tys, methods, implOrigin, ... }) =
   let tag = optionOr noneHeadTag (headTyconHead tys)
   let key = implRouteKeyWord implOrigin iface tys None
   flatMap (implMethodReqCountEntries tag key) methods
--- an inherited default's specialization takes the instance's `requires`
--- dictionaries after its own method-level ones (`inheritedDefaultEntries`)
+-- an inherited default's entry takes its receiver after its own method-level
+-- dictionaries (`inheritedDefaultEntries`)
 implMethodReqCounts (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
   flatMap (inheritedDefaultReqCounts dt (ifaceWordOf ifaceOrigin name)) methods
 implMethodReqCounts _ _ = []
@@ -424,7 +454,7 @@ inheritedDefaultReqCounts : DispositionTable ->
 inheritedDefaultReqCounts dt ifaceWord (IfaceMethod mname _ (Some (MethodDefault pats _)) _) =
   flatMap
     (shape =>
-      let count = leadingImplDictPats pats + shape.isReqCount
+      let count = leadingImplDictPats pats + 1
       [
         ((mname, optionOr noneHeadTag (headTyconHead shape.isTys)), count),
         ((mname, shape.isWord), count),
@@ -481,9 +511,8 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 --     reads none) ⇒ the call site's impl dicts must be DROPPED, or the dict lands in
 --     the first value param.  That is #413.
 --   * None  = no entry answers, and the call site's dicts pass through unchanged.
--- Every inherited default has an entry too: its per-instance specialization takes
--- its method-level and then the instance's `requires` dictionaries, exactly as a
--- supplied method does (`inheritedDefaultReqCounts`).
+-- Every inherited default has an entry too: it takes its method-level dictionaries
+-- and then one more, its receiver (`inheritedDefaultReqCounts`).
 -- Callers take the indexed Option once and derive every consumer from it (see
 -- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
@@ -1713,14 +1742,28 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   -- absent/present distinction.  A narrowed candidate is asked by its own canonical
   -- key, which names one interface's impl where the route tag may name a head
   -- several interfaces implement.
-  let reqCount = lookupMethodReqCountOpt name (narrowedWord env route narrowed)
+  let word = narrowedWord env route narrowed
+  let reqCount = lookupMethodReqCountOpt name word
   let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs narrowed then
     let v1 = applyDicts env narrowed methodRoutes
-    let v2 = applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
-    applyValues v2 fwdReqs
+    if isInheritedEntry name word then
+      applyValues v1 [receiverOf env route implRoutes]
+    else
+      let v2 =
+        applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
+      applyValues v2 fwdReqs
   else
     narrowed
+
+-- The dictionary that selected an inherited default, which the default receives as
+-- its receiver: a dictionary route denotes it directly; a statically selected
+-- instance's is built from its word, its `requires` (the site's impl routes) and
+-- its supers.
+receiverOf : EvalEnv (Value e) -> Route -> List Route -> <e> Value e
+receiverOf env (RKey key _ sups) implRoutes =
+  VDict key (map (dictOfRoute env) implRoutes) (map (dictOfRoute env) sups)
+receiverOf env route _ = dictOfRoute env route
 
 narrowedWord : EvalEnv (Value e) -> Route -> Value e -> <e> String
 narrowedWord _ _ (VTypedImpl _ k _ _ _) = k
@@ -2503,10 +2546,11 @@ declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
 -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
 declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (implMethodEntry env disp o ifaceName typeArgs) methods
--- An interface installs one specialization of each default per instance the
--- disposition table says inherits it, closed over the INTERFACE module's env (the
--- body's names resolve there) and tagged with the instance's head and key, so it is
--- dispatched exactly like the instance's own methods and nothing chooses a default.
+-- An interface installs one entry for each default per instance the disposition
+-- table says inherits it, all sharing one value closed over the INTERFACE module's
+-- env (the body's names resolve there), each tagged with the instance's head and
+-- key, so it is dispatched exactly like the instance's own methods and nothing
+-- chooses a default.
 -- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
 -- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
 -- BUILD process share), the spelling the table's producer keys the slot by.
@@ -2544,12 +2588,11 @@ headTyconHead : List Ty -> Option String
 headTyconHead [] = None
 headTyconHead (t :: _) = headTycon t
 
--- One inheriting instance's specialization of a default: the body with its receiver
--- (`ast.defaultReceiverDict`) bound to a dictionary for the instance, so a sibling
--- or superclass call inside it dispatches on that instance.  Like the instance's own
--- methods it takes its method-level dictionaries and then the instance's `requires`
--- dictionaries (`implMethodReqCounts` reports that count); the latter are what the
--- receiver's dictionary carries.
+-- Each inheriting instance's entry for a default: the interface's one shared value,
+-- filed under the instance's tag and word.  It takes its method-level dictionaries
+-- and then its receiver -- the dictionary that selected the entry
+-- (`applyMethodDicts`) -- so a sibling or superclass call inside the body reads the
+-- caller's dictionary, never one rebuilt for the instance.
 inheritedDefaultEntries : EvalEnv (Value e) ->
   List ((String, String, String), List Int) ->
   DispositionTable ->
@@ -2560,6 +2603,7 @@ inheritedDefaultEntries : EvalEnv (Value e) ->
 inheritedDefaultEntries env disp dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let shared = sharedDefaultValue env positions pats body mname
   map
     (shape => (
       mname,
@@ -2570,94 +2614,29 @@ inheritedDefaultEntries env disp dt o ifaceName (IfaceMethod mname _ (Some (Meth
           shape.isWord
           positions
           0
-          (receiverBoundDefault env positions pats body mname shape),
+          shared,
       ),
     ))
     (inheritorsOf (ifaceWordOf o ifaceName) mname dt)
 inheritedDefaultEntries _ _ _ _ _ _ = []
 
-receiverBoundDefault : EvalEnv (Value e) ->
+-- The interface's one value for a default, shared by every inheritor: its
+-- method-level dictionaries, then its receiver (`defaultReceiverDict`), then its own
+-- value patterns.
+sharedDefaultValue : EvalEnv (Value e) ->
   List Int ->
   List Pat ->
   Expr ->
   String ->
-  InstanceShape ->
   Value e
-receiverBoundDefault env positions pats body mname shape =
+sharedDefaultValue env positions pats body mname =
   let nMethod = leadingImplDictPats pats
-  let receiverEnv =
-    reqs => extendEnv env [(defaultReceiverDict mname, receiverDict shape reqs)]
-  if nMethod + shape.isReqCount == 0 then
-    implMethodValue (receiverEnv []) positions pats body
-  else
-    collectDicts (nMethod + shape.isReqCount) [] (dicts =>
-      receiverBodyApplied
-        (receiverEnv (drop nMethod dicts))
-        positions
-        pats
-        body
-        (takeN nMethod dicts))
-
--- The dictionary the receiver denotes for an instance whose `requires`
--- dictionaries are [reqs]: its supers are the shape's routes over those
--- dictionaries.
-receiverDict : InstanceShape -> List (Value e) -> Value e
-receiverDict shape reqs =
-  VDict shape.isDictWord reqs (map (receiverSuperDict reqs) shape.isSupers)
-
--- One receiver super route over the instance's `requires` dictionaries [reqs]: the
--- only dictionary parameters such a route reads are the `instanceReqParam`
--- placeholders.
-receiverSuperDict : List (Value e) -> Route -> Value e
-receiverSuperDict reqs (RKey key rs sups) =
-  VDict
-    key
-    (map (receiverSuperDict reqs) rs)
-    (map (receiverSuperDict reqs) sups)
-receiverSuperDict reqs (RDict d) = reqParamValue reqs d 0
-receiverSuperDict reqs (RProj r path) =
-  projectDict (receiverSuperDict reqs r) path
-receiverSuperDict _ _ = VDict "" [] []
-
-reqParamValue : List (Value e) -> String -> Int -> Value e
-reqParamValue [] _ _ = VDict "" [] []
-reqParamValue (v :: rest) d k =
-  if d == instanceReqParam k then v else reqParamValue rest d (k + 1)
-
--- the body once every leading dictionary has arrived: its method-level ones bound to
--- its own dictionary parameters, then run (a nullary body) or left awaiting its
--- value arguments
-receiverBodyApplied : EvalEnv (Value e) ->
-  List Int ->
-  List Pat ->
-  Expr ->
-  List (Value e) ->
-  <e> Value e
-receiverBodyApplied env positions pats body methodDicts =
-  let nMethod = listLen methodDicts
-  let valuePats = drop nMethod pats
-  let dictEnv =
-    extendEnv env (zipL (map patVarName (takeN nMethod pats)) methodDicts)
-  if isEmptyL valuePats then
-    if isEmptyL positions then
-      eval dictEnv body
-    else
-      implMethodValue dictEnv positions [] body
-  else
-    VClosure dictEnv valuePats body
-
-patVarName : Pat -> String
-patVarName (PVar x _) = x
-patVarName _ = panic "a dictionary parameter is always a variable pattern"
-
--- a curried value that gathers [n] arguments, then hands them in order to [k]
-collectDicts : Int ->
-  List (Value e) ->
-  (List (Value e) -> <e> Value e) ->
-  Value e
-collectDicts n acc k
-  | n <= 1 = VPrim (d => k (reverseL (d :: acc)))
-  | otherwise = VPrim (d => collectDicts (n - 1) (d :: acc) k)
+  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0)
+  implMethodValue
+    env
+    positions
+    (takeN nMethod pats ++ [receiver] ++ drop nMethod pats)
+    body
 
 -- coalesce all candidates for each method name into one VMulti, most-specific
 -- (fewest type vars) first
@@ -2699,7 +2678,7 @@ implDeclNames : Decl -> List String
 implDeclNames (DAttrib _ d) = implDeclNames d
 implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- A default method's name needs its cell even when no impl supplies it, because
--- every inheriting instance's specialization installs under it
+-- every inheriting instance's entry installs under it
 -- (`inheritedDefaultEntries`); `evalModules`/`cevalModules` both build
 -- `globalCells` from this, and `installConsts`' `findCell` PANICS on a name with no
 -- cell, so the two halves cannot be split.
@@ -4940,9 +4919,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false) (mem "instanceReqParam" false))))
+(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "zipL" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
@@ -5035,7 +5014,17 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "methodReqCountRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
 (DTypeSig true "installDispatchTables" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "methodReqCountIndex") (EApp (EVar "buildMethodReqCounts") (EVar "allDecls"))))) (DoExpr (EVar "disp"))))
+(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "methodReqCountIndex") (EApp (EVar "buildMethodReqCounts") (EVar "allDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "inheritedEntryRef")) (EApp (EVar "methodReqCountIndex") (EApp (EApp (EVar "flatMap") (EApp (EVar "inheritedEntryRows") (EApp (EVar "installedDispositionsOpt") (ELit LUnit)))) (EVar "allDecls"))))) (DoExpr (EVar "disp"))))
+(DTypeSig false "inheritedEntryRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "inheritedEntryRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
+(DTypeSig false "inheritedEntryRows" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "inheritedEntryRows" ((PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "inheritedEntryRows") (EVar "dt")) (EVar "d")))
+(DFunDef false "inheritedEntryRows" ((PCon "Some" (PVar "dt")) (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ETuple (ETuple (EApp (EVar "ifaceMethodName") (EVar "m")) (EFieldAccess (EVar "shape") "isWord")) (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name"))) (EApp (EVar "ifaceMethodName") (EVar "m"))) (EVar "dt"))))) (EVar "methods")))
+(DFunDef false "inheritedEntryRows" (PWild PWild) (EListLit))
+(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "mname") PWild PWild PWild)) (EVar "mname"))
+(DTypeSig false "isInheritedEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isInheritedEntry" ((PVar "mname") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "inheritedEntryRef"))) (arm (PCon "Some" (PVar "words")) () (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "words"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "buildMethodReqCounts" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "implMethodReqCounts") (EApp (EVar "installedDispositionsOpt") (ELit LUnit)))) (EVar "prog")))
 (DTypeSig false "implMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
@@ -5044,7 +5033,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "implMethodReqCounts" ((PCon "Some" (PVar "dt")) (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "inheritedDefaultReqCounts") (EVar "dt")) (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "methods")))
 (DFunDef false "implMethodReqCounts" (PWild PWild) (EListLit))
 (DTypeSig false "inheritedDefaultReqCounts" (TyFun (TyCon "DispositionTable") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
-(DFunDef false "inheritedDefaultReqCounts" ((PVar "dt") (PVar "ifaceWord") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") PWild)) PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "shape")) (EBlock (DoLet false false (PVar "count") (EBinOp "+" (EApp (EVar "leadingImplDictPats") (EVar "pats")) (EFieldAccess (EVar "shape") "isReqCount"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EVar "count")) (ETuple (ETuple (EVar "mname") (EFieldAccess (EVar "shape") "isWord")) (EVar "count"))))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EVar "ifaceWord")) (EVar "mname")) (EVar "dt"))))
+(DFunDef false "inheritedDefaultReqCounts" ((PVar "dt") (PVar "ifaceWord") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") PWild)) PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "shape")) (EBlock (DoLet false false (PVar "count") (EBinOp "+" (EApp (EVar "leadingImplDictPats") (EVar "pats")) (ELit (LInt 1)))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EVar "count")) (ETuple (ETuple (EVar "mname") (EFieldAccess (EVar "shape") "isWord")) (EVar "count"))))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EVar "ifaceWord")) (EVar "mname")) (EVar "dt"))))
 (DFunDef false "inheritedDefaultReqCounts" (PWild PWild PWild) (EListLit))
 (DTypeSig false "implMethodReqCountEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
 (DFunDef false "implMethodReqCountEntries" ((PVar "tag") (PVar "key") (PCon "ImplMethod" (PVar "mname") (PVar "pats") PWild)) (EBlock (DoLet false false (PVar "count") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EVar "tag")) (EVar "count")) (ETuple (ETuple (EVar "mname") (EVar "key")) (EVar "count"))))))
@@ -5533,7 +5522,10 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "candOfIface" ((PVar "iface") (PAs "v" (PCon "VTypedImpl" PWild PWild PWild PWild PWild))) (EBinOp "==" (EApp (EVar "candIface") (EVar "v")) (EVar "iface")))
 (DFunDef false "candOfIface" (PWild PWild) (EVar "True"))
 (DTypeSig true "applyMethodDicts" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
-(DFunDef false "applyMethodDicts" ((PVar "env") (PVar "name") (PVar "route") (PVar "narrowed") (PVar "fwdReqs0") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "name")) (EApp (EApp (EApp (EVar "narrowedWord") (EVar "env")) (EVar "route")) (EVar "narrowed")))) (DoLet false false (PVar "fwdReqs") (EApp (EApp (EVar "takeN") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EVar "reqCount"))) (EVar "fwdReqs0"))) (DoExpr (EIf (EApp (EVar "awaitsArgs") (EVar "narrowed")) (EBlock (DoLet false false (PVar "v1") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "narrowed")) (EVar "methodRoutes"))) (DoLet false false (PVar "v2") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "v1")) (EApp (EApp (EApp (EVar "implDictRoutes") (EVar "reqCount")) (EVar "methodRoutes")) (EVar "implRoutes")))) (DoExpr (EApp (EApp (EVar "applyValues") (EVar "v2")) (EVar "fwdReqs")))) (EVar "narrowed")))))
+(DFunDef false "applyMethodDicts" ((PVar "env") (PVar "name") (PVar "route") (PVar "narrowed") (PVar "fwdReqs0") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EVar "narrowedWord") (EVar "env")) (EVar "route")) (EVar "narrowed"))) (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "name")) (EVar "word"))) (DoLet false false (PVar "fwdReqs") (EApp (EApp (EVar "takeN") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EVar "reqCount"))) (EVar "fwdReqs0"))) (DoExpr (EIf (EApp (EVar "awaitsArgs") (EVar "narrowed")) (EBlock (DoLet false false (PVar "v1") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "narrowed")) (EVar "methodRoutes"))) (DoExpr (EIf (EApp (EApp (EVar "isInheritedEntry") (EVar "name")) (EVar "word")) (EApp (EApp (EVar "applyValues") (EVar "v1")) (EListLit (EApp (EApp (EApp (EVar "receiverOf") (EVar "env")) (EVar "route")) (EVar "implRoutes")))) (EBlock (DoLet false false (PVar "v2") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "v1")) (EApp (EApp (EApp (EVar "implDictRoutes") (EVar "reqCount")) (EVar "methodRoutes")) (EVar "implRoutes")))) (DoExpr (EApp (EApp (EVar "applyValues") (EVar "v2")) (EVar "fwdReqs"))))))) (EVar "narrowed")))))
+(DTypeSig false "receiverOf" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "receiverOf" ((PVar "env") (PCon "RKey" (PVar "key") PWild (PVar "sups")) (PVar "implRoutes")) (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EApp (EApp (EVar "map") (EApp (EVar "dictOfRoute") (EVar "env"))) (EVar "implRoutes"))) (EApp (EApp (EVar "map") (EApp (EVar "dictOfRoute") (EVar "env"))) (EVar "sups"))))
+(DFunDef false "receiverOf" ((PVar "env") (PVar "route") PWild) (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "route")))
 (DTypeSig false "narrowedWord" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))))
 (DFunDef false "narrowedWord" (PWild PWild (PCon "VTypedImpl" PWild (PVar "k") PWild PWild PWild)) (EVar "k"))
 (DFunDef false "narrowedWord" ((PVar "env") (PVar "route") PWild) (EApp (EApp (EVar "routeTag") (EVar "env")) (EVar "route")))
@@ -5845,27 +5837,10 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "headTyconHead" ((PList)) (EVar "None"))
 (DFunDef false "headTyconHead" ((PCons (PVar "t") PWild)) (EApp (EVar "headTycon") (EVar "t")))
 (DTypeSig false "inheritedDefaultEntries" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
-(DFunDef false "inheritedDefaultEntries" ((PVar "env") (PVar "disp") (PVar "dt") (PVar "o") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBlock (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ETuple (EVar "mname") (ETuple (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys")) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "receiverBoundDefault") (EVar "env")) (EVar "positions")) (EVar "pats")) (EVar "body")) (EVar "mname")) (EVar "shape"))))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "mname")) (EVar "dt"))))))
+(DFunDef false "inheritedDefaultEntries" ((PVar "env") (PVar "disp") (PVar "dt") (PVar "o") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBlock (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoLet false false (PVar "shared") (EApp (EApp (EApp (EApp (EApp (EVar "sharedDefaultValue") (EVar "env")) (EVar "positions")) (EVar "pats")) (EVar "body")) (EVar "mname"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ETuple (EVar "mname") (ETuple (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys")) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (ELit (LInt 0))) (EVar "shared")))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "mname")) (EVar "dt"))))))
 (DFunDef false "inheritedDefaultEntries" (PWild PWild PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "receiverBoundDefault" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "InstanceShape") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "receiverBoundDefault" ((PVar "env") (PVar "positions") (PVar "pats") (PVar "body") (PVar "mname") (PVar "shape")) (EBlock (DoLet false false (PVar "nMethod") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoLet false false (PVar "receiverEnv") (ELam ((PVar "reqs")) (EApp (EApp (EVar "extendEnv") (EVar "env")) (EListLit (ETuple (EApp (EVar "defaultReceiverDict") (EVar "mname")) (EApp (EApp (EVar "receiverDict") (EVar "shape")) (EVar "reqs"))))))) (DoExpr (EIf (EBinOp "==" (EBinOp "+" (EVar "nMethod") (EFieldAccess (EVar "shape") "isReqCount")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "implMethodValue") (EApp (EVar "receiverEnv") (EListLit))) (EVar "positions")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "collectDicts") (EBinOp "+" (EVar "nMethod") (EFieldAccess (EVar "shape") "isReqCount"))) (EListLit)) (ELam ((PVar "dicts")) (EApp (EApp (EApp (EApp (EApp (EVar "receiverBodyApplied") (EApp (EVar "receiverEnv") (EApp (EApp (EVar "drop") (EVar "nMethod")) (EVar "dicts")))) (EVar "positions")) (EVar "pats")) (EVar "body")) (EApp (EApp (EVar "takeN") (EVar "nMethod")) (EVar "dicts")))))))))
-(DTypeSig false "receiverDict" (TyFun (TyCon "InstanceShape") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "receiverDict" ((PVar "shape") (PVar "reqs")) (EApp (EApp (EApp (EVar "VDict") (EFieldAccess (EVar "shape") "isDictWord")) (EVar "reqs")) (EApp (EApp (EVar "map") (EApp (EVar "receiverSuperDict") (EVar "reqs"))) (EFieldAccess (EVar "shape") "isSupers"))))
-(DTypeSig false "receiverSuperDict" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Route") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "receiverSuperDict" ((PVar "reqs") (PCon "RKey" (PVar "key") (PVar "rs") (PVar "sups"))) (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EApp (EApp (EVar "map") (EApp (EVar "receiverSuperDict") (EVar "reqs"))) (EVar "rs"))) (EApp (EApp (EVar "map") (EApp (EVar "receiverSuperDict") (EVar "reqs"))) (EVar "sups"))))
-(DFunDef false "receiverSuperDict" ((PVar "reqs") (PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "reqParamValue") (EVar "reqs")) (EVar "d")) (ELit (LInt 0))))
-(DFunDef false "receiverSuperDict" ((PVar "reqs") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectDict") (EApp (EApp (EVar "receiverSuperDict") (EVar "reqs")) (EVar "r"))) (EVar "path")))
-(DFunDef false "receiverSuperDict" (PWild PWild) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
-(DTypeSig false "reqParamValue" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "reqParamValue" ((PList) PWild PWild) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
-(DFunDef false "reqParamValue" ((PCons (PVar "v") (PVar "rest")) (PVar "d") (PVar "k")) (EIf (EBinOp "==" (EVar "d") (EApp (EVar "instanceReqParam") (EVar "k"))) (EVar "v") (EApp (EApp (EApp (EVar "reqParamValue") (EVar "rest")) (EVar "d")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))
-(DTypeSig false "receiverBodyApplied" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "receiverBodyApplied" ((PVar "env") (PVar "positions") (PVar "pats") (PVar "body") (PVar "methodDicts")) (EBlock (DoLet false false (PVar "nMethod") (EApp (EVar "listLen") (EVar "methodDicts"))) (DoLet false false (PVar "valuePats") (EApp (EApp (EVar "drop") (EVar "nMethod")) (EVar "pats"))) (DoLet false false (PVar "dictEnv") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "map") (EVar "patVarName")) (EApp (EApp (EVar "takeN") (EVar "nMethod")) (EVar "pats")))) (EVar "methodDicts")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "valuePats")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "eval") (EVar "dictEnv")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "implMethodValue") (EVar "dictEnv")) (EVar "positions")) (EListLit)) (EVar "body"))) (EApp (EApp (EApp (EVar "VClosure") (EVar "dictEnv")) (EVar "valuePats")) (EVar "body"))))))
-(DTypeSig false "patVarName" (TyFun (TyCon "Pat") (TyCon "String")))
-(DFunDef false "patVarName" ((PCon "PVar" (PVar "x") PWild)) (EVar "x"))
-(DFunDef false "patVarName" (PWild) (EApp (EVar "panic") (ELit (LString "a dictionary parameter is always a variable pattern"))))
-(DTypeSig false "collectDicts" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "collectDicts" ((PVar "n") (PVar "acc") (PVar "k")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 1))) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "k") (EApp (EVar "reverseL") (EBinOp "::" (EVar "d") (EVar "acc")))))) (EIf (EVar "otherwise") (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "collectDicts") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "d") (EVar "acc"))) (EVar "k")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "sharedDefaultValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DFunDef false "sharedDefaultValue" ((PVar "env") (PVar "positions") (PVar "pats") (PVar "body") (PVar "mname")) (EBlock (DoLet false false (PVar "nMethod") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoLet false false (PVar "receiver") (EApp (EApp (EVar "PVar") (EApp (EVar "defaultReceiverDict") (EVar "mname"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "implMethodValue") (EVar "env")) (EVar "positions")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "takeN") (EVar "nMethod")) (EVar "pats")) (EListLit (EVar "receiver"))) (EApp (EApp (EVar "drop") (EVar "nMethod")) (EVar "pats")))) (EVar "body")))))
 (DTypeSig true "coalesceImpls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "coalesceImpls" ((PVar "scored")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EApp (EVar "coalesceOne") (EVar "n")) (EVar "scored"))))) (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "scored")))))
 (DTypeSig false "coalesceOne" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e")))))
@@ -6592,9 +6567,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false) (mem "instanceReqParam" false))))
+(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "zipL" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
@@ -6687,7 +6662,17 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
 (DFunDef false "methodReqCountRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
 (DTypeSig true "installDispatchTables" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "methodReqCountIndex") (EApp (EVar "buildMethodReqCounts") (EVar "allDecls"))))) (DoExpr (EVar "disp"))))
+(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "methodReqCountIndex") (EApp (EVar "buildMethodReqCounts") (EVar "allDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "inheritedEntryRef")) (EApp (EVar "methodReqCountIndex") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "inheritedEntryRows") (EApp (EVar "installedDispositionsOpt") (ELit LUnit)))) (EVar "allDecls"))))) (DoExpr (EVar "disp"))))
+(DTypeSig false "inheritedEntryRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "inheritedEntryRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
+(DTypeSig false "inheritedEntryRows" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "inheritedEntryRows" ((PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "inheritedEntryRows") (EVar "dt")) (EVar "d")))
+(DFunDef false "inheritedEntryRows" ((PCon "Some" (PVar "dt")) (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ETuple (ETuple (EApp (EVar "ifaceMethodName") (EVar "m")) (EFieldAccess (EVar "shape") "isWord")) (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name"))) (EApp (EVar "ifaceMethodName") (EVar "m"))) (EVar "dt"))))) (EVar "methods")))
+(DFunDef false "inheritedEntryRows" (PWild PWild) (EListLit))
+(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "mname") PWild PWild PWild)) (EVar "mname"))
+(DTypeSig false "isInheritedEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isInheritedEntry" ((PVar "mname") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "inheritedEntryRef"))) (arm (PCon "Some" (PVar "words")) () (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "words"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "buildMethodReqCounts" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implMethodReqCounts") (EApp (EVar "installedDispositionsOpt") (ELit LUnit)))) (EVar "prog")))
 (DTypeSig false "implMethodReqCounts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))))))
@@ -6696,7 +6681,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "implMethodReqCounts" ((PCon "Some" (PVar "dt")) (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "inheritedDefaultReqCounts") (EVar "dt")) (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name")))) (EVar "methods")))
 (DFunDef false "implMethodReqCounts" (PWild PWild) (EListLit))
 (DTypeSig false "inheritedDefaultReqCounts" (TyFun (TyCon "DispositionTable") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
-(DFunDef false "inheritedDefaultReqCounts" ((PVar "dt") (PVar "ifaceWord") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") PWild)) PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "shape")) (EBlock (DoLet false false (PVar "count") (EBinOp "+" (EApp (EVar "leadingImplDictPats") (EVar "pats")) (EFieldAccess (EVar "shape") "isReqCount"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EDictApp "count")) (ETuple (ETuple (EVar "mname") (EFieldAccess (EVar "shape") "isWord")) (EDictApp "count"))))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EVar "ifaceWord")) (EVar "mname")) (EVar "dt"))))
+(DFunDef false "inheritedDefaultReqCounts" ((PVar "dt") (PVar "ifaceWord") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") PWild)) PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "shape")) (EBlock (DoLet false false (PVar "count") (EBinOp "+" (EApp (EVar "leadingImplDictPats") (EVar "pats")) (ELit (LInt 1)))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EDictApp "count")) (ETuple (ETuple (EVar "mname") (EFieldAccess (EVar "shape") "isWord")) (EDictApp "count"))))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EVar "ifaceWord")) (EVar "mname")) (EVar "dt"))))
 (DFunDef false "inheritedDefaultReqCounts" (PWild PWild PWild) (EListLit))
 (DTypeSig false "implMethodReqCountEntries" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))))
 (DFunDef false "implMethodReqCountEntries" ((PVar "tag") (PVar "key") (PCon "ImplMethod" (PVar "mname") (PVar "pats") PWild)) (EBlock (DoLet false false (PVar "count") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoExpr (EListLit (ETuple (ETuple (EVar "mname") (EVar "tag")) (EDictApp "count")) (ETuple (ETuple (EVar "mname") (EVar "key")) (EDictApp "count"))))))
@@ -7185,7 +7170,10 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "candOfIface" ((PVar "iface") (PAs "v" (PCon "VTypedImpl" PWild PWild PWild PWild PWild))) (EBinOp "==" (EApp (EVar "candIface") (EVar "v")) (EVar "iface")))
 (DFunDef false "candOfIface" (PWild PWild) (EVar "True"))
 (DTypeSig true "applyMethodDicts" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
-(DFunDef false "applyMethodDicts" ((PVar "env") (PVar "name") (PVar "route") (PVar "narrowed") (PVar "fwdReqs0") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "name")) (EApp (EApp (EApp (EVar "narrowedWord") (EVar "env")) (EVar "route")) (EVar "narrowed")))) (DoLet false false (PVar "fwdReqs") (EApp (EApp (EVar "takeN") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EVar "reqCount"))) (EVar "fwdReqs0"))) (DoExpr (EIf (EApp (EVar "awaitsArgs") (EVar "narrowed")) (EBlock (DoLet false false (PVar "v1") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "narrowed")) (EVar "methodRoutes"))) (DoLet false false (PVar "v2") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "v1")) (EApp (EApp (EApp (EVar "implDictRoutes") (EVar "reqCount")) (EVar "methodRoutes")) (EVar "implRoutes")))) (DoExpr (EApp (EApp (EVar "applyValues") (EVar "v2")) (EVar "fwdReqs")))) (EVar "narrowed")))))
+(DFunDef false "applyMethodDicts" ((PVar "env") (PVar "name") (PVar "route") (PVar "narrowed") (PVar "fwdReqs0") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EVar "narrowedWord") (EVar "env")) (EVar "route")) (EVar "narrowed"))) (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "name")) (EVar "word"))) (DoLet false false (PVar "fwdReqs") (EApp (EApp (EVar "takeN") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EVar "reqCount"))) (EVar "fwdReqs0"))) (DoExpr (EIf (EApp (EVar "awaitsArgs") (EVar "narrowed")) (EBlock (DoLet false false (PVar "v1") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "narrowed")) (EVar "methodRoutes"))) (DoExpr (EIf (EApp (EApp (EVar "isInheritedEntry") (EVar "name")) (EVar "word")) (EApp (EApp (EVar "applyValues") (EVar "v1")) (EListLit (EApp (EApp (EApp (EVar "receiverOf") (EVar "env")) (EVar "route")) (EVar "implRoutes")))) (EBlock (DoLet false false (PVar "v2") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "v1")) (EApp (EApp (EApp (EVar "implDictRoutes") (EVar "reqCount")) (EVar "methodRoutes")) (EVar "implRoutes")))) (DoExpr (EApp (EApp (EVar "applyValues") (EVar "v2")) (EVar "fwdReqs"))))))) (EVar "narrowed")))))
+(DTypeSig false "receiverOf" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "receiverOf" ((PVar "env") (PCon "RKey" (PVar "key") PWild (PVar "sups")) (PVar "implRoutes")) (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EApp (EApp (EMethodRef "map") (EApp (EVar "dictOfRoute") (EVar "env"))) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "dictOfRoute") (EVar "env"))) (EVar "sups"))))
+(DFunDef false "receiverOf" ((PVar "env") (PVar "route") PWild) (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "route")))
 (DTypeSig false "narrowedWord" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))))
 (DFunDef false "narrowedWord" (PWild PWild (PCon "VTypedImpl" PWild (PVar "k") PWild PWild PWild)) (EVar "k"))
 (DFunDef false "narrowedWord" ((PVar "env") (PVar "route") PWild) (EApp (EApp (EVar "routeTag") (EVar "env")) (EVar "route")))
@@ -7497,27 +7485,10 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "headTyconHead" ((PList)) (EVar "None"))
 (DFunDef false "headTyconHead" ((PCons (PVar "t") PWild)) (EApp (EVar "headTycon") (EVar "t")))
 (DTypeSig false "inheritedDefaultEntries" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "DispositionTable") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
-(DFunDef false "inheritedDefaultEntries" ((PVar "env") (PVar "disp") (PVar "dt") (PVar "o") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBlock (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ETuple (EVar "mname") (ETuple (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys")) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "receiverBoundDefault") (EVar "env")) (EVar "positions")) (EVar "pats")) (EVar "body")) (EVar "mname")) (EVar "shape"))))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "mname")) (EVar "dt"))))))
+(DFunDef false "inheritedDefaultEntries" ((PVar "env") (PVar "disp") (PVar "dt") (PVar "o") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBlock (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoLet false false (PVar "shared") (EApp (EApp (EApp (EApp (EApp (EVar "sharedDefaultValue") (EVar "env")) (EVar "positions")) (EVar "pats")) (EVar "body")) (EVar "mname"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ETuple (EVar "mname") (ETuple (EApp (EVar "tyvarsInArgs") (EFieldAccess (EVar "shape") "isTys")) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EApp (EApp (EVar "optionOr") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EFieldAccess (EVar "shape") "isTys")))) (EFieldAccess (EVar "shape") "isWord")) (EVar "positions")) (ELit (LInt 0))) (EVar "shared")))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "mname")) (EVar "dt"))))))
 (DFunDef false "inheritedDefaultEntries" (PWild PWild PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "receiverBoundDefault" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "InstanceShape") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "receiverBoundDefault" ((PVar "env") (PVar "positions") (PVar "pats") (PVar "body") (PVar "mname") (PVar "shape")) (EBlock (DoLet false false (PVar "nMethod") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoLet false false (PVar "receiverEnv") (ELam ((PVar "reqs")) (EApp (EApp (EVar "extendEnv") (EVar "env")) (EListLit (ETuple (EApp (EVar "defaultReceiverDict") (EVar "mname")) (EApp (EApp (EVar "receiverDict") (EVar "shape")) (EVar "reqs"))))))) (DoExpr (EIf (EBinOp "==" (EBinOp "+" (EVar "nMethod") (EFieldAccess (EVar "shape") "isReqCount")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "implMethodValue") (EApp (EVar "receiverEnv") (EListLit))) (EVar "positions")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "collectDicts") (EBinOp "+" (EVar "nMethod") (EFieldAccess (EVar "shape") "isReqCount"))) (EListLit)) (ELam ((PVar "dicts")) (EApp (EApp (EApp (EApp (EApp (EVar "receiverBodyApplied") (EApp (EVar "receiverEnv") (EApp (EApp (EVar "drop") (EVar "nMethod")) (EVar "dicts")))) (EVar "positions")) (EVar "pats")) (EVar "body")) (EApp (EApp (EVar "takeN") (EVar "nMethod")) (EVar "dicts")))))))))
-(DTypeSig false "receiverDict" (TyFun (TyCon "InstanceShape") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "receiverDict" ((PVar "shape") (PVar "reqs")) (EApp (EApp (EApp (EVar "VDict") (EFieldAccess (EVar "shape") "isDictWord")) (EVar "reqs")) (EApp (EApp (EMethodRef "map") (EApp (EVar "receiverSuperDict") (EVar "reqs"))) (EFieldAccess (EVar "shape") "isSupers"))))
-(DTypeSig false "receiverSuperDict" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Route") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "receiverSuperDict" ((PVar "reqs") (PCon "RKey" (PVar "key") (PVar "rs") (PVar "sups"))) (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EApp (EApp (EMethodRef "map") (EApp (EVar "receiverSuperDict") (EVar "reqs"))) (EVar "rs"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "receiverSuperDict") (EVar "reqs"))) (EVar "sups"))))
-(DFunDef false "receiverSuperDict" ((PVar "reqs") (PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "reqParamValue") (EVar "reqs")) (EVar "d")) (ELit (LInt 0))))
-(DFunDef false "receiverSuperDict" ((PVar "reqs") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectDict") (EApp (EApp (EVar "receiverSuperDict") (EVar "reqs")) (EVar "r"))) (EVar "path")))
-(DFunDef false "receiverSuperDict" (PWild PWild) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
-(DTypeSig false "reqParamValue" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "reqParamValue" ((PList) PWild PWild) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
-(DFunDef false "reqParamValue" ((PCons (PVar "v") (PVar "rest")) (PVar "d") (PVar "k")) (EIf (EBinOp "==" (EVar "d") (EApp (EVar "instanceReqParam") (EVar "k"))) (EVar "v") (EApp (EApp (EApp (EVar "reqParamValue") (EVar "rest")) (EVar "d")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))
-(DTypeSig false "receiverBodyApplied" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "receiverBodyApplied" ((PVar "env") (PVar "positions") (PVar "pats") (PVar "body") (PVar "methodDicts")) (EBlock (DoLet false false (PVar "nMethod") (EApp (EVar "listLen") (EVar "methodDicts"))) (DoLet false false (PVar "valuePats") (EApp (EApp (EVar "drop") (EVar "nMethod")) (EVar "pats"))) (DoLet false false (PVar "dictEnv") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EApp (EApp (EVar "zipL") (EApp (EApp (EMethodRef "map") (EVar "patVarName")) (EApp (EApp (EVar "takeN") (EVar "nMethod")) (EVar "pats")))) (EVar "methodDicts")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "valuePats")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "eval") (EVar "dictEnv")) (EVar "body")) (EApp (EApp (EApp (EApp (EVar "implMethodValue") (EVar "dictEnv")) (EVar "positions")) (EListLit)) (EVar "body"))) (EApp (EApp (EApp (EVar "VClosure") (EVar "dictEnv")) (EVar "valuePats")) (EVar "body"))))))
-(DTypeSig false "patVarName" (TyFun (TyCon "Pat") (TyCon "String")))
-(DFunDef false "patVarName" ((PCon "PVar" (PVar "x") PWild)) (EVar "x"))
-(DFunDef false "patVarName" (PWild) (EApp (EVar "panic") (ELit (LString "a dictionary parameter is always a variable pattern"))))
-(DTypeSig false "collectDicts" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "collectDicts" ((PVar "n") (PVar "acc") (PVar "k")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 1))) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "k") (EApp (EVar "reverseL") (EBinOp "::" (EVar "d") (EVar "acc")))))) (EIf (EVar "otherwise") (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "collectDicts") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "d") (EVar "acc"))) (EVar "k")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "sharedDefaultValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DFunDef false "sharedDefaultValue" ((PVar "env") (PVar "positions") (PVar "pats") (PVar "body") (PVar "mname")) (EBlock (DoLet false false (PVar "nMethod") (EApp (EVar "leadingImplDictPats") (EVar "pats"))) (DoLet false false (PVar "receiver") (EApp (EApp (EVar "PVar") (EApp (EVar "defaultReceiverDict") (EVar "mname"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "implMethodValue") (EVar "env")) (EVar "positions")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "takeN") (EVar "nMethod")) (EVar "pats")) (EListLit (EVar "receiver"))) (EApp (EApp (EVar "drop") (EVar "nMethod")) (EVar "pats")))) (EVar "body")))))
 (DTypeSig true "coalesceImpls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "coalesceImpls" ((PVar "scored")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EApp (EVar "coalesceOne") (EVar "n")) (EVar "scored"))))) (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "scored")))))
 (DTypeSig false "coalesceOne" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e")))))

@@ -1656,10 +1656,21 @@ implFnSymTag entries method tag key =
 -- keys and are built once in O(entries log entries), rather than rescanning the
 -- impl list for every row.
 export
-preludeImplSymbols : List CImplEntry -> List (String, String, String)
-preludeImplSymbols entries =
+-- [ownImpls] is the prelude's own declared-impl table (`core_ir_lower.
+-- ifaceImplHeadTable`): an inherited default's entry is prelude code only for a
+-- PRELUDE instance -- the table lowered alone still lists the program's instances
+-- as inheritors of a prelude interface's default, and those entries are the
+-- program's to define.
+preludeImplSymbols : List (String, String, String, String) ->
+  List CImplEntry ->
+  List (String, String, String)
+preludeImplSymbols ownImpls entries =
   let collisions = preludeImplCollisions entries omEmpty omEmpty
-  preludeImplSymbolsGo entries collisions omEmpty
+  let own = omFromNames (map (row => implHeadRowKey row) ownImpls) omEmpty
+  preludeImplSymbolsGo own entries collisions omEmpty
+
+implHeadRowKey : (String, String, String, String) -> String
+implHeadRowKey (_, _, _, key) = key
 
 preludeImplCollisions : List CImplEntry ->
   OrdMap String ->
@@ -1679,15 +1690,16 @@ preludeImplCollisions ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: re
 preludeImplCollisions (_ :: rest) firstKeys collisions =
   preludeImplCollisions rest firstKeys collisions
 
-preludeImplSymbolsGo : List CImplEntry ->
+preludeImplSymbolsGo : OrdMap Unit ->
+  List CImplEntry ->
   OrdMap Unit ->
   OrdMap Unit ->
   List (String, String, String)
-preludeImplSymbolsGo [] _ _ = []
-preludeImplSymbolsGo ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
+preludeImplSymbolsGo _ [] _ _ = []
+preludeImplSymbolsGo own ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
   let implKey = preludeImplPairKey method key
   if omHasKey implKey seen then
-    preludeImplSymbolsGo rest collisions seen
+    preludeImplSymbolsGo own rest collisions seen
   else
     let symTag =
       if omHasKey (preludeImplPairKey method tag) collisions then
@@ -1695,9 +1707,16 @@ preludeImplSymbolsGo ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: res
       else
         tag
     (method, key, symTag)
-      :: preludeImplSymbolsGo rest collisions (omInsert implKey () seen)
-preludeImplSymbolsGo (_ :: rest) collisions seen =
-  preludeImplSymbolsGo rest collisions seen
+      :: preludeImplSymbolsGo own rest collisions (omInsert implKey () seen)
+-- an inherited default's entry is named by its interface and instance key, never by
+-- a symbol tag, so the tag it records is only its head
+preludeImplSymbolsGo own ((CImplEntry method _ (CImplDefault _ tag key _ _ _)) :: rest) collisions seen =
+  let implKey = preludeImplPairKey method key
+  if omHasKey implKey seen || not (omHasKey key own) then
+    preludeImplSymbolsGo own rest collisions seen
+  else
+    (method, key, tag)
+      :: preludeImplSymbolsGo own rest collisions (omInsert implKey () seen)
 
 preludeImplPairKey : String -> String -> String
 preludeImplPairKey method identity = "\{method}\n\{identity}"
@@ -7355,14 +7374,14 @@ emitMethod : Emit ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethod e env name iface siteArity (RKey tag _ _) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes argOps =
   match implForSite e name iface tag siteArity
     Some entry =>
       let dictWords =
         dictWordsOf
           e
           env
-          (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
+          (staticEntryDictRoutes e name entry route methRoutes implRoutes)
       -- [tag] is the stamped route tag — the bare head when the head is unique, the
       -- canonical key on a C7 collision.  For tagToLTy/returns-self use the matched
       -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
@@ -7386,7 +7405,7 @@ emitMethod e env name iface siteArity (RKey tag _ _) implRoutes methRoutes argOp
         name
         iface
         siteArity
-        tag
+        route
         methRoutes
         implRoutes
         argOps
@@ -7698,19 +7717,19 @@ emitGeneralRKey : Emit ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitGeneralRKey e env name iface siteArity tag methRoutes implRoutes argOps =
+emitGeneralRKey e env name iface siteArity route methRoutes implRoutes argOps =
   match implForSite e name iface noneHeadTag siteArity
     Some entry =>
       let dictWords =
         dictWordsOf
           e
           env
-          (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
+          (staticEntryDictRoutes e name entry route methRoutes implRoutes)
       let headTag = implEntryTag entry
       let resTy =
         if methodReturnsSelf e (implEntryIface entry) name then
@@ -7723,7 +7742,39 @@ emitGeneralRKey e env name iface siteArity tag methRoutes implRoutes argOps =
         (dictWords ++ argOps)
         (methodArityOfEntry e entry name + lengthS dictWords)
         resTy
-    None => gapE e "no impl of method '\{name}' for type '\{tag}'"
+    None =>
+      gapE e "no impl of method '\{name}' for type '\{routeKeyWord route}'"
+
+-- The leading dictionaries a static call to [ent] passes after its method-level
+-- ones.  A supplied method takes the instance's `requires` (#1648: no more than its
+-- define binds); an inherited default takes its RECEIVER, the dictionary of the
+-- selected instance -- built here from the site's word, its `requires` routes and
+-- the supers the typechecker put on the route for exactly this case.
+staticEntryDictRoutes : Emit ->
+  String ->
+  CImplEntry ->
+  Route ->
+  List Route ->
+  List Route ->
+  List Route
+staticEntryDictRoutes e name ent route methRoutes implRoutes =
+  if isInheritedEntry ent then
+    methRoutes ++ [receiverRoute route implRoutes]
+  else
+    methRoutes ++ implRoutesForDefine e name ent methRoutes implRoutes
+
+receiverRoute : Route -> List Route -> Route
+receiverRoute (RKey word _ sups) implRoutes = RKey word implRoutes sups
+receiverRoute route _ = route
+
+routeKeyWord : Route -> String
+routeKeyWord (RKey word _ _) = word
+routeKeyWord _ = ""
+
+-- an inherited default's per-instance entry (a forwarder to the shared body)
+isInheritedEntry : CImplEntry -> Bool
+isInheritedEntry (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntry _ = False
 
 -- a direct call to a statically-resolved impl fn (RKey).  Nullary (argOps == [])
 -- ⇒ `call @mdk_impl_<tag>_<method>()`, yielding the impl's value.  `resTy` is the
@@ -8644,7 +8695,12 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- clamp fires on.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let superCount = entrySuperCount ent
-    let cellDicts = loadReqDicts e dictPtr (superCount + cellCount) superCount
+    -- an inherited default receives the dictionary that selected it
+    let cellDicts =
+      if isInheritedEntry ent then
+        [dictPtr]
+      else
+        loadReqDicts e dictPtr (superCount + cellCount) superCount
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
     -- The dispatcher is keyed by BARE method name and its `%argK` count is the arity
     -- the SITE saw, so on an arity collision (two modules declaring same-spelled

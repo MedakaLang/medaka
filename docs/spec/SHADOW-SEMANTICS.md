@@ -627,7 +627,7 @@ Given an occurrence of bare name `N` in module `M`:
   > - **One hop, `core` origin — WORKS, pinned in two corpora.**
   >   `test/resolve_module_fixtures/reexport_core/` (`prov.mdk` is exactly
   >   `export import core.{Filterable, filter, filterMap}`) has a **0-byte**
-  >   `expected`, and `test/eval_modules_fixtures/reexport_core/main.eval.golden`
+  >   `expected`, and `test/eval_typed_modules_fixtures/reexport_core/main.eval.golden`
   >   reads `[2, 4, 6] [30, 40]`. ⚠️ **That is `SYNTAX.md`'s own worked example —
   >   `stdlib/list.mdk` re-exporting `core`'s `filter`, consumed by a plain
   >   downstream `import` — and it is DISPROVED**, not merely unverified.

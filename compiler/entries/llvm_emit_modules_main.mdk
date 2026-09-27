@@ -110,7 +110,7 @@ preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
     filterList
       (n => not (endsWith autoPrintPinName n))
       (map cbindNameOf groups),
-    preludeImplSymbols impls,
+    preludeImplSymbols (ifaceImplHeadTable coreD) impls,
   )
 
 cbindNameOf : CBind -> String

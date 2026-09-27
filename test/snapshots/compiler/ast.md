@@ -158,11 +158,11 @@ ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
 
 -- The dictionary name an interface default body's RECEIVER evidence renders to: a
--- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` to
--- it.  It is not a parameter of the lowered body.  Each engine rebinds it to the
--- instance the body is running for — lowering rewrites it to that instance's route
--- (`core_ir_lower`), eval binds it in the specialized body's frame — so the body is
--- inferred once and selects nothing.  `$` keeps it out of every user namespace.
+-- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` (or
+-- a projection of it) to it.  It is a real parameter of the one shared default body
+-- (`core_ir_lower.sharedDefaultName`, eval's `sharedDefaultValue`), bound to the
+-- dictionary of whichever instance the call selected, so the body is inferred and
+-- lowered once and selects nothing.  `$` keeps it out of every user namespace.
 export
 defaultReceiverDict : String -> String
 defaultReceiverDict method = "$self_\{method}"

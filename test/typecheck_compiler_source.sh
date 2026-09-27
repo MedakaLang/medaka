@@ -1136,8 +1136,10 @@ if grep -rqE 'LegacySuperclassAlias|LegacySuperAlias|ATLegacySuperclass' "$ROOT/
 fi
 # #993/#679: a superinterface takes no dict slot of its own — a dictionary carries its
 # supers (`RKey`'s third list) and a given's super is its projection (`RProj`).  The
-# flat super-slot expansion and the per-instance super-word table are retired.
-if grep -rqwE 'expandSupersTable|expandSupersVecs|expandFunPredicateSlots|expandPredicateSlots|userSuperLookup|userIfaceNamesRef|expandImplRequires|expandImplRequiresPaths|argExpandedImplReqRoutes|instanceSuperWords|isSuperWords|rrSuperWords' --include='*.mdk' "$ROOT/compiler"; then
+# flat super-slot expansion and the per-instance super-word table are retired.  A2: an
+# inherited default receives its receiver as a real parameter of one shared body, so
+# the per-instance receiver rebuild and desugar's same-module default copy are too.
+if grep -rqwE 'expandSupersTable|expandSupersVecs|expandFunPredicateSlots|expandPredicateSlots|userSuperLookup|userIfaceNamesRef|expandImplRequires|expandImplRequiresPaths|argExpandedImplReqRoutes|instanceSuperWords|isSuperWords|rrSuperWords|ReceiverRemap|receiverRemapRef|isDictWord|isSupers|fillImplDefaults' --include='*.mdk' "$ROOT/compiler"; then
   echo "FAIL: a retired flat super-slot name is back; a dictionary carries its supers and a given's super is an RProj"
   exit 1
 fi

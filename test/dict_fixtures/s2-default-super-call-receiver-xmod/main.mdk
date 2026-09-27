@@ -1,0 +1,36 @@
+-- #3509, CROSS-MODULE: the interface and its default live in `fmtlib`, the instances
+-- here.  `shout` builds the `Fmt (Box Int)` dictionary at its call site, where its
+-- `Named` super is solved at that goal and picks the SPECIFIC `Named (Box Int)`; the
+-- inherited `loud` receives that dictionary as its receiver and projects the super
+-- out of it (DICT-SEMANTICS §2/§3).  `Box Cat` has no specific `Named` impl, so the
+-- general one answers.  Expected: [b:spec]|[b:gen(cat)]
+import fmtlib.{Named(..), Fmt(..), nm, fmt, loud}
+
+data Cat = Cat
+data Box a = Box a
+
+impl Named Cat where
+  nm _ = "cat"
+
+impl Named Int where
+  nm _ = "int"
+
+impl Fmt Cat where
+  fmt _ = "b"
+
+impl Fmt Int where
+  fmt _ = "b"
+
+impl Named (Box a) requires Named a where
+  nm (Box v) = "gen(" ++ nm v ++ ")"
+
+impl Named (Box Int) where
+  nm (Box v) = "spec"
+
+impl Fmt (Box a) requires Fmt a where
+  fmt (Box v) = fmt v
+
+shout : Fmt a => a -> String
+shout x = loud x
+
+main = println (shout (Box (1 : Int)) ++ "|" ++ shout (Box Cat))
