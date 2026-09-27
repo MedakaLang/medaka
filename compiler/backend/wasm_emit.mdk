@@ -264,6 +264,7 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import backend.private_mangle.{dictTag, hashName, injectiveIdent}
+import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -2419,7 +2420,8 @@ scanExprW7 _ _ = ()
 -- Only materialized dictionary words need dynamic aliases. A direct method's
 -- principal RKey selects a symbol; its nested requirements still carry words.
 scanMethodRouteW : WasmEmit -> Route -> Unit
-scanMethodRouteW emit (RKey _ routes) = scanDictRoutesW emit routes
+scanMethodRouteW emit (RKey _ routes _) = scanDictRoutesW emit routes
+scanMethodRouteW emit (RProj r _) = scanDictRouteW emit r
 scanMethodRouteW emit (RLocal _ routes) = scanDictRoutesW emit routes
 scanMethodRouteW _ _ = ()
 
@@ -2428,10 +2430,12 @@ scanDictRoutesW emit routes =
   forEachU (route => scanDictRouteW emit route) routes
 
 scanDictRouteW : WasmEmit -> Route -> Unit
-scanDictRouteW emit (RKey key routes) =
+scanDictRouteW emit (RKey key routes sups) =
   let _ =
     setRef emit.usedDictRouteKeys (omInsert key () !emit.usedDictRouteKeys)
-  scanDictRoutesW emit routes
+  let _ = scanDictRoutesW emit routes
+  scanDictRoutesW emit sups
+scanDictRouteW emit (RProj r _) = scanDictRouteW emit r
 scanDictRouteW emit (RLocal _ routes) = scanDictRoutesW emit routes
 scanDictRouteW _ _ = ()
 
@@ -5131,7 +5135,7 @@ emitMethodRef : Prog ->
 -- the rest.  This is the peer of llvm_emit's emitImplCallSat and of the RDict arms
 -- below.  The eta closure's own body applies exactly `valArity` args, so it lands on
 -- the direct call.  A method with no recorded value arity (0) keeps the direct call.
-emitMethodRef prog env d name iface siteArity (route@(RKey tag _)) implRoutes methRoutes args =
+emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args =
   let valArity = methodValArity prog name iface siteArity route
   let nArgs = listLen args
   if valArity > 0 && nArgs < valArity then
@@ -5192,6 +5196,35 @@ emitMethodRef prog env d name iface siteArity (route@(RDict dpar)) implRoutes me
 emitMethodRef prog env d name iface siteArity (route@(RDictFwd dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
     emitMethodDispatchRef prog env d name iface siteArity dpar args
+  else
+    emitMethodValueRef
+        prog
+        env
+        d
+        name
+        iface
+        siteArity
+        route
+        implRoutes
+        methRoutes
+      ++ emitArgsArray prog env d args
+      ++ ["call $__mdk_apply"]
+-- A projected super dictionary is read into its own local (`projLocalName`,
+-- declared by `collectExprLocals`) and dispatched on exactly as a dict parameter.
+emitMethodRef prog env d name iface siteArity (route@(RProj r path)) implRoutes methRoutes args =
+  if listLen args == siteArity then
+    let local = projLocalName r path
+    routeWitness prog env d route
+      ++ ["local.set $" ++ gname local]
+      ++ emitMethodDispatchRef
+        prog
+        (local :: env)
+        d
+        name
+        iface
+        siteArity
+        local
+        args
   else
     emitMethodValueRef
         prog
@@ -5376,7 +5409,9 @@ emitGeneralArm : Prog ->
 emitGeneralArm _ _ None _ _ _ _ = []
 emitGeneralArm prog name (Some arm) blk dpar argInstrs nArgs =
   let reqDicts = implReqDictCount prog name (armRouteKeyW arm) nArgs
-  let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
+  let supers = implSuperCountW prog name (armRouteKeyW arm)
+  let reqLoads =
+    flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
   reqLoads
     ++ argInstrs
     ++ dispatchCallSeqW prog arm name nArgs
@@ -5456,7 +5491,9 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
   -- order (built by routeWitness).  Load field 0..reqDicts-1 and prepend them as the impl fn's
   -- leading dict args, mirroring llvm_emit's loadReqDicts (fields 1..n of the boxed cell).
   let reqDicts = implReqDictCount prog name key nArgs
-  let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
+  let supers = implSuperCountW prog name key
+  let reqLoads =
+    flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
   indentBy idt (dispatchKeyTestW prog arm tagRead ++ ["if"])
     ++ indentBy
       (idt + 1)
@@ -5539,6 +5576,26 @@ implReqDictCount prog method tag _userArgs =
     Some ent => implLeadingDictCountOfEntryW ent
     None => 0
 
+-- the super dictionaries a dictionary of the interface of [method]'s impl at [tag]
+-- stores ahead of its `requires` dictionaries (llvm_emit's `entrySuperCount`)
+implSuperCountW : Prog -> String -> String -> Int
+implSuperCountW prog method tag = match (
+  findByTagW method tag (methodEntriesW prog method),
+  installedDispositionsOpt (),
+)
+  (Some ent, Some table) => ifaceSuperCount (implEntryIfaceWordW ent) table
+  _ => 0
+
+-- the local a projected super dictionary is dispatched through
+projLocalName : Route -> List Int -> String
+projLocalName (RDict d) path = "\{d}$p\{projPathWord path}"
+projLocalName (RDictFwd d) path = "\{d}$p\{projPathWord path}"
+projLocalName (RProj r p) path = projLocalName r (p ++ path)
+projLocalName _ path = "$proj$p\{projPathWord path}"
+
+projPathWord : List Int -> String
+projPathWord path = joinWith "_" (map intToString path)
+
 implLeadingDictCountOfEntryW : CImplEntry -> Int
 implLeadingDictCountOfEntryW ent = wLeadingDictPats (implEntryPatsW ent)
 
@@ -5572,20 +5629,26 @@ readDictParam prog env dpar =
 -- the i31 of hashName(tag); a forwarded RDict/RDictFwd → re-push the in-scope dict
 -- param.  Nested `requires` (RKey with non-empty reqs) are out of the minimal slice.
 routeWitness : Prog -> List String -> Int -> Route -> List String
-routeWitness _ _ _ (RKey tag []) =
+routeWitness _ _ _ (RKey tag [] []) =
   ["i32.const " ++ intToString (dictTag tag), "ref.i31"]
 -- W5 (nested requires-dict): build a $dictcell — push the tag, recursively build each
 -- nested req witness onto the stack, pack them into a $dictarr (array.new_fixed), then
 -- struct.new $dictcell.  Mirrors llvm_emit's emitDictCell (header + recursively-built
 -- req fields); the recursion is dictWordsOf == flatMap routeWitness over reqs.
-routeWitness prog env d (RKey tag reqs) =
-  let reqWitnesses = flatMap (routeWitness prog env d) reqs
+-- The array holds the dictionary's direct supers first, then its requires (the
+-- LLVM cell's order), so a projection indexes the same slot whichever instance the
+-- dictionary is.
+routeWitness prog env d (RKey tag reqs sups) =
+  let fieldWitnesses = flatMap (routeWitness prog env d) (sups ++ reqs)
   ["i32.const " ++ intToString (dictTag tag)]
-    ++ reqWitnesses
+    ++ fieldWitnesses
     ++ [
-      "array.new_fixed $dictarr " ++ intToString (listLen reqs),
+      "array.new_fixed $dictarr " ++ intToString (listLen sups + listLen reqs),
       "struct.new $dictcell",
     ]
+-- a super projected out of a dictionary: a dictionary with supers is always a cell
+routeWitness prog env d (RProj r path) =
+  routeWitness prog env d r ++ flatMap superFieldW path
 routeWitness prog env _ (RDict dpar) =
   if contains dpar env then
     ["local.get $" ++ gname dpar]
@@ -5604,6 +5667,15 @@ routeWitness prog _ _ RNone =
 -- `dictWordOfRoute (RLocal _ _) = "0"`.  RScalar (scalar-tag) likewise.
 routeWitness _ _ _ (RLocal _ _) = ["i32.const 0", "ref.i31"]
 routeWitness _ _ _ (RScalar _) = ["i32.const 0", "ref.i31"]
+
+superFieldW : Int -> List String
+superFieldW i = [
+  "ref.cast (ref $dictcell)",
+  "struct.get $dictcell 1",
+  "i32.const " ++ intToString i,
+  "array.get $dictarr",
+  "ref.as_non_null",
+]
 
 -- a constrained-function occurrence applied to `args`: prepend the materialized
 -- dict witnesses (one per `=>` constraint, in route order) to the args, then call
@@ -5729,7 +5801,7 @@ methodValArity prog name _ siteArity (RLocal sym dicts) =
   let target = if sym == "" then name else sym
   let a = progFnArity prog target - listLen dicts
   if a <= 0 then siteArity else a
-methodValArity prog name iface siteArity (RKey tag _) =
+methodValArity prog name iface siteArity (RKey tag _ _) =
   match implForWSite prog name iface tag siteArity
     Some entry => methodArityOfEntryW prog entry name
     None => siteArity
@@ -9649,7 +9721,7 @@ implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app
     ImplSelfOn method tag key fnName arity =>
       if name == method
         && isSelfSatApp (SelfByMethod method tag) arity app then match route
-        RKey rtag _ => match implForWSite prog name iface rtag siteArity
+        RKey rtag _ _ => match implForWSite prog name iface rtag siteArity
           Some entry =>
             if implEntryKeyW entry == key then
               let dictWords =
@@ -10618,7 +10690,9 @@ freeVarsExpr bound _ = []
 freeVarsRoute : List String -> Route -> List String
 freeVarsRoute bound (RDict d) = if contains d bound then [] else [d]
 freeVarsRoute bound (RDictFwd d) = if contains d bound then [] else [d]
-freeVarsRoute bound (RKey _ rs) = flatMap (freeVarsRoute bound) rs
+freeVarsRoute bound (RKey _ rs sups) =
+  flatMap (freeVarsRoute bound) (rs ++ sups)
+freeVarsRoute bound (RProj r _) = freeVarsRoute bound r
 freeVarsRoute bound RNone = []
 -- S-1 (wasm peer of llvm_emit's methValDictNames RLocal arm): an RLocal route's TARGET
 -- is a global symbol, but its DICT slots can hold an RDict — the enclosing constrained
@@ -11935,6 +12009,8 @@ collectExprLocals (CLetGroup binds body) =
   map lgBindName binds
     ++ flatMap collectLgValLocals binds
     ++ collectExprLocals body
+-- a method dispatched on a projected super dictionary reads it through a local
+collectExprLocals (CMethod _ _ _ (RProj r path) _ _) = [projLocalName r path]
 collectExprLocals _ = []
 
 collectFieldLocals : CField -> List String

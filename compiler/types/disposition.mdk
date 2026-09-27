@@ -15,7 +15,7 @@
 -- dispatches like the instance's own methods) and eval's install (one specialized
 -- candidate per row).  Neither chooses a default: the row says which interface's
 -- body serves which instance's slot.
-import frontend.ast.{Ty}
+import frontend.ast.{Route, Ty}
 import types.repr.{IfaceRef(..)}
 import support.ordmap.{OrdMap, omEmpty, omLookup, omInsert}
 import support.util.{reverseL}
@@ -89,15 +89,25 @@ public export data InstanceShape = InstanceShape {
   -- call of a method of the instance's own interface through the receiver
   -- dispatches by
   isDictWord : String,
-  -- the same word for each superclass instance at these type arguments, keyed
-  -- by the superclass's interface word: a superclass method reached through the
-  -- receiver dispatches by its own instance's word, which differs from
-  -- `isDictWord` whenever either head collides
-  isSuperWords : List (String, String),
+  -- the dictionary of each DIRECT superinterface at these type arguments, in
+  -- declaration order, solved at this instance's own head: the receiver's super
+  -- segment.  A route reads the instance's k-th `requires` dictionary through the
+  -- placeholder parameter `instanceReqParam k`, which a pass binds to that
+  -- dictionary before building the receiver.
+  isSupers : List Route,
   -- how many `requires` dictionaries the instance's methods take after their
-  -- method-level ones (the expanded requires list's length)
+  -- method-level ones (one per declared `requires` predicate)
   isReqCount : Int,
 }
+
+-- The placeholder parameter an `InstanceShape.isSupers` route reads the instance's
+-- [k]-th `requires` dictionary through.
+--
+-- > instanceReqParam 1
+-- "$req_1"
+export
+instanceReqParam : Int -> String
+instanceReqParam k = "$req_\{intToString k}"
 
 export data DispositionTable = DispositionTable {
   dtRows : List MethodDisposition,
@@ -105,6 +115,10 @@ export data DispositionTable = DispositionTable {
   -- the instances inheriting each (interface word, method) slot, keyed by
   -- `slotKey`, in producer order
   dtInheritors : OrdMap (List InstanceShape),
+  -- each interface's DIRECT superinterface count, keyed by interface word: the
+  -- length of the super segment a dictionary of that interface stores ahead of its
+  -- `requires` dictionaries
+  dtIfaceSuperCounts : OrdMap Int,
 }
 
 export
@@ -113,6 +127,7 @@ emptyDispositionTable = DispositionTable {
   dtRows = [],
   dtIndex = omEmpty,
   dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 export
@@ -129,20 +144,37 @@ buildDispositionTable rows = DispositionTable {
   dtRows = rows,
   dtIndex = insertDispositions rows omEmpty,
   dtInheritors = omEmpty,
+  dtIfaceSuperCounts = omEmpty,
 }
 
 -- The producer's builder: each row with its instance's shape and its interface's
--- word (`route_key.ifaceWordOf`), which also fills the inheritor index.
+-- word (`route_key.ifaceWordOf`), which also fills the inheritor index, and each
+-- interface word with its direct superinterface count.
 export
 buildDispositionTableWithShapes : List (InstanceShape, String, MethodDisposition) ->
+  List (String, Int) ->
   DispositionTable
-buildDispositionTableWithShapes shaped =
+buildDispositionTableWithShapes shaped superCounts =
   let rows = map ((_, _, d) => d) shaped
   DispositionTable {
     dtRows = rows,
     dtIndex = insertDispositions rows omEmpty,
     dtInheritors = insertInheritors (reverseL shaped) omEmpty,
+    dtIfaceSuperCounts = insertSuperCounts superCounts omEmpty,
   }
+
+insertSuperCounts : List (String, Int) -> OrdMap Int -> OrdMap Int
+insertSuperCounts [] acc = acc
+insertSuperCounts ((word, n) :: rest) acc =
+  insertSuperCounts rest (omInsert word n acc)
+
+-- How many superinterface dictionaries a dictionary of the interface with word
+-- [ifaceWord] stores ahead of its `requires` dictionaries.  An interface the table
+-- does not know has none.
+export
+ifaceSuperCount : String -> DispositionTable -> Int
+ifaceSuperCount ifaceWord table =
+  optionOr 0 (omLookup ifaceWord table.dtIfaceSuperCounts)
 
 insertInheritors : List (InstanceShape, String, MethodDisposition) ->
   OrdMap (List InstanceShape) ->

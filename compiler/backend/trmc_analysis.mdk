@@ -129,6 +129,12 @@ routeDictNames b ((RDictFwd d) :: rest) =
 -- [] ⇒ byte-identical to the pre-S1 catch-all.
 routeDictNames b ((RLocal _ dicts) :: rest) =
   routeDictNames b dicts ++ routeDictNames b rest
+-- A dictionary built at the site nests its requires and supers, and either may
+-- forward an enclosing dict parameter; a projection reads the one it projects.
+routeDictNames b ((RKey _ reqs sups) :: rest) =
+  routeDictNames b reqs ++ routeDictNames b sups ++ routeDictNames b rest
+routeDictNames b ((RProj r _) :: rest) =
+  routeDictNames b [r] ++ routeDictNames b rest
 routeDictNames b (_ :: rest) = routeDictNames b rest
 
 export
@@ -440,7 +446,7 @@ dictRoutesForwarded _ = False
 -- self-recursion carries after restampIface).
 export
 routeIsKey : String -> Route -> Bool
-routeIsKey tag (RKey t _) = t == tag
+routeIsKey tag (RKey t _ _) = t == tag
 routeIsKey _ _ = False
 
 -- `ex` contains NO free reference to `self`.  SelfByVar: freeVars (a CVar name)

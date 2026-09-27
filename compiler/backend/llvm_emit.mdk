@@ -276,6 +276,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
 }
 import backend.private_mangle.{hashName, injectiveIdent}
+import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -4696,7 +4697,7 @@ u64AliasBody ps body _ = match u64KernelApplied ps body
 -- `fromInt` application the typechecker routed to `Num Int`.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" _ _ (RKey "Int" _) _ _) (CLit (LInt n))) =
+intLitOf (CApp (CMethod "fromInt" _ _ (RKey "Int" _ _) _ _) (CLit (LInt n))) =
   Some n
 intLitOf _ = None
 
@@ -5776,7 +5777,7 @@ intFromIntIdentityArg : String ->
   List Route ->
   List CExpr ->
   Option CExpr
-intFromIntIdentityArg "fromInt" (RKey "Int" []) [] [] (a :: []) = Some a
+intFromIntIdentityArg "fromInt" (RKey "Int" [] _) [] [] (a :: []) = Some a
 intFromIntIdentityArg _ _ _ _ _ = None
 
 headNameIs : CExpr -> String -> Bool
@@ -7357,7 +7358,7 @@ emitMethod : Emit ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethod e env name iface siteArity (RKey tag _) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (RKey tag _ _) implRoutes methRoutes argOps =
   match implForSite e name iface tag siteArity
     Some entry =>
       let dictWords =
@@ -7393,9 +7394,12 @@ emitMethod e env name iface siteArity (RKey tag _) implRoutes methRoutes argOps 
         implRoutes
         argOps
 emitMethod e env name iface siteArity (RDict d) implRoutes methRoutes argOps =
-  emitMethodDispatch e env name iface siteArity d methRoutes argOps
+  emitMethodDispatch e env name iface siteArity (RDict d) methRoutes argOps
 emitMethod e env name iface siteArity (RDictFwd d) implRoutes methRoutes argOps =
-  emitMethodDispatch e env name iface siteArity d methRoutes argOps
+  emitMethodDispatch e env name iface siteArity (RDictFwd d) methRoutes argOps
+-- a projected super dictionary dispatches exactly as a dictionary parameter does
+emitMethod e env name iface siteArity (RProj r path) implRoutes methRoutes argOps =
+  emitMethodDispatch e env name iface siteArity (RProj r path) methRoutes argOps
 emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps =
   emitMethodArgDispatch e name iface siteArity argOps
 -- S-1: a CONSTRAINED shadowing standalone was given leading dict PARAMS by
@@ -7544,7 +7548,7 @@ methValArity e name _ siteArity (RLocal sym dicts) =
     None =>
       let a = fnArity e target - listLen dicts
       if a <= 0 then siteArity else a
-methValArity e name iface siteArity (RKey tag _) =
+methValArity e name iface siteArity (RKey tag _ _) =
   match implForSite e name iface tag siteArity
     Some entry => methodArityOfEntry e entry name
     None => siteArity
@@ -7565,6 +7569,7 @@ methodArgDispatchArity e name iface siteArity =
 isDynamicMethodRoute : Route -> Bool
 isDynamicMethodRoute (RDict _) = True
 isDynamicMethodRoute (RDictFwd _) = True
+isDynamicMethodRoute (RProj _ _) = True
 isDynamicMethodRoute _ = False
 
 -- the dict-witness param name(s) a route reads at runtime (the names whose words the
@@ -7579,6 +7584,7 @@ methValDictNames (RDictFwd d) = [d]
 -- dict param.  That word must be CAPTURED or the lifted body reads an out-of-scope
 -- name.  Empty dicts ⇒ [] ⇒ byte-identical to the pre-S1 catch-all.
 methValDictNames (RLocal _ dicts) = routeDictNames [] dicts
+methValDictNames (RProj r _) = methValDictNames r
 methValDictNames _ = []
 
 -- the operand words for each captured dict name, looked up in the current emit env.
@@ -7952,9 +7958,9 @@ implEntryIface (CImplEntry _ _ (CImplTagged _ _ iface _ _ _)) = iface
 implEntryIface (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceNameOfWord ifaceWord
 
--- a runtime method dispatch (RDict/RDictFwd): the enclosing function's dict
--- PARAMETER `d` (a BOXED dict-witness pointer, GAP 1 Option A) selects the impl at
--- run time.  Load the head tag from the cell's field 0, then emit an if-chain over
+-- a runtime method dispatch (RDict/RDictFwd/RProj): the dictionary [dict] denotes
+-- — the enclosing function's dict PARAMETER or a super projected out of one (a BOXED
+-- dict-witness pointer, GAP 1 Option A) — selects the impl at run time.  Load the head tag from the cell's field 0, then emit an if-chain over
 -- the method's tagged impls — compare the head tag to each impl's hashName tag, on
 -- a match load the matched impl's nested per-instance dicts from the cell's fields
 -- 1..n, PREPEND them to argOps (the impl fn's leading element-dict params), call
@@ -7965,11 +7971,11 @@ emitMethodDispatch : Emit ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatch e env name iface siteArity d methRoutes argOps =
+emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
   match soleImplDirectSite e name iface siteArity
     Some ent =>
       -- WS-1b: the selected interface method has exactly ONE impl with no `requires`
@@ -7989,7 +7995,8 @@ emitMethodDispatch e env name iface siteArity d methRoutes argOps =
         argOps
         (methodArityOfEntry e ent name)
         LTInt
-    _ => emitMethodDispatchChain e env name iface siteArity d methRoutes argOps
+    _ =>
+      emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps
 
 -- WS-1b: Some impl iff the occurrence's interface has exactly one entry for [name]
 -- AND that entry takes no leading `requires` element-dict params (reqCount 0) — the
@@ -8216,12 +8223,12 @@ emitMethodDispatchChain : Emit ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatchChain e env name iface siteArity d methRoutes argOps =
-  let dictPtr = dictOperand e env d
+emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps =
+  let dictPtr = dictWordOfRoute e env dict
   let methWords = dictWordsOf e env methRoutes
   let nmw = lengthS methWords
   let nargs = lengthS argOps
@@ -8474,9 +8481,16 @@ takeRoutes n (r :: rest)
   | n > 0 = r :: takeRoutes (n - 1) rest
 takeRoutes _ _ = []
 
--- load `n` nested dict words from the boxed dict cell `dictPtr`.  The head tag is
--- the cell header (offset 0); the nested req dicts are fields 0..n-1 (loadField i ⇒
--- offset 8*(i+1)), stored by emitDictCell via storeFields at the same field indices.
+-- The super dictionaries a dictionary of [ent]'s interface stores ahead of its
+-- `requires` dictionaries (see `dictWordOfRoute`).
+entrySuperCount : CImplEntry -> Int
+entrySuperCount ent = match installedDispositionsOpt ()
+  Some table => ifaceSuperCount (implEntryIfaceWord ent) table
+  None => 0
+
+-- load dict words [i, n) from the boxed dict cell `dictPtr`.  The head tag is the
+-- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
+-- by emitDictCell via storeFields at the same field indices.
 loadReqDicts : Emit -> String -> Int -> Int -> List String
 loadReqDicts e dictPtr n i
   | i >= n = []
@@ -8632,7 +8646,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- recomputed from `cellCount`.  Byte-identical either way for every shape the
     -- clamp fires on.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
-    let cellDicts = loadReqDicts e dictPtr cellCount 0
+    let superCount = entrySuperCount ent
+    let cellDicts = loadReqDicts e dictPtr (superCount + cellCount) superCount
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
     -- The dispatcher is keyed by BARE method name and its `%argK` count is the arity
     -- the SITE saw, so on an arity collision (two modules declaring same-spelled
@@ -9060,32 +9075,43 @@ dictWordsOf : Emit -> OrdMap (String, LTy) -> List Route -> List String
 dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 
 -- one route -> its dict witness word (GAP 1, Option A — BOXED dict witness).
--- A dict witness is a POINTER to a heap cell `[ i64 head_tag | i64 reqdict_0 | … ]`
--- allocated via @mdk_alloc (the same boxed-cell shape emitCtorAlloc uses): field 0
--- is `hashName(impl-head-tag)`, fields 1..n are the RECURSIVELY-built witness words
--- for the impl's per-instance `requires` dicts, in `reqs` order (matching the
--- interpreter's structured `VDict(key, map dict_of_route reqs)` and the leading
--- dict-param order dict_pass binds — methRoutes then implRoutes, here the impl's
--- own requires).  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
+-- A dict witness is a POINTER to a heap cell
+-- `[ i64 head_tag | i64 super_0 | … | i64 reqdict_0 | … ]` allocated via @mdk_alloc
+-- (the same boxed-cell shape emitCtorAlloc uses): field 0 is
+-- `hashName(impl-head-tag)`, then one RECURSIVELY-built witness word per direct
+-- superinterface of the dictionary's interface (declaration order), then one per
+-- impl's per-instance `requires` dict, in `reqs` order (matching the interpreter's
+-- structured `VDict key reqs supers` and the leading dict-param order dict_pass
+-- binds — methRoutes then implRoutes, here the impl's own requires).  Supers come
+-- first so that a projection indexes the same field whichever instance the
+-- dictionary is; a dispatch arm skips them by its interface's super count.  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
 -- pointer to a 1-word cell `[ hashName k ]`; a two-level dict nests another cell
 -- pointer in field 1.  Consumption (emitDispatchChain / the RKey direct-call path)
 -- loads field 0 for the icmp and prepends fields 1..n as the matched impl's leading
 -- element-dict args.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
-dictWordOfRoute e env (RKey key reqs) =
-  let reqWords = dictWordsOf e env reqs
-  if allConstWords reqWords then
-    emitConstDictCell e (hashName key) reqWords
+dictWordOfRoute e env (RKey key reqs sups) =
+  let fieldWords = dictWordsOf e env (sups ++ reqs)
+  if allConstWords fieldWords then
+    emitConstDictCell e (hashName key) fieldWords
   else
-    emitDictCell e (hashName key) reqWords
+    emitDictCell e (hashName key) fieldWords
 dictWordOfRoute e env (RDict d) = dictOperand e env d
 dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
+dictWordOfRoute e env (RProj r path) =
+  loadSuperPath e (dictWordOfRoute e env r) path
 dictWordOfRoute _ _ RNone = "0"
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
 -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
 -- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
 dictWordOfRoute _ _ (RLocal _ _) = "0"
+
+-- the super dictionary at [path] below the dictionary word [w]: a super index i is
+-- cell field i
+loadSuperPath : Emit -> String -> List Int -> String
+loadSuperPath _ w [] = w
+loadSuperPath e w (i :: rest) = loadSuperPath e (loadField e w i) rest
 
 -- allocate a boxed dict-witness cell `[ i64 headTag | i64 req_0 | … | i64 req_(n-1) ]`
 -- via @mdk_alloc and return its pointer word (ptrtoint).  Mirrors emitCtorAlloc's
@@ -12056,7 +12082,7 @@ methodBodyDeficit e app =
     _ => 0
 
 methodOccurrenceCallableArity : Emit -> String -> String -> Int -> Route -> Int
-methodOccurrenceCallableArity e name iface arity (RKey tag _) =
+methodOccurrenceCallableArity e name iface arity (RKey tag _ _) =
   match implForSite e name iface tag arity
     Some entry => methodArityOfEntry e entry name
     None => arity

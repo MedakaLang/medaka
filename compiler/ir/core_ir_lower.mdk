@@ -64,6 +64,7 @@ import types.disposition.{
   inheritorsOf,
   installedDispositions,
   installedDispositionsOpt,
+  instanceReqParam,
 }
 import eval.eval.{
   buildCtorToType,
@@ -108,14 +109,19 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
   match !receiverRemapRef
     None => CMethod name iface arity route implRoutes methodRoutes
     Some rr =>
-      if receiverOf rr route then
-        CMethod
-          name
-          iface
-          arity
-          (RKey (receiverWordFor rr iface) [])
-          rr.rrReqs
-          (map (remapReceiver rr) methodRoutes)
+      if routeReadsReceiver rr route then match remapReceiver rr route
+        -- a method dispatched on a dictionary built here selects that dictionary's
+        -- instance and takes its `requires` dictionaries as impl dictionaries
+        RKey word reqs _ =>
+          CMethod
+            name
+            iface
+            arity
+            (RKey word [] [])
+            reqs
+            (map (remapReceiver rr) methodRoutes)
+        dict =>
+          CMethod name iface arity dict [] (map (remapReceiver rr) methodRoutes)
       else
         CMethod
           name
@@ -138,34 +144,55 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
 -- under a head collision the two words differ, and the subclass word names no
 -- superclass method.  The instance's `requires` dictionaries, received as the
 -- specialization's own leading parameters, are supplied as the call's impl
--- dictionaries.
-data ReceiverRemap = ReceiverRemap {
-  rrSelf : String,
-  rrWord : String,
-  rrSuperWords : List (String, String),
-  rrReqs : List Route,
-}
-
--- The word a method of interface [iface] dispatches by through the receiver.
-receiverWordFor : ReceiverRemap -> String -> String
-receiverWordFor rr iface =
-  optionOr rr.rrWord (lookupAssoc iface rr.rrSuperWords)
+-- dictionaries, and its supers are the instance's own (`InstanceShape.isSupers`)
+-- over those parameters, so a superclass method called on the receiver projects
+-- the super segment of that dictionary.
+data ReceiverRemap = ReceiverRemap { rrSelf : String, rrDict : Route }
 
 receiverRemapRef : Ref (Option ReceiverRemap)
 receiverRemapRef = Ref None
 
-receiverOf : ReceiverRemap -> Route -> Bool
-receiverOf rr (RDict d) = d == rr.rrSelf
-receiverOf rr (RDictFwd d) = d == rr.rrSelf
-receiverOf _ _ = False
+-- Does [route] read the receiver, directly or through a projection?
+routeReadsReceiver : ReceiverRemap -> Route -> Bool
+routeReadsReceiver rr (RDict d) = d == rr.rrSelf
+routeReadsReceiver rr (RDictFwd d) = d == rr.rrSelf
+routeReadsReceiver rr (RProj r _) = routeReadsReceiver rr r
+routeReadsReceiver _ _ = False
 
 remapReceiver : ReceiverRemap -> Route -> Route
 remapReceiver rr (RDict d)
-  | d == rr.rrSelf = RKey rr.rrWord rr.rrReqs
+  | d == rr.rrSelf = rr.rrDict
 remapReceiver rr (RDictFwd d)
-  | d == rr.rrSelf = RKey rr.rrWord rr.rrReqs
-remapReceiver rr (RKey w rs) = RKey w (map (remapReceiver rr) rs)
+  | d == rr.rrSelf = rr.rrDict
+remapReceiver rr (RKey w rs sups) =
+  RKey w (map (remapReceiver rr) rs) (map (remapReceiver rr) sups)
+remapReceiver rr (RProj r path) = projectRoute (remapReceiver rr r) path
 remapReceiver _ r = r
+
+-- A projection of a dictionary built here is the super route it stores.
+projectRoute : Route -> List Int -> Route
+projectRoute r [] = r
+projectRoute (RKey w rs sups) (i :: rest) = match drop i sups
+  s :: _ => projectRoute s rest
+  [] => panic "dictionary projection past its superinterfaces"
+projectRoute (RProj r path) more = RProj r (path ++ more)
+projectRoute r path = RProj r path
+
+-- An instance-shape route with its `requires` placeholders bound to [reqNames].
+bindReqParams : List String -> Route -> Route
+bindReqParams reqNames (RDict d) = match reqParamIndex d reqNames 0
+  Some name => RDict name
+  None => RDict d
+bindReqParams reqNames (RKey w rs sups) =
+  RKey w (map (bindReqParams reqNames) rs) (map (bindReqParams reqNames) sups)
+bindReqParams reqNames (RProj r path) = RProj (bindReqParams reqNames r) path
+bindReqParams _ r = r
+
+reqParamIndex : String -> List String -> Int -> Option String
+reqParamIndex _ [] _ = None
+reqParamIndex d (name :: rest) k
+  | d == instanceReqParam k = Some name
+  | otherwise = reqParamIndex d rest (k + 1)
 
 -- The dictionary routes of a constrained-function occurrence, remapped likewise.
 lowerDictRoutes : List Route -> List Route
@@ -1311,7 +1338,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
 
 memoCafBind : (String, String) -> CBind
 memoCafBind (tag, method) = CBind (memoBindName tag method) [
-  CClause [] (CMethod method "" 0 (RKey tag []) [] []),
+  CClause [] (CMethod method "" 0 (RKey tag [] []) [] []),
 ]
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
@@ -1339,12 +1366,12 @@ hoistImpl st (CImplEntry n s (CImplDefault ifaceId tag key pos pats body)) =
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
 hoistExpr : LowerState -> CExpr -> CExpr
-hoistExpr st (CMethod name iface 0 (RKey tag []) [] []) =
+hoistExpr st (CMethod name iface 0 (RKey tag [] sups) [] []) =
   if isMemoKey st.memoKeysAll name tag then
     let _ = recordMemoRef st tag name
     CVar (memoBindName tag name) AGlobal
   else
-    CMethod name iface 0 (RKey tag []) [] []
+    CMethod name iface 0 (RKey tag [] sups) [] []
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
 -- (RDictFwd from a polymorphic caller forwarding a concrete dict, or a plain RDict)
 -- resolves — when the method has exactly one impl and no default — statically to
@@ -1356,6 +1383,8 @@ hoistExpr st (CMethod name iface 0 (RDict d) [] []) =
   hoistDictNullary st name iface (RDict d)
 hoistExpr st (CMethod name iface 0 (RDictFwd d) [] []) =
   hoistDictNullary st name iface (RDictFwd d)
+hoistExpr st (CMethod name iface 0 (RProj r path) [] []) =
+  hoistDictNullary st name iface (RProj r path)
 hoistExpr _ (CMethod name iface arity r ir mr) =
   CMethod name iface arity r ir mr
 hoistExpr _ (CLit l) = CLit l
@@ -2166,9 +2195,11 @@ inheritedDefaultEntry ifaceWord mname positions pats body shape =
       (range nMethodDicts (nMethodDicts + shape.isReqCount))
   let rr = ReceiverRemap {
     rrSelf = defaultReceiverDict mname,
-    rrWord = shape.isDictWord,
-    rrSuperWords = shape.isSuperWords,
-    rrReqs = map RDict reqNames,
+    rrDict =
+      RKey
+        shape.isDictWord
+        (map RDict reqNames)
+        (map (bindReqParams reqNames) shape.isSupers),
   }
   let saved = !receiverRemapRef
   receiverRemapRef := Some rr

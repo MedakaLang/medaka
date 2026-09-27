@@ -59,6 +59,7 @@ import types.disposition.{
   InstanceShape(..),
   inheritorsOf,
   installedDispositionsOpt,
+  instanceReqParam,
 }
 import support.util.{
   contains,
@@ -162,8 +163,10 @@ public export data Value (e : Effect) =
   -- Phase 83/84 #5: the value list carries this impl's own requires dicts (each
   -- itself a VDict), so a recursive instance (def : List (List Int)) unfolds
   -- level by level — the inner return-position `def` reads its element dict from
-  -- the forwarded requires rather than failing arg-tag dispatch.
-  | VDict String (List (Value e))
+  -- the forwarded requires rather than failing arg-tag dispatch.  The second list
+  -- is the dictionary's direct superinterface dicts, in declaration order, which a
+  -- projection (`RProj`) reads by index.
+  | VDict String (List (Value e)) (List (Value e))
 
 -- an environment is a stack of frames; each frame maps names to mutable cells
 -- (so letrec / mutual recursion can back-patch a closure's own binding).
@@ -203,7 +206,7 @@ ppValue (VPrim _) = "<prim>"
 ppValue (VMulti vs) = "<dispatch/" ++ intToString (listLen vs) ++ ">"
 ppValue (VTypedImpl t _ _ _ inner) = "<impl@\{t}:\{ppValue inner}>"
 ppValue (VThunk _) = "<thunk>"
-ppValue (VDict key _) = "<dict:" ++ key ++ ">"
+ppValue (VDict key _ _) = "<dict:" ++ key ++ ">"
 ppValue VFallthrough = "<fallthrough>"
 
 ppField : (String, Value e) -> String
@@ -1319,12 +1322,15 @@ awaitsArgs _ = False
 export
 routeTag : EvalEnv (Value e) -> Route -> <e> String
 routeTag _ RNone = ""
-routeTag _ (RKey key _) = key
+routeTag _ (RKey key _ _) = key
 routeTag env (RDict d) = match lookupEnv env d
-  VDict key _ => key
+  VDict key _ _ => key
   _ => ""
 routeTag env (RDictFwd d) = match lookupEnv env d
-  VDict key _ => key
+  VDict key _ _ => key
+  _ => ""
+routeTag env (RProj r path) = match dictOfRoute env (RProj r path)
+  VDict key _ _ => key
   _ => ""
 routeTag _ (RLocal _ _) = ""
 -- RScalar tags an EBinOp with its grounded scalar type (Float arithmetic / Int
@@ -1348,27 +1354,39 @@ applyValues v [] = v
 applyValues v (x :: rest) = applyValues (apply v x) rest
 
 -- build the runtime dictionary for one route: RKey builds a structured VDict
--- carrying the impl's own requires dicts recursively (Phase 83/84 #5); RDict/
--- RDictFwd forward the enclosing dict param in full; RNone is a no-op dict.
+-- carrying the impl's own requires dicts and its supers recursively (Phase 83/84
+-- #5); RDict/RDictFwd forward the enclosing dict param in full; RProj reads a
+-- super out of the dictionary its inner route denotes; RNone is a no-op dict.
+export
 dictOfRoute : EvalEnv (Value e) -> Route -> <e> Value e
-dictOfRoute env (RKey key reqs) = VDict key (map (dictOfRoute env) reqs)
+dictOfRoute env (RKey key reqs sups) =
+  VDict key (map (dictOfRoute env) reqs) (map (dictOfRoute env) sups)
 dictOfRoute env (RDict d) = match lookupEnv env d
-  VDict key reqs => VDict key reqs
-  _ => VDict "" []
+  VDict key reqs sups => VDict key reqs sups
+  _ => VDict "" [] []
 dictOfRoute env (RDictFwd d) = match lookupEnv env d
-  VDict key reqs => VDict key reqs
-  _ => VDict "" []
-dictOfRoute _ RNone = VDict "" []
+  VDict key reqs sups => VDict key reqs sups
+  _ => VDict "" [] []
+dictOfRoute env (RProj r path) = projectDict (dictOfRoute env r) path
+dictOfRoute _ RNone = VDict "" [] []
 -- S-1: an RLocal route's OWN dicts (the shadowing standalone's `=>` constraints) are
 -- applied by evalMethodAt's RLocal arm via applyDicts — they are the call's leading
 -- dict ARGS, not a dict witness FOR this route.  So as a *witness* RLocal is still the
 -- no-op dict.  (Pre-S1 this arm's comment claimed "RLocal never carries a dict"; that
 -- invariant was the S-1 bug and is now false — see ast.mdk's Route doc + S9.)
-dictOfRoute _ (RLocal _ _) = VDict "" []
+dictOfRoute _ (RLocal _ _) = VDict "" [] []
 -- RScalar is a scalar-type binop tag (Float arithmetic / Int comparison),
 -- never a dict route.
 dictOfRoute _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
+
+-- the super dictionary at [path] (direct-super indices, outermost first)
+projectDict : Value e -> List Int -> Value e
+projectDict d [] = d
+projectDict (VDict _ _ sups) (i :: rest) = match drop i sups
+  s :: _ => projectDict s rest
+  [] => panic "dictionary projection past its superinterfaces"
+projectDict _ _ = panic "dictionary projection of a non-dictionary"
 
 -- narrow a method VMulti by a route, returning the narrowed value and any
 -- forwarded requires (non-empty only for RDictFwd return-position sites where the
@@ -1383,7 +1401,7 @@ methodAtNarrow : EvalEnv (Value e) ->
 -- fallback.  (A sibling call inside an interface default is routed to the body's
 -- receiver, never RNone — see `inheritedDefaultEntries`.)
 methodAtNarrow _ _ v RNone = (v, [])
-methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
+methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
 -- RDict site's narrowed impl method ALSO carries leading element-dict params
 -- (resolveArgStamps ran on eval too), so forward the dict's nested `reqs` exactly as
@@ -1393,11 +1411,17 @@ methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
 -- List impl method's leading `Debug Int` param.  Pre-unify RDict impl methods had NO
 -- dict slot (arg-tag), so reqs were discarded; now they need them.
 methodAtNarrow env method v (RDict d) = match lookupEnv env d
-  VDict key reqs => (narrowMethod env method v key, reqs)
+  VDict key reqs _ => (narrowMethod env method v key, reqs)
   _ => (v, [])
 methodAtNarrow env method v (RDictFwd d) = match lookupEnv env d
-  VDict key reqs => (narrowMethod env method v key, reqs)
+  VDict key reqs _ => (narrowMethod env method v key, reqs)
   _ => (v, [])
+-- A projected super dictionary narrows and forwards exactly as a dictionary
+-- parameter does.
+methodAtNarrow env method v (RProj r path) =
+  match dictOfRoute env (RProj r path)
+    VDict key reqs _ => (narrowMethod env method v key, reqs)
+    _ => (v, [])
 -- RLocal: not a method dispatch — the EMethodAt arm resolves the standalone
 -- directly (lookupEnv) and never calls methodAtNarrow with RLocal.  This arm
 -- exists only to keep the match exhaustive; it returns the value unnarrowed.
@@ -2558,8 +2582,7 @@ receiverBoundDefault : EvalEnv (Value e) ->
 receiverBoundDefault env positions pats body mname shape =
   let nMethod = leadingImplDictPats pats
   let receiverEnv =
-    reqs =>
-      extendEnv env [(defaultReceiverDict mname, VDict shape.isDictWord reqs)]
+    reqs => extendEnv env [(defaultReceiverDict mname, receiverDict shape reqs)]
   if nMethod + shape.isReqCount == 0 then
     implMethodValue (receiverEnv []) positions pats body
   else
@@ -2570,6 +2593,32 @@ receiverBoundDefault env positions pats body mname shape =
         pats
         body
         (takeN nMethod dicts))
+
+-- The dictionary the receiver denotes for an instance whose `requires`
+-- dictionaries are [reqs]: its supers are the shape's routes over those
+-- dictionaries.
+receiverDict : InstanceShape -> List (Value e) -> Value e
+receiverDict shape reqs =
+  VDict shape.isDictWord reqs (map (receiverSuperDict reqs) shape.isSupers)
+
+-- One receiver super route over the instance's `requires` dictionaries [reqs]: the
+-- only dictionary parameters such a route reads are the `instanceReqParam`
+-- placeholders.
+receiverSuperDict : List (Value e) -> Route -> Value e
+receiverSuperDict reqs (RKey key rs sups) =
+  VDict
+    key
+    (map (receiverSuperDict reqs) rs)
+    (map (receiverSuperDict reqs) sups)
+receiverSuperDict reqs (RDict d) = reqParamValue reqs d 0
+receiverSuperDict reqs (RProj r path) =
+  projectDict (receiverSuperDict reqs r) path
+receiverSuperDict _ _ = VDict "" [] []
+
+reqParamValue : List (Value e) -> String -> Int -> Value e
+reqParamValue [] _ _ = VDict "" [] []
+reqParamValue (v :: rest) d k =
+  if d == instanceReqParam k then v else reqParamValue rest d (k + 1)
 
 -- the body once every leading dictionary has arrived: its method-level ones bound to
 -- its own dictionary parameters, then run (a nullary body) or left awaiting its
