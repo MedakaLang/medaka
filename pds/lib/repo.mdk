@@ -3,6 +3,7 @@
    Every mutation returns a fresh state.  Record, MST, and commit blocks cross
    the verified blockstore boundary before the state becomes observable. -}
 
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encode}
 import list.{reverse}
 import regex.{Regex, isFullMatchBytes, mustCompile}
@@ -652,7 +653,7 @@ cidSeqEmpty = CidSeq Tip []
 -- The key is the CID's byte encoding in hex, so key equality is `cidEqual`.
 cidSeqAdd : Cid -> CidSeq -> CidSeq
 cidSeqAdd cid (CidSeq seen values) =
-  let key = encode (cidToBytes cid)
+  let key = encode (fromArrayAssumeByteDomain (cidToBytes cid))
   if has key seen then
     CidSeq seen values
   else

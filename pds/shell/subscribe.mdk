@@ -25,6 +25,7 @@
 
 import array.{sliceClamped}
 import async.{Async, liftIO}
+import bytes.{toArray}
 import hex as Hex
 import lib.event_log_record.{EventLogEntry(..)}
 import lib.sync_event.{syncErrorFrame, syncInfoFrame}
@@ -273,7 +274,7 @@ sendEntries : Duration ->
   Async <Clock, Net | e> (Result String Int)
 sendEntries _ _ delivered [] = deferPure (Ok delivered)
 sendEntries budget conn delivered (entry :: rest) =
-  match Hex.decode entry.frameHex
+  match map toArray (Hex.decode entry.frameHex)
     Err message =>
       deferPure
         (Err "subscribe: event \{intToString entry.seq} is not hex: \{message}")

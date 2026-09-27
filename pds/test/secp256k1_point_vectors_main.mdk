@@ -13,6 +13,7 @@ import lib.secp256k1.{
   pointRawFixedGeneratorIsCanonicalInfinityForTest,
 }
 import array as A
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import string.{split, trim}
@@ -30,15 +31,18 @@ three = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
 
 bytes : String -> Array Int
 bytes s = match decode s
-  Ok b => b
+  Ok b => toArray b
   Err _ => panic "point corpus malformed hex"
+
+hexOf : Array Int -> String
+hexOf x = encode (fromArrayAssumeByteDomain x)
 
 token : String -> Bool
 token s =
   if s == "INF" then
     True
   else match pointFromCompressed (bytes s)
-    Ok p => encode (pointCompressed p) == s
+    Ok p => hexOf (pointCompressed p) == s
     Err _ => False
 
 known : String -> Result String JPoint
@@ -79,7 +83,7 @@ mul c scalar expected label =
   else match scFromBytes (bytes scalar)
     Ok x =>
       if expected /= "INF"
-        && encode (pointCompressed (publicPointForSecret x)) == expected then
+        && hexOf (pointCompressed (publicPointForSecret x)) == expected then
         good c label
       else
         bad c label

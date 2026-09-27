@@ -11,6 +11,7 @@
    two public values derived from it, and no other output; the failure paths
    name the file and the rule and never the value. -}
 
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encode}
 import io.{writeFilePrivate}
 import lib.did_key.{didKeyFromPublicKey}
@@ -63,7 +64,10 @@ keygenSummary : Array Int -> Result String (String, String)
 keygenSummary bytes = do
   secret <- secretKeyFromBytes bytes
   let publicKey = publicKeyForSecret secret
-  Ok (encode (publicKeyCompressed publicKey), didKeyFromPublicKey publicKey)
+  Ok (
+    encode (fromArrayAssumeByteDomain (publicKeyCompressed publicKey)),
+    didKeyFromPublicKey publicKey,
+  )
 
 {- | Refuse `path` if it already exists, drawing no entropy and writing
    nothing.
@@ -94,9 +98,10 @@ keygenWrite : String ->
   <FileRead, FileWrite> Result String Unit
 keygenWrite label path bytes = match keygenRefusePath label path
   Err message => Err message
-  Ok () => match writeFilePrivate path "\{encode bytes}\n"
-    Err message => Err "unwritable \{label} \{path}: \{message}"
-    Ok () => Ok ()
+  Ok () =>
+    match writeFilePrivate path "\{encode (fromArrayAssumeByteDomain bytes)}\n"
+      Err message => Err "unwritable \{label} \{path}: \{message}"
+      Ok () => Ok ()
 
 -- | Generate the signing key `--key` names, and report the two public values
 -- that identify it. The scalar itself goes to the file and nowhere else.

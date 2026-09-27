@@ -9,6 +9,7 @@
    that line and nothing else. -}
 
 import array.{concat, sliceClamped}
+import bytes.{fromArrayAssumeByteDomain}
 import hex as Hex
 import lib.cid.{cidForRaw, cidToString}
 import lib.credential.{
@@ -37,6 +38,9 @@ import string.{
 import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
 import test.request_support.{deleteBody}
 import test.response_support.{closeAll, findHeaderEnd, report}
+
+hexOf : Array Int -> String
+hexOf x = Hex.encode (fromArrayAssumeByteDomain x)
 
 -- # Small ad-hoc helpers this test driver owns
 
@@ -436,7 +440,7 @@ rootlessCarHeaderHex : String
 rootlessCarHeaderHex = "11a265726f6f7473806776657273696f6e01"
 
 carHeaderHex : Array Int -> String
-carHeaderHex body = Hex.encode (sliceClamped 0 18 body)
+carHeaderHex body = hexOf (sliceClamped 0 18 body)
 
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
@@ -2326,8 +2330,8 @@ runCredentialAt count password =
     Err message => panic "serve_client: credential-at: \{message}"
     Ok record =>
       let () = println (intToString (credentialIterations record))
-      let () = println (Hex.encode (credentialSalt record))
-      println (Hex.encode (credentialDigest record))
+      let () = println (hexOf (credentialSalt record))
+      println (hexOf (credentialDigest record))
 
 {- | Upload one blob and print the CID the server content-addressed it to.
 
@@ -2364,7 +2368,7 @@ runRepoDigest port did =
   let out = match readResponse conn [||]
     Err message => panic "serve_client: getRepo failed: \{message}"
     Ok (200, body, _) =>
-      "\{intToString (arrayLength body)} \{Hex.encode (sha256 body)}"
+      "\{intToString (arrayLength body)} \{hexOf (sha256 body)}"
     Ok (status, body, _) =>
       panic
         "serve_client: getRepo answered \{intToString status}: \{fromUtf8 body}"
@@ -2548,13 +2552,13 @@ runSyncGetRecord port did collection rkey text =
   let () = match readTypedResponse conn [||]
     Err message => report "SYNCGETRECORD" False message
     Ok (status, mediaType, body, _) =>
-      let bodyHex = Hex.encode body
+      let bodyHex = hexOf body
       report
         "SYNCGETRECORD"
         (status == 200
           && contains carMediaType mediaType
           && carHeaderHex body /= rootlessCarHeaderHex
-          && contains (Hex.encode (toUtf8 text)) bodyHex)
+          && contains (hexOf (toUtf8 text)) bodyHex)
         "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s)"
   ignoreResult (close conn)
 
@@ -2577,13 +2581,13 @@ runSyncGetRecordAbsent port did collection rkey text =
   let () = match readTypedResponse conn [||]
     Err message => report "SYNCGETRECORDABSENT" False message
     Ok (status, mediaType, body, _) =>
-      let bodyHex = Hex.encode body
+      let bodyHex = hexOf body
       report
         "SYNCGETRECORDABSENT"
         (status == 200
           && contains carMediaType mediaType
           && carHeaderHex body /= rootlessCarHeaderHex
-          && not (contains (Hex.encode (toUtf8 text)) bodyHex))
+          && not (contains (hexOf (toUtf8 text)) bodyHex))
         "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s)"
   ignoreResult (close conn)
 
@@ -2603,14 +2607,14 @@ runSyncGetBlocks port did text =
   let () = match readTypedResponse conn [||]
     Err message => report "SYNCGETBLOCKS" False message
     Ok (status, mediaType, body, _) =>
-      let bodyHex = Hex.encode body
+      let bodyHex = hexOf body
       report
         "SYNCGETBLOCKS"
         (status == 200
           && contains carMediaType mediaType
           && carHeaderHex body == rootlessCarHeaderHex
           && arrayLength body > 18
-          && not (contains (Hex.encode (toUtf8 text)) bodyHex))
+          && not (contains (hexOf (toUtf8 text)) bodyHex))
         "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s), roots=[]"
   ignoreResult (close conn)
 

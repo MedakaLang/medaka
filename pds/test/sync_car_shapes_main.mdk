@@ -54,7 +54,7 @@
    is graded as text and not merely as a substring. -}
 
 import array.{sliceClamped}
-import bytes.{fromArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort, zip}
@@ -161,7 +161,8 @@ testContext =
   RequestContext { nowSeconds = 1700000000, nonce = [||], login = None }
 
 mustHex : String -> Array Int
-mustHex text = resultOrPanic "sync_car_shapes: malformed hex" (decode text)
+mustHex text =
+  toArray (resultOrPanic "sync_car_shapes: malformed hex" (decode text))
 
 mustCbor : Array Int -> DagCbor
 mustCbor bytes =
@@ -383,7 +384,8 @@ gradeDecoded rows tag body = match carDecode body
     let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
     let containOk = missing == []
     let boundedOk = length blocks <= maxRecordBlocks tag
-    let bytesOk = encode body == rowValue rows "\{tag}-CAR"
+    let bytesOk =
+      encode (fromArrayAssumeByteDomain body) == rowValue rows "\{tag}-CAR"
     let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"
     let () =
       println
@@ -416,7 +418,9 @@ gradeBlocksPresent server store did rows =
   let response = call server store (blocksTarget did wanted)
   let status = responseStatus response
   let body = responseBody response
-  let bytesOk = encode body == rowValue rows "GETBLOCKS-PRESENT-CAR"
+  let bytesOk =
+    encode (fromArrayAssumeByteDomain body)
+      == rowValue rows "GETBLOCKS-PRESENT-CAR"
   let framed = status == "200" && hasCarMediaType response
   let rootsOk =
     emittedRootCount body == length (rowCids rows "GETBLOCKS-PRESENT-ROOTS")

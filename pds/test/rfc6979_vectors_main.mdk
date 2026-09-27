@@ -8,6 +8,7 @@ import lib.secp256k1.{
   rfc6979InjectedNonceProbeForTest,
 }
 import array as A
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encode}
 import io.{readLines}
 import string.{split, trim}
@@ -22,7 +23,11 @@ oneBytes = [|
 |]
 
 bytes : String -> Array Int
-bytes value = resultOrPanic "rfc6979_vectors: malformed hex" (decode value)
+bytes value =
+  toArray (resultOrPanic "rfc6979_vectors: malformed hex" (decode value))
+
+hexOf : Array Int -> String
+hexOf x = encode (fromArrayAssumeByteDomain x)
 
 scalar : String -> Sc
 scalar value =
@@ -83,15 +88,15 @@ runRow counts lineNo text = match split " " (trim text)
     let key = scalar keyHex
     let digest = bytes digestHex
     let (candidate0, candidate1) = rfc6979CandidateBytesForTest key digest
-    if encode candidate0 == expectedK then
+    if hexOf candidate0 == expectedK then
       let () = pass counts "row \{row} candidate-0"
       if row == "0" then
-        let () = println "CANDIDATE1 row=0 k=\{encode candidate1}"
+        let () = println "CANDIDATE1 row=0 k=\{hexOf candidate1}"
         runProbes counts key digest candidate0 candidate1
     else
       fail
         counts
-        "row \{row} candidate-0 expected=\{expectedK} got=\{encode candidate0}"
+        "row \{row} candidate-0 expected=\{expectedK} got=\{hexOf candidate0}"
   _ => fail counts "line \{intToString lineNo} malformed signing row"
 
 runRows : Array Int -> List String -> Int -> <IO> Unit

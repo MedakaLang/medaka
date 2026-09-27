@@ -111,9 +111,9 @@ import string.{drop, fromUtf8, split, startsWith, toInt, toUtf8}
 -- lint-disable-file rule-stdlib-reimpl
 segmentBytes : String -> Result String (Array Int)
 segmentBytes segment = match stringLength segment % 4
-  0 => decodeUrlSafe segment
-  2 => decodeUrlSafe "\{segment}=="
-  3 => decodeUrlSafe "\{segment}="
+  0 => map toArray (decodeUrlSafe segment)
+  2 => map toArray (decodeUrlSafe "\{segment}==")
+  3 => map toArray (decodeUrlSafe "\{segment}=")
   _ => Err "appview_stub: segment is not a valid unpadded base64url length"
 
 claimsJson : String -> Result String Json

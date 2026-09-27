@@ -2,7 +2,7 @@
 
 import array.{drop}
 import bytes as B
-import bytes.{Bytes, encodeUtf8}
+import bytes.{Bytes, encodeUtf8, toArray}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 import hex.{decode}
@@ -123,7 +123,7 @@ perfSecretHex =
 
 mustHexBytes : String -> Array Int
 mustHexBytes text =
-  resultOrPanic "performance_resource: malformed hex" (decode text)
+  toArray (resultOrPanic "performance_resource: malformed hex" (decode text))
 
 perfSecret : SecretKey
 perfSecret =

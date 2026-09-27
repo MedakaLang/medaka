@@ -21,7 +21,7 @@ import http.{
   Response,
   serializeResponse,
 }
-import bytes.{Bytes, toArray}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import hex as Hex
 import json.{Json(..), get}
 import lib.credential.{
@@ -666,7 +666,7 @@ serviceAuthFor account context nsid audience = ServiceAuthRequest {
   iss = accountDid account,
   aud = audience,
   lxm = Some nsid,
-  jti = Hex.encode context.nonce,
+  jti = Hex.encode (fromArrayAssumeByteDomain context.nonce),
   iat = context.nowSeconds,
   exp = None,
 }
@@ -1062,7 +1062,7 @@ serviceAuthClaims account context table params = do
     iss = accountDid account,
     aud = audience,
     lxm = method,
-    jti = Hex.encode context.nonce,
+    jti = Hex.encode (fromArrayAssumeByteDomain context.nonce),
     iat = context.nowSeconds,
     exp = Some expiry,
   }
