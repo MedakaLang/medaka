@@ -27,7 +27,7 @@ import types.disposition.{
   emptyDispositionTable,
   instIdMid,
   instIdSeq,
-  validateDispositionTable,
+  dispositionProblems,
 }
 
 speakIface : IfaceRef
@@ -105,9 +105,19 @@ test "two same-named methods of two different interfaces stay distinct rows" =
     expectEqual 2 (length (dispositionRows table)),
   ]
 
-test "validateDispositionTable accepts a table naming every expected slot" =
+test "an exact table has no disposition problems" =
   let table = buildDispositionTable [
     Supplied { instance = dogInst, iface = speakIface, method = "speak" },
   ]
-  let _ = validateDispositionTable [(dogInst, speakIface, "speak")] table
-  expectTrue True
+  expectEqual [] (dispositionProblems [(dogInst, speakIface, "speak")] table)
+
+test "a dropped slot is a disposition problem" =
+  let table = buildDispositionTable [
+    Supplied { instance = dogInst, iface = speakIface, method = "speak" },
+  ]
+  expectEqual
+    1
+    (length
+      (dispositionProblems
+        [(dogInst, speakIface, "speak"), (catInst, speakIface, "speak")]
+        table))

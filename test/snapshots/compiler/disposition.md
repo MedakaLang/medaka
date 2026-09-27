@@ -1,5 +1,5 @@
 # META
-source_lines=244
+source_lines=255
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -197,26 +197,37 @@ dispositionLookup inst method table =
 ifaceRefSameSpelling : IfaceRef -> IfaceRef -> Bool
 ifaceRefSameSpelling a b = a.irName == b.irName
 
--- Assert every one of [expected] (instance, iface, method) triples has exactly
--- one row in [table], of the same interface. The production producer can never
--- omit a slot it just built by construction, so this exists for the negative
--- case: a test exercising this validator on a hand-built table (one row
--- deliberately dropped) must see it panic, not silently pass.
+-- What is wrong with [table] as the disposition of the [expected] (instance,
+-- iface, method) slots: a slot with no row, or a slot answered by a different
+-- interface.  Empty when every slot is disposed.  (A second row for one slot never
+-- reaches here: building the table refuses it.)
+export
+dispositionProblems : List (InstId, IfaceRef, String) ->
+  DispositionTable ->
+  List String
+dispositionProblems [] _ = []
+dispositionProblems ((inst, iface, method) :: rest) table =
+  let key = dispositionKey inst method
+  let here = match dispositionLookup inst method table
+    None => ["missing disposition for \{key}"]
+    Some row =>
+      if ifaceRefSameSpelling iface (dispositionIface row) then
+        []
+      else
+        ["\{key} answered by a different interface"]
+  here ++ dispositionProblems rest table
+
+-- Refuse a table that leaves an [expected] slot without its one disposition.  The
+-- producer calls this on every table it publishes, so a consumer never meets a
+-- missing or doubled slot it would otherwise have to fill or choose between.
 export
 validateDispositionTable : List (InstId, IfaceRef, String) ->
   DispositionTable ->
   Unit
-validateDispositionTable [] _ = ()
-validateDispositionTable ((inst, iface, method) :: rest) table =
-  let key = dispositionKey inst method
-  let _ = match dispositionLookup inst method table
-    None => panic "disposition table: missing disposition for \{key}"
-    Some row =>
-      if ifaceRefSameSpelling iface (dispositionIface row) then
-        ()
-      else
-        panic "disposition table: \{key} answered by a different interface"
-  validateDispositionTable rest table
+validateDispositionTable expected table =
+  match dispositionProblems expected table
+    [] => ()
+    problem :: _ => panic "disposition table: \{problem}"
 
 -- ── the installed table ────────────────────────────────────────────────────
 -- `elaborateModules` installs one every elaboration so its readers (see the header)
@@ -293,9 +304,11 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionLookup" ((PVar "inst") (PVar "method") (PVar "table")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (EFieldAccess (EVar "table") "dtIndex")))
 (DTypeSig false "ifaceRefSameSpelling" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))
 (DFunDef false "ifaceRefSameSpelling" ((PVar "a") (PVar "b")) (EBinOp "==" (EFieldAccess (EVar "a") "irName") (EFieldAccess (EVar "b") "irName")))
+(DTypeSig true "dispositionProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "dispositionProblems" ((PList) PWild) (EListLit))
+(DFunDef false "dispositionProblems" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "missing disposition for ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionProblems") (EVar "rest")) (EVar "table"))))))
 (DTypeSig true "validateDispositionTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyCon "Unit"))))
-(DFunDef false "validateDispositionTable" ((PList) PWild) (ELit LUnit))
-(DFunDef false "validateDispositionTable" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false PWild (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: missing disposition for ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (ELit LUnit) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EApp (EApp (EVar "validateDispositionTable") (EVar "rest")) (EVar "table")))))
+(DFunDef false "validateDispositionTable" ((PVar "expected") (PVar "table")) (EMatch (EApp (EApp (EVar "dispositionProblems") (EVar "expected")) (EVar "table")) (arm (PList) () (ELit LUnit)) (arm (PCons (PVar "problem") PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: ")) (EApp (EVar "display") (EVar "problem"))) (ELit (LString "")))))))
 (DTypeSig false "dispositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
 (DFunDef false "dispositionsRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "installDispositions" (TyFun (TyCon "DispositionTable") (TyCon "Unit")))
@@ -351,9 +364,11 @@ installedDispositionsOpt _ = !dispositionsRef
 (DFunDef false "dispositionLookup" ((PVar "inst") (PVar "method") (PVar "table")) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (EFieldAccess (EVar "table") "dtIndex")))
 (DTypeSig false "ifaceRefSameSpelling" (TyFun (TyCon "IfaceRef") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))
 (DFunDef false "ifaceRefSameSpelling" ((PVar "a") (PVar "b")) (EBinOp "==" (EFieldAccess (EVar "a") "irName") (EFieldAccess (EVar "b") "irName")))
+(DTypeSig true "dispositionProblems" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "dispositionProblems" ((PList) PWild) (EListLit))
+(DFunDef false "dispositionProblems" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "missing disposition for ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionProblems") (EVar "rest")) (EVar "table"))))))
 (DTypeSig true "validateDispositionTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyCon "Unit"))))
-(DFunDef false "validateDispositionTable" ((PList) PWild) (ELit LUnit))
-(DFunDef false "validateDispositionTable" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false PWild (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: missing disposition for ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (ELit LUnit) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EApp (EApp (EVar "validateDispositionTable") (EVar "rest")) (EVar "table")))))
+(DFunDef false "validateDispositionTable" ((PVar "expected") (PVar "table")) (EMatch (EApp (EApp (EVar "dispositionProblems") (EVar "expected")) (EVar "table")) (arm (PList) () (ELit LUnit)) (arm (PCons (PVar "problem") PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: ")) (EApp (EMethodRef "display") (EVar "problem"))) (ELit (LString "")))))))
 (DTypeSig false "dispositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
 (DFunDef false "dispositionsRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "installDispositions" (TyFun (TyCon "DispositionTable") (TyCon "Unit")))

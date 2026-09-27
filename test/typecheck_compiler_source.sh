@@ -904,20 +904,20 @@ data GivenScope =
   | GSImplRequires
 givenInScope : GivenScope -> GivenEntry -> Bool
 registerFunPredGiven : PredicateSlot -> EvidenceBinderId -> Unit
-activeFunDictPredOf : PredicateRequest ->
-activeFunDictPredOf request _ useScope =
+activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
+activeFunDictPredOf request useScope =
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalPredOf : String -> Mono -> Option PredicateRequest
 goalPredOfOp : String -> Option PredicateRequest
 activeDictVarOfEncl : Option PredicateRequest ->
 activeDictVarOfEncl None m encl useScope =
-map LegacyScalar (activeDictVarForEncl m encl useScope)
+map LegacyScalar (activeDictVarForEncl m useScope)
 activeDictVarOfEncl (Some request) m encl useScope =
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
 enclSlotIndex (Some request) target encl =
 implReqDictVarOf : Option PredicateRequest ->
-implReqDictVarOf (Some request) m encl useScope
+implReqDictVarOf (Some request) m useScope
 firstPredForEnclAt : GivenScope ->
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool

@@ -1007,7 +1007,7 @@ fillImplDecl prog (d@(DImpl { iface, methods, ... }))
   --     tyvar id, so specializing lt/gt/min/max alongside compare made the global
   --     route lookup return the LAST-registered `$dict_<m>_<slot>` for ALL bodies
   --     (compare's element dispatch wrongly forwarded `$dict_max_0` → "unbound dict
-  --     witness").  Fixed by encl-aware requires routing (typecheck.mdk
+  --     witness").  Fixed by scope-aware requires routing (typecheck.mdk
   --     activeDictVarForEncl / argImplDictRoutesForEncl).
   --   * Foldable — `foldMap f = fold (acc x => acc ++ f x) empty` is ETA-SHORT (binds
   --     only `f` + its `Monoid m` dict, returns a partial awaiting the container); the

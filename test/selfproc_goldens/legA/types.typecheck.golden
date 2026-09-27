@@ -1,11 +1,11 @@
 abstractFieldMsg : String -> String -> String
 abstractSlotIds : List Mono -> List Int
-activeDictPredOf : PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer
-activeDictVarForEncl : Mono -> String -> ScopeId -> Option EvidenceBinderId
+activeDictPredOf : PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
+activeDictVarForEncl : Mono -> ScopeId -> Option EvidenceBinderId
 activeDictVarOf : Mono -> ScopeId -> Option EvidenceBinderId
 activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer
-activeFunDictPredOf : PredicateRequest -> String -> ScopeId -> Option AssumAnswer
-activeFunDictPredOfResidual : String -> List Mono -> String -> ScopeId -> Option AssumAnswer
+activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
+activeFunDictPredOfResidual : String -> List Mono -> ScopeId -> Option AssumAnswer
 addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
@@ -816,6 +816,7 @@ dispatchTyparams : List String -> List String
 dispositionRowsOfImpl : ImplEnv -> ImplRow -> ClassEnv -> List (InstanceShape, String, MethodDisposition)
 dispositionRowsOfImpls : ImplEnv -> List ImplRow -> ClassEnv -> List (InstanceShape, String, MethodDisposition)
 dispositionRowsOfMethods : InstId -> IfaceRef -> List String -> List String -> List String -> List MethodDisposition
+dispositionSlotsOfImpls : List ImplRow -> ClassEnv -> List (InstId, IfaceRef, String)
 distinctIdentsIn2 : List (Ident, String) -> Bool
 doBindArgHint : String -> String
 doBindArgMsg : String -> String
@@ -1355,7 +1356,7 @@ implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodEVars : ImplMethod -> List String
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
-implReqDictVarOf : Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer
+implReqDictVarOf : Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
 implRequireKey : List (String, Mono) -> Require -> String
 implRequireRigidMap : List Require -> List (String, Mono)
 implRequireSuperStep : List String -> List Ty -> Super -> Option (List Ty)

@@ -462,6 +462,7 @@ import types.disposition.{
   InstanceShape(..),
   buildDispositionTableWithShapes,
   installDispositions,
+  validateDispositionTable,
 }
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
@@ -24818,11 +24819,11 @@ activeDictVarOf m useScope = match peelQual m
 -- part in selection, and neither does the enclosing declaration's name: a site in
 -- a test or prop body, which has none, still sees the givens of a local binding it
 -- sits in.
-activeDictVarForEncl : Mono -> String -> ScopeId -> Option EvidenceBinderId
-activeDictVarForEncl m encl useScope = match peelQual m
+activeDictVarForEncl : Mono -> ScopeId -> Option EvidenceBinderId
+activeDictVarForEncl m useScope = match peelQual m
   TVar cell =>
     firstDictForEncl (tyvarId cell) useScope graphRun.value.activeDictVars.value
-  TApp a _ => activeDictVarForEncl a encl useScope
+  TApp a _ => activeDictVarForEncl a useScope
   _ => None
 
 firstDictForEncl : Int ->
@@ -24856,14 +24857,14 @@ activeDictVarOfEncl : Option PredicateRequest ->
   ScopeId ->
   Option AssumAnswer
 activeDictVarOfEncl None m encl useScope =
-  map LegacyScalar (activeDictVarForEncl m encl useScope)
+  map LegacyScalar (activeDictVarForEncl m useScope)
 activeDictVarOfEncl (Some request) m encl useScope =
   -- A complete predicate request is terminal: a miss must not be overwritten by
   -- the scalar tyvar-id registry, whose key cannot distinguish declarations or
   -- complete argument vectors.  The None arm above is the legacy scalar control.
   orElseOpt
     (map LegacyScalar (enclDictVarOf (Some request) m encl useScope))
-    (implReqDictVarOf (Some request) m encl useScope)
+    (implReqDictVarOf (Some request) m useScope)
 
 -- 🚨 #1154 RESIDUAL: AN IMPL-`requires` SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS
 -- CONSTRAINT VAR'S ID — the same rule #1177 established for the SIGNATURE `=>` channel,
@@ -24892,11 +24893,10 @@ activeDictVarOfEncl (Some request) m encl useScope =
 -- opposite tuple orders; one given environment leaves one of them.
 implReqDictVarOf : Option PredicateRequest ->
   Mono ->
-  String ->
   ScopeId ->
   Option AssumAnswer
-implReqDictVarOf None _ _ _ = None
-implReqDictVarOf (Some request) m encl useScope = match peelQual m
+implReqDictVarOf None _ _ = None
+implReqDictVarOf (Some request) m useScope = match peelQual m
   TVar cell =>
     firstPredForEnclAt
       GSImplRequires
@@ -24904,7 +24904,7 @@ implReqDictVarOf (Some request) m encl useScope = match peelQual m
       request
       useScope
       (givensForScope useScope)
-  TApp a _ => implReqDictVarOf (Some request) a encl useScope
+  TApp a _ => implReqDictVarOf (Some request) a useScope
   _ => None
 
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
@@ -30301,7 +30301,7 @@ entailAssum m encl name useScope kind =
   match entailAssumVar request m encl name useScope kind
     Some answer => Some answer
     None => match request
-      Some req => activeDictPredOf req m encl useScope
+      Some req => activeDictPredOf req m useScope
       None => None
 
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
@@ -30343,15 +30343,13 @@ entailAssumVar request m encl _ useScope (EKNumReturn _ _ _ _) =
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
   match (activeFunDictPredOf
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
-    encl
     useScope)
     Some answer => Some answer
     -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
     -- its pre-migration spelling fallback until that producer has declaration identity.
-    None =>
-      match activeFunDictPredOfResidual iface.irName (m :: rest) encl useScope
-        Some answer => Some answer
-        None => map LegacyScalar (activeDictVarForEncl m encl useScope)
+    None => match activeFunDictPredOfResidual iface.irName (m :: rest) useScope
+      Some answer => Some answer
+      None => map LegacyScalar (activeDictVarForEncl m useScope)
 entailAssumVar request m encl _ useScope (EKArg _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
@@ -33876,11 +33874,7 @@ solveExactReturn request = match methodReturnWanted request
           resultMono
           request.mrrEnclosing
           wanted.scope)
-        (activeDictPredOf
-          predRequest
-          resultMono
-          request.mrrEnclosing
-          wanted.scope)
+        (activeDictPredOf predRequest resultMono wanted.scope)
     match given
       Some answer =>
         let _ = noteAssumption wanted.scope answer
@@ -36696,12 +36690,8 @@ monoVecSameGiven _ _ = False
 -- scope selects only its own or an ancestor's binder; generated dictionary names
 -- and registration order across sibling bodies are irrelevant, and so is the
 -- enclosing declaration's name.
-activeDictPredOf : PredicateRequest ->
-  Mono ->
-  String ->
-  ScopeId ->
-  Option AssumAnswer
-activeDictPredOf request targetMono _ useScope =
+activeDictPredOf : PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
+activeDictPredOf request targetMono useScope =
   let preds = givensForScope useScope
   match request.prArgs
     PSArgsKnown _ => firstPredForEncl request useScope preds
@@ -36719,11 +36709,8 @@ predicateTargetId m = match peelQual m
 -- Function-carrier predicate evidence is lexical: the occurrence's captured scope
 -- reads only its own or an ancestor's givens, so a module's givens accumulating across
 -- its functions cannot route evidence from a different body.
-activeFunDictPredOf : PredicateRequest ->
-  String ->
-  ScopeId ->
-  Option AssumAnswer
-activeFunDictPredOf request _ useScope =
+activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
+activeFunDictPredOf request useScope =
   firstPredForEncl request useScope (givensForScope useScope)
 
 firstPredForEncl : PredicateRequest ->
@@ -36795,10 +36782,9 @@ firstPredForEnclAt scope target request useScope (g :: rest)
 -- not reach it.
 activeFunDictPredOfResidual : String ->
   List Mono ->
-  String ->
   ScopeId ->
   Option AssumAnswer
-activeFunDictPredOfResidual iface args _ useScope =
+activeFunDictPredOfResidual iface args useScope =
   firstPredForEnclResidual iface args useScope (givensForScope useScope)
 
 firstPredForEnclResidual : String ->
@@ -47552,8 +47538,37 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
 -- rejected upstream, M1 — never reaches this walk at all).
 buildDispositions : DeclEnvs -> DispositionTable
 buildDispositions envs =
-  buildDispositionTableWithShapes
-    (dispositionRowsOfImpls envs.deImpls (ieRowsAll envs.deImpls) envs.deIfaces)
+  let impls = ieRowsAll envs.deImpls
+  let table =
+    buildDispositionTableWithShapes
+      (dispositionRowsOfImpls envs.deImpls impls envs.deIfaces)
+  let _ =
+    validateDispositionTable (dispositionSlotsOfImpls impls envs.deIfaces) table
+  table
+
+-- Every slot an accepted instance must have exactly one disposition for: each
+-- method of its interface that it names, or that has a default to inherit.
+dispositionSlotsOfImpls : List ImplRow ->
+  ClassEnv ->
+  List (InstId, IfaceRef, String)
+dispositionSlotsOfImpls [] _ = []
+dispositionSlotsOfImpls (r :: rest) ce =
+  let (iface, _, _) = ieRowTriple r
+  let inst = InstId (instRefMid (ieRowInst r)) (instRefSeq (ieRowInst r))
+  let supplied = ieRowMethodNames r
+  let here =
+    match (ceLookupAt
+      (regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName))
+      (ieRowOrd r)
+      ce)
+      None => []
+      Some ceRow =>
+        map
+          (m => (inst, iface, m))
+          (filter
+            (m => contains m supplied || not (contains m (ceRowRequired ceRow)))
+            (ceRowMethodNames ceRow))
+  here ++ dispositionSlotsOfImpls rest ce
 
 dispositionRowsOfImpls : ImplEnv ->
   List ImplRow ->

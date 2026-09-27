@@ -193,26 +193,37 @@ dispositionLookup inst method table =
 ifaceRefSameSpelling : IfaceRef -> IfaceRef -> Bool
 ifaceRefSameSpelling a b = a.irName == b.irName
 
--- Assert every one of [expected] (instance, iface, method) triples has exactly
--- one row in [table], of the same interface. The production producer can never
--- omit a slot it just built by construction, so this exists for the negative
--- case: a test exercising this validator on a hand-built table (one row
--- deliberately dropped) must see it panic, not silently pass.
+-- What is wrong with [table] as the disposition of the [expected] (instance,
+-- iface, method) slots: a slot with no row, or a slot answered by a different
+-- interface.  Empty when every slot is disposed.  (A second row for one slot never
+-- reaches here: building the table refuses it.)
+export
+dispositionProblems : List (InstId, IfaceRef, String) ->
+  DispositionTable ->
+  List String
+dispositionProblems [] _ = []
+dispositionProblems ((inst, iface, method) :: rest) table =
+  let key = dispositionKey inst method
+  let here = match dispositionLookup inst method table
+    None => ["missing disposition for \{key}"]
+    Some row =>
+      if ifaceRefSameSpelling iface (dispositionIface row) then
+        []
+      else
+        ["\{key} answered by a different interface"]
+  here ++ dispositionProblems rest table
+
+-- Refuse a table that leaves an [expected] slot without its one disposition.  The
+-- producer calls this on every table it publishes, so a consumer never meets a
+-- missing or doubled slot it would otherwise have to fill or choose between.
 export
 validateDispositionTable : List (InstId, IfaceRef, String) ->
   DispositionTable ->
   Unit
-validateDispositionTable [] _ = ()
-validateDispositionTable ((inst, iface, method) :: rest) table =
-  let key = dispositionKey inst method
-  let _ = match dispositionLookup inst method table
-    None => panic "disposition table: missing disposition for \{key}"
-    Some row =>
-      if ifaceRefSameSpelling iface (dispositionIface row) then
-        ()
-      else
-        panic "disposition table: \{key} answered by a different interface"
-  validateDispositionTable rest table
+validateDispositionTable expected table =
+  match dispositionProblems expected table
+    [] => ()
+    problem :: _ => panic "disposition table: \{problem}"
 
 -- ── the installed table ────────────────────────────────────────────────────
 -- `elaborateModules` installs one every elaboration so its readers (see the header)
