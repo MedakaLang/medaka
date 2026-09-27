@@ -137,6 +137,8 @@ import string.{
 }
 import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode, encodeUpper}
+import lib.wideint as W
+import i64
 
 -- ---------------------------------------------------------------------------
 -- IN-subquery forward references — the sqlparse ⇄ sqlstmt knot
@@ -367,10 +369,14 @@ numFrom : String -> String -> Option String -> Option String -> Parser Literal
 numFrom sgn ds None None = intFrom "\{sgn}\{ds}"
 numFrom sgn ds fr ex = floatFrom "\{sgn}\{ds}\{optText fr}\{optText ex}"
 
+-- An integer literal outside `Int` is SQLite's 64-bit range still, so it is an
+-- `LInt64` when it fits 64 bits, and malformed only past them.
 intFrom : String -> Parser Literal
 intFrom s = match toInt s
   Some n => deferPure (LInt n)
-  None => failWith "malformed integer literal '\{s}'"
+  None => match W.parse s
+    Some x => deferPure (LInt64 x)
+    None => failWith "malformed integer literal '\{s}'"
 
 floatFrom : String -> Parser Literal
 floatFrom s = match toFloat s
@@ -1028,6 +1034,7 @@ renderCaseElseText (Some e) = "ELSE \{renderSqlExpr e} "
 export
 renderLiteral : Literal -> String
 renderLiteral (LInt n) = "\{n}"
+renderLiteral (LInt64 x) = display x
 renderLiteral (LFloat f) = "\{f}"
 renderLiteral (LText s) = "'\{replaceAll "'" "''" s}'"
 renderLiteral (LBlob b) = "X'\{encodeUpper (fromArrayAssumeByteDomain b)}'"
@@ -1131,6 +1138,7 @@ dumpCaseElse (Some e) = "(Some (\{dumpExpr e}))"
 export
 dumpLiteral : Literal -> String
 dumpLiteral (LInt n) = "LInt \{n}"
+dumpLiteral (LInt64 x) = "LInt64 \{x}"
 dumpLiteral (LFloat f) = "LFloat \{f}"
 dumpLiteral (LText s) = "LText \{renderLiteral (LText s)}"
 dumpLiteral (LBlob b) = "LBlob \{renderLiteral (LBlob b)}"

@@ -76,6 +76,8 @@ import parsec.lib.parser.{
 }
 import lib.sqltoken.{sqlIdent, keyword, symbol, lexeme, word}
 import lib.recordfmt.{Cell(..)}
+import lib.wideint as W
+import i64
 import string.{toUpper, toInt, toFloat, contains, trim, join, fromChars}
 import list.{reverse}
 
@@ -277,6 +279,7 @@ applyAffinity AffReal c = realify c
 
 textify : Cell -> Cell
 textify (CInt n) = CText (intToString n)
+textify (CInt64 x) = CText (display x)
 textify (CFloat f) = CText (floatToString f)
 textify c = c
 
@@ -287,6 +290,7 @@ numify c = c
 
 realify : Cell -> Cell
 realify (CInt n) = CFloat (intToFloat n)
+realify (CInt64 x) = CFloat (W.toFloat x)
 realify (CText s) = realFromText s
 realify c = c
 
@@ -319,7 +323,9 @@ numFromText s = intFromText (trim s) s
 intFromText : String -> String -> Cell
 intFromText t s = match toInt t
   Some n => CInt n
-  None => floatOrText t s
+  None => match W.parse t
+    Some x => CInt64 x
+    None => floatOrText t s
 
 floatOrText : String -> String -> Cell
 floatOrText t s = match toFloat t

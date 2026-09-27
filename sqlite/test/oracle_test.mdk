@@ -143,6 +143,8 @@ rows = [
   leftJoinRow,
   distinctRow,
   typedRow,
+  wideIntRow,
+  wideRealRow,
 ]
 
 -- `sqlite/test/oracle.sh`: schema + four whole tables, through the reader's
@@ -431,6 +433,113 @@ distinctRow = OracleRow {
   ],
 }
 
+-- SQLite's full 64-bit INTEGER (#3456): values from 2^62, where Medaka's `Int`
+-- ends, out to both ends of int64, through the SQL demo's read, order, filter,
+-- index, arithmetic and aggregate paths.  Every query's result is an integer,
+-- so no line depends on how the two engines print a REAL.
+wideIntRow : OracleRow
+wideIntRow = OracleRow {
+  name = "wide_int",
+  entry = "sqlite/sql_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER, name TEXT); INSERT INTO t (v, name) VALUES (4611686018427387904, 'two62'), (9223372036854775807, 'max'), (-9223372036854775808, 'min'), (-4611686018427387905, 'below'), (4611686018427387903, 'intmax'), (3074457345618258602, 'half'), (5, 'five'), (-7, 'neg'), (NULL, 'null'), (1311768467463790320, 'mid'); CREATE INDEX tv ON t (v);",
+  ],
+  pieces = [
+    PRun ["SELECT name, v FROM t ORDER BY rowid"],
+    PRun ["SELECT name, v FROM t ORDER BY v"],
+    PRun ["SELECT name, v FROM t ORDER BY v DESC"],
+    PRun ["SELECT name FROM t WHERE v > 5 ORDER BY v"],
+    PRun ["SELECT name FROM t WHERE v < 0 ORDER BY v"],
+    PRun ["SELECT name FROM t WHERE v = 9223372036854775807"],
+    PRun ["SELECT name FROM t WHERE v = -9223372036854775808"],
+    PRun ["SELECT name FROM t WHERE v >= 4611686018427387904 ORDER BY v"],
+    PRun ["SELECT v + 1 FROM t WHERE name = 'intmax'"],
+    PRun ["SELECT v - 1 FROM t WHERE name = 'max'"],
+    PRun ["SELECT v + 1 FROM t WHERE name = 'min'"],
+    PRun ["SELECT v * 2 FROM t WHERE name = 'half'"],
+    PRun ["SELECT v / 3 FROM t WHERE name = 'max'"],
+    PRun ["SELECT v % 7 FROM t WHERE name = 'max'"],
+    PRun ["SELECT v / -1 FROM t WHERE name = 'below'"],
+    PRun ["SELECT -v FROM t WHERE name = 'below'"],
+    PRun ["SELECT min(v), max(v) FROM t"],
+    PRun ["SELECT count(v) FROM t"],
+    PRun ["SELECT sum(v) FROM t WHERE name = 'intmax' OR name = 'five'"],
+    PRun ["SELECT DISTINCT v FROM t WHERE v > 1000 ORDER BY v"],
+    PRun ["SELECT v FROM t WHERE v IN (SELECT v FROM t WHERE name = 'max')"],
+    PRun ["SELECT v + '9223372036854775800' FROM t WHERE name = 'neg'"],
+  ],
+  expect = [
+    Rows "SELECT name, v FROM t ORDER BY rowid;",
+    Rows "SELECT name, v FROM t ORDER BY v;",
+    Rows "SELECT name, v FROM t ORDER BY v DESC;",
+    Rows "SELECT name FROM t WHERE v > 5 ORDER BY v;",
+    Rows "SELECT name FROM t WHERE v < 0 ORDER BY v;",
+    Rows "SELECT name FROM t WHERE v = 9223372036854775807;",
+    Rows "SELECT name FROM t WHERE v = -9223372036854775808;",
+    Rows "SELECT name FROM t WHERE v >= 4611686018427387904 ORDER BY v;",
+    Rows "SELECT v + 1 FROM t WHERE name = 'intmax';",
+    Rows "SELECT v - 1 FROM t WHERE name = 'max';",
+    Rows "SELECT v + 1 FROM t WHERE name = 'min';",
+    Rows "SELECT v * 2 FROM t WHERE name = 'half';",
+    Rows "SELECT v / 3 FROM t WHERE name = 'max';",
+    Rows "SELECT v % 7 FROM t WHERE name = 'max';",
+    Rows "SELECT v / -1 FROM t WHERE name = 'below';",
+    Rows "SELECT -v FROM t WHERE name = 'below';",
+    Rows "SELECT min(v), max(v) FROM t;",
+    Rows "SELECT count(v) FROM t;",
+    Rows "SELECT sum(v) FROM t WHERE name = 'intmax' OR name = 'five';",
+    Rows "SELECT DISTINCT v FROM t WHERE v > 1000 ORDER BY v;",
+    Rows "SELECT v FROM t WHERE v IN (SELECT v FROM t WHERE name = 'max');",
+    Rows "SELECT v + '9223372036854775800' FROM t WHERE name = 'neg';",
+  ],
+}
+
+-- Integers against REALs at magnitudes a `Float` cannot tell apart (2^53 + 1,
+-- 2^63 - 1 against the REAL 2^63): SQLite compares them exactly, so equality,
+-- ordering and GROUP BY must not merge two different values.
+wideRealRow : OracleRow
+wideRealRow = OracleRow {
+  name = "wide_real",
+  entry = "sqlite/sql_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE x (v, name TEXT); INSERT INTO x VALUES (9223372036854775807, 'maxint'), (9223372036854775807.0, 'real2^63'), (9223372036854775806, 'max-1'), (4611686018427387903, 'intmax'), (4611686018427387904.0, 'real2^62'), (4611686018427387904, 'two62'), (9007199254740993, 'p53+1'), (9007199254740992.0, 'real2^53'), (-9223372036854775808, 'min'), (-9223372036854775808.0, 'realmin'), (3, 'three'), (3.5, 'threehalf');",
+  ],
+  pieces = [
+    PRun ["SELECT name FROM x WHERE v = 9223372036854775807 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v = 9223372036854775807.0 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v > 9223372036854775806 ORDER BY name"],
+    PRun [
+      "SELECT name FROM x WHERE v < 9007199254740993 AND v > 9000000000000000 ORDER BY name",
+    ],
+    PRun ["SELECT name FROM x WHERE v = 9007199254740992.0 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v = -9223372036854775808 ORDER BY name"],
+    PRun ["SELECT name FROM x WHERE v <= 3.5 AND v >= 3 ORDER BY name"],
+    PRun ["SELECT count(*) FROM x GROUP BY v ORDER BY count(*), min(name)"],
+    PRun ["SELECT name FROM x ORDER BY v, name"],
+    PRun [
+      "SELECT name FROM x WHERE v IN (9223372036854775807.0, 3) ORDER BY name",
+    ],
+  ],
+  expect = [
+    Rows "SELECT name FROM x WHERE v = 9223372036854775807 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v = 9223372036854775807.0 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v > 9223372036854775806 ORDER BY name;",
+    Rows
+      "SELECT name FROM x WHERE v < 9007199254740993 AND v > 9000000000000000 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v = 9007199254740992.0 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v = -9223372036854775808 ORDER BY name;",
+    Rows "SELECT name FROM x WHERE v <= 3.5 AND v >= 3 ORDER BY name;",
+    Rows "SELECT count(*) FROM x GROUP BY v ORDER BY count(*), min(name);",
+    Rows "SELECT name FROM x ORDER BY v, name;",
+    Rows
+      "SELECT name FROM x WHERE v IN (9223372036854775807.0, 3) ORDER BY name;",
+  ],
+}
+
 -- `sqlite/test/typed_oracle.sh`: the typed-result (RowType) layer. Its
 -- expected lines are sqlite3's own rows put through the script's `typed_line`
 -- renderer, kept as `typedUserLine` — derived from the ENGINE's answer, not
@@ -515,6 +624,12 @@ test "distinct: DISTINCT query output matches sqlite3" =
   oracleExpectation "distinct"
 
 test "typed: typed query output matches sqlite3" = oracleExpectation "typed"
+
+test "wide_int: 64-bit INTEGER output matches sqlite3" =
+  oracleExpectation "wide_int"
+
+test "wide_real: integers against REALs past 2^53 match sqlite3" =
+  oracleExpectation "wide_real"
 
 -- # The multipage row's premise
 

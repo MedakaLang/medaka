@@ -182,6 +182,10 @@ suites = [
   -- The resource-limit examples. Neither of the two vehicles named in the
   -- header reaches this module, so without this row nothing would run them.
   ("http", (6, EvalAndNative)),
+  -- The signed fixed-width types: two's complement wrapping, truncating
+  -- division, arithmetic shifts, each lowered by its own engine.
+  ("i32", (32, EvalAndNative)),
+  ("i64", (31, EvalAndNative)),
   ("io", (8, NativeCapability)),
   ("json", (55, EvalAndNative)),
   ("list", (158, EvalAndNative)),
@@ -384,6 +388,10 @@ test "stdlib/hash_set.mdk executed >= 13 assertions" =
 test "stdlib/hex.mdk executed >= 17 assertions" = floorExpectation "hex"
 
 test "stdlib/http.mdk executed >= 6 assertions" = floorExpectation "http"
+
+test "stdlib/i32.mdk executed >= 32 assertions" = floorExpectation "i32"
+
+test "stdlib/i64.mdk executed >= 31 assertions" = floorExpectation "i64"
 
 test "stdlib/io.mdk executed >= 8 assertions" = floorExpectation "io"
 

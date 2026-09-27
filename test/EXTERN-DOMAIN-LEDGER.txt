@@ -163,6 +163,12 @@ u64BitXor	TOTAL	total bitwise op
 u64ShiftLeft	TOTAL	total: an amount outside 0 .. 63 gives 0 by design
 u64ShiftRight	TOTAL	total: an amount outside 0 .. 63 gives 0 by design
 u64MulHigh	TOTAL	total: the high 64 bits of the 128-bit product
+# Signed kernels: I32 is the low 32 bits read in two's complement; I64's two
+# doors keep all 64 bits and change only how they are read.
+i32Truncate	TOTAL	total: the low thirty-two bits of any Int, sign-extended
+i32ToInt	TOTAL	total: identity on the word
+i64FromBits	TOTAL	total: the same 64 bits read in two's complement
+i64ToBits	TOTAL	total: the same 64 bits read unsigned
 intToString	TOTAL	total: decimal render of any Int (incl. intMinBound)
 # Hashes (except hashFloat): total over their domains.
 hashBool	TOTAL	total over Bool

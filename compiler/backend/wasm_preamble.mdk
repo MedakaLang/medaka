@@ -836,65 +836,100 @@ appendRuntimeLines = [
 --     ⚠️ #305: a 3-way cannot express NaN's unorderedness, so the emitter does NOT
 --     compare this against 0 for an ordering op — it calls $mdk_value_lt/le/gt/ge,
 --     which answer $float directly and use this only for the $str/int shapes.
--- ── U64 arms of the shape-dispatched helpers (INTEGER-TYPES-DESIGN §5.1) ──────
--- A `U64` is a `$u64` cell (an i64 payload read unsigned), a struct type distinct
--- from `$boxint` and `$float` in the rec group, so no other arm's `ref.test`
--- accepts one.  Each helper that dispatches on value shape takes a flag and
--- splices its U64 arm only when the program uses `U64` (`WasmEmit.useU64`, which
--- is also what declares `$u64`), so a program without one emits the same text.
--- The arm tests the LEFT operand, as the `$float` arms do: both operands of a
--- well-typed binop share a shape.
-u64OnlyW : Bool -> List String -> List String
-u64OnlyW u64 lines = if u64 then lines else []
+-- ── 64-bit arms of the shape-dispatched helpers (INTEGER-TYPES-DESIGN §5.1) ───
+-- A `U64` is a `$u64` cell (an i64 payload read unsigned) and an `I64` an `$i64`
+-- cell (the same payload read in two's complement): two struct types distinct
+-- from each other and from `$boxint` and `$float` in the rec group, so no other
+-- arm's `ref.test` accepts one.  Each helper that dispatches on value shape takes
+-- a `Wide64W` and splices an arm per type the program uses (`WasmEmit.useU64` /
+-- `useI64`, which are also what declare the types), so a program without either
+-- emits the same text.  The arm tests the LEFT operand, as the `$float` arms do:
+-- both operands of a well-typed binop share a shape.
+public export data Wide64W = Wide64W Bool Bool
 
-u64GetW : String -> String
-u64GetW v = "(struct.get $u64 0 (ref.cast (ref $u64) (local.get \{v})))"
+-- the arms for the types in use, `$u64`'s first.
+wideArmsW : Wide64W -> (String -> List String) -> List String
+wideArmsW (Wide64W u64 i64) arm =
+  (if u64 then arm "$u64" else []) ++ (if i64 then arm "$i64" else [])
+
+boxed64GetW : String -> String -> String
+boxed64GetW ty v =
+  "(struct.get \{ty} 0 (ref.cast (ref \{ty}) (local.get \{v})))"
 
 -- `==` for `$mdk_value_eq` / `$mdk_value_eq_num`: the payloads' bit equality.
-u64EqArmW : Bool -> List String
-u64EqArmW u64 = u64OnlyW u64 [
-  "    (if (ref.test (ref $u64) (local.get $a))",
-  "      (then (return (ref.i31 (i64.eq \{u64GetW "$a"} \{u64GetW "$b"})))))",
+wideEqArmsW : Wide64W -> List String
+wideEqArmsW w = wideArmsW w eqArmW
+
+eqArmW : String -> List String
+eqArmW ty = [
+  "    (if (ref.test (ref \{ty}) (local.get $a))",
+  "      (then (return (ref.i31 (i64.eq \{boxed64GetW ty "$a"} \{boxed64GetW ty "$b"})))))",
 ]
 
--- the unsigned 3-way for `$mdk_value_cmp` / `$mdk_value_cmp_num`, into their
--- `$ia`/`$ib` i64 locals.  The ordering predicates (`$mdk_value_lt`…) reach it
--- through the 3-way, which is exact for an integer.
-u64CmpArmW : Bool -> List String
-u64CmpArmW u64 = u64OnlyW u64 [
-  "    (if (ref.test (ref $u64) (local.get $a))",
-  "      (then",
-  "        (local.set $ia \{u64GetW "$a"})",
-  "        (local.set $ib \{u64GetW "$b"})",
-  "        (if (i64.lt_u (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
-  "        (if (i64.gt_u (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
-  "        (return (i32.const 0))))",
+-- the 3-way for `$mdk_value_cmp` / `$mdk_value_cmp_num`, into their `$ia`/`$ib`
+-- i64 locals: unsigned for `$u64`, signed for `$i64`.  The ordering predicates
+-- (`$mdk_value_lt`…) reach it through the 3-way, which is exact for an integer.
+wideCmpArmsW : Wide64W -> List String
+wideCmpArmsW w = wideArmsW w cmpArmW
+
+cmpArmW : String -> List String
+cmpArmW ty =
+  let sfx = if ty == "$u64" then "u" else "s"
+  [
+    "    (if (ref.test (ref \{ty}) (local.get $a))",
+    "      (then",
+    "        (local.set $ia \{boxed64GetW ty "$a"})",
+    "        (local.set $ib \{boxed64GetW ty "$b"})",
+    "        (if (i64.lt_\{sfx} (local.get $ia) (local.get $ib)) (then (return (i32.const -1))))",
+    "        (if (i64.gt_\{sfx} (local.get $ia) (local.get $ib)) (then (return (i32.const 1))))",
+    "        (return (i32.const 0))))",
+  ]
+
+-- `+`/`-`/`*` for `$mdk_value_add`/`sub`/`mul`: the i64 op wraps modulo 2^64,
+-- which is the answer read either way.
+wideArithArmsW : Wide64W -> String -> List String
+wideArithArmsW w instr = wideArmsW w (ty => arithArmW ty instr)
+
+arithArmW : String -> String -> List String
+arithArmW ty instr = [
+  "    (if (ref.test (ref \{ty}) (local.get $a))",
+  "      (then (return (struct.new \{ty} (\{instr} \{boxed64GetW ty "$a"} \{boxed64GetW ty "$b"})))))",
 ]
 
--- `+`/`-`/`*` for `$mdk_value_add`/`sub`/`mul`: the i64 op wraps modulo 2^64.
-u64ArithArmW : Bool -> String -> List String
-u64ArithArmW u64 instr = u64OnlyW u64 [
-  "    (if (ref.test (ref $u64) (local.get $a))",
-  "      (then (return (struct.new $u64 (\{instr} \{u64GetW "$a"} \{u64GetW "$b"})))))",
-]
+-- `/`/`%` for `$mdk_value_div`/`mod`, with the divisor guard the Int arm uses,
+-- into the helper's `$vdr` local.  `uInstr` is the `$u64` operation and `sInstr`
+-- the `$i64` one.
+wideDivArmsW : Wide64W -> String -> String -> List String -> List String
+wideDivArmsW w uInstr sInstr trap =
+  wideArmsW w (ty => divArmW ty (if ty == "$u64" then uInstr else sInstr) trap)
 
--- `/`/`%` for `$mdk_value_div`/`mod`: unsigned, with the divisor guard the Int
--- arm uses, into the helper's `$vdr` local.
-u64DivArmW : Bool -> String -> List String -> List String
-u64DivArmW u64 instr trap =
-  u64OnlyW
-    u64
-    ([
-        "    (if (ref.test (ref $u64) (local.get $a))",
-        "      (then",
-        "        (local.set $vdr \{u64GetW "$b"})",
-        "        (if (i64.eqz (local.get $vdr)) (then",
-      ]
-      ++ trap
-      ++ [
-        "        ))",
-        "        (return (struct.new $u64 (\{instr} \{u64GetW "$a"} (local.get $vdr))))))",
-      ])
+divArmW : String -> String -> List String -> List String
+divArmW ty instr trap =
+  [
+      "    (if (ref.test (ref \{ty}) (local.get $a))",
+      "      (then",
+      "        (local.set $vdr \{boxed64GetW ty "$b"})",
+      "        (if (i64.eqz (local.get $vdr)) (then",
+    ]
+    ++ trap
+    ++ [
+      "        ))",
+      "        (return (struct.new \{ty} (\{instr} \{boxed64GetW ty "$a"} (local.get $vdr))))))",
+    ]
+
+-- The one `I64` operation no single instruction covers.  `i64.div_s` traps on
+-- `minBound / -1`, whose two's complement answer is `minBound`: a divisor of -1
+-- is negation, which wraps there.  `i64.rem_s` is already 0 for that pair.  The
+-- divisor is nonzero here: the caller's guard has run.
+export
+i64RuntimeLines : List String
+i64RuntimeLines = [
+  "  ;; -- I64 kernel: signed division that wraps at minBound / -1 --",
+  "  (func $mdk_i64_div (param $a i64) (param $b i64) (result i64)",
+  "    (if (i64.eq (local.get $b) (i64.const -1))",
+  "      (then (return (i64.sub (i64.const 0) (local.get $a)))))",
+  "    (i64.div_s (local.get $a) (local.get $b)))",
+]
 
 -- The `U64` kernels no single instruction covers.  A shift amount is an `Int`;
 -- read unsigned, every amount outside 0..63 (a negative one included) gives 0,
@@ -933,8 +968,8 @@ u64RuntimeLines = [
 ]
 
 export
-valueEqRuntimeLines : Bool -> List String
-valueEqRuntimeLines u64 =
+valueEqRuntimeLines : Wide64W -> List String
+valueEqRuntimeLines w =
   [
       "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
       "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -944,7 +979,7 @@ valueEqRuntimeLines u64 =
       "        (i32.const 1)",
       "        (i31.get_u (ref.cast (ref i31) (call $mdk_str_compare (ref.cast (ref $str) (local.get $a)) (ref.cast (ref $str) (local.get $b)))))))))) ;; Eq == ordinal 1",
     ]
-    ++ u64EqArmW u64
+    ++ wideEqArmsW w
     ++ [
       "    ;; A2 (poly-Eq-on-Float): two boxed $float cells have distinct identities, so the",
       "    ;; `ref.eq` fallback would report equal floats as unequal — compare f64 values.",
@@ -978,7 +1013,7 @@ valueEqRuntimeLines u64 =
       "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))",
       "        (return (i32.const 0))))",
     ]
-    ++ u64CmpArmW u64
+    ++ wideCmpArmsW w
     ++ [
       "    ;; layer-17 §2.1: Int compare over the i64 box/unbox seam (handles >2^30 boxed).",
       "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
@@ -1079,13 +1114,13 @@ valueModZeroTrapW =
 -- (useValueArith). See wasm_emit.mdk's valueAddRt/valueSubRt/valueMulRt/
 -- valueDivRt/valueModRt bindings for the per-flag gating this backs.
 export
-valueAddRuntimeLines : Bool -> List String
-valueAddRuntimeLines u64 =
+valueAddRuntimeLines : Wide64W -> List String
+valueAddRuntimeLines w =
   [
       "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
       "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
-    ++ u64ArithArmW u64 "i64.add"
+    ++ wideArithArmsW w "i64.add"
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (f64.add",
@@ -1095,12 +1130,12 @@ valueAddRuntimeLines u64 =
     ]
 
 export
-valueSubRuntimeLines : Bool -> List String
-valueSubRuntimeLines u64 =
+valueSubRuntimeLines : Wide64W -> List String
+valueSubRuntimeLines w =
   [
       "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
-    ++ u64ArithArmW u64 "i64.sub"
+    ++ wideArithArmsW w "i64.sub"
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (f64.sub",
@@ -1110,12 +1145,12 @@ valueSubRuntimeLines u64 =
     ]
 
 export
-valueMulRuntimeLines : Bool -> List String
-valueMulRuntimeLines u64 =
+valueMulRuntimeLines : Wide64W -> List String
+valueMulRuntimeLines w =
   [
       "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
-    ++ u64ArithArmW u64 "i64.mul"
+    ++ wideArithArmsW w "i64.mul"
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (f64.mul",
@@ -1125,8 +1160,8 @@ valueMulRuntimeLines u64 =
     ]
 
 export
-valueDivRuntimeLines : Bool -> List String
-valueDivRuntimeLines u64 =
+valueDivRuntimeLines : Wide64W -> List String
+valueDivRuntimeLines w =
   [
       "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
       "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
@@ -1134,7 +1169,7 @@ valueDivRuntimeLines u64 =
       "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
     ]
-    ++ u64DivArmW u64 "i64.div_u" valueDivZeroTrapW
+    ++ wideDivArmsW w "i64.div_u" "call $mdk_i64_div" valueDivZeroTrapW
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (f64.div",
@@ -1151,8 +1186,8 @@ valueDivRuntimeLines u64 =
     ]
 
 export
-valueModRuntimeLines : Bool -> List String
-valueModRuntimeLines u64 =
+valueModRuntimeLines : Wide64W -> List String
+valueModRuntimeLines w =
   [
       "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`",
       "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native",
@@ -1161,7 +1196,7 @@ valueModRuntimeLines u64 =
       "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
       "    (local $vdr i64)",
     ]
-    ++ u64DivArmW u64 "i64.rem_u" valueModZeroTrapW
+    ++ wideDivArmsW w "i64.rem_u" "i64.rem_s" valueModZeroTrapW
     ++ [
       "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
       "      (then (struct.new $float (call $mdk_float_rem",
@@ -1183,13 +1218,13 @@ valueModRuntimeLines u64 =
 -- demanded, since the isCmpOp poly-num routing branch (wasm_emit.mdk) never
 -- touches $mdk_value_add/sub/mul/div/mod.
 export
-valueCmpNumRuntimeLines : Bool -> List String
-valueCmpNumRuntimeLines u64 =
+valueCmpNumRuntimeLines : Wide64W -> List String
+valueCmpNumRuntimeLines w =
   [
       "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
       "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
     ]
-    ++ u64EqArmW u64
+    ++ wideEqArmsW w
     ++ [
       "    (if (ref.test (ref $float) (local.get $a))",
       "      (then (return (ref.i31 (f64.eq",
@@ -1206,7 +1241,7 @@ valueCmpNumRuntimeLines u64 =
       "        (if (f64.gt (local.get $fa) (local.get $fb)) (then (return (i32.const 1))))",
       "        (return (i32.const 0))))",
     ]
-    ++ u64CmpArmW u64
+    ++ wideCmpArmsW w
     ++ [
       "    (local.set $ia (call $mdk_unbox_int (local.get $a)))",
       "    (local.set $ib (call $mdk_unbox_int (local.get $b)))",

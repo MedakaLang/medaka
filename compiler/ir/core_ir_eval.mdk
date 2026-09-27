@@ -168,6 +168,7 @@ litValue : Lit -> Value e
 litValue (LInt n) = VInt n
 litValue (LFloat f) = VFloat f
 litValue (LU64 hi lo) = VU64 hi lo
+litValue (LI64 hi lo) = VI64 hi lo
 litValue (LString s) = VString s
 litValue (LChar c) = VChar c
 litValue (LBool b) = VBool b

@@ -20,28 +20,53 @@ import byteparser.{
   runBP,
   runByteParser,
   beSint,
+  beU64,
   takeBytes,
   failWith,
   beFloat64,
 }
 import bytes.{Bytes, fromU8Array, toArray}
 import lib.varint.{sqVarint}
+import lib.wideint as W
+import i64 as I64
 import list.{reverse}
 import array
 import string.{join, fromUtf8}
 
 -- | One decoded column value.
+--
+-- An INTEGER is `CInt` whenever it fits `Int`, and `CInt64` only when it does
+-- not (above 2^62 - 1 or below -2^62): SQLite's integers are 64-bit, Medaka's
+-- `Int` holds 63 bits.  One value never has two spellings, so the derived `Eq`
+-- and every comparison that dispatches on the constructor stay right.
 public export data Cell =
   | CNull
   | CInt Int
+  | CInt64 I64
   | CText String
   | CBlob (Array Int)
   | CFloat Float
   deriving (Debug, Eq)
 
+-- | The cell for an INTEGER, `CInt` when it fits `Int`: the one way to build an
+--   integer cell from an `I64`, so no value gets two spellings.
+export
+intCell : I64 -> Cell
+intCell x = match W.narrow x
+  Some n => CInt n
+  None => CInt64 x
+
+-- | An INTEGER cell's value as an `I64`; `None` for every other cell.
+export
+cellI64 : Cell -> Option I64
+cellI64 (CInt n) = Some (W.widen n)
+cellI64 (CInt64 x) = Some x
+cellI64 _ = None
+
 export impl Display Cell where
   display CNull = "NULL"
   display (CInt n) = intToString n
+  display (CInt64 x) = display x
   display (CText s) = s
   display (CBlob _) = "<blob>"
   display (CFloat f) = floatToString f
@@ -50,6 +75,7 @@ export
 cellToString : Cell -> String
 cellToString CNull = ""
 cellToString (CInt n) = intToString n
+cellToString (CInt64 x) = display x
 cellToString (CText s) = s
 cellToString (CBlob _) = "<blob>"
 cellToString (CFloat f) = floatToString f
@@ -176,6 +202,10 @@ readBody : Bytes -> Int -> Int -> SerialType -> BResult Cell
 readBody input pos _end STNull = BOk CNull pos
 readBody input pos _end STIntZero = BOk (CInt 0) pos
 readBody input pos _end STIntOne = BOk (CInt 1) pos
+-- An 8-byte integer is SQLite's full 64-bit range, which `Int` does not hold:
+-- it is read as its 64 bits and kept as an `I64` only when it does not fit.
+readBody input pos end (STInt 8) =
+  map (w => intCell (I64.fromBits w)) (runBP beU64 input pos end)
 readBody input pos end (STInt nbytes) =
   map CInt (runBP (beSint nbytes) input pos end)
 readBody input pos end (STText nbytes) =
