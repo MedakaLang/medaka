@@ -62,6 +62,7 @@ localAbsCandidate	Expr	14/42
 localAbsCtorSpine	Expr	5/42
 markTailDecl	Decl	1/14
 methodConstraintNamesOfDecl	Decl	2/14
+negatedI32Lit	Expr	3/42
 overlayScanOne	Decl	1/14
 plainAppHead	Expr	2/42
 prePassDeclScoped	Decl	5/14

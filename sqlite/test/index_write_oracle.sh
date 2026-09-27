@@ -78,6 +78,7 @@ export MEDAKA_EMITTER="$ROOT/medaka_emitter"
 "$MEDAKA" build sqlite/index_write_demo.mdk -o "$WRITER" >/dev/null
 "$MEDAKA" build sqlite/index_fill_demo.mdk -o "$FILLER" >/dev/null
 "$MEDAKA" build sqlite/index_types_demo.mdk -o "$TYPER" >/dev/null
+"$MEDAKA" build sqlite/index_wide_demo.mdk -o "$BINDIR/sqlite_index_wide" >/dev/null
 "$MEDAKA" build sqlite/index_read_probe.mdk -o "$IDXREADER" >/dev/null
 
 # 2. Build the Medaka reader binary (for the self round-trip gate).
@@ -283,6 +284,21 @@ diff -q <(printf '2\n4\n') <(sqlite3 "$TYPEDB" "SELECT id FROM mixed INDEXED BY 
 # BLOB entries in BINARY (memcmp) order via the index.
 diff -q <(printf "3|X'00'\n1|X'01'\n2|X'0203'\n4|X'0203'\n5|X'FF'\n") <(sqlite3 "$TYPEDB" "SELECT id, quote(b) FROM mixed INDEXED BY idx_b WHERE b>=X'00';") >/dev/null || { echo "FAIL: BLOB order"; g9=1; }
 if [ "$g9" = "0" ]; then echo "OK: REAL + BLOB indexes correct (dup keys, completeness, BINARY order)"; else fail=1; fi
+
+# Gate 9b: integers and REALs past 2^53 in one index.  SQLite compares an
+# integer with a REAL exactly; through a Float, 2^53 + 1 would tie 2^53 and
+# 2^63 - 1 would tie the REAL 2^63, and the file would be out of order.  The
+# expected order is hand-derived from sqlite_index_wide's header.
+echo "=== Gate 9b: integer and REAL keys past 2^53 ==="
+WIDEDB="$(mktemp -d)/wide.db"
+rm -f "$WIDEDB"
+"$BINDIR/sqlite_index_wide" "$WIDEDB" >/dev/null
+g11=0
+[ "$(sqlite3 "$WIDEDB" "PRAGMA integrity_check;")" = "ok" ] || { echo "FAIL: wide integrity_check"; g11=1; }
+diff -q <(printf '4\n6\n5\n3\n2\n1\n') <(sqlite3 "$WIDEDB" "SELECT id FROM t INDEXED BY tx ORDER BY x, id;") >/dev/null || { echo "FAIL: wide index order"; g11=1; }
+[ "$(sqlite3 "$WIDEDB" "SELECT id FROM t INDEXED BY tx WHERE x = 9223372036854775807;")" = "2" ] || { echo "FAIL: wide seek 2^63-1"; g11=1; }
+diff -q <(printf '4\n6\n') <(sqlite3 "$WIDEDB" "SELECT id FROM t INDEXED BY tx WHERE x = 9007199254740992 ORDER BY id;") >/dev/null || { echo "FAIL: wide seek 2^53"; g11=1; }
+if [ "$g11" = "0" ]; then echo "OK: integer/REAL keys past 2^53 in exact order"; else fail=1; fi
 
 # ---------------------------------------------------------------------------
 # Gate 10: THE READ SIDE — index-interior + overflow-spill decoding

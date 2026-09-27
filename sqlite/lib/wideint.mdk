@@ -1,0 +1,203 @@
+-- | sqlite.lib.wideint — SQLite's 64-bit INTEGER, as an `I64`.
+--
+-- SQLite's integers are signed 64-bit; Medaka's `Int` holds 63 bits.  A value
+-- that fits `Int` is carried as one (`CInt`), and one that does not as an `I64`
+-- (`CInt64`, `lib.recordfmt`).  Arithmetic on either is done here in `I64` and
+-- checked, because SQLite turns an integer result that overflows 64 bits into a
+-- REAL rather than wrapping it: `I64`'s own operators wrap, so every operation
+-- the library exposes to SQL goes through a checked one below.
+
+import i64 as I64
+import string.{toChars}
+
+-- | The `I64` an `Int` spells.
+export
+widen : Int -> I64
+widen n = fromInt n
+
+-- | The value as an `Int` when it fits, which is the only way a caller outside
+--   this module gets one back.
+export
+narrow : I64 -> Option Int
+narrow x = I64.toInt x
+
+-- | `a + b`, or `None` when the true sum is outside 64 bits.
+--
+-- > checkedAdd 9223372036854775807 1
+-- None
+-- > checkedAdd (-9223372036854775807) (-1) |> map display
+-- Some "-9223372036854775808"
+export
+checkedAdd : I64 -> I64 -> Option I64
+checkedAdd a b =
+  let r = a + b
+  if a < 0 == (b < 0) && r < 0 /= (a < 0) then None else Some r
+
+-- | `a - b`, or `None` when the true difference is outside 64 bits.
+--
+-- > checkedSub (-9223372036854775808) 1
+-- None
+-- > checkedSub 0 (-9223372036854775807) |> map display
+-- Some "9223372036854775807"
+export
+checkedSub : I64 -> I64 -> Option I64
+checkedSub a b =
+  let r = a - b
+  if a < 0 /= (b < 0) && r < 0 /= (a < 0) then None else Some r
+
+-- | `a * b`, or `None` when the true product is outside 64 bits.  A wrapped
+--   product divided by one factor does not give back the other, except for the
+--   one case `-1 * minBound`, which is tested first.
+--
+-- > checkedMul 4294967296 2147483648
+-- None
+-- > checkedMul 4294967296 2147483647 |> map display
+-- Some "9223372032559808512"
+-- > checkedMul (-1) (-9223372036854775808)
+-- None
+export
+checkedMul : I64 -> I64 -> Option I64
+checkedMul a b
+  | a == 0 || b == 0 = Some 0
+  | a == -1 = if b == minBound then None else Some (0 - b)
+  | otherwise =
+    let r = a * b
+    if r / a == b then Some r else None
+
+-- | `a / b` truncating toward zero, or `None` when `b` is zero or the quotient
+--   is outside 64 bits (`minBound / -1`).
+export
+checkedDiv : I64 -> I64 -> Option I64
+checkedDiv a b
+  | b == 0 = None
+  | b == -1 && a == minBound = None
+  | otherwise = Some (a / b)
+
+-- | The nearest `Float`.  The high half times 2^32 is exact, so the one
+--   rounding is the final addition.
+--
+-- > toFloat 9223372036854775807
+-- 9.223372036854776e+18
+-- > toFloat (-9223372036854775808)
+-- -9.223372036854776e+18
+export
+toFloat : I64 -> Float
+toFloat x =
+  let hi = I64.shiftRight x 32
+  let lo = I64.bitAnd x 4294967295
+  intToFloat (small hi) * 4294967296.0 + intToFloat (small lo)
+
+-- 2^63, the first `Float` past every `I64`, built from `intMinBound`: a
+-- `Float` literal this large does not survive `medaka fmt` (see `intIfExact` in
+-- `lib.schemadef`).
+twoTo63 : Float
+twoTo63 = 0.0 - intToFloat intMinBound * 2.0
+
+-- | An integer and a REAL in SQLite's order, exactly, as sqlite3 compares them.
+--   Converting the integer to a `Float` rounds past 2^53, so two different
+--   values would compare equal and equality would stop being transitive; the
+--   REAL is truncated to an integer instead, and only a tie consults the
+--   fraction.  A NaN keeps `Float`'s own order.
+--
+-- > compareFloat 9223372036854775807 (toFloat 9223372036854775807)
+-- Lt
+-- > compareFloat 9007199254740993 9007199254740992.0
+-- Gt
+-- > compareFloat (-5) (-4.5)
+-- Lt
+-- > compareFloat 3 3.0
+-- Eq
+export
+compareFloat : I64 -> Float -> Ordering
+compareFloat i r
+  | r /= r = compare (toFloat i) r
+  | r < 0.0 - twoTo63 = Gt
+  | r >= twoTo63 = Lt
+  | otherwise = match compare i (truncFloat r)
+    Eq => compare (toFloat i) r
+    o => o
+
+-- | `compareFloat` with the REAL first.
+export
+compareRealInt : Float -> I64 -> Ordering
+compareRealInt r i = match compareFloat i r
+  Lt => Gt
+  Gt => Lt
+  Eq => Eq
+
+-- The integer part of a `Float` in `-2^63 .. 2^63`, toward zero.  Past 2^62 a
+-- `Float` is a whole number, taken as its two 32-bit halves, since `floatToInt`
+-- stops at `Int`'s range.
+truncFloat : Float -> I64
+truncFloat r
+  | r <= 0.0 - twoTo63 = minBound
+  | r < 0.0 = 0 - truncFloat (0.0 - r)
+  | r < twoTo63 / 2.0 = widen (floatToInt r)
+  | otherwise =
+    let hi = floatToInt (r / 4294967296.0)
+    let lo = floatToInt (r - intToFloat hi * 4294967296.0)
+    widen hi * 4294967296 + widen lo
+
+-- A value already known to fit `Int` (a half above).
+small : I64 -> Int
+small x = match I64.toInt x
+  Some n => n
+  None => 0
+
+-- | A decimal integer (an optional sign, then one or more digits) as an `I64`,
+--   or `None` when it is anything else or outside 64 bits.  The magnitude is
+--   accumulated negated, so `-9223372036854775808` is reachable.
+--
+-- > parse "-9223372036854775808" |> map display
+-- Some "-9223372036854775808"
+-- > parse "9223372036854775808"
+-- None
+-- > parse "+42" |> map display
+-- Some "42"
+-- > parse "4x"
+-- None
+export
+parse : String -> Option I64
+parse s =
+  let cs = toChars s
+  let n = arrayLength cs
+  if n == 0 then
+    None
+  else
+    let c0 = cs[0]
+    let negative = c0 == '-'
+    let start = if c0 == '-' || c0 == '+' then 1 else 0
+    if start >= n then None else parseDigits cs start n negative 0
+
+parseDigits : Array Char -> Int -> Int -> Bool -> I64 -> Option I64
+parseDigits cs i n negative acc
+  | i >= n = if negative then Some acc else checkedSub 0 acc
+  | otherwise =
+    let k = charCode cs[i] - 48
+    if k < 0 || k > 9 then
+      None
+    else match checkedMul acc 10
+      None => None
+      Some t => match checkedSub t (widen k)
+        None => None
+        Some acc2 => parseDigits cs (i + 1) n negative acc2
+
+-- | The value's 8 bytes, most significant first, as an 8-byte INTEGER body.
+--
+-- > bytesBE (-2)
+-- [255, 255, 255, 255, 255, 255, 255, 254]
+export
+bytesBE : I64 -> List Int
+bytesBE x = bytesGo x 8 []
+
+bytesGo : I64 -> Int -> List Int -> List Int
+bytesGo _ 0 acc = acc
+bytesGo x k acc =
+  bytesGo (I64.shiftRight x 8) (k - 1) (small (I64.bitAnd x 255) :: acc)
+
+-- | Why an integer primary key outside `Int` is refused: the library carries a
+--   rowid as an `Int`, so it reads and writes the 63-bit part of SQLite's range.
+export
+rowidRangeMessage : I64 -> String
+rowidRangeMessage x =
+  "INTEGER PRIMARY KEY \{x} is outside the rowid range this library supports (-4611686018427387904 .. 4611686018427387903)"

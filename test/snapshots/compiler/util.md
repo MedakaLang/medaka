@@ -1,5 +1,5 @@
 # META
-source_lines=650
+source_lines=670
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -647,6 +647,26 @@ export
 u64HalvesHex : Int -> Int -> String
 u64HalvesHex hi lo = hexDigits 8 hi "" ++ hexDigits 8 lo ""
 
+-- An `I64` literal's halves (`ast.LI64`, the two's complement pattern) as a
+-- literal that spells the same value: `0x…` of the pattern when it is not
+-- negative, and `-0x…` of the magnitude when it is.
+export
+i64HalvesLiteral : Int -> Int -> String
+i64HalvesLiteral hi lo
+  | hi < 2147483648 = "0x" ++ u64HalvesHex hi lo
+  | otherwise =
+    let mlo = (4294967296 - lo) % 4294967296
+    let mhi = (4294967296 - hi - (if lo == 0 then 0 else 1)) % 4294967296
+    "-0x" ++ u64HalvesHex mhi mlo
+
+-- An `Int` as the halves of its 64-bit two's complement pattern (`ast.LI64`).
+export
+int64Halves : Int -> (Int, Int)
+int64Halves n =
+  let lo = (n % 4294967296 + 4294967296) % 4294967296
+  let hi = ((n - lo) / 4294967296 % 4294967296 + 4294967296) % 4294967296
+  (hi, lo)
+
 hexDigits : Int -> Int -> String -> String
 hexDigits 0 _ acc = acc
 hexDigits k n acc =
@@ -828,6 +848,10 @@ hexDigits k n acc =
 (DFunDef false "rootsOrDefault" (PWild (PVar "roots")) (EVar "roots"))
 (DTypeSig true "u64HalvesHex" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "u64HalvesHex" ((PVar "hi") (PVar "lo")) (EBinOp "++" (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "hi")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "lo")) (ELit (LString "")))))
+(DTypeSig true "i64HalvesLiteral" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "i64HalvesLiteral" ((PVar "hi") (PVar "lo")) (EIf (EBinOp "<" (EVar "hi") (ELit (LInt 2147483648))) (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "mlo") (EBinOp "%" (EBinOp "-" (ELit (LInt 4294967296)) (EVar "lo")) (ELit (LInt 4294967296)))) (DoLet false false (PVar "mhi") (EBinOp "%" (EBinOp "-" (EBinOp "-" (ELit (LInt 4294967296)) (EVar "hi")) (EIf (EBinOp "==" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (ELit (LInt 1)))) (ELit (LInt 4294967296)))) (DoExpr (EBinOp "++" (ELit (LString "-0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "mhi")) (EVar "mlo"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "int64Halves" (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "int64Halves" ((PVar "n")) (EBlock (DoLet false false (PVar "lo") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 4294967296))) (ELit (LInt 4294967296))) (ELit (LInt 4294967296)))) (DoLet false false (PVar "hi") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EBinOp "/" (EBinOp "-" (EVar "n") (EVar "lo")) (ELit (LInt 4294967296))) (ELit (LInt 4294967296))) (ELit (LInt 4294967296))) (ELit (LInt 4294967296)))) (DoExpr (ETuple (EVar "hi") (EVar "lo")))))
 (DTypeSig false "hexDigits" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "hexDigits" ((PLit (LInt 0)) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "hexDigits" ((PVar "k") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "d") (EBinOp "%" (EVar "n") (ELit (LInt 16)))) (DoExpr (EApp (EApp (EApp (EVar "hexDigits") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))) (EVar "acc"))))))
@@ -1007,6 +1031,10 @@ hexDigits k n acc =
 (DFunDef false "rootsOrDefault" (PWild (PVar "roots")) (EVar "roots"))
 (DTypeSig true "u64HalvesHex" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "u64HalvesHex" ((PVar "hi") (PVar "lo")) (EBinOp "++" (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "hi")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "hexDigits") (ELit (LInt 8))) (EVar "lo")) (ELit (LString "")))))
+(DTypeSig true "i64HalvesLiteral" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "i64HalvesLiteral" ((PVar "hi") (PVar "lo")) (EIf (EBinOp "<" (EVar "hi") (ELit (LInt 2147483648))) (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "mlo") (EBinOp "%" (EBinOp "-" (ELit (LInt 4294967296)) (EVar "lo")) (ELit (LInt 4294967296)))) (DoLet false false (PVar "mhi") (EBinOp "%" (EBinOp "-" (EBinOp "-" (ELit (LInt 4294967296)) (EVar "hi")) (EIf (EBinOp "==" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (ELit (LInt 1)))) (ELit (LInt 4294967296)))) (DoExpr (EBinOp "++" (ELit (LString "-0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "mhi")) (EVar "mlo"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "int64Halves" (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "int64Halves" ((PVar "n")) (EBlock (DoLet false false (PVar "lo") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 4294967296))) (ELit (LInt 4294967296))) (ELit (LInt 4294967296)))) (DoLet false false (PVar "hi") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EBinOp "/" (EBinOp "-" (EVar "n") (EVar "lo")) (ELit (LInt 4294967296))) (ELit (LInt 4294967296))) (ELit (LInt 4294967296))) (ELit (LInt 4294967296)))) (DoExpr (ETuple (EVar "hi") (EVar "lo")))))
 (DTypeSig false "hexDigits" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "hexDigits" ((PLit (LInt 0)) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "hexDigits" ((PVar "k") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "d") (EBinOp "%" (EVar "n") (ELit (LInt 16)))) (DoExpr (EApp (EApp (EApp (EVar "hexDigits") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))) (EVar "acc"))))))

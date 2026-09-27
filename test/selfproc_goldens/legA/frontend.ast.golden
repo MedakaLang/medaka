@@ -28,7 +28,12 @@ ifaceIdMatches : String -> String -> Bool
 ifaceIdentity : TyConOrigin -> String -> String
 intMinLiteralHelp : String
 intMinLiteralMsg : String
+isBoxed64Head : String -> Bool
+isFixedIntHead : String -> Bool
 isFixedWidthHead : String -> Bool
+isI32Head : String -> Bool
+isI64Head : String -> Bool
+isTaggedFixedHead : String -> Bool
 isU64Head : String -> Bool
 isUnsignedHead : String -> Bool
 kindAnnArg : KindAnn -> String
@@ -74,6 +79,7 @@ tabHasName : String -> List (TabKey, a) -> Bool
 tabKeyEq : TabKey -> TabKey -> Bool
 tabKeyName : TabKey -> String
 tabKeyOf : Ns -> TyConOrigin -> String -> TabKey
+taggedFixedRange : String -> Option (Int, Int)
 tyConBuiltin : String -> Option Loc -> Ty
 tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
 tyConUnresolved : String -> Option Loc -> Ty

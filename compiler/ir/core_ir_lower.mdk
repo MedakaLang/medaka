@@ -590,6 +590,7 @@ litKey (LBool True) = "bT"
 litKey (LBool False) = "bF"
 litKey LUnit = "u"
 litKey (LU64 hi lo) = "w\{intToString hi}.\{intToString lo}"
+litKey (LI64 hi lo) = "i\{intToString hi}.\{intToString lo}"
 
 -- collapse -0.0 to +0.0 so the float key matches `Eq Lit` (which treats them
 -- equal); a no-op for every other value.
