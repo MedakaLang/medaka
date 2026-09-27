@@ -96,12 +96,19 @@ public export data ScopeRoles = ScopeRoles {
   rlQuantified : Map Int Int,
   rlOutward : Map Int Unit,
   rlTyped : Option (Map Int Unit),
+  -- each member's authorities in group order, read when asked: a solve links
+  -- one member's variable to another's, and membership must follow the link
+  rlMemberAuths : Unit -> List (Map Int Unit),
 }
 
 export
 noScopeRoles : ScopeRoles
-noScopeRoles =
-  ScopeRoles { rlQuantified = Tip, rlOutward = Tip, rlTyped = None }
+noScopeRoles = ScopeRoles {
+  rlQuantified = Tip,
+  rlOutward = Tip,
+  rlTyped = None,
+  rlMemberAuths = _ => [],
+}
 
 -- Whether an unbound owned variable of this scope may take the empty
 -- authority: it is in no member's type.
@@ -865,6 +872,7 @@ solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
         quantifiable
         outward
         rigid
+        (roles.rlMemberAuths ())
         scope.essAuthorities.value
     let _ =
       solveOwnedAuthorities
@@ -878,20 +886,24 @@ solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
 
 -- The quantifiable variables whose obligations become residuals rather than
 -- being solved: those whose whole constraint component (local variables
--- linked by a shared obligation) is quantified by one member.  Authorities
--- outside this scope are no part of a component: a residual names them as
--- they stand.  A component
--- that also reaches a local variable the group does not quantify is decided
--- as before, and so is one bounded below by a domain's top: its variable has
--- no freedom left, and solving it is exact.
+-- linked by a shared obligation) is quantified by one member, and whose
+-- variables no other member's type mentions.  Authorities outside this scope
+-- are no part of a component: a residual names them as they stand.  A
+-- component that also reaches a local variable the group does not quantify is
+-- decided as before, and so is one another member of a recursive group
+-- mentions (its scheme would quantify the variable with no relation), and so
+-- is one bounded below by a domain's top: its variable has no freedom left,
+-- and solving it is exact.  [mentions] is each member's authorities after the
+-- first solve, which may have linked one member's variable to another's.
 residualEligible : SummaryScope c ->
   Map Int Int ->
   Map Int Unit ->
   Map Int Unit ->
+  List (Map Int Unit) ->
   List (AuthWanted c) ->
   Map Int Int
-residualEligible _ Tip _ _ _ = Tip
-residualEligible scope quantifiable outward rigid wanteds =
+residualEligible _ Tip _ _ _ _ = Tip
+residualEligible scope quantifiable outward rigid mentions wanteds =
   let cells =
     fold
       (acc w =>
@@ -931,7 +943,7 @@ residualEligible scope quantifiable outward rigid wanteds =
           let comp = componentOf edges [id] Tip
           let seen2 = M.foldlWithKey (m k _ => M.set k () m) seen comp
           let ids = M.keys comp
-          match componentMember quantifiable rigid outside forced ids
+          match componentMember quantifiable rigid outside forced mentions ids
             Some member => (
               seen2,
               fold
@@ -965,21 +977,25 @@ componentOf edges (id :: rest) seen =
     componentOf edges (optionOr [] (M.get id edges) ++ rest) (M.set id () seen)
 
 -- The one member quantifying every local variable of a component, when the
--- rest lie outside the scope and none is forced to top.
+-- rest lie outside the scope, none is forced to top, and no other member's
+-- type mentions one of them.
 componentMember : Map Int Int ->
   Map Int Unit ->
   (Int -> Bool) ->
   Map Int Unit ->
+  List (Map Int Unit) ->
   List Int ->
   Option Int
-componentMember quantifiable rigid outside forced ids =
-  let members =
+componentMember quantifiable rigid outside forced mentions ids =
+  let locals = filter (id => not (outside id)) ids
+  let quantifying =
     fold
       (acc id => match M.get id quantifiable
         Some member => M.set member () acc
         None => acc)
       Tip
       ids
+  let members = mentioningMembers mentions locals 0 quantifying
   let local =
     allList
       (id =>
@@ -989,6 +1005,19 @@ componentMember quantifiable rigid outside forced ids =
   match M.keys members
     [member] => if local then Some member else None
     _ => None
+
+-- [acc] plus the index of every member whose authorities include one of [ids].
+mentioningMembers : List (Map Int Unit) ->
+  List Int ->
+  Int ->
+  Map Int Unit ->
+  Map Int Unit
+mentioningMembers [] _ _ acc = acc
+mentioningMembers (auths :: rest) ids index acc = mentioningMembers
+  rest
+  ids
+  (index + 1)
+  (if anyList (id => M.has id auths) ids then M.set index () acc else acc)
 
 solveAuthorities : (Ref Authvar -> Bool) ->
   (Ref Authvar -> Bool) ->

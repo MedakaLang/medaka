@@ -413,8 +413,11 @@ first. A variable the owning scope decides that nothing bounds below (no
 value ever reaches it: an unused partial application, a callback over an
 empty list) takes the least solution of all, the empty authority `⊥`, which
 every bound admits; it renders `()` (`Dir ()`, `<FileRead ()>`, the label
-kept). A variable a binding's type mentions is not decided this way: its
-scheme may quantify it, and each use supplies it. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
+kept). A variable a binding's type mentions is not decided this way inside
+a binding group: its scheme may quantify it, and each use supplies it. The
+module root is the exception: it decides every variable left, so a top-level
+binding the value restriction keeps monomorphic takes `⊥` for an authority
+nothing in its module bounds below, and an importer cannot supply one later. An upper bound that is a join with flexible members (`q₁ ⊔ κ`, the
 bound a joined qualifier writes) has no single least solution, and no member
 is chosen for it: such an obligation is decided once the join's members are
 known, so a value in `String @(p | q)` is built against written or otherwise
@@ -462,7 +465,11 @@ outside authority links nothing: two members may each owe a relation to one
 monomorphic cell, and each keeps its own residual over it: a local helper that uses a captured handle,
 `let inner (Dir p) = sub h p`, keeps `p <= d_h` and each use of `inner`
 owes it. A component that reaches a local variable the binding does not
-quantify, or another member of a recursive group, is decided as before, and
+quantify, or that another member of a recursive group mentions (after the
+group's first solve, which may have linked one member's variable to
+another's), is decided in the group: a residual on one member would leave the
+other quantifying the same variable with no relation. Such a component is
+decided as before, and
 so is one bounded below by the domain's top, whose variable has no freedom
 left and is solved to it. A binding the value restriction keeps monomorphic
 has no context: the authorities of its type belong to the enclosing scope,

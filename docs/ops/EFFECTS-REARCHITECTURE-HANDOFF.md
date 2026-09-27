@@ -1065,6 +1065,33 @@ on a built binary beside a control, and each answered by a rule, not a case):
   `Dir "cfg/*"` on `main`, whose less general `rdIn` equated the two); the
   spelling of the empty authority (`()`).
 
+**#3462 review round 3** (whole diff on `a2e50bca7`):
+
+- *S0, since the first commit:* in a mutually recursive group
+  (`q1 n (Dir p) = … readUnder cfg p … q2 (n - 1) (Dir p)`, `q2 = q1`) the
+  first solve linked one member's authority to the other's; the component then
+  named one quantifiable variable, the residual went to one member, and the
+  other published the same variable with no relation, so `q1 2 secret` read
+  `/tmp` under `<FileRead "cfg/*">` (also a where-group over a captured handle,
+  a three-member cycle, and source-order swapped). Eligibility now counts the
+  members whose types mention a component variable after that solve
+  (`rlMemberAuths`, `mentioningMembers`); a component two members mention is
+  decided in the group, refused as on `main`.
+- *S1, for a ruling:* an honest mutually recursive pair over a captured handle
+  or a monomorphic cell (`r8`, `g1`) is refused; `main` accepted it through the
+  vacuous transfer that also let `b8x`-style launders through. Accepting it
+  needs a residual shared by every member that mentions the component: a
+  proposal, not built.
+- *Spec text:* the module root does default a monomorphic top-level binding's
+  cells (`partial`, `cell`), which §4.1 now says; the ⊥-at-root ruling stands.
+- *Open S2/S3:* `()` shows in `check-policy`'s "main requires <FileRead (), IO>"
+  (the spelling ruling); the binder-rule message uses the signed-code wording
+  for an unsigned group and names a callee's binder (`only s is admitted`).
+- *Pre-existing, not this PR:* `check-policy` crashes (`E-NOT-A-FUNCTION`) on
+  a point-free `main = touch app`, on `main` too (#3329); LSP hover on a local shows no
+  context; `stash : Dir d -> Unit` over a monomorphic cell is accepted as too
+  general.
+
 **Traps paid for (#3462):**
 
 - A join must be decided before the closing scope reads its roots and

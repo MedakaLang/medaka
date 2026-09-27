@@ -1243,6 +1243,32 @@ test "two members may each owe a residual to one monomorphic cell" =
     expectTrue (rejects (residual (group ++ "use _ = q1 etc\n"))),
   ]
 
+-- A relation another member of a recursive group would quantify with no
+-- context is decided in the group: here the first solve links `q1`'s
+-- authority to `q2`'s, and a residual on one member would leave the other a
+-- launder (review round 3).  The control is the same body recursing on
+-- itself, which keeps its residual.
+test "a recursive group decides a relation two members' schemes share" = expectAll
+  [
+    expectTrue
+      (rejects
+        (residual
+          "q1 n (Dir p) = if n then sub cfg p else q2 False (Dir p)\nq2 n (Dir p) = q1 n (Dir p)\n")),
+    expectEqual
+      "(d <= \"cfg/*\") => Bool -> Dir d -> Dir \"cfg/*\""
+      (schemeOf
+        (residual "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\n")
+        "q1"),
+    expectTrue
+      (accepts
+        (residual
+          "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True app\n")),
+    expectTrue
+      (rejects
+        (residual
+          "q1 n (Dir p) = if n then sub cfg p else q1 False (Dir p)\nuse _ = q1 True etc\n")),
+  ]
+
 test "an authority bounded below by the top is solved, not kept" =
   expectEqual
     "Bool -> String -> String -> Dir * -> Dir *"

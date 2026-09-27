@@ -40467,6 +40467,7 @@ scopeRolesOf members =
         Tip
         members,
     rlTyped = Some (fold (acc (_, mono) => authIdsIn mono acc) Tip members),
+    rlMemberAuths = _ => map ((_, mono) => authIdsIn mono Tip) members,
   }
 
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
