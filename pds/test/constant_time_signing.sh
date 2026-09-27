@@ -81,17 +81,29 @@ write_source_manifest() {
 # secp256k1_fe_mul_inner), and pds/lib/scalar.mdk on 8 x 32 limbs, straight-line
 # with no branch on its secret path. No other claimed source changed. The
 # closure and control grades below say what moved in the IR.
+# Re-blessed 2026-09-26 for SHA-256 and HMAC on `Bytes` (S-crypto-bytes).
+# stdlib/crypto/sha256.mdk and stdlib/crypto/hmac.mdk now take and return
+# `Bytes`: the hash reads its message straight from the input's packed block,
+# and the byte-domain scan and the `*FixedBytes` entries are gone, since the
+# type carries the domain. pds/lib/hmac_sha256.mdk keeps its `Array Int`
+# signature and admits the key and message through the unchecked
+# `fromArrayAssumeByteDomain`, which masks and never branches, so no scan of a
+# secret byte enters the signing closure (pinned in internal_source_routes_ok).
+# pds/test/constant_time_signing_main.mdk moved in S-codecs-bytes (hex.encode
+# takes `Bytes`, so the carrier prints through a `hexOf` door), outside the
+# signing closure, which is rooted at ecdsaSignDigestForTest. The memcheck arm
+# below proves the property on the linked binary: zero key-tainted reports.
 expected_internal_source_manifest() {
   cat <<'EOF'
 1376420778 29785  pds/lib/field.mdk
 1303044162 44815  pds/lib/scalar.mdk
-4266693202 13314  stdlib/crypto/sha256.mdk
-2034797298 8367  stdlib/crypto/hmac.mdk
+2724272250 11762  stdlib/crypto/sha256.mdk
+2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-1390942859 1217  pds/lib/hmac_sha256.mdk
+1062562400 1459  pds/lib/hmac_sha256.mdk
 1706692293 25394  pds/lib/secp256k1.mdk
-3267398383 4682  pds/test/constant_time_signing_main.mdk
+1633608214 4799  pds/test/constant_time_signing_main.mdk
 EOF
 }
 
@@ -99,11 +111,11 @@ expected_public_source_manifest() {
   cat <<'EOF'
 1376420778 29785  pds/lib/field.mdk
 1303044162 44815  pds/lib/scalar.mdk
-4266693202 13314  stdlib/crypto/sha256.mdk
-2034797298 8367  stdlib/crypto/hmac.mdk
+2724272250 11762  stdlib/crypto/sha256.mdk
+2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-1390942859 1217  pds/lib/hmac_sha256.mdk
+1062562400 1459  pds/lib/hmac_sha256.mdk
 1706692293 25394  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
@@ -192,19 +204,25 @@ internal_source_routes_ok() {
   grep -F -q 'let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)' "$secp" || return 1
   grep -F -q 'let r = scFromFixedBytesReduce (feToBytes x)' "$secp" || return 1
   grep -F -q 'scFromFixedBytesReduce bs = reduce256 (limbsOfBytes bs)' "$scalar" || return 1
-  # The signing side takes the UNCHECKED SHA-256 entry at every step of the
-  # HMAC schedule: normalization, inner hash and outer hash. Each anchor is
-  # pinned once so a stray `sha256` (the byte-domain-checking entry) in any of
-  # the three positions reds this instead of quietly putting a secret-derived
-  # early exit in the signing closure.
-  [ "$(grep -F -c 'if arrayLength key > blockBytes then sha256FixedBytes key else key' "$hmac" || true)" -eq 1 ] || return 1
-  [ "$(grep -F -c 'let inner = sha256FixedBytes (concat [|keyPad normalized 0x36, message|])' "$hmac" || true)" -eq 1 ] || return 1
-  [ "$(grep -F -c 'sha256FixedBytes (concat [|keyPad normalized 0x5c, inner|])' "$hmac" || true)" -eq 1 ] || return 1
+  # The HMAC schedule hashes through `sha256` at every step: normalization,
+  # inner hash and outer hash. `sha256` takes `Bytes`, whose type carries the
+  # byte domain, so it scans nothing; the one scan that could put a
+  # secret-derived early exit in the signing closure is a checked `fromArray`
+  # door, which the guard below is pinned never to use. The normalization line
+  # is shared by `hmacSha256` and `hmacSha256Key`, hence two; the inner and
+  # outer hash are `hmacSha256`'s alone.
+  [ "$(grep -F -c 'let normalized = if B.length key > blockBytes then sha256 key else key' "$hmac" || true)" -eq 2 ] || return 1
+  [ "$(grep -F -c 'let inner = sha256 (concat [keyPad normalized 0x36, message])' "$hmac" || true)" -eq 1 ] || return 1
+  [ "$(grep -F -c 'sha256 (concat [keyPad normalized 0x5c, inner])' "$hmac" || true)" -eq 1 ] || return 1
   # The 32-byte guard is the whole of pds/lib/hmac_sha256.mdk: it must still
-  # reject every other length, and it must delegate to the unchecked entry.
+  # reject every other length, and it must admit the secret key and message
+  # into `Bytes` through the unchecked door, never the scanning `fromArray`.
   grep -F -q 'if arrayLength key /= keyBytes then' "$guard" || return 1
-  [ "$(grep -F -c 'hmacSha256FixedBytes key message' "$guard" || true)" -eq 1 ] || return 1
-  grep -F -q 'sha256FixedBytes msg = sha256AssumeByteDomain msg' "$sha" || return 1
+  [ "$(grep -F -c '(hmacSha256' "$guard" || true)" -eq 1 ] || return 1
+  [ "$(grep -F -c '(fromArrayAssumeByteDomain key)' "$guard" || true)" -eq 1 ] || return 1
+  [ "$(grep -F -c '(fromArrayAssumeByteDomain message))' "$guard" || true)" -eq 1 ] || return 1
+  if grep -E -q '(^|[^A-Za-z])fromArray([^A-Za-z]|$)' "$guard"; then return 1; fi
+  grep -F -q 'sha256 msg = sha256AssumeByteDomainFrom h0Init 0 msg' "$sha" || return 1
   return 0
 }
 
@@ -636,7 +654,22 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # reduce256, zeroLimbsBit, reduce512__rw, subNSelect__rw): 134 alone. Together
 # 157 - 14 - 23 = 120, and no definition outside the two modules differs
 # between the branches.
-[ "$closure_grade" = '2015029485 3602' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when SHA-256 and HMAC moved onto `Bytes` (S-crypto-bytes),
+# symbol by symbol against the 120-definition closure above. Out:
+# `mdk_crypto_hmac__hmacSha256FixedBytes`, `mdk_crypto_sha256__sha256FixedBytes`
+# and `mdk_crypto_sha256__sha256AssumeByteDomain` (the entries themselves are
+# gone), and the five `Array Int` helpers the old schedule's key-pad `concat`
+# reached (`mdk_array__{blit,concat,concatBlitAll,concatLookup,concatTotal}`).
+# In: `mdk_crypto_hmac__hmacSha256` and `mdk_crypto_sha256__sha256` (the
+# entries the schedule now calls), `mdk_crypto_hmac__fillPad` (the key pad is
+# a 64-byte block filled with the pad byte, then xored with the key), and eight
+# `mdk_bytes__` helpers: `fromArrayAssumeByteDomain`/`toArray` (the guard's
+# doors), `lendByteBlockUnsafe`/`adoptByteBlockUnsafe` (the hash reads its
+# input's block and adopts its digest block), `length`, and
+# `concat`/`concatFill`/`concatLength` (the ipad/opad concatenation, over a
+# two-element list). None of the eight reads a byte to decide anything; the
+# control grade below counts their branches. 123 definitions.
+[ "$closure_grade" = '1548379241 3660' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -705,7 +738,25 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # scSecretCandidate its public counter and length, rawFe/rawSc the constructor
 # dispatch; wordAt__rw/putWord__rw's 7 traps each are the public `off + k`
 # offsets of the field's byte codecs.
-[ "$control_grade" = '923755390 5549' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived for SHA-256 and HMAC on `Bytes` (S-crypto-bytes), row by row
+# against the grade above; the closure change is the one described at the
+# closure grade. Every row that left had only public control. Of the rows that
+# entered, the branches all test public shape: `mdk_bytes__concat`,
+# `adoptByteBlockUnsafe` and `fromArrayAssumeByteDomain` have none;
+# `lendByteBlockUnsafe`, `length` and `toArray` have 1 each, the `Bytes`
+# constructor tag; `concatLength` 2 and `concatFill` 3, the two-element list's
+# cons/nil and the `Bytes` tag; `hmacSha256` 1, the public key-length test
+# before normalization; `fillPad` 1 branch and 1 trap, its counter against the
+# constant 64. No surviving row's branch column moved. The byte reads and
+# writes are now runtime block accesses, which none of the Array columns
+# count: `fillKeyPad` lost its index and write (1 -> 0 each), and
+# `buildTailWithTotal` (1 -> 0), `digestWord__rw` (4 -> 0) and `writeLenGo`
+# (1 -> 0) lost their `setInPlace` writes. The call column moved with them:
+# buildTailWithTotal 5 -> 3, digestWord__rw 12 -> 8, writeLenGo 4 -> 3,
+# digestBytes 9 -> 10, processTail 1 -> 2, sha256AssumeByteDomainFrom 4 -> 6,
+# keyPad 3 -> 6, and the guard hmacSha256FixedKey 2 -> 5 (its two unchecked
+# doors and the `toArray` back).
+[ "$control_grade" = '2314314774 5655' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -715,8 +766,8 @@ for symbol in \
   mdk_lib_secp256k1__selectSigningCandidates \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_lib_hmac_sha256__hmacSha256FixedKey \
-  mdk_crypto_sha256__sha256FixedBytes \
-  mdk_crypto_sha256__sha256AssumeByteDomain \
+  mdk_crypto_hmac__hmacSha256 \
+  mdk_crypto_sha256__sha256AssumeByteDomainFrom \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_scalar__scInverse \
@@ -730,10 +781,12 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 
 # Clang may inline wrappers, so require the audited non-inlined leaves rather
 # than pretending every emitted definition survives as a symbol.
-# hmac_sha256.mdk's guard is a two-call delegation (length test, then the
-# stdlib schedule) and clang inlines it away, so the leaf pinned here is the
-# schedule itself, mdk_crypto_hmac__hmacSha256FixedBytes. The guard is still pinned
-# by source text above and by the IR closure manifests, which read definitions
+# The HMAC schedule, `hmacSha256`, is inlined into its only caller here, the
+# 32-byte guard, so the leaf pinned for it is the guard,
+# mdk_lib_hmac_sha256__hmacSha256FixedKey, which carries the inlined schedule,
+# and beside it the SHA-256 body that schedule calls,
+# mdk_crypto_sha256__sha256AssumeByteDomainFrom. The schedule is still pinned by
+# source text above and by the IR closure manifests, which read definitions
 # rather than surviving link-time symbols.
 #
 # mdk_crypto_sha256__compressRounds and mdk_lib_scalar__scNegateCt stood in this list
@@ -744,12 +797,13 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 # exist: scNegateCt by the low-S route pin in internal_source_routes_ok (red
 # under M09) and by the emitted closure manifest above; compressRounds by the
 # exact control grade over the emitted closure, which counts its branches,
-# comparisons and indexing. Its caller mdk_crypto_hmac__hmacSha256FixedBytes still
-# survives below, so the HMAC/SHA schedule is still in the link.
+# comparisons and indexing. The HMAC/SHA leaves below still survive, so the
+# schedule is still in the link.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
-  mdk_crypto_hmac__hmacSha256FixedBytes \
+  mdk_lib_hmac_sha256__hmacSha256FixedKey \
+  mdk_crypto_sha256__sha256AssumeByteDomainFrom \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
@@ -912,8 +966,8 @@ for symbol in \
   mdk_lib_secp256k1__selectSigningCandidates \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_lib_hmac_sha256__hmacSha256FixedKey \
-  mdk_crypto_sha256__sha256FixedBytes \
-  mdk_crypto_sha256__sha256AssumeByteDomain \
+  mdk_crypto_hmac__hmacSha256 \
+  mdk_crypto_sha256__sha256AssumeByteDomainFrom \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
@@ -962,7 +1016,12 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # now that scEqual is `scEqualBit a b == 1`), 134 together. Every field row
 # equals the field branch's, every scalar row the scalar branch's, and the only
 # other row that moved is u64's shiftLeft__rw giving way to bitNot__rw.
-if [ "$public_closure_grade" != '1265512852 4006' ] || [ "$public_control_grade" != '3373174632 6182' ]; then
+# Re-derived for SHA-256 and HMAC on `Bytes` (S-crypto-bytes): the same
+# closure and row changes as the internal grades above and no others, except
+# that `mdk_bytes__toArray` was already in this union (secretScalar reads the
+# at-rest key through it), so seven `mdk_bytes__` helpers enter here rather
+# than eight. 134 -> 136 definitions.
+if [ "$public_closure_grade" != '811918273 4045' ] || [ "$public_control_grade" != '1896713597 6253' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
@@ -977,7 +1036,8 @@ pass "public-root LLVM union excludes ForTest and retains the audited signing/ke
 # still required as a linked symbol of the internal carrier.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
-  mdk_crypto_hmac__hmacSha256FixedBytes \
+  mdk_lib_hmac_sha256__hmacSha256FixedKey \
+  mdk_crypto_sha256__sha256AssumeByteDomainFrom \
   mdk_lib_secp256k1__scalarLadder \
   mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete \
@@ -1036,6 +1096,7 @@ fi
 
 write_taint_probe() {
   cat > "$TAINT_PROBE" <<'EOF'
+import bytes.{fromArrayAssumeByteDomain}
 import hex.{encode}
 import u64 as U64
 import lib.scalar.{scSecretCandidate}
@@ -1076,7 +1137,7 @@ probeKey k =
       let compact = ecdsaSignatureCompact signature
       let sigPublic = declassifyAll compact
       println
-        "key \{k} vbits \{validVbits} \{ctVbits pub[5]} \{ctVbits compact[0]} pub \{encode pubPublic} sig \{encode sigPublic}"
+        "key \{k} vbits \{validVbits} \{ctVbits pub[5]} \{ctVbits compact[0]} pub \{encode (fromArrayAssumeByteDomain pubPublic)} sig \{encode (fromArrayAssumeByteDomain sigPublic)}"
     else
       println "key \{k} exhausted"
 

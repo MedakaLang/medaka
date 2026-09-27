@@ -187,7 +187,13 @@ perfUnsignedValue dataCid = DcMap [
 perfSignedCommit : Cid -> (Cid, Array Int)
 perfSignedCommit dataCid =
   let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
-  let signature = match signDigest perfSecret (sha256 unsigned)
+  let digest =
+    B.toArray
+      (sha256
+        (optionOrPanic
+          "sha256: every element must be a byte in 0..255"
+          (B.fromArray unsigned)))
+  let signature = match signDigest perfSecret digest
     Ok value => value
     Err message => panic "performance_resource: signing failed: \{message}"
   let signed =

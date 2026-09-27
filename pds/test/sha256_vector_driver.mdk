@@ -30,7 +30,7 @@
    Exit 1 if any record failed, or if zero records were checked across all
    files (vacuous-green guard). Exit 0 otherwise. -}
 
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import crypto.sha256.{sha256}
 import hex.{decode, encode}
 import array.{take, make, blit, concat}
@@ -185,7 +185,12 @@ monteStep md0 md1 md2 remaining =
   if remaining <= 0 then
     md2
   else
-    let mi = sha256 (concat [|md0, md1, md2|])
+    let mi =
+      toArray
+        (sha256
+          (optionOrPanic
+            "sha256: every element must be a byte in 0..255"
+            (fromArray (concat [|md0, md1, md2|]))))
     monteStep md1 md2 mi (remaining - 1)
 
 -- The 100 COUNT answers, each COUNT's checkpoint carried into the next.
@@ -245,8 +250,10 @@ checkRecords path maxBytes (r :: rest) =
   else
     let actual =
       encode
-        (fromArrayAssumeByteDomain
-          (sha256 (expandMsg r.lenBits r.msgHex r.repeatN)))
+        (sha256
+          (optionOrPanic
+            "sha256: every element must be a byte in 0..255"
+            (fromArray (expandMsg r.lenBits r.msgHex r.repeatN))))
     let (c, f, s) = checkRecords path maxBytes rest
     if actual == r.mdHex then
       (c + 1, f, s)

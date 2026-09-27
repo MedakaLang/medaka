@@ -14,17 +14,23 @@
 -- version" is the one remedy that cannot apply here.
 -- lint-disable-file rule-stdlib-reimpl
 
-import crypto.hmac.{hmacSha256FixedBytes}
+import bytes.{fromArrayAssumeByteDomain, toArray}
+import crypto.hmac.{hmacSha256}
 
 keyBytes : Int
 keyBytes = 32
 
 -- | Signing-internal HMAC. The key length is deliberately exact; all RFC
---   state keys are SHA-256 digests and therefore 32 bytes.
+--   state keys are SHA-256 digests and therefore 32 bytes. Its callers hold
+--   secret bytes already in range, so both are admitted without a scan: a
+--   scan would branch on them.
 export
 hmacSha256FixedKey : Array Int -> Array Int -> Array Int
 hmacSha256FixedKey key message =
   if arrayLength key /= keyBytes then
     panic "hmac_sha256: expected a 32-byte key"
   else
-    hmacSha256FixedBytes key message
+    toArray
+      (hmacSha256
+        (fromArrayAssumeByteDomain key)
+        (fromArrayAssumeByteDomain message))
