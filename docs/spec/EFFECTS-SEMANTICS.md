@@ -337,10 +337,15 @@ is the safe default):
 
 **Open: extending an authority variable.** No term names the extension of a
 variable, so `p ++ x` with `p : String @κ` currently keeps `κ`. That is sound
-only when the caller's element is a pattern: a caller passing the exact
-element `"cfg/app.toml"` is charged for that file while the read reaches
-`cfg/app.toml<x>` (#3496, pinned by must_fail
-`3496-variable-prefix-extension`).
+only when whatever `κ` stands for is a pattern, and nothing guarantees it:
+- a signature's variable, bound by an argument or a data index, admits a
+  caller's exact element: `"cfg/app.toml"` is charged for that file while the
+  read reaches `cfg/app.toml<x>`;
+- a flexible variable still unbound when `α` runs is solved afterwards, and
+  may be solved to an exact element with no caller involved.
+
+(#3501 and #3502, pinned by must_fail `3501-signature-variable-extension` and
+`3502-flexible-variable-extension`.)
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to
@@ -411,7 +416,8 @@ proofs of containment.
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
 `α_𝔻(argument) ⊑ κ`, where `α` reads the argument's syntax first (a literal, a
-`++` whose left operand is justified in a prefix-shaped domain, a same-body
+`++` whose left operand is justified in a prefix-shaped domain and extended by
+the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
 of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the

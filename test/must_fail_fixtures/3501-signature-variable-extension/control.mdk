@@ -1,4 +1,4 @@
--- #3496 control: the same wrapper forwarding its argument unchanged. The read
+-- #3501 control: the same wrapper forwarding its argument unchanged. The read
 -- is exactly the caller's element, so the exact bound admits it.
 readUnder : (p : String) -> String -> <FileRead p> Result String String
 readUnder p _ = readFile p

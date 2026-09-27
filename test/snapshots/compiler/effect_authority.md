@@ -1,5 +1,5 @@
 # META
-source_lines=217
+source_lines=219
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -71,8 +71,10 @@ authTop top = AConst (subTopOf top)
 -- The authority of a value once a suffix is appended: each constant extends
 -- through its domain, by the suffix when it is known (`authAppend`) and to
 -- the pattern it begins when it is not (`authExtend`). A variable is kept as
--- it stands, which is sound only when the caller's element is a pattern; the
--- exact-element case is pinned by must_fail `3496-variable-prefix-extension`.
+-- it stands, which is sound only when what it stands for is a pattern: a
+-- signature's variable may be given an exact element by a caller, and a
+-- flexible one may be solved to one later. Pinned by must_fail
+-- `3501-signature-variable-extension` and `3502-flexible-variable-extension`.
 export
 authExtend : Param -> Authority -> Authority
 authExtend top a = mapConstants (extendParam top) a
