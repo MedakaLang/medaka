@@ -16,7 +16,9 @@
 -- Names are deliberately OFF the prelude (`eGt`/`eEq`/`eAnd`/...) so they never
 -- collide with `Ord`/`Eq`/`Bool` methods (`gt`/`eq`/`and`/...).
 
-import lib.recordfmt.{Cell(..), nthCell}
+import lib.recordfmt.{Cell(..), nthCell, intCell, cellI64}
+import lib.wideint as W
+import i64
 import lib.sqlite.{
   Db,
   scanTableRowsIpk,
@@ -42,6 +44,9 @@ import string.{join, fromChars, replaceAll, toInt, toFloat}
 --   "decoded from a column" provenance.
 public export data Literal =
   | LInt Int
+  -- An integer literal outside `Int` (above 2^62 - 1 or below -2^62); every
+  -- other integer literal is `LInt`, as with `CInt64`.
+  | LInt64 I64
   | LText String
   | LFloat Float
   | LBlob (Array Int)
@@ -1436,6 +1441,7 @@ inTriGo x (v :: rest) sawUnknown = match cmpCellsTri OpEq x v
 cellToTextOp : Cell -> Option String
 cellToTextOp CNull = None
 cellToTextOp (CInt n) = Some "\{n}"
+cellToTextOp (CInt64 x) = Some (display x)
 cellToTextOp (CFloat f) = Some "\{f}"
 cellToTextOp (CText s) = Some s
 cellToTextOp (CBlob b) = Some (blobToText b)
@@ -1718,17 +1724,17 @@ evalArithNum op a b = evalAddSubMul op a b
 -- integer and/or fractional digits, and an optional `e`/`E` exponent (which is
 -- only consumed when at least one exponent digit follows — `'5e'` ⇒ 5, not an
 -- error).  A prefix that carries a `.` or a valid exponent is REAL (`CFloat`),
--- otherwise INTEGER (`CInt`); an integer that overflows Medaka's `Int` falls
--- back to `CFloat`, mirroring SQLite's own integer→real overflow.  NO numeric
--- prefix (`'abc'`, `''`, `'  '`, `'0x10'` past the `0`) ⇒ `CInt 0`.
+-- otherwise INTEGER (`CInt`, or `CInt64` outside `Int`); an integer that
+-- overflows 64 bits falls back to `CFloat`, mirroring SQLite's own integer→real
+-- overflow.  NO numeric prefix (`'abc'`, `''`, `'  '`, `'0x10'` past the `0`) ⇒
+-- `CInt 0`.
 --
--- Verified against `sqlite3`; see findings/sql-arith-rowid-coercion.md.  Two
--- deliberately-unmatched edges are documented there: text that parses to an
--- integer in `(2^62, 2^63)` becomes REAL here (Medaka `Int` is 63-bit, SQLite's
--- is 64-bit), and `'inf'`/`'nan'` coerce to 0 (SQLite agrees for those literal
--- spellings).
+-- Verified against `sqlite3`; see findings/sql-arith-rowid-coercion.md.  One
+-- deliberately-unmatched edge is documented there: `'inf'`/`'nan'` coerce to 0
+-- (SQLite agrees for those literal spellings).
 coerceNumericCell : Cell -> Cell
 coerceNumericCell (CInt n) = CInt n
+coerceNumericCell (CInt64 x) = CInt64 x
 coerceNumericCell (CFloat f) = CFloat f
 coerceNumericCell (CText s) = coerceTextNumeric s
 coerceNumericCell (CBlob b) = coerceTextNumeric (blobToText b)
@@ -1757,7 +1763,9 @@ coerceTextNumeric s =
       floatCellOf prefix
     else match toInt prefix
       Some i => CInt i
-      None => floatCellOf prefix
+      None => match W.parse prefix
+        Some x => CInt64 x
+        None => floatCellOf prefix
 
 floatCellOf : String -> Cell
 floatCellOf s = match toFloat s
@@ -1802,20 +1810,40 @@ parseExpEnd chars i n =
   else
     i
 
--- `+ - *`: integer result when both operands are integers, else float.
+-- `+ - *`: integer result when both operands are integers, else float.  An
+-- integer result is exact across SQLite's whole 64-bit range, and one that
+-- overflows 64 bits becomes a REAL, as in sqlite3 (`9223372036854775807 + 1` is
+-- `9.22337203685478e+18`); it never wraps.
 evalAddSubMul : ArithOp -> Cell -> Cell -> Cell
 evalAddSubMul op a b = match (a, b)
-  (CInt x, CInt y) => CInt (intArith op x y)
-  (CInt x, CFloat y) => CFloat (floatArith op (intToFloat x) y)
-  (CFloat x, CInt y) => CFloat (floatArith op x (intToFloat y))
+  (CInt x, CInt y) => match intArith op x y
+    Some r => CInt r
+    None => wideArith op (W.widen x) (W.widen y)
   (CFloat x, CFloat y) => CFloat (floatArith op x y)
-  _ => CNull
+  (CFloat x, _) => CFloat (floatArith op x (cellNumF b))
+  (_, CFloat y) => CFloat (floatArith op (cellNumF a) y)
+  _ => match (cellI64 a, cellI64 b)
+    (Some x, Some y) => wideArith op x y
+    _ => CNull
 
-intArith : ArithOp -> Int -> Int -> Int
-intArith AAdd x y = x + y
-intArith ASub x y = x - y
-intArith AMul x y = x * y
-intArith _ x _ = x  -- ADiv/AMod never reach here (handled upstream)
+-- `None` when the result is outside `Int`, which `wideArith` then redoes in 64
+-- bits.
+intArith : ArithOp -> Int -> Int -> Option Int
+intArith AAdd x y = checkedAdd x y
+intArith ASub x y = checkedSub x y
+intArith AMul x y = checkedMul x y
+intArith _ x _ = Some x  -- ADiv/AMod never reach here (handled upstream)
+
+wideArith : ArithOp -> I64 -> I64 -> Cell
+wideArith op x y =
+  let r = match op
+    AAdd => W.checkedAdd x y
+    ASub => W.checkedSub x y
+    AMul => W.checkedMul x y
+    _ => Some x
+  match r
+    Some v => intCell v
+    None => CFloat (floatArith op (W.toFloat x) (W.toFloat y))
 
 floatArith : ArithOp -> Float -> Float -> Float
 floatArith AAdd x y = x + y
@@ -1825,26 +1853,55 @@ floatArith _ x _ = x  -- ADiv/AMod never reach here (handled upstream)
 
 -- Division: both-int ⇒ truncating integer division; any-float ⇒ float division.
 -- Division by zero (integer or real) ⇒ NULL, matching sqlite.
+-- `minBound / -1` overflows 64 bits and is a REAL, as `+` is; the one `Int`
+-- quotient that does not fit `Int` (`-2^62 / -1`) is a `CInt64`.
 evalDiv : Cell -> Cell -> Cell
 evalDiv a b = match (a, b)
-  (CInt x, CInt y) => if y == 0 then CNull else CInt (x / y)
-  (CInt x, CFloat y) => if y == 0.0 then CNull else CFloat (intToFloat x / y)
-  (CFloat x, CInt y) => if y == 0 then CNull else CFloat (x / intToFloat y)
+  (CInt x, CInt y) =>
+    if y == 0 then
+      CNull
+    else if y == -1 then
+      wideDiv (W.widen x) (W.widen y)
+    else
+      CInt (x / y)
   (CFloat x, CFloat y) => if y == 0.0 then CNull else CFloat (x / y)
-  _ => CNull
+  (CFloat x, _) => floatDiv x (cellNumF b)
+  (_, CFloat y) => floatDiv (cellNumF a) y
+  _ => match (cellI64 a, cellI64 b)
+    (Some x, Some y) => wideDiv x y
+    _ => CNull
+
+floatDiv : Float -> Float -> Cell
+floatDiv x y = if y == 0.0 then CNull else CFloat (x / y)
+
+wideDiv : I64 -> I64 -> Cell
+wideDiv x y
+  | y == 0 = CNull
+  | otherwise = match W.checkedDiv x y
+    Some q => intCell q
+    None => CFloat (W.toFloat x / W.toFloat y)
 
 -- Modulo: operate on the integer parts (floats truncate toward zero via the
 -- pattern below only reaching integer cells here); x%0 ⇒ NULL; sign follows the
 -- dividend (Medaka `%` matches sqlite for negatives, verified).
 evalMod : Cell -> Cell -> Cell
-evalMod a b = match (cellToIntPart a, cellToIntPart b)
-  (Some x, Some y) => if y == 0 then CNull else CInt (x % y)
-  _ => CNull
+evalMod a b = match (a, b)
+  (CInt x, CInt y) => if y == 0 then CNull else CInt (x % y)
+  _ => match (cellIntPart64 a, cellIntPart64 b)
+    (Some x, Some y) => if y == 0 then CNull else intCell (x % y)
+    _ => CNull
+
+-- `cellToIntPart` across the whole 64-bit range.
+cellIntPart64 : Cell -> Option I64
+cellIntPart64 (CFloat f) = Some (W.widen (floatToInt f))
+cellIntPart64 c = cellI64 c
 
 -- Truncate a numeric cell to its integer part (toward zero).  Non-numeric ⇒ None.
 cellToIntPart : Cell -> Option Int
 cellToIntPart (CInt n) = Some n
 cellToIntPart (CFloat f) = Some (floatToInt f)
+-- A position past `Int` is past the end of every string.
+cellToIntPart (CInt64 x) = Some (if x < 0 then intMinBound else intMaxBound)
 cellToIntPart _ = None
 
 -- ---------------------------------------------------------------------------
@@ -1860,6 +1917,7 @@ cellIsNull _ = False
 cellTruthy : Cell -> Bool
 cellTruthy CNull = False
 cellTruthy (CInt n) = n /= 0
+cellTruthy (CInt64 _) = True
 cellTruthy (CFloat f) = f /= 0.0
 cellTruthy (CText s) = stringLength s > 0
 cellTruthy (CBlob _) = True
@@ -1867,12 +1925,14 @@ cellTruthy (CBlob _) = True
 litTruthy : Literal -> Bool
 litTruthy LNull = False
 litTruthy (LInt n) = n /= 0
+litTruthy (LInt64 _) = True
 litTruthy (LFloat f) = f /= 0.0
 litTruthy (LText s) = stringLength s > 0
 litTruthy (LBlob _) = True
 
 litToCell : Literal -> Cell
 litToCell (LInt n) = CInt n
+litToCell (LInt64 x) = intCell x
 litToCell (LText s) = CText s
 litToCell (LFloat f) = CFloat f
 litToCell (LBlob b) = CBlob b
@@ -1894,11 +1954,13 @@ cmpOrder : Cell -> Cell -> Option Ordering
 cmpOrder a b = match (a, b)
   (CInt x, CInt y) => Some (compare x y)
   (CFloat x, CFloat y) => Some (compare x y)
-  (CInt x, CFloat y) => Some (compare (intToFloat x) y)
-  (CFloat x, CInt y) => Some (compare x (intToFloat y))
+  (CFloat x, _) => map (y => compare x (W.toFloat y)) (cellI64 b)
+  (_, CFloat y) => map (x => compare (W.toFloat x) y) (cellI64 a)
   (CText x, CText y) => Some (compare x y)
   (CBlob x, CBlob y) => Some (compare (arrayLength x) (arrayLength y))
-  _ => None
+  _ => match (cellI64 a, cellI64 b)
+    (Some x, Some y) => Some (compare x y)
+    _ => None
 
 applyCmp : CmpOp -> Ordering -> Bool
 applyCmp op o = match (op, o)
@@ -2126,6 +2188,7 @@ selOffset sel = sel.offset
 cellToLiteral : Cell -> Literal
 cellToLiteral CNull = LNull
 cellToLiteral (CInt n) = LInt n
+cellToLiteral (CInt64 x) = LInt64 x
 cellToLiteral (CText s) = LText s
 cellToLiteral (CFloat f) = LFloat f
 cellToLiteral (CBlob b) = LBlob b
@@ -2722,13 +2785,31 @@ nonNull cells = filter (c => not (cellIsNull c)) cells
 sumCells : List Cell -> Cell
 sumCells [] = CNull
 sumCells cells =
-  if any isFloatCell cells then CFloat (sumFloat cells) else CInt (sumInt cells)
+  if any isFloatCell cells then CFloat (sumFloat cells) else sumInt cells
 
 sumFloat : List Cell -> Float
 sumFloat cells = fold (acc c => acc + cellNumF c) 0.0 cells
 
-sumInt : List Cell -> Int
-sumInt cells = fold (acc c => acc + cellNumI c) 0 cells
+-- In `Int` while every partial sum fits, then again from the start in 64 bits.
+-- A sum past 64 bits is sqlite3's `integer overflow` error, never a wrapped
+-- value; this reducer has no error channel, so it stops the program.
+sumInt : List Cell -> Cell
+sumInt cells = match sumIntFast cells 0
+  Some n => CInt n
+  None => sumWide cells 0
+
+sumIntFast : List Cell -> Int -> Option Int
+sumIntFast [] acc = Some acc
+sumIntFast ((CInt n) :: rest) acc = match checkedAdd acc n
+  Some a => sumIntFast rest a
+  None => None
+sumIntFast (_ :: _) _ = None
+
+sumWide : List Cell -> I64 -> Cell
+sumWide [] acc = intCell acc
+sumWide (c :: rest) acc = match W.checkedAdd acc (optionOr 0 (cellI64 c))
+  Some a => sumWide rest a
+  None => panic "sum: integer overflow"
 
 -- AVG is always a Float (= sum / count over the non-NULLs); NULL over an empty set.
 avgCells : List Cell -> Cell
@@ -2751,12 +2832,9 @@ isFloatCell _ = False
 
 cellNumF : Cell -> Float
 cellNumF (CInt n) = intToFloat n
+cellNumF (CInt64 x) = W.toFloat x
 cellNumF (CFloat f) = f
 cellNumF _ = 0.0
-
-cellNumI : Cell -> Int
-cellNumI (CInt n) = n
-cellNumI _ = 0
 
 -- ---------------------------------------------------------------------------
 -- Post-group rewrite: expressions over the raw row → expressions over the
@@ -3258,9 +3336,13 @@ cellOrder (CInt x) (CInt y) = compare x y
 cellOrder (CFloat x) (CFloat y) = compare x y
 cellOrder (CInt x) (CFloat y) = compare (intToFloat x) y
 cellOrder (CFloat x) (CInt y) = compare x (intToFloat y)
+cellOrder (CInt64 x) (CFloat y) = compare (W.toFloat x) y
+cellOrder (CFloat x) (CInt64 y) = compare x (W.toFloat y)
 cellOrder (CText x) (CText y) = compare x y
 cellOrder (CBlob x) (CBlob y) = compare (arrayLength x) (arrayLength y)
-cellOrder a b = compare (cellTypeRank a) (cellTypeRank b)
+cellOrder a b = match (cellI64 a, cellI64 b)
+  (Some x, Some y) => compare x y
+  _ => compare (cellTypeRank a) (cellTypeRank b)
 
 -- Type affinity rank: numeric=1, text=2, blob=3.  Used by cellOrder's catch-all
 -- for cross-type comparisons (e.g. Int vs Text, Float vs Blob, Text vs Blob).
@@ -3268,6 +3350,7 @@ cellOrder a b = compare (cellTypeRank a) (cellTypeRank b)
 cellTypeRank : Cell -> Int
 cellTypeRank CNull = 0
 cellTypeRank (CInt _) = 1
+cellTypeRank (CInt64 _) = 1
 cellTypeRank (CFloat _) = 1
 cellTypeRank (CText _) = 2
 cellTypeRank (CBlob _) = 3
@@ -3489,6 +3572,7 @@ showBindsGo (x :: rest) first =
 
 showLit : Literal -> String
 showLit (LInt n) = "LInt \{n}"
+showLit (LInt64 x) = "LInt64 \{x}"
 showLit (LText s) = "LText \{s}"
 showLit (LFloat f) = "LFloat \{f}"
 showLit (LBlob _) = "LBlob"
