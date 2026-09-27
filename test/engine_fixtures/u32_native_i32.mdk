@@ -1,0 +1,70 @@
+-- U32 computed as a native `i32` (N5, #3428): the LLVM backend evaluates a U32
+-- expression on 32-bit registers, keeps a `let`-bound U32 in one, and inlines
+-- the `u32` module's small operations so a rotate is a single instruction.
+-- Every line below crosses one of those seams at a value where a wrong width
+-- shows: the sign bit of an i32 (2^31), 2^32 - 1, products and sums past
+-- 2^32, rotate and shift amounts of 0, 31, 32 and beyond, and negative
+-- rotate amounts (taken modulo 32).
+--
+-- The trailing `int` lines are bystanders ([T-GLOBAL-TABLE]): the same
+-- magnitudes as plain `Int` keep `Int` semantics.
+--
+-- Expected values were computed independently of every engine (Python,
+-- `% 2**32`); the pin is test/engine_value_pins/engine/u32_native_i32.pin.
+
+import u32 as U32
+
+top : U32
+top = 0xFFFFFFFF
+
+sign : U32
+sign = 0x80000000
+
+-- SHA-256's Σ1, a chain of inlined rotates and xors.
+sigma1 : U32 -> U32
+sigma1 x =
+  U32.bitXor
+    (U32.rotateRight x 6)
+    (U32.bitXor (U32.rotateRight x 11) (U32.rotateRight x 25))
+
+-- let-bound U32s, an `if` on them, and arithmetic that wraps twice.
+mixed : U32 -> U32 -> U32
+mixed a b =
+  let s = a + b
+  let p = a * b
+  let d = if s < p then p - s else s - p
+  d + sigma1 d
+
+-- a rotate by an amount only known at run time.
+rotBy : U32 -> Int -> U32
+rotBy x k = U32.rotateLeft x k
+
+-- a loop carrying U32 state, the shape of a hash round.
+rounds : Int -> U32 -> U32 -> U32
+rounds n a b =
+  if n <= 0 then
+    U32.bitXor a b
+  else
+    rounds (n - 1) (b + sigma1 a) (U32.rotateLeft a 7 * 5 + 1)
+
+main =
+  println [top + 1, 0 - (1 : U32), (0x10000 : U32) * 0x10000, top * top]
+  println [top / 3, top % 7, sign / 2, sign * 2]
+  println [sign > 1, top > 0x7FFFFFFF, sign < top, sign == 0x80000000]
+  println
+    (map (k => U32.rotateLeft 0x80000001 k) [0, 1, 13, 31, 32, 33, -1, -31])
+  println (map (k => U32.rotateRight 0x80000001 k) [0, 1, 13, 31, 32, 33, -1])
+  println (map (k => U32.shiftLeft 0xF000000F k) [0, 1, 4, 31, 32, 40])
+  println (map (k => U32.shiftRight 0xF000000F k) [0, 1, 4, 31, 32, 40])
+  println [U32.bitNot 0, U32.bitNot sign, U32.bitAnd top sign, U32.bitOr 1 sign]
+  println [
+    U32.truncate (-1),
+    U32.truncate 0x1FFFFFFFF,
+    U32.truncate (-4294967296),
+  ]
+  println [sigma1 0x6a09e667, sigma1 top, sigma1 sign, sigma1 0]
+  println [mixed top top, mixed sign 3, mixed 123456789 987654321]
+  println [rotBy 0x12345678 4, rotBy 0x12345678 36, rotBy 0x12345678 (-4)]
+  println (rounds 1000 0x6a09e667 0xbb67ae85)
+  println (U32.toInt (sigma1 top) + 1)
+  println [4294967295 + 1, 2147483648 * 2, 0 - 1]

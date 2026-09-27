@@ -138,13 +138,13 @@ The signing slice adds private fixed-control helpers beside, rather than
 silently reinterpreting, the current Bool-returning helpers:
 
 - `feZeroBit` and `feEqualBit` return an arithmetic `0`/`1`. They OR/XOR all
-  ten limbs and use a fixed-width subtract-one borrow chain; no early exit or
-  Bool conversion is permitted.
-- `feSelect bit a b` visits all ten limbs and computes
+  five limbs and test the result once, as `1 - ((v + 2^52 - 1) >> 52)`; no
+  early exit or Bool conversion is permitted.
+- `feSelect bit a b` visits all five limbs and computes
   `a + bit * (b - a)` per limb, with `bit` constrained to `0`/`1`.
 - `feNegateCt` performs the complete modulus subtraction and arithmetic-selects
-  zero when the input is zero; it never calls the current branch-bearing
-  `feNegate`.
+  zero when the input is zero; it never calls `feNegate`, which is outside
+  the audited set.
 
 Equivalent scalar helpers are `scZeroBit`, `scEqualBit`, `scSelect`, and
 `scNegateCt`. `scHighBit` subtracts `floor(n/2)+1` with the existing

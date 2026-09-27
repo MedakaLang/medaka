@@ -1,0 +1,46 @@
+-- `let (h, l) = U64.mulWide a b` and the other small tuple-returning `u64`
+-- operations bound in place (N5, #3428): the LLVM backend inlines the callee at
+-- the destructuring `let` and binds each component in its raw register, so a
+-- 128-bit product is two registers and no tuple.  The values cross 2^63 and
+-- 2^64, where a boxed or signed reading goes wrong; an alias of a raw local
+-- (`let z = y`) and a component that escapes (printed, returned in a tuple)
+-- ride along.
+--
+-- The trailing `int` line is a bystander ([T-GLOBAL-TABLE]): a destructuring
+-- `let` of an ordinary tuple-returning function keeps its value.
+--
+-- Expected values were computed independently of every engine (Python,
+-- `% 2**64`); the pin is test/engine_value_pins/engine/u64_tuple_fusion.pin.
+
+import u64 as U64
+
+-- the 128-bit sum of two full products, as (high, low)
+dot2 : U64 -> U64 -> U64 -> U64 -> (U64, U64)
+dot2 a b c d =
+  let (h1, l1) = U64.mulWide a b
+  let (h2, l2) = U64.mulWide c d
+  let (lo, carry) = U64.addCarry l1 l2 False
+  let (hi, _) = U64.addCarry h1 h2 carry
+  (hi, lo)
+
+-- a chain of products folded into a 64-bit value, an alias on the way
+foldProducts : Int -> U64 -> U64 -> U64
+foldProducts n x acc =
+  if n <= 0 then
+    acc
+  else
+    let (h, l) = U64.mulWide x (acc + 1)
+    let y = U64.bitXor h l
+    let z = y
+    foldProducts (n - 1) (x + 0x9e3779b97f4a7c15) (z + acc)
+
+divmod : Int -> Int -> (Int, Int)
+divmod a b = (a / b, a % b)
+
+main =
+  println (U64.mulWide 0xFFFFFFFFFFFFFFFF 0xFFFFFFFFFFFFFFFF)
+  println (dot2 0xFFFFFFFFFFFFFFFF 0xFFFFFFFFFFFFFFFF 0x8000000000000000 3)
+  println (dot2 0x123456789ABCDEF0 0x0FEDCBA987654321 7 0xFFFFFFFFFFFFFFFF)
+  println (foldProducts 1000 0xDEADBEEFCAFEBABE 1)
+  let (q, r) = divmod 1000003 97
+  println [q, r]
