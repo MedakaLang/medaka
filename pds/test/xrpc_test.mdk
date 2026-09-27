@@ -1,6 +1,6 @@
 {- | Focused structural XRPC registry, routing, and canonical-error tests. -}
 
-import bytes.{fromArray, toArray}
+import bytes.{encodeUtf8, fromArray, fromU8Array, toArray}
 import http.{
   maxJsonBodyBytes,
   maxRawBodyBytes,
@@ -459,7 +459,7 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
         ),
         (
           "the text request's bytes are passed through",
-          expectEqual (toUtf8 "hello") textBytes,
+          expectEqual (encodeUtf8 "hello") textBytes,
         ),
         (
           "the JSON request names the blob method",
@@ -475,7 +475,7 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
         ),
         (
           "the JSON request's bytes are passed through unparsed",
-          expectEqual (toUtf8 "{nope}") jsonBytes,
+          expectEqual (encodeUtf8 "{nope}") jsonBytes,
         ),
         (
           "the opaque request names the blob method",
@@ -491,7 +491,7 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
         ),
         (
           "the opaque request's bytes are passed through",
-          expectEqual [|0, 128, 255|] opaqueBytes,
+          expectEqual (fromU8Array [|0, 128, 255|]) opaqueBytes,
         ),
       ]
     _ => fail "expected the JSON and opaque procedure calls to route"

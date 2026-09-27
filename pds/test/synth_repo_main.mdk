@@ -21,7 +21,7 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{Bytes, encodeUtf8, toArray}
+import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
 import lib.blob.{blobCid}
@@ -195,7 +195,8 @@ buildBlobRowsGo seed j acc =
     acc
   else
     let bytes = blobBytesFor seed j
-    buildBlobRowsGo seed (j - 1) ((blobCid bytes, mimeFor j, bytes) :: acc)
+    let cid = blobCid (fromArrayAssumeByteDomain bytes)
+    buildBlobRowsGo seed (j - 1) ((cid, mimeFor j, bytes) :: acc)
 
 buildBlobRows : Int -> Int -> List (Cid, String, Array Int)
 buildBlobRows seed blobCount = buildBlobRowsGo seed (blobCount - 1) []

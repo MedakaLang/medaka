@@ -3,12 +3,13 @@
    Every mutation returns a fresh state.  Record, MST, and commit blocks cross
    the verified blockstore boundary before the state becomes observable. -}
 
-import bytes.{Bytes, fromArray, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArray}
 import hex.{encode}
 import list.{reverse}
 import regex.{Regex, isFullMatchBytes, mustCompile}
 import set.{Set(..), has, insert}
-import string.{startsWith, toUtf8}
+import string.{startsWith}
 import lib.blockstore.{
   BlockStore,
   blockStoreAddMany,
@@ -50,6 +51,7 @@ import lib.sign.{
   verifyDigest,
 }
 import lib.tid.{Tid, tidCompare, tidParse, tidToString}
+import u8 as U8
 
 -- ── types ───────────────────────────────────────────────────────────────────
 
@@ -102,13 +104,16 @@ alphaByte byte = lowerByte byte || upperByte byte
 alphaNumericByte : Int -> Bool
 alphaNumericByte byte = alphaByte byte || digitByte byte
 
-didMethodEnd : Array Int -> Int -> Option Int
+byteAt : Bytes -> Int -> Int
+byteAt bytes i = U8.toInt bytes[i]
+
+didMethodEnd : Bytes -> Int -> Option Int
 didMethodEnd bytes i =
-  if i >= arrayLength bytes then
+  if i >= B.length bytes then
     None
-  else if bytes[i] == 58 then
+  else if byteAt bytes i == 58 then
     Some i
-  else if lowerByte bytes[i] || digitByte bytes[i] then
+  else if lowerByte (byteAt bytes i) || digitByte (byteAt bytes i) then
     didMethodEnd bytes (i + 1)
   else
     None
@@ -119,31 +124,31 @@ validDidLastByte byte =
 
 validateDid : String -> Result String Unit
 validateDid did =
-  let bytes = toUtf8 did
+  let bytes = encodeUtf8 did
+  let len = B.length bytes
   if not (startsWith "did:" did) then
     Err "repo: invalid DID; expected did:<method>:<identifier>"
-  else if arrayLength bytes > 2048 then
+  else if len > 2048 then
     Err "repo: invalid DID; maximum length is 2048 characters"
   else match didMethodEnd bytes 4
     None => Err "repo: invalid DID method"
     Some end =>
       if end == 4
-        || end + 1 >= arrayLength bytes
-        || not
-          (isFullMatchBytes didIdentifierRe bytes (end + 1) (arrayLength bytes))
-        || not (validDidLastByte bytes[arrayLength bytes - 1]) then
+        || end + 1 >= len
+        || not (isFullMatchBytes didIdentifierRe bytes (end + 1) len)
+        || not (validDidLastByte (byteAt bytes (len - 1))) then
         Err "repo: invalid DID identifier"
       else
         Ok ()
 
-findPathSlash : Array Int -> Int -> Int -> Result String Int
+findPathSlash : Bytes -> Int -> Int -> Result String Int
 findPathSlash path i slash =
-  if i >= arrayLength path then
+  if i >= B.length path then
     if slash < 0 then
       Err "repo: path must contain exactly one slash"
     else
       Ok slash
-  else if path[i] == 47 then
+  else if byteAt path i == 47 then
     if slash >= 0 then
       Err "repo: path must contain exactly one slash"
     else
@@ -151,16 +156,16 @@ findPathSlash path i slash =
   else
     findPathSlash path (i + 1) slash
 
-lastDotBefore : Array Int -> Int -> Int -> Int -> Int
+lastDotBefore : Bytes -> Int -> Int -> Int -> Int
 lastDotBefore bytes i end last =
   if i >= end then
     last
-  else if bytes[i] == 46 then
+  else if byteAt bytes i == 46 then
     lastDotBefore bytes (i + 1) end i
   else
     lastDotBefore bytes (i + 1) end last
 
-normalizedAuthority : Array Int -> Int -> Bool
+normalizedAuthority : Bytes -> Int -> Bool
 normalizedAuthority path end =
   isFullMatchBytes notUpperRe path 0 (lastDotBefore path 0 end (-1))
 
@@ -169,12 +174,7 @@ normalizedAuthority path end =
 -- against the official atproto interop NSID syntax corpus.
 export
 validateCollection : Bytes -> Int -> Result String Unit
-validateCollection path end = collectionAt (toArray path) end
-
--- `lib.nsid` and `regex.isFullMatchBytes` read `Array Int`, so path
--- validation runs over one `toArray` of the path.
-collectionAt : Array Int -> Int -> Result String Unit
-collectionAt path end = match validateNsidPrefix path end
+validateCollection path end = match validateNsidPrefix path end
   Ok () =>
     if normalizedAuthority path end then
       Ok ()
@@ -187,34 +187,32 @@ collectionAt path end = match validateNsidPrefix path end
 -- atproto interop record-key syntax corpus.
 export
 validateRkey : Bytes -> Int -> Result String Unit
-validateRkey path start = rkeyAt (toArray path) start
-
-rkeyAt : Array Int -> Int -> Result String Unit
-rkeyAt path start =
-  let size = arrayLength path - start
+validateRkey path start =
+  let size = B.length path - start
   if size < 1 || size > 512 then
     Err "repo: record key length must be 1..512 characters"
-  else if size == 1 && path[start] == 46 then
+  else if size == 1 && byteAt path start == 46 then
     Err "repo: record key must not be . or .."
-  else if size == 2 && path[start] == 46 && path[start + 1] == 46 then
+  else if size == 2
+    && byteAt path start == 46
+    && byteAt path (start + 1) == 46 then
     Err "repo: record key must not be . or .."
-  else if not (isFullMatchBytes rkeyRe path start (arrayLength path)) then
+  else if not (isFullMatchBytes rkeyRe path start (B.length path)) then
     Err "repo: invalid record key characters"
   else
     Ok ()
 
 validatePath : Bytes -> Result String Unit
 validatePath key =
-  let path = toArray key
-  if arrayLength path == 0 then
+  if B.length key == 0 then
     Err "repo: path must be non-empty"
   else do
-    slash <- findPathSlash path 0 (-1)
-    if slash <= 0 || slash >= arrayLength path - 1 then
+    slash <- findPathSlash key 0 (-1)
+    if slash <= 0 || slash >= B.length key - 1 then
       Err "repo: path must be collection/rkey"
     else do
-      () <- collectionAt path slash
-      rkeyAt path (slash + 1)
+      () <- validateCollection key slash
+      validateRkey key (slash + 1)
 
 validateRecord : DagCbor -> Result String Unit
 validateRecord (DcMap _) = Ok ()

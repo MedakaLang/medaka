@@ -3425,14 +3425,14 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest t
       logAccess
         trace
         upgradeStatus
-        (arrayLength (handshakeResponseBytes admission.accept)))
+        (B.length (handshakeResponseBytes admission.accept)))
     outcome <- runSubscription
       dir
       writeTimeout
       conn
       admission.accept
       admission.cursor
-      (toArray (readBufferLive rest))
+      (readBufferLive rest)
     _ <- liftIO (u => releaseSubscription census)
     deferPure outcome
 

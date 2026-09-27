@@ -19,10 +19,11 @@
    this call reaches asks for. -}
 
 import async.{Async}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import json.{jObject, Json(..), stringify}
 import lib.httpclient.{makeRequestHeader, serializeRequest}
 import shell.egress.{egressAddress, egressConnect}
-import string.{toUtf8}
 
 -- | The loopback port of the reverse proxy fronting the real relay.
 export data RelayTarget = RelayTarget Int
@@ -36,19 +37,22 @@ relayPort (RelayTarget port) = port
 
 -- | `{"hostname": <own hostname>}` — the reference implementation's exact
 -- body shape (`pds/test/vectors/pds_service_auth_shape_corpus.txt`).
-requestCrawlBody : String -> Array Int
+requestCrawlBody : String -> Bytes
 requestCrawlBody hostname =
-  toUtf8 (stringify (jObject [("hostname", JString hostname)]))
+  encodeUtf8 (stringify (jObject [("hostname", JString hostname)]))
 
 requestCrawlBytes : RelayTarget -> String -> Result String (Array Int)
 requestCrawlBytes target hostname = do
   contentType <- makeRequestHeader "content-type" "application/json"
-  serializeRequest
-    "POST"
-    "/xrpc/com.atproto.sync.requestCrawl"
-    "\{egressAddress}:\{intToString (relayPort target)}"
-    [contentType]
-    (requestCrawlBody hostname)
+  -- Door: `egressConnect` still sends `Array Int`; `toArray` is total.
+  map
+    B.toArray
+    (serializeRequest
+      "POST"
+      "/xrpc/com.atproto.sync.requestCrawl"
+      "\{egressAddress}:\{intToString (relayPort target)}"
+      [contentType]
+      (requestCrawlBody hostname))
 
 {- | Announce `hostname` to `target`. `Err` covers every way the call can fail
    to reach or be answered by the relay — connect failure, a timeout, an

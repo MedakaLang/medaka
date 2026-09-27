@@ -19,12 +19,17 @@
    caller's own maximum: a 64-bit length field is 8 bytes to write and a
    terabyte to believe. -}
 
-import array.{blit, get, make, setInPlace}
 import base64.{decode, encode}
-import bytes.{encodeUtf8, toArray}
+import bytebuilder.{
+  Builder, buildBytes, emitBeUint, emitBytes, emitU8, newBuilder
+}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import list.{reverse}
-import string.{toUtf8}
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
 import lib.sha1.{sha1}
+import u8 as U8
 import u64 as U64
 
 -- ── The opening handshake ────────────────────────────────────────────
@@ -47,12 +52,12 @@ keyNonceBytes = 16
    concatenated with the protocol GUID — the key is NOT decoded first. -}
 export
 handshakeAccept : String -> Result String String
-handshakeAccept key = match map toArray (decode key)
+handshakeAccept key = match decode key
   Err e => Err "Sec-WebSocket-Key is not base64: \{e}"
   Ok nonce =>
-    if arrayLength nonce /= keyNonceBytes then
+    if B.length nonce /= keyNonceBytes then
       Err
-        "Sec-WebSocket-Key decodes to \{intToString (arrayLength nonce)} bytes, expected \{intToString keyNonceBytes}"
+        "Sec-WebSocket-Key decodes to \{intToString (B.length nonce)} bytes, expected \{intToString keyNonceBytes}"
     else
       Ok (encode (sha1 (encodeUtf8 "\{key}\{handshakeGuid}")))
 
@@ -68,9 +73,9 @@ handshakeAccept key = match map toArray (decode key)
    6455 §4.2.2 requires, and the only client-derived text among them is
    `accept`, which `handshakeAccept` produced as base64. -}
 export
-handshakeResponseBytes : String -> Array Int
+handshakeResponseBytes : String -> Bytes
 handshakeResponseBytes accept =
-  toUtf8
+  encodeUtf8
     "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: \{accept}\r\n\r\n"
 
 -- ── Frames ───────────────────────────────────────────────────────────
@@ -99,7 +104,7 @@ public export data Opcode =
 public export data Frame = Frame {
   fin : Bool,
   opcode : Opcode,
-  payload : Array Int,
+  payload : Bytes,
 }
 
 {- | Which way a frame is travelling, which is what decides whether masking
@@ -131,8 +136,9 @@ messageTooBigCode = 1009
 maxControlPayload : Int
 maxControlPayload = 125
 
-byteAt : Array Int -> Int -> Int
-byteAt arr i = optionOrPanic "websocket: byte index out of bounds" (get i arr)
+byteAt : Bytes -> Int -> Int
+byteAt bytes i =
+  U8.toInt (optionOrPanic "websocket: byte index out of bounds" (B.get i bytes))
 
 opcodeBits : Opcode -> Int
 opcodeBits Continuation = 0x0
@@ -165,7 +171,7 @@ isControl Binary = False
 
 -- A big-endian unsigned integer of `n` bytes starting at `off`, for a width
 -- whose largest value fits `Int` (the 2-byte length, the close code).
-readBigEndian : Array Int -> Int -> Int -> Int -> Int
+readBigEndian : Bytes -> Int -> Int -> Int -> Int
 readBigEndian bytes off n acc =
   if n <= 0 then
     acc
@@ -176,37 +182,34 @@ readBigEndian bytes off n acc =
 -- larger than `Int` holds. Read as a `U64`, so a declared length between 2^62
 -- and 2^63 is reported as the oversized length it is rather than wrapping to a
 -- value that reads as some other malformation (#2905).
-readLength64 : Array Int -> Int -> Option Int
+readLength64 : Bytes -> Int -> Option Int
 readLength64 bytes off = U64.toInt (readU64 bytes off 8 0)
 
-readU64 : Array Int -> Int -> Int -> U64 -> U64
+readU64 : Bytes -> Int -> Int -> U64 -> U64
 readU64 bytes off n acc =
   if n <= 0 then
     acc
   else
     readU64 bytes (off + 1) (n - 1) (acc * 256 + fromInt (byteAt bytes off))
 
--- The payload, copied out of the read buffer and unmasked in place. Reached
+-- The payload, copied out of the read buffer and unmasked on the way. Reached
 -- only after the declared length has been checked against both the caller's
 -- maximum and the bytes actually available, so this is the first and only
 -- allocation the declared length sizes.
-copyPayload : Array Int -> Int -> Int -> Option (Array Int) -> Array Int
-copyPayload bytes off len maskKey =
-  let out = make len 0
-  blit bytes off out 0 len
-  match maskKey
-    None => out
-    Some key =>
-      unmask out len key 0
-      out
+copyPayload : Bytes -> Int -> Int -> Option Bytes -> Bytes
+copyPayload bytes off len None = slice bytes off (off + len)
+copyPayload bytes off len (Some key) =
+  let out = MB.make len
+  unmask bytes off out len key 0
+  MB.freeze out
 
-unmask : Array Int -> Int -> Array Int -> Int -> Unit
-unmask out len key i =
+unmask : Bytes -> Int -> MutBytes -> Int -> Bytes -> Int -> Unit
+unmask bytes off out len key i =
   if i >= len then
     ()
   else
-    setInPlace i (bitXor (byteAt out i) (byteAt key (i % 4))) out
-    unmask out len key (i + 1)
+    MB.setInPlace i (U8.bitXor bytes[off + i] key[i % 4]) out
+    unmask bytes off out len key (i + 1)
 
 -- RFC 6455 §5.2: "the minimal number of bytes MUST be used to encode the
 -- length". A 64-bit field holding 5 is a distinct encoding of a frame that
@@ -234,9 +237,9 @@ maskRuleViolation _ _ = None
    occupied, starting at `offset`, so a caller holding several frames in one
    read can step through them. -}
 export
-decodeFrame : Direction -> Int -> Array Int -> Int -> DecodeResult
+decodeFrame : Direction -> Int -> Bytes -> Int -> DecodeResult
 decodeFrame direction maxPayload bytes offset =
-  let available = arrayLength bytes - offset
+  let available = B.length bytes - offset
   if available < 2 then
     NeedMore
   else
@@ -275,7 +278,7 @@ decodeChecked : Bool ->
   Bool ->
   Int ->
   Int ->
-  Array Int ->
+  Bytes ->
   Int ->
   Int ->
   DecodeResult
@@ -327,7 +330,7 @@ decodeDeclared : Bool ->
   Bool ->
   Int ->
   Int ->
-  Array Int ->
+  Bytes ->
   Int ->
   Int ->
   Int ->
@@ -356,25 +359,17 @@ decodeDeclared fin opcode masked lenField maxPayload bytes offset available extL
 
 -- ── Encoding ─────────────────────────────────────────────────────────
 
-writeBigEndian : Array Int -> Int -> Int -> Int -> Unit
-writeBigEndian out off n value =
-  if n <= 0 then
+maskInto : Builder -> Bytes -> Int -> Bytes -> Unit
+maskInto out src i key =
+  if i >= B.length src then
     ()
   else
-    setInPlace off (bitAnd (shiftRight value ((n - 1) * 8)) 255) out
-    writeBigEndian out (off + 1) (n - 1) value
+    emitU8 (U8.bitXor src[i] key[i % 4]) out
+    maskInto out src (i + 1) key
 
-maskInto : Array Int -> Int -> Array Int -> Int -> Array Int -> Unit
-maskInto out off src i key =
-  if i >= arrayLength src then
-    ()
-  else
-    setInPlace (off + i) (bitXor (byteAt src i) (byteAt key (i % 4))) out
-    maskInto out off src (i + 1) key
-
-encodeWith : Option (Array Int) -> Frame -> Array Int
+encodeWith : Option Bytes -> Frame -> Bytes
 encodeWith maskKey (Frame fin opcode payload) =
-  let payloadLen = arrayLength payload
+  let payloadLen = B.length payload
   if isControl opcode && payloadLen > maxControlPayload then
     panic
       "websocket: a control frame payload is at most \{intToString maxControlPayload} bytes"
@@ -393,20 +388,23 @@ encodeWith maskKey (Frame fin opcode payload) =
     let maskBytes = match maskKey
       None => 0
       Some _ => 4
-    let headerLen = 2 + extLenBytes + maskBytes
-    let out = make (headerLen + payloadLen) 0
-    setInPlace 0 (bitOr (if fin then 0x80 else 0) (opcodeBits opcode)) out
-    setInPlace 1 (bitOr (if maskBytes == 0 then 0 else 0x80) lenField) out
-    writeBigEndian out 2 extLenBytes payloadLen
+    let out = newBuilder ()
+    emitU8
+      (U8.truncate (bitOr (if fin then 0x80 else 0) (opcodeBits opcode)))
+      out
+    emitU8
+      (U8.truncate (bitOr (if maskBytes == 0 then 0 else 0x80) lenField))
+      out
+    emitBeUint extLenBytes payloadLen out
     match maskKey
-      None => blit payload 0 out headerLen payloadLen
+      None => emitBytes payload out
       Some key =>
-        if arrayLength key /= 4 then
+        if B.length key /= 4 then
           panic "websocket: a masking key is exactly 4 bytes"
         else
-          blit key 0 out (2 + extLenBytes) 4
-          maskInto out headerLen payload 0 key
-    out
+          emitBytes key out
+          maskInto out payload 0 key
+    buildBytes out
 
 {- | `frame` on the wire as a server sends it: unmasked, per RFC 6455 §5.1.
 
@@ -414,7 +412,7 @@ encodeWith maskKey (Frame fin opcode payload) =
    payload over 125 bytes, or a fragmented control frame. Those are
    programming errors in the caller, not peer input. -}
 export
-encodeServerFrame : Frame -> Array Int
+encodeServerFrame : Frame -> Bytes
 encodeServerFrame frame = encodeWith None frame
 
 {- | `frame` on the wire as a client sends it: masked with `maskKey`, which
@@ -423,7 +421,7 @@ encodeServerFrame frame = encodeWith None frame
    A server does not send masked frames. This exists so a test or a client
    probe can produce the bytes this module's own decoder must accept. -}
 export
-encodeClientFrame : Array Int -> Frame -> Array Int
+encodeClientFrame : Bytes -> Frame -> Bytes
 encodeClientFrame maskKey frame = encodeWith (Some maskKey) frame
 
 -- ── The close handshake ──────────────────────────────────────────────
@@ -446,11 +444,10 @@ closeCodeOnWire code =
 export
 closeFrame : Int -> String -> Frame
 closeFrame code reason =
-  let reasonBytes = toUtf8 reason
-  let out = make (2 + arrayLength reasonBytes) 0
-  writeBigEndian out 0 2 code
-  blit reasonBytes 0 out 2 (arrayLength reasonBytes)
-  Frame True Close out
+  let out = newBuilder ()
+  emitBeUint 2 code out
+  emitBytes (encodeUtf8 reason) out
+  Frame True Close (buildBytes out)
 
 {- | The status code and reason bytes a Close frame's payload carries, or
    `None` for the empty payload RFC 6455 §5.5.1 permits, or the reason the
@@ -460,9 +457,9 @@ closeFrame code reason =
    read, and reading the one byte as a code would invent a status the peer
    never sent. -}
 export
-parseClosePayload : Array Int -> Result String (Option (Int, Array Int))
+parseClosePayload : Bytes -> Result String (Option (Int, Bytes))
 parseClosePayload payload =
-  let len = arrayLength payload
+  let len = B.length payload
   if len == 0 then
     Ok None
   else if len == 1 then
@@ -483,27 +480,14 @@ parseClosePayload payload =
 
    The constructor is not exported because a caller never builds one — it
    starts from `None` and threads whatever `assembleFrame` hands back. -}
-export data Assembly = Assembly Opcode (List (Array Int))
+export data Assembly = Assembly Opcode (List Bytes)
 
 {- | What one frame meant to a stream reassembler. -}
 public export data AssembleEvent =
   | EventPartial
-  | EventMessage Opcode (Array Int)
+  | EventMessage Opcode Bytes
   | EventControl Frame
   | EventRejected Int String
-
-concatChunks : List (Array Int) -> Array Int
-concatChunks chunks =
-  let total = sum (map arrayLength chunks)
-  let out = make total 0
-  blitChunks out 0 chunks
-  out
-
-blitChunks : Array Int -> Int -> List (Array Int) -> Unit
-blitChunks _ _ [] = ()
-blitChunks out off (chunk :: rest) =
-  blit chunk 0 out off (arrayLength chunk)
-  blitChunks out (off + arrayLength chunk) rest
 
 {- | Folds one decoded frame into a reassembly state (RFC 6455 §5.4).
 
@@ -542,7 +526,7 @@ assembleFrame pending (Frame fin opcode payload) =
 
 continueMessage : Option Assembly ->
   Bool ->
-  Array Int ->
+  Bytes ->
   (Option Assembly, AssembleEvent)
 continueMessage None _ _ = (
   None,
@@ -553,6 +537,6 @@ continueMessage None _ _ = (
 continueMessage (Some (Assembly opcode chunks)) fin payload =
   let grown = payload :: chunks
   if fin then
-    (None, EventMessage opcode (concatChunks (reverse grown)))
+    (None, EventMessage opcode (B.concat (reverse grown)))
   else
     (Some (Assembly opcode grown), EventPartial)

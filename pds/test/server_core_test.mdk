@@ -88,11 +88,7 @@ handler : Handler
 handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
 handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
-  let packed =
-    optionOrPanic
-      "cidForRaw: every element must be a byte in 0..255"
-      (fromArray bytes)
-  match storePut (cidForRaw packed) packed store
+  match storePut (cidForRaw bytes) bytes store
     Err message =>
       panic "server_core_test: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")

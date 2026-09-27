@@ -90,7 +90,8 @@ blobBytesFor j =
     "synth blob seed=\{intToString corpusSeed} idx=\{intToString j} payload 0123456789"
 
 blobCidText : Int -> String
-blobCidText j = cidToString (blobCid (blobBytesFor j))
+blobCidText j =
+  cidToString (blobCid (B.fromArrayAssumeByteDomain (blobBytesFor j)))
 
 blobIndex : Int -> Int -> Int
 blobIndex blobCount i =

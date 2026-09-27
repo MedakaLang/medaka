@@ -283,8 +283,12 @@ blobFixtures =
   let first = blobBytes "store_persistence blob fixture one"
   let second = blobBytes "store_persistence blob fixture two, a different type"
   [
-    (blobCid first, "text/plain", first),
-    (blobCid second, "application/octet-stream", second),
+    (blobCid (fromArrayAssumeByteDomain first), "text/plain", first),
+    (
+      blobCid (fromArrayAssumeByteDomain second),
+      "application/octet-stream",
+      second,
+    ),
   ]
 
 blobSummary : String -> (Cid, String, Array Int) -> <IO> Unit
@@ -379,7 +383,10 @@ runBlobReject dir = match verifiedBlobs dir
 runBlobOversize : String -> <IO, FileRead, FileWrite> Unit
 runBlobOversize dir =
   let oversize = arrayMakeWith (maxBlobBytes + 1) (_ => 65)
-  match admitBlob 0 "application/octet-stream" oversize
+  match (admitBlob
+    0
+    "application/octet-stream"
+    (fromArrayAssumeByteDomain oversize))
     Ok _ =>
       let () = println "BLOB-OVERSIZE: FAIL an oversize blob was admitted"
       exit 1
@@ -697,7 +704,7 @@ churnBytes index =
 churnRow : Int -> (Cid, String, Array Int)
 churnRow index =
   let bytes = churnBytes index
-  (blobCid bytes, "application/octet-stream", bytes)
+  (blobCid (fromArrayAssumeByteDomain bytes), "application/octet-stream", bytes)
 
 churnRows : Int -> Int -> List (Cid, String, Array Int)
 churnRows index limit =
@@ -765,7 +772,8 @@ retypeSecondType : String
 retypeSecondType = "application/json"
 
 retypeRow : String -> (Cid, String, Array Int)
-retypeRow mimeType = (blobCid retypeBytes, mimeType, retypeBytes)
+retypeRow mimeType =
+  (blobCid (fromArrayAssumeByteDomain retypeBytes), mimeType, retypeBytes)
 
 runBlobRetypeSeed : String -> <IO, FileRead, FileWrite> Unit
 runBlobRetypeSeed dir =
@@ -775,7 +783,8 @@ runBlobRetypeSeed dir =
     Err message => panic "store_persistence: retype seed failed: \{message}"
     Ok () =>
       let () =
-        println "BLOB-RETYPE-SEED cid \{cidToString (blobCid retypeBytes)}"
+        println
+          "BLOB-RETYPE-SEED cid \{cidToString (blobCid (fromArrayAssumeByteDomain retypeBytes))}"
       let () = println "BLOB-RETYPE-SEED mime \{retypeFirstType}"
       println "BLOB-RETYPE-SEED: PASS"
 

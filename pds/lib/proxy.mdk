@@ -404,9 +404,9 @@ pickFields : List String -> List Header -> List (String, String)
 pickFields [] _ = []
 pickFields (name :: rest) headers = match soleField name headers
   Some header =>
-    let value = B.toArray (headerValue header)
+    let value = headerValue header
     if printableAscii value 0 then
-      (name, fromUtf8 value) :: pickFields rest headers
+      (name, fromUtf8 (B.toArray value)) :: pickFields rest headers
     else
       pickFields rest headers
   None => pickFields rest headers

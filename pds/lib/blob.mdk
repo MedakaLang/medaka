@@ -18,20 +18,14 @@ import json.{Json(..), get, jObject, stringify}
 import lib.cid.{Cid, cidForRaw, cidFromString, cidToString}
 import lib.resource_limits.{checkAccountBlobBytes, checkBlobBytes}
 import regex.{Regex, isFullMatch, mustCompile}
-import bytes.{fromArray, fromU8Array}
+import bytes as B
+import bytes.{Bytes, fromU8Array}
 
 -- | Content-address a blob's raw bytes with the raw codec (reuses
 -- `cidForRaw`; blobs are not a new CID kind).
---
--- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
--- out-of-range element panics as the old `Array Int` `cidForRaw` did.
 export
-blobCid : Array Int -> Cid
-blobCid bytes =
-  cidForRaw
-    (optionOrPanic
-      "cidForRaw: every element must be a byte in 0..255"
-      (fromArray bytes))
+blobCid : Bytes -> Cid
+blobCid bytes = cidForRaw bytes
 
 {- | An admitted blob reference: its content CID, declared MIME type, and
    byte size. The constructor is private — a `BlobRef` is only ever minted by
@@ -87,9 +81,9 @@ validMimeShape mimeType = isFullMatch mimeShapeRe mimeType
    the returned `BlobRef` carries the actual content CID and byte count — the
    caller never supplies either. -}
 export
-admitBlob : Int -> String -> Array Int -> Result String BlobRef
+admitBlob : Int -> String -> Bytes -> Result String BlobRef
 admitBlob accountUsedBytes mimeType bytes = do
-  let size = arrayLength bytes
+  let size = B.length bytes
   if not (validMimeShape mimeType) then
     Err "blob: mimeType must be of the form type/subtype"
   else
