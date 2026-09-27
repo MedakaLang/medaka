@@ -1,0 +1,78 @@
+{- | secp256k1 point arithmetic against the 25-row public-point corpus, on
+   two engines: eval over a three-row sample and native over every row.
+
+   The engines read different corpora, so they are two rows rather than
+   two arms of one: `Row.corpus` is shared by every arm of a row. The eval
+   row names the same ledgered file as the native row and keeps lines 17,
+   19 and 25 of it (the `n * G` raw ladder to canonical infinity, `G + INF`,
+   and `2 * INF`), because a full 256-round ladder per row is too slow to
+   interpret 25 times. The native row sweeps every row and pins that row 17
+   reached canonical infinity through the raw ladder: `scFromBytes` does
+   not admit `n`, so no other path in the driver can reach that row's
+   answer.
+
+   No Wasm arm: the retired script had none. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+gate : String
+gate = "pds/test/secp256k1_point_vectors"
+
+driver : String
+driver = "pds/test/secp256k1_point_vectors_main.mdk"
+
+corpusFile : String
+corpusFile = "pds/test/vectors/point_public_key_corpus.txt"
+
+evalSample : Row
+evalSample = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Lines corpusFile [17, 19, 25],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = EvalEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "PASS\trow 1 raw-ladder canonical-infinity",
+        "counted: 3/3 rows ok",
+      ],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+nativeFull : Row
+nativeFull = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Explicit [corpusFile],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs =
+        ["row 17 raw-ladder canonical-infinity", "counted: 25/25 rows ok"],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "secp256k1 points (eval): 3 sampled rows, nG reaches canonical infinity" =
+  expectRow evalSample
+
+test "secp256k1 points (native): 25/25 rows, nG raw ladder reaches canonical infinity" =
+  expectRow nativeFull

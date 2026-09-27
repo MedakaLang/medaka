@@ -766,7 +766,7 @@ five disposable behavior mutations turn it red.
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
-  sh pds/test/did_key_all_engines.sh
+  ./medaka test --native pds/test/did_key_all_engines_test.mdk
 ```
 
 ## Vector provenance
