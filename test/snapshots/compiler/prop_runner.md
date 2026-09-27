@@ -1,5 +1,5 @@
 # META
-source_lines=1247
+source_lines=1259
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -25,7 +25,7 @@ import frontend.ast.{
   PropParam,
   ImplMethod(..),
   Ty(..),
-  TyConOrigin,
+  TyConOrigin(..),
   sameTyConHead,
   Variant(..),
   Field(..),
@@ -330,16 +330,18 @@ genForType ge env subst depth (TyApp (TyCon { tyConName = "Array" }) t) =
         depth
         t
         (randIntRange 0 (listLenBound (genEnvTyDefs ge) depth t))))
-genForType ge env subst depth (TyApp (TyCon { tyConName = "Option" }) t) =
-  if randBoolL () then
-    VCon "None" []
-  else
-    VCon "Some" [genForType ge env subst depth t]
-genForType ge env subst depth (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) =
-  if randBoolL () then
-    VCon "Ok" [genForType ge env subst depth a]
-  else
-    VCon "Err" [genForType ge env subst depth e]
+genForType ge env subst depth (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
+  | not (programModuleOrigin o) =
+    if randBoolL () then
+      VCon "None" []
+    else
+      VCon "Some" [genForType ge env subst depth t]
+genForType ge env subst depth (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
+  | not (programModuleOrigin o) =
+    if randBoolL () then
+      VCon "Ok" [genForType ge env subst depth a]
+    else
+      VCon "Err" [genForType ge env subst depth e]
 genForType ge env subst depth (TyTuple ts) =
   VTuple (genTuple ge env subst depth ts)
 genForType ge env subst depth ty = match userArbitrary ge env ty
@@ -360,7 +362,7 @@ genEnvTyDefs (GenEnv tydefs _ _ _) = tydefs
 unusableArbAt : GenEnv -> Ty -> Option String
 unusableArbAt (GenEnv _ _ unusable _) ty = match tyHeadIdentity ty
   Some (n, o) =>
-    if contains n builtinGenHeads
+    if builtinGenHead n o
       || isEmptyL (filterList (sameHeadAs n o) unusable) then
       None
     else
@@ -889,6 +891,16 @@ unexpandedAlias tydefs aliases ty = match tySpine ty
 -- `randomInt`/`randomBool` externs, which draw from the SAME ref the program
 -- under test does: that both perturbs the program's own stream and makes
 -- `--seed` describe nothing, since `seedPropRng` reseeds the private ref alone.
+-- A head the runner draws itself: one of [builtinGenHeads], and not a
+-- program's own type that shares the name (a program may declare its own
+-- `Option` or `Result`, #3465; it is drawn structurally, like any user type).
+builtinGenHead : String -> TyConOrigin -> Bool
+builtinGenHead n o = contains n builtinGenHeads && not (programModuleOrigin o)
+
+programModuleOrigin : TyConOrigin -> Bool
+programModuleOrigin (OriginModule m) = m /= "core"
+programModuleOrigin _ = False
+
 builtinGenHeads : List String
 builtinGenHeads = [
   "Int",
@@ -926,7 +938,7 @@ builtinGenHeads = [
 -- more than one candidate.
 userArbitrary : GenEnv -> List (String, Value e) -> Ty -> <e> Option (Value e)
 userArbitrary (GenEnv _ arbs _ _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
-  if contains n builtinGenHeads then
+  if builtinGenHead n o then
     None
   else match arbImplKeyFor arbs n o
     Some route => match lookupAssoc "arbitrary" evalEnv
@@ -1250,7 +1262,7 @@ anyDecl : (Decl -> Bool) -> List Decl -> Bool
 anyDecl _ [] = False
 anyDecl p (d :: rest) = p d || anyDecl p rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
@@ -1329,14 +1341,14 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PRec "TyCon" ((rf "tyConName" (PLit (LString "Unit")))) false)) (EVar "VUnit"))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) (PVar "t"))) (EApp (EVar "VList") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EVar "randIntRange") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "listLenBound") (EApp (EVar "genEnvTyDefs") (EVar "ge"))) (EVar "depth")) (EVar "t"))))))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Array")))) false) (PVar "t"))) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EVar "randIntRange") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "listLenBound") (EApp (EVar "genEnvTyDefs") (EVar "ge"))) (EVar "depth")) (EVar "t")))))))
-(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) (PVar "t"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t"))))))
-(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Result")))) false) (PVar "e")) (PVar "a"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "a")))) (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "e"))))))
+(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option"))) (rf "tyConOrigin" (PVar "o"))) false) (PVar "t"))) (EIf (EApp (EVar "not") (EApp (EVar "programModuleOrigin") (EVar "o"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Result"))) (rf "tyConOrigin" (PVar "o"))) false) (PVar "e")) (PVar "a"))) (EIf (EApp (EVar "not") (EApp (EVar "programModuleOrigin") (EVar "o"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "a")))) (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "e"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "VTuple") (EApp (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "ts"))))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PVar "ty")) (EMatch (EApp (EApp (EApp (EVar "userArbitrary") (EVar "ge")) (EVar "env")) (EVar "ty")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "unusableArbAt") (EVar "ge")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prop_runner: the 'Arbitrary' instance for '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' cannot be drawn from. The runner draws through an argument-free instance at a bare head only; a constrained instance ('requires …') or one at an applied head needs a dictionary the runner has no constraint entailment to build. Give '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' an argument-free instance, or draw it with an explicit generator."))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "genUserOrFail") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "ty")))))))
 (DTypeSig false "genEnvTyDefs" (TyFun (TyCon "GenEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef")))))
 (DFunDef false "genEnvTyDefs" ((PCon "GenEnv" (PVar "tydefs") PWild PWild PWild)) (EVar "tydefs"))
 (DTypeSig false "unusableArbAt" (TyFun (TyCon "GenEnv") (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "unusableArbAt" ((PCon "GenEnv" PWild PWild (PVar "unusable") PWild) (PVar "ty")) (EMatch (EApp (EVar "tyHeadIdentity") (EVar "ty")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "o"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "sameHeadAs") (EVar "n")) (EVar "o"))) (EVar "unusable")))) (EVar "None") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "unusableArbAt" ((PCon "GenEnv" PWild PWild (PVar "unusable") PWild) (PVar "ty")) (EMatch (EApp (EVar "tyHeadIdentity") (EVar "ty")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "o"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "builtinGenHead") (EVar "n")) (EVar "o")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "sameHeadAs") (EVar "n")) (EVar "o"))) (EVar "unusable")))) (EVar "None") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "sameHeadAs" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyTuple (TyCon "String") (TyCon "TyConOrigin")) (TyCon "Bool")))))
 (DFunDef false "sameHeadAs" ((PVar "n") (PVar "o") (PTuple (PVar "n2") (PVar "o2"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")))
 (DTypeSig false "genTuple" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
@@ -1461,10 +1473,15 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genParam" ((PAs "ge" (PCon "GenEnv" (PVar "tydefs") PWild PWild (PVar "aliases"))) (PVar "evalEnv") (PVar "ty")) (EMatch (EApp (EApp (EApp (EVar "userArbitrary") (EVar "ge")) (EVar "evalEnv")) (EVar "ty")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "unexpandedAlias") (EVar "tydefs")) (EVar "aliases")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "prop_runner: no generator for type alias '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "'. The runner draws from the parameter's declared type without expanding aliases, and an alias cannot carry an 'Arbitrary' instance — write the underlying type as the parameter's type instead."))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "evalEnv")) (EListLit)) (ELit (LInt 0))) (EVar "ty")))))))
 (DTypeSig false "unexpandedAlias" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "unexpandedAlias" ((PVar "tydefs") (PVar "aliases") (PVar "ty")) (EMatch (EApp (EVar "tySpine") (EVar "ty")) (arm (PCon "Some" (PTuple (PVar "n") PWild)) () (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "aliases")) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tydefs")))) (EApp (EVar "Some") (EVar "n")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "builtinGenHead" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
+(DFunDef false "builtinGenHead" ((PVar "n") (PVar "o")) (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EApp (EVar "not") (EApp (EVar "programModuleOrigin") (EVar "o")))))
+(DTypeSig false "programModuleOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))
+(DFunDef false "programModuleOrigin" ((PCon "OriginModule" (PVar "m"))) (EBinOp "/=" (EVar "m") (ELit (LString "core"))))
+(DFunDef false "programModuleOrigin" (PWild) (EVar "False"))
 (DTypeSig false "builtinGenHeads" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtinGenHeads" () (EListLit (ELit (LString "Int")) (ELit (LString "Bool")) (ELit (LString "Float")) (ELit (LString "Char")) (ELit (LString "String")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Array")) (ELit (LString "Option")) (ELit (LString "Result"))))
 (DTypeSig false "userArbitrary" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "route")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "route")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
+(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "builtinGenHead") (EVar "n")) (EVar "o")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "route")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "route")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
 (DFunDef false "userArbitrary" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "arbImplKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "ArbRoute"))))))
 (DFunDef false "arbImplKeyFor" ((PVar "arbs") (PVar "n") (PVar "o")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "arbImplAt") (EVar "n")) (EVar "o"))) (EVar "arbs")) (arm (PList (PCon "ArbImpl" PWild PWild (PVar "route"))) () (EApp (EVar "Some") (EVar "route"))) (arm PWild () (EVar "None"))))
@@ -1552,7 +1569,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "anyDecl" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyDecl" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "d")) (EApp (EApp (EVar "anyDecl") (EVar "p")) (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" false) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
@@ -1631,14 +1648,14 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PRec "TyCon" ((rf "tyConName" (PLit (LString "Unit")))) false)) (EVar "VUnit"))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "List")))) false) (PVar "t"))) (EApp (EVar "VList") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EVar "randIntRange") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "listLenBound") (EApp (EVar "genEnvTyDefs") (EVar "ge"))) (EVar "depth")) (EVar "t"))))))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Array")))) false) (PVar "t"))) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "genList") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t")) (EApp (EApp (EVar "randIntRange") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "listLenBound") (EApp (EVar "genEnvTyDefs") (EVar "ge"))) (EVar "depth")) (EVar "t")))))))
-(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option")))) false) (PVar "t"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t"))))))
-(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Result")))) false) (PVar "e")) (PVar "a"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "a")))) (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "e"))))))
+(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Option"))) (rf "tyConOrigin" (PVar "o"))) false) (PVar "t"))) (EIf (EApp (EVar "not") (EApp (EVar "programModuleOrigin") (EVar "o"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyApp" (PCon "TyApp" (PRec "TyCon" ((rf "tyConName" (PLit (LString "Result"))) (rf "tyConOrigin" (PVar "o"))) false) (PVar "e")) (PVar "a"))) (EIf (EApp (EVar "not") (EApp (EVar "programModuleOrigin") (EVar "o"))) (EIf (EApp (EVar "randBoolL") (ELit LUnit)) (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "a")))) (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "e"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "VTuple") (EApp (EApp (EApp (EApp (EApp (EVar "genTuple") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "ts"))))
 (DFunDef false "genForType" ((PVar "ge") (PVar "env") (PVar "subst") (PVar "depth") (PVar "ty")) (EMatch (EApp (EApp (EApp (EVar "userArbitrary") (EVar "ge")) (EVar "env")) (EVar "ty")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "unusableArbAt") (EVar "ge")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prop_runner: the 'Arbitrary' instance for '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' cannot be drawn from. The runner draws through an argument-free instance at a bare head only; a constrained instance ('requires …') or one at an applied head needs a dictionary the runner has no constraint entailment to build. Give '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' an argument-free instance, or draw it with an explicit generator."))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "genUserOrFail") (EVar "ge")) (EVar "env")) (EVar "subst")) (EVar "depth")) (EVar "ty")))))))
 (DTypeSig false "genEnvTyDefs" (TyFun (TyCon "GenEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef")))))
 (DFunDef false "genEnvTyDefs" ((PCon "GenEnv" (PVar "tydefs") PWild PWild PWild)) (EVar "tydefs"))
 (DTypeSig false "unusableArbAt" (TyFun (TyCon "GenEnv") (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "unusableArbAt" ((PCon "GenEnv" PWild PWild (PVar "unusable") PWild) (PVar "ty")) (EMatch (EApp (EVar "tyHeadIdentity") (EVar "ty")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "o"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "sameHeadAs") (EVar "n")) (EVar "o"))) (EVar "unusable")))) (EVar "None") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "unusableArbAt" ((PCon "GenEnv" PWild PWild (PVar "unusable") PWild) (PVar "ty")) (EMatch (EApp (EVar "tyHeadIdentity") (EVar "ty")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "o"))) () (EIf (EBinOp "||" (EApp (EApp (EVar "builtinGenHead") (EVar "n")) (EVar "o")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "sameHeadAs") (EVar "n")) (EVar "o"))) (EVar "unusable")))) (EVar "None") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "sameHeadAs" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyTuple (TyCon "String") (TyCon "TyConOrigin")) (TyCon "Bool")))))
 (DFunDef false "sameHeadAs" ((PVar "n") (PVar "o") (PTuple (PVar "n2") (PVar "o2"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")))
 (DTypeSig false "genTuple" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
@@ -1763,10 +1780,15 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genParam" ((PAs "ge" (PCon "GenEnv" (PVar "tydefs") PWild PWild (PVar "aliases"))) (PVar "evalEnv") (PVar "ty")) (EMatch (EApp (EApp (EApp (EVar "userArbitrary") (EVar "ge")) (EVar "evalEnv")) (EVar "ty")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "unexpandedAlias") (EVar "tydefs")) (EVar "aliases")) (EVar "ty")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "prop_runner: no generator for type alias '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "'. The runner draws from the parameter's declared type without expanding aliases, and an alias cannot carry an 'Arbitrary' instance — write the underlying type as the parameter's type instead."))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "genForType") (EVar "ge")) (EVar "evalEnv")) (EListLit)) (ELit (LInt 0))) (EVar "ty")))))))
 (DTypeSig false "unexpandedAlias" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "unexpandedAlias" ((PVar "tydefs") (PVar "aliases") (PVar "ty")) (EMatch (EApp (EVar "tySpine") (EVar "ty")) (arm (PCon "Some" (PTuple (PVar "n") PWild)) () (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "aliases")) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tydefs")))) (EApp (EVar "Some") (EVar "n")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "builtinGenHead" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
+(DFunDef false "builtinGenHead" ((PVar "n") (PVar "o")) (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EApp (EVar "not") (EApp (EVar "programModuleOrigin") (EVar "o")))))
+(DTypeSig false "programModuleOrigin" (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))
+(DFunDef false "programModuleOrigin" ((PCon "OriginModule" (PVar "m"))) (EBinOp "/=" (EVar "m") (ELit (LString "core"))))
+(DFunDef false "programModuleOrigin" (PWild) (EVar "False"))
 (DTypeSig false "builtinGenHeads" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtinGenHeads" () (EListLit (ELit (LString "Int")) (ELit (LString "Bool")) (ELit (LString "Float")) (ELit (LString "Char")) (ELit (LString "String")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Array")) (ELit (LString "Option")) (ELit (LString "Result"))))
 (DTypeSig false "userArbitrary" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtinGenHeads")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "route")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "route")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
+(DFunDef false "userArbitrary" ((PCon "GenEnv" PWild (PVar "arbs") PWild PWild) (PVar "evalEnv") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EIf (EApp (EApp (EVar "builtinGenHead") (EVar "n")) (EVar "o")) (EVar "None") (EMatch (EApp (EApp (EApp (EVar "arbImplKeyFor") (EVar "arbs")) (EVar "n")) (EVar "o")) (arm (PCon "Some" (PVar "route")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "arbitrary"))) (EVar "evalEnv")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "userArbitraryAt") (EVar "route")) (EApp (EVar "force") (EVar "m")))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))))
 (DFunDef false "userArbitrary" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "arbImplKeyFor" (TyFun (TyApp (TyCon "List") (TyCon "ArbImpl")) (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "ArbRoute"))))))
 (DFunDef false "arbImplKeyFor" ((PVar "arbs") (PVar "n") (PVar "o")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "arbImplAt") (EVar "n")) (EVar "o"))) (EVar "arbs")) (arm (PList (PCon "ArbImpl" PWild PWild (PVar "route"))) () (EApp (EVar "Some") (EVar "route"))) (arm PWild () (EVar "None"))))

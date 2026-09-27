@@ -1,0 +1,3 @@
+interface Display a where
+  shout : a -> String
+main = 0

@@ -1,0 +1,6 @@
+issue: #3512 (control)
+shape: control, two flips (`A x = MkA (B x -> Int)`, `B y = MkB (y -> Int)`)
+spec: EFFECTS-SEMANTICS.md §9 variance discussion: `x` occurs only in
+      `(x -> Int) -> Int`, a covariant position, so widening is sound.
+status: GREEN (ACCEPTED) -- must stay green: the fixpoint's order-independence
+  must not read two flips as invariant.
