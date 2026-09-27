@@ -1,5 +1,5 @@
 # META
-source_lines=390
+source_lines=389
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -70,7 +70,6 @@ litSexp (LChar s) = node "LChar" [escStr s]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
 litSexp (LU64 hi lo) = node "LU64" [intToString hi, intToString lo]
-litSexp (LI64 hi lo) = node "LI64" [intToString hi, intToString lo]
 
 export
 patSexp : Pat -> String
@@ -412,7 +411,6 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "litSexp" ((PCon "LBool" (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "LBool"))) (EListLit (EApp (EVar "boolStr") (EVar "b")))))
 (DFunDef false "litSexp" ((PCon "LUnit")) (ELit (LString "LUnit")))
 (DFunDef false "litSexp" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LU64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
-(DFunDef false "litSexp" ((PCon "LI64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LI64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
 (DTypeSig true "patSexp" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "patSexp" ((PCon "PVar" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "PVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "patSexp" ((PCon "PWild")) (ELit (LString "PWild")))
@@ -605,7 +603,6 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "litSexp" ((PCon "LBool" (PVar "b"))) (EApp (EApp (EVar "node") (ELit (LString "LBool"))) (EListLit (EApp (EVar "boolStr") (EVar "b")))))
 (DFunDef false "litSexp" ((PCon "LUnit")) (ELit (LString "LUnit")))
 (DFunDef false "litSexp" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LU64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
-(DFunDef false "litSexp" ((PCon "LI64" (PVar "hi") (PVar "lo"))) (EApp (EApp (EVar "node") (ELit (LString "LI64"))) (EListLit (EApp (EVar "intToString") (EVar "hi")) (EApp (EVar "intToString") (EVar "lo")))))
 (DTypeSig true "patSexp" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "patSexp" ((PCon "PVar" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "PVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "patSexp" ((PCon "PWild")) (ELit (LString "PWild")))

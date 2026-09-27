@@ -626,6 +626,7 @@ whereBindingsCons : ParserE <> (List (String, List Pat, Expr))
 whereBindingsLoop : ParserE <> (List (String, List Pat, Expr))
 whereEol : Expr -> ParserE <> Expr
 whereTail : Expr -> ParserE <> Expr
+wideNegMsg : String -> String
 widePatMsg : String -> String
 withAllFor : Int -> String -> Token -> ParserE <> UseMember
 withAllOrNot : Int -> String -> ParserE <> UseMember

@@ -1,5 +1,5 @@
 # META
-source_lines=2659
+source_lines=2655
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -81,8 +81,8 @@ import frontend.ast.{
   Attr(..),
 }
 import support.util.{
-  u64HalvesHex, i64HalvesLiteral, zipL, joinWith, listLen, allList, isEmptyL,
-  isNonEmptyL, escOneHex2
+  u64HalvesHex, zipL, joinWith, listLen, allList, isEmptyL, isNonEmptyL,
+  escOneHex2
 }
 import list.{last, sortBy}
 import support.char.{isUpper}
@@ -955,14 +955,12 @@ printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
 printLit (LU64 hi lo) = text ("0x" ++ u64HalvesHex hi lo)
-printLit (LI64 hi lo) = text (i64HalvesLiteral hi lo)
 
 isNegLit : Lit -> Bool
 isNegLit (LInt n) = n < 0
 isNegLit (LFloat f) =
   let s = floatToString f
   stringLength s > 0 && stringSlice 0 1 s == "-"
-isNegLit (LI64 hi _) = hi >= 2147483648
 isNegLit _ = False
 
 -- ── Types ─────────────────────────────────────────
@@ -2061,8 +2059,6 @@ headIsNumericHead (ENumLit _ _ _ _) = True
 headIsNumericHead (EWideLit _ _ _ _) = True
 headIsNumericHead (ELit (LInt _)) = True
 headIsNumericHead (ELit (LFloat _)) = True
-headIsNumericHead (ELit (LU64 _ _)) = True
-headIsNumericHead (ELit (LI64 _ _)) = True
 headIsNumericHead _ = False
 
 collectApp : List Expr -> Expr -> (Expr, List Expr)
@@ -2663,7 +2659,7 @@ effAxesDoc axes =
       (text ")"))
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
-(DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
+(DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
@@ -3020,11 +3016,9 @@ effAxesDoc axes =
 (DFunDef false "printLit" ((PCon "LBool" (PVar "b"))) (EApp (EVar "text") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False")))))
 (DFunDef false "printLit" ((PCon "LUnit")) (EApp (EVar "text") (ELit (LString "()"))))
 (DFunDef false "printLit" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo")))))
-(DFunDef false "printLit" ((PCon "LI64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EApp (EApp (EVar "i64HalvesLiteral") (EVar "hi")) (EVar "lo"))))
 (DTypeSig false "isNegLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
 (DFunDef false "isNegLit" ((PCon "LInt" (PVar "n"))) (EBinOp "<" (EVar "n") (ELit (LInt 0))))
 (DFunDef false "isNegLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "-")))))))
-(DFunDef false "isNegLit" ((PCon "LI64" (PVar "hi") PWild)) (EBinOp ">=" (EVar "hi") (ELit (LInt 2147483648))))
 (DFunDef false "isNegLit" (PWild) (EVar "False"))
 (DTypeSig false "tyConSurface" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "tyConSurface" ((PLit (LString "__tuple2__"))) (ELit (LString "(,)")))
@@ -3424,8 +3418,6 @@ effAxesDoc axes =
 (DFunDef false "headIsNumericHead" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
-(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LU64" PWild PWild))) (EVar "True"))
-(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LI64" PWild PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" (PWild) (EVar "False"))
 (DTypeSig false "collectApp" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "collectApp" ((PVar "acc") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "collectApp") (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "f")))
@@ -3610,7 +3602,7 @@ effAxesDoc axes =
 (DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
-(DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
+(DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
@@ -3967,11 +3959,9 @@ effAxesDoc axes =
 (DFunDef false "printLit" ((PCon "LBool" (PVar "b"))) (EApp (EVar "text") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False")))))
 (DFunDef false "printLit" ((PCon "LUnit")) (EApp (EVar "text") (ELit (LString "()"))))
 (DFunDef false "printLit" ((PCon "LU64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo")))))
-(DFunDef false "printLit" ((PCon "LI64" (PVar "hi") (PVar "lo"))) (EApp (EVar "text") (EApp (EApp (EVar "i64HalvesLiteral") (EVar "hi")) (EVar "lo"))))
 (DTypeSig false "isNegLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
 (DFunDef false "isNegLit" ((PCon "LInt" (PVar "n"))) (EBinOp "<" (EVar "n") (ELit (LInt 0))))
 (DFunDef false "isNegLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "-")))))))
-(DFunDef false "isNegLit" ((PCon "LI64" (PVar "hi") PWild)) (EBinOp ">=" (EVar "hi") (ELit (LInt 2147483648))))
 (DFunDef false "isNegLit" (PWild) (EVar "False"))
 (DTypeSig false "tyConSurface" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "tyConSurface" ((PLit (LString "__tuple2__"))) (ELit (LString "(,)")))
@@ -4371,8 +4361,6 @@ effAxesDoc axes =
 (DFunDef false "headIsNumericHead" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
-(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LU64" PWild PWild))) (EVar "True"))
-(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LI64" PWild PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" (PWild) (EVar "False"))
 (DTypeSig false "collectApp" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "collectApp" ((PVar "acc") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "collectApp") (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "f")))

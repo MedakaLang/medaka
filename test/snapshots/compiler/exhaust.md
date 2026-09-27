@@ -1,5 +1,5 @@
 # META
-source_lines=1138
+source_lines=1137
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -444,7 +444,6 @@ litEq (LChar a) (LChar b) = a == b
 litEq (LBool a) (LBool b) = a == b
 litEq LUnit LUnit = True
 litEq (LU64 ah al) (LU64 bh bl) = ah == bh && al == bl
-litEq (LI64 ah al) (LI64 bh bl) = ah == bh && al == bl
 litEq _ _ = False
 
 defaultMatrix : List (List Pat) -> List (List Pat)
@@ -1265,7 +1264,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
 (DFunDef false "litEq" ((PCon "LU64" (PVar "ah") (PVar "al")) (PCon "LU64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
-(DFunDef false "litEq" ((PCon "LI64" (PVar "ah") (PVar "al")) (PCon "LI64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
 (DFunDef false "litEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "defaultMatrix" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "defaultMatrix" ((PList)) (EListLit))
@@ -1662,7 +1660,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
 (DFunDef false "litEq" ((PCon "LU64" (PVar "ah") (PVar "al")) (PCon "LU64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
-(DFunDef false "litEq" ((PCon "LI64" (PVar "ah") (PVar "al")) (PCon "LI64" (PVar "bh") (PVar "bl"))) (EBinOp "&&" (EBinOp "==" (EVar "ah") (EVar "bh")) (EBinOp "==" (EVar "al") (EVar "bl"))))
 (DFunDef false "litEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "defaultMatrix" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "defaultMatrix" ((PList)) (EListLit))

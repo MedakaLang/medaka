@@ -1,5 +1,5 @@
 # META
-source_lines=898
+source_lines=880
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -734,24 +734,6 @@ extern u64ShiftRight : U64 -> Int -> U64
 -- | The high 64 bits of the 128-bit product of two `U64` values.
 extern u64MulHigh : U64 -> U64 -> U64
 
--- The signed types.  `I32` shares `Int`'s tagged word and holds its value
--- sign-extended, `-2^31 .. 2^31 - 1`; `I64` is a boxed 64-bit cell like `U64`,
--- read in two's complement.  Their arithmetic and comparisons are builtin
--- operators; these are the kernels the `i32` and `i64` modules build the rest of
--- their surface on.  Restricted like the conversions above.
-
--- | The low thirty-two bits of an `Int`, read in two's complement, as an `I32`.
-extern i32Truncate : Int -> I32
-
--- | An `I32` as an `Int`.
-extern i32ToInt : I32 -> Int
-
--- | A `U64`'s 64 bits read in two's complement, as an `I64`.
-extern i64FromBits : U64 -> I64
-
--- | An `I64`'s two's complement bits, as a `U64`.
-extern i64ToBits : I64 -> U64
-
 -- # Byte blocks
 
 -- `ByteBlock` is a mutable buffer holding one byte per element, so a block of
@@ -1058,10 +1040,6 @@ extern stringToLower : String -> String
 (DExtern false "u64ShiftLeft" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "U64"))))
 (DExtern false "u64ShiftRight" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "U64"))))
 (DExtern false "u64MulHigh" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
-(DExtern false "i32Truncate" (TyFun (TyCon "Int") (TyCon "I32")))
-(DExtern false "i32ToInt" (TyFun (TyCon "I32") (TyCon "Int")))
-(DExtern false "i64FromBits" (TyFun (TyCon "U64") (TyCon "I64")))
-(DExtern false "i64ToBits" (TyFun (TyCon "I64") (TyCon "U64")))
 (DExtern false "byteBlockMake" (TyFun (TyCon "Int") (TyCon "ByteBlock")))
 (DExtern false "byteBlockLength" (TyFun (TyCon "ByteBlock") (TyCon "Int")))
 (DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))
@@ -1253,10 +1231,6 @@ extern stringToLower : String -> String
 (DExtern false "u64ShiftLeft" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "U64"))))
 (DExtern false "u64ShiftRight" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "U64"))))
 (DExtern false "u64MulHigh" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
-(DExtern false "i32Truncate" (TyFun (TyCon "Int") (TyCon "I32")))
-(DExtern false "i32ToInt" (TyFun (TyCon "I32") (TyCon "Int")))
-(DExtern false "i64FromBits" (TyFun (TyCon "U64") (TyCon "I64")))
-(DExtern false "i64ToBits" (TyFun (TyCon "I64") (TyCon "U64")))
 (DExtern false "byteBlockMake" (TyFun (TyCon "Int") (TyCon "ByteBlock")))
 (DExtern false "byteBlockLength" (TyFun (TyCon "ByteBlock") (TyCon "Int")))
 (DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))

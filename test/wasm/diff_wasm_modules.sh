@@ -126,9 +126,9 @@ RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
     # fixture keeps same-spelled IA/IB implementations live and proves IA never
     # tail-calls IB just because both methods are named `walk`.
     if [ "$st" = 0 ] && [ "$name" = "w_selftail_dict.mdk" ]; then
-      walkbody="$(awk '/func \$mdk_impl_Counter_walk /{f=1} f&&/^  \(func /&&!/mdk_impl_Counter_walk /{f=0} f' "$wat")"
-      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$mdk_impl_Counter_walk')"
-      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $mdk_impl_Counter_walk')"
+      walkbody="$(awk '/func \$mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk /{f=1} f&&/^  \(func /&&!/mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk /{f=0} f' "$wat")"
+      plain="$(printf '%s' "$walkbody" | grep -cE '^[[:space:]]*call \$mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk')"
+      rc="$(printf '%s' "$walkbody" | grep -cF 'return_call $mdk_impl_zZw_5f_selftail_5f_dict_2e_Counter_walk')"
       if [ "$rc" -eq 1 ] && [ "$plain" -eq 0 ]; then
         msg="$msg
 SELFKEY-ASSERT ok   $name: exactly 1 self return_call, 0 plain self call"
@@ -221,6 +221,13 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
     [ -f "$entry" ] || continue
     printf '%s\t%s\t%s\n' "$(basename "${dir%/}")" "$entry" "${dir%/}"
   done
+  # An entry file whose name is not a WAT identifier: its module id is part of
+  # every type word it declares (`café(1).Mod5`, #1397), and the emitted type
+  # and impl names must still be legal.  Generated here, not committed, so the
+  # shared corpus carries no such file name.
+  mkdir -p "$WORK/nonident"
+  cp "$FIXDIR/eq_custom_dispatch.mdk" "$WORK/nonident/café(1).mdk"
+  printf '%s\t%s\t%s\n' "nonident_entry" "$WORK/nonident/café(1).mdk" "$WORK/nonident"
 } > "$WORK/worklist.tsv"
 
 MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" CORE="$CORE" STDLIB="$STDLIB" \

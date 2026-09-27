@@ -1,8 +1,8 @@
 # META
-source_lines=227
+source_lines=182
 stages=DESUGAR,MARK
 # SOURCE
--- The interpreter's `U64` and `I64` arithmetic (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2).
+-- The interpreter's `U64` arithmetic (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2).
 -- The interpreter is a Medaka program compiled with a 63-bit `Int`, so it carries a
 -- `U64` as two `Int` halves, `(hi, lo)`, each in `0 .. 2^32 - 1`, and does every
 -- operation here with no intermediate above 2^62.  A product of two 32-bit halves
@@ -184,51 +184,6 @@ toDecimalGo (0, 0) acc = acc
 toDecimalGo (hi, lo) acc =
   let t = hi % 10 * half + lo
   toDecimalGo (hi / 10, t / 10) (intToString (t % 10) ++ acc)
-
--- ── I64 ─────────────────────────────────────────────────────────────────────
--- An `I64` is the same pair of halves read in two's complement: bit 63 (the top
--- bit of the high half) is the sign.  Addition, subtraction, multiplication and
--- the bitwise operations are the unsigned ones above, bit for bit; only order,
--- division and rendering read the sign.
-
-isNegative : (Int, Int) -> Bool
-isNegative (hi, _) = hi >= 2147483648
-
--- Two's complement negation, modulo 2^64: `negate minBound` is `minBound`.
-export
-negate64 : (Int, Int) -> (Int, Int)
-negate64 v = sub (0, 0) v
-
--- Signed order: a negative value is below every non-negative one, and two values
--- of one sign compare as their patterns do.
-export
-compareI64 : (Int, Int) -> (Int, Int) -> Ordering
-compareI64 a b = match (isNegative a, isNegative b)
-  (True, False) => Lt
-  (False, True) => Gt
-  _ => compareU64 a b
-
--- Signed quotient and remainder, truncating toward zero as C does: the quotient
--- is the magnitudes' quotient with the sign of the operands' product, and the
--- remainder takes the dividend's sign.  `minBound / -1` is `minBound` (the
--- magnitude 2^63 wraps) and `minBound % -1` is `0`.  The divisor is not zero.
-export
-divModI64 : (Int, Int) -> (Int, Int) -> ((Int, Int), (Int, Int))
-divModI64 a b =
-  let na = isNegative a
-  let nb = isNegative b
-  let qr = divMod (if na then negate64 a else a) (if nb then negate64 b else b)
-  let q = if na /= nb then negate64 (fst qr) else fst qr
-  let r = if na then negate64 (snd qr) else snd qr
-  (q, r)
-
--- Decimal, as the interpreter prints an `I64`; `minBound`'s magnitude 2^63 is
--- the unsigned pattern of its negation.
-export
-toDecimalI64 : (Int, Int) -> String
-toDecimalI64 v
-  | isNegative v = "-" ++ toDecimal (negate64 v)
-  | otherwise = toDecimal v
 # DESUGAR
 (DTypeSig false "half" (TyCon "Int"))
 (DFunDef false "half" () (ELit (LInt 4294967296)))
@@ -280,16 +235,6 @@ toDecimalI64 v
 (DTypeSig false "toDecimalGo" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "toDecimalGo" ((PTuple (PLit (LInt 0)) (PLit (LInt 0))) (PVar "acc")) (EVar "acc"))
 (DFunDef false "toDecimalGo" ((PTuple (PVar "hi") (PVar "lo")) (PVar "acc")) (EBlock (DoLet false false (PVar "t") (EBinOp "+" (EBinOp "*" (EBinOp "%" (EVar "hi") (ELit (LInt 10))) (EVar "half")) (EVar "lo"))) (DoExpr (EApp (EApp (EVar "toDecimalGo") (ETuple (EBinOp "/" (EVar "hi") (ELit (LInt 10))) (EBinOp "/" (EVar "t") (ELit (LInt 10))))) (EBinOp "++" (EApp (EVar "intToString") (EBinOp "%" (EVar "t") (ELit (LInt 10)))) (EVar "acc"))))))
-(DTypeSig false "isNegative" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Bool")))
-(DFunDef false "isNegative" ((PTuple (PVar "hi") PWild)) (EBinOp ">=" (EVar "hi") (ELit (LInt 2147483648))))
-(DTypeSig true "negate64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "negate64" ((PVar "v")) (EApp (EApp (EVar "sub") (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (EVar "v")))
-(DTypeSig true "compareI64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Ordering"))))
-(DFunDef false "compareI64" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "isNegative") (EVar "a")) (EApp (EVar "isNegative") (EVar "b"))) (arm (PTuple (PCon "True") (PCon "False")) () (EVar "Lt")) (arm (PTuple (PCon "False") (PCon "True")) () (EVar "Gt")) (arm PWild () (EApp (EApp (EVar "compareU64") (EVar "a")) (EVar "b")))))
-(DTypeSig true "divModI64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "divModI64" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "na") (EApp (EVar "isNegative") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "isNegative") (EVar "b"))) (DoLet false false (PVar "qr") (EApp (EApp (EVar "divMod") (EIf (EVar "na") (EApp (EVar "negate64") (EVar "a")) (EVar "a"))) (EIf (EVar "nb") (EApp (EVar "negate64") (EVar "b")) (EVar "b")))) (DoLet false false (PVar "q") (EIf (EBinOp "/=" (EVar "na") (EVar "nb")) (EApp (EVar "negate64") (EApp (EVar "fst") (EVar "qr"))) (EApp (EVar "fst") (EVar "qr")))) (DoLet false false (PVar "r") (EIf (EVar "na") (EApp (EVar "negate64") (EApp (EVar "snd") (EVar "qr"))) (EApp (EVar "snd") (EVar "qr")))) (DoExpr (ETuple (EVar "q") (EVar "r")))))
-(DTypeSig true "toDecimalI64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))
-(DFunDef false "toDecimalI64" ((PVar "v")) (EIf (EApp (EVar "isNegative") (EVar "v")) (EBinOp "++" (ELit (LString "-")) (EApp (EVar "toDecimal") (EApp (EVar "negate64") (EVar "v")))) (EIf (EVar "otherwise") (EApp (EVar "toDecimal") (EVar "v")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
 (DTypeSig false "half" (TyCon "Int"))
 (DFunDef false "half" () (ELit (LInt 4294967296)))
@@ -341,13 +286,3 @@ toDecimalI64 v
 (DTypeSig false "toDecimalGo" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "toDecimalGo" ((PTuple (PLit (LInt 0)) (PLit (LInt 0))) (PVar "acc")) (EVar "acc"))
 (DFunDef false "toDecimalGo" ((PTuple (PVar "hi") (PVar "lo")) (PVar "acc")) (EBlock (DoLet false false (PVar "t") (EBinOp "+" (EBinOp "*" (EBinOp "%" (EVar "hi") (ELit (LInt 10))) (EVar "half")) (EVar "lo"))) (DoExpr (EApp (EApp (EVar "toDecimalGo") (ETuple (EBinOp "/" (EVar "hi") (ELit (LInt 10))) (EBinOp "/" (EVar "t") (ELit (LInt 10))))) (EBinOp "++" (EApp (EVar "intToString") (EBinOp "%" (EVar "t") (ELit (LInt 10)))) (EVar "acc"))))))
-(DTypeSig false "isNegative" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Bool")))
-(DFunDef false "isNegative" ((PTuple (PVar "hi") PWild)) (EBinOp ">=" (EVar "hi") (ELit (LInt 2147483648))))
-(DTypeSig true "negate64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "negate64" ((PVar "v")) (EApp (EApp (EVar "sub#shadow") (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (EVar "v")))
-(DTypeSig true "compareI64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Ordering"))))
-(DFunDef false "compareI64" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "isNegative") (EVar "a")) (EApp (EVar "isNegative") (EVar "b"))) (arm (PTuple (PCon "True") (PCon "False")) () (EVar "Lt")) (arm (PTuple (PCon "False") (PCon "True")) () (EVar "Gt")) (arm PWild () (EApp (EApp (EVar "compareU64") (EVar "a")) (EVar "b")))))
-(DTypeSig true "divModI64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "divModI64" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "na") (EApp (EVar "isNegative") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "isNegative") (EVar "b"))) (DoLet false false (PVar "qr") (EApp (EApp (EVar "divMod") (EIf (EVar "na") (EApp (EVar "negate64") (EVar "a")) (EVar "a"))) (EIf (EVar "nb") (EApp (EVar "negate64") (EVar "b")) (EVar "b")))) (DoLet false false (PVar "q") (EIf (EBinOp "/=" (EVar "na") (EVar "nb")) (EApp (EVar "negate64") (EApp (EVar "fst") (EVar "qr"))) (EApp (EVar "fst") (EVar "qr")))) (DoLet false false (PVar "r") (EIf (EVar "na") (EApp (EVar "negate64") (EApp (EVar "snd") (EVar "qr"))) (EApp (EVar "snd") (EVar "qr")))) (DoExpr (ETuple (EVar "q") (EVar "r")))))
-(DTypeSig true "toDecimalI64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))
-(DFunDef false "toDecimalI64" ((PVar "v")) (EIf (EApp (EVar "isNegative") (EVar "v")) (EBinOp "++" (ELit (LString "-")) (EApp (EVar "toDecimal") (EApp (EVar "negate64") (EVar "v")))) (EIf (EVar "otherwise") (EApp (EVar "toDecimal") (EVar "v")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
