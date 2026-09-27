@@ -1023,8 +1023,8 @@ finishEffectSummaryScope retained borrowed =
   ()
 
 -- Close the scope, keeping as residuals the unproven obligations over the
--- authorities [quantifiable] assigns to a member (see `closeSummaryScope`);
--- each comes back with its member index.
+-- authorities [roles] quantifies at a member (`rlQuantified`, see
+-- `closeSummaryScope`); each comes back with its member index.
 finishEffectSummaryScopeKeeping : ScopeRoles ->
   Map Int Unit ->
   Map Int (Ref Effvar) ->
@@ -11297,16 +11297,19 @@ reportIndexFailure loc a b =
 
 authorityIndexMsg : Authority -> Authority -> String
 authorityIndexMsg a b =
-  let sa = authorityTermText a
-  let sb = authorityTermText b
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = authorityTermTextIn ctx cnt a
+  let sb = authorityTermTextIn ctx cnt b
   let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
   "Authority index mismatch: \{x} vs \{y}. An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"
 
 -- An authority as a message names it: the top as the whole domain, a term
--- as it is written.
-authorityTermText : Authority -> String
-authorityTermText q =
-  if authIsTop q then "the whole domain" else ppAuthority (Ref []) (Ref 0) q
+-- as it is written, under a naming context shared by every term of one
+-- message, so two distinct variables with one binder name read apart.
+authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+authorityTermTextIn ctx cnt q =
+  if authIsTop q then "the whole domain" else ppAuthority ctx cnt q
 
 -- Against a named authority the remedy is to derive the value from the
 -- argument; against a written bound it is to stay within, or widen, the
@@ -11320,12 +11323,10 @@ authorityFailureMsg : String ->
   Option Authority ->
   String
 authorityFailureMsg name origin lower upper written =
-  let lo =
-    if authIsTop lower then
-      "the whole domain"
-    else
-      ppAuthority (Ref []) (Ref 0) lower
-  let hi = ppAuthority (Ref []) (Ref 0) upper
+  let ctx = Ref []
+  let cnt = Ref 0
+  let lo = authorityTermTextIn ctx cnt lower
+  let hi = ppAuthority ctx cnt upper
   match origin
     Some callee => residualFailureMsg callee lo hi
     None => boundFailureMsg name lower lo hi upper written
@@ -21068,7 +21069,9 @@ resolvePendingJoins level = match perRun.value.pendingJoinsRef.value
 -- enclosing scope, its result lowered to that level so the binding cannot
 -- generalize over it, exactly as equating it with those variables would; a
 -- later use there may still shape an alternative.  Any other join is decided
--- now.
+-- now, including one whose result is already outer but which has a local
+-- alternative: handing it out would let the binding generalize that
+-- alternative while the join still constrains it.
 settlePendingJoins : Int -> Unit
 settlePendingJoins level =
   let postponed = settlePending level []
@@ -21092,9 +21095,8 @@ settlePending level postponed = match perRun.value.pendingJoinsRef.value
 
 joinOfOuterVariables : Int -> PendingJoin -> Bool
 joinOfOuterVariables level pj =
-  isOuterVariable level pj.pjResult
-    || isUnshaped pj.pjResult
-      && allList (value => isOuterVariable level (snd value)) pj.pjValues
+  isUnshaped pj.pjResult
+    && allList (value => isOuterVariable level (snd value)) pj.pjValues
 
 isUnshaped : Mono -> Bool
 isUnshaped t = match normalize t
@@ -40464,6 +40466,7 @@ scopeRolesOf members =
           _ => acc)
         Tip
         members,
+    rlTyped = Some (fold (acc (_, mono) => authIdsIn mono acc) Tip members),
   }
 
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual

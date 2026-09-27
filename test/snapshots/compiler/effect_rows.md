@@ -1,5 +1,5 @@
 # META
-source_lines=434
+source_lines=437
 stages=DESUGAR,MARK
 # SOURCE
 -- Effect atoms and rows. An atom is a resolved label refined by an authority
@@ -85,10 +85,13 @@ renderAtom a = renderAtomWith authvarDefaultName a
 
 -- An atom whose authority is a symbolic join renders as one atom per operand
 -- (`FileWrite dst, FileWrite src`), the spelling a signature writes and the
--- parser folds back into one atom; the join form ` (a | b)` is not one.
+-- parser folds back into one atom; the join form ` (a | b)` is not one.  The
+-- empty authority (a least solution nothing bounded below) keeps its label
+-- and renders ` ()`: a label must never vanish from a row.
 export
 renderAtomWith : (Ref Authvar -> String) -> Atom -> String
 renderAtomWith name a = match authNorm (atomAuth a)
+  AJoin [] => atomLabel a ++ renderAuthorityWith name (AJoin [])
   AJoin ms =>
     joinWith ", " (map (m => atomLabel a ++ renderAuthorityWith name m) ms)
   q => atomLabel a ++ renderAuthorityWith name q
@@ -473,7 +476,7 @@ dedupCellsGo (cell :: cells) seen acc =
 (DTypeSig true "renderAtom" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "renderAtom" ((PVar "a")) (EApp (EApp (EVar "renderAtomWith") (EVar "authvarDefaultName")) (EVar "a")))
 (DTypeSig true "renderAtomWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "renderAtomWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "m"))))) (EVar "ms")))) (arm (PVar "q") () (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "q"))))))
+(DFunDef false "renderAtomWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "AJoin" (PList)) () (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EApp (EVar "AJoin") (EListLit))))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "m"))))) (EVar "ms")))) (arm (PVar "q") () (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "q"))))))
 (DTypeSig true "renderAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "renderAtoms" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EApp (EVar "atomsNorm") (EVar "atoms")))))
 (DTypeSig true "renderAtomsWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
@@ -630,7 +633,7 @@ dedupCellsGo (cell :: cells) seen acc =
 (DTypeSig true "renderAtom" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "renderAtom" ((PVar "a")) (EApp (EApp (EVar "renderAtomWith") (EVar "authvarDefaultName")) (EVar "a")))
 (DTypeSig true "renderAtomWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyCon "Atom") (TyCon "String"))))
-(DFunDef false "renderAtomWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "m"))))) (EVar "ms")))) (arm (PVar "q") () (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "q"))))))
+(DFunDef false "renderAtomWith" ((PVar "name") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EApp (EVar "atomAuth") (EVar "a"))) (arm (PCon "AJoin" (PList)) () (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EApp (EVar "AJoin") (EListLit))))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "m"))))) (EVar "ms")))) (arm (PVar "q") () (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EApp (EVar "renderAuthorityWith") (EVar "name")) (EVar "q"))))))
 (DTypeSig true "renderAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "renderAtoms" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EApp (EVar "atomsNorm") (EVar "atoms")))))
 (DTypeSig true "renderAtomsWith" (TyFun (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))

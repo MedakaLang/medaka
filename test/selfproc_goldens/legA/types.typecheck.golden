@@ -217,7 +217,7 @@ authorityParamAsRowMsg : String -> String -> String
 authorityParamAsTypeMsg : String -> String -> String
 authorityParamNames : List String -> List (Option KindAnn) -> List String
 authorityTermAsTypeMsg : EffParamTy -> String
-authorityTermText : Authority -> String
+authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
 authvarIdOf : (String, Ref Authvar) -> Int
 axisProblems : List (String, Param) -> String -> Param -> List String

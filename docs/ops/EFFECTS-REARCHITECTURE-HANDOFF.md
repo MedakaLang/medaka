@@ -1021,12 +1021,49 @@ on a built binary beside a control; each answered by a rule):
   decided at its definition (`let p = subIn cfg` then `p app` refused); its
   type's authorities are now outward, the enclosing scope's (`ScopeRoles`).
 - *S3:* an alias-qualified occurrence (`D.rdSub`) reported at a stale span:
-  desugar dropped the alias head's span (`withLocOf`). A residual forced to
+  desugar dropped the alias head's span (`qualifiedAt`). A residual forced to
   top by a top lower bound rendered as `(* <= d)`: such a variable has no
   freedom and is solved, `Dir *` as on `main`.
 - *Older, not acted on:* `run (Handler (x => (if c then f else g) x))` is
   refused on `main` too: an unsigned binding's input row is not solved down to
   a closed slot through a lambda.
+
+**#3462 review round 2** (whole diff on `cdded5101`; each finding reproduced
+on a built binary beside a control, and each answered by a rule, not a case):
+
+- *S0, new in round 1:* a signed binding's universal reached the module root
+  when its group had a monomorphic member (`g = second f readAt` beside
+  `f : Dir d -> <FileRead d>`); the root solved it as a flexible variable and
+  `/tmp` was read under `<FileRead "cfg/*">`. An obligation naming a binder of
+  the closing group (its own universal, or a variable its schemes generalize)
+  is now decided in the group, never transferred (`binderAuth`); an enclosing
+  function's universal still moves with the rest (`effect_named_authority_ref_ok`).
+- *S0, new here:* a delayed join was handed outward whenever its result was
+  outer, even with a local alternative, which the binding then generalized
+  (`h x = k (if c then f else x)`; a segfault, a garbage value, an effect
+  laundered). A join is postponed only when every alternative is an outer
+  variable (`joinOfOuterVariables`).
+- *S1, new here:* a residual instance whose variable nothing bounded below was
+  refused (`partial = subIn cfg`, unused; `map (subIn cfg) []`): the solver
+  assigns only a variable some obligation bounds above-and-below. An internal
+  variable nothing bounds below now takes the empty authority (`AJoin []`,
+  rendered `()`; `bottomUnbounded`), and `authSub` admits it under anything.
+  A variable a member's type mentions is never defaulted (`rlTyped`).
+- *Found while fixing S1, S0:* with the empty authority at the root, a
+  generalized variable's obligation that had been transferred out of its
+  group (`q1 (Dir p) = readUnder h0 p` beside a monomorphic `h0`) held
+  vacuously and `q1 etc` read a file outside `cfg/*`. The binder rule above
+  closes it. The component walk no longer links two members through an
+  outside cell (`residualEligible`), so `q1` keeps `(d <= "cfg/*") =>` and
+  the honest `q1 app` that `main` refused is accepted.
+- *S2/S3:* an effect atom solved to the empty authority lost its label in
+  `check --types` (`<, IO>`); two distinct variables with one binder name read
+  alike in a message (`needs d to lie within d`); a residual the root proved
+  printed as `(d <= *) =>`; stale `withLocOf`/`[quantifiable]` names.
+- *Open, for a ruling:* a module-root cell bounded only above takes `⊥`, so a
+  library's exported `partial = rdIn cfg` is unusable from an importer (it was
+  `Dir "cfg/*"` on `main`, whose less general `rdIn` equated the two); the
+  spelling of the empty authority (`()`).
 
 **Traps paid for (#3462):**
 

@@ -15,7 +15,7 @@
 
 import types.effect_authority.{
   Authority(..), Authvar(..), authvarId, authvarName, authNorm, authIsTop,
-  renderAuthorityWith
+  authSub, renderAuthorityWith
 }
 import types.effect_rows.{
   renderAtoms,
@@ -348,12 +348,20 @@ normalizeLink cell t = match t
 -- ── rendering ─────────────────────────────────────────────────────────────
 export
 ppScheme : Scheme -> String
-ppScheme (Forall _ _ _ [] force t) = ppBinding (Ref []) (Ref 0) force t
-ppScheme (Forall _ _ _ residual force t) =
-  let ctx = Ref []
-  let cnt = Ref 0
-  let body = ppBinding ctx cnt force t
-  "\{contextText [] (renderResiduals ctx cnt residual)} => \{body}"
+ppScheme (Forall _ _ _ residual force t) = match openResiduals residual
+  [] => ppBinding (Ref []) (Ref 0) force t
+  live =>
+    let ctx = Ref []
+    let cnt = Ref 0
+    let body = ppBinding ctx cnt force t
+    "\{contextText [] (renderResiduals ctx cnt live)} => \{body}"
+
+-- The residuals a scheme still states: one whose relation already holds (an
+-- upper bound the root solved to the domain's top, a lower one it solved to
+-- the empty authority) constrains no use, and is not printed.
+openResiduals : List AuthResidual -> List AuthResidual
+openResiduals residual =
+  filterList (r => not (authSub r.arLower r.arUpper)) residual
 
 -- A scheme's context: one class constraint alone reads bare (`Num a =>`); a
 -- residual, or several entries, are parenthesised (`(p <= d) =>`,
@@ -414,7 +422,7 @@ ppSchemeCon cons (Forall _ _ _ residual force t) =
   let cnt = Ref 0
   let body = ppBinding ctx cnt force t
   let classes = sortUniqS (renderConstraintCtx ctx cnt cons)
-  "\{contextText classes (renderResiduals ctx cnt residual)} => \{body}"
+  "\{contextText classes (renderResiduals ctx cnt (openResiduals residual))} => \{body}"
 
 -- a predicate renders with its WHOLE argument vector — `Ix a i =>`, not the
 -- `(Ix a, Ix i) =>` two-1-ary-facts rendering the shattered representation produced

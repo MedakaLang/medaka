@@ -1192,6 +1192,57 @@ test "a monomorphic binding owes its residuals where it is used" = expectAll [
   expectTrue (accepts (residual "partial = subIn cfg\nuse _ = partial app\n")),
 ]
 
+-- A variable nothing bounds below takes its least solution, the empty
+-- authority, which every bound admits (review round 2).  The control feeds
+-- the same cell a value outside the bound.
+test "a variable nothing bounds below takes the empty authority" = expectAll [
+  expectTrue (accepts (residual "partial = subIn cfg\n")),
+  expectTrue (accepts (residual "outer _ =\n  let p = subIn cfg\n  0\n")),
+  expectTrue
+    (accepts
+      (residual
+        "each f xs = match xs\n  [] => []\n  x :: r => f x :: each f r\nnone _ = each (subIn cfg) []\n")),
+  expectTrue (rejects (residual "partial = subIn cfg\nuse _ = partial etc\n")),
+  expectEqual
+    "Dir () -> Dir \"cfg/*\""
+    (schemeOf (residual "partial = subIn cfg\n") "partial"),
+  expectEqual
+    "a -> <Store ()> List Int"
+    (schemeOf
+      (residual
+        "each f xs = match xs\n  [] => []\n  x :: r => f x :: each f r\nnone _ = each (rdSub cfg) []\n")
+      "none"),
+]
+
+-- An obligation naming a universal is decided in the universal's own scope:
+-- handed outward with a monomorphic sibling's authority, the root would solve
+-- the universal as a flexible variable and admit a read outside it (review
+-- round 2).  The control widens the declared row to the whole label.
+test "an obligation over a universal never leaves its scope" = expectAll [
+  expectTrue
+    (rejects
+      (residual
+        "readAt p = load p\nsecond a b = b\ng = second f readAt\nf : Dir d -> <Store d> Int\nf _ = g \"/tmp/x\"\n")),
+  expectTrue
+    (accepts
+      (residual
+        "readAt p = load p\nsecond a b = b\ng = second f readAt\nf : Dir d -> <Store> Int\nf _ = g \"/tmp/x\"\n")),
+]
+
+-- A monomorphic cell is outside the group that uses it: two members may each
+-- owe a relation to it, and each keeps its own residual rather than linking
+-- the two members' variables into one component (review round 2).
+test "two members may each owe a residual to one monomorphic cell" =
+  let group =
+    "second a b = b\nh0 = second (q1, q2) cfg\nq1 (Dir p) = sub h0 p\nq2 (Dir p) = sub h0 p\n"
+  expectAll [
+    expectEqual
+      "(d <= \"cfg/*\") => Dir d -> Dir \"cfg/*\""
+      (schemeOf (residual group) "q1"),
+    expectTrue (accepts (residual (group ++ "use _ = q1 app\n"))),
+    expectTrue (rejects (residual (group ++ "use _ = q1 etc\n"))),
+  ]
+
 test "an authority bounded below by the top is solved, not kept" =
   expectEqual
     "Bool -> String -> String -> Dir * -> Dir *"

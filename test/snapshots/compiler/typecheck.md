@@ -1,5 +1,5 @@
 # META
-source_lines=50613
+source_lines=50616
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -1027,8 +1027,8 @@ finishEffectSummaryScope retained borrowed =
   ()
 
 -- Close the scope, keeping as residuals the unproven obligations over the
--- authorities [quantifiable] assigns to a member (see `closeSummaryScope`);
--- each comes back with its member index.
+-- authorities [roles] quantifies at a member (`rlQuantified`, see
+-- `closeSummaryScope`); each comes back with its member index.
 finishEffectSummaryScopeKeeping : ScopeRoles ->
   Map Int Unit ->
   Map Int (Ref Effvar) ->
@@ -11301,16 +11301,19 @@ reportIndexFailure loc a b =
 
 authorityIndexMsg : Authority -> Authority -> String
 authorityIndexMsg a b =
-  let sa = authorityTermText a
-  let sb = authorityTermText b
+  let ctx = Ref []
+  let cnt = Ref 0
+  let sa = authorityTermTextIn ctx cnt a
+  let sb = authorityTermTextIn ctx cnt b
   let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
   "Authority index mismatch: \{x} vs \{y}. An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"
 
 -- An authority as a message names it: the top as the whole domain, a term
--- as it is written.
-authorityTermText : Authority -> String
-authorityTermText q =
-  if authIsTop q then "the whole domain" else ppAuthority (Ref []) (Ref 0) q
+-- as it is written, under a naming context shared by every term of one
+-- message, so two distinct variables with one binder name read apart.
+authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
+authorityTermTextIn ctx cnt q =
+  if authIsTop q then "the whole domain" else ppAuthority ctx cnt q
 
 -- Against a named authority the remedy is to derive the value from the
 -- argument; against a written bound it is to stay within, or widen, the
@@ -11324,12 +11327,10 @@ authorityFailureMsg : String ->
   Option Authority ->
   String
 authorityFailureMsg name origin lower upper written =
-  let lo =
-    if authIsTop lower then
-      "the whole domain"
-    else
-      ppAuthority (Ref []) (Ref 0) lower
-  let hi = ppAuthority (Ref []) (Ref 0) upper
+  let ctx = Ref []
+  let cnt = Ref 0
+  let lo = authorityTermTextIn ctx cnt lower
+  let hi = ppAuthority ctx cnt upper
   match origin
     Some callee => residualFailureMsg callee lo hi
     None => boundFailureMsg name lower lo hi upper written
@@ -21072,7 +21073,9 @@ resolvePendingJoins level = match perRun.value.pendingJoinsRef.value
 -- enclosing scope, its result lowered to that level so the binding cannot
 -- generalize over it, exactly as equating it with those variables would; a
 -- later use there may still shape an alternative.  Any other join is decided
--- now.
+-- now, including one whose result is already outer but which has a local
+-- alternative: handing it out would let the binding generalize that
+-- alternative while the join still constrains it.
 settlePendingJoins : Int -> Unit
 settlePendingJoins level =
   let postponed = settlePending level []
@@ -21096,9 +21099,8 @@ settlePending level postponed = match perRun.value.pendingJoinsRef.value
 
 joinOfOuterVariables : Int -> PendingJoin -> Bool
 joinOfOuterVariables level pj =
-  isOuterVariable level pj.pjResult
-    || isUnshaped pj.pjResult
-      && allList (value => isOuterVariable level (snd value)) pj.pjValues
+  isUnshaped pj.pjResult
+    && allList (value => isOuterVariable level (snd value)) pj.pjValues
 
 isUnshaped : Mono -> Bool
 isUnshaped t = match normalize t
@@ -40468,6 +40470,7 @@ scopeRolesOf members =
           _ => acc)
         Tip
         members,
+    rlTyped = Some (fold (acc (_, mono) => authIdsIn mono acc) Tip members),
   }
 
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
@@ -52319,11 +52322,11 @@ isTyAuth _ = False
 (DTypeSig false "reportIndexFailure" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
 (DFunDef false "reportIndexFailure" ((PVar "loc") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-AUTHORITY-INDEX-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "authorityIndexMsg") (EVar "a")) (EVar "b"))))
 (DTypeSig false "authorityIndexMsg" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "String"))))
-(DFunDef false "authorityIndexMsg" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "sa") (EApp (EVar "authorityTermText") (EVar "a"))) (DoLet false false (PVar "sb") (EApp (EVar "authorityTermText") (EVar "b"))) (DoLet false false (PTuple (PVar "x") (PVar "y")) (EIf (EBinOp "<=" (EVar "sa") (EVar "sb")) (ETuple (EVar "sa") (EVar "sb")) (ETuple (EVar "sb") (EVar "sa")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority index mismatch: ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " vs "))) (EApp (EVar "display") (EVar "y"))) (ELit (LString ". An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"))))))
-(DTypeSig false "authorityTermText" (TyFun (TyCon "Authority") (TyCon "String")))
-(DFunDef false "authorityTermText" ((PVar "q")) (EIf (EApp (EVar "authIsTop") (EVar "q")) (ELit (LString "the whole domain")) (EApp (EApp (EApp (EVar "ppAuthority") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "q"))))
+(DFunDef false "authorityIndexMsg" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "sa") (EApp (EApp (EApp (EVar "authorityTermTextIn") (EVar "ctx")) (EVar "cnt")) (EVar "a"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EVar "authorityTermTextIn") (EVar "ctx")) (EVar "cnt")) (EVar "b"))) (DoLet false false (PTuple (PVar "x") (PVar "y")) (EIf (EBinOp "<=" (EVar "sa") (EVar "sb")) (ETuple (EVar "sa") (EVar "sb")) (ETuple (EVar "sb") (EVar "sa")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority index mismatch: ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " vs "))) (EApp (EVar "display") (EVar "y"))) (ELit (LString ". An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"))))))
+(DTypeSig false "authorityTermTextIn" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
+(DFunDef false "authorityTermTextIn" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EIf (EApp (EVar "authIsTop") (EVar "q")) (ELit (LString "the whole domain")) (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q"))))
 (DTypeSig false "authorityFailureMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyCon "String")))))))
-(DFunDef false "authorityFailureMsg" ((PVar "name") (PVar "origin") (PVar "lower") (PVar "upper") (PVar "written")) (EBlock (DoLet false false (PVar "lo") (EIf (EApp (EVar "authIsTop") (EVar "lower")) (ELit (LString "the whole domain")) (EApp (EApp (EApp (EVar "ppAuthority") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "lower")))) (DoLet false false (PVar "hi") (EApp (EApp (EApp (EVar "ppAuthority") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "upper"))) (DoExpr (EMatch (EVar "origin") (arm (PCon "Some" (PVar "callee")) () (EApp (EApp (EApp (EVar "residualFailureMsg") (EVar "callee")) (EVar "lo")) (EVar "hi"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "boundFailureMsg") (EVar "name")) (EVar "lower")) (EVar "lo")) (EVar "hi")) (EVar "upper")) (EVar "written")))))))
+(DFunDef false "authorityFailureMsg" ((PVar "name") (PVar "origin") (PVar "lower") (PVar "upper") (PVar "written")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "lo") (EApp (EApp (EApp (EVar "authorityTermTextIn") (EVar "ctx")) (EVar "cnt")) (EVar "lower"))) (DoLet false false (PVar "hi") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "upper"))) (DoExpr (EMatch (EVar "origin") (arm (PCon "Some" (PVar "callee")) () (EApp (EApp (EApp (EVar "residualFailureMsg") (EVar "callee")) (EVar "lo")) (EVar "hi"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "boundFailureMsg") (EVar "name")) (EVar "lower")) (EVar "lo")) (EVar "hi")) (EVar "upper")) (EVar "written")))))))
 (DTypeSig false "residualFailureMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "residualFailureMsg" ((PVar "callee") (PVar "lo") (PVar "hi")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "callee"))) (ELit (LString "' needs "))) (EApp (EVar "display") (EVar "lo"))) (ELit (LString " to lie within "))) (EApp (EVar "display") (EVar "hi"))) (ELit (LString " here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it"))))
 (DTypeSig false "boundFailureMsg" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyCon "String"))))))))
@@ -54093,7 +54096,7 @@ isTyAuth _ = False
 (DTypeSig false "settlePending" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PendingJoin")) (TyApp (TyCon "List") (TyCon "PendingJoin")))))
 (DFunDef false "settlePending" ((PVar "level") (PVar "postponed")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value") (arm (PCons (PVar "pj") (PVar "rest")) () (EIf (EBinOp ">=" (EFieldAccess (EVar "pj") "pjLevel") (EVar "level")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EVar "joinOfOuterVariables") (EVar "level")) (EVar "pj")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "lowerTyvarLevel") (EBinOp "-" (EVar "level") (ELit (LInt 1)))) (EFieldAccess (EVar "pj") "pjResult"))) (DoExpr (EApp (EApp (EVar "settlePending") (EVar "level")) (EBinOp "::" (ERecordUpdate (EVar "pj") ((fa "pjLevel" (EBinOp "-" (EVar "level") (ELit (LInt 1)))))) (EVar "postponed"))))) (EBlock (DoLet false false PWild (EApp (EVar "resolvePendingJoin") (EVar "pj"))) (DoExpr (EApp (EApp (EVar "settlePending") (EVar "level")) (EVar "postponed"))))))) (EVar "postponed"))) (arm (PList) () (EVar "postponed"))))
 (DTypeSig false "joinOfOuterVariables" (TyFun (TyCon "Int") (TyFun (TyCon "PendingJoin") (TyCon "Bool"))))
-(DFunDef false "joinOfOuterVariables" ((PVar "level") (PVar "pj")) (EBinOp "||" (EApp (EApp (EVar "isOuterVariable") (EVar "level")) (EFieldAccess (EVar "pj") "pjResult")) (EBinOp "&&" (EApp (EVar "isUnshaped") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "allList") (ELam ((PVar "value")) (EApp (EApp (EVar "isOuterVariable") (EVar "level")) (EApp (EVar "snd") (EVar "value"))))) (EFieldAccess (EVar "pj") "pjValues")))))
+(DFunDef false "joinOfOuterVariables" ((PVar "level") (PVar "pj")) (EBinOp "&&" (EApp (EVar "isUnshaped") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "allList") (ELam ((PVar "value")) (EApp (EApp (EVar "isOuterVariable") (EVar "level")) (EApp (EVar "snd") (EVar "value"))))) (EFieldAccess (EVar "pj") "pjValues"))))
 (DTypeSig false "isUnshaped" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "isUnshaped" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "isOuterVariable" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool"))))
@@ -57277,7 +57280,7 @@ isTyAuth _ = False
 (DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
 (DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
 (DTypeSig false "scopeRolesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "BindingRole") (TyCon "Mono"))) (TyCon "ScopeRoles")))
-(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EVar "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EVar "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EVar "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))))))))
+(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EVar "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EVar "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EVar "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))) (fa "rlTyped" (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "members")))))))))
 (DTypeSig false "residualsOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))) (TyApp (TyCon "List") (TyCon "AuthResidual")))))
 (DFunDef false "residualsOf" ((PVar "index") (PVar "residuals")) (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "owner") (PVar "r"))) (EIf (EBinOp "==" (EVar "owner") (EVar "index")) (EListLit (EVar "r")) (EListLit)))) (EVar "residuals")))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))
@@ -60314,11 +60317,11 @@ isTyAuth _ = False
 (DTypeSig false "reportIndexFailure" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Unit")))))
 (DFunDef false "reportIndexFailure" ((PVar "loc") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-AUTHORITY-INDEX-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "authorityIndexMsg") (EVar "a")) (EVar "b"))))
 (DTypeSig false "authorityIndexMsg" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "String"))))
-(DFunDef false "authorityIndexMsg" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "sa") (EApp (EVar "authorityTermText") (EVar "a"))) (DoLet false false (PVar "sb") (EApp (EVar "authorityTermText") (EVar "b"))) (DoLet false false (PTuple (PVar "x") (PVar "y")) (EIf (EBinOp "<=" (EVar "sa") (EVar "sb")) (ETuple (EVar "sa") (EVar "sb")) (ETuple (EVar "sb") (EVar "sa")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority index mismatch: ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ". An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"))))))
-(DTypeSig false "authorityTermText" (TyFun (TyCon "Authority") (TyCon "String")))
-(DFunDef false "authorityTermText" ((PVar "q")) (EIf (EApp (EVar "authIsTop") (EVar "q")) (ELit (LString "the whole domain")) (EApp (EApp (EApp (EVar "ppAuthority") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "q"))))
+(DFunDef false "authorityIndexMsg" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "sa") (EApp (EApp (EApp (EVar "authorityTermTextIn") (EVar "ctx")) (EVar "cnt")) (EVar "a"))) (DoLet false false (PVar "sb") (EApp (EApp (EApp (EVar "authorityTermTextIn") (EVar "ctx")) (EVar "cnt")) (EVar "b"))) (DoLet false false (PTuple (PVar "x") (PVar "y")) (EIf (EBinOp "<=" (EVar "sa") (EVar "sb")) (ETuple (EVar "sa") (EVar "sb")) (ETuple (EVar "sb") (EVar "sa")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Authority index mismatch: ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ". An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"))))))
+(DTypeSig false "authorityTermTextIn" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyFun (TyCon "Authority") (TyCon "String")))))
+(DFunDef false "authorityTermTextIn" ((PVar "ctx") (PVar "cnt") (PVar "q")) (EIf (EApp (EVar "authIsTop") (EVar "q")) (ELit (LString "the whole domain")) (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "q"))))
 (DTypeSig false "authorityFailureMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyCon "String")))))))
-(DFunDef false "authorityFailureMsg" ((PVar "name") (PVar "origin") (PVar "lower") (PVar "upper") (PVar "written")) (EBlock (DoLet false false (PVar "lo") (EIf (EApp (EVar "authIsTop") (EVar "lower")) (ELit (LString "the whole domain")) (EApp (EApp (EApp (EVar "ppAuthority") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "lower")))) (DoLet false false (PVar "hi") (EApp (EApp (EApp (EVar "ppAuthority") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (ELit (LInt 0)))) (EVar "upper"))) (DoExpr (EMatch (EVar "origin") (arm (PCon "Some" (PVar "callee")) () (EApp (EApp (EApp (EVar "residualFailureMsg") (EVar "callee")) (EVar "lo")) (EVar "hi"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "boundFailureMsg") (EVar "name")) (EVar "lower")) (EVar "lo")) (EVar "hi")) (EVar "upper")) (EVar "written")))))))
+(DFunDef false "authorityFailureMsg" ((PVar "name") (PVar "origin") (PVar "lower") (PVar "upper") (PVar "written")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoLet false false (PVar "lo") (EApp (EApp (EApp (EVar "authorityTermTextIn") (EVar "ctx")) (EVar "cnt")) (EVar "lower"))) (DoLet false false (PVar "hi") (EApp (EApp (EApp (EVar "ppAuthority") (EVar "ctx")) (EVar "cnt")) (EVar "upper"))) (DoExpr (EMatch (EVar "origin") (arm (PCon "Some" (PVar "callee")) () (EApp (EApp (EApp (EVar "residualFailureMsg") (EVar "callee")) (EVar "lo")) (EVar "hi"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "boundFailureMsg") (EVar "name")) (EVar "lower")) (EVar "lo")) (EVar "hi")) (EVar "upper")) (EVar "written")))))))
 (DTypeSig false "residualFailureMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "residualFailureMsg" ((PVar "callee") (PVar "lo") (PVar "hi")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "' needs "))) (EApp (EMethodRef "display") (EVar "lo"))) (ELit (LString " to lie within "))) (EApp (EMethodRef "display") (EVar "hi"))) (ELit (LString " here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it"))))
 (DTypeSig false "boundFailureMsg" (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyFun (TyApp (TyCon "Option") (TyCon "Authority")) (TyCon "String"))))))))
@@ -62088,7 +62091,7 @@ isTyAuth _ = False
 (DTypeSig false "settlePending" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PendingJoin")) (TyApp (TyCon "List") (TyCon "PendingJoin")))))
 (DFunDef false "settlePending" ((PVar "level") (PVar "postponed")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef") "value") (arm (PCons (PVar "pj") (PVar "rest")) () (EIf (EBinOp ">=" (EFieldAccess (EVar "pj") "pjLevel") (EVar "level")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingJoinsRef")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EVar "joinOfOuterVariables") (EVar "level")) (EVar "pj")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "lowerTyvarLevel") (EBinOp "-" (EVar "level") (ELit (LInt 1)))) (EFieldAccess (EVar "pj") "pjResult"))) (DoExpr (EApp (EApp (EVar "settlePending") (EVar "level")) (EBinOp "::" (ERecordUpdate (EVar "pj") ((fa "pjLevel" (EBinOp "-" (EVar "level") (ELit (LInt 1)))))) (EVar "postponed"))))) (EBlock (DoLet false false PWild (EApp (EVar "resolvePendingJoin") (EVar "pj"))) (DoExpr (EApp (EApp (EVar "settlePending") (EVar "level")) (EVar "postponed"))))))) (EVar "postponed"))) (arm (PList) () (EVar "postponed"))))
 (DTypeSig false "joinOfOuterVariables" (TyFun (TyCon "Int") (TyFun (TyCon "PendingJoin") (TyCon "Bool"))))
-(DFunDef false "joinOfOuterVariables" ((PVar "level") (PVar "pj")) (EBinOp "||" (EApp (EApp (EVar "isOuterVariable") (EVar "level")) (EFieldAccess (EVar "pj") "pjResult")) (EBinOp "&&" (EApp (EVar "isUnshaped") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "allList") (ELam ((PVar "value")) (EApp (EApp (EVar "isOuterVariable") (EVar "level")) (EApp (EVar "snd") (EVar "value"))))) (EFieldAccess (EVar "pj") "pjValues")))))
+(DFunDef false "joinOfOuterVariables" ((PVar "level") (PVar "pj")) (EBinOp "&&" (EApp (EVar "isUnshaped") (EFieldAccess (EVar "pj") "pjResult")) (EApp (EApp (EVar "allList") (ELam ((PVar "value")) (EApp (EApp (EVar "isOuterVariable") (EVar "level")) (EApp (EVar "snd") (EVar "value"))))) (EFieldAccess (EVar "pj") "pjValues"))))
 (DTypeSig false "isUnshaped" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "isUnshaped" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "isOuterVariable" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool"))))
@@ -65272,7 +65275,7 @@ isTyAuth _ = False
 (DFunDef false "localRole" ((PCon "True")) (EVar "RoleQuantifies"))
 (DFunDef false "localRole" ((PCon "False")) (EVar "RoleMonomorphic"))
 (DTypeSig false "scopeRolesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "BindingRole") (TyCon "Mono"))) (TyCon "ScopeRoles")))
-(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EMethodRef "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EMethodRef "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))))))))
+(DFunDef false "scopeRolesOf" ((PVar "members")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PTuple (PVar "acc") (PVar "index")) (PTuple (PVar "role") (PVar "mono"))) (EBlock (DoLet false false (PVar "ids") (EMatch (EVar "role") (arm (PCon "RoleQuantifies") () (EApp (EVar "IdMap.keys") (EApp (EApp (EVar "qualifierAuthIds") (EVar "mono")) (EVar "Tip")))) (arm PWild () (EListLit)))) (DoExpr (ETuple (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "id")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EBinOp "::" (EMethodRef "index") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "IdMap.get") (EVar "id")) (EVar "m"))))) (EVar "m")))) (EVar "acc")) (EVar "ids")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))))))) (ETuple (EVar "Tip") (ELit (LInt 0)))) (EVar "members"))) (DoExpr (ERecordCreate "ScopeRoles" ((fa "rlQuantified" (EApp (EApp (EApp (EVar "IdMap.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "indices")) (EMatch (EVar "indices") (arm (PList (PVar "index")) () (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (EMethodRef "index")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EApp (EVar "fst") (EVar "owners")))) (fa "rlOutward" (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "role") (PVar "mono"))) (EMatch (EVar "role") (arm (PCon "RoleMonomorphic") () (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "Tip")) (EVar "members"))) (fa "rlTyped" (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple PWild (PVar "mono"))) (EApp (EApp (EVar "authIdsIn") (EVar "mono")) (EVar "acc")))) (EVar "Tip")) (EVar "members")))))))))
 (DTypeSig false "residualsOf" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "AuthResidual"))) (TyApp (TyCon "List") (TyCon "AuthResidual")))))
 (DFunDef false "residualsOf" ((PVar "index") (PVar "residuals")) (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "owner") (PVar "r"))) (EIf (EBinOp "==" (EVar "owner") (EMethodRef "index")) (EListLit (EVar "r")) (EListLit)))) (EVar "residuals")))
 (DTypeSig false "memberClauseIsValue" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyCon "Bool"))))

@@ -85,17 +85,30 @@ public export data SummaryFailure c = SummaryFailure {
 }
 
 -- What the closing binding group says about the authorities in its members'
--- types: which member's scheme quantifies each, and which belong to a member
--- that stays monomorphic.  The latter are the enclosing scope's: they are
--- lowered to it once the group closes, and later uses there bound them.
+-- types: which member's scheme quantifies each, which belong to a member
+-- that stays monomorphic, and every authority any member's type mentions.
+-- The monomorphic ones are the enclosing scope's: they are lowered to it
+-- once the group closes, and later uses there bound them.  An owned variable
+-- in no member's type is internal to the scope; one nothing bounds below
+-- takes the empty authority.  [rlTyped] is `None` for a scope that names no
+-- member types, which defaults nothing.
 public export data ScopeRoles = ScopeRoles {
   rlQuantified : Map Int Int,
   rlOutward : Map Int Unit,
+  rlTyped : Option (Map Int Unit),
 }
 
 export
 noScopeRoles : ScopeRoles
-noScopeRoles = ScopeRoles { rlQuantified = Tip, rlOutward = Tip }
+noScopeRoles =
+  ScopeRoles { rlQuantified = Tip, rlOutward = Tip, rlTyped = None }
+
+-- Whether an unbound owned variable of this scope may take the empty
+-- authority: it is in no member's type.
+internalAuth : ScopeRoles -> Ref Authvar -> Bool
+internalAuth roles cell = match roles.rlTyped
+  Some typed => not (M.has (authvarId cell) typed)
+  None => False
 
 -- What closing a scope decides: the obligations it could neither prove nor
 -- hand outward, and the obligations it keeps for a scheme — each with the
@@ -705,12 +718,14 @@ closeSummaryScope solver protected rigidAuths roles retained borrowed escape mak
   -- Row validation may have derived new authority obligations; solve the
   -- variables they bound, then decide every obligation this scope owns.
   let eligible = solveOwnedStaged scope rigidAuths roles widen
+  let outward = withoutRigid rigidAuths roles.rlOutward
   let (residuals, authFailures) =
     checkAuthorities
       solver
       scope
       rigidAuths
-      (withoutRigid rigidAuths roles.rlOutward)
+      outward
+      (binderAuth scope rigidAuths outward roles)
       eligible
   solver.essStack := match solver.essStack.value
     _ :: rest => rest
@@ -745,6 +760,29 @@ localRigidAuth _ rigid cell = match !cell
   AUnbound id _ _ _ => M.has id rigid
   ALink _ _ => False
 
+-- A binder of the closing group: a variable a member's type mentions that no
+-- monomorphic member hands outward, and that is either one of the group's
+-- own universals (minted at its level, not an enclosing function's) or an
+-- owned variable the group's schemes generalize.  Either means nothing
+-- outside the group, so an obligation naming one is kept as a residual or
+-- decided here.  A scope that names no member types treats every universal
+-- as its own, as before.
+binderAuth : SummaryScope c ->
+  Map Int Unit ->
+  Map Int Unit ->
+  ScopeRoles ->
+  Ref Authvar ->
+  Bool
+binderAuth scope rigid outward roles cell = match roles.rlTyped
+  Some typed => match !cell
+    AUnbound id level _ _ =>
+      M.has id typed
+        && not (M.has id outward)
+        && (M.has id rigid && level >= scope.essLevel
+          || ownedFlexibleAuth scope rigid cell)
+    ALink _ _ => False
+  None => localRigidAuth scope rigid cell
+
 -- Every owned flexible variable takes the join of its lower bounds, its
 -- least solution.  Variables bounded by each other collapse to one
 -- representative first, so no solution can refer back to itself.  [widen]
@@ -755,14 +793,18 @@ solveOwnedAuthorities : SummaryScope c ->
   Map Int Unit ->
   Map Int Unit ->
   Map Int Int ->
+  (Ref Authvar -> Bool) ->
   (Int -> Authority -> Authority) ->
   Unit
-solveOwnedAuthorities scope rigid outward held widen =
-  solveAuthorities
-    (cell =>
+solveOwnedAuthorities scope rigid outward held internal widen =
+  let owned =
+    cell =>
       ownedFlexibleAuth scope rigid cell
         && not (M.has (authvarId cell) held)
-        && not (M.has (authvarId cell) outward))
+        && not (M.has (authvarId cell) outward)
+  solveAuthorities
+    owned
+    (cell => owned cell && internal cell)
     widen
     (reverseL scope.essAuthorities.value)
 
@@ -804,11 +846,19 @@ solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
         rigid
         (withoutRigid rigid roles.rlOutward)
         Tip
+        (internalAuth roles)
         widen
     Tip
   quantifiable =>
     let outward = withoutRigid rigid roles.rlOutward
-    let _ = solveOwnedAuthorities scope rigid outward quantifiable widen
+    let _ =
+      solveOwnedAuthorities
+        scope
+        rigid
+        outward
+        quantifiable
+        (internalAuth roles)
+        widen
     let eligible =
       residualEligible
         scope
@@ -816,13 +866,21 @@ solveOwnedStaged scope rigid roles widen = match roles.rlQuantified
         outward
         rigid
         scope.essAuthorities.value
-    let _ = solveOwnedAuthorities scope rigid outward eligible widen
+    let _ =
+      solveOwnedAuthorities
+        scope
+        rigid
+        outward
+        eligible
+        (internalAuth roles)
+        widen
     eligible
 
 -- The quantifiable variables whose obligations become residuals rather than
--- being solved: those whose whole constraint component (variables linked by
--- a shared obligation) is quantified by one member, apart from authorities
--- outside this scope, which a residual names as they stand.  A component
+-- being solved: those whose whole constraint component (local variables
+-- linked by a shared obligation) is quantified by one member.  Authorities
+-- outside this scope are no part of a component: a residual names them as
+-- they stand.  A component
 -- that also reaches a local variable the group does not quantify is decided
 -- as before, and so is one bounded below by a domain's top: its variable has
 -- no freedom left, and solving it is exact.
@@ -834,7 +892,6 @@ residualEligible : SummaryScope c ->
   Map Int Int
 residualEligible _ Tip _ _ _ = Tip
 residualEligible scope quantifiable outward rigid wanteds =
-  let edges = fold (acc w => linkIds (wantedVarIds w) acc) Tip wanteds
   let cells =
     fold
       (acc w =>
@@ -857,6 +914,13 @@ residualEligible scope quantifiable outward rigid wanteds =
     id => match M.get id cells
       Some c => outsideAuth scope outward c
       None => False
+  -- an outside authority links nothing: two members may each owe a relation
+  -- to one monomorphic cell, and each keeps its own residual over it
+  let edges =
+    fold
+      (acc w => linkIds (filter (id => not (outside id)) (wantedVarIds w)) acc)
+      Tip
+      wanteds
   -- every component is walked once, eligible or not
   snd
     (M.foldlWithKey
@@ -927,10 +991,11 @@ componentMember quantifiable rigid outside forced ids =
     _ => None
 
 solveAuthorities : (Ref Authvar -> Bool) ->
+  (Ref Authvar -> Bool) ->
   (Int -> Authority -> Authority) ->
   List (AuthWanted c) ->
   Unit
-solveAuthorities owned widen wanteds =
+solveAuthorities owned defaultable widen wanteds =
   let lowers =
     fold
       (acc w => match authNorm w.awUpper
@@ -946,7 +1011,7 @@ solveAuthorities owned widen wanteds =
       Tip
       wanteds
   match M.keys lowers
-    [] => ()
+    [] => bottomUnbounded defaultable wanteds
     ids =>
       let names = map intToString ids
       let idOfName = fold (acc id => M.set (intToString id) id acc) Tip ids
@@ -961,10 +1026,36 @@ solveAuthorities owned widen wanteds =
               acc)
           Tip
           ids
+      let _ =
+        fold
+          (_ members => solveClass lowers idOfName widen members)
+          ()
+          (tarjanSCCs names edges)
+      bottomUnbounded defaultable wanteds
+
+-- An owned variable no obligation bounds below (it only ever appears on the
+-- lower side, or every lower bound it had was itself unbounded) is still
+-- unbound after its class is solved.  Its least solution is the empty
+-- authority, which every bound admits; leaving it unbound would fail
+-- `a <= "cfg/*"` for a value nothing ever supplies.  [defaultable] keeps
+-- a variable a member's type mentions (`internalAuth`): a scheme may
+-- quantify it, and each use supplies it.
+bottomUnbounded : (Ref Authvar -> Bool) -> List (AuthWanted c) -> Unit
+bottomUnbounded owned wanteds =
+  fold
+    (_ w =>
       fold
-        (_ members => solveClass lowers idOfName widen members)
+        (_ cell =>
+          if isUnboundAuth cell && owned cell then linkAuthvar cell (AJoin []))
         ()
-        (tarjanSCCs names edges)
+        (authVars (authNorm w.awLower) ++ authVars (authNorm w.awUpper)))
+    ()
+    wanteds
+
+isUnboundAuth : Ref Authvar -> Bool
+isUnboundAuth cell = match !cell
+  AUnbound _ _ _ _ => True
+  ALink _ _ => False
 
 lowersOf : Int -> Map Int (Ref Authvar, List Authority) -> List Authority
 lowersOf id m = match M.get id m
@@ -1048,14 +1139,15 @@ checkAuthorities : SummarySolver c ->
   SummaryScope c ->
   Map Int Unit ->
   Map Int Unit ->
+  (Ref Authvar -> Bool) ->
   Map Int Int ->
   (List (Int, AuthWanted c), List (SummaryFailure c))
-checkAuthorities solver scope rigid outward eligible =
+checkAuthorities solver scope rigid outward binder eligible =
   let wanteds = reverseL scope.essAuthorities.value
   let keep = keptResidual (outsideAuth scope outward) eligible
   let kept = flatMap keep wanteds
   let decided = filter (w => isEmptyL (keep w)) wanteds
-  (kept, decideAuthorities solver scope rigid outward decided)
+  (kept, decideAuthorities solver scope rigid outward binder decided)
 
 -- An unproven obligation over one member's eligible variables, constants and
 -- authorities outside this scope is kept for that member, normalised.
@@ -1100,9 +1192,10 @@ decideAuthorities : SummarySolver c ->
   SummaryScope c ->
   Map Int Unit ->
   Map Int Unit ->
+  (Ref Authvar -> Bool) ->
   List (AuthWanted c) ->
   List (SummaryFailure c)
-decideAuthorities solver scope rigid outward wanteds =
+decideAuthorities solver scope rigid outward binder wanteds =
   distinctFailures
     (flatMap
       (w =>
@@ -1112,14 +1205,16 @@ decideAuthorities solver scope rigid outward wanteds =
           []
         else
           let cells = authVars lo ++ authVars hi
-          -- an obligation over an outward authority is the enclosing
-          -- scope's, which owns that authority once this group closes, even
-          -- when it also names a universal; otherwise an obligation moves
-          -- out only over an outer variable and no universal
+          -- an obligation moves out over an outward authority (the
+          -- enclosing scope owns it once this group closes) or an outer
+          -- variable, and never when it names a binder of this group (a
+          -- universal, or a variable its schemes generalize): the binder
+          -- means nothing outside the group, and the enclosing scope would
+          -- solve it as a flexible variable
           let transferable =
-            anyList (c => M.has (authvarId c) outward) cells
-              || anyList (outerFlexibleAuth scope rigid) cells
-                && not (anyList (localRigidAuth scope rigid) cells)
+            (anyList (c => M.has (authvarId c) outward) cells
+                || anyList (outerFlexibleAuth scope rigid) cells)
+              && not (anyList binder cells)
           match solver.essStack.value
             _ :: parent :: _ =>
               if transferable then
@@ -1191,8 +1286,8 @@ closeRootAuthorities : SummarySolver c ->
   List (SummaryFailure c)
 closeRootAuthorities solver rigid widen =
   let wanteds = reverseL solver.essRoot.value
-  let _ =
-    solveAuthorities (cell => not (M.has (authvarId cell) rigid)) widen wanteds
+  let owned = cell => not (M.has (authvarId cell) rigid)
+  let _ = solveAuthorities owned owned widen wanteds
   solver.essRoot := []
   distinctFailures
     (flatMap

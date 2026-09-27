@@ -1302,6 +1302,27 @@ test "a join a later use shapes first is decided by that use" = expectAll [
       "apply2 : (Unit -> Unit -> Unit) -> Unit\napply2 k = k () ()\nviaApply c f g = apply2 (if c then f else g)\nloud2 : Unit -> Unit -> <Audit> Unit\nloud2 _ _ = emitAudit ()\nuse = viaApply True loud2 (_ _ => ())\n"),
 ]
 
+-- A join with a local alternative is decided before the binding
+-- generalizes, even when its result already flows outward: otherwise the
+-- binding generalizes the alternative the join still ties to [f] (review
+-- round 2).  The control passes [f] itself.
+test "a join with a local alternative is decided before its binding generalizes" =
+  let outer = "outer c f k =\n  let h x = k (if c then f else x)\n"
+  expectAll [
+    expectEqual
+      "Bool -> String -> (String -> <a> b) -> <a> b"
+      (renderedFor (outer ++ "  h \"hello\"\n") "outer"),
+    expectNotEqual
+      []
+      (errorsFor
+        (outer
+          ++ "  h \"hello\"\nuse : Int\nuse = outer False 100 (n => n)\n")),
+    expectEqual
+      []
+      (errorsFor
+        (outer ++ "  h f\nuse : Int\nuse = outer False 100 (n => n)\n")),
+  ]
+
 test "a join the result's own use shapes keeps each alternative's row" = expectAll
   [
     expectEqual

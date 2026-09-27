@@ -1,5 +1,5 @@
 # META
-source_lines=194
+source_lines=196
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -68,7 +68,8 @@ authTop : Param -> Authority
 authTop top = AConst (subTopOf top)
 
 -- The domain's top for a term: from a constant's shape, or a variable's
--- declared domain. An empty join has no domain; callers never build one.
+-- declared domain. An empty join (the empty authority, a variable's least
+-- solution when nothing bounds it below) has no domain of its own.
 export
 authDomainTop : Authority -> Param
 authDomainTop (AConst p) = subTopOf p
@@ -154,6 +155,7 @@ authSub : Authority -> Authority -> Bool
 authSub lo hi = authSubN (authNorm lo) (authNorm hi)
 
 authSubN : Authority -> Authority -> Bool
+authSubN (AJoin []) _ = True
 authSubN (AConst c) (AConst d) = dsub c d
 authSubN _ (AConst d)
   | isSubTop d = True
@@ -252,6 +254,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DTypeSig true "authSub" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "authSub" ((PVar "lo") (PVar "hi")) (EApp (EApp (EVar "authSubN") (EApp (EVar "authNorm") (EVar "lo"))) (EApp (EVar "authNorm") (EVar "hi"))))
 (DTypeSig false "authSubN" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "authSubN" ((PCon "AJoin" (PList)) PWild) (EVar "True"))
 (DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AConst" (PVar "d"))) (EApp (EApp (EVar "dsub") (EVar "c")) (EVar "d")))
 (DFunDef false "authSubN" (PWild (PCon "AConst" (PVar "d"))) (EIf (EApp (EVar "isSubTop") (EVar "d")) (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))
@@ -331,6 +334,7 @@ renderAuthority a = renderAuthorityWith authvarDefaultName a
 (DTypeSig true "authSub" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
 (DFunDef false "authSub" ((PVar "lo") (PVar "hi")) (EApp (EApp (EVar "authSubN") (EApp (EVar "authNorm") (EVar "lo"))) (EApp (EVar "authNorm") (EVar "hi"))))
 (DTypeSig false "authSubN" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyCon "Bool"))))
+(DFunDef false "authSubN" ((PCon "AJoin" (PList)) PWild) (EVar "True"))
 (DFunDef false "authSubN" ((PCon "AConst" (PVar "c")) (PCon "AConst" (PVar "d"))) (EApp (EApp (EVar "dsub") (EVar "c")) (EVar "d")))
 (DFunDef false "authSubN" (PWild (PCon "AConst" (PVar "d"))) (EIf (EApp (EVar "isSubTop") (EVar "d")) (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "authSubN" (PWild (PCon "AConst" PWild)) (EVar "False"))

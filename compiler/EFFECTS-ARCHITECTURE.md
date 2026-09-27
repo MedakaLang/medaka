@@ -816,8 +816,15 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
    solves any ineligible quantifiable variable as before. `checkAuthorities`
    keeps an unproven obligation over eligible variables and constants
    (`keptResidual`, which may name an outside authority as it stands) and
-   decides the rest, handing an obligation over an outward authority to the
-   enclosing scope. Every local binding route (`blockLet`,
+   decides the rest, handing an obligation over an outward authority or an
+   outer variable to the enclosing scope, unless it names a binder of the
+   group (`binderAuth`: its own universal, or a variable a member's type
+   mentions that the group generalizes), which is decided here. The component
+   walk does not link through outside authorities, so two members owing a
+   relation to one monomorphic cell each keep a residual. An internal
+   variable (in no member's type, `rlTyped`) that nothing bounds below takes
+   the empty authority `AJoin []` (`bottomUnbounded`); the module root does
+   the same for every variable it decides. Every local binding route (`blockLet`,
    `blockRecLet`, `inferLetSimple`, `inferRecLet`, `processLetGroup`) keeps
    residuals the same way (`finishValueEffectsKeeping`).
 3. **Owing.** `forceInstantiation` re-emits each residual through
@@ -835,20 +842,23 @@ rendering; normative text in [Effects semantics](../docs/spec/EFFECTS-SEMANTICS.
    recorded). `resolvePendingJoins` decides the rest before the scope's roots
    are read and before Num defaulting and generalization
    (`resolveDeferredJoin`: an alternative's shape, else equality). A local binding that
-   generalizes hands a join of enclosing-scope variables outward with its
-   result at the enclosing level (`settlePendingJoins`); one that does not
+   generalizes hands a join whose alternatives are all enclosing-scope
+   variables outward with its result at the enclosing level
+   (`settlePendingJoins`), and decides any join with a local alternative; one that does not
    generalizes nothing and hands all of them outward (`postponePendingJoins`).
    A top-level group decides every join it recorded: the routes of the methods
    it uses are fixed when it closes, and a join postponed past that point was
    measured to route a method on an undecided type (the build's emitter
    panicked on an arg-tag route with an `Int` receiver).
 5. **Locations.** An alias-qualified reference (`D.subIn`) keeps its alias
-   head's span through desugar (`withLocOf`), so a diagnostic about the
+   head's span through desugar (`qualifiedAt`), so a diagnostic about the
    occurrence, a residual failure included, points at it.
 6. **Rendering.** `ppScheme`/`ppSchemeCon` print the context
    (`renderResiduals`, `contextText`); `ppDomain` reads a qualifier through its
    links, so a solved cell no longer prints as a fresh binder (`subH h = sub h`
-   printed `Dir d -> (a : String) -> Dir d`).
+   printed `Dir d -> (a : String) -> Dir d`). A residual the solver has since
+   proved is not printed (`openResiduals`); the empty authority prints `()`,
+   and an effect atom holding it keeps its label (`renderAtomWith`).
 
 Coverage: `types/effect_authority_test.mdk` (the residual groups: two
 variables, a join upper, constants, local bindings, a signature, a module

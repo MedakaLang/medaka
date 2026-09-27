@@ -8,6 +8,7 @@ nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 nameTaken : String -> List (Int, String) -> Bool
 normalize : Mono -> Mono
 normalizeLink : Ref Tyvar -> Mono -> Mono
+openResiduals : List AuthResidual -> List AuthResidual
 ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
 ppAuthArg : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 ppAuthority : Ref (List (Int, String)) -> Ref Int -> Authority -> String
