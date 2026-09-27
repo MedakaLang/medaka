@@ -204,7 +204,7 @@ gzipHeaderParser = defer
 -}
 export
 parseGzipHeader : Bytes -> Result String (GzipHeader, Int)
-parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0
+parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0 (B.length bytes)
   BOk h pos => Ok (h, pos)
   BErr msg pos => Err "\{msg} at byte \{pos}"
 

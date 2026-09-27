@@ -45,10 +45,13 @@ public export data BResult a = BOk a Int | BErr String Int
 -- `ByteParser` alias pins the index to `<>`.
 --
 -- The wrapped function's third argument is the exclusive end of the range it
--- may read: `runBP` passes `length input`, and `runByteParserWithin` passes
--- an arbitrary bound, so every base-level read checks against `end` rather
--- than against `input`'s own length. Every combinator that calls into
--- another parser threads the SAME `end` through unchanged.
+-- may read, and every base-level read checks against `end` rather than
+-- against `input`'s own length. `runBP` takes that bound from its caller
+-- rather than defaulting to `length input`, so a primitive that delegates
+-- through `runBP` inherits whatever bound its own caller was given —
+-- `runByteParser` passes `length input`, `runByteParserWithin` passes its
+-- own `end`. Every combinator that calls into another parser threads the
+-- SAME `end` through unchanged.
 {- | A parser indexed by the effect row `e` its steps may perform.
 
    The wrapped function takes the input, a start position and an exclusive
@@ -61,18 +64,20 @@ public export data ByteParserE (e : Effect) a =
 -- exports has this type.
 export type ByteParser a = ByteParserE <> a
 
-{- | Runs `p` on `input` from position `pos` and returns the raw `BResult`.
+{- | Runs `p` on `input` from position `pos`, bounded to `[pos, end)`, and
+   returns the raw `BResult`.
 
-   `runByteParser` is the form that starts at `0` and returns a `Result`. -}
+   A primitive that delegates to another parser (rather than composing with
+   the combinators above) must call `runBP` with the SAME `end` it was
+   itself handed, never `length input` — otherwise it escapes a bound set by
+   `runByteParserWithin`. `runByteParser`/`runByteParserWithin` are the forms
+   that supply `end` themselves and return a `Result`.
+
+   > runByteParserWithin 0 1 (ByteParserE (input pos end => runBP (takeBytes 2) input pos end)) (fromU8Array [|1, 2, 3|])
+   Err "unexpected end of input at byte 1" -}
 export
-runBP : ByteParserE e a -> Bytes -> Int -> <e> BResult a
-runBP (ByteParserE f) input pos = f input pos (bytesLength input)
-
--- Runs `p` bounded to `[.., end)` rather than to `input`'s own length. Every
--- combinator below calls this, never `runBP`, so a bound set by
--- `runByteParserWithin` survives into every nested parser.
-runBPWithin : ByteParserE e a -> Bytes -> Int -> Int -> <e> BResult a
-runBPWithin (ByteParserE f) input pos end = f input pos end
+runBP : ByteParserE e a -> Bytes -> Int -> Int -> <e> BResult a
+runBP (ByteParserE f) input pos end = f input pos end
 
 -- Higher-kinded impl over the bare head `BResult`.
 export impl Mappable BResult where
@@ -93,7 +98,7 @@ onOk (BOk a pos) k = k a pos
 -- which is what lets the callback's row ride the index.
 
 export impl DeferredMappable ByteParserE where
-  deferMap g p = ByteParserE (input pos end => onOk (runBPWithin
+  deferMap g p = ByteParserE (input pos end => onOk (runBP
     p
     input
     pos
@@ -102,19 +107,19 @@ export impl DeferredMappable ByteParserE where
 
 export impl DeferredApplicative ByteParserE where
   deferPure a = ByteParserE (_ pos _ => BOk a pos)
-  deferAp pf pa = ByteParserE (input pos end => onOk (runBPWithin
+  deferAp pf pa = ByteParserE (input pos end => onOk (runBP
     pf
     input
     pos
-    end) (f p2 => onOk (runBPWithin pa input p2 end) (a p3 => BOk (f a) p3)))
+    end) (f p2 => onOk (runBP pa input p2 end) (a p3 => BOk (f a) p3)))
 
 export impl DeferredThenable ByteParserE where
-  deferThen p k = ByteParserE (input pos end => onOk (runBPWithin
+  deferThen p k = ByteParserE (input pos end => onOk (runBP
     p
     input
     pos
     end) (a p2 =>
-    runBPWithin (k a) input p2 end))
+    runBP (k a) input p2 end))
 
 -- # Alternatives
 
@@ -133,9 +138,9 @@ noMatch = ByteParserE (_ pos _ => BErr "noMatch" pos)
    Ok 2 -}
 export
 orElse : ByteParserE e a -> ByteParserE e a -> ByteParserE e a
-orElse p q = ByteParserE (input pos end => match runBPWithin p input pos end
+orElse p q = ByteParserE (input pos end => match runBP p input pos end
   BOk a pos2 => BOk a pos2
-  BErr _ _ => runBPWithin q input pos end)
+  BErr _ _ => runBP q input pos end)
 
 -- # Primitives
 
@@ -215,7 +220,7 @@ many : ByteParser a -> ByteParser (List a)
 many p = ByteParserE (input pos end => manyGo p input pos end [])
 
 manyGo : ByteParser a -> Bytes -> Int -> Int -> List a -> BResult (List a)
-manyGo p input pos end acc = match runBPWithin p input pos end
+manyGo p input pos end acc = match runBP p input pos end
   BErr _ _ => BOk (reverse acc) pos
   BOk a pos2 =>
     if pos2 == pos then
@@ -303,10 +308,13 @@ chainl1Rest p op acc =
 
 {- | Exactly `n` bytes, as a `Bytes`.
 
-   Fails when fewer than `n` bytes remain.
+   Fails when fewer than `n` bytes remain, even when `n` is far larger than
+   any real input could hold — the bound check never overflows.
 
    > runByteParser (takeBytes 3) (fromU8Array [|10, 20, 30, 40|])
-   Ok Bytes "0a141e" -}
+   Ok Bytes "0a141e"
+   > runByteParser (deferThen anyByte (_ => takeBytes 4611686018427387903)) (fromU8Array [|10, 20, 30, 40|])
+   Err "unexpected end of input at byte 4" -}
 export
 takeBytes : Int -> ByteParser Bytes
 takeBytes n = ByteParserE (takeBytesStep n)
@@ -314,7 +322,11 @@ takeBytes n = ByteParserE (takeBytesStep n)
 takeBytesStep : Int -> Bytes -> Int -> Int -> BResult Bytes
 takeBytesStep n input pos end
   | n <= 0 = BOk (slice input pos pos) pos
-  | pos + n > end = BErr "unexpected end of input" pos
+  -- `end - pos` rather than `pos + n`: `n` can be an arbitrary caller-given
+  -- Int (huge, even negative-looking after wraparound), and `pos + n` traps
+  -- E-INT-OVERFLOW where the base once returned `Err`. The failure position
+  -- is `end`, matching where the input actually ran out.
+  | n > end - pos = BErr "unexpected end of input" end
   | otherwise = BOk (slice input pos (pos + n)) (pos + n)
 
 -- # Integers and floats
@@ -572,7 +584,7 @@ leU64Go n shift acc input pos end
    Err "unexpected byte at byte 0" -}
 export
 runByteParser : ByteParser a -> Bytes -> Result String a
-runByteParser p bytes = match runBP p bytes 0
+runByteParser p bytes = match runBP p bytes 0 (bytesLength bytes)
   BOk a _ => Ok a
   BErr m pos => Err "\{m} at byte \{pos}"
 
@@ -582,14 +594,24 @@ runByteParser p bytes = match runBP p bytes 0
    Behaves as running `p` on `bytes.[start..end]` would, but every length
    check inside `p` sees `end` rather than `bytes`' own length, so a parser
    that reads to the end of its input stops at `end`, not at the end of the
-   larger `bytes` value it was carved from.
+   larger `bytes` value it was carved from. A position in a returned `Err`
+   is always an absolute offset into `bytes` itself, never relative to
+   `start`. `start < 0`, `end < start` or `end > length bytes` is a
+   malformed range and fails without running `p` at all, rather than
+   parsing an empty or truncated input.
 
    > runByteParserWithin 1 3 (many anyByte) (fromU8Array [|10, 20, 30, 40|])
    Ok [20, 30]
    > runByteParserWithin 0 1 beU16 (fromU8Array [|1, 2|])
-   Err "unexpected end of input at byte 1" -}
+   Err "unexpected end of input at byte 1"
+   > runByteParserWithin 2 1 anyByte (fromU8Array [|1, 2, 3|])
+   Err "invalid range [2, 1) for input of length 3" -}
 export
 runByteParserWithin : Int -> Int -> ByteParser a -> Bytes -> Result String a
-runByteParserWithin start end p bytes = match runBPWithin p bytes start end
-  BOk a _ => Ok a
-  BErr m pos => Err "\{m} at byte \{pos}"
+runByteParserWithin start end p bytes
+  | start < 0 || end < start || end > bytesLength bytes =
+    Err
+      "invalid range [\{start}, \{end}) for input of length \{bytesLength bytes}"
+  | otherwise = match runBP p bytes start end
+    BOk a _ => Ok a
+    BErr m pos => Err "\{m} at byte \{pos}"

@@ -68,13 +68,23 @@ exports has this type.
 ### `runBP`
 
 ```
-runBP : ByteParserE e a -> Bytes -> Int -> <e> BResult a
-runBP _ input pos
+runBP : ByteParserE e a -> Bytes -> Int -> Int -> <e> BResult a
+runBP _ input pos end
 ```
 
-Runs `p` on `input` from position `pos` and returns the raw `BResult`.
+Runs `p` on `input` from position `pos`, bounded to `[pos, end)`, and
+returns the raw `BResult`.
 
-`runByteParser` is the form that starts at `0` and returns a `Result`.
+A primitive that delegates to another parser (rather than composing with
+the combinators above) must call `runBP` with the SAME `end` it was
+itself handed, never `length input` — otherwise it escapes a bound set by
+`runByteParserWithin`. `runByteParser`/`runByteParserWithin` are the forms
+that supply `end` themselves and return a `Result`.
+
+```medaka
+> runByteParserWithin 0 1 (ByteParserE (input pos end => runBP (takeBytes 2) input pos end)) (fromU8Array [|1, 2, 3|])
+Err "unexpected end of input at byte 1"
+```
 
 ### `onOk`
 
@@ -300,11 +310,14 @@ takeBytes n
 
 Exactly `n` bytes, as a `Bytes`.
 
-Fails when fewer than `n` bytes remain.
+Fails when fewer than `n` bytes remain, even when `n` is far larger than
+any real input could hold — the bound check never overflows.
 
 ```medaka
 > runByteParser (takeBytes 3) (fromU8Array [|10, 20, 30, 40|])
 Ok Bytes "0a141e"
+> runByteParser (deferThen anyByte (_ => takeBytes 4611686018427387903)) (fromU8Array [|10, 20, 30, 40|])
+Err "unexpected end of input at byte 4"
 ```
 
 ## Integers and floats
@@ -549,12 +562,18 @@ The result of running `p` on the half-open sub-range `[start, end)` of
 Behaves as running `p` on `bytes.[start..end]` would, but every length
 check inside `p` sees `end` rather than `bytes`' own length, so a parser
 that reads to the end of its input stops at `end`, not at the end of the
-larger `bytes` value it was carved from.
+larger `bytes` value it was carved from. A position in a returned `Err`
+is always an absolute offset into `bytes` itself, never relative to
+`start`. `start < 0`, `end < start` or `end > length bytes` is a
+malformed range and fails without running `p` at all, rather than
+parsing an empty or truncated input.
 
 ```medaka
 > runByteParserWithin 1 3 (many anyByte) (fromU8Array [|10, 20, 30, 40|])
 Ok [20, 30]
 > runByteParserWithin 0 1 beU16 (fromU8Array [|1, 2|])
 Err "unexpected end of input at byte 1"
+> runByteParserWithin 2 1 anyByte (fromU8Array [|1, 2, 3|])
+Err "invalid range [2, 1) for input of length 3"
 ```
 

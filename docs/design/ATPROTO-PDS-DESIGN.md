@@ -121,9 +121,9 @@ The organising principle, and the reason P9 costs little:
 ```
 
 The HTTP layer is a **function from bytes to bytes**, not a server. `parseRequest :
-Array Int -> Result String Request` remains the diagnostic-facing parser;
+Bytes -> Result String Request` remains the diagnostic-facing parser;
 `parseRequestClassified` adds a typed malformed/resource-excess split for the
-composition layer, and `serializeResponse : Response -> Array Int` is deterministic.
+composition layer, and `serializeResponse : Response -> Bytes` is deterministic.
 The router and configured server beneath them are pure too.
 
 **Storage is threaded, not performed** (P14). Phase 2's opaque immutable `Store`

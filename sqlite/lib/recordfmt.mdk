@@ -125,50 +125,63 @@ nthCell [] _ = CNull
 nthCell (c :: rest) i = if i <= 0 then c else nthCell rest (i - 1)
 
 -- The pure driver: we drop to BResult-level position threading so we can
--- compute the header boundary precisely. `end` is unused: `parseRecord` is
--- only ever run full-range, never through `runByteParserWithin`.
+-- compute the header boundary precisely. `end` is the bound `parseRecord`
+-- was itself called with — every nested `runBP` call below passes it
+-- through unchanged, so a window set by `runByteParserWithin` still holds
+-- inside a record.
 parseRecordGo : Bytes -> Int -> Int -> BResult (List Cell)
-parseRecordGo input pos _end =
-  onOk (runBP sqVarint input pos) (parseRecordAfterHdr input pos)
+parseRecordGo input pos end =
+  onOk (runBP sqVarint input pos end) (parseRecordAfterHdr input pos end)
 
-parseRecordAfterHdr : Bytes -> Int -> Int -> Int -> BResult (List Cell)
-parseRecordAfterHdr input pos hdrLen hdrStart =
+parseRecordAfterHdr : Bytes -> Int -> Int -> Int -> Int -> BResult (List Cell)
+parseRecordAfterHdr input pos end hdrLen hdrStart =
   let headerEnd = pos + hdrLen
-  onOk (readSerialTypes input hdrStart headerEnd []) (sts _ =>
-    readBodies input headerEnd sts [])
+  onOk (readSerialTypes input hdrStart headerEnd end []) (sts _ =>
+    readBodies input headerEnd end sts [])
 
 -- Read serial-type varints until `pos >= headerEnd`.
 readSerialTypes : Bytes ->
   Int ->
   Int ->
+  Int ->
   List SerialType ->
   BResult (List SerialType)
-readSerialTypes input pos headerEnd acc
+readSerialTypes input pos headerEnd end acc
   | pos >= headerEnd = BOk (reverse acc) pos
   | otherwise = onOk (runBP
     sqVarint
     input
-    pos) (code pos2 => match serialOf code
+    pos
+    end) (code pos2 => match serialOf code
     Err e => BErr e pos
-    Ok st => readSerialTypes input pos2 headerEnd (st :: acc))
+    Ok st => readSerialTypes input pos2 headerEnd end (st :: acc))
 
 -- Read the body bytes for each serial type in order.
-readBodies : Bytes -> Int -> List SerialType -> List Cell -> BResult (List Cell)
-readBodies input pos [] acc = BOk (reverse acc) pos
-readBodies input pos (st :: rest) acc = onOk (readBody
+readBodies : Bytes ->
+  Int ->
+  Int ->
+  List SerialType ->
+  List Cell ->
+  BResult (List Cell)
+readBodies input pos end [] acc = BOk (reverse acc) pos
+readBodies input pos end (st :: rest) acc = onOk (readBody
   input
   pos
+  end
   st) (cell pos2 =>
-  readBodies input pos2 rest (cell :: acc))
+  readBodies input pos2 end rest (cell :: acc))
 
 -- Read one cell's body given its serial type.
-readBody : Bytes -> Int -> SerialType -> BResult Cell
-readBody input pos STNull = BOk CNull pos
-readBody input pos STIntZero = BOk (CInt 0) pos
-readBody input pos STIntOne = BOk (CInt 1) pos
-readBody input pos (STInt nbytes) = map CInt (runBP (beSint nbytes) input pos)
-readBody input pos (STText nbytes) =
-  map (bs => CText (fromUtf8 (toArray bs))) (runBP (takeBytes nbytes) input pos)
-readBody input pos (STBlob nbytes) =
-  map (bs => CBlob (toArray bs)) (runBP (takeBytes nbytes) input pos)
-readBody input pos STFloat = map CFloat (runBP beFloat64 input pos)
+readBody : Bytes -> Int -> Int -> SerialType -> BResult Cell
+readBody input pos _end STNull = BOk CNull pos
+readBody input pos _end STIntZero = BOk (CInt 0) pos
+readBody input pos _end STIntOne = BOk (CInt 1) pos
+readBody input pos end (STInt nbytes) =
+  map CInt (runBP (beSint nbytes) input pos end)
+readBody input pos end (STText nbytes) =
+  map
+    (bs => CText (fromUtf8 (toArray bs)))
+    (runBP (takeBytes nbytes) input pos end)
+readBody input pos end (STBlob nbytes) =
+  map (bs => CBlob (toArray bs)) (runBP (takeBytes nbytes) input pos end)
+readBody input pos end STFloat = map CFloat (runBP beFloat64 input pos end)

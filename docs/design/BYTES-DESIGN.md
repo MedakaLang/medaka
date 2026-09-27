@@ -346,18 +346,24 @@ scope.
 Derived by `git grep -nE '^[a-zA-Z0-9_]*Bytes[a-zA-Z0-9_]* :' -- 'stdlib/*.mdk'`
 (excluding `*_test.mdk`), filtered to **exported** names — an unexported
 `*Bytes` helper carrying the same suffix is not public API and has no B6
-obligation of its own. The largest unexported group is `stdlib/http.mdk`'s
-`lowerAsciiBytes`/`allTokenBytes`/`validFieldValueBytes`/`trimLeftOwsBytes`/
-`trimRightOwsBytes`/`scanTokenEndBytes`/`skipOwsBytes`, each already the
-`Bytes`-typed twin of an `Array Int`-typed private original the module's own
-comment (`stdlib/http.mdk:354-361`) says B5 removes; also unexported:
+obligation of its own. At the time of that census, the largest unexported
+group was `stdlib/http.mdk`'s `lowerAsciiBytes`/`allTokenBytes`/
+`validFieldValueBytes`/`trimLeftOwsBytes`/`trimRightOwsBytes`/
+`scanTokenEndBytes`/`skipOwsBytes`, each the `Bytes`-typed twin of an
+`Array Int`-typed private original; S-net-http-bytes has since moved
+`http.mdk` fully onto `Bytes` and dropped the suffix from every one of
+those names (`lowerAscii`/`allToken`/`validFieldValue`/`trimLeftOws`/
+`trimRightOws`/`scanTokenEnd`/`skipOws`), since a single `Array Int`-typed
+twin no longer exists to disambiguate from. `stdlib/net_async.mdk`'s
+`pendingRecvBytes`/`tryRecvBytes` moved the same way, to `pendingRecv`/
+`tryRecv`. Also unexported at the time of the census:
 `stdlib/http.mdk`'s `validBytes`/`headHeaderBytes`/`requestBytesVerdict`/
 `decodeQueryBytes`/`validMediaBytes`, `stdlib/base32.mdk`'s `validBytes`,
 `stdlib/byteparser.mdk`'s `takeBytesGo`, `stdlib/crypto/sha256.mdk`'s `digestBytes`,
 `stdlib/bytes.mdk`'s `debugBytesHex`, `stdlib/crypto/hmac.mdk`'s `blockBytes`,
 `stdlib/net.mdk`'s `testSentBytes`, and
-`stdlib/net_async.mdk`'s `pendingRecvBytes`/`tryRecvBytes`/`recvBytesStep`/
-`recvUntilBytes`/`recvUntilBytesStep`/`recvBytesWake`.
+`stdlib/net_async.mdk`'s `recvBytesStep`/`recvUntilBytes`/
+`recvUntilBytesStep`/`recvBytesWake`.
 
 | Module | Export (current) | Current signature | B6 destination |
 |---|---|---|---|
@@ -365,11 +371,11 @@ comment (`stdlib/http.mdk:354-361`) says B5 removes; also unexported:
 | `bytebuilder` | `appendBytes` | `Bytes -> Builder -> Unit` | **2026-09-21: renamed to `emitBytes`** |
 | `bytebuilder` | `emitBytes` | `List Int -> Builder -> Unit` | **2026-09-21: name retires, deleted** |
 | `byteparser` | `takeBytes` | `Int -> ByteParser (List Int)` | **2026-09-21: `Int -> ByteParser Bytes`** |
-| `hex` | `encodeBytes` | `Bytes -> String` | unchanged — already packed |
-| `hex` | `decodeBytes` | `String -> Result String Bytes` | unchanged — already packed |
+| `hex` | `encodeBytes` | `Bytes -> String` | **S-codecs-bytes: merged into `encode`, name retires, deleted** |
+| `hex` | `decodeBytes` | `String -> Result String Bytes` | **S-codecs-bytes: merged into `decode`, name retires, deleted** |
 | `bytes` | `writeStdoutBytes` | `Bytes -> <Stdout> Unit` | unchanged — already packed |
-| `net_async` | `recvBytes` | `Connection -> Int -> Async <Net "_" \| e> (Result String Bytes)` | unchanged — already packed |
-| `net_async` | `recvBytesWithin` | `Duration -> Connection -> Int -> Async <Clock, Net "_" \| e> (Result String Bytes)` | unchanged — already packed |
+| `net_async` | `recvBytes` | `Connection -> Int -> Async <Net "_" \| e> (Result String Bytes)` | **S-net-http-bytes: renamed to `recv`, name retires** |
+| `net_async` | `recvBytesWithin` | `Duration -> Connection -> Int -> Async <Clock, Net "_" \| e> (Result String Bytes)` | **S-net-http-bytes: renamed to `recvWithin`, name retires** |
 | `regex` | `isFullMatchBytes` | `Regex -> Array Int -> Int -> Int -> Bool` | B6: same name, `Array Int -> Bytes` — the licensed twin of `isFullMatch : Regex -> String -> Bool` |
 | `regex` | `findBytes` | `Regex -> Array Int -> Int -> Int -> Option Match` | B6: same name, `Array Int -> Bytes` — the licensed twin of `find : Regex -> String -> Option Match` |
 | `sha256` | `sha256FixedBytes` | `Array Int -> Array Int` | **2026-09-26: deleted** — `sha256 : Bytes -> Bytes` is now the only entry, and it is the unchecked one: the type carries the byte domain (Ruling 6) |

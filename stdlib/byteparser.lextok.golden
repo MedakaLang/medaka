@@ -113,6 +113,8 @@ UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
+UPPER "Int"
+ARROW
 LT
 IDENT "e"
 GT
@@ -120,40 +122,6 @@ UPPER "BResult"
 IDENT "a"
 NEWLINE
 IDENT "runBP"
-LPAREN
-UPPER "ByteParserE"
-IDENT "f"
-RPAREN
-IDENT "input"
-IDENT "pos"
-EQUAL
-IDENT "f"
-IDENT "input"
-IDENT "pos"
-LPAREN
-IDENT "bytesLength"
-IDENT "input"
-RPAREN
-NEWLINE
-IDENT "runBPWithin"
-COLON
-UPPER "ByteParserE"
-IDENT "e"
-IDENT "a"
-ARROW
-UPPER "Bytes"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-LT
-IDENT "e"
-GT
-UPPER "BResult"
-IDENT "a"
-NEWLINE
-IDENT "runBPWithin"
 LPAREN
 UPPER "ByteParserE"
 IDENT "f"
@@ -269,7 +237,7 @@ IDENT "end"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
@@ -325,7 +293,7 @@ IDENT "end"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "pf"
 IDENT "input"
 IDENT "pos"
@@ -337,7 +305,7 @@ IDENT "p2"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "pa"
 IDENT "input"
 IDENT "p2"
@@ -377,7 +345,7 @@ IDENT "end"
 FAT_ARROW
 IDENT "onOk"
 LPAREN
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
@@ -388,7 +356,7 @@ IDENT "a"
 IDENT "p2"
 FAT_ARROW
 INDENT
-IDENT "runBPWithin"
+IDENT "runBP"
 LPAREN
 IDENT "k"
 IDENT "a"
@@ -451,7 +419,7 @@ IDENT "pos"
 IDENT "end"
 FAT_ARROW
 MATCH
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
@@ -469,7 +437,7 @@ UPPER "BErr"
 UNDERSCORE
 UNDERSCORE
 FAT_ARROW
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "q"
 IDENT "input"
 IDENT "pos"
@@ -762,7 +730,7 @@ IDENT "end"
 IDENT "acc"
 EQUAL
 MATCH
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "p"
 IDENT "input"
 IDENT "pos"
@@ -1179,15 +1147,15 @@ RPAREN
 IDENT "pos"
 NEWLINE
 PIPE
-IDENT "pos"
-PLUS
 IDENT "n"
 GT
 IDENT "end"
+MINUS
+IDENT "pos"
 EQUAL
 UPPER "BErr"
 STRING "unexpected end of input"
-IDENT "pos"
+IDENT "end"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -2159,6 +2127,10 @@ IDENT "runBP"
 IDENT "p"
 IDENT "bytes"
 INT 0
+LPAREN
+IDENT "bytesLength"
+IDENT "bytes"
+RPAREN
 INDENT
 UPPER "BOk"
 IDENT "a"
@@ -2202,9 +2174,39 @@ IDENT "start"
 IDENT "end"
 IDENT "p"
 IDENT "bytes"
+INDENT
+PIPE
+IDENT "start"
+LT
+INT 0
+OR
+IDENT "end"
+LT
+IDENT "start"
+OR
+IDENT "end"
+GT
+IDENT "bytesLength"
+IDENT "bytes"
+EQUAL
+INDENT
+UPPER "Err"
+INTERP_OPEN "invalid range ["
+IDENT "start"
+INTERP_MID ", "
+IDENT "end"
+INTERP_MID ") for input of length "
+IDENT "bytesLength"
+IDENT "bytes"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
 EQUAL
 MATCH
-IDENT "runBPWithin"
+IDENT "runBP"
 IDENT "p"
 IDENT "bytes"
 IDENT "start"
@@ -2227,6 +2229,8 @@ IDENT "m"
 INTERP_MID " at byte "
 IDENT "pos"
 INTERP_END ""
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
