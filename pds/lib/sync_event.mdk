@@ -23,7 +23,7 @@ import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
 import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
-import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
+import lib.mst.{Mst, mstCoveringProofBlocks, mstKeyDepth, mstNodeBlocks}
 import lib.repo.{
   blockBytesChecked,
   blockRowsChecked,
@@ -78,15 +78,15 @@ public export data SyncCommitEvent = SyncCommitEvent {
   ops : List SyncRepoOp,
 }
 
-seenCids : List (Cid, Array Int) -> Map String Bool -> Map String Bool
+seenCids : List (Cid, Bytes) -> Map String Bool -> Map String Bool
 seenCids [] index = index
 seenCids ((cid, _) :: rest) index =
   seenCids rest (set (cidToString cid) True index)
 
-missingFrom : List (Cid, Array Int) ->
+missingFrom : List (Cid, Bytes) ->
   Map String Bool ->
-  List (Cid, Array Int) ->
-  List (Cid, Array Int)
+  List (Cid, Bytes) ->
+  List (Cid, Bytes)
 missingFrom [] _ acc = reverse acc
 missingFrom ((cid, bytes) :: rest) index acc =
   if has (cidToString cid) index then
@@ -154,10 +154,11 @@ syncCommitBlocks : Option Mst ->
   Array Int ->
   Result String (List (Cid, Array Int))
 syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
-  proof <- mstCoveringProofBlocks keys after
+  keyBytes <- mstKeysDoor keys
+  proof <- mstCoveringProofBlocks keyBytes after
   let union =
     createdNodes before after
-      ++ proof
+      ++ blockRowsFromBytesDoor proof
       ++ addedRecords
       ++ [(commitCid, commitBytes)]
   Ok (sortBlocks (dedupe union Tip []))
@@ -170,9 +171,27 @@ syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
    An empty tree that merely HAPPENS to equal the post-write one is still a
    prior tree and still subtracts. -}
 createdNodes : Option Mst -> Mst -> List (Cid, Array Int)
-createdNodes None after = mstNodeBlocks after
+createdNodes None after = blockRowsFromBytesDoor (mstNodeBlocks after)
 createdNodes (Some before) after =
-  missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
+  blockRowsFromBytesDoor
+    (missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) [])
+
+-- Door: `mst` speaks `Bytes` blocks and this module's block lists are
+-- `Array Int`. `toArray` is total, so nothing is checked or masked.
+blockRowsFromBytesDoor : List (Cid, Bytes) -> List (Cid, Array Int)
+blockRowsFromBytesDoor = map ((cid, bytes) => (cid, toArray bytes))
+
+{- | Door, checked: MST keys are `Bytes` and a write's touched keys are
+   `Array Int`. The keys are refused in order, each as
+   `mstCoveringProofBlocks` refused it when it took `Array Int`: an element
+   outside 0..255 with the range message, an empty key with `mstKeyDepth`'s. -}
+mstKeysDoor : List (Array Int) -> Result String (List Bytes)
+mstKeysDoor [] = Ok []
+mstKeysDoor (key :: rest) = match fromArray key
+  None => Err "mst: key element outside byte range 0..255"
+  Some bytes => match mstKeyDepth bytes
+    Err message => Err message
+    Ok _ => map (bytes :: _) (mstKeysDoor rest)
 
 {- | Wrap a block set as the CAR file the `blocks` field carries. The commit
    CID is the sole root, which is the one ordering constraint the lexicon

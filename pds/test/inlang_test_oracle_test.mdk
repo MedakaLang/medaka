@@ -90,7 +90,9 @@ suites = [
   ("server_core_test", (11, Eval)),
   ("encodings_test", (29, Eval)),
   ("dagcbor_cid_test", (12, Eval)),
-  ("mst_test", (13, NativeSpeed)),
+  -- lowered from 13: the defensive-copy cell mutated the returned entry and
+  -- root arrays, and `Bytes` has no mutation for it to attempt
+  ("mst_test", (12, NativeSpeed)),
   -- lowered from 14: two cells fed out-of-range bytes that `Bytes` cannot
   -- represent, and were deleted rather than converted
   ("car_store_test", (12, Eval)),
@@ -503,7 +505,7 @@ test "pds/test/encodings_test.mdk executed >= 29 assertions" =
 test "pds/test/dagcbor_cid_test.mdk executed >= 12 assertions" =
   floorExpectation "dagcbor_cid_test"
 
-test "pds/test/mst_test.mdk executed >= 13 assertions" =
+test "pds/test/mst_test.mdk executed >= 12 assertions" =
   floorExpectation "mst_test"
 
 test "pds/test/car_store_test.mdk executed >= 12 assertions" =

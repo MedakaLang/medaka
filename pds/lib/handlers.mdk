@@ -1101,10 +1101,20 @@ afterKey key =
   let width = arrayLength key
   arrayMakeWith (width + 1) (i => if i == width then 0 else key[i])
 
+-- Door, checked: MST range bounds are `Bytes` and this module's record paths
+-- are `Array Int`. `mstRange` took any `Array Int` and had no refusal, so an
+-- out-of-range element panics rather than bounding the read at a byte no key
+-- holds.
+rangeKeyDoor : Array Int -> Bytes
+rangeKeyDoor key =
+  optionOrPanic
+    "mst: range key element outside byte range 0..255"
+    (fromArray key)
+
 -- | Read the one entry sorting at or after `from`, and nothing behind it.
 seekFrom : Option (Array Int) -> MstRangeQuery
 seekFrom from = MstRangeQuery {
-  start = from,
+  start = map rangeKeyDoor from,
   prefix = None,
   reverse = False,
   limit = Some 1,
@@ -1253,8 +1263,8 @@ applyListRecords account store params = do
   -- read stops at that bound inside the tree, so selection reaches no further
   -- into the collection than the page it answers with.
   let query = MstRangeQuery {
-    start = map (recordPath collection) cursor,
-    prefix = Some (collectionPrefix collection),
+    start = map (rkey => rangeKeyDoor (recordPath collection rkey)) cursor,
+    prefix = Some (rangeKeyDoor (collectionPrefix collection)),
     reverse = not ascending,
     limit = Some (limit + 2),
   }
@@ -1591,6 +1601,14 @@ blockRowsToBytesDoor : List (Cid, Array Int) -> List (Cid, Bytes)
 blockRowsToBytesDoor =
   map ((cid, bytes) => (cid, fromArrayAssumeByteDomain bytes))
 
+-- Door, checked: MST keys are `Bytes` and this module's record paths are
+-- `Array Int`. An out-of-range element is refused with the message
+-- `mstCoveringProofBlocks` returned for it when it took `Array Int`.
+mstProofDoor : Array Int -> Repo -> Result String (List (Cid, Bytes))
+mstProofDoor path repo = match fromArray path
+  None => Err "mst: key element outside byte range 0..255"
+  Some key => mstCoveringProofBlocks [key] (repoTree repo)
+
 applySyncGetRecord : Account ->
   Store ->
   List QueryParam ->
@@ -1602,7 +1620,7 @@ applySyncGetRecord account store params = do
   collection <- requiredParam "collection" params
   rkey <- requiredParam "rkey" params
   let path = recordPath collection rkey
-  proof <- match mstCoveringProofBlocks [path] (repoTree repo)
+  proof <- match mstProofDoor path repo
     Err message =>
       Err (invalidRequest "Record key is not admissible: \{message}")
     Ok blocks => Ok blocks
@@ -1612,8 +1630,11 @@ applySyncGetRecord account store params = do
   record <- recordProofBlock found repo
   let commit = repoLatestCommit repo
   let commitCid = repoCommitCid commit
-  let blocks = (commitCid, repoCommitSignedBytes commit) :: proof ++ record
-  match carEncode [commitCid] (blockRowsToBytesDoor blocks)
+  let blocks =
+    blockRowsToBytesDoor [(commitCid, repoCommitSignedBytes commit)]
+      ++ proof
+      ++ blockRowsToBytesDoor record
+  match carEncode [commitCid] blocks
     Err message => Err (invalidRequest "Record proof rejected: \{message}")
     Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" (toArray bytes))
 

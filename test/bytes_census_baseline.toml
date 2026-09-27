@@ -127,3 +127,7 @@ count = 0
 [[entry]]
 file = "pds/lib/hmac_sha256.mdk"
 count = 0
+
+[[entry]]
+file = "pds/lib/mst.mdk"
+count = 0
