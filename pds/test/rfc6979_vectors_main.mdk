@@ -8,26 +8,25 @@ import lib.secp256k1.{
   rfc6979InjectedNonceProbeForTest,
 }
 import array as A
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromU8Array}
 import hex.{decode, encode}
 import io.{readLines}
 import string.{split, trim}
 
-zero32 : Array Int
-zero32 = arrayMake 32 0
+zero32 : Bytes
+zero32 = fromU8Array (arrayMake 32 0)
 
-oneBytes : Array Int
-oneBytes = [|
+oneBytes : Bytes
+oneBytes = fromU8Array [|
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0, 0, 0, 0, 1
 |]
 
-bytes : String -> Array Int
-bytes value =
-  toArray (resultOrPanic "rfc6979_vectors: malformed hex" (decode value))
+bytes : String -> Bytes
+bytes value = resultOrPanic "rfc6979_vectors: malformed hex" (decode value)
 
-hexOf : Array Int -> String
-hexOf x = encode (fromArrayAssumeByteDomain x)
+hexOf : Bytes -> String
+hexOf x = encode x
 
 scalar : String -> Sc
 scalar value =
@@ -48,7 +47,7 @@ fail counts label =
   let () = bump counts 1
   println "FAIL\t\{label}"
 
-candidate1Probe : Sc -> Array Int -> Array Int -> Array Int -> Bool
+candidate1Probe : Sc -> Bytes -> Bytes -> Bytes -> Bool
 candidate1Probe key digest candidate0 candidate1 =
   let (normal0, normal1, selectedValid, selected) =
     rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 1
@@ -58,7 +57,7 @@ candidate1Probe key digest candidate0 candidate1 =
     && selectedValid == 1
     && selected == oneBytes
 
-exhaustionProbe : Sc -> Array Int -> Array Int -> Array Int -> Bool
+exhaustionProbe : Sc -> Bytes -> Bytes -> Bytes -> Bool
 exhaustionProbe key digest candidate0 candidate1 =
   let (normal0, normal1, validBit, selected) =
     rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 0
@@ -68,7 +67,7 @@ exhaustionProbe key digest candidate0 candidate1 =
     && validBit == 0
     && selected == zero32
 
-runProbes : Array Int -> Sc -> Array Int -> Array Int -> Array Int -> <IO> Unit
+runProbes : Array Int -> Sc -> Bytes -> Bytes -> Bytes -> <IO> Unit
 runProbes counts key digest candidate0 candidate1 =
   let () =
     if candidate1Probe key digest candidate0 candidate1 then

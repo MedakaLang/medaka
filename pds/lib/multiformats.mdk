@@ -34,15 +34,17 @@
    commit d7406cdea189b82a0b3937f5737b440f5fa92f92, table row: "U+007a, z,
    base58btc, Base58 Bitcoin, final"). -}
 
-import array.{get}
-import bytes.{fromArray, toArray}
+import bytes.{Bytes, get, fromU8Array}
+import bytes as B
+import bytebuilder.{Builder, newBuilder, emitU8, buildBytes}
 import string.{stripPrefix}
+import u8 as U8
 import lib.base58.{base58btcEncode, base58btcDecode}
 import base32.{base32Encode, base32Decode}
 
-byteAt : Int -> Array Int -> Int
-byteAt i arr =
-  optionOrPanic "multiformats: byte index out of bounds" (get i arr)
+byteAt : Int -> Bytes -> Int
+byteAt i bs =
+  U8.toInt (optionOrPanic "multiformats: byte index out of bounds" (get i bs))
 
 -- ── unsigned-varint (LEB128) ─────────────────────────────────────────────
 
@@ -58,32 +60,40 @@ uvarintEncodeGo n =
   else
     bitOr (bitAnd n 0x7f) 0x80 :: uvarintEncodeGo (shiftRight n 7)
 
+-- Every element of `uvarintEncodeGo`'s result is `bitAnd _ 0x7f` bitOr'd with
+-- `0x80` or `0`, so each is in the byte domain by construction.
+emitDigitBytes : List Int -> Builder -> Unit
+emitDigitBytes [] _ = ()
+emitDigitBytes (x :: rest) buf =
+  emitU8 (U8.truncate x) buf
+  emitDigitBytes rest buf
+
 {- | Non-negative `Int` -> minimal unsigned-varint bytes (LSB-first, 7 bits
    per byte, continuation bit `0x80` set on every byte but the last).
 
-   > uvarintEncode 1
-   [|1|]
-   > uvarintEncode 127
-   [|127|]
-   > uvarintEncode 128
-   [|128, 1|]
-   > uvarintEncode 255
-   [|255, 1|]
-   > uvarintEncode 300
-   [|172, 2|]
-   > uvarintEncode 16384
-   [|128, 128, 1|] -}
+   > debug (uvarintEncode 1)
+   "Bytes \"01\""
+   > debug (uvarintEncode 127)
+   "Bytes \"7f\""
+   > debug (uvarintEncode 128)
+   "Bytes \"8001\""
+   > debug (uvarintEncode 255)
+   "Bytes \"ff01\""
+   > debug (uvarintEncode 300)
+   "Bytes \"ac02\""
+   > debug (uvarintEncode 16384)
+   "Bytes \"808001\"" -}
 export
-uvarintEncode : Int -> Array Int
+uvarintEncode : Int -> Bytes
 uvarintEncode n =
   if n < 0 then
     -- unsigned-varint encodes non-negative values only, and
     -- `uvarintEncodeGo`'s `n < 128` test is TRUE for every negative `n`, so
     -- without this guard a negative argument silently produces a 1-element
-    -- array holding that negative value. Not `Result`-typed (the signature
-    -- is `Int -> Array Int` and `multicodecPrefix` is total on constants),
-    -- so this panics — same in-family precedent as
-    -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
+    -- encoding of that negative value. Not `Result`-typed (the signature is
+    -- `Int -> Bytes` and `multicodecPrefix` is total on constants), so this
+    -- panics — same in-family precedent as `pds/lib/field.mdk`'s
+    -- `feFromBytesReduce`.
     --
     -- `uvarintDecode` must never reach this panic: it is `Result`-typed,
     -- and turning a correct `Err` into a process abort would break its own
@@ -91,18 +101,15 @@ uvarintEncode n =
     panic
       "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
   else
-    arrayFromList (uvarintEncodeGo n)
+    let buf = newBuilder ()
+    emitDigitBytes (uvarintEncodeGo n) buf
+    buildBytes buf
 
 -- Read one varint from `bytes` starting at `idx`, accumulating `acc` with
 -- `shift` bits already placed. `Err` on truncation (ran out of input while
 -- the continuation bit was still set) or over-length (more than
 -- `uvarintMaxBytes` bytes).
-uvarintDecodeGo : Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Result String (Int, Int)
+uvarintDecodeGo : Bytes -> Int -> Int -> Int -> Int -> Result String (Int, Int)
 uvarintDecodeGo bytes idx n shift acc =
   if idx >= uvarintMaxBytes then
     Err "uvarint: over-long (more than 9 bytes)"
@@ -119,7 +126,7 @@ uvarintDecodeGo bytes idx n shift acc =
 -- Byte-for-byte comparison of `bytes[0 .. len)` against `expected`, used to
 -- confirm a decoded value's canonical (minimal) re-encoding matches what
 -- was actually consumed.
-prefixEquals : Array Int -> Array Int -> Int -> Int -> Bool
+prefixEquals : Bytes -> Bytes -> Int -> Int -> Bool
 prefixEquals a b i len =
   if i >= len then
     True
@@ -135,13 +142,13 @@ prefixEquals a b i len =
    the representable `Int` range (see the module header: spec-legal values in
    `[2^62, 2^63-1]` do not fit Medaka's 63-bit signed `Int`).
 
-   > uvarintDecode (arrayFromList [172, 2])
+   > uvarintDecode (fromU8Array [|172, 2|])
    Ok (300, 2)
-   > uvarintDecode (arrayFromList [0x81, 0x00])
+   > uvarintDecode (fromU8Array [|0x81, 0x00|])
    Err "uvarint: non-minimal encoding" -}
 export
-uvarintDecode : Array Int -> Result String (Int, Int)
-uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
+uvarintDecode : Bytes -> Result String (Int, Int)
+uvarintDecode bytes = match uvarintDecodeGo bytes 0 (B.length bytes) 0 0
   Err e => Err e
   Ok (value, consumed) =>
     -- RANGE, checked FIRST and EXPLICITLY. Only the 9th byte can shift a
@@ -166,7 +173,7 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
       -- requirement (the published `{0x81, 0x00}` case), which the range
       -- check does not touch.
       let reencoded = uvarintEncode value
-      if arrayLength reencoded /= consumed
+      if B.length reencoded /= consumed
         || not (prefixEquals reencoded bytes 0 consumed) then
         Err "uvarint: non-minimal encoding"
       else
@@ -174,14 +181,14 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
 
 {- | `uvarintDecode`, additionally requiring the WHOLE input be consumed.
 
-   > uvarintDecodeAll (arrayFromList [172, 2])
+   > uvarintDecodeAll (fromU8Array [|172, 2|])
    Ok 300 -}
 export
-uvarintDecodeAll : Array Int -> Result String Int
+uvarintDecodeAll : Bytes -> Result String Int
 uvarintDecodeAll bytes = match uvarintDecode bytes
   Err e => Err e
   Ok (value, consumed) =>
-    if consumed /= arrayLength bytes then
+    if consumed /= B.length bytes then
       Err "uvarint: trailing bytes after value"
     else
       Ok value
@@ -215,31 +222,31 @@ multicodecP256Pub = 0x1200
 
 {- | A multicodec code's unsigned-varint prefix bytes.
 
-   > multicodecPrefix multicodecSecp256k1Pub
-   [|231, 1|]
-   > multicodecPrefix multicodecP256Pub
-   [|128, 36|] -}
+   > debug (multicodecPrefix multicodecSecp256k1Pub)
+   "Bytes \"e701\""
+   > debug (multicodecPrefix multicodecP256Pub)
+   "Bytes \"8024\"" -}
 export
-multicodecPrefix : Int -> Array Int
+multicodecPrefix : Int -> Bytes
 multicodecPrefix code = uvarintEncode code
 
 -- ── multibase base58btc (`z` prefix, status final) ────────────────────────
 
 {- | Bytes -> multibase-prefixed base58btc string (`"z" ++ base58btcEncode`).
 
-   > multibaseBase58btc [||]
+   > multibaseBase58btc (fromU8Array [||])
    "z" -}
 export
-multibaseBase58btc : Array Int -> String
+multibaseBase58btc : Bytes -> String
 multibaseBase58btc bytes = "z" ++ base58btcEncode bytes
 
 {- | The exact inverse of `multibaseBase58btc`. `Err` when the leading `z`
    is missing, or when the remainder is not valid base58btc.
 
-   > multibaseBase58btcDecode "z"
-   Ok [||] -}
+   > debug (multibaseBase58btcDecode "z")
+   "Ok Bytes \"\"" -}
 export
-multibaseBase58btcDecode : String -> Result String (Array Int)
+multibaseBase58btcDecode : String -> Result String Bytes
 multibaseBase58btcDecode s = match stripPrefix "z" s
   Some rest => base58btcDecode rest
   None =>
@@ -250,25 +257,20 @@ multibaseBase58btcDecode s = match stripPrefix "z" s
 {- | Bytes -> multibase-prefixed lowercase base32 string
    (`"b" ++ base32Encode`), used by atproto CIDs.
 
-   > multibaseBase32Lower [||]
+   > multibaseBase32Lower (fromU8Array [||])
    "b" -}
 export
-multibaseBase32Lower : Array Int -> String
-multibaseBase32Lower bytes =
-  "b"
-    ++ base32Encode
-      (optionOrPanic
-        "multibaseBase32Lower: byte value out of range"
-        (fromArray bytes))
+multibaseBase32Lower : Bytes -> String
+multibaseBase32Lower bytes = "b" ++ base32Encode bytes
 
 {- | The exact inverse of `multibaseBase32Lower`. `Err` when the leading `b`
    is missing, or when the remainder is not canonical base32.
 
-   > multibaseBase32LowerDecode "b"
-   Ok [||] -}
+   > debug (multibaseBase32LowerDecode "b")
+   "Ok Bytes \"\"" -}
 export
-multibaseBase32LowerDecode : String -> Result String (Array Int)
+multibaseBase32LowerDecode : String -> Result String Bytes
 multibaseBase32LowerDecode s = match stripPrefix "b" s
-  Some rest => map toArray (base32Decode rest)
+  Some rest => base32Decode rest
   None =>
     Err "multibaseBase32LowerDecode: missing 'b' (base32) multibase prefix"

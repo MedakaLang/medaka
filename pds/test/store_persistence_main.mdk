@@ -50,7 +50,7 @@
    three stores list has a stated disposition for an entry no write path here
    can produce. -}
 
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -138,7 +138,8 @@ mustSecret : SecretKey
 mustSecret =
   resultOrPanic
     "store_persistence: malformed secret"
-    (secretKeyFromBytes (mustHex secretHex))
+    (secretKeyFromBytes
+      (resultOrPanic "store_persistence: malformed hex" (decode secretHex)))
 
 mustTid : String -> Tid
 mustTid text = resultOrPanic "store_persistence: malformed TID" (tidParse text)
@@ -198,7 +199,7 @@ summary label repo =
   let records = match repoList repo
     Ok rows => length rows
     Err message => panic "store_persistence: listing failed: \{message}"
-  let roots = match carDecode car
+  let roots = match carDecode (fromArrayAssumeByteDomain car)
     Ok _ => "decodes"
     Err message =>
       panic "store_persistence: exported CAR does not decode: \{message}"
@@ -311,7 +312,8 @@ verifiedBlobs : String ->
   <FileRead> Result String (List (Cid, String, Array Int))
 verifiedBlobs dir = do
   rows <- blobFileRead dir
-  _ <- blockStoreFromBlocks (map ((cid, _, bytes) => (cid, bytes)) rows)
+  _ <- blockStoreFromBlocks
+    (map ((cid, _, bytes) => (cid, fromArrayAssumeByteDomain bytes)) rows)
   Ok rows
 
 -- Each fixture is reported in FIXTURE order, not disk order (`blobFileRead`
@@ -410,8 +412,11 @@ runPrefsSave dir = match persistPreferences dir fixturePrefs
 
 -- A fixed record, persisted into the same data directory as the repository
 -- and preferences halves so case 12's syscall trace covers it too.
-fixtureCredentialSalt : Array Int
-fixtureCredentialSalt = mustHex "000102030405060708090a0b0c0d0e0f"
+fixtureCredentialSalt : Bytes
+fixtureCredentialSalt =
+  resultOrPanic
+    "store_persistence: malformed hex"
+    (decode "000102030405060708090a0b0c0d0e0f")
 
 fixtureCredential : CredentialRecord
 fixtureCredential =
@@ -970,10 +975,10 @@ plantDir path = do
 -- stores keep this arithmetic private, and the gate has to plant INSIDE a
 -- shard that really exists for a leaf-level case to be a leaf-level case.
 shardOf : Cid -> String
-shardOf cid = take 2 (encode (fromArrayAssumeByteDomain (cidDigest cid)))
+shardOf cid = take 2 (encode (cidDigest cid))
 
 cidName : Cid -> String
-cidName cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+cidName cid = encode (cidToBytes cid)
 
 firstBlobCid : Cid
 firstBlobCid = match blobFixtures

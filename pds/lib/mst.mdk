@@ -19,7 +19,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import array.{drop, take}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set, size}
@@ -197,7 +197,8 @@ splitLayer ((entry@(MstEntry _ _ depth)) :: rest) layer =
 
 mustEncodeNode : DagCbor -> Array Int
 mustEncodeNode value =
-  resultOrPanic "mst: internal node encoding failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "mst: internal node encoding failed" (dagCborEncode value))
 
 oldLeaves : List NodeEntry -> List OldLeaf
 oldLeaves [] = []
@@ -304,7 +305,13 @@ buildNode reuse entries layer =
     buildWireEntries reuse first layer None
   let bytes =
     mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
-  let cid = cidForDagCbor bytes
+  -- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+  -- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
+  let cid =
+    cidForDagCbor
+      (optionOrPanic
+        "cidForDagCbor: every element must be a byte in 0..255"
+        (fromArray bytes))
   MstNode cid bytes (childEntries left ++ rightEntries)
 
 nodeBlocks : MstNode -> List (Cid, Array Int)
@@ -328,9 +335,10 @@ buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
   let prefix = match previous
     None => 0
     Some prior => commonPrefix prior key
+  -- Masked: every key was range-checked by `mstKeyDepth` on the way in.
   let wire = DcMap [
     ("p", DcInt prefix),
-    ("k", DcBytes (drop prefix key)),
+    ("k", DcBytes (fromArrayAssumeByteDomain (drop prefix key))),
     ("v", DcLink value),
     ("t", childValue right),
   ]
@@ -688,7 +696,8 @@ decodeEntries : List DagCbor ->
   Result String (List DecodedEntry)
 decodeEntries [] _ acc = Ok (reverse acc)
 decodeEntries (value :: rest) previous acc = match value
-  DcMap [("k", DcBytes suffix), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] =>
+  DcMap [("k", DcBytes suffixBytes), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] =>
+    let suffix = toArray suffixBytes
     if prefix < 0 then
       Err "mst: prefix length must be non-negative"
     else match previous
@@ -724,8 +733,18 @@ decodeEntries (value :: rest) previous acc = match value
             _ => Err "mst: entry order is not strictly lexical"
   _ => Err "mst: invalid node entry form"
 
+{- | `dagCborDecode` over `Array Int`, refused with the decoder's own range
+   message when an element is outside 0..255. The decoder took `Array Int`
+   and made this check itself; masking instead truncates the element into a
+   byte that can still decode. -}
+export
+dagCborDecodeChecked : Array Int -> Result String DagCbor
+dagCborDecodeChecked bytes = match fromArray bytes
+  None => Err "dagcbor: input element outside byte range 0..255"
+  Some checked => dagCborDecode checked
+
 decodeNode : Array Int -> Result String DecodedNode
-decodeNode bytes = match dagCborDecode bytes
+decodeNode bytes = match dagCborDecodeChecked bytes
   Err message => Err "mst: \{message}"
   Ok value => match value
     DcMap [("e", DcArray entries), ("l", left)] =>
@@ -803,7 +822,7 @@ mstValidateNodeBytes expected isRoot bytes = do
 -- ── validating a block set ──────────────────────────────────────────────────
 
 cidKey : Cid -> String
-cidKey cid = encode (fromArrayAssumeByteDomain (cidToBytes cid))
+cidKey cid = encode (cidToBytes cid)
 
 mstEmptySet : Set String
 mstEmptySet = empty
@@ -816,7 +835,13 @@ validateBlockRows ((cid, bytes) :: rest) index =
   let key = cidKey cid
   if has key index then
     Err "mst: duplicate node block CID"
-  else if not (cidEqual cid (cidForDagCbor bytes)) then
+  else if not
+    (cidEqual
+      cid
+      (cidForDagCbor
+        (optionOrPanic
+          "cidForDagCbor: every element must be a byte in 0..255"
+          (fromArray bytes)))) then
     Err "mst: node block CID does not match bytes"
   else
     validateBlockRows rest (set key bytes index)

@@ -240,16 +240,19 @@ splitEvent payload = splitEventAt payload 1
 maxHeaderBytes : Int
 maxHeaderBytes = 64
 
+decodeEventPart : Array Int -> Int -> Int -> Result String DagCbor
+decodeEventPart payload lo hi =
+  dagCborDecode (B.fromArrayAssumeByteDomain (sliceClamped lo hi payload))
+
 splitEventAt : Array Int -> Int -> Result String (DagCbor, DagCbor)
 splitEventAt payload cut =
   if cut > maxHeaderBytes || cut > arrayLength payload then
     Err "serve_subscribe: event frame has no decodable header object"
-  else match dagCborDecode (sliceClamped 0 cut payload)
+  else match decodeEventPart payload 0 cut
     Err _ => splitEventAt payload (cut + 1)
-    Ok header =>
-      match dagCborDecode (sliceClamped cut (arrayLength payload) payload)
-        Err message => Err "serve_subscribe: event frame body: \{message}"
-        Ok body => Ok (header, body)
+    Ok header => match decodeEventPart payload cut (arrayLength payload)
+      Err message => Err "serve_subscribe: event frame body: \{message}"
+      Ok body => Ok (header, body)
 
 mapField : DagCbor -> String -> Option DagCbor
 mapField (DcMap fields) name = fieldIn fields name
@@ -528,7 +531,7 @@ commitDataCid car head = match blockBytes (carBlocks car) head
       None => Err "serve_subscribe: the commit block names no data root"
       Some cid => Ok (cidToString cid)
 
-blockBytes : List (Cid, Array Int) -> Cid -> Option (Array Int)
+blockBytes : List (Cid, B.Bytes) -> Cid -> Option B.Bytes
 blockBytes [] _ = None
 blockBytes ((cid, bytes) :: rest) want =
   if cidToString cid == cidToString want then

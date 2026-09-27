@@ -23,7 +23,7 @@ import test.{
   fail,
   pass,
 }
-import lib.cid.{cidForRaw}
+import lib.cid.{Cid, cidForRaw}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -53,6 +53,15 @@ mustHeader name value =
   resultOrPanic
     "server_core_test: header setup failed"
     (makeHeader name (encodeUtf8 value))
+
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForRaw` did.
+cidForRawDoor : Array Int -> Cid
+cidForRawDoor bytes =
+  cidForRaw
+    (optionOrPanic
+      "cidForRaw: every element must be a byte in 0..255"
+      (fromArray bytes))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =
@@ -87,7 +96,7 @@ handler : Handler
 handler _ _ store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
 handler _ _ store (ProcedureRawCall "com.example.block.put" [] _ bytes) =
-  match storePut (cidForRaw bytes) bytes store
+  match storePut (cidForRawDoor bytes) bytes store
     Err message =>
       panic "server_core_test: verified store update failed: \{message}"
     Ok next => (next, mustResponse 201 "Created" "stored")
@@ -118,11 +127,12 @@ seededStore : Store
 seededStore =
   resultOrPanic
     "server_core_test: seed store setup failed"
-    (storePut (cidForRaw seedBytes) seedBytes storeEmpty)
+    (storePut (cidForRawDoor seedBytes) seedBytes storeEmpty)
 
 seedPreserved : Store -> Bool
 seedPreserved store =
-  storeSize store == 1 && storeGet (cidForRaw seedBytes) store == Some seedBytes
+  storeSize store == 1
+    && storeGet (cidForRawDoor seedBytes) store == Some seedBytes
 
 fixedQuery : Bytes
 fixedQuery =
@@ -185,7 +195,7 @@ test "an out-of-domain request array is refused at the door, not framed" = expec
 
 test "Store starts empty and delegates verified immutable insertion" =
   let bytes = [|1, 2, 3|]
-  let cid = cidForRaw bytes
+  let cid = cidForRawDoor bytes
   expectOkThen
     (next => expectEach [
       ("storeSize storeEmpty == 0", expectEqual 0 (storeSize storeEmpty)),
@@ -199,7 +209,7 @@ test "Store starts empty and delegates verified immutable insertion" =
 
 test "Store insertion and lookup both retain defensive copies" =
   let bytes = [|4, 5, 6|]
-  let cid = cidForRaw bytes
+  let cid = cidForRawDoor bytes
   expectOkThen
     (next => match storeGet cid next
       None => fail "expected the stored bytes to still be present"
@@ -248,7 +258,7 @@ test "fixed raw request returns successor Store and exact response bytes" =
       "the stored block reads back as the posted bytes",
       expectEqual
         (Some (toUtf8 "abc"))
-        (storeGet (cidForRaw (toUtf8 "abc")) next),
+        (storeGet (cidForRawDoor (toUtf8 "abc")) next),
     ),
     (
       "the response is the exact 201 Created wire form",
@@ -270,7 +280,7 @@ test "chunked raw request returns successor Store and exact response bytes" =
       "the chunked body reassembles to the posted bytes",
       expectEqual
         (Some (toUtf8 "abc"))
-        (storeGet (cidForRaw (toUtf8 "abc")) next),
+        (storeGet (cidForRawDoor (toUtf8 "abc")) next),
     ),
     (
       "the response is the exact 201 Created wire form",

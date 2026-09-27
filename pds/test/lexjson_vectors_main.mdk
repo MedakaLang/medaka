@@ -14,7 +14,7 @@
    happens to carry a `"$link"` key without being a link object, and a
    `"$bytes"` value that is not valid base64. -}
 
-import bytes.{toArray}
+import bytes.{Bytes}
 import hex.{decode}
 import io.{readLines}
 import json.{Json, parse, stringify}
@@ -22,11 +22,10 @@ import string.{split, startsWith}
 import lib.dagcbor.{dagCborDecode, dagCborEncode}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "lexjson_vectors: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "lexjson_vectors: malformed hex" (decode text)
 
-checkForward : String -> Array Int -> String -> <IO> Bool
+checkForward : String -> Bytes -> String -> <IO> Bool
 checkForward name cborBytes jsonText = match dagCborDecode cborBytes
   Err message =>
     let () = println "ROW \{name} FAIL forward-decode \{message}"
@@ -41,7 +40,7 @@ checkForward name cborBytes jsonText = match dagCborDecode cborBytes
           "ROW \{name} FAIL forward rendered=\{rendered} expected=\{jsonText}"
       False
 
-checkBackwardValue : String -> Array Int -> Json -> <IO> Bool
+checkBackwardValue : String -> Bytes -> Json -> <IO> Bool
 checkBackwardValue name cborBytes value = match lexJsonToDagCbor value
   Err message =>
     let () = println "ROW \{name} FAIL backward \{message}"
@@ -57,7 +56,7 @@ checkBackwardValue name cborBytes value = match lexJsonToDagCbor value
         let () = println "ROW \{name} FAIL backward-mismatch"
         False
 
-checkBackward : String -> Array Int -> String -> <IO> Bool
+checkBackward : String -> Bytes -> String -> <IO> Bool
 checkBackward name cborBytes jsonText = match parse jsonText
   Err message =>
     let () = println "ROW \{name} FAIL json-parse \{message}"

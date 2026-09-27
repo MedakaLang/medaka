@@ -677,7 +677,8 @@ frameHeaderValue = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
 
 mustEncode : DagCbor -> Array Int
 mustEncode value =
-  resultOrPanic "event_log_test: header encode failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "event_log_test: header encode failed" (dagCborEncode value))
 
 frameHeaderBytes : Array Int
 frameHeaderBytes = mustEncode frameHeaderValue
@@ -738,7 +739,10 @@ test "a real commit's frame is stored and read back byte for byte" =
       Ok [stored] => match map toArray (decode stored.frameHex)
         Err message => Fail message "hex-decodable frame bytes" "an error"
         Ok frameBytes =>
-          match dagCborDecode (drop (arrayLength frameHeaderBytes) frameBytes)
+          let bodyBytes =
+            fromArrayAssumeByteDomain
+              (drop (arrayLength frameHeaderBytes) frameBytes)
+          match dagCborDecode bodyBytes
             Err message => Fail message "a decodable #commit body" "an error"
             Ok body => match (
               asInt (bodyField "seq" body),

@@ -246,7 +246,7 @@ writeOf : Op -> RepoWrite
 writeOf op = match (op.action, op.recordBytes)
   ("delete", _) => RepoWriteDelete op.path
   (_, None) => panic "commit_event: \{op.action} row carries no record bytes"
-  (action, Some bytes) => match dagCborDecode bytes
+  (action, Some bytes) => match dagCborDecode (fromArrayAssumeByteDomain bytes)
     Err message => panic "commit_event: undecodable record: \{message}"
     Ok record =>
       if action == "create" then
@@ -297,12 +297,16 @@ sameBlockBytes expected actual =
 {- | The reference-ordered CAR, decoded: its sole root and its whole block set
    are graded against ours, independently of the frame comparisons. -}
 gradeReferenceCar : Step -> List (Cid, Array Int) -> Bool
-gradeReferenceCar step blocks = match carDecode (mustHex step.carHex)
-  Err _ => False
-  Ok car => match carRoots car
-    [root] =>
-      cidEqual root step.commitCid && sameBlockBytes blocks (carBlocks car)
-    _ => False
+gradeReferenceCar step blocks =
+  match carDecode (fromArrayAssumeByteDomain (mustHex step.carHex))
+    Err _ => False
+    Ok car => match carRoots car
+      [root] =>
+        cidEqual root step.commitCid
+          && sameBlockBytes
+            blocks
+            (map ((cid, bytes) => (cid, toArray bytes)) (carBlocks car))
+      _ => False
 
 eventWith : String -> Step -> List SyncRepoOp -> Array Int -> SyncCommitEvent
 eventWith did step ops car = SyncCommitEvent {

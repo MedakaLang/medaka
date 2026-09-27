@@ -1,9 +1,8 @@
 {- | Trust-boundary PANIC guards for RUN-PDS0-036, #1727 and #3210, migrated
    from `pds/test/trust_boundary_guards.sh` under #2592.
 
-   The SHA-256, base58 and `readBufferAppend` byte domains and
-   `uvarintEncode`'s non-negative domain abort instead of returning a value:
-   their result types have no
+   The `readBufferAppend` byte domain and `uvarintEncode`'s non-negative
+   domain abort instead of returning a value: their result types have no
    `Result` channel. Medaka has no catchable panics, so they cannot be
    asserted IN PROCESS — the first abort would shadow every later assertion.
    This gate spawns `pds/test/guard_probes_main.mdk` ONE CASE PER PROCESS
@@ -20,14 +19,16 @@
                     deleted. `expectSpawnFails` is exactly this shape.
      CONTROL cell — must exit 0 AND print its expected "OK …" line. This is
                     the half that catches an over-tight bound;
-                    `sha256-edges` uses the two INCLUSIVE endpoints 0 and
-                    255 for exactly that reason.
+                    `readbuffer-edges` uses the two INCLUSIVE endpoints 0
+                    and 255 for exactly that reason.
+
+   SHA-256 and base58 have no cell here. Both take `Bytes`, whose type
+   carries the byte domain, so an out-of-range element is refused where the
+   `Bytes` is built: by `bytes.fromArray`, or at compile time for a `U8`
+   literal, which `test/fixed_width_refusal_fixtures` pins.
 
    SCOPE, stated honestly (inherited from the retired script): this is the
-   EVAL arm only (`medaka run`). The native arm of the sha256 domain scan is
-   covered by `pds/test/sha256_vectors_test.mdk`'s native arm; base58's
-   cells are
-   eval-only; `uvarintEncode` has no native cell.
+   EVAL arm only (`medaka run`). `uvarintEncode` has no native cell.
 
    ANTI-ROT FLOOR (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
    indistinguishable from "this passed"): `cells` below is the roster every
@@ -53,7 +54,7 @@ probe = underRoot "pds/test/guard_probes_main.mdk"
 
    Whole-line, not substring: the retired script graded these with
    `grep -q "^…$"`, and a substring accepts a probe that printed
-   `NOT OK sha256-edges len=32` for the line `OK sha256-edges len=32`, which
+   `NOT OK uvarint-ok len=2` for the line `OK uvarint-ok len=2`, which
    is the exact inversion a control case exists to catch. -}
 expectControlCase : String -> String -> <Exec, IO> Expectation
 expectControlCase caseName wantLine =
@@ -66,18 +67,6 @@ expectControlCase caseName wantLine =
 -- graded, not a `Result` this module computes.
 cells : List (String, Result String String)
 cells = [
-  ("sha256-over", Err "sha256: every element must be a byte in 0..255"),
-  ("sha256-under", Err "sha256: every element must be a byte in 0..255"),
-  ("sha256-edges", Ok "OK sha256-edges len=32"),
-  (
-    "base58-over",
-    Err "base58btcEncode: every element must be a byte in 0..255",
-  ),
-  (
-    "base58-under",
-    Err "base58btcEncode: every element must be a byte in 0..255",
-  ),
-  ("base58-edges", Ok "OK base58-edges value=15Q"),
   ("uvarint-neg", Err "unsigned-varint encodes non-negative values only"),
   ("uvarint-ok", Ok "OK uvarint-ok len=2"),
   (
@@ -92,7 +81,7 @@ cells = [
 ]
 
 cellFloor : Int
-cellFloor = 11
+cellFloor = 5
 
 runCell : (String, Result String String) -> <Exec, IO> (String, Expectation)
 runCell (name, Err wantMessage) =
@@ -110,22 +99,6 @@ cellExpectation name = match lookup name results
   None => Fail "\{name} has no `results` entry" "" ""
   Some e => e
 
-test "sha256-over panics with the guard's own message" =
-  cellExpectation "sha256-over"
-
-test "sha256-under panics with the guard's own message" =
-  cellExpectation "sha256-under"
-
-test "sha256-edges control case is unaffected" = cellExpectation "sha256-edges"
-
-test "base58-over panics with the guard's own message" =
-  cellExpectation "base58-over"
-
-test "base58-under panics with the guard's own message" =
-  cellExpectation "base58-under"
-
-test "base58-edges control case is unaffected" = cellExpectation "base58-edges"
-
 test "uvarint-neg panics with the guard's own message" =
   cellExpectation "uvarint-neg"
 
@@ -142,7 +115,7 @@ test "readbuffer-edges control case is unaffected" =
 
 -- # Non-vacuity
 
-test "trust_boundary_guards ran at least CELL_FLOOR=11 cells" =
+test "trust_boundary_guards ran at least CELL_FLOOR=5 cells" =
   let n = length results
   if n >= cellFloor then
     Pass ">= \{intToString cellFloor} cells" "\{intToString n} cells"

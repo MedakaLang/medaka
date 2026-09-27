@@ -320,6 +320,7 @@ locOffsRef : Ref (Array (Int, Int))
 locSrcRef : Ref String
 locateOffset : Array Token -> Array Int -> Int -> Int -> Int
 located : ParserE <> Expr -> ParserE <> Expr
+locatedUpperNameP : ParserE <> (String, Loc)
 lowerNameFor : Token -> ParserE <> String
 lowerNameP : ParserE <> String
 many : ParserE <> a -> ParserE <> (List a)

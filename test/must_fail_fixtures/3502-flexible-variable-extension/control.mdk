@@ -1,0 +1,9 @@
+-- #3502 control: the same handle read without a suffix.  The read is exactly
+-- the element "/etc", so the exact bound admits it.
+data Handle (p : Authority FileRead) = Handle (String @p)
+
+readAny : String -> <FileRead "/etc"> Result String String
+readAny x = match Handle "/etc"
+  Handle p => readFile p
+
+main = println 1

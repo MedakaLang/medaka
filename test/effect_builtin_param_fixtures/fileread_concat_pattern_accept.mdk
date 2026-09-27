@@ -1,0 +1,7 @@
+-- #3496 control: the same read under the pattern "/etc/app/*", which admits
+-- every path it begins ⇒ ACCEPT.
+readCfg : String -> <FileRead "/etc/app/*"> Result String String
+readCfg name = readFile ("/etc/app/" ++ name)
+
+main : <IO> Unit
+main = println "fileread concat pattern accept"

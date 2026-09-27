@@ -21,7 +21,7 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{fromArray, toArray}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
 import lib.blob.{blobCid}
@@ -42,14 +42,12 @@ import shell.persist.{persistSave}
 secretHex : String
 secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
-mustHex : String -> Array Int
-mustHex text = toArray (resultOrPanic "synth_repo: malformed hex" (decode text))
-
 corpusSecret : SecretKey
 corpusSecret =
   resultOrPanic
     "synth_repo: bad signing key"
-    (secretKeyFromBytes (mustHex secretHex))
+    (secretKeyFromBytes
+      (resultOrPanic "synth_repo: malformed hex" (decode secretHex)))
 
 corpusDid : String
 corpusDid = "did:plc:synthrepocorpus000000000"
@@ -108,7 +106,17 @@ recordFor seed i = DcMap [
 
 mustEncode : DagCbor -> Array Int
 mustEncode value =
-  resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value)
+  toArray
+    (resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value))
+
+-- Door: `bytes` crosses from `Array Int` to `Bytes` checked, so an
+-- out-of-range element panics as the old `Array Int` `cidForDagCbor` did.
+cidForDagCborDoor : Array Int -> Cid
+cidForDagCborDoor bytes =
+  cidForDagCbor
+    (optionOrPanic
+      "cidForDagCbor: every element must be a byte in 0..255"
+      (fromArray bytes))
 
 -- One row: the record's path bytes, its content CID, and its encoded bytes —
 -- built once per record so the entry (for the MST) and the block (for the
@@ -117,7 +125,7 @@ buildRow : String -> Int -> Int -> Int -> (Array Int, Cid, Array Int)
 buildRow shape seed count i =
   let path = pathFor shape count i
   let bytes = mustEncode (recordFor seed i)
-  (toUtf8 path, cidForDagCbor bytes, bytes)
+  (toUtf8 path, cidForDagCborDoor bytes, bytes)
 
 -- Builds descending so the ascending final list falls out of plain consing —
 -- no `++` accumulation over thousands of records.
@@ -163,11 +171,10 @@ signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Array Int)
 signedCommit did secret rev dataCid =
   let unsigned = mustEncode (unsignedValue did dataCid rev)
   let digest =
-    toArray
-      (sha256
-        (optionOrPanic
-          "sha256: every element must be a byte in 0..255"
-          (fromArray unsigned)))
+    sha256
+      (optionOrPanic
+        "sha256: every element must be a byte in 0..255"
+        (fromArray unsigned))
   let signature = match signDigest secret digest
     Ok value => value
     Err message => panic "synth_repo: signing failed: \{message}"
@@ -181,7 +188,7 @@ signedCommit did secret rev dataCid =
         ("prev", DcNull),
         ("sig", DcBytes (signatureCompact signature)),
       ])
-  (cidForDagCbor signed, signed)
+  (cidForDagCborDoor signed, signed)
 
 -- ── blobs ───────────────────────────────────────────────────────────────────
 

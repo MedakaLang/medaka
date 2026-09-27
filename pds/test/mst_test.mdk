@@ -2,6 +2,7 @@
    and node bytes remain exclusively in the provenance-ledgered corpus. -}
 
 import array as A
+import bytes.{fromU8Array}
 import list.{filter, reverse, take}
 import string.{fromUtf8, toUtf8}
 import test.{Expectation, expectEach, expectEqual, expectTrue}
@@ -22,6 +23,7 @@ import lib.mst.{
   mstRootBytes,
   mstRootCid,
   mstValidateBlocks,
+  mstValidateNodeBytes,
 }
 
 -- `Cid` derives no `Eq` — `lib.cid` designates `cidEqual` as its equality
@@ -50,10 +52,10 @@ key1 = [|
 |]
 
 value0 : Cid
-value0 = cidForDagCbor [|1|]
+value0 = cidForDagCbor (fromU8Array [|1|])
 
 value1 : Cid
-value1 = cidForDagCbor [|2|]
+value1 = cidForDagCbor (fromU8Array [|2|])
 
 test "empty MST is stable and validates" =
   expectEqual
@@ -499,3 +501,18 @@ test "a range selects exactly what filtering the full entry list selects" = expe
     ("three collections", expectEqual [] (disagreements mixedTree)),
     ("a 64-key layered tree", expectEqual [] (disagreements probeTree)),
   ]
+
+-- `0xa2 + 256` masks to `0xa2`, and the rest is the canonical empty node, so
+-- a decoder that masked would accept these bytes.
+test "node validation refuses an element outside the byte range" =
+  expectEqual
+    (Err "mst: dagcbor: input element outside byte range 0..255")
+    (mstValidateNodeBytes 0 True [|
+      0xa2 + 256,
+      0x61,
+      0x65,
+      0x80,
+      0x61,
+      0x6c,
+      0xf6,
+    |])

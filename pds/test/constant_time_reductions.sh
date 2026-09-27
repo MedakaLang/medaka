@@ -121,6 +121,16 @@ check_emitted_helpers() {
 # (reduce512__rw, subNSelect__rw, zeroLimbsBit, beWord, limbsOfBytes,
 # reduce256). No u64 or Int bit helper remains, and the raw workers are the
 # audited bodies: a U64 crosses reduce512 and subNSelect as a register.
+#
+# The scalar byte-codec rows were re-derived 2026-09-27 when the codecs moved
+# to `Bytes`. limbsOfBytes reads its 32 bytes through the `Bytes` index
+# (mdk_impl_zZbytes_2e_Bytes_index, literal indices) where it read the array
+# index; beWord calls u64's fromU8 raw worker four times, a one-instruction
+# untag; scToBytes allocates a MutBytes, reads its eight limbs at literal
+# indices, hands each to putLimb's raw worker and freezes the result; and
+# putLimb__rw stores four `U8.truncateU64` bytes through MutBytes.setInPlace.
+# The `Bytes` index and MutBytes.setInPlace branch on the value's constructor
+# tag and on the public index, never on a byte.
 ir_call_shape_ok() {
   name=$1
   body=$2
@@ -149,10 +159,11 @@ ir_call_shape_ok() {
     scHighBit) expected='3010223839 191' ;;
     secretBelowNBit) expected='1446924398 168' ;;
     secretNonzeroBit) expected='2074939242 42' ;;
-    limbsOfBytes) expected='724852714 864' ;;
-    beWord) expected='4294967295 0' ;;
+    limbsOfBytes) expected='2436343677 1216' ;;
+    beWord) expected='2463314856 80' ;;
     scFromFixedBytesReduce) expected='3885913975 57' ;;
-    scToBytes) expected='3010223839 191' ;;
+    scToBytes) expected='449973670 465' ;;
+    putLimb__rw) expected='675383234 200' ;;
     *) return 1 ;;
   esac
   actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
@@ -212,7 +223,7 @@ u64_callees_ok() {
   callees=$(sed -n 's/.*call i64 @\(mdk_u64__[A-Za-z0-9_]*\)(.*/\1/p' "$dir.u64-bodies" | sort -u)
   for callee in $callees; do
     case $callee in
-      mdk_u64__bitAnd|mdk_u64__bitXor|mdk_u64__truncate|mdk_u64__toIntTruncating|mdk_u64__bitNot__rw) ;;
+      mdk_u64__bitAnd|mdk_u64__bitXor|mdk_u64__truncate|mdk_u64__toIntTruncating|mdk_u64__bitNot__rw|mdk_u64__fromU8__rw) ;;
       *) return 1 ;;
     esac
     awk -v s="$callee" '$0 ~ ("^define i64 @" s "\\(") { p = 1 } p { print } p && /^}/ { exit }' "$ir" > "$dir.u64-callee.ll"
@@ -253,6 +264,11 @@ emitted_comparison_present() {
 # began lowering a comparison on known-scalar operands to an inline icmp, at which
 # point "one branch" and "one comparison call" stopped being the same claim.
 #
+# The index, write and make columns count a `Bytes` read, a MutBytes write
+# and a MutBytes allocation alongside the array ones (2026-09-27, the scalar
+# byte codecs' move to `Bytes`), so a byte codec's reads and writes stay
+# visible to the same columns.
+#
 # The optional ninth count is the helper's U64 cell allocations
 # (`call ptr @mdk_alloc_atomic`, which the `call i64` total does not count).
 # The limbs are stored as Int and each U64 expression boxes nothing, so every
@@ -274,9 +290,9 @@ helper_ir_ok() {
   branches=$(grep -c 'br i1' "$body" || true)
   comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)
   hashes=$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)
-  indices=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$body" || true)
-  sets=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$body" || true)
-  makes=$(grep -F -c 'call i64 @mdk_array_make(' "$body" || true)
+  indices=$(grep -E -c 'call i64 @mdk_impl_(Array|zZbytes_2e_Bytes)_index\(' "$body" || true)
+  sets=$(grep -E -c 'call i64 @mdk_(array|mut_bytes)__setInPlace\(' "$body" || true)
+  makes=$(grep -E -c 'call i64 @mdk_(array_make|mut_bytes__make)\(' "$body" || true)
   copies=$(grep -F -c 'call i64 @mdk_array_copy(' "$body" || true)
   total=$(grep -E -c 'call i64 @' "$body" || true)
   [ "$branches" -eq "$expected" ] && [ "$comparisons" -eq "$expected_comparisons" ] &&
@@ -340,20 +356,25 @@ source_indices_ok() {
   ' "$body"
 }
 
+# A `MutBytes` write (`MB.setInPlace`) counts as a write too, since the
+# scalar's byte codec stores through one; its offset must be `off` or
+# `off + k` for a literal k, the public offset putLimb is handed.
 source_writes_allocations_ok() {
   body=$1
   awk '
-    /(^|[[:space:]])(A\.)?set(InPlace)?[[:space:]]/ &&
-      $0 !~ /(A\.)?set(InPlace)? (0|1|9|i|j|k|\(i \+ 1\)|\(i - 16\)) / { exit 1 }
+    /(^|[[:space:]])((A|MB)\.)?set(InPlace)?[[:space:]]/ &&
+      $0 !~ /((A|MB)\.)?set(InPlace)? (0|1|9|i|j|k|off|\(i \+ 1\)|\(i - 16\)|\(off \+ [0-9]+\)) / { exit 1 }
     /arrayMake[[:space:]]/ && $0 !~ /arrayMake (10|16|32) / { exit 1 }
+    /MB\.make[[:space:]]/ && $0 !~ /MB\.make 32$/ { exit 1 }
   ' "$body"
 }
 
 source_write_shape_ok() {
   name=$1
   body=$2
-  writes=$(grep -E -c '(^|[[:space:]])(A\.)?set(InPlace)?[[:space:]]' "$body" || true)
+  writes=$(grep -E -c '(^|[[:space:]])((A|MB)\.)?set(InPlace)?[[:space:]]' "$body" || true)
   case "$name" in
+    putLimb) [ "$writes" -eq 4 ] ;;
     *) [ "$writes" -eq 0 ] ;;
   esac
 }
@@ -382,6 +403,16 @@ extract_source_function() {
 #
 # The scalar rows were re-derived from scratch for the 8 x 32 straight-line
 # rewrite (N5); each body is pinned as written in pds/lib/scalar.mdk.
+#
+# Re-derived 2026-09-27 when the scalar byte codecs moved to `Bytes`. The
+# limb arithmetic rows are unchanged. limbsOfBytes reads its 32 bytes from a
+# `Bytes` at literal indices and beWord widens each `U8` through
+# `U64.fromU8`; scToBytes writes its eight limbs through putLimb, a new row,
+# which stores four bytes into a `MutBytes` at the public offsets `off` to
+# `off + 3`, each byte one `U8.truncateU64` of a literal shift. None of the
+# four has an `if`, a comparison or a secret index. scFromFixedBytesReduce's
+# body is unchanged; its row moved only because the declaration after it is
+# no longer exported.
 source_shape_ok() {
   name=$1
   body=$2
@@ -411,10 +442,11 @@ source_shape_ok() {
     scHighBit) expected='2440456507 821' ;;
     secretBelowNBit) expected='1418687575 841' ;;
     secretNonzeroBit) expected='3876579769 56' ;;
-    limbsOfBytes) expected='196349055 319' ;;
-    beWord) expected='2431281592 240' ;;
-    scFromFixedBytesReduce) expected='2878968898 64' ;;
-    scToBytes) expected='3630826681 2739' ;;
+    limbsOfBytes) expected='3299239598 326' ;;
+    beWord) expected='2695358797 232' ;;
+    scFromFixedBytesReduce) expected='3215920253 57' ;;
+    scToBytes) expected='1990994587 445' ;;
+    putLimb) expected='3620649717 304' ;;
     rawSc) expected='3051169895 33' ;;
     *) return 1 ;;
   esac
@@ -457,6 +489,7 @@ source_helpers_ok() {
     "beWord:$scalar:0" \
     "scFromFixedBytesReduce:$scalar:0" \
     "scToBytes:$scalar:0" \
+    "putLimb:$scalar:0" \
     "rawSc:$scalar:0"
   do
     name=${spec%%:*}
@@ -667,9 +700,11 @@ cteq_tautologies() {
 # secret bytes only through crypto.hmac.ctEq. Per file: ctEq is the imported one (no
 # local definition shadows it), its occurrence count is the call-site roster,
 # and no `==`, `/=` or `compare` line names a secret-bearing identifier except
-# through `arrayLength`, whose value is public. Per comparing function: its
-# stated number of ctEq calls and no other comparison, XOR accumulation or
-# indexing beside them. The per-function roster is complete: each file's
+# through `arrayLength` or `B.length`, whose value is public (`B.length` since
+# 2026-09-27: the credential digest and the session secret are `Bytes` now,
+# and their length checks are the same public comparison). Per comparing
+# function: its stated number of ctEq calls and no other comparison, XOR
+# accumulation or indexing beside them. The per-function roster is complete: each file's
 # ctEq count is its import plus the roster's calls in that file, so a new
 # comparing function the roster does not name fails the census.
 # A `||` across session records stays legal -- it reveals which record matched,
@@ -716,7 +751,7 @@ secret_comparisons_ok() {
       /^[[:space:]]*--/ { next }
       /==|\/=|compare/ {
         line = " " $0 " "
-        gsub(/arrayLength [A-Za-z0-9_\047]+/, "", line)
+        gsub(/(arrayLength|B\.length) [A-Za-z0-9_\047]+/, "", line)
         k = split(secrets, ids, " ")
         for (j = 1; j <= k; j++) {
           if (match(line, "[^A-Za-z0-9_\047.]" ids[j] "[^A-Za-z0-9_\047]")) { n++ }
@@ -790,7 +825,7 @@ fieldRoundsWitness =
     0x1fffffffffffff, 0x1fffffffffffff, 0x1fffffffffffff, 0x1fffffffffffff,
     0x1ffffffffffff,
   |]
-  let expected = [|
+  let expected = B.fromU8Array [|
     0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0,
     0, 0, 1, 0, 0, 0, 0, 0, 0, 0x10, 0, 2, 0, 0, 7, 0xa1,
   |]
@@ -800,12 +835,14 @@ fieldRoundsWitness =
 -- limb sums 1..3 are 2^53 - 2.
 fieldProducerWitness : Bool
 fieldProducerWitness =
-  let pm1 = arrayMake 32 0xff
-  let () = setInPlace 27 0xfe pm1
-  let () = setInPlace 30 0xfc pm1
-  let () = setInPlace 31 0x2e pm1
-  let pm2 = arrayCopy pm1
-  let () = setInPlace 31 0x2d pm2
+  let scratch = MB.make 32
+  let () = MB.fill 0xff scratch
+  let () = MB.setInPlace 27 0xfe scratch
+  let () = MB.setInPlace 30 0xfc scratch
+  let () = MB.setInPlace 31 0x2e scratch
+  let pm1 = MB.freeze scratch
+  let () = MB.setInPlace 31 0x2d scratch
+  let pm2 = MB.freeze scratch
   let a = feFromBytesReduce pm1
   let two = feAdd feOne feOne
   feToBytes (feAdd a a) == pm2 && feEqual (feMul two two) (feAdd two two)
@@ -813,7 +850,7 @@ fieldProducerWitness =
 fieldSelectWitness : Bool
 fieldSelectWitness =
   let canonical = canonicalize [|1, 0, 0, 0, 0|]
-  arrayLength (feToBytes canonical) == 32
+  B.length (feToBytes canonical) == 32
 
 fieldCtHelpersWitness : Bool
 fieldCtHelpersWitness =
@@ -831,8 +868,13 @@ main = if fieldRoundsWitness && fieldProducerWitness && fieldSelectWitness && fi
 EOF
 }
 
+# The probe's limb workspaces are Array Int written through `A.setInPlace`,
+# and scalar.mdk itself no longer imports `array` since its byte codecs moved
+# to `Bytes` (2026-09-27), so the import is added beside the module's own.
 append_scalar_probe() {
   file=$1
+  awk '{ print } $0 == "import u64 as U64" { print "import array as A" }' "$file" > "$file.imports"
+  mv "$file.imports" "$file"
   cat >> "$file" <<'EOF'
 
 -- Committed reduce512 workspaces, sixteen 32-bit limbs, least-significant
@@ -961,7 +1003,7 @@ scalarRoundsWitness () =
 -- value, and both reach reduce256 and the secret-ingress bits.
 scalarBytesWitness : Unit -> <IO> Bool
 scalarBytesWitness () =
-  let allOnes = arrayMake 32 255
+  let allOnes = B.fromU8Array (arrayMake 32 255)
   let minusOne = scNegateCt scOne
   let (onesBit, onesSc) = scSecretCandidate allOnes
   let (topBit, topSc) = scSecretCandidate (scToBytes minusOne)
@@ -1075,8 +1117,8 @@ scalar_schedule_ok() {
 # helpers are straight-line, so an index operand that is a register is an
 # index computed from something, and here that something can only be a limb.
 scalar_indices_literal() {
-  ! grep -h -F 'call i64 @mdk_impl_Array_index(' "$@" |
-    grep -v -E -q 'call i64 @mdk_impl_Array_index\(i64 %[A-Za-z0-9_.]+, i64 -?[0-9]+\)'
+  ! grep -h -E 'call i64 @mdk_impl_(Array|zZbytes_2e_Bytes)_index\(' "$@" |
+    grep -v -E -q 'call i64 @mdk_impl_(Array|zZbytes_2e_Bytes)_index\(i64 %[A-Za-z0-9_.]+, i64 -?[0-9]+\)'
 }
 
 # Source anti-rot: exact schedules and no retired conditional path from the
@@ -1254,12 +1296,31 @@ STORE="$ROOT/pds/lib/store.mdk"
 secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 pass 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 
+# The credential mutants below rewrite both comparison sites, credentialVerify's
+# and digestIs's, each as a `  ctEq digest derived` body line. Re-pinned
+# 2026-09-27: the record's digest and the derived key are `Bytes`, so neither
+# argument carries a byte-domain door any more, and the formatter keeps
+# digestIs's shorter call on its declaration line. `credential_split.mdk` moves
+# that call onto a body line of its own so both sites are rewritten, as they
+# were before. Both are needed: credentialVerify's call follows a `let` whose
+# last token is a word, which the census's layout-blind tokenizer reads as an
+# application, so a partially-applied mutant there is seen only at digestIs.
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) / {
-    sub(/ctEq \(fromArrayAssumeByteDomain digest\) /, "(fromArrayAssumeByteDomain digest) == ")
+  /^digestIs \(CredentialRecord _ _ digest\) derived = ctEq digest derived$/ {
+    print "digestIs (CredentialRecord _ _ digest) derived ="
+    print "  ctEq digest derived"
+    next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_eq_mutant.mdk"
+' "$CREDENTIAL" > "$WORK/credential_split.mdk"
+[ "$(grep -c '^  ctEq digest derived$' "$WORK/credential_split.mdk")" -eq 2 ] ||
+  fail 'credential mutation base has both comparison sites on body lines'
+awk '
+  /^  ctEq digest derived$/ {
+    sub(/ctEq digest /, "digest == ")
+  }
+  { print }
+' "$WORK/credential_split.mdk" > "$WORK/credential_eq_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_eq_mutant.mdk"; then
   fail 'credential early-exit mutation was constructed'
 fi
@@ -1295,8 +1356,8 @@ fi
 pass 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes)"
     next
   }
   { print }
@@ -1305,7 +1366,7 @@ awk '
     print "sameDigest : Array Int -> Array Int -> Bool"
     print "sameDigest a b = arrayToList a == arrayToList b"
   }
-' "$CREDENTIAL" > "$WORK/credential_wrapper_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_wrapper_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_wrapper_mutant.mdk"; then
   fail 'credential wrapper-indirection mutation was constructed'
 fi
@@ -1315,12 +1376,12 @@ fi
 pass 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_elem_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_elem_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_elem_mutant.mdk"; then
   fail 'credential tautological-ctEq-plus-elem mutation was constructed'
 fi
@@ -1330,12 +1391,12 @@ fi
 pass 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes)"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_ord_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_ord_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_ord_mutant.mdk"; then
   fail 'credential tautological-ctEq-plus-Ord mutation was constructed'
 fi
@@ -1345,8 +1406,8 @@ fi
 pass 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+  /^  ctEq digest derived$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes)"
     next
   }
   { print }
@@ -1355,7 +1416,7 @@ awk '
     print "sameDigest : Array Int -> Array Int -> Bool"
     print "sameDigest a b = a == b"
   }
-' "$CREDENTIAL" > "$WORK/credential_tautology_wrapper_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_wrapper_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_wrapper_mutant.mdk"; then
   fail 'credential tautological-ctEq-plus-wrapper mutation was constructed'
 fi
@@ -1365,12 +1426,12 @@ fi
 pass 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  ctEq (digest) ( digest ) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  ctEq (digest) ( digest ) && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_paren_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_paren_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_paren_mutant.mdk"; then
   fail 'credential parenthesized tautological-ctEq mutation was constructed'
 fi
@@ -1380,13 +1441,13 @@ fi
 pass 'credential tautological ctEq with reparenthesized arguments is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
+  /^  ctEq digest derived$/ {
     print "  ctEq digest"
-    print "    digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    print "    digest && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_multiline_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_multiline_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_multiline_mutant.mdk"; then
   fail 'credential multi-line tautological-ctEq mutation was constructed'
 fi
@@ -1396,12 +1457,12 @@ fi
 pass 'credential tautological ctEq split across lines is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  (digest |> ctEq digest) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  (digest |> ctEq digest) && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_pipe_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_pipe_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_pipe_mutant.mdk"; then
   fail 'credential piped tautological-ctEq mutation was constructed'
 fi
@@ -1411,12 +1472,12 @@ fi
 pass 'credential tautological ctEq fed through |> is rejected by the secret-comparison census'
 
 awk '
-  /^  ctEq \(fromArrayAssumeByteDomain digest\) \(fromArrayAssumeByteDomain derived\)$/ {
-    print "  (ctEq digest) digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+  /^  ctEq digest derived$/ {
+    print "  (ctEq digest) digest && elem digest [pbkdf2HmacSha256 (encodeUtf8 password) salt iterations digestBytes]"
     next
   }
   { print }
-' "$CREDENTIAL" > "$WORK/credential_tautology_section_mutant.mdk"
+' "$WORK/credential_split.mdk" > "$WORK/credential_tautology_section_mutant.mdk"
 if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_section_mutant.mdk"; then
   fail 'credential partially-applied tautological-ctEq mutation was constructed'
 fi
@@ -1605,16 +1666,21 @@ MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" -
 # cell allocation: its only calls are literal-index reads, the rawSc accessor
 # and the next helper down. reduce512 and subNSelect are audited as their raw
 # workers (`__rw`), the bodies every in-module caller reaches, whose U64
-# parameters arrive as registers. No helper does Int arithmetic, so none has a
-# public counter argument (`-`).
+# parameters arrive as registers. No limb helper does Int arithmetic, so none
+# has a public counter argument (`-`). The byte-codec rows moved 2026-09-27
+# (see ir_call_shape_ok): limbsOfBytes' 32 reads are now `Bytes` reads, beWord
+# makes four fromU8 calls, scToBytes gains its MutBytes make, eight putLimb
+# calls and the freeze, and putLimb__rw's three branches are the overflow
+# checks of `off + 1` to `off + 3`, on its public offset argument (1).
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
   subNSelect__rw:0:0:0:0:0:0:0:0:- reduce512__rw:0:0:0:0:0:0:1:0:- reduce256:0:0:8:0:0:0:9:0:- \
   scMul:0:0:16:0:0:0:19:0:- scAdd:0:0:16:0:0:0:19:0:- scNegateCt:0:0:8:0:0:0:10:0:- \
   scSelect:0:0:16:0:0:0:18:0:- scZeroBit:0:0:0:0:0:0:2:0:- zeroLimbsBit:0:0:8:0:0:0:8:0:- \
   scEqualBit:0:0:16:0:0:0:18:0:- scHighBit:0:0:8:0:0:0:9:0:- \
   secretBelowNBit:0:0:8:0:0:0:8:0:- secretNonzeroBit:0:0:0:0:0:0:2:0:- \
-  limbsOfBytes:0:0:32:0:0:0:40:0:- beWord:0:0:0:0:0:0:0:0:- \
-  scFromFixedBytesReduce:0:0:0:0:0:0:2:0:- scToBytes:0:0:8:0:0:0:9:0:-
+  limbsOfBytes:0:0:32:0:0:0:40:0:- beWord:0:0:0:0:0:0:4:0:- \
+  scFromFixedBytesReduce:0:0:0:0:0:0:2:0:- scToBytes:0:0:8:0:1:0:19:0:- \
+  putLimb__rw:3:0:0:4:0:0:8:0:1
 extract_function rawSc "$WORK/scalar_emit.ll" "$WORK/scalar-ir/rawSc.ll"
 raw_accessor_ir_ok "$WORK/scalar-ir/rawSc.ll" || fail 'scalar opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/scalar-ir" scalar_emit || fail 'scalar emitted local call graph is closed'

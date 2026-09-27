@@ -13,8 +13,8 @@
    bytes are the graded values. -}
 
 import test.{Expectation, expectEach, expectEqual}
-import array.{take}
-import bytes.{toArray}
+import bytes as B
+import bytes.{Bytes, fromU8Array}
 import hex.{decode}
 import list.{somes}
 import string.{toInt, trim, words}
@@ -22,23 +22,23 @@ import io.{readLines}
 import lib.pbkdf2.{int32Be, pbkdf2HmacSha256}
 
 -- "passwd"
-passwd : Array Int
-passwd = [|112, 97, 115, 115, 119, 100|]
+passwd : Bytes
+passwd = fromU8Array [|112, 97, 115, 115, 119, 100|]
 
 -- "salt"
-salt1 : Array Int
-salt1 = [|115, 97, 108, 116|]
+salt1 : Bytes
+salt1 = fromU8Array [|115, 97, 108, 116|]
 
 -- "Password"
-passwordCap : Array Int
-passwordCap = [|80, 97, 115, 115, 119, 111, 114, 100|]
+passwordCap : Bytes
+passwordCap = fromU8Array [|80, 97, 115, 115, 119, 111, 114, 100|]
 
 -- "NaCl"
-nacl : Array Int
-nacl = [|78, 97, 67, 108|]
+nacl : Bytes
+nacl = fromU8Array [|78, 97, 67, 108|]
 
-expected1 : Array Int
-expected1 = [|
+expected1 : Bytes
+expected1 = fromU8Array [|
   0x55,
   0xac,
   0x04,
@@ -105,8 +105,8 @@ expected1 = [|
   0x83,
 |]
 
-expected2 : Array Int
-expected2 = [|
+expected2 : Bytes
+expected2 = fromU8Array [|
   0x4d,
   0xdc,
   0xd8,
@@ -183,27 +183,21 @@ test "shorter dkLen truncates the same block stream rather than re-deriving" =
   let full = pbkdf2HmacSha256 passwd salt1 1 64
   let short = pbkdf2HmacSha256 passwd salt1 1 20
   expectEach [
-    ("arrayLength short == 20", expectEqual 20 (arrayLength short)),
-    ("short == take 20 full", expectEqual (take 20 full) short),
+    ("length short == 20", expectEqual 20 (B.length short)),
+    ("short == take 20 full", expectEqual (B.take 20 full) short),
   ]
 
 test "INT (i) is the block index as 4 big-endian bytes, up to 2^32 - 1" = expectEach
   [
-    ("int32Be 1", expectEqual [|0, 0, 0, 1|] (int32Be 1)),
-    ("int32Be 16909060", expectEqual [|1, 2, 3, 4|] (int32Be 16909060)),
+    ("int32Be 1", expectEqual (fromU8Array [|0, 0, 0, 1|]) (int32Be 1)),
+    (
+      "int32Be 16909060",
+      expectEqual (fromU8Array [|1, 2, 3, 4|]) (int32Be 16909060),
+    ),
     (
       "int32Be 4294967295",
-      expectEqual [|255, 255, 255, 255|] (int32Be 4294967295),
+      expectEqual (fromU8Array [|255, 255, 255, 255|]) (int32Be 4294967295),
     ),
-  ]
-
-test "does not mutate its Array Int inputs" =
-  let passwordBefore = arrayCopy passwd
-  let saltBefore = arrayCopy salt1
-  let _ = pbkdf2HmacSha256 passwd salt1 1 64
-  expectEach [
-    ("passwd unchanged", expectEqual passwordBefore passwd),
-    ("salt1 unchanged", expectEqual saltBefore salt1),
   ]
 
 {- | The Wycheproof PBKDF2-HMAC-SHA256 corpus (S-pbkdf2, #3362
@@ -217,17 +211,17 @@ wycheproofCorpusPath = "pds/test/vectors/wycheproof_pbkdf2_hmac_sha256.txt"
 
 data KdfRow = KdfRow {
   tcId : Int,
-  password : Array Int,
-  salt : Array Int,
+  password : Bytes,
+  salt : Bytes,
   iterations : Int,
   dkLen : Int,
-  dk : Array Int,
+  dk : Bytes,
 }
 
-kdfHexField : String -> Array Int
-kdfHexField "-" = [||]
+kdfHexField : String -> Bytes
+kdfHexField "-" = empty
 kdfHexField h = match decode h
-  Ok bytes => toArray bytes
+  Ok bytes => bytes
   Err e => panic "pbkdf2_test: bad hex \{debug h}: \{e}"
 
 parseKdfLine : String -> Option KdfRow

@@ -4,8 +4,8 @@
    by one exact compressed SEC 1 public key, wrapped in base58btc multibase.
    Only the lower-case `did:key:` method spelling is accepted. -}
 
-import array.{drop}
 import string.{stripPrefix}
+import bytes as B
 import lib.multiformats.{
   multibaseBase58btc,
   multibaseBase58btcDecode,
@@ -15,7 +15,7 @@ import lib.multiformats.{
 }
 import lib.sign.{PublicKey, publicKeyCompressed, publicKeyFromCompressed}
 
-secp256k1Prefix : Array Int
+secp256k1Prefix : B.Bytes
 secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
 
 {- | The multibase half of a secp256k1 `did:key` identifier, without the
@@ -28,7 +28,7 @@ secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
 export
 didKeyMultibase : PublicKey -> String
 didKeyMultibase publicKey =
-  multibaseBase58btc (secp256k1Prefix ++ publicKeyCompressed publicKey)
+  multibaseBase58btc (B.concat [secp256k1Prefix, publicKeyCompressed publicKey])
 
 -- | Encode a secp256k1 public key as its canonical `did:key` identifier.
 export
@@ -49,5 +49,5 @@ publicKeyFromDidKey did = match stripPrefix "did:key:" did
         if codec /= multicodecSecp256k1Pub then
           Err "did_key.publicKeyFromDidKey: expected secp256k1-pub multicodec"
         else
-          let keyBytes = drop consumed payload
+          let keyBytes = B.drop consumed payload
           publicKeyFromCompressed keyBytes

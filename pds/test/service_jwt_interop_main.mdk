@@ -34,7 +34,7 @@ import lib.sign.{SecretKey, publicKeyForSecret, secretKeyFromBytes}
 signingKey : String -> SecretKey
 signingKey value = match decode value
   Err message => panic "service_jwt_interop: malformed hex: \{message}"
-  Ok scalar => match secretKeyFromBytes (toArray scalar)
+  Ok scalar => match secretKeyFromBytes scalar
     Err message => panic "service_jwt_interop: \{message}"
     Ok key => key
 

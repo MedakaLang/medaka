@@ -327,13 +327,25 @@ is the safe default):
 | Core form | `α` |
 |---|---|
 | string literal `"s"` | the singleton authority `s` (e.g. `Prefix` pattern from `s`) |
-| `e₁ ++ e₂` (concatenation) | in `Prefix`, a justified left prefix bounds the whole; in `Set`, non-literal concatenation gives `⊤` |
-| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix; the first interpolated expression stops it |
+| `e₁ ++ e₂` (concatenation) | a concatenation of literals is that literal. Otherwise, in `Prefix` (and a `Product`'s primary axis) the left operand's authority is **extended** by the suffix: an exact element `s` becomes `s` followed by a literal suffix, or the pattern `s*` for any other suffix, since an exact element admits only itself (§2.3); a pattern stays. In `Set`, non-literal concatenation gives `⊤` |
+| string interpolation `"s\{e}…"` | the `++`-chain rule: the leading literal `s` is the known prefix, extended to `s*` by the first interpolated expression |
 | `let x = e₁ in …x…` | propagate `α(e₁)` to uses of `x` |
 | `if c then e₁ else e₂` | `α(e₁) ⊔ α(e₂)` (join of branch authorities) |
 | `match … { … ⇒ eᵢ }` | `⊔ᵢ α(eᵢ)` (join over arms) |
 | a value whose checked type is `τ @q` | `q`, including variables, application results and field reads |
 | application result, parameter, or field without an authority qualifier; anything else | `⊤` |
+
+**Open: extending an authority variable.** No term names the extension of a
+variable, so `p ++ x` with `p : String @κ` currently keeps `κ`. That is sound
+only when whatever `κ` stands for is a pattern, and nothing guarantees it:
+- a signature's variable, bound by an argument or a data index, admits a
+  caller's exact element: `"cfg/app.toml"` is charged for that file while the
+  read reaches `cfg/app.toml<x>`;
+- a flexible variable still unbound when `α` runs is solved afterwards, and
+  may be solved to an exact element with no caller involved.
+
+(#3501 and #3502, pinned by must_fail `3501-signature-variable-extension` and
+`3502-flexible-variable-extension`.)
 
 **The ⊤-fallback *is* the no-exfiltration guarantee.** A URL/path that is computed
 (a function result, a runtime input, an un-analyzable expression) abstracts to
@@ -404,7 +416,8 @@ proofs of containment.
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
 `α_𝔻(argument) ⊑ κ`, where `α` reads the argument's syntax first (a literal, a
-`++` whose left operand is justified in a prefix-shaped domain, a same-body
+`++` whose left operand is justified in a prefix-shaped domain and extended by
+the suffix, a same-body
 `let`, a branch join) and otherwise the argument's checked type: the qualifier
 of a `τ @q`, else the domain's top. A flexible `κ` accumulates lower bounds by
 symbolic join, subject to its upper bounds; the scope that owns it takes the

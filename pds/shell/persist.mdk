@@ -73,7 +73,7 @@ credentialPath dir = "\{dir}/credential"
 -- The password is not among them and was never held here.
 credentialText : CredentialRecord -> String
 credentialText record =
-  "\{intToString (credentialIterations record)}\n\{encode (fromArrayAssumeByteDomain (credentialSalt record))}\n\{encode (fromArrayAssumeByteDomain (credentialDigest record))}\n"
+  "\{intToString (credentialIterations record)}\n\{encode (credentialSalt record)}\n\{encode (credentialDigest record)}\n"
 
 {- | Write the account's password credential beneath `dir`, at mode 0600.
 

@@ -1,0 +1,10 @@
+-- A record type exported abstractly: importers see the name, never the fields.
+export data Cfg = Cfg { a : Int, b : Int }
+
+export
+mk : Int -> Cfg
+mk n = Cfg { a = n, b = n * 10 }
+
+export
+getA : Cfg -> Int
+getA x = x.a

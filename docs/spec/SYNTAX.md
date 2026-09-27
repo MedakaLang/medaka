@@ -680,6 +680,27 @@ per line with a trailing comma, `}` back at the decl's column, and `deriving` on
 own indented line below. A one-line variant list with an own-line `deriving` is
 therefore legal input that `fmt` never emits.
 
+**A program's own type may share a prelude type's name** (`Option`, `Result`,
+`Ordering`, `Socket`, …), as a `data`, `newtype` or `type` declaration. Inside
+the program the name means the program's type; the prelude's type is still
+reached through its own constructors and functions (`Ok`, `resultOr`), and a
+mismatch between the two names both origins. What a program cannot declare is a
+built-in type's name (`Int`, `String`, `List`, …), a prelude constructor's name
+(`data Result = Ok Int` is refused; #3471), or a prelude interface's name. Each
+of these errors is located at the declaration.
+
+```medaka
+data Result a = Good a | Bad deriving (Debug)
+
+describe : Result Int -> String
+describe r = match r
+  Good n => "good \{intToString n}"
+  Bad => "bad"
+
+fallback : Int
+fallback = resultOr 7 (Err "the prelude's Result")
+```
+
 ## Records
 
 A record is just a single-constructor `data` type with named fields. There is no

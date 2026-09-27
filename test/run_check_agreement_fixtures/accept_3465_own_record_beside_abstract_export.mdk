@@ -1,0 +1,13 @@
+-- #3465: a program's own record type may share the name of a record another
+-- module exports abstractly.  `y.a` reads the program's own `Cfg`, so the
+-- abstract export's field refusal does not apply; the imported `Cfg` is still
+-- reached only through its module's functions.  Fields are declared in the
+-- opposite order, so a wrong slot shows in the value.
+import lib.abs3465_cfg.{mk, getA}
+
+data Cfg = MyCfg { b : Int, a : Int }
+
+main =
+  let y = MyCfg { b = 2, a = 3 }
+  println "\{intToString y.a} \{intToString y.b}"
+  println (intToString (getA (mk 7)))

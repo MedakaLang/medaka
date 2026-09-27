@@ -7,30 +7,17 @@
    unrelated blocks are accepted, while every block crosses the verified
    blockstore trust boundary. -}
 
--- The byte-range validator is intentionally local at each untrusted boundary.
--- lint-disable-file rule-duplicate-body
-
-import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
+import bytebuilder.{Builder, buildBytes, emitBytes, newBuilder}
+import bytes.{Bytes, length as bytesLength, sliceClamped}
 import list.{reverse}
 import lib.blockstore.{BlockStore, blockStoreFromBlocks, blockStoreHas}
 import lib.cid.{Cid, cidFromBytes, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
-import lib.multiformats.{uvarintEncode}
+import lib.multiformats.{uvarintDecode, uvarintEncode}
 import lib.resource_limits.{checkCarBlocks, checkCarBytes, checkCarSectionBytes}
 
 -- | A decoded CAR preserving section order plus its verified unique store.
-export data Car = Car (List Cid) (List (Cid, Array Int)) BlockStore
-
-validBytes : Array Int -> Int -> Bool
-validBytes bytes i =
-  if i >= arrayLength bytes then
-    True
-  else
-    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
-
-copyBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
-copyBlocks [] = []
-copyBlocks ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyBlocks rest
+export data Car = Car (List Cid) (List (Cid, Bytes)) BlockStore
 
 -- | Header roots in their declared order.
 export
@@ -39,8 +26,8 @@ carRoots (Car roots _ _) = roots
 
 -- | Blocks in their original section order, including identical duplicates.
 export
-carBlocks : Car -> List (Cid, Array Int)
-carBlocks (Car _ blocks _) = copyBlocks blocks
+carBlocks : Car -> List (Cid, Bytes)
+carBlocks (Car _ blocks _) = blocks
 
 -- | Verified unique block store.
 export
@@ -56,7 +43,7 @@ decodeRoots [] acc = Ok (reverse acc)
 decodeRoots ((DcLink cid) :: rest) acc = decodeRoots rest (cid :: acc)
 decodeRoots _ _ = Err "car: header roots must contain only CID links"
 
-decodeHeader : Array Int -> Result String (List Cid)
+decodeHeader : Bytes -> Result String (List Cid)
 decodeHeader bytes = match dagCborDecode bytes
   Err message => Err "car: invalid header: \{message}"
   Ok (DcMap [("roots", DcArray values), ("version", DcInt version)]) =>
@@ -68,57 +55,27 @@ decodeHeader bytes = match dagCborDecode bytes
       Ok roots => Ok roots
   Ok _ => Err "car: header must be exactly {roots, version}"
 
-varintPrefixEquals : Array Int -> Int -> Array Int -> Int -> Bool
-varintPrefixEquals input pos expected i =
-  if i >= arrayLength expected then
-    True
-  else if input[pos + i] /= expected[i] then
-    False
-  else
-    varintPrefixEquals input pos expected (i + 1)
+-- The bytes over `[start, start + size)`, copied out of `input`. Every call
+-- site validates the range against a length it already read before slicing,
+-- so a clamp here never masks a bounds bug.
+carSlice : Bytes -> Int -> Int -> Bytes
+carSlice input start size = sliceClamped start (start + size) input
 
-readVarintGo : Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Result String (Int, Int)
-readVarintGo input pos end consumed shift acc =
-  if consumed >= 9 then
-    Err "uvarint: over-long (more than 9 bytes)"
-  else if pos + consumed >= end then
-    Err "uvarint: truncated (input ended with the continuation bit still set)"
-  else
-    let byte = input[pos + consumed]
-    let value = acc + shiftLeft (bitAnd byte 0x7f) shift
-    if bitAnd byte 0x80 == 0 then
-      let used = consumed + 1
-      if value < 0 then
-        Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
-      else
-        let canonical = uvarintEncode value
-        if arrayLength canonical /= used
-          || not (varintPrefixEquals input pos canonical 0) then
-          Err "uvarint: non-minimal encoding"
-        else
-          Ok (value, pos + used)
-    else
-      readVarintGo input pos end (consumed + 1) (shift + 7) value
-
-readVarintAt : String -> Array Int -> Int -> Int -> Result String (Int, Int)
+{- | One unsigned-varint at `pos`, bounded by `end` (not necessarily the
+   whole input — a CID's own fields bound each other's search window). The
+   empty-window case is reported before `multiformats.uvarintDecode` ever
+   sees it, so its message names `label` rather than the field-agnostic
+   "truncated (input ended with the continuation bit still set)"; every
+   other rejection is `uvarintDecode`'s own message, unchanged. -}
+readVarintAt : String -> Bytes -> Int -> Int -> Result String (Int, Int)
 readVarintAt label input pos end =
   if pos >= end then
     Err "car: truncated \{label} varint"
-  else
-    mapErr
-      (message => "car: \{label}: \{message}")
-      (readVarintGo input pos end 0 0 0)
+  else match uvarintDecode (sliceClamped pos end input)
+    Err message => Err "car: \{label}: \{message}"
+    Ok (value, consumed) => Ok (value, pos + consumed)
 
-slice : Array Int -> Int -> Int -> Array Int
-slice input start size = arrayMakeWith size (i => input[start + i])
-
-parseCidAt : Array Int -> Int -> Int -> Result String (Cid, Int)
+parseCidAt : Bytes -> Int -> Int -> Result String (Cid, Int)
 parseCidAt input start end = do
   (_, p1) <- readVarintAt "CID version" input start end
   (_, p2) <- readVarintAt "CID codec" input p1 end
@@ -130,17 +87,17 @@ parseCidAt input start end = do
     Err "car: truncated CID digest"
   else
     let cidEnd = p4 + digestLength
-    match cidFromBytes (slice input start (cidEnd - start))
+    match cidFromBytes (carSlice input start (cidEnd - start))
       Err message => Err "car: malformed or non-blessed CID: \{message}"
       Ok cid => Ok (cid, cidEnd)
 
-decodeSections : Array Int ->
+decodeSections : Bytes ->
   Int ->
   Int ->
-  List (Cid, Array Int) ->
-  Result String (List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  Result String (List (Cid, Bytes))
 decodeSections input pos count acc =
-  if pos == arrayLength input then
+  if pos == bytesLength input then
     Ok (reverse acc)
   else match checkCarBlocks (count + 1)
     Err message => Err message
@@ -149,7 +106,7 @@ decodeSections input pos count acc =
         "trailing corruption in section length"
         input
         pos
-        (arrayLength input))
+        (bytesLength input))
         Err message => Err message
         Ok (sectionLength, payloadPos) =>
           if sectionLength == 0 then
@@ -157,7 +114,7 @@ decodeSections input pos count acc =
           else match checkCarSectionBytes sectionLength
             Err message => Err message
             Ok () =>
-              if sectionLength > arrayLength input - payloadPos then
+              if sectionLength > bytesLength input - payloadPos then
                 Err
                   "car: truncated or overlong section length exceeds remaining bytes"
               else
@@ -165,7 +122,7 @@ decodeSections input pos count acc =
                 match parseCidAt input payloadPos sectionEnd
                   Err message => Err message
                   Ok (cid, cidEnd) =>
-                    let block = slice input cidEnd (sectionEnd - cidEnd)
+                    let block = carSlice input cidEnd (sectionEnd - cidEnd)
                     decodeSections
                       input
                       sectionEnd
@@ -180,42 +137,33 @@ rootsPresent (root :: rest) store =
   else
     Err "car: atproto profile root block is missing"
 
-makeCar : List Cid -> List (Cid, Array Int) -> Result String Car
+makeCar : List Cid -> List (Cid, Bytes) -> Result String Car
 makeCar [] _ = Err "car: atproto profile requires at least one root"
 makeCar roots blocks = match checkCarBlocks (length blocks)
   Err message => Err message
   Ok () => match blockStoreFromBlocks blocks
     Err message => Err "car: \{message}"
-    Ok store =>
-      map (() => Car roots (copyBlocks blocks) store) (rootsPresent roots store)
+    Ok store => map (() => Car roots blocks store) (rootsPresent roots store)
 
-emitArray : Array Int -> Int -> Builder -> Unit
-emitArray bytes i out =
-  if i >= arrayLength bytes then
-    ()
-  else
-    emitU8 (fromInt bytes[i]) out
-    emitArray bytes (i + 1) out
-
-emitSections : List (Cid, Array Int) -> Builder -> Unit
+emitSections : List (Cid, Bytes) -> Builder -> Unit
 emitSections [] _ = ()
 emitSections ((cid, block) :: rest) out =
   let cidBytes = cidToBytes cid
-  let payloadLength = arrayLength cidBytes + arrayLength block
-  emitArray (uvarintEncode payloadLength) 0 out
-  emitArray cidBytes 0 out
-  emitArray block 0 out
+  let payloadLength = bytesLength cidBytes + bytesLength block
+  emitBytes (uvarintEncode payloadLength) out
+  emitBytes cidBytes out
+  emitBytes block out
   emitSections rest out
 
-encodedSectionsSize : List (Cid, Array Int) -> Int -> Result String Int
+encodedSectionsSize : List (Cid, Bytes) -> Int -> Result String Int
 encodedSectionsSize [] total = Ok total
 encodedSectionsSize ((cid, block) :: rest) total =
-  let payloadLength = arrayLength (cidToBytes cid) + arrayLength block
+  let payloadLength = bytesLength (cidToBytes cid) + bytesLength block
   match checkCarSectionBytes payloadLength
     Err message => Err message
     Ok () =>
       let next =
-        total + arrayLength (uvarintEncode payloadLength) + payloadLength
+        total + bytesLength (uvarintEncode payloadLength) + payloadLength
       match checkCarBytes next
         Err message => Err message
         Ok () => encodedSectionsSize rest next
@@ -228,35 +176,35 @@ encodedSectionsSize ((cid, block) :: rest) total =
    block count, the header encoding and the section sizes are all decided
    before the row verification's answer is read. -}
 carEncodeChecked : List Cid ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   Result String Unit ->
-  Result String (Array Int)
+  Result String Bytes
 carEncodeChecked roots blocks verified = match checkCarBlocks (length blocks)
   Err message => Err message
   Ok () => match dagCborEncode (headerValue roots 1)
     Err message => Err "car: header encoding failed: \{message}"
     Ok header =>
-      let headerPrefix = uvarintEncode (arrayLength header)
-      let headerSize = arrayLength headerPrefix + arrayLength header
+      let headerPrefix = uvarintEncode (bytesLength header)
+      let headerSize = bytesLength headerPrefix + bytesLength header
       match encodedSectionsSize blocks headerSize
         Err message => Err message
         Ok _ => match verified
           Err message => Err message
           Ok () =>
             let out = newBuilder ()
-            let () = emitArray headerPrefix 0 out
-            let () = emitArray header 0 out
+            let () = emitBytes headerPrefix out
+            let () = emitBytes header out
             let () = emitSections blocks out
-            Ok (buildArray out)
+            Ok (buildBytes out)
 
 {- | Canonically encode the header and preserve the caller's explicit block
    order. Every row is verified before any bytes are returned. -}
 export
-carEncode : List Cid -> List (Cid, Array Int) -> Result String (Array Int)
+carEncode : List Cid -> List (Cid, Bytes) -> Result String Bytes
 carEncode roots blocks =
   carEncodeChecked roots blocks (map (_ => ()) (makeCar roots blocks))
 
-rowsVerified : List (Cid, Array Int) -> Result String Unit
+rowsVerified : List (Cid, Bytes) -> Result String Unit
 rowsVerified blocks = match blockStoreFromBlocks blocks
   Err message => Err "car: \{message}"
   Ok _ => Ok ()
@@ -274,29 +222,25 @@ rowsVerified blocks = match blockStoreFromBlocks blocks
    exists beside `carEncode` rather than as a relaxation of it, and DECODING
    still refuses a rootless CAR: nothing this server reads is one. -}
 export
-carEncodeRootless : List (Cid, Array Int) -> Result String (Array Int)
+carEncodeRootless : List (Cid, Bytes) -> Result String Bytes
 carEncodeRootless blocks = carEncodeChecked [] blocks (rowsVerified blocks)
 
 -- | Strictly decode one complete CARv1 byte array.
 export
-carDecode : Array Int -> Result String Car
-carDecode input = match checkCarBytes (arrayLength input)
+carDecode : Bytes -> Result String Car
+carDecode input = match checkCarBytes (bytesLength input)
   Err message => Err message
-  Ok () =>
-    if not (validBytes input 0) then
-      Err "car: input element outside byte range 0..255"
-    else match readVarintAt "header length" input 0 (arrayLength input)
-      Err message => Err message
-      Ok (headerLength, headerPos) =>
-        if headerLength == 0 then
-          Err "car: zero-length header section"
-        else if headerLength > arrayLength input - headerPos then
-          Err "car: truncated header section"
-        else
-          let header = slice input headerPos headerLength
-          match decodeHeader header
+  Ok () => match readVarintAt "header length" input 0 (bytesLength input)
+    Err message => Err message
+    Ok (headerLength, headerPos) =>
+      if headerLength == 0 then
+        Err "car: zero-length header section"
+      else if headerLength > bytesLength input - headerPos then
+        Err "car: truncated header section"
+      else
+        let header = carSlice input headerPos headerLength
+        match decodeHeader header
+          Err message => Err message
+          Ok roots => match decodeSections input (headerPos + headerLength) 0 []
             Err message => Err message
-            Ok roots =>
-              match decodeSections input (headerPos + headerLength) 0 []
-                Err message => Err message
-                Ok blocks => makeCar roots blocks
+            Ok blocks => makeCar roots blocks

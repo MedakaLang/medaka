@@ -643,9 +643,9 @@ pds/test/later.txt"
   # therefore stay green, so this cell fails for a gate that stopped
   # actually reading the ledger.
   #
-  # pds/test/car_vectors.sh is the sampled consumer: it reads one ledger
-  # consumer id and hands the resulting path straight to the engine, the
-  # same shape pds/test/mst_vectors.sh and pds/test/repo_vectors.sh use.
+  # pds/test/mst_vectors.sh is the sampled consumer: it reads two ledger
+  # consumer ids and hands the resulting paths straight to the engine, the
+  # same shape pds/test/repo_vectors.sh uses.
   # A native row (one that reads the ledger through
   # pds/test/vector_ledger.mdk instead) needs no cell here: that module's
   # Err and zero-file paths already fail the row outright on every run, so
@@ -653,21 +653,35 @@ pds/test/later.txt"
   t9="$(mktemp -d "$VP_WORK/t9.XXXXXX")"
   mkdir -p "$t9/pds/test/vectors"
   cp "$ROOT/pds/test/vector_provenance.sh" "$t9/pds/test/vector_provenance.sh"
-  cp "$ROOT/pds/test/car_vectors.sh" "$t9/pds/test/car_vectors.sh"
-  mk_vector "$t9" "pds/test/vectors/car-wrong-answer.txt" "deliberately wrong answer for car"
-  car_hash="$(sha256_of_file "$t9/pds/test/vectors/car-wrong-answer.txt")"
+  cp "$ROOT/pds/test/mst_vectors.sh" "$t9/pds/test/mst_vectors.sh"
+  mk_vector "$t9" "pds/test/vectors/mst-wrong-answer.txt" "deliberately wrong answer for mst"
+  mk_vector "$t9" "pds/test/vectors/mst-proof.txt" "covering-proof rows for mst"
+  mst_hash="$(sha256_of_file "$t9/pds/test/vectors/mst-wrong-answer.txt")"
+  proof_hash="$(sha256_of_file "$t9/pds/test/vectors/mst-proof.txt")"
   cat > "$t9/pds/test/VECTOR-PROVENANCE.txt" << EOF
 [vector]
-file: pds/test/vectors/car-wrong-answer.txt
-local-sha256: $car_hash
+file: pds/test/vectors/mst-wrong-answer.txt
+local-sha256: $mst_hash
 kind: published-artifact
-source: Synthetic CAR fixture
-source-url: https://example.invalid/t9-car
+source: Synthetic MST fixture
+source-url: https://example.invalid/t9-mst
 source-sha256: UNAVAILABLE
 source-note: synthetic self-test fixture, no real artifact
 extraction: hand-written for self-test T9
-retrieved: 2026-09-14
-consumer: P1-C-CAR-STORE (self-test T9)
+retrieved: 2026-09-27
+consumer: P1-B-MST (self-test T9)
+
+[vector]
+file: pds/test/vectors/mst-proof.txt
+local-sha256: $proof_hash
+kind: published-artifact
+source: Synthetic MST covering-proof fixture
+source-url: https://example.invalid/t9-mst-proof
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T9
+retrieved: 2026-09-27
+consumer: P1-B-MST-PROOF (self-test T9)
 EOF
   cat > "$t9/fake-medaka" << 'FAKEEOF'
 #!/bin/sh
@@ -682,14 +696,14 @@ exit 1
 FAKEEOF
   chmod +x "$t9/fake-medaka"
 
-  t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/car_vectors.sh" 2>&1)"
+  t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/mst_vectors.sh" 2>&1)"
   t9_rc=$?
   rm -rf "$t9"
   if [ "$t9_rc" -ne 0 ] \
      && printf '%s' "$t9_out" | grep -q 'FAKE-ENGINE: rejected ledgered wrong-answer corpus'; then
-    echo "T9 car_vectors.sh consumes ledgered wrong answer: PASS"
+    echo "T9 mst_vectors.sh consumes ledgered wrong answer: PASS"
   else
-    echo "T9 car_vectors.sh consumes ledgered wrong answer: FAIL (rc=$t9_rc)"
+    echo "T9 mst_vectors.sh consumes ledgered wrong answer: FAIL (rc=$t9_rc)"
     printf '%s\n' "$t9_out"
     st_rc=1
   fi
