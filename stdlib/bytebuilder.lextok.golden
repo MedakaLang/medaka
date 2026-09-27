@@ -40,8 +40,6 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
-IDENT "adoptByteBlockUnsafe"
-COMMA
 IDENT "fromArrayAssumeByteDomain"
 COMMA
 IDENT "fromByteBlockPrefix"
@@ -51,6 +49,17 @@ COMMA
 IDENT "encodeUtf8"
 COMMA
 IDENT "toArray"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "mut_bytes"
+AS
+UPPER "MB"
+NEWLINE
+IMPORT
+IDENT "mut_bytes"
+DOT_LBRACE
+UPPER "MutBytes"
 RBRACE
 NEWLINE
 IMPORT
@@ -446,7 +455,7 @@ COLON
 UPPER "Builder"
 ARROW
 LPAREN
-UPPER "Bytes"
+UPPER "MutBytes"
 COMMA
 UPPER "Int"
 RPAREN
@@ -459,6 +468,8 @@ IDENT "len"
 RPAREN
 EQUAL
 LPAREN
+UPPER "MB"
+DOT
 IDENT "adoptByteBlockUnsafe"
 BANG
 IDENT "backing"

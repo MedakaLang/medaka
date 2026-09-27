@@ -20,6 +20,7 @@
    line and nothing else. -}
 
 import array.{concat, make, sliceClamped}
+import bytes as B
 import list.{reverse}
 import lib.car.{Car, carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
@@ -99,10 +100,10 @@ readHead conn pending = match findHeaderEnd pending 0
   None => match recv conn 4096
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_subscribe: connection closed before response headers"
       else
-        readHead conn (appendBytes pending chunk)
+        readHead conn (appendBytes pending (B.toArray chunk))
 
 statusOf : String -> Result String Int
 statusOf headerText = match lines headerText
@@ -150,10 +151,10 @@ readBodyBytes conn want have =
   else match recv conn 4096
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Err "serve_subscribe: refusal body ended before its content-length"
       else
-        readBodyBytes conn want (appendBytes have chunk)
+        readBodyBytes conn want (appendBytes have (B.toArray chunk))
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -199,10 +200,10 @@ readFrame conn buffered = match decodeFrame FromServer maxFrameBytes buffered 0
   NeedMore => match recv conn 65536
     Err message => Err message
     Ok chunk =>
-      if arrayLength chunk == 0 then
+      if B.isEmpty chunk then
         Ok None
       else
-        readFrame conn (appendBytes buffered chunk)
+        readFrame conn (appendBytes buffered (B.toArray chunk))
 
 {- | The largest server frame this client will accept. An event frame carries
    a commit's blocks, so it is bounded by the same CAR ceiling a
@@ -282,7 +283,7 @@ mustConnect port =
   resultOrPanic "serve_subscribe: connect failed" (connect "127.0.0.1" port)
 
 mustSend : Connection * -> Array Int -> <Net> Unit
-mustSend conn bytes = match sendAll conn bytes
+mustSend conn bytes = match sendAll conn (B.fromArrayAssumeByteDomain bytes)
   Ok () => ()
   Err message => panic "serve_subscribe: send failed: \{message}"
 
@@ -295,7 +296,11 @@ ignoreResult (Err _) = ()
 -- already read what it came for.
 sayGoodbye : Connection * -> <Net> Unit
 sayGoodbye conn =
-  ignoreResult (sendAll conn (encodeClientFrame maskKey (closeFrame 1000 "")))
+  ignoreResult
+    (sendAll
+      conn
+      (B.fromArrayAssumeByteDomain
+        (encodeClientFrame maskKey (closeFrame 1000 ""))))
 
 -- How long a case waits for a frame that must arrive. Generous: what is being
 -- graded is that the frame arrives at all, never how fast.

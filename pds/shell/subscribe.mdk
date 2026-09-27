@@ -25,6 +25,7 @@
 
 import array.{sliceClamped}
 import async.{Async, liftIO}
+import bytes as B
 import bytes.{toArray}
 import hex as Hex
 import lib.event_log_record.{EventLogEntry(..)}
@@ -143,7 +144,7 @@ runSubscription : String ->
   Array Int ->
   Async <Clock, FileRead, Net | e> (Result String Unit)
 runSubscription dir budget conn accept cursor pending = defer
-  opened <- A.sendAllWithin budget conn (handshakeResponseBytes accept)
+  opened <- sendArrayWithin budget conn (handshakeResponseBytes accept)
   match opened
     Err message => deferPure (Err message)
     Ok () => openStream dir budget conn cursor pending
@@ -287,12 +288,20 @@ sendEntries budget conn delivered (entry :: rest) =
 -- One atproto event-stream message, as one unfragmented binary WebSocket
 -- frame. The payload is two concatenated CBOR objects and the reader decodes
 -- both from the one message, so it may not be split across frames.
+-- The frames are still built as arrays; `sendAllWithin` sends `Bytes`.
+sendArrayWithin : Duration ->
+  Connection * ->
+  Array Int ->
+  Async <Clock, Net | e> (Result String Unit)
+sendArrayWithin budget conn frame =
+  A.sendAllWithin budget conn (B.fromArrayAssumeByteDomain frame)
+
 sendPayload : Duration ->
   Connection * ->
   Array Int ->
   Async <Clock, Net | e> (Result String Unit)
 sendPayload budget conn payload =
-  A.sendAllWithin budget conn (encodeServerFrame (Frame True Binary payload))
+  sendArrayWithin budget conn (encodeServerFrame (Frame True Binary payload))
 
 sendPayloadThenClose : Duration ->
   Connection * ->
@@ -309,7 +318,7 @@ sendClose : Duration ->
   Int ->
   Async <Clock, Net | e> (Result String Unit)
 sendClose budget conn code = defer
-  _ <- A.sendAllWithin budget conn (encodeServerFrame (closeFrame code ""))
+  _ <- sendArrayWithin budget conn (encodeServerFrame (closeFrame code ""))
   deferPure (Ok ())
 
 {- | The steady state: wait a poll interval for the client to say something,
@@ -346,7 +355,7 @@ tailStep dir budget conn lastSeq pending buffered =
     ClientFailed code => sendClose budget conn code
     ClientClosed code => sendClose budget conn code
     ClientReply next reply rest => defer
-      sent <- A.sendAllWithin budget conn reply
+      sent <- sendArrayWithin budget conn reply
       match sent
         Err message => deferPure (Err message)
         Ok () => tailFrom dir budget conn lastSeq next rest
@@ -357,10 +366,10 @@ tailStep dir budget conn lastSeq pending buffered =
         clientReadChunkBytes
       match received
         Ok bytes =>
-          if arrayLength bytes == 0 then
+          if B.isEmpty bytes then
             deferPure (Ok ())
           else
-            tailFrom dir budget conn lastSeq next (rest ++ bytes)
+            tailFrom dir budget conn lastSeq next (rest ++ toArray bytes)
         Err message =>
           if message == pollTimedOut then
             pollLog dir budget conn lastSeq next rest

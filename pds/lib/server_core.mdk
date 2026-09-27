@@ -242,7 +242,7 @@ presentedHeader [] 1 (Some value) = bearerOf (fromUtf8 value)
 presentedHeader [] _ _ = NotBearer
 presentedHeader (header :: rest) count value =
   if headerName header == "authorization" then
-    presentedHeader rest (count + 1) (Some (headerValue header))
+    presentedHeader rest (count + 1) (Some (toArray (headerValue header)))
   else
     presentedHeader rest count value
 
@@ -441,7 +441,7 @@ pickHeader _ [] 1 (Some value) = HeaderPicked (fromUtf8 value)
 pickHeader _ [] _ _ = HeaderRepeated
 pickHeader wanted (header :: rest) count value =
   if headerName header == wanted then
-    pickHeader wanted rest (count + 1) (Some (headerValue header))
+    pickHeader wanted rest (count + 1) (Some (toArray (headerValue header)))
   else
     pickHeader wanted rest count value
 
@@ -1187,9 +1187,13 @@ export
 handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Array Int)
 handleBytes server context store bytes = match parseRequestClassified bytes
   Err (HttpMalformed _) =>
-    (store, serializeResponse (withAllowOrigin malformedHttpResponse))
+    (store, serializedArray (withAllowOrigin malformedHttpResponse))
   Err (HttpResourceExcess _) =>
-    (store, serializeResponse (withAllowOrigin resourceExcessResponse))
+    (store, serializedArray (withAllowOrigin resourceExcessResponse))
   Ok request =>
     let (next, response) = handle server context store request
-    (next, serializeResponse response)
+    (next, serializedArray response)
+
+-- `handleBytes` still answers an `Array Int`; the serializer writes `Bytes`.
+serializedArray : Response -> Array Int
+serializedArray response = toArray (serializeResponse response)

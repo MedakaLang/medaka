@@ -1,6 +1,6 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
-import bytes.{Bytes, encodeUtf8, fromArray}
+import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain}
 import http.{
   Header,
   HttpParseFailure(..),
@@ -52,7 +52,7 @@ mustHeader : String -> String -> Header
 mustHeader name value =
   resultOrPanic
     "server_core_test: header setup failed"
-    (makeHeader name (toUtf8 value))
+    (makeHeader name (encodeUtf8 value))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =
@@ -60,7 +60,7 @@ mustResponse status reason body =
     status
     reason
     [mustHeader "content-type" "text/plain"]
-    (toUtf8 body))
+    (encodeUtf8 body))
     Ok response => response
     Err message => panic "server_core_test: response setup failed: \{message}"
 
@@ -231,7 +231,7 @@ test "direct configured handle preserves Store for a fixed query" =
         (
           "the response is the exact fixed-query wire form",
           expectEqual
-            (expectedTextResponse 200 "OK" "fixed")
+            (fromArrayAssumeByteDomain (expectedTextResponse 200 "OK" "fixed"))
             (serializeResponse response),
         ),
       ])

@@ -34,7 +34,7 @@ import http.{
   requestMethod,
   Response,
 }
-import bytes.{toArray}
+import bytes.{Bytes, encodeUtf8, toArray}
 import json.{Json, Json(..), jObject, stringify}
 import string.{fromUtf8, toUtf8}
 import lib.nsid.{sameNsidIdentity, validateNsid}
@@ -223,7 +223,7 @@ mustJsonHeader : Header
 mustJsonHeader =
   resultOrPanic
     "xrpc: internal response header error"
-    (makeHeader "content-type" (toUtf8 "application/json"))
+    (makeHeader "content-type" (encodeUtf8 "application/json"))
 
 errorResponse : Int -> String -> String -> String -> Response
 errorResponse status reason code message =
@@ -240,7 +240,7 @@ errorResponseWithHeaders : Int ->
   Response
 errorResponseWithHeaders status reason code message extraHeaders =
   let body =
-    toUtf8
+    encodeUtf8
       (stringify
         (jObject [("error", JString code), ("message", JString message)]))
   resultOrPanic
@@ -417,10 +417,7 @@ data MediaSelection =
   | InvalidMedia
   | SelectedMedia MediaType
 
-collectContentType : List Header ->
-  Int ->
-  Option (Array Int) ->
-  (Int, Option (Array Int))
+collectContentType : List Header -> Int -> Option Bytes -> (Int, Option Bytes)
 collectContentType [] count value = (count, value)
 collectContentType (header :: rest) count value =
   if headerName header == "content-type" then

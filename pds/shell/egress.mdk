@@ -47,6 +47,7 @@
    closed only by the second. -}
 
 import async.{Async, Wait, deadlineAfter, expired}
+import bytes as B
 import http.{Header}
 import lib.httpclient.{
   findHeader,
@@ -240,16 +241,20 @@ relayedAnswerFields headers (name :: rest) = match findHeader name headers
    (`maxHttpClientWireBytes`), which is a quantity no decoded ceiling can
    express. -}
 decodeUpstream : Array Int -> Result String UpstreamAnswer
-decodeUpstream buffer = match parseResponse buffer
-  Err message => Err "egress: upstream response was not decodable: \{message}"
-  Ok response =>
+decodeUpstream buffer = match map parseResponse (B.fromArray buffer)
+  None =>
+    Err
+      "egress: upstream response was not decodable: an element is outside 0..255"
+  Some (Err message) =>
+    Err "egress: upstream response was not decodable: \{message}"
+  Some (Ok response) =>
     Ok
       (UpstreamAnswer
         (responseStatus response)
         (responseReason response)
         (findHeader "content-type" (responseHeaders response))
         (relayedAnswerFields (responseHeaders response) relayedResponseFields)
-        (responseBody response))
+        (B.toArray (responseBody response)))
 
 {- | Read until the response is complete: either the bytes so far already
    frame one (`responseBoundaryWithin`) or the peer closed, which is what
@@ -280,7 +285,7 @@ collectUpstream deadline mayHold conn acc = defer
     deferPure (Err "egress: the upstream call exceeded its budget")
   else defer
     received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
-    collectStep deadline mayHold conn acc received
+    collectStep deadline mayHold conn acc (map B.toArray received)
 
 collectStep : Wait <Clock, Net | e> ->
   (Int -> Async <Clock, Net | e> Bool) ->
@@ -314,9 +319,16 @@ keepChunk deadline mayHold conn acc bytes =
     deferPure
       (Err
         "egress: upstream response exceeds the \{intToString maxHttpClientWireBytes}-byte wire ceiling")
-  else match responseBoundaryWithin backing collected
+  else match wireBoundary backing collected
     Some _ => deferPure (decodeUpstream (V.toArray acc))
     None => collectUpstream deadline mayHold conn acc
+
+-- `responseBoundaryWithin` over the first `collected` accumulated bytes,
+-- which `lib.httpclient` reads as `Bytes`.
+wireBoundary : Array Int -> Int -> Option Int
+wireBoundary backing collected = match B.fromArray (slice backing 0 collected)
+  Some wire => responseBoundaryWithin wire collected
+  None => None
 
 exchange : (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
@@ -324,7 +336,10 @@ exchange : (Int -> Async <Clock, Net | e> Bool) ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 exchange mayHold conn bytes = defer
   deadline <- deadlineAfter upstreamCallTimeout
-  sent <- A.sendAllWithin upstreamWriteTimeout conn bytes
+  sent <- A.sendAllWithin
+    upstreamWriteTimeout
+    conn
+    (B.fromArrayAssumeByteDomain bytes)
   match sent
     Err message =>
       deferPure (Err "egress: upstream request could not be sent: \{message}")

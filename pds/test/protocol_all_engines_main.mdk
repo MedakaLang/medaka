@@ -4,7 +4,7 @@
    pinned XRPC error envelope. They are intentionally not captured from an
    engine. -}
 
-import bytes.{fromArray}
+import bytes.{Bytes, encodeUtf8, fromArray}
 import http.{
   Header,
   makeHeader,
@@ -66,7 +66,7 @@ mustHeader : String -> String -> Header
 mustHeader name value =
   resultOrPanic
     "protocol_all_engines: header setup failed"
-    (makeHeader name (toUtf8 value))
+    (makeHeader name (encodeUtf8 value))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =
@@ -74,7 +74,7 @@ mustResponse status reason body =
     status
     reason
     [mustHeader "content-type" "text/plain"]
-    (toUtf8 body))
+    (encodeUtf8 body))
     Ok response => response
     Err message =>
       panic "protocol_all_engines: response setup failed: \{message}"
@@ -457,9 +457,9 @@ checkResource =
 
 -- # HTTP client codec (`lib.httpclient`) — response side
 
-clientFixedResponse : Array Int
+clientFixedResponse : Bytes
 clientFixedResponse =
-  toUtf8
+  encodeUtf8
     "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 5\r\n\r\nhello"
 
 checkClientFixedLength : <IO> Unit
@@ -469,7 +469,7 @@ checkClientFixedLength = match HC.parseResponse clientFixedResponse
   Ok response =>
     if HC.responseStatus response == 200
       && HC.responseReason response == "OK"
-      && HC.responseBody response == toUtf8 "hello"
+      && HC.responseBody response == encodeUtf8 "hello"
       && HC.findHeader "content-type" (HC.responseHeaders response)
         == Some (toUtf8 "text/plain") then
       println "CELL client-fixed-length PASS status=200 body=hello"
@@ -478,9 +478,9 @@ checkClientFixedLength = match HC.parseResponse clientFixedResponse
 
 -- Two chunks, the first carrying a chunk-extension per RFC 9112 SS7.1.1, plus
 -- a trailer field the terminating chunk introduces.
-clientChunkedResponse : Array Int
+clientChunkedResponse : Bytes
 clientChunkedResponse =
-  toUtf8
+  encodeUtf8
     "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n3;ext=1\r\nfoo\r\n3\r\nbar\r\n0\r\nx-trailer: done\r\n\r\n"
 
 checkClientChunked : <IO> Unit
@@ -489,14 +489,14 @@ checkClientChunked = match HC.parseResponse clientChunkedResponse
     panic "protocol_all_engines: client chunked parse failed: \{message}"
   Ok response =>
     if HC.responseStatus response == 200
-      && HC.responseBody response == toUtf8 "foobar"
+      && HC.responseBody response == encodeUtf8 "foobar"
       && HC.findHeader "x-trailer" (HC.responseTrailers response)
         == Some (toUtf8 "done") then
       println "CELL client-chunked PASS chunks=2 body=foobar trailer=done"
     else
       panic "protocol_all_engines: client chunked mismatch"
 
-expectResourceExcess : String -> Array Int -> String -> <IO> Unit
+expectResourceExcess : String -> Bytes -> String -> <IO> Unit
 expectResourceExcess label bytes cellLine =
   match HC.parseResponseClassified bytes
     Ok _ => panic "protocol_all_engines: \{label} unexpectedly parsed"
@@ -505,9 +505,9 @@ expectResourceExcess label bytes cellLine =
         "protocol_all_engines: \{label} reported malformed, not resource-excess: \{message}"
     Err (HttpClientResourceExcess _) => println cellLine
 
-clientStatusLineOverLimit : Array Int
+clientStatusLineOverLimit : Bytes
 clientStatusLineOverLimit =
-  toUtf8
+  encodeUtf8
     ("HTTP/1.1 200 "
       ++ repeat (maxHttpClientStatusLineBytes + 1) "a"
       ++ "\r\n\r\n")
@@ -525,11 +525,11 @@ checkClientStatusLineLimit =
 -- single CRLF-less scan that long would recurse once per byte. Ten short
 -- scans keep every recursion shallow while the CUMULATIVE ceiling this cell
 -- exercises still trips well before the unrelated 100-field ceiling would.
-clientHeaderBytesOverLimit : Array Int
+clientHeaderBytesOverLimit : Bytes
 clientHeaderBytesOverLimit =
   let perHeaderBytes = 7000
   let headerCount = maxHttpClientHeaderBytes / perHeaderBytes + 2
-  toUtf8
+  encodeUtf8
     ("HTTP/1.1 200 OK\r\n"
       ++ repeat headerCount ("x-big: " ++ repeat perHeaderBytes "a" ++ "\r\n")
       ++ "content-length: 0\r\n\r\n")
@@ -541,9 +541,9 @@ checkClientHeaderBytesLimit =
     clientHeaderBytesOverLimit
     "CELL client-header-bytes-limit PASS refused"
 
-clientHeaderFieldsOverLimit : Array Int
+clientHeaderFieldsOverLimit : Bytes
 clientHeaderFieldsOverLimit =
-  toUtf8
+  encodeUtf8
     ("HTTP/1.1 200 OK\r\n"
       ++ repeat (maxHttpClientHeaderFields + 1) "x-h: 1\r\n"
       ++ "content-length: 0\r\n\r\n")
@@ -558,9 +558,9 @@ checkClientHeaderFieldsLimit =
 -- One chunk-size line declaring more than `maxHttpClientChunkBytes`; the
 -- ceiling is enforced on the declared size alone, so no matching chunk data
 -- needs to follow.
-clientChunkSizeOverLimit : Array Int
+clientChunkSizeOverLimit : Bytes
 clientChunkSizeOverLimit =
-  toUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n200000\r\n"
+  encodeUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n200000\r\n"
 
 checkClientChunkSizeLimit : <IO> Unit
 checkClientChunkSizeLimit =
@@ -580,9 +580,9 @@ checkClientChunkSizeLimit =
 
 -- A declared Content-Length alone is enough to trip this ceiling; no body
 -- bytes need to be supplied since the check runs before the body is read.
-clientBodyBytesOverLimit : Array Int
+clientBodyBytesOverLimit : Bytes
 clientBodyBytesOverLimit =
-  toUtf8
+  encodeUtf8
     "HTTP/1.1 200 OK\r\ncontent-length: \{intToString (maxHttpClientBodyBytes + 1)}\r\n\r\n"
 
 checkClientBodyBytesLimit : <IO> Unit
@@ -592,8 +592,8 @@ checkClientBodyBytesLimit =
     clientBodyBytesOverLimit
     "CELL client-body-bytes-limit PASS refused"
 
-clientMalformedStatusLine : Array Int
-clientMalformedStatusLine = toUtf8 "HTTP/1.1 20 OK\r\n\r\n"
+clientMalformedStatusLine : Bytes
+clientMalformedStatusLine = encodeUtf8 "HTTP/1.1 20 OK\r\n\r\n"
 
 checkClientMalformedStatusLine : <IO> Unit
 checkClientMalformedStatusLine =
@@ -607,9 +607,9 @@ checkClientMalformedStatusLine =
     Err (HttpClientMalformed _) =>
       println "CELL client-malformed-status-line PASS refused"
 
-clientMalformedHeader : Array Int
+clientMalformedHeader : Bytes
 clientMalformedHeader =
-  toUtf8 "HTTP/1.1 200 OK\r\nbadheader\r\ncontent-length: 0\r\n\r\n"
+  encodeUtf8 "HTTP/1.1 200 OK\r\nbadheader\r\ncontent-length: 0\r\n\r\n"
 
 checkClientMalformedHeader : <IO> Unit
 checkClientMalformedHeader =

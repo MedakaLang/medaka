@@ -22,7 +22,7 @@
    and not the `RepoNotFound` the handler would have produced, so the check
    demonstrably ran first. -}
 
-import bytes.{fromArray}
+import bytes.{encodeUtf8, fromArray}
 import http.{
   Header,
   makeHeader,
@@ -149,13 +149,13 @@ mustResponse : String -> Response
 mustResponse body =
   resultOrPanic
     "auth_seam_test: response setup failed"
-    (makeResponse 200 "OK" [textHeader] (toUtf8 body))
+    (makeResponse 200 "OK" [textHeader] (encodeUtf8 body))
 
 textHeader : Header
 textHeader =
   resultOrPanic
     "auth_seam_test: header setup failed"
-    (makeHeader "content-type" (toUtf8 "text/plain"))
+    (makeHeader "content-type" (encodeUtf8 "text/plain"))
 
 {- | Reports the `AuthOutcome` the seam resolved, so a public route reached
    with a good token is distinguishable from one reached with none. Reaching

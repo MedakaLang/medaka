@@ -195,9 +195,9 @@ import time.{
 }
 import bytebuilder.{Builder, emitBytes, builderParts, newBuilder}
 import bytes as B
-import bytes.{
-  Bytes, fromArray, fromArrayAssumeByteDomain, sliceClamped, toArray
-}
+import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
 
 -- ── timeouts, ceilings and the listener ─────────────────────────────────────
 
@@ -503,7 +503,7 @@ bindAddress addr port = listen addr port
 -- inherited.
 persistFailureBytes : Array Int
 persistFailureBytes =
-  serializeResponse
+  serializedArray
     (withAllowOrigin
       (xrpcErrorResponse
         500
@@ -1742,7 +1742,7 @@ readBufferIsEmpty buf = readBufferLen buf == 0
 -- read past it on its own. `builderParts` reaches the builder's own block
 -- without copying, so this costs nothing proportional to what is buffered.
 export
-readBufferBacking : ReadBuffer -> Bytes
+readBufferBacking : ReadBuffer -> MutBytes
 readBufferBacking (ReadBuffer b _) =
   let (backing, _) = builderParts b
   backing
@@ -1779,8 +1779,9 @@ readBufferAppendBytes bytes (ReadBuffer b _) = emitBytes bytes b
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
-   (`respondAt`'s `rest`). Copies the leftover once, the same single copy
-   `sliceClamped` performed on the old `Array Int` representation.
+   (`respondAt`'s `rest`). Costs a copy proportional to the leftover, never
+   to the whole buffer: `liveSlice` copies the leftover out and `emitBytes`
+   copies it into the fresh buffer.
 
    The budget charge is carried across rather than restarted: this is the same
    connection's buffer under a new value, and `respondAt` gives back exactly
@@ -1790,8 +1791,19 @@ readBufferFrom : Int -> ReadBuffer -> ReadBuffer
 readBufferFrom from (ReadBuffer b charged) =
   let (backing, len) = builderParts b
   let fresh = newBuilder ()
-  let () = emitBytes (sliceClamped from len backing) fresh
+  let () = emitBytes (liveSlice from len backing) fresh
   ReadBuffer fresh charged
+
+-- The bytes of `backing` over `[lo, hi)`, both bounds clamped into it, as an
+-- immutable copy: the backing store keeps changing under later appends.
+liveSlice : Int -> Int -> MutBytes -> Bytes
+liveSlice lo hi backing =
+  let n = MB.length backing
+  let from = if lo < 0 then 0 else min lo n
+  let to = if hi < from then from else min hi n
+  let copy = MB.make (to - from)
+  let () = MB.blit backing from copy 0 (to - from)
+  MB.freeze copy
 
 -- | The live bytes alone, for the one caller (`rejectBufferAt`) that hands
 -- the whole buffer to `applyRequest` rather than a scanned `[0, boundary)`
@@ -1800,7 +1812,7 @@ export
 readBufferLive : ReadBuffer -> Bytes
 readBufferLive (ReadBuffer b _) =
   let (backing, len) = builderParts b
-  sliceClamped 0 len backing
+  liveSlice 0 len backing
 
 -- ── the serving context ─────────────────────────────────────────────────────
 
@@ -2336,7 +2348,7 @@ readMore server dir storeRef limiterRef census serving conn slot deadlines buf s
       refuseOverBudget conn scan
     else defer
       let want = readSizeFor scan buf
-      received <- A.recvBytesWithin (silenceBudget scan) conn want
+      received <- A.recvWithin (silenceBudget scan) conn want
       match received
         Err message => deferPure (Err message)
         Ok bytes =>
@@ -2457,9 +2469,9 @@ refuseOverBudget conn scan =
     deferPure (Err "in-flight request buffer budget exceeded")
   else defer
     startedAt <- liftIO (u => monotonic ())
-    let bytes = serializeResponse (withAllowOrigin bufferCeilingResponse)
+    let bytes = serializedArray (withAllowOrigin bufferCeilingResponse)
     let trace = RequestTrace "" "" (identityLabel directIdentity) startedAt
-    _ <- A.sendAllWithin writeTimeout conn bytes
+    _ <- sendArrayWithin writeTimeout conn bytes
     _ <- liftIO (u => logAccessBytes trace bytes)
     _ <- drainRefused conn lingerDrainReads
     deferPure (Err "in-flight request buffer budget exceeded")
@@ -2484,7 +2496,7 @@ drainRefused conn left =
   if left <= 0 then
     deferPure ()
   else defer
-    received <- A.recvBytesWithin lingerDrainWait conn readChunkBytes
+    received <- A.recvWithin lingerDrainWait conn readChunkBytes
     match received
       Err _ => deferPure ()
       Ok bytes =>
@@ -2707,7 +2719,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
         rest
         keepAlive
         trace
-        (serializeResponse response)
+        (serializedArray response)
     None => defer
       decision <- liftIO (u =>
         upgradeDecision server storeRef nowSeconds parsed)
@@ -2738,7 +2750,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
             rest
             False
             trace
-            (serializeResponse (withAllowOrigin refusal))
+            (serializedArray (withAllowOrigin refusal))
         NotAnUpgrade => defer
           proxy <- liftIO (u =>
             proxyDecisionFor server serving storeRef nowSeconds parsed)
@@ -2772,7 +2784,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 rest
                 keepAlive
                 trace
-                (serializeResponse (withAllowOrigin refusal))
+                (serializedArray (withAllowOrigin refusal))
             NotProxied => defer
               credential <- liftIO (u =>
                 serviceAuthDecisionFor
@@ -2809,10 +2821,10 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     rest
                     keepAlive
                     trace
-                    (serializeResponse (withAllowOrigin refusal))
+                    (serializedArray (withAllowOrigin refusal))
                 NotServiceAuth => defer
                   let requestBytes =
-                    sliceClamped 0 boundary (readBufferBacking buf)
+                    liveSlice 0 boundary (readBufferBacking buf)
                   login <- settleLogin
                     server
                     serving
@@ -2833,7 +2845,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                         rest
                         keepAlive
                         trace
-                        (serializeResponse
+                        (serializedArray
                           (withAllowOrigin derivationCeilingResponse))
                     _ => defer
                       response <- liftIO (u =>
@@ -3131,11 +3143,11 @@ settleLogin server serving storeRef parsed identity = defer
    server declining. -}
 mintedTokenBytes : Serving -> ServiceAuthRequest -> Array Int
 mintedTokenBytes serving claims = match servingEgress serving
-  None => serializeResponse (withAllowOrigin serviceAuthUnavailableResponse)
+  None => serializedArray (withAllowOrigin serviceAuthUnavailableResponse)
   Some egress => match egressMintToken egress claims
-    Err _ => serializeResponse (withAllowOrigin serviceAuthMintFailureResponse)
+    Err _ => serializedArray (withAllowOrigin serviceAuthMintFailureResponse)
     Ok minted =>
-      serializeResponse (withAllowOrigin (serviceAuthTokenResponse minted))
+      serializedArray (withAllowOrigin (serviceAuthTokenResponse minted))
 
 -- | What a client is told when the signature itself did not come out. The
 -- reason is not in the body for the reason a proxied read's 502 does not carry
@@ -3198,7 +3210,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
         rest
         keepAlive
         trace
-        (serializeResponse (withAllowOrigin refusal))
+        (serializedArray (withAllowOrigin refusal))
     None => match servingEgress serving
       None =>
         sendAndContinue
@@ -3213,7 +3225,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
           rest
           keepAlive
           trace
-          (serializeResponse (withAllowOrigin proxyUpstreamFailureResponse))
+          (serializedArray (withAllowOrigin proxyUpstreamFailureResponse))
       Some egress => defer
         admitted <- admitProxiedCall (servingProxyCensus serving)
         if not admitted then
@@ -3229,14 +3241,14 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             rest
             keepAlive
             trace
-            (serializeResponse (withAllowOrigin proxyCeilingResponse))
+            (serializedArray (withAllowOrigin proxyCeilingResponse))
         else defer
           let charge = Ref EgressUncharged
           let budget = servingEgressCensus serving
           answered <- egressCall egress (egressMayHold budget charge) admission
           let bytes = proxyAnswerBytes !charge answered
           _ <- liftIO (u => releaseProxiedCall (servingProxyCensus serving))
-          sent <- A.sendAllWithin writeTimeout conn bytes
+          sent <- sendArrayWithin writeTimeout conn bytes
           _ <- liftIO (u => settleEgressCharge budget charge)
           continueAfterSend
             server
@@ -3309,12 +3321,12 @@ egressBudgetResponse =
 -- accumulated.
 proxyAnswerBytes : EgressCharge -> Result String UpstreamAnswer -> Array Int
 proxyAnswerBytes EgressRefused _ =
-  serializeResponse (withAllowOrigin egressBudgetResponse)
+  serializedArray (withAllowOrigin egressBudgetResponse)
 proxyAnswerBytes _ (Err _) =
-  serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
+  serializedArray (withAllowOrigin proxyUpstreamFailureResponse)
 proxyAnswerBytes _ (Ok answer) = match proxyUpstreamResponse answer
-  Err _ => serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
-  Ok response => serializeResponse response
+  Err _ => serializedArray (withAllowOrigin proxyUpstreamFailureResponse)
+  Ok response => serializedArray response
 
 -- ── the subscription upgrade path ───────────────────────────────────────────
 
@@ -3393,7 +3405,7 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest t
       rest
       False
       trace
-      (serializeResponse (withAllowOrigin subscriptionCeilingResponse))
+      (serializedArray (withAllowOrigin subscriptionCeilingResponse))
   else defer
     -- The one exit that does not hand `sendAndContinue` a response: the
     -- handshake is written inside `runSubscription`, and what follows it is a
@@ -3438,6 +3450,18 @@ subscriptionCeilingResponse =
 
 -- ── sending a response ──────────────────────────────────────────────────────
 
+-- The response paths below still carry `Array Int`; `http` serializes to
+-- `Bytes` and `net_async` sends `Bytes`.
+serializedArray : Response -> Array Int
+serializedArray response = toArray (serializeResponse response)
+
+sendArrayWithin : Duration ->
+  Connection * ->
+  Array Int ->
+  Async <Clock, Net | e> (Result String Unit)
+sendArrayWithin budget conn bytes =
+  A.sendAllWithin budget conn (fromArrayAssumeByteDomain bytes)
+
 sendAndContinue : Server ->
   String ->
   Ref Store ->
@@ -3453,7 +3477,7 @@ sendAndContinue : Server ->
   Async <Clock, FileRead, FileWrite, Net, Rand, Stderr, Stdout | e> (Result String Unit)
 sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes =
   defer
-    sent <- A.sendAllWithin writeTimeout conn responseBytes
+    sent <- sendArrayWithin writeTimeout conn responseBytes
     continueAfterSend
       server
       dir
@@ -3567,14 +3591,14 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds s
   let trace = RequestTrace "" "" (identityLabel directIdentity) startedAt
   match charged
     Some refusal =>
-      let bytes = serializeResponse (withAllowOrigin refusal)
+      let bytes = serializedArray (withAllowOrigin refusal)
       defer
-        sent <- A.sendAllWithin writeTimeout conn bytes
+        sent <- sendArrayWithin writeTimeout conn bytes
         _ <- liftIO (u => logAccessBytes trace bytes)
         deferPure sent
     None => defer
       response <- liftIO (u =>
         applyRequest server dir storeRef None (readBufferLive buf))
-      sent <- A.sendAllWithin writeTimeout conn response
+      sent <- sendArrayWithin writeTimeout conn response
       _ <- liftIO (u => logAccessBytes trace response)
       deferPure sent
