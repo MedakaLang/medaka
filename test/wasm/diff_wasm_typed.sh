@@ -2255,9 +2255,10 @@ U_WAT="$INPUT_WORK/u.wat"
 # Every top-level binding and every non-reserved constructor below carries the
 # `<mid>__<name>` qualifier mangleUnitsEv stamps on, with `__user__` the synthetic
 # unit id this entry elaborates its single source under.  A data type is named
-# by its dispatch tag `<mid>.<name>` (#1397): `$T___user__.PSubject`, and the
-# impl symbol spells that tag through `injectiveIdent`
-# (`$mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark`). The qualifier is
+# by its dispatch tag `<mid>.<name>` (#1397), which both its WAT type name and
+# its impl symbol spell through `injectiveIdent`
+# (`$T_zZ_5f__5f_user_5f__5f__2e_PSubject`,
+# `$mdk_impl_zZ_5f__5f_user_5f__5f__2e_PSubject_mark`). The qualifier is
 # identical on both halves, so it can neither create nor erase a P/U distinction:
 # each name below still differs between the two only where its source name does.
 require_wat fn-names "$P1_WAT" 'call $__user____pOnlyFn'
@@ -2296,18 +2297,18 @@ require_ctor_fields ctor-arity 2 "$P1_WAT"
 require_wat ctor-arity "$P1_WAT" 'struct.new $C___user____SharedCtor'
 require_ctor_fields ctor-arity 3 "$U_WAT"
 require_wat ctor-arity "$U_WAT" 'struct.new $C___user____SharedCtor'
-require_wat ctor-owner-type "$P1_WAT" '(type $C___user____SharedCtor (sub $T___user__.PSubject'
-require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T___user__.PSubject)'
-require_wat ctor-owner-type "$U_WAT" '(type $C___user____SharedCtor (sub $T___user__.USubject'
-require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T___user__.USubject)'
+require_wat ctor-owner-type "$P1_WAT" '(type $C___user____SharedCtor (sub $T_zZ_5f__5f_user_5f__5f__2e_PSubject'
+require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_PSubject)'
+require_wat ctor-owner-type "$U_WAT" '(type $C___user____SharedCtor (sub $T_zZ_5f__5f_user_5f__5f__2e_USubject'
+require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_USubject)'
 require_ctor_ordinal ctor-ordinal 1 "$P1_WAT"
 require_ctor_ordinal ctor-ordinal 0 "$U_WAT"
-require_wat type-to-ctors "$P1_WAT" '(type $T___user__.PSubject (sub (struct (field i32)))'
-forbid_wat type-to-ctors "$P1_WAT" '(type $T___user__.USubject (sub (struct (field i32)))'
-require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $T___user__.PSubject)'
-require_wat type-to-ctors "$U_WAT" '(type $T___user__.USubject (sub (struct (field i32)))'
-forbid_wat type-to-ctors "$U_WAT" '(type $T___user__.PSubject (sub (struct (field i32)))'
-require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T___user__.USubject)'
+require_wat type-to-ctors "$P1_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_PSubject (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$P1_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_USubject (sub (struct (field i32)))'
+require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_PSubject)'
+require_wat type-to-ctors "$U_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_USubject (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$U_WAT" '(type $T_zZ_5f__5f_user_5f__5f__2e_PSubject (sub (struct (field i32)))'
+require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_zZ_5f__5f_user_5f__5f__2e_USubject)'
 
 run_impl_self_check
 run_trmc_state_check

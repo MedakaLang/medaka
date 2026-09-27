@@ -50,7 +50,8 @@ import frontend.ast.{
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
 import types.route_key.{
-  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes, typeTagOf
+  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes, typeTagOf,
+  typeTagName
 }
 import support.util.{
   contains,
@@ -1306,7 +1307,7 @@ reportIfUndecidable tag cands
   | twoDistinctKeys cands [] =
     runtimePanic
       "E-AMBIGUOUS-DISPATCH"
-      "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+      "arg-tag dispatch on a receiver of type '\{typeTagName tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The

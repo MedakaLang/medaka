@@ -1,5 +1,5 @@
 # META
-source_lines=5158
+source_lines=5159
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -54,7 +54,8 @@ import frontend.ast.{
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
 import types.route_key.{
-  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes, typeTagOf
+  implRouteKeyWord, funHeadTag, evDictRoutes, evMethodRoutes, typeTagOf,
+  typeTagName
 }
 import support.util.{
   contains,
@@ -1310,7 +1311,7 @@ reportIfUndecidable tag cands
   | twoDistinctKeys cands [] =
     runtimePanic
       "E-AMBIGUOUS-DISPATCH"
-      "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+      "arg-tag dispatch on a receiver of type '\{typeTagName tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
@@ -5162,7 +5163,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -5605,7 +5606,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
 (DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
 (DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
-(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
 (DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6803,7 +6804,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
@@ -7246,7 +7247,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
 (DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
 (DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
-(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EApp (EVar "typeTagName") (EVar "tag")))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
 (DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

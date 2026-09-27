@@ -221,6 +221,13 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
     [ -f "$entry" ] || continue
     printf '%s\t%s\t%s\n' "$(basename "${dir%/}")" "$entry" "${dir%/}"
   done
+  # An entry file whose name is not a WAT identifier: its module id is part of
+  # every type word it declares (`café(1).Mod5`, #1397), and the emitted type
+  # and impl names must still be legal.  Generated here, not committed, so the
+  # shared corpus carries no such file name.
+  mkdir -p "$WORK/nonident"
+  cp "$FIXDIR/eq_custom_dispatch.mdk" "$WORK/nonident/café(1).mdk"
+  printf '%s\t%s\t%s\n' "nonident_entry" "$WORK/nonident/café(1).mdk" "$WORK/nonident"
 } > "$WORK/worklist.tsv"
 
 MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" CORE="$CORE" STDLIB="$STDLIB" \

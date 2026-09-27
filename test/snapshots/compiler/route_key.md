@@ -1,5 +1,5 @@
 # META
-source_lines=592
+source_lines=612
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -30,9 +30,11 @@ stages=DESUGAR,MARK
 -- space-joined>|<method name or empty>`. The interface word is qualified when
 -- origin is known (e.g., "b::Speak"), or the bare name when origin is absent.
 --
--- `routeWordFor` consumes the collision verdict and the bare head tag, both
--- computed from tables this module cannot see: unique head yields the bare
--- tag verbatim; colliding head yields the canonical impl word (see above).
+-- `routeWordFor` consumes the collision verdict and the head tag
+-- (`typeTagOf`: bare for a prelude or builtin type, module-qualified
+-- otherwise), both computed from tables this module cannot see: unique head
+-- yields the tag verbatim; colliding head yields the canonical impl word (see
+-- above).
 --
 -- `rkTy`/`rkTyFunArg`/`rkTyAtom` are one prec-2 `Ty` printer. It matches
 -- `types/typecheck.mdk`'s version, not `eval/eval.mdk`'s, because the latter is
@@ -315,10 +317,10 @@ implRouteKeyWord o iface tys nm =
 
 -- ── the route word a SITE gets ───────────────────────────────────────────
 -- [headIsUnique] is the caller's collision verdict — "is this head the head of
--- exactly ONE declared impl of this interface?" — and [tag] the bare head
--- tycon word to use when it is. Unique head ⇒ the bare tag, exactly as today;
--- otherwise the canonical impl word, which is the only thing that can tell two
--- impls at one head apart.
+-- exactly ONE declared impl of this interface?" — and [tag] the head tag
+-- (`typeTagOf`) to use when it is. Unique head ⇒ the tag verbatim; otherwise
+-- the canonical impl word, which is the only thing that can tell two impls at
+-- one head apart.
 --
 -- ⚠️ THE VERDICT IS AN ARGUMENT ON PURPOSE. Both existing spellings compute it
 -- from a table this module cannot see and must not acquire — `ifaceImplHeadsRef`
@@ -357,6 +359,24 @@ typeTagOf : TyConOrigin -> String -> String
 typeTagOf (OriginModule "core") name = name
 typeTagOf (OriginModule m) name = "\{m}.\{name}"
 typeTagOf _ name = name
+
+-- The name a type word shows a reader: the part after its last dot.  A
+-- dispatch word is internal; a message names the type as it is written.
+--
+-- >>> typeTagName "app.dirs.T"
+-- "T"
+-- >>> typeTagName "Int"
+-- "Int"
+export
+typeTagName : String -> String
+typeTagName tag = afterLastDot tag (stringLength tag - 1)
+
+afterLastDot : String -> Int -> String
+afterLastDot tag i
+  | i < 0 = tag
+  | stringSlice i (i + 1) tag == "." =
+    stringSlice (i + 1) (stringLength tag) tag
+  | otherwise = afterLastDot tag (i - 1)
 
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn
@@ -523,7 +543,7 @@ rkTyList =
 -- > implRouteKeyWord (OriginModule "a") "Speak" [rkTyInt] None == implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None
 -- False
 
--- `routeWordFor`: unique head ⇒ the caller's bare tag verbatim; colliding head
+-- `routeWordFor`: unique head ⇒ the caller's head tag verbatim; colliding head
 -- ⇒ the canonical impl word, with the method slot empty.
 -- > routeWordFor True "Int" OriginUnresolved "Show" [rkTyInt]
 -- "Int"
@@ -634,6 +654,10 @@ rkTyList =
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
 (DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
+(DTypeSig true "typeTagName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "typeTagName" ((PVar "tag")) (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "tag")) (ELit (LInt 1)))))
+(DTypeSig false "afterLastDot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "afterLastDot" ((PVar "tag") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "tag") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "tag")) (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag")) (EIf (EVar "otherwise") (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
@@ -713,6 +737,10 @@ rkTyList =
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
 (DFunDef false "typeTagOf" (PWild (PVar "name")) (EVar "name"))
+(DTypeSig true "typeTagName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "typeTagName" ((PVar "tag")) (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "tag")) (ELit (LInt 1)))))
+(DTypeSig false "afterLastDot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "afterLastDot" ((PVar "tag") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "tag") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "tag")) (ELit (LString "."))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "tag"))) (EVar "tag")) (EIf (EVar "otherwise") (EApp (EApp (EVar "afterLastDot") (EVar "tag")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "rkTy" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false)) (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n")))
 (DFunDef false "rkTy" ((PCon "TyVar" (PVar "n"))) (EVar "n"))

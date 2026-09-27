@@ -1765,11 +1765,11 @@ defaultIfaceIdOf _ = ""
 -- full-type key (`Speak|(Box String)|`), whose `|`/`(`/space are not legal in an
 -- LLVM identifier — clang rejects the define outright.  `injectiveIdent`
 -- (`backend.private_mangle`, the ONE shared encoding since #1950) is the identity
--- on every bare head tag (type heads are `[A-Za-z0-9_]`, tuples are `__tupleN__`),
--- so every existing symbol is byte-identical; it only ever fires on the C7 /
--- #1036 collision path, which previously emitted a LEGAL but LOSSY name — the
--- pre-#1950 sanitize collapsed distinct keys onto one identifier, silently
--- merging two defines rather than producing anything clang would reject.
+-- on a prelude or builtin head tag (`[A-Za-z0-9_]`, tuples are `__tupleN__`), so
+-- those symbols read as the type's name; it escapes a module-qualified head tag
+-- (`m.T`, #1397) and a C7 / #1036 collision key.  The pre-#1950 sanitize
+-- collapsed distinct keys onto one identifier, silently merging two defines
+-- rather than producing anything clang would reject.
 defaultFnName : String -> String -> String
 defaultFnName tag method = "mdk_default_\{method}_\{injectiveIdent tag}"
 
