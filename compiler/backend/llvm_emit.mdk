@@ -833,7 +833,6 @@ data EmitInputData = EmitInputData {
   methodIfaces : List (String, (String, Int)),
   methodIfaceIndex : OrdMap (String, Int),
   methodIfaceIdIndex : OrdMap Int,
-  methodConstraintIfaces : List (String, List String),
   ctorFieldIndex : OrdMap (List String),
   declSigIndex : OrdMap (List String, String),
   -- #2074: the USER-declared externs only (the runtime catalog's own names are
@@ -878,7 +877,6 @@ makeEmitInput : List ((String, String), Bool) ->
   List ((String, String), List Int) ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
-  List (String, List String) ->
   List (String, (List String, String)) ->
   Bool ->
   Bool ->
@@ -890,7 +888,7 @@ makeEmitInput : List ((String, String), Bool) ->
   List (String, (List String, String)) ->
   List (String, String, String, String) ->
   EmitInput
-makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes ifaceImplHeads = EmitInputData {
+makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes ifaceImplHeads = EmitInputData {
   returnsSelf = returnsSelf,
   selfFnParams = selfFnParams,
   methodIfaces = map bareIfaceArityRow methodIfaces,
@@ -898,7 +896,6 @@ makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorF
     omFromPairs (reverseL (map bareIfaceArityRow methodIfaces)) omEmpty,
   methodIfaceIdIndex =
     omFromPairs (reverseL (map ifaceIdArityRow methodIfaces)) omEmpty,
-  methodConstraintIfaces = methodConstraintIfaces,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty,
   ffiExternIndex = omFromPairs (reverseL ffiExternTypes) omEmpty,

@@ -38,7 +38,6 @@ import types.typecheck.{
   preludeArgPosDictNames,
 }
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   lowerProgramEmit,
   EmitTarget(..),
   methodIfaceTable,
@@ -77,7 +76,6 @@ runEmit runtimeDecls coreDecls modules =
       False
       (declaredRecordFieldOrders allDecls)
       []
-      (ifaceImplHeadTable allDecls)
   let gaps = emitProgramGaps input (lowerProgramEmit TargetWasm allDecls)
   printGaps gaps
 
