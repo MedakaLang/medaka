@@ -444,15 +444,11 @@ runPrefsLoad dir = match persistLoadPreferences dir
 -- ── the session half ─────────────────────────────────────────
 
 {- | Two open sessions of two families and one refresh token the second family
-   consumed, replayed once inside the grace window into its open session,
-   persisted into the same data directory as every other half so
-   the signing-key sweep in `store_persistence_test.mdk` covers this file
-   too. The fingerprints are fixed rather than derived from tokens: these
-   routes grade the file's round trip, not `lib.store`'s
-   `sessionFingerprint`, and a row is digests plus instants whatever produced
-   it. -}
-fixtureSessions : List SessionRow
-fixtureSessions = [
+   consumed, replayed once inside the grace window into its open session.
+   These are the rows `store_persistence_test.mdk` also writes as a file in
+   the text a build without superseded rows wrote, which must still load. -}
+baseFixtureSessions : List SessionRow
+baseFixtureSessions = [
   OpenSessionRow
     (mustHex "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
     (mustHex "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
@@ -474,6 +470,25 @@ fixtureSessions = [
       (mustHex
         "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110")),
 ]
+
+{- | The base rows and one refresh token of the second family whose session
+   a later replay superseded, persisted into the same data directory as every
+   other half so the signing-key sweep in `store_persistence_test.mdk` covers
+   this file too. The fingerprints are fixed rather than derived from tokens:
+   these routes grade the file's round trip, not `lib.store`'s
+   `sessionFingerprint`, and a row is digests plus instants whatever produced
+   it. -}
+fixtureSessions : List SessionRow
+fixtureSessions =
+  baseFixtureSessions
+    ++ [
+      SupersededRefreshRow
+        (mustHex
+          "3f3e3d3c3b3a393837363534333231303f3e3d3c3b3a39383736353433323130")
+        (mustHex
+          "2f2e2d2c2b2a292827262524232221202f2e2d2c2b2a29282726252423222120")
+        2095000000,
+    ]
 
 -- The access and refresh fingerprints of the row
 -- `store_persistence_test.mdk` writes into a legacy sessions file, and that
@@ -519,6 +534,20 @@ runSessionsLegacy dir = match persistLoadSessions dir
       println "SESSIONS LEGACY: PASS"
     else
       let () = println "SESSIONS LEGACY: FAIL mismatch"
+      exit 1
+
+-- Admit a sessions file in the text a build without superseded rows wrote:
+-- every row must come back exactly as that build meant it.
+runSessionsBase : String -> <IO, FileRead> Unit
+runSessionsBase dir = match persistLoadSessions dir
+  Err message =>
+    let () = println "SESSIONS BASE: FAIL startup refused: \{message}"
+    exit 1
+  Ok rows =>
+    if rows == baseFixtureSessions then
+      println "SESSIONS BASE: PASS"
+    else
+      let () = println "SESSIONS BASE: FAIL mismatch"
       exit 1
 
 runSessionsSave : String -> <IO, FileRead, FileWrite> Unit
@@ -1224,6 +1253,7 @@ main = match args ()
   ["sessions-save", dir] => runSessionsSave dir
   ["sessions-load", dir] => runSessionsLoad dir
   ["sessions-legacy", dir] => runSessionsLegacy dir
+  ["sessions-base", dir] => runSessionsBase dir
   ["credential-save", dir] => runCredentialSave dir
   ["event-recover-owed", dir] => runEventRecover dir (_ head => Some head)
   ["event-recover-orphan", dir] =>
