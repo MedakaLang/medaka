@@ -1,5 +1,5 @@
 # META
-source_lines=2474
+source_lines=2476
 stages=DESUGAR,MARK
 # SOURCE
 {- | HTTP/1.1 message framing: request parsing, response building, and
@@ -336,9 +336,10 @@ lowerByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
 byteAt : Bytes -> Int -> Int
 byteAt input i = U8.toInt input[i]
 
--- The bytes of `b` as a string, verbatim: an ill-formed sequence is neither
--- rejected nor replaced, so a reason phrase or a validated query component
--- reads back exactly as it arrived.
+-- The bytes of `b` as a string.  Every caller but the reason phrase has
+-- already checked them as UTF-8 text, so they read back exactly as they
+-- arrived; a reason phrase's obs-text that is not UTF-8 reads back with one
+-- U+FFFD per ill-formed sequence.
 verbatimString : Bytes -> String
 verbatimString b = byteBlockToString (lendByteBlockUnsafe b)
 
@@ -1530,7 +1531,8 @@ export
 parsedResponseStatus : ParsedResponse -> Int
 parsedResponseStatus (ParsedResponse status _ _ _ _) = status
 
--- | The reason phrase, exactly as received.
+-- | The reason phrase as received, read as UTF-8: a byte sequence that is not
+-- UTF-8 reads back as U+FFFD.
 export
 parsedResponseReason : ParsedResponse -> String
 parsedResponseReason (ParsedResponse _ reason _ _ _) = reason
