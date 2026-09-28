@@ -1,0 +1,12 @@
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+weird : b -> b
+weird _ = get (Box [])
+
+main = println (weird 41 + 1)

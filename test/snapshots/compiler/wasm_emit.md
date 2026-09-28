@@ -1,5 +1,5 @@
 # META
-source_lines=12785
+source_lines=12788
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -12554,6 +12554,9 @@ maxIndexAt _ d = d - 1
 
 -- the deepest switch nesting in a tree (each CTSwitch increments the emit depth by
 -- 1 for its subtrees; an arm body at a leaf is emitted at decision-depth + this).
+-- A constructor switch emits its default subtree inside the same tower as its
+-- branches, one level deeper (`emitBrTableTower` at d+1); a literal switch emits
+-- both at its own depth, so counting the default one level deeper covers both.
 treeSwitchNesting : CTree -> Int
 treeSwitchNesting CTFail = 0
 treeSwitchNesting (CTLeaf _) = 0
@@ -12561,7 +12564,7 @@ treeSwitchNesting (CTGuard _ fail) = treeSwitchNesting fail
 treeSwitchNesting (CTDrop sub) = treeSwitchNesting sub
 treeSwitchNesting (CTSwitch branches dft) =
   let bd = foldMaxI (map (b => treeSwitchNesting (branchSub b)) branches)
-  maxI (1 + bd) (treeSwitchNesting dft)
+  1 + maxI bd (treeSwitchNesting dft)
 
 -- P1: scratch depth of a group's nullary VALUE member's inline-emitted rhs (a function
 -- member contributes nothing here — it is lifted).
@@ -12594,7 +12597,7 @@ maxIndexTree (CTGuard _ fail) d = maxIndexTree fail d
 maxIndexTree (CTDrop sub) d = maxIndexTree sub d
 maxIndexTree (CTSwitch branches dft) d =
   let bd = foldMaxI (map (b => maxIndexTree (branchSub b) (d + 1)) branches)
-  maxI d (maxI bd (maxIndexTree dft d))
+  maxI d (maxI bd (maxIndexTree dft (d + 1)))
 
 branchSub : CTBranch -> CTree
 branchSub (CTBranch _ sub) = sub
@@ -15013,7 +15016,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "treeSwitchNesting" ((PCon "CTLeaf" PWild)) (ELit (LInt 0)))
 (DFunDef false "treeSwitchNesting" ((PCon "CTGuard" PWild (PVar "fail"))) (EApp (EVar "treeSwitchNesting") (EVar "fail")))
 (DFunDef false "treeSwitchNesting" ((PCon "CTDrop" (PVar "sub"))) (EApp (EVar "treeSwitchNesting") (EVar "sub")))
-(DFunDef false "treeSwitchNesting" ((PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EVar "treeSwitchNesting") (EApp (EVar "branchSub") (EVar "b"))))) (EVar "branches")))) (DoExpr (EApp (EApp (EVar "maxI") (EBinOp "+" (ELit (LInt 1)) (EVar "bd"))) (EApp (EVar "treeSwitchNesting") (EVar "dft"))))))
+(DFunDef false "treeSwitchNesting" ((PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EVar "treeSwitchNesting") (EApp (EVar "branchSub") (EVar "b"))))) (EVar "branches")))) (DoExpr (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "maxI") (EVar "bd")) (EApp (EVar "treeSwitchNesting") (EVar "dft")))))))
 (DTypeSig false "maxIndexAtLgVal" (TyFun (TyCon "CBind") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "maxIndexAtLgVal" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "rhs")) (EVar "d")))
 (DFunDef false "maxIndexAtLgVal" (PWild (PVar "d")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))
@@ -15030,7 +15033,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "maxIndexTree" ((PCon "CTLeaf" PWild) (PVar "d")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))
 (DFunDef false "maxIndexTree" ((PCon "CTGuard" PWild (PVar "fail")) (PVar "d")) (EApp (EApp (EVar "maxIndexTree") (EVar "fail")) (EVar "d")))
 (DFunDef false "maxIndexTree" ((PCon "CTDrop" (PVar "sub")) (PVar "d")) (EApp (EApp (EVar "maxIndexTree") (EVar "sub")) (EVar "d")))
-(DFunDef false "maxIndexTree" ((PCon "CTSwitch" (PVar "branches") (PVar "dft")) (PVar "d")) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EApp (EVar "maxIndexTree") (EApp (EVar "branchSub") (EVar "b"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "branches")))) (DoExpr (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EVar "bd")) (EApp (EApp (EVar "maxIndexTree") (EVar "dft")) (EVar "d")))))))
+(DFunDef false "maxIndexTree" ((PCon "CTSwitch" (PVar "branches") (PVar "dft")) (PVar "d")) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EApp (EVar "maxIndexTree") (EApp (EVar "branchSub") (EVar "b"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "branches")))) (DoExpr (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EVar "bd")) (EApp (EApp (EVar "maxIndexTree") (EVar "dft")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))))))
 (DTypeSig false "branchSub" (TyFun (TyCon "CTBranch") (TyCon "CTree")))
 (DFunDef false "branchSub" ((PCon "CTBranch" PWild (PVar "sub"))) (EVar "sub"))
 (DTypeSig false "foldMaxI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
@@ -17353,7 +17356,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "treeSwitchNesting" ((PCon "CTLeaf" PWild)) (ELit (LInt 0)))
 (DFunDef false "treeSwitchNesting" ((PCon "CTGuard" PWild (PVar "fail"))) (EApp (EVar "treeSwitchNesting") (EVar "fail")))
 (DFunDef false "treeSwitchNesting" ((PCon "CTDrop" (PVar "sub"))) (EApp (EVar "treeSwitchNesting") (EMethodRef "sub")))
-(DFunDef false "treeSwitchNesting" ((PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EVar "treeSwitchNesting") (EApp (EVar "branchSub") (EVar "b"))))) (EVar "branches")))) (DoExpr (EApp (EApp (EVar "maxI") (EBinOp "+" (ELit (LInt 1)) (EVar "bd"))) (EApp (EVar "treeSwitchNesting") (EVar "dft"))))))
+(DFunDef false "treeSwitchNesting" ((PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EVar "treeSwitchNesting") (EApp (EVar "branchSub") (EVar "b"))))) (EVar "branches")))) (DoExpr (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "maxI") (EVar "bd")) (EApp (EVar "treeSwitchNesting") (EVar "dft")))))))
 (DTypeSig false "maxIndexAtLgVal" (TyFun (TyCon "CBind") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "maxIndexAtLgVal" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "rhs")) (EVar "d")))
 (DFunDef false "maxIndexAtLgVal" (PWild (PVar "d")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))
@@ -17370,7 +17373,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "maxIndexTree" ((PCon "CTLeaf" PWild) (PVar "d")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))
 (DFunDef false "maxIndexTree" ((PCon "CTGuard" PWild (PVar "fail")) (PVar "d")) (EApp (EApp (EVar "maxIndexTree") (EVar "fail")) (EVar "d")))
 (DFunDef false "maxIndexTree" ((PCon "CTDrop" (PVar "sub")) (PVar "d")) (EApp (EApp (EVar "maxIndexTree") (EMethodRef "sub")) (EVar "d")))
-(DFunDef false "maxIndexTree" ((PCon "CTSwitch" (PVar "branches") (PVar "dft")) (PVar "d")) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EApp (EVar "maxIndexTree") (EApp (EVar "branchSub") (EVar "b"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "branches")))) (DoExpr (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EVar "bd")) (EApp (EApp (EVar "maxIndexTree") (EVar "dft")) (EVar "d")))))))
+(DFunDef false "maxIndexTree" ((PCon "CTSwitch" (PVar "branches") (PVar "dft")) (PVar "d")) (EBlock (DoLet false false (PVar "bd") (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EApp (EVar "maxIndexTree") (EApp (EVar "branchSub") (EVar "b"))) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))) (EVar "branches")))) (DoExpr (EApp (EApp (EVar "maxI") (EVar "d")) (EApp (EApp (EVar "maxI") (EVar "bd")) (EApp (EApp (EVar "maxIndexTree") (EVar "dft")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))))))))
 (DTypeSig false "branchSub" (TyFun (TyCon "CTBranch") (TyCon "CTree")))
 (DFunDef false "branchSub" ((PCon "CTBranch" PWild (PVar "sub"))) (EMethodRef "sub"))
 (DTypeSig false "foldMaxI" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))

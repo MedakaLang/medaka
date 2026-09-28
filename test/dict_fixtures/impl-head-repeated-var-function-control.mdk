@@ -1,0 +1,14 @@
+-- Control: the box holds the function the use asks for. Expected `6`.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+viaG b = get b
+
+main =
+  let f : Int -> Int = viaG (Box (x => x + 1))
+  println (f 5)

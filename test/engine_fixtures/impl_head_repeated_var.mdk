@@ -1,0 +1,27 @@
+-- The control for `typecheck_error_fixtures/impl_head_repeated_var.mdk`: an
+-- impl head that repeats a variable matches a consistent goal, here fixed
+-- to Float by the use. Expected, derived from the source: 3.0 > 4.0 is
+-- false (`small`), 5.0 > 4.0 is true (`big`), and 3.0 + 0.5 is `3.5`.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+dbl : (Get c e, Num e) => c -> e
+dbl b = get b + get b
+
+classify : Box Float -> String
+classify b = if dbl b > 4.0 then "big" else "small"
+
+sumAt : Array Float -> Float
+sumAt v = at 0 + at 1
+  where
+    at i = v[i] + v[i]
+
+main =
+  println (classify (Box 1.5))
+  println (classify (Box 2.5))
+  println (debug (sumAt [|1.5, 0.25|]))

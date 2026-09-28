@@ -1,0 +1,22 @@
+-- An impl head that repeats a variable matches only a goal that binds it
+-- consistently: `impl Get (Box a) a` never matches `Get (Box Float) Int`.
+-- Here the element type is defaulted to Int where the impl fixes it to
+-- Float, so both uses are refused at the use, not dispatched with an Int
+-- dictionary to a body that holds a Float.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+dbl b = get b + get b
+
+classify : Box Float -> String
+classify b = if dbl b > 4 then "big" else "small"
+
+local : Array Float -> String
+local v = if twice 0 > 4 then "big" else "small"
+  where
+    twice i = v[i] + v[i]
