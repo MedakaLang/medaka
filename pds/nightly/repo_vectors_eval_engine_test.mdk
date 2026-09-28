@@ -1,0 +1,144 @@
+{- | The eval interpreter agrees with the native binary, byte for byte, on
+   the focused representative repo transcript: the third engine's own
+   agreement, which the merge-tier `pds/test/repo_vectors` gate does not
+   grade.
+
+   It runs nightly, not in the merge queue (#2208). The cost is the engine,
+   not the assertions: the same driver over the same corpus takes about
+   18 minutes under `medaka run` and a third of a second natively. The
+   representative routes themselves run on native and Wasm with a
+   cross-engine comparison in `pds/test/repo_vectors_test.mdk`; this is the
+   one thing left that needs the interpreter. #2181's charter keeps
+   soundness-class checks in the queue and lets a breadth arm like this one
+   move to nightly.
+
+   The native arm runs first and is the reference: it must pass on its own
+   before the interpreter is graded against it, since grading eval against
+   a failing native run would prove nothing. The eval arm must exit 0, write
+   nothing to stderr, carry the representative counts, end in
+   `REPRESENTATIVE: PASS`, and print exactly the native bytes.
+
+   Runs under `medaka test --native`: the arms and the ledger lookup spawn
+   subprocesses. -}
+
+import test.vector_ledger.{filesForConsumer}
+import test.vector_runner.{
+  Arm(..),
+  Engine(..),
+  buildNative,
+  freshScratch,
+  outputFindings,
+  reap,
+  runSeconds,
+  spawn,
+  spawnFindings,
+}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaBin, medakaRoot}
+
+gate : String
+gate = "pds/nightly/repo_vectors_eval_engine"
+
+driver : String
+driver = "pds/test/repo_vectors_main.mdk"
+
+consumer : String
+consumer = "P1-D-REPO"
+
+-- The interpreter's run over the representative transcript. The nightly
+-- job's own timeout is 40 minutes.
+evalSeconds : Int
+evalSeconds = 2400
+
+-- `MEDAKA_STRICT=1` turns a stale compiler into a failure rather than a
+-- warning on stderr.
+medakaEnv : <IO> List String
+medakaEnv = [
+  "MEDAKA_ROOT=\{medakaRoot}",
+  "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+  "MEDAKA_STRICT=1",
+]
+
+arm : Engine -> List String -> Arm
+arm e needs = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = needs,
+  lastLine = Some "REPRESENTATIVE: PASS",
+}
+
+nativeArm : Arm
+nativeArm = arm NativeEngine []
+
+evalArm : Arm
+evalArm = arm EvalEngine [
+  "representative-external: 6/6 official-atproto initialization/create/CAR checks",
+  "focused-rejected: 27/27 named routes",
+  "focused-controls: 8/8 valid routes",
+  "OP CREATE PASS",
+  "CREATE CAR PASS order=",
+]
+
+-- A spawn's stdout and findings, with `a`'s substrings and last line graded
+-- only when the spawn itself ran clean.
+graded : String -> Arm -> (String, List String) -> (String, List String)
+graded label a (out, []) = (out, outputFindings label a [] out)
+graded _ _ spawned = spawned
+
+-- The one ledgered file `consumer` owns, as an absolute path.
+corpusPath : <Exec, FileRead, IO> Result String String
+corpusPath = match filesForConsumer medakaRoot consumer
+  Err e => Err e
+  Ok [rel] => Ok "\{medakaRoot}/\{rel}"
+  Ok rels =>
+    Err
+      "\{consumer} owns \{intToString (length rels)} ledgered files, expected exactly 1"
+
+nativeRun : String -> String -> <Exec, IO> (String, List String)
+nativeRun scratch corpus =
+  let label = "\{gate} (native)"
+  let bin = "\{scratch}/repo_vectors_main"
+  match buildNative label "\{medakaRoot}/\{driver}" bin
+    [] =>
+      graded
+        label
+        nativeArm
+        (spawnFindings
+          label
+          "the built driver"
+          (spawn runSeconds [] bin [corpus, "--representative"]))
+    fs => ("", fs)
+
+evalRun : String -> String -> <Exec, IO> List String
+evalRun corpus native =
+  let label = "\{gate} (eval)"
+  let args = ["run", "\{medakaRoot}/\{driver}", corpus, "--representative"]
+  match (graded
+    label
+    evalArm
+    (spawnFindings
+      label
+      "medaka run"
+      (spawn evalSeconds medakaEnv medakaBin args)))
+    (out, []) =>
+      if out == native then
+        []
+      else
+        [
+          "\{label}: output differs from \{gate} (native) — the interpreter and the native binary disagree on the representative transcript",
+        ]
+    (_, fs) => fs
+
+findings : String -> <Exec, FileRead, IO> List String
+findings scratch = match corpusPath
+  Err e => ["\{gate}: \{e}"]
+  Ok corpus => match nativeRun scratch corpus
+    (native, []) => evalRun corpus native
+    (_, fs) => fs
+
+test "repo: the eval interpreter prints the native binary's bytes on the representative transcript" = expectNoFindings
+  gate
+  (match freshScratch ()
+    Err e => Err "could not make a scratch directory: \{e}"
+    Ok scratch => Ok (reap scratch (findings scratch)))

@@ -253,6 +253,10 @@ exempt = [
     "vector_provenance_test",
     "a gate-test, not a suite: it checks the provenance ledger against the tree and its checker against synthetic ledgers, and `test/gates.toml` runs it as `pds/test/vector_provenance`",
   ),
+  (
+    "signing_parity_test",
+    "a cross-engine gate-test, not a suite: it spawns two drivers on native and Wasm, and on eval under SIGNING_DEEP=1, and `test/gates.toml` runs it as `pds/test/signing_parity`",
+  ),
 ]
 
 exemptNames : List String

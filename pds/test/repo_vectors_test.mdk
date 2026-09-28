@@ -8,7 +8,7 @@
    emitter, `node` or `wasm-tools`, unless `MEDAKA_REQUIRE_WASM=1`. There is
    no eval arm: the interpreter takes about 18 minutes on the representative
    transcript, so its agreement with the native binary is graded nightly by
-   `pds/nightly/repo_vectors_eval_engine.sh` instead.
+   `pds/nightly/repo_vectors_eval_engine_test.mdk` instead.
 
    The other rows are native only, for the same reason, and each reads its
    own ledgered corpus: the record-write handlers and the read/sync handlers

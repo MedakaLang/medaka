@@ -77,7 +77,7 @@ queue, so this is normally already true — re-check it anyway, don't assume).
 set** (it runs in `gates_3`, per `test/gates.toml`) — the ordinary required-
 check derivation above already covers it. **One ARM of it is NOT covered
 that way and must be checked separately.** The gate's `SIGNING_DEEP=1` arm
-(`pds/test/signing_parity.sh` with `SIGNING_DEEP=1`, #1962 — G4 in
+(`pds/test/signing_parity_test.mdk` with `SIGNING_DEEP=1`, #1962 — G4 in
 `PDS-LAUNCH-PLAN.md` §2.G) runs only on the nightly tier, not per-PR, so it
 never appears in the ruleset's required-check set the way the merge-tier arm
 does. That nightly arm must be confirmed green against the **exact deploy
@@ -92,8 +92,8 @@ gh api repos/MedakaLang/medaka/actions/runs/<id>/jobs \
 
 The job's YAML id is `pds-signing-parity`, but that id never appears in
 `.jobs[].name` — the filter above matches on the job's `name:` field, which
-is `"pds/test/signing_parity.sh SIGNING_DEEP=1 (the eval and interpreted-
-WasmGC arms — #1962)"` in `.github/workflows/nightly.yml` (confirmed present
+is `"pds/test/signing_parity_test.mdk SIGNING_DEEP=1 (the eval and
+interpreted-WasmGC arms — #1962)"` in `.github/workflows/nightly.yml` (confirmed present
 in this tree at the time this runbook was written). If the deploy commit has
 never had a nightly run against it (e.g. it merged after the last nightly
 kicked off), trigger one explicitly rather than deploying on an unconfirmed
@@ -362,20 +362,20 @@ an unchanged compiler, which is the ordinary case steps 1-5 cover). A `pdsd`
 binary rebuilt against a **newer `medaka` compiler** must additionally pass,
 before the swap:
 
-1. **`pds/test/signing_parity.sh` with `SIGNING_DEEP=1`** (#1962) — the
+1. **`pds/test/signing_parity_test.mdk` with `SIGNING_DEEP=1`** (#1962) — the
    eval-vs-native-vs-WasmGC ECDSA parity check. A compiler change is exactly
    the kind of change this gate exists to catch that an unchanged-compiler
    PDS release doesn't need to re-run.
 2. **`pds/test/serve_e2e.sh`** — the full end-to-end server behavior gate.
 
-`pds/test/signing_parity.sh` hard-requires `test/bin/wasm_emit_modules_main`
+`pds/test/signing_parity_test.mdk` hard-requires `test/bin/wasm_emit_modules_main`
 to exist (it is gitignored, absent on a fresh checkout); build it first, the
 same way `.github/workflows/nightly.yml`'s `pds-signing-parity` job does:
 
 ```sh
 export MEDAKA_EMITTER="$(git rev-parse --show-toplevel)/medaka_emitter"
 sh test/wasm/build_wasm_oracle.sh --modules-only
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" SIGNING_DEEP=1 sh pds/test/signing_parity.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" SIGNING_DEEP=1 ./medaka test --native pds/test/signing_parity_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/serve_e2e.sh
 ```
 

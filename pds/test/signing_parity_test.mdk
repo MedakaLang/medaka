@@ -1,0 +1,298 @@
+{- | ECDSA signing values agree across eval, native and WasmGC (#1700
+   step 3). Native timing is audited by `constant_time_signing`; this gate
+   makes no timing claim.
+
+   Two tests, each split on the engine (#1962). The merge half is cheap:
+   the sampled driver's native and Wasm bytes must be identical and carry
+   all four witnesses, and the whole 322-row corpus must pass natively. The
+   deep half, run when `SIGNING_DEEP=1`, adds the two interpreted arms:
+   the sampled driver under `medaka run`, and the full corpus under WasmGC,
+   each byte-identical to native. Those two engines are nearly all of the
+   deep half's cost; the corpus itself is seconds natively. The nightly
+   `pds-signing-parity` job in `.github/workflows/nightly.yml` sets it.
+
+   Both Wasm arms are required: a host without the Wasm emitter, `node` or
+   `wasm-tools` fails this gate rather than skipping the arm.
+
+   Runs under `medaka test --native`: every arm spawns a subprocess. -}
+
+import test.vector_runner.{
+  Arm(..),
+  Engine(..),
+  buildNative,
+  freshScratch,
+  outputFindings,
+  reap,
+  runSeconds,
+  spawn,
+  spawnFindings,
+}
+import io.{getEnvOr}
+import list.{last}
+import string.{contains, join, lines}
+import test.{Expectation, expectNoFindings}
+import test_process.{medakaBin, medakaRoot}
+
+gate : String
+gate = "pds/test/signing_parity"
+
+sampleDriver : String
+sampleDriver = "pds/test/constant_time_signing_main.mdk"
+
+fullDriver : String
+fullDriver = "pds/test/ecdsa_vectors_main.mdk"
+
+-- The signing corpus, then Wycheproof's P1363 and Bitcoin files: the order
+-- `ecdsa_vectors_main` reads its arguments in.
+corpus : List String
+corpus = [
+  "pds/test/vectors/prehashed_signing_corpus.txt",
+  "pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt",
+  "pds/test/vectors/wycheproof_secp256k1_sha256_bitcoin.txt",
+]
+
+deep : <IO> Bool
+deep = getEnvOr "SIGNING_DEEP" "0" == "1"
+
+-- # Spawning
+
+buildSeconds : Int
+buildSeconds = 900
+
+-- An interpreted arm: the sampled driver under `medaka run`, or the full
+-- corpus under WasmGC. The nightly job's own timeout is 40 minutes.
+interpretedSeconds : Int
+interpretedSeconds = 2400
+
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+-- `MEDAKA_STRICT=1` turns a stale compiler into a failure rather than a
+-- warning on stderr.
+medakaEnv : <IO> List String
+medakaEnv = [
+  "MEDAKA_ROOT=\{medakaRoot}",
+  "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  "MEDAKA_STRICT=1",
+]
+
+under : String -> <IO> String
+under rel = "\{medakaRoot}/\{rel}"
+
+-- `node test/wasm/run.js` takes the program's arguments as one
+-- space-separated environment variable.
+runWasm : Int ->
+  String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+runWasm secs wasm args =
+  spawn
+    secs
+    ["MDK_ARGS=\{join " " args}"]
+    "node"
+    [under "test/wasm/run.js", wasm]
+
+-- # The sampled driver's compile warning
+
+{- | Compiling the sampled driver writes one warning to stderr: its
+   `import bytes.{…, length}` is shadowed by `Foldable.length`. Its builds and
+   its `medaka run` are therefore graded on exit status plus this pin, and
+   everything else they write to stderr goes ungraded. Its compiled runs
+   write nothing to stderr and are graded in full.
+
+   The driver's bytes are pinned by `pds/test/constant_time_signing.sh`, so
+   the warning is not this gate's to fix. The pin drains itself: a compile
+   that stops writing the warning fails here until `compileWarning` is
+   removed and those spawns are graded like the others. -}
+compileWarning : String
+compileWarning = "imported 'length : Bytes -> Int' is shadowed"
+
+warnedSpawn : String ->
+  String ->
+  Result String (Int, String, String) ->
+  (String, List String)
+warnedSpawn label what (Err e) =
+  ("", ["\{label}: could not spawn \{what}: \{e}"])
+warnedSpawn label what (Ok (code, out, err))
+  | code /= 0 = (
+    "",
+    ["\{label}: \{what} exited \{intToString code}: \{debug (lastOf err)}"],
+  )
+  | not (contains compileWarning err) = (
+    out,
+    [
+      "\{label}: \{what} no longer writes the pinned compile warning; drop `compileWarning` from \{gate}_test.mdk",
+    ],
+  )
+  | otherwise = (out, [])
+
+lastOf : String -> String
+lastOf text = match last (filter (/= "") (lines text))
+  None => ""
+  Some l => l
+
+-- # Grading
+
+witnessArm : Arm
+witnessArm = Arm {
+  engine = NativeEngine,
+  driverArgs = [],
+  countFloor = None,
+  needs = [
+    "candidate-1:computations=2:c0.valid=0:",
+    "exhaustion:computations=2:c0.valid=0:",
+    "high-s:compact=reject:verify:reject",
+    "malformed:reject",
+  ],
+  lastLine = None,
+}
+
+corpusArm : Arm
+corpusArm = Arm {
+  engine = NativeEngine,
+  driverArgs = [],
+  countFloor = None,
+  needs = [
+    "PROBE candidate-1-selection: PASS computations=2",
+    "PROBE two-candidate-exhaustion: PASS computations=2",
+    "WITNESS high-S ",
+    "WITNESS malformed ",
+  ],
+  lastLine = Some "TOTAL: PASS",
+}
+
+-- A spawn's stdout and findings, with `arm`'s substrings and last line
+-- graded only when the spawn itself ran clean.
+graded : String -> Arm -> (String, List String) -> (String, List String)
+graded label arm (out, []) = (out, outputFindings label arm [] out)
+graded _ _ spawned = spawned
+
+-- `other` must print exactly what native printed.
+sameAs : String -> String -> (String, List String) -> List String
+sameAs _ _ (_, fs@(_ :: _)) = fs
+sameAs label native (out, [])
+  | out == native = []
+  | otherwise = [
+    "\{label}: output differs from native — the engines disagree about a value no substring names",
+  ]
+
+-- # The sampled driver
+
+sampleFindings : String -> <Exec, IO> List String
+sampleFindings scratch = match nativeSample scratch
+  (native, []) =>
+    wasmSample scratch native ++ (if deep then evalSample native else [])
+  (_, fs) => fs
+
+nativeSample : String -> <Exec, IO> (String, List String)
+nativeSample scratch =
+  let label = "\{gate} (native sample)"
+  let bin = "\{scratch}/sample"
+  let args = ["build", under sampleDriver, "-o", bin]
+  match (warnedSpawn
+    label
+    "medaka build"
+    (spawn buildSeconds medakaEnv medakaBin args))
+    (_, []) =>
+      graded
+        label
+        witnessArm
+        (spawnFindings label "the built sample" (spawn runSeconds [] bin []))
+    (_, fs) => ("", fs)
+
+wasmSample : String -> String -> <Exec, IO> List String
+wasmSample scratch native =
+  let label = "\{gate} (wasm sample)"
+  let wasm = "\{scratch}/sample.wasm"
+  let args = ["build", "--target", "wasm", under sampleDriver, "-o", wasm]
+  match (warnedSpawn
+    label
+    "medaka build --target wasm"
+    (spawn buildSeconds medakaEnv medakaBin args))
+    (_, []) =>
+      sameAs
+        label
+        native
+        (graded
+          label
+          witnessArm
+          (spawnFindings
+            label
+            "node test/wasm/run.js"
+            (runWasm runSeconds wasm [])))
+    (_, fs) => fs
+
+evalSample : String -> <Exec, IO> List String
+evalSample native =
+  let label = "\{gate} (eval sample)"
+  let args = ["run", under sampleDriver]
+  sameAs
+    label
+    native
+    (graded
+      label
+      witnessArm
+      (warnedSpawn
+        label
+        "medaka run"
+        (spawn interpretedSeconds medakaEnv medakaBin args)))
+
+-- # The full corpus
+
+corpusFindings : String -> <Exec, IO> List String
+corpusFindings scratch = match nativeCorpus scratch
+  (native, []) => if deep then wasmCorpus scratch native else []
+  (_, fs) => fs
+
+nativeCorpus : String -> <Exec, IO> (String, List String)
+nativeCorpus scratch =
+  let label = "\{gate} (native corpus)"
+  let bin = "\{scratch}/corpus"
+  match buildNative label (under fullDriver) bin
+    [] =>
+      graded
+        label
+        corpusArm
+        (spawnFindings
+          label
+          "the built corpus driver"
+          (spawn runSeconds [] bin (map under corpus)))
+    fs => ("", fs)
+
+wasmCorpus : String -> String -> <Exec, IO> List String
+wasmCorpus scratch native =
+  let label = "\{gate} (wasm corpus)"
+  let wasm = "\{scratch}/corpus.wasm"
+  let args = ["build", "--target", "wasm", under fullDriver, "-o", wasm]
+  match (spawnFindings
+    label
+    "medaka build --target wasm"
+    (spawn buildSeconds medakaEnv medakaBin args))
+    (_, []) =>
+      sameAs
+        label
+        native
+        (graded
+          label
+          corpusArm
+          (spawnFindings
+            label
+            "node test/wasm/run.js"
+            (runWasm interpretedSeconds wasm (map under corpus))))
+    (_, fs) => fs
+
+-- # The tests
+
+inScratch : (String -> <Exec, IO> List String) ->
+  <Exec, IO> Result String (List String)
+inScratch check = match freshScratch ()
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok scratch => Ok (reap scratch (check scratch))
+
+test "signing parity: the sampled driver prints the same bytes on native and Wasm (and eval, under SIGNING_DEEP=1), with all four witnesses" =
+  expectNoFindings gate (inScratch sampleFindings)
+
+test "signing parity: the full ECDSA corpus passes natively (and prints the same bytes on Wasm, under SIGNING_DEEP=1)" =
+  expectNoFindings gate (inScratch corpusFindings)

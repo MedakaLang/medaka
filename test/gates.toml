@@ -443,13 +443,13 @@ project = "pds"
 tiers = ["nightly"]
 # 1091.56s measured (the eval interpreter over the representative repo
 # transcript) — over the 900s "medium" bound, so "heavy". Reachability is the
-# `repo-vectors-eval-engine` job in .github/workflows/nightly.yml, named by
-# literal path, which is what clause (a) of diff_compiler_ci_shard_coverage.sh
-# checks for an `other-job` entry.
+# `repo-vectors-eval-engine` job in .github/workflows/nightly.yml, which runs
+# `medaka test --native` on this module: a native spelling clause (a) of
+# diff_compiler_ci_shard_coverage.sh accepts for an `other-job` entry.
 cost = "heavy"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/nightly/repo_vectors_eval_engine.sh"
+kind = "native"
+migration = "done"
+run = "pds/nightly/repo_vectors_eval_engine_test.mdk"
 oracles = []
 sources = []
 corpus = []
@@ -888,9 +888,9 @@ shard = "gates_3"
 project = "pds"
 tiers = ["merge", "nightly/SIGNING_DEEP=1"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/test/signing_parity.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/signing_parity_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
