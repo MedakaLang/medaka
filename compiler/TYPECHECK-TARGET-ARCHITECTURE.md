@@ -310,8 +310,9 @@ Seven steps, in this order, with the dependency reasons measured in the feasibil
    impl to key to — the LLVM emitter mirrored it as `emitDefaultRKey` (deleted, `llvm_emit.mdk`).
    **G1 is now landed tree-wide** (`registerLocalAbs`/`localAbsCandidate`,
    `docs/spec/DICT-SEMANTICS.md` §4.1 G1), and separately (S4) a default body is inferred once
-   against a receiver `self` given (`DefaultBodyOwner`) and specialized per instance by
-   `compiler/types/disposition.mdk`'s table — the RNone exception this bullet described is
+   against a receiver `self` given (`DefaultBodyOwner`); each inheriting row that
+   `compiler/types/disposition.mdk`'s table lists gets the body specialized to its instance,
+   taking the receiver dictionary as a parameter — the RNone exception this bullet described is
    retired by construction, not by taking B-1/G1 as M2's prerequisite (owner decision, SA-10 Q4,
    was answered by landing both independently of M2). Until `eval` has no
    `Route` arm, M2 is half-landed and the `engines` gate is the only witness between
