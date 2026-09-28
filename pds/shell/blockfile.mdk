@@ -68,6 +68,7 @@
    file through it. -}
 
 import bytes as B
+import bytes.{Bytes}
 import hex.{decode, encode}
 import string.{take}
 import fs.{isDir, mkdirAllDurably}
@@ -98,14 +99,13 @@ ensureShard dir cid = mkdirAllDurably (blockShardDir dir cid)
 -- Not `fs.replaceDurably`: `writeFileBytes` has no mode-setting counterpart,
 -- so a block's bytes stay at whatever mode the process umask gives them
 -- (0600 only under `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
-writeOne : String ->
-  Cid ->
-  Array Int ->
-  <FileRead, FileWrite> Result String Unit
+writeOne : String -> Cid -> Bytes -> <FileRead, FileWrite> Result String Unit
 writeOne dir cid bytes = do
   () <- ensureShard dir cid
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
-  () <- writeFileBytes staged bytes
+  -- Door (FFI): `writeFileBytes` takes the runtime's integer array; `toArray`
+  -- is total.
+  () <- writeFileBytes staged (B.toArray bytes)
   () <- fsync staged
   rename staged (blockFilePath dir cid)
 
@@ -113,7 +113,7 @@ writeOne dir cid bytes = do
 -- At most 256 shard names exist, so membership over a list costs less than the
 -- barrier it saves.
 writeRows : String ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   List String ->
   <FileRead, FileWrite> Result String (List String)
 writeRows _ [] shards = Ok shards
@@ -143,7 +143,7 @@ ensureStaging dir = mkdirAllDurably "\{dir}/\{stagingName}"
    carries exactly the bytes the old one did. -}
 export
 blockFileWrite : String ->
-  List (Cid, Array Int) ->
+  List (Cid, Bytes) ->
   <FileRead, FileWrite> Result String Unit
 blockFileWrite dir rows = do
   () <- ensureStaging dir
@@ -192,8 +192,8 @@ fileLeaves shardPath (leaf :: rest) = match isDir "\{shardPath}/\{leaf}"
 
 readLeaves : String ->
   List String ->
-  List (Cid, Array Int) ->
-  <FileRead> Result String (List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  <FileRead> Result String (List (Cid, Bytes))
 readLeaves _ [] acc = Ok acc
 readLeaves shardPath (leaf :: rest) acc =
   let path = "\{shardPath}/\{leaf}"
@@ -201,12 +201,18 @@ readLeaves shardPath (leaf :: rest) acc =
     Err message => Err message
     Ok cid => match readFileBytes path
       Err message => Err "blockfile: \{path}: unreadable block file: \{message}"
-      Ok bytes => readLeaves shardPath rest ((cid, bytes) :: acc)
+      -- Door (FFI), checked: `readFileBytes` answers the runtime's integer
+      -- array. An element outside 0..255 is refused here rather than
+      -- truncated into bytes that could still match the CID.
+      Ok raw => match B.fromArray raw
+        None =>
+          Err "blockfile: \{path}: block element outside byte range 0..255"
+        Some bytes => readLeaves shardPath rest ((cid, bytes) :: acc)
 
 readShards : String ->
   List String ->
-  List (Cid, Array Int) ->
-  <FileRead> Result String (List (Cid, Array Int))
+  List (Cid, Bytes) ->
+  <FileRead> Result String (List (Cid, Bytes))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
   let path = "\{dir}/\{shard}"
@@ -234,7 +240,7 @@ readShards dir (shard :: rest) acc =
    directory that IS named like a shard and cannot be listed still fails
    loudly, because that is one of ours. -}
 export
-blockFileRead : String -> <FileRead> Result String (List (Cid, Array Int))
+blockFileRead : String -> <FileRead> Result String (List (Cid, Bytes))
 blockFileRead dir = match listDir dir
   Err message => Err "blockfile: unreadable block directory: \{message}"
   Ok shards => readShards dir shards []

@@ -19,7 +19,6 @@
    this call reaches asks for. -}
 
 import async.{Async}
-import bytes as B
 import bytes.{Bytes, encodeUtf8}
 import json.{jObject, Json(..), stringify}
 import lib.httpclient.{makeRequestHeader, serializeRequest}
@@ -41,18 +40,15 @@ requestCrawlBody : String -> Bytes
 requestCrawlBody hostname =
   encodeUtf8 (stringify (jObject [("hostname", JString hostname)]))
 
-requestCrawlBytes : RelayTarget -> String -> Result String (Array Int)
+requestCrawlBytes : RelayTarget -> String -> Result String Bytes
 requestCrawlBytes target hostname = do
   contentType <- makeRequestHeader "content-type" "application/json"
-  -- Door: `egressConnect` still sends `Array Int`; `toArray` is total.
-  map
-    B.toArray
-    (serializeRequest
-      "POST"
-      "/xrpc/com.atproto.sync.requestCrawl"
-      "\{egressAddress}:\{intToString (relayPort target)}"
-      [contentType]
-      (requestCrawlBody hostname))
+  serializeRequest
+    "POST"
+    "/xrpc/com.atproto.sync.requestCrawl"
+    "\{egressAddress}:\{intToString (relayPort target)}"
+    [contentType]
+    (requestCrawlBody hostname)
 
 {- | Announce `hostname` to `target`. `Err` covers every way the call can fail
    to reach or be answered by the relay — connect failure, a timeout, an

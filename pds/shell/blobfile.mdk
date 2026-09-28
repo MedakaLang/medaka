@@ -99,6 +99,8 @@
    signatures carry no `Repo` and no `SecretKey`, so no signing key can reach a
    file through it. -}
 
+import bytes as B
+import bytes.{Bytes}
 import hex.{decode, encode}
 import string.{endsWith, stripSuffix, take}
 import fs.{isDir, mkdirAllDurably}
@@ -135,8 +137,8 @@ blobFilePath dir cid = "\{blobShardDir dir cid}/\{cidKey cid}"
 
 -- The pure layer already refused an oversize blob, so reaching this is a bug
 -- in the caller rather than a rejected upload; it fails rather than writing.
-admitted : Array Int -> Result String Unit
-admitted bytes = match checkBlobBytes (arrayLength bytes)
+admitted : Bytes -> Result String Unit
+admitted bytes = match checkBlobBytes (B.length bytes)
   Err message =>
     Err
       "blobfile: refusing to persist a blob pds/lib/blob.mdk would not have admitted: \{message}"
@@ -158,7 +160,7 @@ ensureShard dir cid = mkdirAllDurably (blobShardDir dir cid)
 writeOne : String ->
   Cid ->
   String ->
-  Array Int ->
+  Bytes ->
   <FileRead, FileWrite> Result String Unit
 writeOne dir cid mimeType bytes = do
   () <- admitted bytes
@@ -168,7 +170,9 @@ writeOne dir cid mimeType bytes = do
   () <- fsync stagedMime
   () <- rename stagedMime "\{blobFilePath dir cid}\{mimeSuffix}"
   let staged = "\{blobDir dir}/\{stagingName}/\{cidKey cid}"
-  () <- writeFileBytes staged bytes
+  -- Door (FFI): `writeFileBytes` takes the runtime's integer array; `toArray`
+  -- is total.
+  () <- writeFileBytes staged (B.toArray bytes)
   () <- fsync staged
   () <- rename staged (blobFilePath dir cid)
   fsync (blobShardDir dir cid)
@@ -181,7 +185,7 @@ ensureStaging : String -> <FileRead, FileWrite> Result String Unit
 ensureStaging dir = mkdirAllDurably "\{blobDir dir}/\{stagingName}"
 
 writeRows : String ->
-  List (Cid, String, Array Int) ->
+  List (Cid, String, Bytes) ->
   <FileRead, FileWrite> Result String Unit
 writeRows _ [] = Ok ()
 writeRows dir ((cid, mimeType, bytes) :: rest) =
@@ -195,7 +199,7 @@ writeRows dir ((cid, mimeType, bytes) :: rest) =
    already-stored bytes be corrected by a later upload. -}
 export
 blobFileWrite : String ->
-  List (Cid, String, Array Int) ->
+  List (Cid, String, Bytes) ->
   <FileRead, FileWrite> Result String Unit
 blobFileWrite dir rows = do
   () <- ensureStaging dir
@@ -219,8 +223,8 @@ sidecarOk path leaf = match stripSuffix mimeSuffix leaf
 
 readLeaves : String ->
   List String ->
-  List (Cid, String, Array Int) ->
-  <FileRead> Result String (List (Cid, String, Array Int))
+  List (Cid, String, Bytes) ->
+  <FileRead> Result String (List (Cid, String, Bytes))
 readLeaves _ [] acc = Ok acc
 readLeaves shardPath (leaf :: rest) acc =
   let path = "\{shardPath}/\{leaf}"
@@ -236,12 +240,19 @@ readLeaves shardPath (leaf :: rest) acc =
       Err _ => readLeaves shardPath rest acc
       Ok mimeType => match readFileBytes path
         Err message => Err "blobfile: \{path}: unreadable blob file: \{message}"
-        Ok bytes => readLeaves shardPath rest ((cid, mimeType, bytes) :: acc)
+        -- Door (FFI), checked: `readFileBytes` answers the runtime's integer
+        -- array. An element outside 0..255 is refused here rather than
+        -- truncated into bytes that could still match the CID.
+        Ok raw => match B.fromArray raw
+          None =>
+            Err "blobfile: \{path}: blob element outside byte range 0..255"
+          Some bytes =>
+            readLeaves shardPath rest ((cid, mimeType, bytes) :: acc)
 
 readShards : String ->
   List String ->
-  List (Cid, String, Array Int) ->
-  <FileRead> Result String (List (Cid, String, Array Int))
+  List (Cid, String, Bytes) ->
+  <FileRead> Result String (List (Cid, String, Bytes))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
   let path = "\{blobDir dir}/\{shard}"
@@ -269,8 +280,7 @@ readShards dir (shard :: rest) acc =
    is what proves each row's bytes hash to that CID, and a tampered file fails
    there. -}
 export
-blobFileRead : String ->
-  <FileRead> Result String (List (Cid, String, Array Int))
+blobFileRead : String -> <FileRead> Result String (List (Cid, String, Bytes))
 blobFileRead dir =
   if not (fileExists (blobDir dir)) then
     Ok []

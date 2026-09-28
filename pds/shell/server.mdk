@@ -195,7 +195,7 @@ import time.{
 }
 import bytebuilder.{Builder, emitBytes, builderParts, newBuilder}
 import bytes as B
-import bytes.{Bytes, fromArray, toArray}
+import bytes.{Bytes}
 import mut_bytes as MB
 import mut_bytes.{MutBytes}
 
@@ -269,7 +269,7 @@ lingerDrainReads = 128
 requestNonceBytes : Int
 requestNonceBytes = 16
 
--- Door, masked: `osEntropyBytes` is the runtime's integer-array extern, and
+-- Door (FFI), masked: `osEntropyBytes` is the runtime's integer-array extern, and
 -- every element it returns is a byte by construction.
 requestNonce : Unit -> <Rand> Bytes
 requestNonce () = B.fromArrayAssumeByteDomain (osEntropyBytes requestNonceBytes)
@@ -946,7 +946,7 @@ blobWriteOwed before after cid =
 blobRowsOwed : Store ->
   Store ->
   List Cid ->
-  Result String (List (Cid, String, Array Int))
+  Result String (List (Cid, String, Bytes))
 blobRowsOwed _ _ [] = Ok []
 blobRowsOwed before after (cid :: rest) =
   if blobWriteOwed before after cid then match storeGet cid after
@@ -955,7 +955,7 @@ blobRowsOwed before after (cid :: rest) =
         "blob \{cidToString cid} is listed by the blob half but holds no bytes"
     Some bytes => do
       tail <- blobRowsOwed before after rest
-      Ok ((cid, declaredMimeType after cid, toArray bytes) :: tail)
+      Ok ((cid, declaredMimeType after cid, bytes) :: tail)
   else
     blobRowsOwed before after rest
 
@@ -977,12 +977,7 @@ headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
 persistRepo : String -> Repo -> <FileRead, FileWrite> Result String Unit
 persistRepo dir repo = do
   blocks <- repoExportBlocks repo
-  -- Door: `lib.repo` exports `Bytes` blocks and `persistSave` writes
-  -- `Array Int` rows; `toArray` is total.
-  persistSave
-    dir
-    (repoCommitCid (repoLatestCommit repo))
-    (map ((cid, bytes) => (cid, toArray bytes)) blocks)
+  persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
 
 -- ── rate limiting ───────────────────────────────────────────────────────────
 
@@ -1658,7 +1653,7 @@ retireConnection active slot census buf =
    live. A byte costs a byte here, not a tagged 64-bit word. Appending a
    chunk (`readBufferAppend`) copies only the chunk, doubling the backing
    store when it doesn't fit — a request delivered in K reads costs
-   O(bytes), not O(bytes × K), which `buf ++ bytes` on a plain `Array Int`
+   O(bytes), not O(bytes × K), which `buf ++ bytes` on a plain `Bytes`
    would cost because `++` copies its whole left operand on every call. The
    doubling itself is `bytebuilder.emitBytes`'s: this module does no
    capacity arithmetic of its own.
@@ -1759,33 +1754,15 @@ readBufferBacking (ReadBuffer b _) =
 
 {- | Appends `bytes` in place. When the backing store doesn't fit them, it is
    replaced by a doubled one first, copying the live prefix once (`blit`);
-   the append itself is one more `blit`, of exactly `arrayLength bytes`
+   the append itself is one more `blit`, of exactly `B.length bytes`
    bytes. Neither copy is proportional to bytes already buffered from
    earlier reads — `emitBytes` grows at most once per call, to the
    smallest doubling that holds the result, however many capacity classes a
-   single delivered chunk spans.
-
-   Packing `bytes` into a `Bytes` first is the one copy this shape adds, and
-   it goes through the CHECKED door: an element outside `0..255` aborts
-   rather than being masked to its low eight bits, so no caller can put a
-   byte on the wire that it did not supply. The socket read loop pays
-   neither the copy nor the scan: its chunk arrives packed and appends
-   through `readBufferAppendBytes`. The abort is graded out of process by
-   `pds/test/trust_boundary_guards_test.mdk`'s `readbuffer-*` cells. -}
+   single delivered chunk spans. A chunk off the socket arrives packed, so
+   `readMore` appends it with no further copy. -}
 export
-readBufferAppend : Array Int -> ReadBuffer -> Unit
-readBufferAppend bytes (ReadBuffer b _) =
-  emitBytes
-    (optionOrPanic
-      "readBufferAppend: every element must be a byte in 0..255"
-      (fromArray bytes))
-    b
-
--- | Appends an already-packed chunk, skipping the packing copy
--- `readBufferAppend` performs. This is `readMore`'s door: a chunk off the
--- socket arrives packed.
-readBufferAppendBytes : Bytes -> ReadBuffer -> Unit
-readBufferAppendBytes bytes (ReadBuffer b _) = emitBytes bytes b
+readBufferAppend : Bytes -> ReadBuffer -> Unit
+readBufferAppend bytes (ReadBuffer b _) = emitBytes bytes b
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
@@ -2365,7 +2342,7 @@ readMore server dir storeRef limiterRef census serving conn slot deadlines buf s
           if B.length bytes == 0 then
             deferPure (endOfStream buf)
           else
-            let () = readBufferAppendBytes bytes buf
+            let () = readBufferAppend bytes buf
             frameLoop
               server
               dir
@@ -2987,6 +2964,8 @@ loginCheckFor : Server ->
   <Rand> Option LoginCheck
 loginCheckFor _ _ (Err _) = None
 loginCheckFor server storeRef (Ok request) =
+  -- Door (FFI), masked: the salt crosses from `osEntropyBytes` exactly as
+  -- `requestNonce`'s bytes do.
   classifyLogin
     server
     (B.fromArrayAssumeByteDomain (osEntropyBytes saltBytes))

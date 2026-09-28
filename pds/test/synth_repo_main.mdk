@@ -21,9 +21,9 @@
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
    using only exported primitives. -}
 
-import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, encodeUtf8}
 import hex.{decode}
-import string.{padLeft, toInt, toUtf8}
+import string.{padLeft, toInt}
 import lib.blob.{blobCid}
 import lib.cid.{Cid, cidForDagCbor, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
@@ -178,9 +178,9 @@ signedCommit did secret rev dataCid =
 
 -- ── blobs ───────────────────────────────────────────────────────────────────
 
-blobBytesFor : Int -> Int -> Array Int
+blobBytesFor : Int -> Int -> Bytes
 blobBytesFor seed j =
-  toUtf8
+  encodeUtf8
     "synth blob seed=\{intToString seed} idx=\{intToString j} payload 0123456789"
 
 mimeFor : Int -> String
@@ -188,17 +188,17 @@ mimeFor j = if isEven j then "text/plain" else "application/octet-stream"
 
 buildBlobRowsGo : Int ->
   Int ->
-  List (Cid, String, Array Int) ->
-  List (Cid, String, Array Int)
+  List (Cid, String, Bytes) ->
+  List (Cid, String, Bytes)
 buildBlobRowsGo seed j acc =
   if j < 0 then
     acc
   else
     let bytes = blobBytesFor seed j
-    let cid = blobCid (fromArrayAssumeByteDomain bytes)
+    let cid = blobCid bytes
     buildBlobRowsGo seed (j - 1) ((cid, mimeFor j, bytes) :: acc)
 
-buildBlobRows : Int -> Int -> List (Cid, String, Array Int)
+buildBlobRows : Int -> Int -> List (Cid, String, Bytes)
 buildBlobRows seed blobCount = buildBlobRowsGo seed (blobCount - 1) []
 
 -- ── driver ───────────────────────────────────────────────────────────────────
@@ -217,9 +217,7 @@ runBuild shape dir count blobCount seed =
     signedCommit corpusDid corpusSecret corpusRev dataCid
   let allBlocks =
     (commitCid, signed) :: mstNodeBlocks tree ++ recordBlocksOf rows
-  -- `persistSave` writes `Array Int` rows; `toArray` is total.
-  let persisted = map ((cid, bytes) => (cid, toArray bytes)) allBlocks
-  match persistSave dir commitCid persisted
+  match persistSave dir commitCid allBlocks
     Err message => panic "synth_repo: persist failed: \{message}"
     Ok () =>
       let blobRows = buildBlobRows seed blobCount

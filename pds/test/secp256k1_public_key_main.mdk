@@ -11,7 +11,7 @@
    keys in the same order, so together they grade a secret's whole derivation.
    Provenance: `pds/test/VECTOR-PROVENANCE.txt`. -}
 
-import bytes.{Bytes, fromArray, fromU8Array, toArray}
+import bytes.{Bytes, fromU8Array}
 import mut_bytes as MB
 import u8 as U8
 import hex.{decode}
@@ -150,16 +150,12 @@ hexBlock : String -> Bytes
 hexBlock text =
   resultOrPanic "public-key driver: corpus field is not hex" (decode text)
 
--- The `Array Int` form `shell.keygen` still takes.
-hexBytes : String -> Array Int
-hexBytes text = toArray (hexBlock text)
-
 {- | Every official row, graded through the exact composition `pds keygen`
    prints: the secret's compressed public key and the `did:key` naming it. -}
 keygenGradesRow : (String, String) -> (String, String) -> Bool
 keygenGradesRow (secretHex, publicHex) (didPublicHex, did) =
   didPublicHex == publicHex
-    && (match keygenSummary (hexBytes secretHex)
+    && (match keygenSummary (hexBlock secretHex)
       Err _ => False
       Ok (derivedPublic, derivedDid) =>
         derivedPublic == publicHex && derivedDid == did)
@@ -173,18 +169,13 @@ keygenGradesCorpora muls dids =
 -- A generated key is one this program would also accept back as `--key`, and
 -- its printed public key is the one the ladder derives from the scalar it
 -- wrote. Nothing here renders the scalar.
-freshKeyRoundTrips : Array Int -> Bool
-freshKeyRoundTrips bytes =
-  let block =
-    optionOrPanic
-      "public-key driver: keygen produced a non-byte"
-      (fromArray bytes)
-  match secretKeyFromBytes block
+freshKeyRoundTrips : Bytes -> Bool
+freshKeyRoundTrips bytes = match secretKeyFromBytes bytes
+  Err _ => False
+  Ok secret => match keygenSummary bytes
     Err _ => False
-    Ok secret => match keygenSummary bytes
-      Err _ => False
-      Ok (publicHex, _) =>
-        publicKeyCompressed (publicKeyForSecret secret) == hexBlock publicHex
+    Ok (publicHex, _) =>
+      publicKeyCompressed (publicKeyForSecret secret) == hexBlock publicHex
 
 assertion : String -> Bool -> <IO> Int
 assertion label passed =
@@ -256,8 +247,8 @@ main =
   let a9 =
     assertion
       "keygen-admits-d-only-in-1-to-n-minus-1"
-      (isErr (keygenSummary (arrayMake 32 0))
-        && isErr (keygenSummary (hexBytes (groupOrderHex pointRows))))
+      (isErr (keygenSummary (fromU8Array (arrayMake 32 0)))
+        && isErr (keygenSummary (hexBlock (groupOrderHex pointRows))))
   let a10 = match keygenSecretBytes 8
     Err _ => assertion "keygen-fresh-key-round-trips" False
     Ok fresh =>
