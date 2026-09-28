@@ -2523,6 +2523,39 @@ table = [
     pinned = "[1]\n[]\n",
     codes = [],
   },
+  Row {
+    entry = "impl-head-repeated-var-cycle.mdk",
+    label =
+      "§3 the joint unification of a repeated head variable's bindings has an occurs check: `Same (Int, Int) (List Int, Int)` needs `x = List x` and is refused, where binding the cycle looped forever",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "impl-head-repeated-var-cycle-control.mdk",
+    label =
+      "control for the cycle row: both bindings are `(x, List x)`. Hand-derived: `same` returns \"same\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "same\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-heads-cycle-no-overlap.mdk",
+    label =
+      "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "one\ntwo\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -2534,7 +2567,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 218
+tableRows = 221
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

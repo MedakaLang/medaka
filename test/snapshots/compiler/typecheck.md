@@ -1,5 +1,5 @@
 # META
-source_lines=51049
+source_lines=51063
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -26501,15 +26501,29 @@ cohGoR _ (TEff _) (TEff _) = True
 cohGoR _ (TAuth _) (TAuth _) = True
 -- A qualifier is not part of a head's shape: coherence compares the value
 -- types under it.
-cohGoR subst (TQual a _) b = cohGoR subst (normalize a) b
-cohGoR subst a (TQual b _) = cohGoR subst a (normalize b)
+cohGoR subst (TQual a _) b = cohGo subst a b
+cohGoR subst a (TQual b _) = cohGo subst a b
 cohGoR _ _ _ = False
 
 -- bind id := m in the wildcard subst and return True
+-- A variable never binds to a type that contains it: `t := List t` has no
+-- finite solution, so the two sides share no instance, and binding it would
+-- send every later comparison through `t` round the cycle forever.
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohBind subst id m =
-  subst := (id, m) :: !subst
-  True
+  if cohOccurs subst id m then
+    False
+  else
+    subst := (id, m) :: !subst
+    True
+
+cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
+cohOccurs subst id m = match cohResolve subst m
+  TVar cell => tyvarId cell == id
+  TApp f a => cohOccurs subst id f || cohOccurs subst id a
+  TFun a _ b => cohOccurs subst id a || cohOccurs subst id b
+  TQual a _ => cohOccurs subst id a
+  _ => False
 
 -- ── shared one-sided matcher core (#156 S1) ────────────────────────────────
 -- cohSubsumes (Mono-space), tySubsumes (AST-space) and matchTyMono (AST head-
@@ -55733,11 +55747,13 @@ isTyAuth _ = False
 (DFunDef false "cohGoR" ((PVar "subst") (PCon "TFun" (PVar "a1") PWild (PVar "b1")) (PCon "TFun" (PVar "a2") PWild (PVar "b2"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "a1")) (EVar "a2")) (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "b1")) (EVar "b2"))))
 (DFunDef false "cohGoR" (PWild (PCon "TEff" PWild) (PCon "TEff" PWild)) (EVar "True"))
 (DFunDef false "cohGoR" (PWild (PCon "TAuth" PWild) (PCon "TAuth" PWild)) (EVar "True"))
-(DFunDef false "cohGoR" ((PVar "subst") (PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EApp (EVar "cohGoR") (EVar "subst")) (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
-(DFunDef false "cohGoR" ((PVar "subst") (PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "cohGoR") (EVar "subst")) (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
+(DFunDef false "cohGoR" ((PVar "subst") (PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "a")) (EVar "b")))
+(DFunDef false "cohGoR" ((PVar "subst") (PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "a")) (EVar "b")))
 (DFunDef false "cohGoR" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "cohBind" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool")))))
-(DFunDef false "cohBind" ((PVar "subst") (PVar "id") (PVar "m")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "subst")) (EBinOp "::" (ETuple (EVar "id") (EVar "m")) (EUnOp "!" (EVar "subst"))))) (DoExpr (EVar "True"))))
+(DFunDef false "cohBind" ((PVar "subst") (PVar "id") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "m")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "subst")) (EBinOp "::" (ETuple (EVar "id") (EVar "m")) (EUnOp "!" (EVar "subst"))))) (DoExpr (EVar "True")))))
+(DTypeSig false "cohOccurs" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "cohOccurs" ((PVar "subst") (PVar "id") (PVar "m")) (EMatch (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id"))) (arm (PCon "TApp" (PVar "f") (PVar "a")) () (EBinOp "||" (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "f")) (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "a")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "a")) (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "b")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "a"))) (arm PWild () (EVar "False"))))
 (DData Private "MStep" ("k" "g" "s") ((variant "MVar" (ConPos (TyVar "k"))) (variant "MKids" (ConPos (TyApp (TyCon "List") (TyTuple (TyVar "g") (TyVar "s"))))) (variant "MOk" (ConPos)) (variant "MFail" (ConPos))) ())
 (DTypeSig false "matchOneSided" (TyFun (TyFun (TyVar "g") (TyFun (TyVar "s") (TyApp (TyApp (TyApp (TyCon "MStep") (TyVar "k")) (TyVar "g")) (TyVar "s")))) (TyFun (TyFun (TyVar "k") (TyFun (TyVar "k") (TyCon "Bool"))) (TyFun (TyFun (TyVar "s") (TyFun (TyVar "s") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "g") (TyVar "s"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "s"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "s"))))))))))
 (DFunDef false "matchOneSided" (PWild PWild PWild (PList) (PVar "acc")) (EApp (EVar "Some") (EVar "acc")))
@@ -63904,11 +63920,13 @@ isTyAuth _ = False
 (DFunDef false "cohGoR" ((PVar "subst") (PCon "TFun" (PVar "a1") PWild (PVar "b1")) (PCon "TFun" (PVar "a2") PWild (PVar "b2"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "a1")) (EVar "a2")) (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "b1")) (EVar "b2"))))
 (DFunDef false "cohGoR" (PWild (PCon "TEff" PWild) (PCon "TEff" PWild)) (EVar "True"))
 (DFunDef false "cohGoR" (PWild (PCon "TAuth" PWild) (PCon "TAuth" PWild)) (EVar "True"))
-(DFunDef false "cohGoR" ((PVar "subst") (PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EApp (EVar "cohGoR") (EVar "subst")) (EApp (EVar "normalize") (EVar "a"))) (EVar "b")))
-(DFunDef false "cohGoR" ((PVar "subst") (PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "cohGoR") (EVar "subst")) (EVar "a")) (EApp (EVar "normalize") (EVar "b"))))
+(DFunDef false "cohGoR" ((PVar "subst") (PCon "TQual" (PVar "a") PWild) (PVar "b")) (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "a")) (EVar "b")))
+(DFunDef false "cohGoR" ((PVar "subst") (PVar "a") (PCon "TQual" (PVar "b") PWild)) (EApp (EApp (EApp (EVar "cohGo") (EVar "subst")) (EVar "a")) (EVar "b")))
 (DFunDef false "cohGoR" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "cohBind" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool")))))
-(DFunDef false "cohBind" ((PVar "subst") (PVar "id") (PVar "m")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "subst")) (EBinOp "::" (ETuple (EVar "id") (EVar "m")) (EUnOp "!" (EVar "subst"))))) (DoExpr (EVar "True"))))
+(DFunDef false "cohBind" ((PVar "subst") (PVar "id") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "m")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "subst")) (EBinOp "::" (ETuple (EVar "id") (EVar "m")) (EUnOp "!" (EVar "subst"))))) (DoExpr (EVar "True")))))
+(DTypeSig false "cohOccurs" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "cohOccurs" ((PVar "subst") (PVar "id") (PVar "m")) (EMatch (EApp (EApp (EVar "cohResolve") (EVar "subst")) (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id"))) (arm (PCon "TApp" (PVar "f") (PVar "a")) () (EBinOp "||" (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "f")) (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "a")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "a")) (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "b")))) (arm (PCon "TQual" (PVar "a") PWild) () (EApp (EApp (EApp (EVar "cohOccurs") (EVar "subst")) (EVar "id")) (EVar "a"))) (arm PWild () (EVar "False"))))
 (DData Private "MStep" ("k" "g" "s") ((variant "MVar" (ConPos (TyVar "k"))) (variant "MKids" (ConPos (TyApp (TyCon "List") (TyTuple (TyVar "g") (TyVar "s"))))) (variant "MOk" (ConPos)) (variant "MFail" (ConPos))) ())
 (DTypeSig false "matchOneSided" (TyFun (TyFun (TyVar "g") (TyFun (TyVar "s") (TyApp (TyApp (TyApp (TyCon "MStep") (TyVar "k")) (TyVar "g")) (TyVar "s")))) (TyFun (TyFun (TyVar "k") (TyFun (TyVar "k") (TyCon "Bool"))) (TyFun (TyFun (TyVar "s") (TyFun (TyVar "s") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "g") (TyVar "s"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "s"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "s"))))))))))
 (DFunDef false "matchOneSided" (PWild PWild PWild (PList) (PVar "acc")) (EApp (EVar "Some") (EVar "acc")))

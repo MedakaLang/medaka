@@ -26497,15 +26497,29 @@ cohGoR _ (TEff _) (TEff _) = True
 cohGoR _ (TAuth _) (TAuth _) = True
 -- A qualifier is not part of a head's shape: coherence compares the value
 -- types under it.
-cohGoR subst (TQual a _) b = cohGoR subst (normalize a) b
-cohGoR subst a (TQual b _) = cohGoR subst a (normalize b)
+cohGoR subst (TQual a _) b = cohGo subst a b
+cohGoR subst a (TQual b _) = cohGo subst a b
 cohGoR _ _ _ = False
 
 -- bind id := m in the wildcard subst and return True
+-- A variable never binds to a type that contains it: `t := List t` has no
+-- finite solution, so the two sides share no instance, and binding it would
+-- send every later comparison through `t` round the cycle forever.
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohBind subst id m =
-  subst := (id, m) :: !subst
-  True
+  if cohOccurs subst id m then
+    False
+  else
+    subst := (id, m) :: !subst
+    True
+
+cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
+cohOccurs subst id m = match cohResolve subst m
+  TVar cell => tyvarId cell == id
+  TApp f a => cohOccurs subst id f || cohOccurs subst id a
+  TFun a _ b => cohOccurs subst id a || cohOccurs subst id b
+  TQual a _ => cohOccurs subst id a
+  _ => False
 
 -- ── shared one-sided matcher core (#156 S1) ────────────────────────────────
 -- cohSubsumes (Mono-space), tySubsumes (AST-space) and matchTyMono (AST head-

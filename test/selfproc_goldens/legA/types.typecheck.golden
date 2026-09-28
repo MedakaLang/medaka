@@ -524,6 +524,7 @@ cohIncomparableMsg : String -> List Mono -> List Mono -> String -> String -> Str
 cohIsCrossModule : String -> String -> Bool
 cohKeepFirst : Option a -> Option a -> Option a
 cohMutuallySubsumes : List Mono -> List Mono -> Bool
+cohOccurs : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohOntoFull : Option String -> Option String -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag)
 cohOverlap : List Mono -> List Mono -> Bool
 cohOverlapGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
