@@ -425,11 +425,11 @@ createRecordBody did record =
 
 {- | A batch's rkey-less creates and the NEXT rkey-less `createRecord` draw
    their record keys from the same TID sequence the commit revision comes
-   from, and nothing here has a clock: every key is a pure function of the
-   repository's last commit. So a batch that mints keys past its own commit
-   revision leaves the next `createRecord` proposing a key the batch already
-   consumed -- refused as a duplicate create, and refused identically on every
-   retry. The commit revision has to clear every key the batch minted. -}
+   from, and this driver's clock is fixed: every key is a function of the
+   repository's last commit alone. So a batch that mints keys past its own
+   commit revision leaves the next `createRecord` proposing a key the batch
+   already consumed -- refused as a duplicate create, and refused on every
+   retry until the clock passes it. The commit revision has to clear them. -}
 autoRkeyCell : String -> Server -> Store -> Json -> <IO> Int
 autoRkeyCell did server store record =
   let (afterBatch, batchBytes) =

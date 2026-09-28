@@ -45,26 +45,40 @@
    a repository-layer refusal) returns the identical input `Store`, so a failed
    request cannot leave observable state behind.
 
-   ── WHERE THE REVISION COMES FROM (no clock is in scope) ────────────────────
+   ── Where the revision comes from ──────────────────────────────────────────
 
    `repoCreate`/`repoUpdate`/`repoDelete` each require an explicit strictly
-   monotonic `Tid`, but the pinned lexicon input has no `rev` field for a
-   caller to supply one and this module has no clock. The revision is
-   therefore derived from the repository's OWN latest commit:
+   monotonic `Tid`, and the pinned lexicon input has no `rev` field for a
+   caller to supply one. Nothing in `pds/lib` reads a clock, so the shell's
+   instant arrives as `RequestContext`'s `nowSeconds`, and the revision is
+   proposed from it:
 
-       next = tidNext prior (tidMicros prior) (tidClockId prior)
+       next = tidNext prior (nowSeconds * 1000000) (tidClockId prior)
 
-   `tidNext` advances the prior timestamp by exactly one microsecond when the
-   proposal is not newer, and the proposal here is the prior timestamp itself,
-   so every write advances the repository revision by one microsecond and
-   keeps the clock id the repository was initialized with. The whole sequence
-   is a pure function of the initial revision, which reproduces the Phase-1
-   reference transcript's revisions exactly (`3ke6kg3wk222b` initialized, then
-   `…232b`, `…242b`, `…252b`, `…262b`). See `pds/README.md`.
+   `tidNext` takes the proposal when it is newer than the latest commit's
+   revision and otherwise advances that revision by one microsecond, so the
+   revision is strictly increasing whatever the clock does: across a restart,
+   across a clock that steps backwards, and across several writes in one
+   second. It keeps the clock id the repository was initialized with. A
+   repository whose revision was minted by any earlier rule is followed by a
+   clock-based one as soon as the clock is past it.
 
-   `createRecord` with no `rkey` uses that same derived revision's canonical
-   TID spelling as the record key, which is what a real PDS does with its
-   clock and is deterministic here for the same reason. -}
+   The proposal is the start of the request's second, so a revision runs
+   ahead of the clock by at most the number of revisions and record keys
+   already minted in that second, in microseconds. A relay refuses a commit
+   whose revision is in the future, which is why the proposal is not rounded
+   up. Once the clock has stepped back behind the latest commit, the
+   one-microsecond successors lead it until it catches up.
+
+   The Phase-1 reference transcript is replayed at the instant its repository
+   was initialized (`3ke6kg3wk222b`, micros `1700000000000000`), so no
+   proposal there is newer and its revisions are the successors `…232b`,
+   `…242b`, `…252b`, `…262b` exactly. See `pds/README.md`.
+
+   `createRecord` with no `rkey` uses its commit revision's canonical TID
+   spelling as the record key, and an `applyWrites` batch keys each such
+   create by the next successor (`autoRkey`), so every minted key is unique
+   and no newer than the revision that commits it. -}
 
 import http.{
   Header,
@@ -490,11 +504,18 @@ recordPath collection rkey = encodeUtf8 "\{collection}/\{rkey}"
 
 -- ── revision derivation ─────────────────────────────────────────────────────
 
+{- | The successor of `prior` for a proposed timestamp: the proposal when it
+   is newer, `prior` plus one microsecond otherwise. The clock id is always
+   `prior`'s, so a repository keeps the one it was initialized with. -}
+tidAfter : Tid -> Int -> Result Response Tid
+tidAfter prior proposedMicros =
+  match tidNext prior proposedMicros (tidClockId prior)
+    Err message =>
+      Err (invalidRequest "Repository revision cannot advance: \{message}")
+    Ok rev => Ok rev
+
 advanceTid : Tid -> Result Response Tid
-advanceTid prior = match tidNext prior (tidMicros prior) (tidClockId prior)
-  Err message =>
-    Err (invalidRequest "Repository revision cannot advance: \{message}")
-  Ok rev => Ok rev
+advanceTid prior = tidAfter prior (tidMicros prior)
 
 {- | `advanceTid` applied `n` times. `n <= 0` is the identity, so a caller
    that minted nothing keeps the revision it started from. -}
@@ -506,8 +527,15 @@ advanceTidBy rev n =
     next <- advanceTid rev
     advanceTidBy next (n - 1)
 
-nextRevision : Repo -> Result Response Tid
-nextRevision repo = advanceTid (repoCommitTid (repoLatestCommit repo))
+{- | The revision a write commits at, proposed from the request's clock at
+   the start of its second. It never runs ahead of that clock by more than
+   the writes already committed in the same second, in microseconds, unless
+   the clock has stepped back behind the latest commit. -}
+nextRevision : RequestContext -> Repo -> Result Response Tid
+nextRevision context repo =
+  tidAfter
+    (repoCommitTid (repoLatestCommit repo))
+    (context.nowSeconds * 1000000)
 
 -- ── compare-and-swap ────────────────────────────────────────────────────────
 
@@ -610,15 +638,19 @@ admitBlobRef (Ok ref) = Ok ref
 
 -- ── the write endpoints ─────────────────────────────────────────────────────
 
-applyCreateRecord : Account -> Store -> Json -> Result Response (Repo, Json)
-applyCreateRecord account store body = do
+applyCreateRecord : Account ->
+  RequestContext ->
+  Store ->
+  Json ->
+  Result Response (Repo, Json)
+applyCreateRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
   () <- admitValidateFlag body
   collection <- requiredString "collection" body
   record <- requireRecord body
-  rev <- nextRevision repo
+  rev <- nextRevision context repo
   proposedRkey <- optionalString "rkey" body
   let rkey = match proposedRkey
     None => tidToString rev
@@ -638,8 +670,12 @@ applyCreateRecord account store body = do
       (repoMutationCommit mutation),
   )
 
-applyPutRecord : Account -> Store -> Json -> Result Response (Repo, Json)
-applyPutRecord account store body = do
+applyPutRecord : Account ->
+  RequestContext ->
+  Store ->
+  Json ->
+  Result Response (Repo, Json)
+applyPutRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
@@ -647,7 +683,7 @@ applyPutRecord account store body = do
   collection <- requiredString "collection" body
   rkey <- requiredString "rkey" body
   record <- requireRecord body
-  rev <- nextRevision repo
+  rev <- nextRevision context repo
   let path = recordPath collection rkey
   () <- checkSwapCommit body repo
   () <- checkSwapRecord body path repo
@@ -681,8 +717,12 @@ applyPutRecord account store body = do
    malformed collection or record key is still rejected; and an explicit
    `swapRecord` CID still fails `InvalidSwap` against a missing record, because
    that caller asserted the record WAS there. -}
-applyDeleteRecord : Account -> Store -> Json -> Result Response (Repo, Json)
-applyDeleteRecord account store body = do
+applyDeleteRecord : Account ->
+  RequestContext ->
+  Store ->
+  Json ->
+  Result Response (Repo, Json)
+applyDeleteRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
@@ -695,7 +735,7 @@ applyDeleteRecord account store body = do
   match existing
     None => Ok (repo, deleteOutput (repoLatestCommit repo))
     Some _ => do
-      rev <- nextRevision repo
+      rev <- nextRevision context repo
       mutation <- admitMutation (repoDelete path rev repo)
       Ok (
         repoMutationState mutation,
@@ -828,17 +868,20 @@ batchElements did rev elements i auto =
    would leave keys the batch already consumed ahead of the repository's
    revision — and the next `createRecord` with no `rkey`, which derives its
    key from that revision, would propose one of them again and be refused as
-   a duplicate create, permanently, since the derivation is a pure function
-   of the repository's last commit. A batch that minted no key advances
-   nothing: `commitRev == rev`. -}
-applyBatchWrites : Account -> Store -> Json -> Result Response (Repo, Json)
-applyBatchWrites account store body = do
+   a duplicate create whenever the clock has not yet passed them. A batch
+   that minted no key advances nothing: `commitRev == rev`. -}
+applyBatchWrites : Account ->
+  RequestContext ->
+  Store ->
+  Json ->
+  Result Response (Repo, Json)
+applyBatchWrites account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
   () <- admitValidateFlag body
   elements <- requireWrites body
-  rev <- nextRevision repo
+  rev <- nextRevision context repo
   let did = accountDid account
   (writes, results, finalAuto) <- batchElements did rev elements 0 0
   () <- checkSwapCommit body repo
@@ -882,35 +925,40 @@ finishUploadBlob _ (Ok (next, output)) = (next, jsonOkResponse output)
    half because it transitions the `Store` (the blob half) exactly like the
    other four transition the repository half — only this half can return a
    successor `Store`. -}
-recordHandled : Account -> Store -> XrpcCall -> Option (Store, Response)
-recordHandled account store (ProcedureJsonCall nsid _ body)
+recordHandled : Account ->
+  RequestContext ->
+  Store ->
+  XrpcCall ->
+  Option (Store, Response)
+recordHandled account context store (ProcedureJsonCall nsid _ body)
   | nsid == createRecordNsid =
-    Some (finishWrite store (applyCreateRecord account store body))
+    Some (finishWrite store (applyCreateRecord account context store body))
   | nsid == putRecordNsid =
-    Some (finishWrite store (applyPutRecord account store body))
+    Some (finishWrite store (applyPutRecord account context store body))
   | nsid == deleteRecordNsid =
-    Some (finishWrite store (applyDeleteRecord account store body))
+    Some (finishWrite store (applyDeleteRecord account context store body))
   | nsid == applyWritesNsid =
-    Some (finishWrite store (applyBatchWrites account store body))
+    Some (finishWrite store (applyBatchWrites account context store body))
   | otherwise = None
-recordHandled _ store (ProcedureRawCall nsid _ media bytes)
+recordHandled _ _ store (ProcedureRawCall nsid _ media bytes)
   | nsid == uploadBlobNsid =
     Some (finishUploadBlob store (applyUploadBlob store media bytes))
   | otherwise = None
-recordHandled _ _ (QueryCall _ _) = None
-recordHandled _ _ (ProcedureNoInputCall _ _) = None
-recordHandled _ _ (ProcedureTextCall _ _ _ _) = None
-recordHandled _ _ (WellKnownCall _) = None
-recordHandled _ _ HealthCall = None
+recordHandled _ _ _ (QueryCall _ _) = None
+recordHandled _ _ _ (ProcedureNoInputCall _ _) = None
+recordHandled _ _ _ (ProcedureTextCall _ _ _ _) = None
+recordHandled _ _ _ (WellKnownCall _) = None
+recordHandled _ _ _ HealthCall = None
 
 {- | The record-write handler for one configured account. Any routed call that
    is not one of the five record-write procedures is answered 501 with the
    input `Store` intact. -}
 export
 recordHandler : Account -> Handler
-recordHandler account _ _ store call = match recordHandled account store call
-  Some result => result
-  None => (store, unhandledRoute call)
+recordHandler account context _ store call =
+  match recordHandled account context store call
+    Some result => result
+    None => (store, unhandledRoute call)
 
 {- | What a routed call names: the NSID for the five XRPC arms, and the request
    path for the two non-XRPC well-knowns and the health probe, none of which
@@ -2334,7 +2382,7 @@ preferencesHandled _ _ _ = None
 export
 pdsHandler : Account -> ServerLinks -> String -> Handler
 pdsHandler account links version context outcome store call =
-  match recordHandled account store call
+  match recordHandled account context store call
     Some result => result
     None => match sessionHandled account context outcome store call
       Some result => result
