@@ -336,6 +336,7 @@ jobs:
               # Syntax references and guide chapters are executable docs, not prose.
               docs/spec/SYNTAX.md) nondoc "$f" ;;
               docs/guide/*.md) nondoc "$f" ;;
+              docs/advanced/*.md) nondoc "$f" ;;
 
               docs/*) : ;;
               LICENSE|LICENSE.*) : ;;

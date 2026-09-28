@@ -39,9 +39,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEST="$ROOT/playground/guide_render_test.mjs"
 RENDERER="$ROOT/playground/render_docs.mjs"
 BUILDER="$ROOT/playground/build_guide.sh"
+ADVANCED_BUILDER="$ROOT/playground/build_advanced_docs.sh"
 STDLIB_BUILDER="$ROOT/playground/build_stdlib_docs.sh"
 MARKED="$ROOT/playground/vendor/marked/marked.js"
 SRC="$ROOT/docs/guide"
+ADVANCED_SRC="$ROOT/docs/advanced"
 STDLIB_SRC="$ROOT/docs/stdlib"
 # The three hand-written design notes docs/stdlib carries alongside the
 # generated reference. Kept in step with build_stdlib_docs.sh's --exclude by
@@ -49,13 +51,13 @@ STDLIB_SRC="$ROOT/docs/stdlib"
 STDLIB_EXCLUDE="$(sed -n 's/^  --exclude \(.*\) \\$/\1/p' "$STDLIB_BUILDER")"
 
 fail=0
-for f in "$TEST" "$RENDERER" "$BUILDER" "$STDLIB_BUILDER" "$MARKED"; do
+for f in "$TEST" "$RENDERER" "$BUILDER" "$ADVANCED_BUILDER" "$STDLIB_BUILDER" "$MARKED"; do
   if [ ! -f "$f" ]; then
     echo "FAIL: missing ${f#"$ROOT"/}" >&2
     fail=1
   fi
 done
-for d in "$SRC" "$STDLIB_SRC"; do
+for d in "$SRC" "$ADVANCED_SRC" "$STDLIB_SRC"; do
   if [ ! -d "$d" ]; then
     echo "FAIL: missing ${d#"$ROOT"/}" >&2
     fail=1
@@ -72,12 +74,24 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+# Each arm passes the SAME --sibling pairs its builder passes to the renderer, so
+# the harness grades the cross-set links (check 14) under the rule the deploy
+# render actually applies.
 echo "-- guide render assertions (node playground/guide_render_test.mjs)"
-node "$TEST" --src "$SRC" || exit 1
+node "$TEST" --src "$SRC" \
+  --sibling "advanced=../advanced" --sibling "stdlib=../stdlib" || exit 1
+
+echo "-- advanced topics render assertions (same harness, docs/advanced)"
+# No exclusions: docs/advanced has no planning doc, so every source page ships.
+# An explicit empty --exclude overrides the harness's guide default (OUTLINE.md).
+node "$TEST" --src "$ADVANCED_SRC" --exclude "" \
+  --title "Medaka: Advanced Topics" \
+  --sibling "guide=../guide" --sibling "stdlib=../stdlib" || exit 1
 
 echo "-- stdlib reference render assertions (same harness, docs/stdlib)"
 node "$TEST" --src "$STDLIB_SRC" --exclude "$STDLIB_EXCLUDE" \
-  --title "The Medaka Standard Library" || exit 1
+  --title "The Medaka Standard Library" \
+  --sibling "guide=../guide" --sibling "advanced=../advanced" || exit 1
 
 # The renderer is doc-set-agnostic on purpose (build_guide.sh is a thin entry
 # point over it, and the stdlib reference is meant to reuse the same machine,
@@ -112,6 +126,27 @@ fi
 
 pages="$(ls "$OUT/guide"/*.html | wc -l | tr -d ' ')"
 echo "-- build_guide.sh emitted $pages page(s) + guide.css"
+
+echo "-- build_advanced_docs.sh end-to-end into a scratch out-dir"
+bash "$ADVANCED_BUILDER" "$ADVANCED_SRC" "$OUT/advanced" >/dev/null || {
+  echo "FAIL: build_advanced_docs.sh exited non-zero" >&2
+  exit 1
+}
+
+# Derived page set, no exclusions: every docs/advanced/*.md, plus the stylesheet.
+missing=""
+for m in "$ADVANCED_SRC"/*.md; do
+  b="$(basename "$m")"
+  [ -f "$OUT/advanced/${b%.md}.html" ] || missing="$missing ${b%.md}.html"
+done
+[ -f "$OUT/advanced/guide.css" ] || missing="$missing guide.css"
+if [ -n "$missing" ]; then
+  echo "FAIL: build_advanced_docs.sh did not emit:$missing" >&2
+  exit 1
+fi
+
+advanced_pages="$(ls "$OUT/advanced"/*.html | wc -l | tr -d ' ')"
+echo "-- build_advanced_docs.sh emitted $advanced_pages page(s) + guide.css"
 
 echo "-- build_stdlib_docs.sh end-to-end into a scratch out-dir"
 bash "$STDLIB_BUILDER" "$STDLIB_SRC" "$OUT/stdlib" >/dev/null || {

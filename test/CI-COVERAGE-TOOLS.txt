@@ -287,6 +287,11 @@ playground/build_guide           renders docs/guide/*.md into playground/site-gu
                                  will consume, and asserts nothing. The ASSERTIONS about its
                                  output live in playground/guide_render_test.mjs — invocable
                                  standalone today, wired into preflight/CI by S-site-wiring.
+playground/build_advanced_docs   renders docs/advanced/*.md into playground/site-advanced/ via
+                                 playground/render_docs.mjs. The third sibling of build_guide
+                                 above (same machine, different title, no exclusions): a build
+                                 step for build_site.sh that asserts nothing. Its render IS
+                                 graded, by test/diff_compiler_guide_render.sh's advanced arm.
 playground/build_stdlib_docs     renders docs/stdlib/*.md into playground/site-stdlib/ via
                                  playground/render_docs.mjs (#2384, S-stdlib-renders). The exact
                                  sibling of build_guide above, over the same render machine, and

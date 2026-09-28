@@ -59,5 +59,8 @@ exec node "$SCRIPT_DIR/render_docs.mjs" \
   --title "The Medaka Standard Library" \
   --repo-root "$REPO_ROOT" \
   --nav-link "Guide=../guide/index.html" \
+  --nav-link "Advanced=../advanced/index.html" \
   --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
+  --sibling "guide=../guide" \
+  --sibling "advanced=../advanced" \
   "${DIST_ARGS[@]+"${DIST_ARGS[@]}"}"

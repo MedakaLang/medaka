@@ -51,7 +51,7 @@
 //      `index.html` — byte for byte, not overwritten by the synthetic
 //      chapter-list index; where it has none, the synthetic index is present
 
-import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -79,11 +79,21 @@ let src = join(REPO_ROOT, 'docs', 'guide');
 let distDir = null;
 let exclude = ['OUTLINE.md'];
 let title = 'The Medaka Guide';
+// `--sibling name=href`, repeatable, exactly as the builders pass it to
+// render_docs.mjs: a link into a sibling doc set is rewritten to that set's
+// rendered page instead of the repository. Check 14 grades the rewrite.
+const siblings = [];
 for (let i = 2; i < process.argv.length; i++) {
   if (process.argv[i] === '--src') src = resolve(process.argv[++i]);
   else if (process.argv[i] === '--dist') distDir = resolve(process.argv[++i]);
   else if (process.argv[i] === '--exclude') exclude = process.argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
   else if (process.argv[i] === '--title') title = process.argv[++i];
+  else if (process.argv[i] === '--sibling') {
+    const v = process.argv[++i];
+    const eq = v.indexOf('=');
+    if (eq <= 0 || eq === v.length - 1) { console.error(`--sibling needs name=href, got: ${v}`); process.exit(2); }
+    siblings.push({ name: v.slice(0, eq), href: v.slice(eq + 1).replace(/\/+$/, '') });
+  }
   else { console.error(`unknown argument: ${process.argv[i]}`); process.exit(2); }
 }
 
@@ -119,7 +129,7 @@ try {
   let pages;
   try {
     pages = renderDocSet({
-      src, out, exclude, title,
+      src, out, exclude, title, siblings,
       repoUrl: 'https://github.com/MedakaLang/medaka/blob/main',
       // Derived from --src rather than pinned to this checkout, so pointing the
       // gate at a scratch COPY of a doc set (the red-before-green demonstration)
@@ -373,6 +383,55 @@ try {
   if (deadFragments === 0) {
     note(`${fragmentRefs.length} fragment link(s) all resolve to a heading on their target page`);
   }
+
+  // ── 14. sibling doc-set links reach the sibling's RENDERED page ───────────
+  // The guide, the advanced topics and the stdlib reference are rendered beside
+  // each other (site/guide, site/advanced, site/stdlib), and a chapter links to
+  // a sibling's page as `../<name>/X.md`. Without --sibling that link fell
+  // through to the repository rule and left the site for GitHub; with it, the
+  // link must name the sibling's rendered page, and every such page must have
+  // a source `.md` behind it — an `href="../advanced/X.html"` with no
+  // docs/advanced/X.md is a 404 on our own site, which check 3 skips on
+  // purpose (it stops at `../`).
+  let siblingLinks = 0;
+  for (const page of pages) {
+    const html = readFileSync(join(out, page.outFile), 'utf8');
+    for (const { name, href } of siblings) {
+      const esc = href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      for (const m of html.matchAll(new RegExp(`href="${esc}/([^"/#]+)\\.html(#[^"]*)?"`, 'g'))) {
+        siblingLinks++;
+        const source = resolve(src, '..', name, `${m[1]}.md`);
+        check(existsSync(source), `${page.outFile}: sibling link ${href}/${m[1]}.html has a source page docs/${name}/${m[1]}.md`);
+      }
+    }
+  }
+  if (siblings.length > 0) {
+    note(`${siblingLinks} sibling doc-set link(s) each name a page with a source behind it`);
+  }
+  // The positive and negative controls, on a synthetic pair of doc sets, so the
+  // assertion does not depend on the graded corpus happening to contain a
+  // cross-set link: an existing sibling page IS rewritten to its .html, and a
+  // missing one is NOT (it takes the repository rule, or stays put with no
+  // repo URL), never a fabricated .html.
+  const sibRoot = join(scratch, 'sib');
+  mkdirSync(join(sibRoot, 'a'), { recursive: true });
+  mkdirSync(join(sibRoot, 'b'), { recursive: true });
+  writeFileSync(join(sibRoot, 'b', 'x.md'), '# X\n\n## S\n\nsibling page, long enough to count as a page body for check five in spirit.\n');
+  writeFileSync(join(sibRoot, 'a', 'y.md'),
+    '# Y\n\n## S\n\n[there](../b/x.md#s) and [nowhere](../b/missing.md) and [spec](../c/z.md).\n');
+  const sibOut = join(scratch, 'sibout');
+  renderDocSet({
+    src: join(sibRoot, 'a'), out: sibOut, exclude: [], title: 'Sib', repoUrl: '', repoRoot: sibRoot,
+    siblings: [{ name: 'b', href: '../b' }],
+  });
+  const sibHtml = readFileSync(join(sibOut, 'y.html'), 'utf8');
+  check(sibHtml.includes('href="../b/x.html#s"'),
+    'sibling control: a link to an existing sibling page is rewritten to its rendered .html (fragment kept)');
+  check(sibHtml.includes('href="../b/missing.md"'),
+    'sibling control: a link to a MISSING sibling page is not rewritten to a fabricated .html');
+  check(sibHtml.includes('href="../c/z.md"'),
+    'sibling control: a link into an undeclared directory is untouched');
+  note('sibling doc-set rewriting: existing page rewritten, missing page and undeclared set left alone');
 
   // ── 7. an unknown fence label must be REFUSED ─────────────────────────────
   const bad = join(scratch, 'badfence');
