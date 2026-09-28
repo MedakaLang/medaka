@@ -53,12 +53,12 @@
    name and message were read off a real `InvalidRequestError`, so the message
    is graded as text and not merely as a substring. -}
 
-import array.{sliceClamped}
-import bytes.{Bytes, encodeUtf8, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import hex.{decode, encode}
 import io.{readLines}
 import list.{lookup, sort, zip}
-import string.{contains, fromUtf8, join, split, startsWith, toLower}
+import string.{contains, join, split, startsWith, toLower}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
@@ -82,21 +82,8 @@ import lib.server_core.{
 import lib.store.{Store, storeFromRepo}
 import lib.tid.{Tid, tidClockId, tidEncode, tidMicros, tidParse}
 import test.request_support.{queryRequest}
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "sync_car_shapes: request fixture holds a non-byte element"
+import test.response_support.{bodyText, headText, rawBodyOf}
+import u8 as U8
 
 {- | The secret every row in this corpus was signed with
    (`pds/tools/gen_sync_event_corpus.mjs`): an exportable secp256k1 key of one.
@@ -248,45 +235,24 @@ fixtureRepo did records rev =
 
 -- ── the seam ────────────────────────────────────────────────────────────────
 
-headerEnd : Array Int -> Int -> Int
-headerEnd bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "sync_car_shapes: response has no header terminator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i
-  else
-    headerEnd bytes (i + 1)
-
-responseBody : Array Int -> Array Int
-responseBody bytes =
-  sliceClamped (headerEnd bytes 0 + 4) (arrayLength bytes) bytes
-
-responseHead : Array Int -> String
-responseHead bytes = fromUtf8 (sliceClamped 0 (headerEnd bytes 0) bytes)
-
 -- | The status line's three-digit code, as text, so a wrong status reports
 -- what it actually was.
-responseStatus : Array Int -> String
-responseStatus bytes = match split " " (responseHead bytes)
+responseStatus : Bytes -> String
+responseStatus bytes = match split " " (headText bytes)
   _ :: status :: _ => status
   _ => panic "sync_car_shapes: response has no status line"
 
 -- | One route call against the fixture store. No route here can transition
 -- it, so the successor store is discarded rather than threaded.
-call : Server -> Store -> String -> Array Int
+call : Server -> Store -> String -> Bytes
 call server store target =
   let (_, bytes) =
-    handleFixture server testContext store (queryRequest accountHostText target)
+    handleBytes server testContext store (queryRequest accountHostText target)
   bytes
 
-hasCarMediaType : Array Int -> Bool
+hasCarMediaType : Bytes -> Bool
 hasCarMediaType bytes =
-  contains
-    "content-type: application/vnd.ipld.car"
-    (toLower (responseHead bytes))
+  contains "content-type: application/vnd.ipld.car" (toLower (headText bytes))
 
 -- ── the emitted CAR's own header ────────────────────────────────────────────
 
@@ -299,13 +265,16 @@ hasCarMediaType bytes =
    single-byte unsigned LEB128 length here (the header is 17 bytes for an
    empty roots list and 55 for a one-CID one, both under 128), and a
    multi-byte length would be a header this file's fixtures cannot produce. -}
-emittedRootCount : Array Int -> Int
+emittedRootCount : Bytes -> Int
 emittedRootCount bytes =
-  if arrayLength bytes < 1 || bytes[0] >= 128 then
+  let headerLength = match B.get 0 bytes
+    Some first => U8.toInt first
+    None => 128
+  if headerLength >= 128 then
     panic "sync_car_shapes: CAR header length is not a single-byte varint"
   else
-    let header = arrayMakeWith bytes[0] (i => bytes[1 + i])
-    match mustCbor (fromArrayAssumeByteDomain header)
+    let header = B.take headerLength (B.drop 1 bytes)
+    match mustCbor header
       DcMap fields => match lookup "roots" fields
         Some (DcArray roots) => length roots
         _ => panic "sync_car_shapes: CAR header has no roots array"
@@ -346,7 +315,7 @@ gradeRecordShape server store did rows tag =
     "com.atproto.sync.getRecord?did=\{did}&collection=\{fixtureCollection}&rkey=\{rkey}"
   let response = call server store target
   let status = responseStatus response
-  let body = responseBody response
+  let body = rawBodyOf response
   let framed = status == "200" && hasCarMediaType response
   let () = println "\{tag}: \{gradeWord framed} status=\{status} rkey=\{rkey}"
   let shaped = gradeDecoded rows tag body
@@ -371,8 +340,8 @@ rkeyOf path = match split "/" path
    makes that direction visible. EQUAL, ORDER and BYTES are the stronger
    claims, reported so the gate can assert each where it holds rather than
    dropping to containment everywhere. -}
-gradeDecoded : List (String, String) -> String -> Array Int -> <IO> Bool
-gradeDecoded rows tag body = match carDecode (fromArrayAssumeByteDomain body)
+gradeDecoded : List (String, String) -> String -> Bytes -> <IO> Bool
+gradeDecoded rows tag body = match carDecode body
   Err message =>
     let () =
       println "\{tag}-BLOCKS: FAIL emitted CAR does not decode: \{message}"
@@ -385,8 +354,7 @@ gradeDecoded rows tag body = match carDecode (fromArrayAssumeByteDomain body)
     let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
     let containOk = missing == []
     let boundedOk = length blocks <= maxRecordBlocks tag
-    let bytesOk =
-      encode (fromArrayAssumeByteDomain body) == rowValue rows "\{tag}-CAR"
+    let bytesOk = encode body == rowValue rows "\{tag}-CAR"
     let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"
     let () =
       println
@@ -418,10 +386,8 @@ gradeBlocksPresent server store did rows =
   let wanted = rowCids rows "GETBLOCKS-PRESENT-BLOCKS"
   let response = call server store (blocksTarget did wanted)
   let status = responseStatus response
-  let body = responseBody response
-  let bytesOk =
-    encode (fromArrayAssumeByteDomain body)
-      == rowValue rows "GETBLOCKS-PRESENT-CAR"
+  let body = rawBodyOf response
+  let bytesOk = encode body == rowValue rows "GETBLOCKS-PRESENT-CAR"
   let framed = status == "200" && hasCarMediaType response
   let rootsOk =
     emittedRootCount body == length (rowCids rows "GETBLOCKS-PRESENT-ROOTS")
@@ -447,7 +413,7 @@ gradeBlocksMissing server store did rows =
   let requested = rowCids rows "GETBLOCKS-PARTLY-MISSING-REQUESTED"
   let response = call server store (blocksTarget did requested)
   let status = responseStatus response
-  let body = fromUtf8 (responseBody response)
+  let body = bodyText response
   let expected =
     "{\"error\":\"\{rowValue rows "GETBLOCKS-PARTLY-MISSING-ERROR"}\",\"message\":\"\{rowValue rows "GETBLOCKS-PARTLY-MISSING-MESSAGE"}\"}"
   let statusOk = status == rowValue rows "GETBLOCKS-PARTLY-MISSING-STATUS"

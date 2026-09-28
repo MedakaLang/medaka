@@ -8,18 +8,11 @@
    session secret and credential but no repository, the same shape
    `pds/test/session_routes_test.mdk` already uses. -}
 
-import bytes.{
-  Bytes,
-  encodeUtf8,
-  fromArray,
-  fromArrayAssumeByteDomain,
-  fromU8Array,
-  toArray,
-}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{parseRequestClassified}
 import json.{Json(..), get, parse}
 import list.{sort}
-import string.{fromUtf8, toUtf8}
 import test.{expectEqual, expectTrue}
 import u8 as U8
 import lib.blob.{blobCid}
@@ -37,15 +30,16 @@ import lib.server_core.{
   makeAccount,
 }
 import lib.store.{Store, storeEmpty, storeWithCredential, storeWithServerSecret}
-import test.fixture_support.{altTestSecret, appendBytes, contextAt}
+import test.fixture_support.{altTestSecret, contextAt}
 import test.request_support.{authOf, loginJson, postJson}
 import test.response_support.{
-  bodyOf,
   hasContentType,
+  jsonBody,
+  listedCids,
   outcome,
   rawBodyOf,
   settled,
-  statusLineOf,
+  statusLine,
   stringField,
 }
 
@@ -99,59 +93,46 @@ testInstant = 1700000000
 
 -- ── requests and responses ──────────────────────────────────────────────────
 
-postRaw : String -> String -> String -> Array Int -> Array Int
+postRaw : String -> String -> String -> Bytes -> Bytes
 postRaw token nsid mimeType body =
-  appendBytes
-    (toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n")
-    body
+  encodeUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: \{mimeType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
-getQuery : String -> String -> String -> Array Int
+getQuery : String -> String -> String -> Bytes
 getQuery token nsid query =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/\{nsid}\{query} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
 
 -- | One string field nested under `blob` in an `uploadBlob` response body.
-blobStringField : String -> Array Int -> String
-blobStringField name bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get "blob" body
+blobStringField : String -> Bytes -> String
+blobStringField name bytes = match jsonBody bytes
+  Some body => match get "blob" body
     Some blob => match get name blob
       Some (JString value) => value
       _ => ""
     None => ""
-  Err _ => ""
+  None => ""
 
-blobIntField : String -> Array Int -> Int
-blobIntField name bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get "blob" body
+blobIntField : String -> Bytes -> Int
+blobIntField name bytes = match jsonBody bytes
+  Some body => match get "blob" body
     Some blob => match get name blob
       Some (JInt value) => value
       _ => -1
     None => -1
-  Err _ => -1
+  None => -1
 
-blobRefCidText : Array Int -> String
-blobRefCidText bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get "blob" body
+blobRefCidText : Bytes -> String
+blobRefCidText bytes = match jsonBody bytes
+  Some body => match get "blob" body
     Some blob => match get "ref" blob
       Some ref => match get "$link" ref
         Some (JString link) => link
         _ => ""
       None => ""
     None => ""
-  Err _ => ""
-
-listedCids : Array Int -> List String
-listedCids bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get "cids" body
-    Some (JArray entries) => stringEntries (toList entries)
-    _ => []
-  Err _ => []
-
-stringEntries : List Json -> List String
-stringEntries [] = []
-stringEntries ((JString value) :: rest) = value :: stringEntries rest
-stringEntries (_ :: rest) = stringEntries rest
+  None => ""
 
 -- ── driving ──────────────────────────────────────────────────────────────────
 
@@ -159,17 +140,13 @@ stringEntries (_ :: rest) = stringEntries rest
 -- shell derives it (`settleLogin`, `pds/shell/server.mdk`), all at once here.
 -- The salt it offers is empty, which offers no upgrade: the shell's would
 -- re-derive the low-count `credential` at the shipped count on login.
-send : RequestContext -> Store -> Array Int -> (Store, Array Int)
-send context store bytes = match fromArray bytes
-  Some packed =>
-    let (next, response) =
-      handleBytes
-        server
-        { context | login = verdictAgainst store packed }
-        store
-        packed
-    (next, toArray response)
-  None => panic "blob_routes: request fixture holds a non-byte element"
+send : RequestContext -> Store -> Bytes -> (Store, Bytes)
+send context store bytes =
+  handleBytes
+    server
+    { context | login = verdictAgainst store bytes }
+    store
+    bytes
 
 verdictAgainst : Store -> Bytes -> Option LoginVerdict
 verdictAgainst store packed = match parseRequestClassified packed
@@ -188,7 +165,7 @@ getBlobNsid = "com.atproto.sync.getBlob"
 listBlobsNsid : String
 listBlobsNsid = "com.atproto.sync.listBlobs"
 
-login : Int -> Int -> Store -> (Store, Array Int)
+login : Int -> Int -> Store -> (Store, Bytes)
 login instant seed store =
   send
     (contextAt instant seed)
@@ -212,20 +189,19 @@ accessToken : String
 accessToken = match loggedIn
   (_, token) => token
 
-uploadedBytes : Array Int
-uploadedBytes = [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
+uploadedBytes : Bytes
+uploadedBytes = fromU8Array [|1, 2, 3, 4, 5, 6, 7, 8, 9, 10|]
 
 uploadedMimeType : String
 uploadedMimeType = "image/png"
 
 uploadedCidText : String
-uploadedCidText =
-  cidToString (blobCid (fromArrayAssumeByteDomain uploadedBytes))
+uploadedCidText = cidToString (blobCid uploadedBytes)
 
 -- | The store and response after one successful authenticated upload. Every
 -- cell that reads back what was uploaded starts here — the read-back happens
 -- in the SAME test process, no restart (that is `S-blob-persist`'s job).
-uploaded : (Store, Array Int)
+uploaded : (Store, Bytes)
 uploaded =
   send
     (contextAt testInstant 2)
@@ -236,7 +212,7 @@ uploadedStore : Store
 uploadedStore = match uploaded
   (store, _) => store
 
-uploadedResponse : Array Int
+uploadedResponse : Bytes
 uploadedResponse = match uploaded
   (_, response) => response
 
@@ -260,7 +236,7 @@ test "uploadBlob's response names the declared MIME type" =
   expectEqual (blobStringField "mimeType" uploadedResponse) uploadedMimeType
 
 test "uploadBlob's response names the exact byte size" =
-  expectEqual (blobIntField "size" uploadedResponse) (arrayLength uploadedBytes)
+  expectEqual (blobIntField "size" uploadedResponse) (B.length uploadedBytes)
 
 test "uploadBlob with a malformed MIME type is refused with the XRPC envelope, not a framing failure" =
   let (_, response) =
@@ -305,7 +281,7 @@ test "getBlob needs no credential" =
       (contextAt testInstant 7)
       uploadedStore
       (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
-  expectEqual "200 OK" (statusLineOf (fromUtf8 response))
+  expectEqual "200 OK" (statusLine response)
 
 -- # listBlobs
 
@@ -331,7 +307,7 @@ test "listBlobs needs no credential" =
       (contextAt testInstant 10)
       uploadedStore
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
-  expectEqual "200 OK" (statusLineOf (fromUtf8 response))
+  expectEqual "200 OK" (statusLine response)
 
 -- # listBlobs cursor pagination
 
@@ -344,8 +320,9 @@ test "listBlobs needs no credential" =
 pagedCount : Int
 pagedCount = 40
 
-pagedBytes : Int -> Array Int
-pagedBytes n = arrayMakeWith 12 (i => (n * 37 + i * 11 + 5) % 256)
+pagedBytes : Int -> Bytes
+pagedBytes n =
+  fromU8Array (arrayMakeWith 12 (i => U8.truncate (n * 37 + i * 11 + 5)))
 
 uploadPaged : Int -> Store -> Store
 uploadPaged n store =
@@ -364,10 +341,7 @@ pagedStore = uploadPaged 0 sessionStore
 
 pagedCids : List String
 pagedCids =
-  sort
-    (map
-      (n => cidToString (blobCid (fromArrayAssumeByteDomain (pagedBytes n))))
-      [0..pagedCount])
+  sort (map (n => cidToString (blobCid (pagedBytes n))) [0..pagedCount])
 
 pagedQuery : String -> String
 pagedQuery "" = "?did=\{accountDidText}&limit=3"

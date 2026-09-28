@@ -21,17 +21,13 @@ import test.vector_runner.{
   Bound(..),
   Corpus(..),
   Engine(..),
+  Mutation(..),
+  MutationTest(..),
   Row(..),
-  buildNative,
+  expectMutations,
   expectRow,
-  freshScratch,
-  reap,
-  runSeconds,
-  spawn,
 }
-import list.{somes}
-import string.{contains, countOccurrences, replace}
-import test.{Expectation, expectNoFindings}
+import test.{Expectation}
 import test_process.{medakaRoot}
 
 gate : String
@@ -91,17 +87,6 @@ row = Row {
 
 -- # Mutations
 
-{- | One deliberate break: in repo-relative `file`, the single occurrence of
-   `anchor` becomes `mutant`, and the built driver must then fail with
-   `witness` somewhere in its output. -}
-data Mutation = Mutation {
-  name : String,
-  file : String,
-  anchor : String,
-  mutant : String,
-  witness : String,
-}
-
 didKeyLib : String
 didKeyLib = "pds/lib/did_key.mdk"
 
@@ -145,79 +130,16 @@ mutations = [
   },
 ]
 
--- The findings against one mutation, run in the scratch tree `tree`. The
--- mutated file is put back afterwards, whatever the outcome, so the next
--- mutation starts from an unbroken tree.
-mutationFindings : String ->
-  Mutation ->
-  <Exec, FileRead, FileWrite, IO> List String
-mutationFindings tree m =
-  let label = "\{gate} (mutation \{m.name})"
-  match readFile "\{medakaRoot}/\{m.file}"
-    Err e => ["\{label}: could not read \{m.file}: \{e}"]
-    Ok original =>
-      let anchors = countOccurrences m.anchor original
-      if anchors /= 1 then
-        [
-          "\{label}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
-        ]
-      else
-        let target = "\{tree}/\{m.file}"
-        let found = match writeFile target (replace m.anchor m.mutant original)
-          Err e => ["\{label}: could not write the mutant: \{e}"]
-          Ok _ => mutantFindings tree label m
-        match writeFile target original
-          Err e => found ++ ["\{label}: could not restore \{m.file}: \{e}"]
-          Ok _ => found
-
--- The mutant must build, then fail, and fail with its own witness.
-mutantFindings : String -> String -> Mutation -> <Exec, IO> List String
-mutantFindings tree label m =
-  let bin = "\{tree}/mutant"
-  match buildNative label "\{tree}/\{driver}" bin
-    [] => match spawn runSeconds [] bin ["\{medakaRoot}/\{corpusFile}"]
-      Err e => ["\{label}: could not spawn the mutant: \{e}"]
-      Ok (0, _, _) => ["\{label}: the mutant passed; the corpus cannot see it"]
-      Ok (_, out, err) =>
-        if contains m.witness (out ++ err) then
-          []
-        else
-          [
-            "\{label}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
-          ]
-    fs => fs
-
--- The scratch tree must end byte-identical to the source for every file a
--- mutation touched, or a later mutation graded a doubly-broken tree.
-restoredFindings : String -> <FileRead, IO> List String
-restoredFindings tree = somes (map (restoredFinding tree) [didKeyLib, driver])
-
-restoredFinding : String -> String -> <FileRead, IO> Option String
-restoredFinding tree rel = match (
-  readFile "\{medakaRoot}/\{rel}",
-  readFile "\{tree}/\{rel}",
-)
-  (Ok a, Ok b) =>
-    if a == b then
-      None
-    else
-      Some "\{gate}: \{rel} was not restored in the mutation tree"
-  _ => Some "\{gate}: could not read \{rel} back to check its restoration"
-
-allMutationFindings : String -> <Exec, FileRead, FileWrite, IO> List String
-allMutationFindings tree =
-  match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
-    Ok (0, _, _) =>
-      flatMap (mutationFindings tree) mutations ++ restoredFindings tree
-    Ok (code, _, err) =>
-      ["\{gate}: copying pds/ exited \{intToString code}: \{err}"]
-    Err e => ["\{gate}: could not copy pds/: \{e}"]
+mutationTest : MutationTest
+mutationTest = MutationTest {
+  gate = gate,
+  driver = driver,
+  args = ["\{medakaRoot}/\{corpusFile}"],
+  mutations = mutations,
+}
 
 test "did:key: 16/16 external rows, 14/14 malformed cells, eval == native == Wasm" =
   expectRow row
 
-test "did:key: each of 5 mutations turns the gate red with its own witness" = expectNoFindings
-  gate
-  (match freshScratch ()
-    Err e => Err "could not make a scratch directory: \{e}"
-    Ok tree => Ok (reap tree (allMutationFindings tree)))
+test "did:key: each of 5 mutations turns the gate red with its own witness" =
+  expectMutations mutationTest

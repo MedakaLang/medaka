@@ -33,21 +33,17 @@
    `did_key_all_engines_test` gives. -}
 
 import test.vector_runner.{
-  Arm(..),
   Bound(..),
   Corpus(..),
   Engine(..),
+  Mutation(..),
+  MutationTest(..),
   Row(..),
-  buildNative,
+  expectMutations,
   expectRow,
-  freshScratch,
-  reap,
-  runSeconds,
-  spawn,
+  transcriptArm,
 }
-import list.{somes}
-import string.{contains, countOccurrences, replace, unlines}
-import test.{Expectation, expectNoFindings}
+import test.{Expectation}
 import test_process.{medakaRoot}
 
 gate : String
@@ -160,19 +156,6 @@ transcript = [
   "TOTAL: PASS",
 ]
 
--- Each line on its own, so a red run names the cell that moved, and then
--- the whole transcript as one needle. With `lastLine`, that needle leaves
--- only output printed before the first cell ungraded, and a cell added
--- there moves the driver's own `cells:` count, which the needle names.
-arm : Engine -> Arm
-arm e = Arm {
-  engine = e,
-  driverArgs = [],
-  countFloor = None,
-  needs = transcript ++ [unlines transcript],
-  lastLine = Some "TOTAL: PASS",
-}
-
 row : Row
 row = Row {
   gate = gate,
@@ -181,147 +164,64 @@ row = Row {
   corpusCount = Exactly 1,
   sourceShapes = [],
   oracle = None,
-  arms = [arm EvalEngine, arm NativeEngine, arm WasmEngine],
+  arms = map (transcriptArm transcript) [EvalEngine, NativeEngine, WasmEngine],
   parity = True,
 }
 
 -- # Mutations
 
-{- | One deliberate break: in repo-relative `file`, the single occurrence of
-   `anchor` becomes `mutant`, and the built driver must then fail with
-   `witness` somewhere in its output. -}
-data Mutation = Mutation {
-  name : String,
-  file : String,
-  anchor : String,
-  mutant : String,
-  witness : String,
+mutationTest : MutationTest
+mutationTest = MutationTest {
+  gate = gate,
+  driver = driver,
+  args = ["\{medakaRoot}/\{corpusFile}"],
+  mutations = [
+    -- A document naming the wrong server must not satisfy the did:web cell.
+    Mutation {
+      name = "did-web-hostname",
+      file = driver,
+      anchor = "\\\"id\\\":\\\"did:web:pds.example\\\"",
+      mutant = "\\\"id\\\":\\\"did:web:other.example\\\"",
+      witness = "CELL wellknown-did-json FAIL",
+    },
+    -- The confused deputy (#2912): the "foreign" audience becomes the one
+    -- permitted audience, so the refusal cell sees an admission. Only an
+    -- expectation naming the whole outcome, claims or `signed=none`, can tell
+    -- a refusal from an admission.
+    Mutation {
+      name = "proxy-foreign-audience",
+      file = driver,
+      anchor = "foreignServiceDid = \"did:web:other.example\"",
+      mutant = "foreignServiceDid = \"did:web:appview.example\"",
+      witness = "CELL proxy-foreign-audience FAIL decision=admitted",
+    },
+    -- Every proxied request loses its `Authorization` field. The audience
+    -- mutation proves the seam grades which service a credential is for; this
+    -- one proves it grades whether the caller may have one at all.
+    Mutation {
+      name = "proxy-no-credential",
+      file = driver,
+      anchor =
+        "proxyAuthField = \"Authorization: Bearer \\{proxyAccessToken}\\r\\n\"",
+      mutant = "proxyAuthField = \"\"",
+      witness =
+        "CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired",
+    },
+    -- The egress port is looked up under the default audience instead of the
+    -- admitted one. Every claim set stays correct, so only a cell naming the
+    -- port sees it: the appview cells stay green and the chat ones go red.
+    Mutation {
+      name = "proxy-audience-routing",
+      file = driver,
+      anchor = "match appviewRouteFor table did",
+      mutant = "match appviewRouteFor table configuredAppviewDid",
+      witness = "CELL proxy-admitted-chat-audience FAIL decision=admitted",
+    },
+  ],
 }
-
-mutations : List Mutation
-mutations = [
-  -- A document naming the wrong server must not satisfy the did:web cell.
-  Mutation {
-    name = "did-web-hostname",
-    file = driver,
-    anchor = "\\\"id\\\":\\\"did:web:pds.example\\\"",
-    mutant = "\\\"id\\\":\\\"did:web:other.example\\\"",
-    witness = "CELL wellknown-did-json FAIL",
-  },
-  -- The confused deputy (#2912): the "foreign" audience becomes the one
-  -- permitted audience, so the refusal cell sees an admission. Only an
-  -- expectation naming the whole outcome, claims or `signed=none`, can tell
-  -- a refusal from an admission.
-  Mutation {
-    name = "proxy-foreign-audience",
-    file = driver,
-    anchor = "foreignServiceDid = \"did:web:other.example\"",
-    mutant = "foreignServiceDid = \"did:web:appview.example\"",
-    witness = "CELL proxy-foreign-audience FAIL decision=admitted",
-  },
-  -- Every proxied request loses its `Authorization` field. The audience
-  -- mutation proves the seam grades which service a credential is for; this
-  -- one proves it grades whether the caller may have one at all.
-  Mutation {
-    name = "proxy-no-credential",
-    file = driver,
-    anchor =
-      "proxyAuthField = \"Authorization: Bearer \\{proxyAccessToken}\\r\\n\"",
-    mutant = "proxyAuthField = \"\"",
-    witness =
-      "CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired",
-  },
-  -- The egress port is looked up under the default audience instead of the
-  -- admitted one. Every claim set stays correct, so only a cell naming the
-  -- port sees it: the appview cells stay green and the chat ones go red.
-  Mutation {
-    name = "proxy-audience-routing",
-    file = driver,
-    anchor = "match appviewRouteFor table did",
-    mutant = "match appviewRouteFor table configuredAppviewDid",
-    witness = "CELL proxy-admitted-chat-audience FAIL decision=admitted",
-  },
-]
-
--- The findings against one mutation, run in the scratch tree `tree`. The
--- mutated file is put back afterwards, whatever the outcome, so the next
--- mutation starts from an unbroken tree.
-mutationFindings : String ->
-  Mutation ->
-  <Exec, FileRead, FileWrite, IO> List String
-mutationFindings tree m =
-  let label = "\{gate} (mutation \{m.name})"
-  match readFile "\{medakaRoot}/\{m.file}"
-    Err e => ["\{label}: could not read \{m.file}: \{e}"]
-    Ok original =>
-      let anchors = countOccurrences m.anchor original
-      if anchors /= 1 then
-        [
-          "\{label}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
-        ]
-      else
-        let target = "\{tree}/\{m.file}"
-        let found = match writeFile target (replace m.anchor m.mutant original)
-          Err e => ["\{label}: could not write the mutant: \{e}"]
-          Ok _ => mutantFindings tree label m
-        match writeFile target original
-          Err e => found ++ ["\{label}: could not restore \{m.file}: \{e}"]
-          Ok _ => found
-
--- The mutant must build, then fail, and fail with its own witness.
-mutantFindings : String -> String -> Mutation -> <Exec, IO> List String
-mutantFindings tree label m =
-  let bin = "\{tree}/mutant"
-  match buildNative label "\{tree}/\{driver}" bin
-    [] => match spawn runSeconds [] bin ["\{medakaRoot}/\{corpusFile}"]
-      Err e => ["\{label}: could not spawn the mutant: \{e}"]
-      Ok (0, _, _) => ["\{label}: the mutant passed; the corpus cannot see it"]
-      Ok (_, out, err) =>
-        if contains m.witness (out ++ err) then
-          []
-        else
-          [
-            "\{label}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
-          ]
-    fs => fs
-
--- The scratch copy must end byte-identical to the live driver, or a later
--- mutation graded a doubly-broken tree; and the live driver must end
--- byte-identical to what it was before the first mutation.
-restoredFindings : String -> String -> <FileRead, IO> List String
-restoredFindings pristine tree =
-  somes
-    (map (restoredFinding pristine) [
-      ("the mutation tree's copy", "\{tree}/\{driver}"),
-      ("the live copy", "\{medakaRoot}/\{driver}"),
-    ])
-
-restoredFinding : String -> (String, String) -> <FileRead> Option String
-restoredFinding pristine (what, path) = match readFile path
-  Ok text =>
-    if text == pristine then
-      None
-    else
-      Some "\{gate}: \{what} of \{driver} was left modified"
-  Err e => Some "\{gate}: could not read \{what} of \{driver} back: \{e}"
-
-allMutationFindings : String -> <Exec, FileRead, FileWrite, IO> List String
-allMutationFindings tree = match readFile "\{medakaRoot}/\{driver}"
-  Err e => ["\{gate}: could not read \{driver}: \{e}"]
-  Ok pristine =>
-    match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
-      Ok (0, _, _) =>
-        flatMap (mutationFindings tree) mutations
-          ++ restoredFindings pristine tree
-      Ok (code, _, err) =>
-        ["\{gate}: copying pds/ exited \{intToString code}: \{err}"]
-      Err e => ["\{gate}: could not copy pds/: \{e}"]
 
 test "read routes: 64 hand-authored cells, eval == native == Wasm" =
   expectRow row
 
-test "read routes: each of 4 mutations turns the gate red with its own witness" = expectNoFindings
-  gate
-  (match freshScratch ()
-    Err e => Err "could not make a scratch directory: \{e}"
-    Ok tree => Ok (reap tree (allMutationFindings tree)))
+test "read routes: each of 4 mutations turns the gate red with its own witness" =
+  expectMutations mutationTest

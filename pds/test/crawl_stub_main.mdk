@@ -19,9 +19,8 @@
    needs no mode of this driver at all — it is simply never started, so the
    connection this server's announce attempts is refused by the kernel. -}
 
-import array.{concat, sliceClamped}
 import bytes as B
-import bytes.{Bytes, encodeUtf8, fromArray, toArray}
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
 import http.{
   Header,
   Request,
@@ -39,21 +38,10 @@ import json.{Json(..), get, jObject, parse, stringify}
 import net.{
   Connection, Listener, accept, close, listen, listenPort, recv, sendAll
 }
-import string.{drop, fromUtf8, lines, startsWith, toInt, toUtf8, trim}
+import string.{drop, lines, startsWith, toInt, trim}
+import test.response_support.{findHeaderEnd, textOrHex}
 
 -- ── framing: read until the head, then until the declared body arrives ─────
-
-headerEnd : Array Int -> Int -> Option Int
-headerEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    headerEnd buf (i + 1)
 
 -- `serializeRequest` always emits `content-length: N` in lowercase as the
 -- last framing header it controls, so a plain line search suffices — this
@@ -70,39 +58,30 @@ findContentLength (line :: rest) =
   else
     findContentLength rest
 
-recvFrame : Connection * -> Array Int -> <Net> Result String (Array Int)
-recvFrame conn buffer = match headerEnd buffer 0
+recvFrame : Connection * -> Bytes -> <Net> Result String Bytes
+recvFrame conn buffer = match findHeaderEnd buffer 0
   None => match recv conn 65536
     Err message => Err "crawl_stub: read failed: \{message}"
     Ok chunk =>
       if B.isEmpty chunk then
         Err "crawl_stub: call closed before its header terminator"
       else
-        recvFrame conn (concat [|buffer, toArray chunk|])
+        recvFrame conn (buffer ++ chunk)
   Some at =>
-    let need =
-      at + 4 + declaredContentLength (fromUtf8 (sliceClamped 0 at buffer))
+    let need = at + 4 + declaredContentLength (textOrHex (B.take at buffer))
     recvBody conn buffer need
 
-recvBody : Connection * -> Array Int -> Int -> <Net> Result String (Array Int)
+recvBody : Connection * -> Bytes -> Int -> <Net> Result String Bytes
 recvBody conn buffer need =
-  if arrayLength buffer >= need then
-    Ok (sliceClamped 0 need buffer)
+  if B.length buffer >= need then
+    Ok (B.take need buffer)
   else match recv conn 65536
     Err message => Err "crawl_stub: read failed: \{message}"
     Ok chunk =>
       if B.isEmpty chunk then
         Err "crawl_stub: call closed before its declared body arrived"
       else
-        recvBody conn (concat [|buffer, toArray chunk|]) need
-
--- | The framed head and body, parsed. The frame is gathered as an
--- `Array Int` and the framer reads a packed `Bytes`; `fromArray` is the only
--- door between them.
-parseFramed : Array Int -> Result String Request
-parseFramed framed = match fromArray framed
-  Some packed => parseRequest packed
-  None => Err "crawl_stub: a byte read off the socket fell outside 0..255"
+        recvBody conn (buffer ++ chunk) need
 
 -- ── the answer ───────────────────────────────────────────────────────────
 
@@ -111,12 +90,12 @@ findHeaderName _ [] = False
 findHeaderName wanted (header :: rest) =
   headerName header == wanted || findHeaderName wanted rest
 
-hostnameField : Array Int -> String
-hostnameField body = match parse (fromUtf8 body)
-  Ok value => match get "hostname" value
+hostnameField : Bytes -> String
+hostnameField body = match map parse (decodeUtf8 body)
+  Some (Ok value) => match get "hostname" value
     Some (JString text) => text
     _ => "<absent>"
-  Err _ => "<unparseable>"
+  _ => "<unparseable>"
 
 mustJsonHeader : Header
 mustJsonHeader =
@@ -148,16 +127,16 @@ answerCall : String ->
   Connection * ->
   <FileWrite, Net> Result String Unit
 answerCall path status conn =
-  let bytes = match recvFrame conn [||]
+  let bytes = match recvFrame conn empty
     Err message =>
       let () = logLine path "unreadable \{message}"
       answerBytes status "<unreadable>" "<unreadable>"
-    Ok framed => match parseFramed framed
+    Ok framed => match parseRequest framed
       Err message =>
         let () = logLine path "unreadable \{message}"
         answerBytes status "<unreadable>" "<unreadable>"
       Ok request =>
-        let hostname = hostnameField (toArray (requestBody request))
+        let hostname = hostnameField (requestBody request)
         let authorization =
           if findHeaderName "authorization" (requestHeaders request) then
             "present"

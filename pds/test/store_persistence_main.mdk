@@ -51,7 +51,8 @@
    can produce. -}
 
 import bytes as B
-import bytes.{Bytes, encodeUtf8, fromArrayAssumeByteDomain}
+import u8 as U8
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -364,11 +365,8 @@ runBlobReject dir = match verifiedBlobs dir
    nothing was written, which is the claim: refused BEFORE any bytes land. -}
 runBlobOversize : String -> <IO, FileRead, FileWrite> Unit
 runBlobOversize dir =
-  let oversize = arrayMakeWith (maxBlobBytes + 1) (_ => 65)
-  match (admitBlob
-    0
-    "application/octet-stream"
-    (fromArrayAssumeByteDomain oversize))
+  let oversize = fromU8Array (arrayMakeWith (maxBlobBytes + 1) (_ => 65))
+  match admitBlob 0 "application/octet-stream" oversize
     Ok _ =>
       let () = println "BLOB-OVERSIZE: FAIL an oversize blob was admitted"
       exit 1
@@ -997,7 +995,7 @@ freeShardFrom parent n =
   if n >= 256 then
     panic "store_persistence: \{parent} occupies every shard name"
   else
-    let name = encode (fromArrayAssumeByteDomain (arrayMakeWith 1 (_ => n)))
+    let name = encode (fromU8Array [|U8.truncate n|])
     if fileExists "\{parent}/\{name}" then
       freeShardFrom parent (n + 1)
     else

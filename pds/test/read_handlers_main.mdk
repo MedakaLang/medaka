@@ -34,11 +34,11 @@
    repository and is graded here, against the corpus's key. -}
 
 import bytes as B
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, decodeUtf8}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
-import string.{fromUtf8, join, split, startsWith, stripPrefix, toUtf8}
+import string.{join, split, startsWith, stripPrefix}
 import lib.dagcbor.{dagCborDecode}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.lexjson.{dagCborToLexJson}
@@ -71,21 +71,7 @@ import test.request_support.{
   procedureRequest,
   queryRequest,
 }
-
--- | `handleBytes` over a request fixture this driver still holds as an
--- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
--- door into one: a fixture element outside the byte domain stops here rather
--- than reaching the framer.
-handleFixture : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-handleFixture httpServer context store request = match fromArray request
-  Some packed =>
-    let (next, response) = handleBytes httpServer context store packed
-    (next, toArray response)
-  None => panic "read_handlers: request fixture holds a non-byte element"
+import test.response_support.{bodyText, rawBodyOf, statusLine}
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -173,33 +159,13 @@ testToken did =
 
 -- ── response inspection ─────────────────────────────────────────────────────
 
-headerEnd : Array Int -> Int -> Int
-headerEnd bytes i =
-  if i + 3 >= arrayLength bytes then
-    panic "read_handlers: response has no header terminator"
-  else if bytes[i] == 13
-    && bytes[i + 1] == 10
-    && bytes[i + 2] == 13
-    && bytes[i + 3] == 10 then
-    i
-  else
-    headerEnd bytes (i + 1)
-
-responseBodyBytes : Array Int -> Array Int
-responseBodyBytes bytes =
-  let start = headerEnd bytes 0 + 4
-  arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
-
-responseBodyText : Array Int -> String
-responseBodyText bytes = fromUtf8 (responseBodyBytes bytes)
-
-responseJson : Array Int -> Json
+responseJson : Bytes -> Json
 responseJson bytes =
   resultOrPanic
     "read_handlers: response body is not JSON"
-    (parse (responseBodyText bytes))
+    (parse (bodyText bytes))
 
-errorCode : Array Int -> String
+errorCode : Bytes -> String
 errorCode bytes = fieldText "error" (responseJson bytes)
 
 recordsOf : Json -> List Json
@@ -216,6 +182,14 @@ rkeysOf value = join "," (map (fieldText "uri") (recordsOf value))
 
 -- ── the transcript ──────────────────────────────────────────────────────────
 
+-- A corpus path names the record a read is compared against, so one that is
+-- not UTF-8 is a malformed corpus, not text to repair.
+corpusPath : String -> String
+corpusPath pathHex =
+  optionOrPanic
+    "read_handlers: corpus path is not UTF-8"
+    (decodeUtf8 (mustHex pathHex))
+
 splitPath : String -> (String, String)
 splitPath text = match split "/" text
   [collection, rkey] => (collection, rkey)
@@ -224,7 +198,7 @@ splitPath text = match split "/" text
 runStep : String -> Server -> Store -> String -> <IO> Store
 runStep did server store opLine = match split "\t" opLine
   ["OP", kind, pathHex, recordHex, _, _] =>
-    let (collection, rkey) = splitPath (fromUtf8 (toArray (mustHex pathHex)))
+    let (collection, rkey) = splitPath (corpusPath pathHex)
     let (nsid, body) = match kind
       "CREATE" => (
         "com.atproto.repo.createRecord",
@@ -238,7 +212,7 @@ runStep did server store opLine = match split "\t" opLine
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "read_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleFixture
+      handleBytes
         server
         testContext
         store
@@ -246,7 +220,7 @@ runStep did server store opLine = match split "\t" opLine
     if errorCode responseBytes == "<missing:error>" then
       next
     else
-      let () = println "SETUP \{kind} FAIL \{responseBodyText responseBytes}"
+      let () = println "SETUP \{kind} FAIL \{bodyText responseBytes}"
       let () = exit 1
       next
   _ => panic "read_handlers: malformed transcript row"
@@ -265,13 +239,13 @@ check label ok detail =
 readJson : Server -> Store -> String -> Json
 readJson server store target =
   let (_, responseBytes) =
-    handleFixture server testContext store (queryRequest accountHostText target)
+    handleBytes server testContext store (queryRequest accountHostText target)
   responseJson responseBytes
 
 readError : Server -> Store -> String -> String
 readError server store target =
   let (_, responseBytes) =
-    handleFixture server testContext store (queryRequest accountHostText target)
+    handleBytes server testContext store (queryRequest accountHostText target)
   errorCode responseBytes
 
 recordRoute : String -> String -> String
@@ -288,22 +262,22 @@ listRoute did suffix =
 carCell : Server -> Store -> String -> String -> <IO> Int
 carCell server store did corpusHex =
   let (_, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store
       (queryRequest accountHostText "com.atproto.sync.getRepo?did=\{did}")
-  let served = responseBodyBytes responseBytes
+  let served = rawBodyOf responseBytes
   let exported = match repoExportCar (storeMustRepo store)
     Ok bytes => bytes
     Err message => panic "read_handlers: repoExportCar failed: \{message}"
   let corpus = mustHex corpusHex
-  let servedHex = encode (fromArrayAssumeByteDomain served)
+  let servedHex = encode served
   let ok = servedHex == encode exported && servedHex == encode corpus
   check
     "sync-getRepo-car-bytes"
     ok
-    "served=\{intToString (arrayLength served)}B exported=\{intToString (B.length exported)}B corpus=\{intToString (B.length corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
+    "served=\{intToString (B.length served)}B exported=\{intToString (B.length exported)}B corpus=\{intToString (B.length corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
 
 firstHex : String -> String
 firstHex text = stringSlice 0 32 text
@@ -336,14 +310,13 @@ firstEntry name value = match get name value
   _ => JNull
 
 -- | The three status digits of a response, read off the status line.
-responseStatus : Array Int -> String
-responseStatus bytes =
-  stringSlice 9 12 (fromUtf8 (arrayMakeWith 12 (i => bytes[i])))
+responseStatus : Bytes -> String
+responseStatus bytes = stringSlice 0 3 (statusLine bytes)
 
-wellKnownDidJsonBytes : Server -> Store -> Array Int
+wellKnownDidJsonBytes : Server -> Store -> Bytes
 wellKnownDidJsonBytes server store =
   let (_, responseBytes) =
-    handleFixture
+    handleBytes
       server
       testContext
       store

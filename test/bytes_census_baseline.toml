@@ -17,6 +17,38 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "pds/lib/event_log_record.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/lexjson.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/query_params.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/resource_limits.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/sha1.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/tid.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/dirlock.mdk"
+count = 0
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+count = 0
+
+[[entry]]
 file = "pds/serve.mdk"
 count = 0
 

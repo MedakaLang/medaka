@@ -14,10 +14,10 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import bytes.{Bytes, fromArray, fromArrayAssumeByteDomain, fromU8Array, toArray}
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{parseRequestClassified}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
-import string.{contains, fromUtf8, toUtf8}
+import string.{contains}
 import u8 as U8
 import test.{
   expectAtLeast,
@@ -62,7 +62,7 @@ import lib.store.{
 import test.fixture_support.{altTestSecret, contextAt}
 import test.request_support.{authOf, loginJson, postJson}
 import test.response_support.{
-  bodyOf, outcome, settled, statusLineOf, stringField
+  jsonBody, outcome, responseText, settled, statusLineOf, stringField
 }
 
 accountDidText : String
@@ -149,10 +149,8 @@ changedPasswordStore =
 
 -- | The verdict the shell would derive for `bytes` against `store`, offering
 -- `salt` as the upgrade.
-verdictFor : Array Int -> Array Int -> Store -> Option LoginVerdict
-verdictFor salt bytes store = match fromArray bytes
-  Some packed => verdictAgainst salt store packed
-  None => panic "session_routes: request fixture holds a non-byte element"
+verdictFor : Bytes -> Bytes -> Store -> Option LoginVerdict
+verdictFor salt bytes store = verdictAgainst salt store bytes
 
 -- | The same store with no credential at all, which is what a server that was
 -- never given a password would hold.
@@ -170,25 +168,23 @@ testInstant = 1700000000
 {- | A bodiless POST, the shape `refreshSession` and `deleteSession` take.
    The zero-length `Content-Length` is what a real client sends on one, so it
    is what these tests send. -}
-postNoInput : String -> String -> Array Int
+postNoInput : String -> String -> Bytes
 postNoInput token nsid =
-  toUtf8
+  encodeUtf8
     "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Length: 0\r\n\r\n"
 
-getQuery : String -> String -> Array Int
+getQuery : String -> String -> Bytes
 getQuery token nsid =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
 
 -- | One boolean field of a response body, or `None` if it is absent or not a
 -- `JBool` (mirrors `stringField`, whose `JString`-only match can't see this
 -- shape).
-fieldBool : String -> Array Int -> Option Bool
-fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
-  Ok body => match get name body
-    Some value => asBool value
-    _ => None
-  Err _ => None
+fieldBool : String -> Bytes -> Option Bool
+fieldBool name bytes = match map (get name) (jsonBody bytes)
+  Some (Some value) => asBool value
+  _ => None
 
 -- # Driving
 
@@ -206,54 +202,36 @@ fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
    verified and the record kept. The shell always offers one, and against
    this file's `cheapIterations` records it would re-derive at the shipped
    count on every successful login. -}
-send : RequestContext -> Store -> Array Int -> (Store, Array Int)
-send context store bytes = match fromArray bytes
-  Some packed =>
-    let (next, response) =
-      handleBytes
-        server
-        { context | login = verdictAgainst noUpgradeSalt store packed }
-        store
-        packed
-    (next, toArray response)
-  None => panic "session_routes: request fixture holds a non-byte element"
+send : RequestContext -> Store -> Bytes -> (Store, Bytes)
+send context store bytes =
+  handleBytes
+    server
+    { context | login = verdictAgainst noUpgradeSalt store bytes }
+    store
+    bytes
 
 -- The salt a login that earns an upgrade re-derives the credential under.
-upgradeSalt : Array Int
-upgradeSalt = arrayMakeWith 16 (i => (i * 29 + 17) % 256)
+upgradeSalt : Bytes
+upgradeSalt = fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 29 + 17)))
 
 -- A salt of the wrong length, which `loginCheckBegin` takes as an offer of no
 -- upgrade at all.
-noUpgradeSalt : Array Int
-noUpgradeSalt = [||]
+noUpgradeSalt : Bytes
+noUpgradeSalt = empty
 
 -- | The verdict of `packed`'s password derivations against the credential
 -- `store` holds, offering `salt` as the upgrade, or `None` for a request that
 -- needs none.
-verdictAgainst : Array Int -> Store -> Bytes -> Option LoginVerdict
+verdictAgainst : Bytes -> Store -> Bytes -> Option LoginVerdict
 verdictAgainst salt store packed = match parseRequestClassified packed
   Err _ => None
-  Ok request =>
-    map
-      settled
-      (classifyLogin server (fromArrayAssumeByteDomain salt) store request)
+  Ok request => map settled (classifyLogin server salt store request)
 
 -- | One request against `store`, carrying a verdict computed elsewhere rather
 -- than against `store` itself.
-sendWithVerdict : Option LoginVerdict ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
-sendWithVerdict verdict store bytes = match fromArray bytes
-  Some packed =>
-    let (next, response) =
-      handleBytes
-        server
-        { contextAt testInstant 40 | login = verdict }
-        store
-        packed
-    (next, toArray response)
-  None => panic "session_routes: request fixture holds a non-byte element"
+sendWithVerdict : Option LoginVerdict -> Store -> Bytes -> (Store, Bytes)
+sendWithVerdict verdict store bytes =
+  handleBytes server { contextAt testInstant 40 | login = verdict } store bytes
 
 createSessionNsid : String
 createSessionNsid = "com.atproto.server.createSession"
@@ -271,7 +249,7 @@ createRecordNsid : String
 createRecordNsid = "com.atproto.repo.createRecord"
 
 -- | Log in with the right password at `instant`, identified by `seed`.
-login : Int -> Int -> Store -> (Store, Array Int)
+login : Int -> Int -> Store -> (Store, Bytes)
 login instant seed store =
   send
     (contextAt instant seed)
@@ -496,7 +474,7 @@ test "a wrong password and an unknown identifier are the same refusal" =
         ""
         createSessionNsid
         (loginJson "nobody.test" password))
-  expectEqual (fromUtf8 wrongPassword) (fromUtf8 unknownIdentifier)
+  expectEqual (responseText wrongPassword) (responseText unknownIdentifier)
 
 test "a login against a server with no credential is the same refusal" =
   let (_, noCredential) =
@@ -517,7 +495,7 @@ test "a login against a server with no credential is the same refusal" =
         ""
         createSessionNsid
         (loginJson accountHandleText "not it"))
-  expectEqual (fromUtf8 noCredential) (fromUtf8 wrongPassword)
+  expectEqual (responseText noCredential) (responseText wrongPassword)
 
 -- Nothing the client sent comes back. A refusal that quoted the identifier
 -- would put it in every log the response passes through on the way out.
@@ -531,7 +509,7 @@ test "a refusal repeats neither the password nor the identifier" =
         ""
         createSessionNsid
         (loginJson accountHandleText "not it"))
-  let text = fromUtf8 response
+  let text = responseText response
   expectEach [
     (
       "the refusal does not repeat the password",
@@ -618,7 +596,7 @@ test "the access token is refused after its window closes" =
 
 -- # refreshSession
 
-refreshed : (Store, Array Int)
+refreshed : (Store, Bytes)
 refreshed =
   send
     (contextAt (testInstant + 60) 4)
@@ -797,7 +775,7 @@ test "a consumed refresh token replayed within the grace window still works" =
 
 -- | The original refresh token, consumed at +60, presented `count - step`
 -- more times a second apart from +120, each against the store the last left.
-replayBurst : Int -> Int -> Store -> (Store, List (Array Int))
+replayBurst : Int -> Int -> Store -> (Store, List Bytes)
 replayBurst step count store =
   if step >= count then
     (store, [])
@@ -811,7 +789,7 @@ replayBurst step count store =
     (final, response :: rest)
 
 -- | The outcome of one request, the store it left behind discarded.
-answerTo : RequestContext -> Store -> Array Int -> String
+answerTo : RequestContext -> Store -> Bytes -> String
 answerTo context store bytes = match send context store bytes
   (_, response) => outcome response
 
@@ -868,7 +846,7 @@ test "a burst of replays inside the grace window leaves one of its pairs open" =
    when the original refresh token is replayed at +7261, past the grace window
    of its consumption at +60. Family B: a second login at +7000, which that
    replay must not touch. -}
-revocation : (Store, Store, String, String, String, String, Array Int)
+revocation : (Store, Store, String, String, String, String, Bytes)
 revocation =
   let (familyA, currentAccess, currentRefresh) =
     rotateAt (testInstant + 7000) 31 rotatedStore rotatedRefresh
@@ -939,7 +917,7 @@ test "a revocation leaves a sibling family on the same account open" =
 
 -- # deleteSession
 
-closed : (Store, Array Int)
+closed : (Store, Bytes)
 closed =
   send
     (contextAt (testInstant + 60) 7)
@@ -1005,7 +983,7 @@ test "a write with the deleted session's access token is refused first" =
 {- | Logging out with the original refresh token after the rotation at +60
    consumed it, inside the grace window. The token is still admitted, since a
    replay of it would be, and it ends the family it was consumed in. -}
-consumedClosed : (Store, Array Int)
+consumedClosed : (Store, Bytes)
 consumedClosed =
   send
     (contextAt (testInstant + 120) 60)
@@ -1041,7 +1019,7 @@ test "a consumed refresh token logged out with is not replayed afterwards" =
    at +7000, so its current access token is still inside its own two hours when
    the original refresh token is presented at +7261; family B is a second login
    at +7000, which the logout must not touch. -}
-lateConsumedClosed : (Store, String, String, Array Int)
+lateConsumedClosed : (Store, String, String, Bytes)
 lateConsumedClosed =
   let (familyA, currentAccess, _) =
     rotateAt (testInstant + 7000) 63 rotatedStore rotatedRefresh

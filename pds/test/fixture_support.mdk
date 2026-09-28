@@ -44,13 +44,6 @@ meaningful : String -> Bool
 meaningful line = line /= "" && not (startsWith "#" line)
 
 export
-appendBytes : Array Int -> Array Int -> Array Int
-appendBytes left right =
-  let leftSize = arrayLength left
-  arrayMakeWith (leftSize + arrayLength right) (i =>
-    if i < leftSize then left[i] else right[i - leftSize])
-
-export
 lastHex : String -> String
 lastHex text = stringSlice (stringLength text - 32) (stringLength text) text
 

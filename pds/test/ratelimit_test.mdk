@@ -3,12 +3,13 @@
    `(state, identity, class, now) -> (state, verdict)` step and the identity
    derivation from `X-Forwarded-For`. -}
 
-import bytes.{encodeUtf8}
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromU8Array}
 import http.{
   Header, headerName, headerValue, makeHeader, parseRequest, requestHeaders
 }
 import list.{replicate}
-import string.{join, repeat, toUtf8}
+import string.{join, repeat}
 import test.{
   expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
 }
@@ -348,10 +349,16 @@ fourByteCodepoint = "😀"
 -- | The headers of a real parsed request carrying `value` as its
 -- `X-Forwarded-For`.
 parsedXffHeaders : String -> List Header
-parsedXffHeaders value =
-  let line = "x-forwarded-for: \{value}"
-  let raw = "GET /xrpc/_health HTTP/1.1\r\nhost: pds.example\r\n\{line}\r\n\r\n"
-  match parseRequest (encodeUtf8 raw)
+parsedXffHeaders value = parsedXffHeaderBytes (encodeUtf8 value)
+
+-- | As `parsedXffHeaders`, for a value given as raw wire bytes, which need
+-- not be UTF-8.
+parsedXffHeaderBytes : Bytes -> List Header
+parsedXffHeaderBytes value =
+  let head = "GET /xrpc/_health HTTP/1.1\r\nhost: pds.example\r\n"
+  let raw =
+    encodeUtf8 "\{head}x-forwarded-for: " ++ value ++ encodeUtf8 "\r\n\r\n"
+  match parseRequest raw
     Ok request => requestHeaders request
     Err message => panic message
 
@@ -362,7 +369,7 @@ test "a multi-byte X-Forwarded-For is measured in bytes, not codepoints" =
   let value = xffOfCodepointLength (maxXffHeaderBytes / 4)
   expectAll [
     expectTrue (stringLength value <= maxXffHeaderBytes),
-    expectTrue (arrayLength (toUtf8 value) > maxXffHeaderBytes),
+    expectTrue (B.length (encodeUtf8 value) > maxXffHeaderBytes),
     expectEqual
       (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaders value)))
       "refused",
@@ -373,7 +380,7 @@ test "a multi-byte X-Forwarded-For is measured in bytes, not codepoints" =
 test "a multi-byte X-Forwarded-For under the byte ceiling is still honored" =
   let value = xffOfCodepointLength (maxXffHeaderBytes / 8)
   expectAll [
-    expectTrue (arrayLength (toUtf8 value) <= maxXffHeaderBytes),
+    expectTrue (B.length (encodeUtf8 value) <= maxXffHeaderBytes),
     expectEqual
       (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaders value)))
       lastHopAddress,
@@ -394,6 +401,32 @@ test "an X-Forwarded-For at the token-count cap is honored" =
 test "an X-Forwarded-For one token past the token-count cap is refused" =
   let headers = [xffHeader (xffOfTokenCount (maxXffTokens + 1))]
   expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "refused"
+
+{- (d3b) A last hop that is not UTF-8 is a header this module cannot read,
+   so it is charged to the shared `direct` bucket. A decode that repaired or
+   dropped the stray byte would key it into the bucket of the address it
+   resembles: `1.2.3.4` followed by a lone continuation byte 0xA0 (the second
+   byte of U+00A0, a no-break space) is not `1.2.3.4`. -}
+test "a last hop that is not UTF-8 is charged to direct, not to the address it resembles" =
+  let value = encodeUtf8 lastHopAddress ++ fromU8Array [|0xA0|]
+  expectEqual
+    (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaderBytes value)))
+    "direct"
+
+{- The token ceiling counts commas in the raw bytes, before any decode. 64
+   tokens of one 0xFF byte each, then an address, is 65 tokens whatever the
+   bytes decode to. A count taken after a lenient decode, which can read a
+   0xFF and the comma after it as one character, would count fewer. -}
+test "an X-Forwarded-For over the token cap is refused even when it is not UTF-8" =
+  let padding = B.concat (replicate maxXffTokens (fromU8Array [|0xFF, 0x2C|]))
+  let value = padding ++ encodeUtf8 lastHopAddress
+  expectAll [
+    expectTrue (B.length value <= maxXffHeaderBytes),
+    expectEqual
+      (labelOf
+        (identifyClient (TrustedProxy True) (parsedXffHeaderBytes value)))
+      "refused",
+  ]
 
 {- (d4) #2949 second round, the escape hatch itself: a cap violation must not
    resolve to ANY bucket.

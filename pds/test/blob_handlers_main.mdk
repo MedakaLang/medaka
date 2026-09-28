@@ -20,10 +20,11 @@
 
 import hex.{decode}
 import io.{readLines}
-import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import json.{Json(..), get, parse, stringify}
 import list.{sort}
-import string.{contains, drop, fromUtf8, indexOf, split, startsWith, toUtf8}
+import string.{contains, split, startsWith}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
 import lib.server_core.{
@@ -40,10 +41,10 @@ import lib.store.{
   storeSessionOpen,
   storeWithServerSecret,
 }
-import test.fixture_support.{
-  appendBytes, field, meaningful, testNonce, testSecret
+import test.fixture_support.{field, meaningful, testNonce, testSecret}
+import test.response_support.{
+  hasContentType, jsonBody, listedCids, rawBodyOf, statusLine
 }
-import test.response_support.{hasContentType, rawBodyOf}
 
 accountDidText : String
 accountDidText = "did:plc:s-blob-handlers-corpus"
@@ -112,76 +113,48 @@ authorizedStore = match storeWithServerSecret testSecret storeEmpty
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-postRaw : String -> Array Int -> Array Int
+postRaw : String -> Bytes -> Bytes
 postRaw mimeType body =
-  appendBytes
-    (toUtf8
-      "POST /xrpc/\{uploadBlobNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{accessToken}\r\nContent-Type: \{mimeType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n")
-    body
+  encodeUtf8
+      "POST /xrpc/\{uploadBlobNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{accessToken}\r\nContent-Type: \{mimeType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+    ++ body
 
-getQuery : String -> String -> Array Int
+getQuery : String -> String -> Bytes
 getQuery nsid query =
-  toUtf8
+  encodeUtf8
     "GET /xrpc/\{nsid}\{query} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
 
-send : Store -> Array Int -> (Store, Array Int)
-send store bytes = match fromArray bytes
-  Some packed =>
-    let (next, response) = handleBytes server testContext store packed
-    (next, toArray response)
-  None => panic "blob_handlers: request fixture holds a non-byte element"
+send : Store -> Bytes -> (Store, Bytes)
+send store bytes = handleBytes server testContext store bytes
 
 -- ── response reading ────────────────────────────────────────────────────────
-
-statusLineOf : Array Int -> String
-statusLineOf bytes = match split "\r\n" (fromUtf8 bytes)
-  first :: _ => drop 9 first
-  [] => "no status line"
-
-bodyText : Array Int -> String
-bodyText bytes = match indexOf "\r\n\r\n" (fromUtf8 bytes)
-  Some at => drop (at + 4) (fromUtf8 bytes)
-  None => ""
 
 -- | The `blob` ref value of an `uploadBlob` response, re-rendered. The corpus
 -- column it is compared against was rendered by `@atproto/lex-json`, whose
 -- `blob` shape is field-ordered `$type`/`ref`/`mimeType`/`size`, so this is a
 -- byte-for-byte comparison of the whole ref, not a field subset.
-blobRefJsonText : Array Int -> String
-blobRefJsonText bytes = match parse (bodyText bytes)
-  Ok body => match get "blob" body
+blobRefJsonText : Bytes -> String
+blobRefJsonText bytes = match jsonBody bytes
+  Some body => match get "blob" body
     Some blob => stringify blob
     None => "<missing:blob>"
-  Err message => "<unparsable:\{message}>"
+  None => "<unparsable>"
 
-blobRefCidText : Array Int -> String
-blobRefCidText bytes = match parse (bodyText bytes)
-  Ok body => match get "blob" body
+blobRefCidText : Bytes -> String
+blobRefCidText bytes = match jsonBody bytes
+  Some body => match get "blob" body
     Some blob => match get "ref" blob
       Some ref => match get "$link" ref
         Some (JString link) => link
         _ => "<missing:ref.$link>"
       None => "<missing:ref>"
     None => "<missing:blob>"
-  Err message => "<unparsable:\{message}>"
-
-stringEntries : List Json -> List String
-stringEntries [] = []
-stringEntries ((JString value) :: rest) = value :: stringEntries rest
-stringEntries (_ :: rest) = stringEntries rest
-
-listedCids : Array Int -> List String
-listedCids bytes = match parse (bodyText bytes)
-  Ok body => match get "cids" body
-    Some (JArray entries) => stringEntries (toList entries)
-    _ => []
-  Err _ => []
+  None => "<unparsable>"
 
 -- ── corpus rows ─────────────────────────────────────────────────────────────
 
-mustHex : String -> Array Int
-mustHex text =
-  toArray (resultOrPanic "blob_handlers: malformed hex" (decode text))
+mustHex : String -> Bytes
+mustHex text = resultOrPanic "blob_handlers: malformed hex" (decode text)
 
 -- ── grading ─────────────────────────────────────────────────────────────────
 
@@ -202,7 +175,7 @@ uploadRows [] store passed = (store, passed)
 uploadRows (row :: rest) store passed =
   let (next, response) =
     send store (postRaw (field 1 row) (mustHex (field 2 row)))
-  let status = statusLineOf response
+  let status = statusLine response
   let cid = blobRefCidText response
   let ref = blobRefJsonText response
   let matched =
@@ -221,14 +194,14 @@ readRows (row :: rest) store passed =
     send
       store
       (getQuery getBlobNsid "?did=\{accountDidText}&cid=\{field 3 row}")
-  let status = statusLineOf response
+  let status = statusLine response
   let matched =
     check
       "getBlob-\{field 0 row}"
       (status == "200 OK"
         && rawBodyOf response == mustHex (field 2 row)
         && hasContentType (field 1 row) response)
-      "status=\{status} bytes=\{intToString (arrayLength (rawBodyOf response))}"
+      "status=\{status} bytes=\{intToString (B.length (rawBodyOf response))}"
   readRows rest store (passed + matched)
 
 listCell : List (List String) -> Store -> <IO> Int
