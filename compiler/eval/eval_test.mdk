@@ -54,7 +54,7 @@ lookupCount wanted ((key, count) :: rest)
   | wanted == key = Some count
   | otherwise = lookupCount wanted rest
 
-test "method requires counts recognize bare and canonical route words" =
+test "method requires counts are keyed by the canonical route word only" =
   let numOrigin = OriginModule "core"
   let forgeOrigin = OriginModule "fixture"
   let counts = buildMethodReqCounts [
@@ -65,10 +65,9 @@ test "method requires counts recognize bare and canonical route words" =
   let forgeKey = implRouteKeyWord forgeOrigin "Forge" [boxTy] None
   expectAll
     [
-      -- The short route keeps declaration-order behavior; it is the type's
-      -- word, qualified by its module (#1397).
-      expectEqual (Some 1) (lookupCount ("fromInt", "fixture.Box") counts),
-      -- Canonical collision routes recover the selected definition's own ABI.
+      -- A dictionary word names one instance row, so the type's bare word
+      -- answers nothing: two interfaces' rows at one head stay apart.
+      expectEqual None (lookupCount ("fromInt", "fixture.Box") counts),
       expectEqual (Some 1) (lookupCount ("fromInt", numKey) counts),
       expectEqual (Some 2) (lookupCount ("fromInt", forgeKey) counts),
       expectEqual None (lookupCount ("missing", numKey) counts),

@@ -1470,8 +1470,8 @@ therefore matches every instantiation, but its body only typechecks at `c := Str
 the design element as *"G: W3 rigid everywhere; #803 bound keeps pre-unify placement"*.
 
 **W3 cannot reach #819, by construction.** W3 is *method-scheme* rigidity —
-`checkImplMethodRigidity` / `checkDefaultMethodRigidity` / `checkImplEffVarRigidity`
-(`:14749`, `:14766`, `:14927`), all gated by `inRigidityBodyRef`. Impl-**head** variables
+`checkMethodRigidityCore` / `checkMethodEffVarRigidity` / `checkImplEffVarRigidity`,
+run by the one method-body driver `inferMethodBody` for impl and default bodies. Impl-**head** variables
 are the instance's own quantifiers (the substitution φ) and are **deliberately exempt**;
 the source says so at `:14926`: *"(The TYPE-var half has no such carve-out: a method type
 var may never alias an impl-head type var.)"* — i.e. the rule that exists is about method

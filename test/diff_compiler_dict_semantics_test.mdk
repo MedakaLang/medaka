@@ -574,7 +574,7 @@ table = [
   Row {
     entry = "s3-w3-default-method-rigidity.mdk",
     label =
-      "§3 W3 DEFAULT-BODY half: W3 also governs \"the class`s default, which is checked by this same rule\". A different site (`checkDefaultMethodRigidity`) from the two impl-body rows, and the corpus previously had NO fixture declaring a default body inside an `interface` at all",
+      "§3 W3 DEFAULT-BODY half: W3 also governs \"the class`s default, which is checked by this same rule\". A different body kind (the default kind of `MethodBodyKind`) from the two impl-body rows, and the corpus previously had NO fixture declaring a default body inside an `interface` at all",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",

@@ -1,4 +1,4 @@
--- Review F5 (m-evidence): an inherited default calls a SUPERCLASS method on its
+-- #3509: an inherited default calls a SUPERCLASS method on its
 -- receiver while the interface's head collides with a same-spelled interface at the
 -- same type, so the `ia.Shape Sq` dictionary's word is its canonical key.  The
 -- super call projects `Base Sq` out of that receiver and dispatches by `Base Sq`'s
