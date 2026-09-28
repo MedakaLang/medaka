@@ -36,6 +36,11 @@
 //                      source page must exist; a link to a missing one still
 //                      falls through to the repository rule (and `make
 //                      docs-links` refuses it). Repeatable.
+//   --sibling-exclude <name>=<a,b>  basenames of that sibling's SOURCE pages its
+//                      own builder does not render (the guide's OUTLINE.md, the
+//                      stdlib notes). A link to one of them is not a page on the
+//                      site, so it takes the repository rule like any other
+//                      out-of-set link. Repeatable; must name a declared sibling.
 //   --dist <dir>       the directory of `.mdk` modules the playground page SHIPS
 //                      (playground/dist, staged by build_playground_wasm.sh).
 //                      Optional: given, a block importing a module that is not
@@ -281,7 +286,7 @@ function parseArgs(argv) {
     // --playground-url. The renderer knows nothing about sibling doc sets, so
     // the caller that lays them out beside each other supplies the links.
     navLinks: [],
-    // Sibling doc sets, {name, href}: see --sibling above. Empty = every
+    // Sibling doc sets, {name, href, exclude}: see --sibling above. Empty = every
     // out-of-set link goes to the repository, exactly as before.
     siblings: [],
     // null = "this caller does not know the shipped-module set", which SKIPS the
@@ -320,7 +325,17 @@ function parseArgs(argv) {
         if (name.includes('/') || name.includes('\\')) {
           throw new Error(`--sibling name must be a bare directory name under docs/, not a path: ${name}`);
         }
-        opts.siblings.push({ name, href: v.slice(eq + 1).replace(/\/+$/, '') });
+        opts.siblings.push({ name, href: v.slice(eq + 1).replace(/\/+$/, ''), exclude: [] });
+        break;
+      }
+      case '--sibling-exclude': {
+        const v = next();
+        const eq = v.indexOf('=');
+        if (eq <= 0 || eq === v.length - 1) throw new Error(`--sibling-exclude needs name=a,b, got: ${v}`);
+        const name = v.slice(0, eq);
+        const sib = opts.siblings.find((s) => s.name === name);
+        if (!sib) throw new Error(`--sibling-exclude names \`${name}\`, which no earlier --sibling declared`);
+        sib.exclude.push(...v.slice(eq + 1).split(',').map((s) => s.trim()).filter(Boolean));
         break;
       }
       case '--dist': opts.distDir = resolve(next()); break;
@@ -349,7 +364,8 @@ export function renderDocSet(opts) {
   // to docs/advanced), so it is resolved from the source's parent, never from
   // the repo root: pointing the renderer at a scratch copy of a doc set keeps
   // its siblings scratch-relative too.
-  const siblingDirs = siblings.map(({ name, href }) => ({ dir: resolve(src, '..', name), href }));
+  const siblingDirs = siblings.map(({ name, href, exclude = [] }) =>
+    ({ dir: resolve(src, '..', name), href, exclude: new Set(exclude) }));
 
   const shipped = shippedModules(distDir);
 
@@ -520,12 +536,13 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors, siblin
   // A page of a sibling doc set rendered beside this one (--sibling): the
   // guide's ../advanced/effects-1-rows.md is a rendered page at
   // ../advanced/effects-1-rows.html on the deployed site. Only a `.md` DIRECTLY
-  // inside the sibling's directory qualifies, and only if it exists — a missing
+  // inside the sibling's directory qualifies, and only if it exists and the
+  // sibling's builder renders it (--sibling-exclude) — a missing or unrendered
   // one falls through to the repository rule below rather than becoming a
   // plausible-looking 404 on our own site.
   if (path.endsWith('.md')) {
-    for (const { dir, href: base } of siblingDirs) {
-      if (dirname(abs) === dir && existsSync(abs)) {
+    for (const { dir, href: base, exclude } of siblingDirs) {
+      if (dirname(abs) === dir && existsSync(abs) && !exclude.has(basename(abs))) {
         return `${base}/${basename(abs).replace(/\.md$/, '.html')}${frag}`;
       }
     }

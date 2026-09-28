@@ -185,7 +185,7 @@ if [ -n "$missing_advanced" ]; then
   exit 1
 fi
 
-# Third instance of the same shape, for the stdlib reference. The expected page
+# Fourth instance of the same shape, for the stdlib reference. The expected page
 # set is DERIVED from docs/stdlib/ minus build_stdlib_docs.sh's OWN --exclude
 # list, read back out of that script — one copy of the exclusion set, not two.
 # (test/diff_compiler_guide_render.sh derives it the same way, for the same

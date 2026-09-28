@@ -176,7 +176,7 @@ HEADER
     $GUIDE_FILES
 
   emit_group "advanced — one topic at a time, in depth" \
-    "The guide's sequel: each topic (effects first) is a run of chapters that starts from what the guide taught. Executable docs like the guide — every example is compiled and run by \`check_syntax_examples\`." \
+    "The guide's sequel: each topic (effects first) is a run of chapters that starts from what the guide taught. Executable docs like the guide — every example is compiled by \`check_syntax_examples\`, and run where it declares its output." \
     $ADVANCED_FILES
 
   emit_group "design — open/partial work" \

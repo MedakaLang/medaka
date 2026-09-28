@@ -267,6 +267,25 @@ async function main() {
       const bareGuide = await page.evaluate(async (u) => (await fetch(u)).status, base + '/guide/');
       check('bare /guide/ route serves a directory index (200)', bareGuide === 200, `status ${bareGuide}`);
 
+      // The Advanced Topics section (docs/advanced, rendered by
+      // build_advanced_docs.sh into site/advanced/) is a sibling doc set with
+      // the same shape: an apex link, a landing page, a bare route, and a
+      // cross-link INTO the guide that must resolve on this origin (the
+      // renderer's --sibling rewrite) rather than leaving for GitHub.
+      const advHref = await page.evaluate(() => document.querySelector('.links a[href*="advanced/"]')?.getAttribute('href') ?? null);
+      check('apex header links into the advanced topics', !!advHref, String(advHref));
+      const advStatus = (await page.goto(base + '/advanced/00-about.html', { waitUntil: 'domcontentloaded' })).status();
+      check('/advanced/00-about.html loads (200)', advStatus === 200, `status ${advStatus}`);
+      const bareAdv = await page.evaluate(async (u) => (await fetch(u)).status, base + '/advanced/');
+      check('bare /advanced/ route serves a directory index (200)', bareAdv === 200, `status ${bareAdv}`);
+      const advToGuide = await page.evaluate(() => document.querySelector('article a[href^="../guide/"]')?.getAttribute('href') ?? null);
+      check('advanced landing page links into the guide on this origin', !!advToGuide && advToGuide.endsWith('.html'), String(advToGuide));
+      if (advToGuide) {
+        const advToGuideStatus = await page.evaluate(async (h) => (await fetch(h)).status, advToGuide);
+        check(`that cross-link resolves (${advToGuide} -> ${advToGuideStatus})`, advToGuideStatus === 200);
+      }
+      await page.goto(base + GUIDE_ENTRY, { waitUntil: 'domcontentloaded' });
+
       // A chapter page: real rendered content, not an empty shell.
       const chapterStatus = (await page.goto(base + '/guide/03-functions.html', { waitUntil: 'domcontentloaded' })).status();
       check('a chapter page loads (200)', chapterStatus === 200, `status ${chapterStatus}`);

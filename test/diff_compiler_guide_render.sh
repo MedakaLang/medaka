@@ -18,17 +18,21 @@
 #
 # It also makes the renderer's inputs DERIVABLE by preflight: this file's live
 # references to playground/guide_render_test.mjs, playground/render_docs.mjs,
-# playground/build_guide.sh and playground/build_stdlib_docs.sh are what
-# test/preflight.sh's `_consumes` scan reads to map a change in any of those four
-# back to this gate. Do not demote those paths to prose-only mentions.
+# playground/build_guide.sh, playground/build_advanced_docs.sh and
+# playground/build_stdlib_docs.sh are what test/preflight.sh's `_consumes` scan
+# reads to map a change in any of those five back to this gate. Do not demote
+# those paths to prose-only mentions.
 #
-# TWO DOC SETS, ONE MACHINE. The renderer is doc-set-agnostic by design, and
-# since #2384 it has a second real caller: docs/stdlib, rendered by
-# playground/build_stdlib_docs.sh. Both are graded here, by the same assertions,
-# because the two exercise disjoint halves of the renderer — the guide has no
-# `index.md` (so it takes the SYNTHETIC index arm) and no doctests (so every
-# `medaka` fence takes the FOOTER arm), and the stdlib reference is the exact
-# inverse on both. Grading only one leaves the other arm ungated.
+# THREE DOC SETS, ONE MACHINE. The renderer is doc-set-agnostic by design, and
+# it has three real callers: docs/guide, docs/stdlib (#2384, rendered by
+# playground/build_stdlib_docs.sh) and docs/advanced (the Advanced Topics
+# section, playground/build_advanced_docs.sh). All are graded here, by the same
+# assertions, because they exercise different halves of the renderer — the guide
+# and the advanced set have no `index.md` (so they take the SYNTHETIC index arm)
+# and no doctests (so every `medaka` fence takes the FOOTER arm), and the stdlib
+# reference is the exact inverse on both. Grading only one leaves the other arm
+# ungated. The three link to each other (`--sibling`), and each arm below passes
+# the pairs its builder passes, read out of the builder.
 #
 # Node only — it grades the RENDERER, not the compiler, so it needs no ./medaka
 # and no oracle binary.
@@ -74,24 +78,66 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-# Each arm passes the SAME --sibling pairs its builder passes to the renderer, so
-# the harness grades the cross-set links (check 14) under the rule the deploy
-# render actually applies.
+# Each arm passes the SAME --sibling / --sibling-exclude pairs its builder passes
+# to the renderer, READ OUT OF THE BUILDER (the same discipline as
+# STDLIB_EXCLUDE above): a hand-typed second copy here would grade the cross-set
+# links (check 14) under a rule the deploy render might no longer apply. The
+# values carry no spaces, so the unquoted expansion splits into arguments.
+sibling_args() {
+  sed -n 's/^  \(--sibling[-a-z]*\) "\([^"]*\)" \\$/\1 \2/p' "$1" | tr '\n' ' '
+}
+GUIDE_SIBLINGS="$(sibling_args "$BUILDER")"
+ADVANCED_SIBLINGS="$(sibling_args "$ADVANCED_BUILDER")"
+STDLIB_SIBLINGS="$(sibling_args "$STDLIB_BUILDER")"
+for pair in "$BUILDER:$GUIDE_SIBLINGS" "$ADVANCED_BUILDER:$ADVANCED_SIBLINGS" "$STDLIB_BUILDER:$STDLIB_SIBLINGS"; do
+  case "$pair" in
+    *:*--sibling*) ;;
+    *) echo "FAIL: could not read any --sibling pair out of ${pair%%:*}" >&2; exit 1 ;;
+  esac
+done
+
+# A builder's --sibling-exclude for a set must equal that set's OWN --exclude,
+# read out of its builder: the two lists are the one fact (which source pages
+# that set does not render) stated in two places, so they are compared here
+# rather than trusted. The advanced set excludes nothing, so no builder may
+# claim it does.
+own_exclude() {
+  sed -n 's/^  --exclude \(.*\) \\$/\1/p' "$1"
+}
+claimed_exclude() {
+  sed -n "s/^  --sibling-exclude \"$2=\([^\"]*\)\" \\\\\$/\1/p" "$1"
+}
+for claimer in "$BUILDER" "$ADVANCED_BUILDER" "$STDLIB_BUILDER"; do
+  for target in "guide:$BUILDER" "advanced:$ADVANCED_BUILDER" "stdlib:$STDLIB_BUILDER"; do
+    name="${target%%:*}"
+    owner="${target#*:}"
+    [ "$claimer" != "$owner" ] || continue
+    claimed="$(claimed_exclude "$claimer" "$name")"
+    if grep -q "^  --sibling \"$name=" "$claimer"; then
+      if [ "$claimed" != "$(own_exclude "$owner")" ]; then
+        echo "FAIL: ${claimer#"$ROOT"/} says sibling $name excludes '$claimed', but ${owner#"$ROOT"/} excludes '$(own_exclude "$owner")'" >&2
+        exit 1
+      fi
+    fi
+  done
+done
+echo "-- sibling pairs read out of the builders (and their exclude lists agree)"
+
 echo "-- guide render assertions (node playground/guide_render_test.mjs)"
-node "$TEST" --src "$SRC" \
-  --sibling "advanced=../advanced" --sibling "stdlib=../stdlib" || exit 1
+# shellcheck disable=SC2086
+node "$TEST" --src "$SRC" $GUIDE_SIBLINGS || exit 1
 
 echo "-- advanced topics render assertions (same harness, docs/advanced)"
 # No exclusions: docs/advanced has no planning doc, so every source page ships.
 # An explicit empty --exclude overrides the harness's guide default (OUTLINE.md).
+# shellcheck disable=SC2086
 node "$TEST" --src "$ADVANCED_SRC" --exclude "" \
-  --title "Medaka: Advanced Topics" \
-  --sibling "guide=../guide" --sibling "stdlib=../stdlib" || exit 1
+  --title "Medaka: Advanced Topics" $ADVANCED_SIBLINGS || exit 1
 
 echo "-- stdlib reference render assertions (same harness, docs/stdlib)"
+# shellcheck disable=SC2086
 node "$TEST" --src "$STDLIB_SRC" --exclude "$STDLIB_EXCLUDE" \
-  --title "The Medaka Standard Library" \
-  --sibling "guide=../guide" --sibling "advanced=../advanced" || exit 1
+  --title "The Medaka Standard Library" $STDLIB_SIBLINGS || exit 1
 
 # The renderer is doc-set-agnostic on purpose (build_guide.sh is a thin entry
 # point over it, and the stdlib reference is meant to reuse the same machine,

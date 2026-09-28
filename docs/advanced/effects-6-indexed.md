@@ -98,7 +98,17 @@ error: indexed.mdk:13:47: Effectful value used where <> is allowed, but it perfo
 Here `runPure : Job <> a -> a` runs a job with no row of its own, which is honest
 only because its argument's index is empty. Widening the index to `<Stdout>`
 would let `runPure` print from a pure position, so the compiler holds the index
-fixed and reports the callback that does not fit.
+fixed and reports the callback that does not fit. When the two indices are both
+already written, the message names the invariance directly:
+
+```
+error: indexed.mdk:4:10: Effect index mismatch: <Stdout> vs <>. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. `<Stdout | e>`) if it really should accept more.
+  |
+4 | widen j = j
+  |           ^
+```
+
+for `widen : Job <> Int -> Job <Stdout> Int` with `widen j = j`.
 
 ## Combining indices
 

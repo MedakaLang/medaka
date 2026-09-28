@@ -43,8 +43,9 @@ Three new things are in that program. The signature of `load` names its argument
 label at whatever path the caller passes. `readConfig` bounds its row with a
 literal, `<Store "cfg/*">`, and its body is checked against it: `"cfg/app.toml"`
 lies within `"cfg/*"`, so it is accepted. `readAll` writes the label bare, which
-means the whole domain, any path at all, and `readBoth` writes two atoms of the
-same label, which admits either.
+means the whole domain, any path at all, and `readBoth` writes two *atoms* of the
+same label (an atom is one label with one parameter, the unit a row is made of),
+which admits either.
 
 Reading a path the bound does not admit is refused with the same message as any
 other escape, now with parameters in it:
@@ -64,9 +65,11 @@ does not admit `"cfg/app.toml.bak"`; `"cfg/app.toml*"` does. Two patterns are
 never merged into a wider one: `<Store "cfg/a/*", Store "cfg/b/*">` admits both
 subtrees and nothing else, not `"cfg/*"`.
 
-There is one restriction on what may be written, and it exists for hosts. A
-written element has to contain a `/` or end in `*`, so that `"a.com"` cannot be
-written as a pattern that would also admit `a.com.evil.com`:
+There is one restriction on what may be written: an element of a `Prefix` label
+other than `FFI` has to contain a `/` or end in `*`. The rule is meant to keep a
+host bound explicit about where it stops, though as stated it neither prevents
+`"a.com*"` (a pattern that admits `a.com.evil.com`) nor is needed for an exact
+`"a.com"` (which admits only itself):
 
 ```
 error: authority.mdk:3:22: Invalid effect parameter on <FileRead>: pattern "notes.txt" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)
@@ -75,18 +78,18 @@ error: authority.mdk:3:22: Invalid effect parameter on <FileRead>: pattern "note
   |                       ^
 ```
 
-> ⚠️ **A bare filename cannot be written as a bound.** Inference charges
-> `readFile "notes.txt"` with `<FileRead "notes.txt">`, and that exact element is
-> refused in a signature and in a `check-policy` allow list alike, so the only
-> writable bounds for it are `"notes.txt*"` and the bare label. Tracked as
-> [#3557](https://github.com/MedakaLang/medaka/issues/3557); until then, keep
-> files under a directory.
+One consequence is that a bare filename cannot be written as a bound. Inference
+charges `readFile "notes.txt"` with `<FileRead "notes.txt">`, and that exact
+element is refused in a signature and in a `check-policy` allow list alike, so
+the only writable bounds for it are `"notes.txt*"` and the bare label. That is
+[#3557](https://github.com/MedakaLang/medaka/issues/3557); until it is closed,
+keep files under a directory.
 
 ## Named arguments
 
 `(path : String) -> <Store path> Int` is the signature of an operation whose
-authority is decided by its caller. Inside such a function, the body may use the
-named argument, and it may narrow it, but it may not reach anything else:
+authority is decided by its caller. Inside such a function, the body may forward
+the named argument to another operation, but it may not reach anything else:
 
 ```medaka
 effect Store Prefix
@@ -134,11 +137,11 @@ So a program that reads one file is charged with that one file, with nothing
 written by the programmer:
 
 ```medaka
-import io.{readLines}
+import string.{lines}
 
-countLines : Unit -> <FileRead "notes/*", IO> Int
+countLines : Unit -> <FileRead "notes/*"> Int
 countLines () = match readFile "notes/today.txt"
-  Ok text => length (readLines text)
+  Ok text => length (lines text)
   Err _ => 0
 
 main = println (countLines ())
@@ -150,10 +153,11 @@ main = println (countLines ())
 
 (The file does not exist where the examples are run, so the count is 0. That is
 itself the point: the effect and the failure are separate, and the row was
-checked before anything ran.) The `IO` in `countLines`'s row is there because
-`readLines`, the line splitter from the `io` module, is declared `<IO>`; with
-`readFile` alone the bound `<FileRead "notes/*">` suffices. Narrowing the `io`
-helpers is tracked as [#3388](https://github.com/MedakaLang/medaka/issues/3388).
+checked before anything ran.) Not every library function is this precise yet.
+The `io` module's `readLines`, which reads a file and splits it, is declared
+`<IO>` rather than at its path's authority, so a function that calls it cannot
+carry a narrow bound; narrowing those helpers is tracked as
+[#3388](https://github.com/MedakaLang/medaka/issues/3388).
 
 ## How the compiler reads a path
 
@@ -198,7 +202,8 @@ main =
 - A **`let`-bound** name is whatever it was bound to, in the scope it was bound in.
 - An **`if` or `match`** is the join of its branches, one element per branch.
 - **Anything else** is the whole domain. A parameter of unknown origin, a function
-  result, a field of a record: the compiler cannot know what string it holds, so
+  result, a field of a record, unless its type carries an authority of its own
+  (the qualified values below): the compiler cannot know what string it holds, so
   it assumes any string.
 
 The last rule is the one that matters for security. A path that arrives at
@@ -211,14 +216,20 @@ error: authority.mdk:7:23: Effectful value used where <Store "cfg/*"> is allowed
   |                        ^
 ```
 
-So a function bounded to `"cfg/*"` cannot be talked into reading a path chosen by
-its caller. There is no separate check for "computed destinations"; the rule
-that unknown means everything, and everything fits nothing narrower than the bare
-label, is that check. The price is that the abstraction is conservative. It never
-under-approximates (that would be a hole), but it can over-approximate, refusing a
-program a human can see is fine. When that happens, the remedy is to name the
-argument in the signature, as `under` does above, and let the caller supply the
-authority.
+So a function bounded to `"cfg/*"` cannot be talked into reading a path its
+caller chose outright. There is no separate check for "computed destinations";
+the rule that unknown means everything, and everything fits nothing narrower
+than the bare label, is that check. The price is that the abstraction is
+conservative. It can over-approximate, refusing a program a human can see is
+fine, and when that happens the remedy is to name the argument in the signature,
+as `under` does above, and let the caller supply the authority.
+
+> ⚠️ **A prefix is a prefix of the string, not of the file.** `"cfg/" ++ name` is
+> within `"cfg/*"` for every `name`, including `"../secret.txt"`, and the runtime
+> resolves the `..`. So a `<FileRead "cfg/*">` bound, and the manifest it produces,
+> can today be walked out of by a caller-supplied suffix. Tracked as
+> [#3564](https://github.com/MedakaLang/medaka/issues/3564); until it is closed,
+> treat a path bound as documentation of intent, not as a sandbox.
 
 ## Sets and products
 
@@ -271,19 +282,19 @@ main = putStrLn "\{fetchApi ()}"
 200
 ```
 
-`<Http host>` is the same as `<Http Host=host>`, and an axis a row does not
-mention is the whole of that axis. A written product may pin several:
-`<Http Host="api.example.com/*" Method={"GET"}>`. Comparison is pointwise, so a
-row that says nothing about `Method` does not fit a bound that restricts it.
-
-> ⚠️ **Only the primary axis can name an argument.** `<Http Host=host Method=m>`
-> is a parse error; a written axis must be a literal. So a Medaka function can
-> pin `Method` only in a literal bound, and an operation whose method is decided
-> by its caller charges the whole `Method` axis. Tracked as
-> [#3558](https://github.com/MedakaLang/medaka/issues/3558).
+A bare name or string in a product atom, `<Http host>`, lifts into the primary
+axis, and an axis a row does not mention is the whole of that axis. A written
+product pins axes by name with literals: `<Http Host="api.example.com/*"
+Method={"GET"}>`. Comparison is pointwise, so a row that says nothing about
+`Method` does not fit a bound that restricts it. Only the primary axis can name
+an argument; `Host=host` and `Method=method` are parse errors, so an operation
+whose method is decided by its caller charges the whole `Method` axis
+([#3558](https://github.com/MedakaLang/medaka/issues/3558)).
 
 In a manifest a product renders as a table, and a label that holds several
-elements renders as an array:
+elements renders as an array. The first transcript is the `Http` program above;
+the second is the "How the compiler reads a path" program, whose `main` reaches
+both subtrees:
 
 ```
 $ medaka manifest product.mdk
@@ -293,7 +304,7 @@ Stdout = true
 ```
 
 ```
-$ medaka manifest authority.mdk
+$ medaka manifest paths.mdk
 [package.capabilities]
 IO = true
 Store = ["cfg/*", "data/*"]
@@ -365,7 +376,12 @@ error: authority.mdk:6:38: The qualifier names 'dir', but no effect atom or inde
 > qualifier needs a label atom the function does not perform, and an extension
 > of a named authority counts as the whole domain in a result. Forward the
 > argument unchanged, or move the concatenation to the call site. Tracked as
-> [#3559](https://github.com/MedakaLang/medaka/issues/3559).
+> [#3559](https://github.com/MedakaLang/medaka/issues/3559). The mirror image
+> is worse: in *argument* position, `load (dir ++ "/x")` under `<Store dir>` is
+> accepted today and charged `dir`, although a caller that passed an exact
+> element is then reaching beyond it. That is
+> [#3501](https://github.com/MedakaLang/medaka/issues/3501), ruled to be refused;
+> do not rely on it.
 
 ## Relations the compiler keeps
 
