@@ -1,0 +1,21 @@
+-- A literal that contains `"` must not make one tuple equal to another:
+-- e2's authority is outside the bound, in either statement order.
+effect Q Product (A : Prefix, B : Prefix, M : Set)
+
+extern e1 : Unit -> <FFI, Q A="x/1" B="y/*" M={"GET"}> Unit
+extern e2 : Unit -> <FFI, Q A="x/1\" B=\"y/*" M={"POST"}> Unit
+
+f : Unit -> <FFI, Q A="x/1" B="y/*" M={"GET", "POST"}> Unit
+f _ =
+  let _ = e1 ()
+  e2 ()
+
+g : Unit -> <FFI, Q A="x/1" B="y/*" M={"GET", "POST"}> Unit
+g _ =
+  let _ = e2 ()
+  e1 ()
+
+h : Unit -> <FFI, Q A="x/1" B="y/*" M={"GET", "POST"}> Unit
+h _ = e2 ()
+
+main = println 1

@@ -204,9 +204,6 @@ import types.effect_domain.{
   subTopOf,
   lookupAxis,
   productPrimaryLift,
-  djoin,
-  djoinN,
-  joinAxis,
   axisUnion,
   productNorm,
   isSubTop,
@@ -1750,6 +1747,12 @@ checkEffectParamsDecl (DData { dataCtors = ctors }) =
     ctors
 checkEffectParamsDecl (DTypeAlias { tyAliasRhs = rhs }) =
   checkEffectParamsTy rhs
+checkEffectParamsDecl (DInterface { methods = ms }) =
+  fold
+    (_ m => match m
+      IfaceMethod _ t _ _ => checkEffectParamsTy t)
+    ()
+    ms
 checkEffectParamsDecl _ = ()
 
 -- #784 (Option A): reject an interface method whose signature has a free effect
@@ -13374,7 +13377,7 @@ qualifyByTerms etbl ps loc t =
       else
         let top = match cells
           cell :: _ => authvarDomain cell
-          [] => PPrefix None
+          [] => literalDomainTop lits
         let src = qualifierSource escStr ps
         let _ =
           fold
@@ -13389,6 +13392,20 @@ qualifyByTerms etbl ps loc t =
           t
           (authJoinAll
             (map AVar cells ++ map (p => AConst (writtenParam top p)) lits))
+
+-- The domain a qualifier that names no binder is written in, read from its
+-- literals' shape: a set is a Set domain's element, axes a Product's, and a
+-- string a Prefix pattern (a string's own domain).
+literalDomainTop : List EffParamTy -> Param
+literalDomainTop ((EPSet _) :: _) = PSet None
+literalDomainTop ((EPProduct axes) :: _) =
+  PProduct
+    (map
+      (a => match snd a
+        EPSet _ => (fst a, PSet None)
+        _ => (fst a, PPrefix None))
+      axes)
+literalDomainTop _ = PPrefix None
 
 -- The problems of a written authority term's literals, as elements of the
 -- domain whose top is [top]: each literal as an atom's parameter is checked,

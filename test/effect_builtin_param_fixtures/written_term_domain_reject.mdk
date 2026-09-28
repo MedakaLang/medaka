@@ -1,9 +1,6 @@
--- A literal in a qualifier or an index is an element of its domain: a Set
--- or a pattern without a delimiter is refused, never read as the whole
--- domain.
-setQual : String @({"A", "B"}) -> <Env> Option String
-setQual k = getEnv k
-
+-- A literal in a qualifier or an index is an element of its domain: a
+-- pattern without a delimiter, or a Set where a Prefix pattern goes, is
+-- refused, never read as the whole domain.
 bareQual : String @"a.com" -> <Net> Unit
 bareQual h =
   let _ = netResolve h

@@ -9,9 +9,9 @@
 
 import types.effect_domain.{
   Param(..), dsub, canonParam, drender, isSubTop, subTopOf, extendParam,
-  appendParam, dantichain, dsubAny
+  appendParam, dantichain, dsubAny, djoinN, setCardCap
 }
-import support.util.{joinWith, reverseL}
+import support.util.{joinWith, reverseL, listLen}
 import string.{trimLeft}
 import map as M
 import map.{Map(..)}
@@ -124,6 +124,25 @@ assemble consts vars = match map AConst consts ++ map AVar (M.values vars)
   [] => AJoin []
   [m] => m
   ms => AJoin ms
+
+-- A value's abstraction may over-approximate it, so a value whose authority
+-- would hold more than `setCardCap` constants is folded by the domain join
+-- into one element that covers them all; its variables are kept. Only the
+-- abstraction α calls this: a bound is never a value's abstraction, so no
+-- bound is ever folded.
+export
+authWidenValue : Authority -> Authority
+authWidenValue a =
+  let (consts, vars) = collect [a] [] Tip
+  let cs = dantichain consts
+  if listLen cs > setCardCap then
+    assemble [fold djoinN (headOr cs) cs] vars
+  else
+    authNorm a
+
+headOr : List Param -> Param
+headOr (p :: _) = p
+headOr [] = PUnit
 
 export
 authJoin : Authority -> Authority -> Authority

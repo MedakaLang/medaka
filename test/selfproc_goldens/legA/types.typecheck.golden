@@ -1692,6 +1692,7 @@ letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 letPatRename : Pat -> Expr -> Map String String -> (Pat, Map String String)
 letRecNonFunctionMsg : String -> String
 litType : Lit -> Mono
+literalDomainTop : List EffParamTy -> Param
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit

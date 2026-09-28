@@ -1,0 +1,5 @@
+-- A caller passes a member outside a Set qualifier.
+readE : String @({"HOME", "PATH"}) -> <Env> Option String
+readE k = getEnv k
+
+main = println (debug (readE "SECRET"))

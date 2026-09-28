@@ -480,7 +480,6 @@ test "a qualifier or an index past the cap is refused, not folded" = expectAll [
 test "a qualifier or an index literal is an element of its domain" = expectCheckReject
   (fixture "written_term_domain_reject.mdk")
   [
-    "Invalid authority in the qualifier `@({\"A\", \"B\"})`: label 'qualifier' takes a prefix pattern, not a set",
     "Invalid authority in the qualifier `@\"a.com\"`: pattern \"a.com\" must end in '*'",
     "Invalid effect parameter on <Net>: label 'Net' takes a prefix pattern, not a set",
   ]
@@ -488,7 +487,7 @@ test "a qualifier or an index literal is an element of its domain" = expectCheck
 test "Set members split across atoms are capped as one set" = expectAll [
   expectCheckReject (fixture "written_split_cap_reject.mdk") [
     "Invalid effect parameter on <Env>: a set holds at most 16 members, and this one has 17",
-    "Invalid effect parameter on <Web>: a set holds at most 16 members",
+    "Invalid effect parameter on <Web>: a bound admits at most 16 elements of one label, and this one writes 17",
   ],
   expectCheckAccept (fixture "written_split_cap_accept.mdk"),
 ]
@@ -506,33 +505,30 @@ test "rows in a data field or a type alias are validated as bounds" = expectAll
 test "the same Product elements in any order are one set" =
   expectCheckAccept (fixture "product_set_order_accept.mdk")
 
-test "a policy past the cap on one label is malformed, not widened" = expectAll
+test "a policy's entries for one label are read exactly, however many" = expectAll
   [
     expectVerbExitStartsWith
       "check-policy"
       [
         fixture "policy_cap_accept.mdk",
         "--allow",
-        "FileRead=cfg/a/*,FileRead=cfg/b/*,FileRead=cfg/c/*,FileRead=cfg/d/*,FileRead=cfg/e/*,FileRead=cfg/f/*,FileRead=cfg/g/*,FileRead=cfg/h/*,FileRead=cfg/i/*,FileRead=cfg/j/*,FileRead=cfg/k/*,FileRead=cfg/l/*,FileRead=cfg/m/*,FileRead=cfg/n/*,FileRead=cfg/o/*,FileRead=cfg/secret/*",
+        "FileRead=cfg/a/*,FileRead=cfg/b/*,FileRead=cfg/c/*,FileRead=cfg/d/*,FileRead=cfg/e/*,FileRead=cfg/f/*,FileRead=cfg/g/*,FileRead=cfg/h/*,FileRead=cfg/i/*,FileRead=cfg/j/*,FileRead=cfg/k/*,FileRead=cfg/l/*,FileRead=cfg/m/*,FileRead=cfg/n/*,FileRead=cfg/o/*,FileRead=cfg/q/*,FileRead=cfg/secret/*",
         "--fn",
         "readSecret",
       ]
       0
       "accepted",
-    expectVerbExitStartsWithAndContains
+    expectVerbExitStartsWith
       "check-policy"
       [
         fixture "policy_cap_accept.mdk",
         "--allow",
-        "FileRead=cfg/a/*,FileRead=cfg/b/*,FileRead=cfg/c/*,FileRead=cfg/d/*,FileRead=cfg/e/*,FileRead=cfg/f/*,FileRead=cfg/g/*,FileRead=cfg/h/*,FileRead=cfg/i/*,FileRead=cfg/j/*,FileRead=cfg/k/*,FileRead=cfg/l/*,FileRead=cfg/m/*,FileRead=cfg/n/*,FileRead=cfg/o/*,FileRead=cfg/secret/*,FileRead=cfg/q/*",
+        "FileRead=cfg/a/*,FileRead=cfg/b/*,FileRead=cfg/c/*,FileRead=cfg/d/*,FileRead=cfg/e/*,FileRead=cfg/f/*,FileRead=cfg/g/*,FileRead=cfg/h/*,FileRead=cfg/i/*,FileRead=cfg/j/*,FileRead=cfg/k/*,FileRead=cfg/l/*,FileRead=cfg/m/*,FileRead=cfg/n/*,FileRead=cfg/o/*,FileRead=cfg/p/*,FileRead=cfg/q/*",
         "--fn",
         "readSecret",
       ]
       1
-      "rejected"
-      [
-        "a bound admits at most 16 elements of one label, and this one writes 17",
-      ],
+      "rejected",
   ]
 
 test "a bound assembled from pieces stays exact, never folded" = expectAll [
@@ -545,10 +541,10 @@ test "a bound assembled from pieces stays exact, never folded" = expectAll [
 test "a bound's elements have one canonical form, in either write order" = expectAll
   [
     expectCheckReject (fixture "bound_order_a_reject.mdk") [
-      "a bound admits at most 16 elements of one label, and this one writes 24",
+      "a bound admits at most 16 elements of one label, and this one writes 32",
     ],
     expectCheckReject (fixture "bound_order_b_reject.mdk") [
-      "a bound admits at most 16 elements of one label, and this one writes 24",
+      "a bound admits at most 16 elements of one label, and this one writes 32",
     ],
   ]
 
@@ -561,3 +557,22 @@ test "Product tuples the bound covers together are within it" = expectAll [
 
 test "a catalog extern redeclared at an index join charges each term" =
   expectCheckAccept (fixture "catalog_index_join_accept.mdk")
+
+test "a Set qualifier naming no binder is a Set bound" = expectAll [
+  expectCheckAccept (fixture "qualifier_literal_domain_accept.mdk"),
+  expectCheckReject (fixture "qualifier_literal_domain_launder.mdk") [
+    "reaches {\"SECRET\"}",
+  ],
+]
+
+test "a value's abstraction is widened past the cap, never a bound" = expectAll
+  [
+    expectCheckAccept (fixture "value_widen_accept.mdk"),
+    expectCheckReject (fixture "value_widen_launder.mdk") ["performs <Net"],
+  ]
+
+test "the written cap counts written elements, whatever the axes are named" =
+  expectCheckAccept (fixture "written_cap_axis_names_accept.mdk")
+
+test "a literal containing a quote never merges two tuples" =
+  expectCheckReject (fixture "product_quote_literal_reject.mdk") ["performs"]

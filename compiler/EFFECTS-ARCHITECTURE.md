@@ -552,9 +552,11 @@ What landed, in the order the decision record prescribed:
    joining them: Set members as one union, Prefix patterns as the maximal
    ones, Products split into singletons and regrouped along one Set axis
    (#3464). A set is never folded, so no bound widens; only a written bound is
-   capped at 16 elements (`writtenSetProblem`). The domain join, whose longest
-   common prefix is spelled `lcp*` (#3391), is not used for sets. An element
-   without a trailing `*` is exact and admits only itself.
+   capped at 16 elements (`writtenSetProblem`). The one widening is α's: a
+   value's authority past 16 elements folds by the domain join
+   (`authWidenValue`, called only from `joinBranches`), whose longest common
+   prefix is spelled `lcp*` (#3391). An element without a trailing `*` is
+   exact and admits only itself.
 9. **Catalog redeclaration.** A user `extern` redeclaring a catalog name is
    checked against the catalog's row with one authority variable per argument
    position, so a binder covers the catalog's only when it names the same

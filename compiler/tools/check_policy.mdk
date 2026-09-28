@@ -1,4 +1,4 @@
-import types.effect_domain.{canonParam, drender, Param(..), writtenSetProblem}
+import types.effect_domain.{canonParam, drender, Param(..)}
 import types.effect_authority.{
   Authority(..), authSub, authVars, authHasVars, authvarDefaultName,
   authJoinAll, authConsts
@@ -450,14 +450,13 @@ permitOf : Atom -> List (String, EffParamTy) -> Permit
 permitOf a policy = match policyEntriesFor a policy
   [] => Forbidden
   written => match allOk (map (decodeWrittenParam (atomLabelOf a)) written)
-    Ok pps => match writtenSetProblem pps
-      -- The entries are an upper bound, which must never fold wider.
-      Some why => Malformed why
-      None =>
-        if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
-          Permitted
-        else
-          Forbidden
+    -- The entries are read exactly, however many there are: a set is never
+    -- folded, so a manifest of any size is accepted back as a policy.
+    Ok pps =>
+      if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
+        Permitted
+      else
+        Forbidden
     Err m => Malformed m
 
 -- An atom whose authority is still a variable at the host boundary, refused

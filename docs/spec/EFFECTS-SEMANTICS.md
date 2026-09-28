@@ -177,35 +177,40 @@ order they were written or joined in:
 - Unit and Set members always merge by `⊔`, which is exact (`{A} ⊔ {B} = {A, B}`).
   These labels hold one element.
 - Prefix patterns never merge; the maximal ones are kept.
-- A Product element is split into its singletons, one member on each Set
-  axis. The maximal singletons are kept and regrouped along one Set axis,
-  the last by name: those equal on every other axis share that axis's
-  members. `Host="a.com/*" Method={"GET"}` beside the same host with
+- Products are regrouped along one Set axis, the last by name: every other
+  Set axis is split into single members, tuples equal on all the other axes
+  share one set of that axis's members, and a member another tuple covers
+  is dropped. `Host="a.com/*" Method={"GET"}` beside the same host with
   `{"POST"}` is one element with both methods; beside `Host="b.com/*"` it
   stays two, since their pointwise join would admit POST to a.com.
 
 So `<Net "a.com/*", Net "b.com/*">` admits those two hosts and nothing else.
 Their join would be `Net` (the longest common prefix is empty), which admits
 every host. Likewise `<FileRead "cfg/a/*", FileRead "cfg/b/*">` does not admit
-`cfg/secret`, which their join `cfg/*` would. The domain join is taken only
-where one element is needed.
+`cfg/secret`, which their join `cfg/*` would.
 
-A set is never folded into a wider element. An inferred set stays exact at
-any size; its constants come from the program's literals, so a fixpoint over
-them still terminates. A bound that folded would admit more than it states.
+A set is never folded into a wider element, so no bound ever admits more
+than it states. The one widening is the abstraction of a value (§4): α may
+over-approximate what a string denotes. When a value's authority, the join of
+its branches, would hold more than 16 elements, α folds it by `⊔` into one
+element that covers them all. A value is never a bound, so this widens
+nothing a signature wrote. It keeps the cost of a chain of optional appends
+linear instead of exponential. Every other set stays exact at any size: rows,
+solutions, policies and manifests.
 
-What may be written is capped: at most 16 elements of one label, and at most
-16 members in one Set. A written bound past either cap is refused
-(`T-EFFECT-PARAM`). That covers:
+What may be written in source is capped: at most 16 elements of one label, as
+written, and at most 16 members in one Set. A written bound past either cap
+is refused (`T-EFFECT-PARAM`). That covers:
 
-- a row in a signature, a data field or a type alias;
+- a row in a signature (a top-level or interface method signature), a data
+  field or a type alias;
 - a qualifier or index join;
 - a Set literal;
-- Set members written across atoms that merge into one set;
-- a policy's entries for one label.
+- Set members written across atoms that merge into one set.
 
-Each written element is also validated against its domain, wherever it is
-written.
+Each element written in those places is also validated against its domain.
+A policy's entries are not capped: they are read exactly, so a manifest of
+any size is accepted back as a policy.
 
 ### 2.3 The `Prefix` domain and the delimiter discipline
 
@@ -447,8 +452,9 @@ authority, the type of a branch that returns one of two named arguments. Its
 names must be binders of one domain (`T-AUTHORITY-DOMAIN`). A qualifier or an
 index may also write literals, `String @("a.com/*" | p)`,
 `Socket ("a.com/x" | "b.com/y")`, the spelling a set renders as (§2.2).
-A literal in a qualifier is an element of its names' domain, or of the Prefix
-domain when it names none.
+A literal in a qualifier is an element of its names' domain. When the
+qualifier names none, the literal's shape gives the domain: a string is a
+Prefix pattern, a set is a Set element, and axes are a Product element.
 
 Each authority has exactly one domain. A binder used by two compatible Prefix
 labels shares a variable; incompatible-domain uses are ill-formed, and so is a

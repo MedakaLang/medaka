@@ -1,0 +1,10 @@
+-- Two written tuples are two elements whatever the axes are named: the
+-- cap counts what was written, not the canonical regrouping.
+effect P Product (A : Set, B : Set)
+
+extern ex : Unit -> <FFI, P A={"a1"} B={"b"}> Unit
+
+f : Unit -> <FFI, P A={"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9"} B={"b"}, P A={"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"} B={"d"}> Unit
+f _ = ex ()
+
+main = println 1

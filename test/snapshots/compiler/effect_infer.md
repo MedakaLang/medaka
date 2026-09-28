@@ -1,5 +1,5 @@
 # META
-source_lines=219
+source_lines=220
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -9,7 +9,7 @@ import types.effect_domain.{
   Param(..), canonParam, productNorm, subTopOf, productPrimaryLift
 }
 import types.effect_authority.{
-  Authority(..), authJoin, authTop, authExtend, authAppend
+  Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -206,12 +206,13 @@ letInScope _ [] = None
 letInScope x ((n, e) :: rest) =
   if n == x then Some (e, rest) else letInScope x rest
 
--- Every branch must be known for the join to say more than the top.
+-- Every branch must be known for the join to say more than the top. The
+-- join is a value's, so past the cap it is widened (`authWidenValue`).
 joinBranches : List (Option Authority) -> Option Authority
 joinBranches [] = None
 joinBranches [q] = q
 joinBranches (q :: rest) = match (q, joinBranches rest)
-  (Some a, Some b) => Some (authJoin a b)
+  (Some a, Some b) => Some (authWidenValue (authJoin a b))
   _ => None
 
 collectBinds : List LetBind ->
@@ -224,7 +225,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 # DESUGAR
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productNorm" false) (mem "subTopOf" false) (mem "productPrimaryLift" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "lookupAssoc" false) (mem "mapOption" false))))
@@ -294,14 +295,14 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DTypeSig false "joinBranches" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Authority"))) (TyApp (TyCon "Option") (TyCon "Authority"))))
 (DFunDef false "joinBranches" ((PList)) (EVar "None"))
 (DFunDef false "joinBranches" ((PList (PVar "q"))) (EVar "q"))
-(DFunDef false "joinBranches" ((PCons (PVar "q") (PVar "rest"))) (EMatch (ETuple (EVar "q") (EApp (EVar "joinBranches") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b")))) (arm PWild () (EVar "None"))))
+(DFunDef false "joinBranches" ((PCons (PVar "q") (PVar "rest"))) (EMatch (ETuple (EVar "q") (EApp (EVar "joinBranches") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EVar "authWidenValue") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "collectBinds" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))
 (DFunDef false "collectBinds" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "collectBinds" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses")) (PVar "rest")) (PVar "acc")) (EMatch (EVar "clauses") (arm (PList (PCon "FunClause" (PList) (PVar "rhs"))) () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "acc")))) (arm PWild () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EVar "acc")))))
 # MARK
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productNorm" false) (mem "subTopOf" false) (mem "productPrimaryLift" false))))
-(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false))))
+(DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "lookupAssoc" false) (mem "mapOption" false))))
@@ -371,7 +372,7 @@ collectBinds ((LetBind n clauses) :: rest) acc = match clauses
 (DTypeSig false "joinBranches" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Authority"))) (TyApp (TyCon "Option") (TyCon "Authority"))))
 (DFunDef false "joinBranches" ((PList)) (EVar "None"))
 (DFunDef false "joinBranches" ((PList (PVar "q"))) (EVar "q"))
-(DFunDef false "joinBranches" ((PCons (PVar "q") (PVar "rest"))) (EMatch (ETuple (EVar "q") (EApp (EVar "joinBranches") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b")))) (arm PWild () (EVar "None"))))
+(DFunDef false "joinBranches" ((PCons (PVar "q") (PVar "rest"))) (EMatch (ETuple (EVar "q") (EApp (EVar "joinBranches") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EVar "authWidenValue") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "collectBinds" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))
 (DFunDef false "collectBinds" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "collectBinds" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses")) (PVar "rest")) (PVar "acc")) (EMatch (EVar "clauses") (arm (PList (PCon "FunClause" (PList) (PVar "rhs"))) () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "acc")))) (arm PWild () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EVar "acc")))))

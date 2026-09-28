@@ -5,7 +5,7 @@ import types.effect_domain.{
   Param(..), canonParam, productNorm, subTopOf, productPrimaryLift
 }
 import types.effect_authority.{
-  Authority(..), authJoin, authTop, authExtend, authAppend
+  Authority(..), authJoin, authTop, authExtend, authAppend, authWidenValue
 }
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
@@ -202,12 +202,13 @@ letInScope _ [] = None
 letInScope x ((n, e) :: rest) =
   if n == x then Some (e, rest) else letInScope x rest
 
--- Every branch must be known for the join to say more than the top.
+-- Every branch must be known for the join to say more than the top. The
+-- join is a value's, so past the cap it is widened (`authWidenValue`).
 joinBranches : List (Option Authority) -> Option Authority
 joinBranches [] = None
 joinBranches [q] = q
 joinBranches (q :: rest) = match (q, joinBranches rest)
-  (Some a, Some b) => Some (authJoin a b)
+  (Some a, Some b) => Some (authWidenValue (authJoin a b))
   _ => None
 
 collectBinds : List LetBind ->

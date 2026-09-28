@@ -10,3 +10,7 @@ useSock : Socket ("a.com/*" | h) -> <Net "a.com/*", Net h> Int
 conv : W (X={"1"} Y={"1"}) -> Int
 
 keys : String @({"A", "B"}) -> Int
+
+effect P Product (X : Set, Y : Set)
+
+data W (p : Authority P) = W String

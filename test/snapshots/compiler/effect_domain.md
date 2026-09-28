@@ -1,5 +1,5 @@
 # META
-source_lines=442
+source_lines=553
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -8,7 +8,7 @@ stages=DESUGAR,MARK
 
 import support.util.{
   listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
-  anyList, reverseL
+  anyList, reverseL, lenKey
 }
 
 public export data Param =
@@ -138,14 +138,16 @@ djoinN p _ = p
 --   * Prefix patterns are the maximal ones: a pattern another covers is
 --     dropped, and the rest stay separate, so `"a.com/*"` beside
 --     `"b.com/*"` admits those two hosts and nothing else.
---   * Products are split into their singletons (one member per Set axis),
---     the maximal ones are kept, and they are regrouped along one Set axis,
---     the last by name: tuples equal on every other axis share that axis's
---     members. `Host="a.com/*" Method={"GET"}` beside the same host with
---     `{"POST"}` is one tuple with both; beside `Host="b.com/*"` it stays
---     two, since their pointwise join would admit POST to a.com.
--- Nothing is folded wider: a set of any size stays exact, and only a written
--- bound is held to `setCardCap` (`writtenSetProblem`).
+--   * Products are regrouped along one Set axis, the last by name: every
+--     other Set axis is split into single members, tuples equal on all the
+--     other axes share one set of that axis's members, and a member another
+--     tuple covers is dropped. `Host="a.com/*" Method={"GET"}` beside the
+--     same host with `{"POST"}` is one tuple with both; beside
+--     `Host="b.com/*"` it stays two, since their pointwise join would admit
+--     POST to a.com.
+-- Nothing is folded wider: a set of any size stays exact. Only a written
+-- bound is held to `setCardCap` (`writtenSetProblem`), and only a value's
+-- abstraction is widened past it (`authWidenValue`).
 export
 dantichain : List Param -> List Param
 dantichain ps =
@@ -154,26 +156,28 @@ dantichain ps =
     [subTopOf (headParam cs)]
   else match cs
     (PSet _) :: _ => [PSet (Some (sortUniqS (flatMap setMembers cs)))]
-    (PProduct _) :: _ =>
-      sortParams (regroup (maximalOf (flatMap singletonsOf cs)))
+    (PPrefix _) :: _ => sortParams (maximalPrefixes cs)
+    (PProduct _) :: _ => sortParams (canonProducts cs)
     [] => []
     _ => sortParams (maximalOf cs)
 
-export
-dmaximal : List Param -> List Param
-dmaximal ps = dantichain ps
-
 -- Why a written bound cannot be kept as written: more than `setCardCap`
--- elements of one label, or a set of more than `setCardCap` members.
+-- elements of one label as written (less any another covers), or a set of
+-- more than `setCardCap` members.
 export
 writtenSetProblem : List Param -> Option String
 writtenSetProblem ps =
-  let merged = dantichain ps
-  let n = listLen merged
+  let cs = map canonParam ps
+  let written = match cs
+    (PSet _) :: _ => dantichain cs
+    _ => maximalOf cs
+  let n = listLen written
+  let bigs =
+    filterList (> setCardCap) (map largestSet (written ++ dantichain cs))
   if n > setCardCap then
     Some
       "a bound admits at most \{intToString setCardCap} elements of one label, and this one writes \{intToString n}; write a pattern that covers several of them"
-  else match filterList (> setCardCap) (map largestSet merged)
+  else match bigs
     big :: _ =>
       Some
         "a set holds at most \{intToString setCardCap} members, and this one has \{intToString big}"
@@ -205,18 +209,6 @@ headParam : List Param -> Param
 headParam (p :: _) = p
 headParam [] = PUnit
 
--- A Product's singletons: one tuple per choice of a member on each Set axis.
-singletonsOf : Param -> List Param
-singletonsOf (PProduct ax) = map productNorm (axisChoices ax)
-singletonsOf p = [p]
-
-axisChoices : List (String, Param) -> List (List (String, Param))
-axisChoices [] = [[]]
-axisChoices ((n, PSet (Some xs)) :: rest) =
-  let tails = axisChoices rest
-  flatMap (x => map ((n, PSet (Some [x])) :: _) tails) xs
-axisChoices ((n, p) :: rest) = map ((n, p) :: _) (axisChoices rest)
-
 -- The elements no other element covers; of two that cover each other, one.
 maximalOf : List Param -> List Param
 maximalOf ps = fold (acc p => keepMaximal p acc) [] ps
@@ -228,12 +220,155 @@ keepMaximal p acc =
   else
     p :: filterList (q => not (dsubN q p)) acc
 
--- Regroup Product singletons along the last Set axis by name: tuples equal
--- on every other axis share one set of that axis's members.
-regroup : List Param -> List Param
-regroup ps = match lastSetAxis ps
-  None => ps
-  Some axis => map (groupParam axis) (groupsBy axis ps [])
+-- The maximal Prefix patterns, by one sweep in order of concrete part. An
+-- element that covers another has a concrete part that is a prefix of the
+-- other's, so it comes first in that order (a pattern before an exact
+-- element of the same part), and stays on the stack of open patterns until
+-- an element outside it is reached.
+maximalPrefixes : List Param -> List Param
+maximalPrefixes ps =
+  prefixSweep (sortByKey prefixOrder (map prefixEntry ps)) [] None []
+
+data PrefixEntry = PrefixEntry String Bool Param
+
+prefixEntry : Param -> PrefixEntry
+prefixEntry (p@(PPrefix (Some s))) =
+  if isPrefixPattern s then
+    PrefixEntry (prefixConcrete s) True p
+  else
+    PrefixEntry s False p
+prefixEntry p = PrefixEntry "" True p
+
+prefixOrder : PrefixEntry -> PrefixEntry -> Bool
+prefixOrder (PrefixEntry a pa _) (PrefixEntry b pb _) = match stringCompare a b
+  Lt => True
+  Gt => False
+  Eq => pa || not pb
+
+prefixSweep : List PrefixEntry ->
+  List String ->
+  Option String ->
+  List Param ->
+  List Param
+prefixSweep [] _ _ kept = kept
+prefixSweep ((PrefixEntry c pat p) :: rest) open lastExact kept =
+  let still = dropWhileNotPrefix c open
+  if isNonEmpty still || not pat && lastExact == Some c then
+    prefixSweep rest still lastExact kept
+  else if pat then
+    prefixSweep rest (c :: still) lastExact (p :: kept)
+  else
+    prefixSweep rest still (Some c) (p :: kept)
+
+dropWhileNotPrefix : String -> List String -> List String
+dropWhileNotPrefix _ [] = []
+dropWhileNotPrefix c (o :: os) =
+  if startsWith o c then o :: os else dropWhileNotPrefix c os
+
+isNonEmpty : List a -> Bool
+isNonEmpty [] = False
+isNonEmpty _ = True
+
+-- A Product's singletons: one tuple per choice of a member on each Set axis.
+singletonsOf : Param -> List Param
+singletonsOf (PProduct ax) = map productNorm (axisChoices "" ax)
+singletonsOf p = [p]
+
+-- The choices of a member on every Set axis except [keep], whose set stays
+-- whole.
+axisChoices : String -> List (String, Param) -> List (List (String, Param))
+axisChoices _ [] = [[]]
+axisChoices keep ((n, PSet (Some xs)) :: rest) =
+  let tails = axisChoices keep rest
+  if n == keep then
+    map ((n, PSet (Some xs)) :: _) tails
+  else
+    flatMap (x => map ((n, PSet (Some [x])) :: _) tails) xs
+axisChoices keep ((n, p) :: rest) = map ((n, p) :: _) (axisChoices keep rest)
+
+-- Products regrouped along the last Set axis by name (see `dantichain`).
+canonProducts : List Param -> List Param
+canonProducts ps = match lastSetAxis ps
+  None => maximalOf ps
+  Some axis =>
+    let parts = flatMap (splitAround axis) ps
+    let groups = fold (acc p => addGroup axis p acc) [] parts
+    flatMap (rebuildGroup axis groups) groups
+
+-- A tuple's other axes, split into single members, each with the whole
+-- set on [axis].
+splitAround : String -> Param -> List Param
+splitAround axis (PProduct ax) = map productNorm (axisChoices axis ax)
+splitAround _ p = [p]
+
+-- A group: its other axes (as a key that cannot collide, and as axes), and
+-- its members on the regroup axis, `None` for the whole axis.
+data PGroup = PGroup String (List (String, Param)) (Option (List String))
+
+addGroup : String -> Param -> List PGroup -> List PGroup
+addGroup axis p gs =
+  let others = otherAxes axis p
+  let key = axesKey others
+  let members = axisMembers axis p
+  match gs
+    [] => [PGroup key others members]
+    (PGroup k o ms) :: rest =>
+      if k == key then
+        PGroup k o (unionMembers ms members) :: rest
+      else
+        PGroup k o ms :: addGroup axis p rest
+
+otherAxes : String -> Param -> List (String, Param)
+otherAxes axis (PProduct ax) = filterList (a => fst a /= axis) ax
+otherAxes _ _ = []
+
+axisMembers : String -> Param -> Option (List String)
+axisMembers axis (PProduct ax) = match lookupAxis axis ax
+  Some (PSet (Some xs)) => Some xs
+  _ => None
+axisMembers _ _ = None
+
+unionMembers : Option (List String) ->
+  Option (List String) ->
+  Option (List String)
+unionMembers (Some a) (Some b) = Some (sortUniqS (a ++ b))
+unionMembers _ _ = None
+
+-- An injective key for a group's other axes: every string is written with
+-- its length, so no literal can spell another tuple's key.
+axesKey : List (String, Param) -> String
+axesKey ax = joinWith ";" (map (a => "\{fst a}=\{paramKey (snd a)}") ax)
+
+paramKey : Param -> String
+paramKey (PPrefix (Some s)) = "p" ++ lenKey s
+paramKey (PPrefix None) = "P"
+paramKey (PSet (Some xs)) = "s" ++ joinWith "" (map lenKey xs)
+paramKey (PSet None) = "S"
+paramKey (PProduct ax) = "x(" ++ axesKey ax ++ ")"
+paramKey PUnit = "u"
+
+-- A group less the members a covering group holds: another group whose
+-- other axes cover this one's covers each member they share, and the whole
+-- group if its members are the whole axis.
+rebuildGroup : String -> List PGroup -> PGroup -> List Param
+rebuildGroup axis gs (PGroup key others members) =
+  let coverers =
+    filterList
+      (g => match g
+        PGroup k o _ => k /= key && dsubN (productNorm others) (productNorm o))
+      gs
+  if anyList (g => groupMembersOf g == None) coverers then
+    []
+  else match members
+    None => [productNorm others]
+    Some xs =>
+      let taken = flatMap (g => optionOr [] (groupMembersOf g)) coverers
+      match filterList (x => not (contains x taken)) xs
+        [] => []
+        left => [productNorm ((axis, PSet (Some left)) :: others)]
+
+groupMembersOf : PGroup -> Option (List String)
+groupMembersOf (PGroup _ _ ms) = ms
 
 lastSetAxis : List Param -> Option String
 lastSetAxis ps = match sortUniqS (flatMap setAxisNames ps)
@@ -256,57 +391,33 @@ lastOf [x] = x
 lastOf (_ :: rest) = lastOf rest
 lastOf [] = ""
 
--- Groups keyed by a tuple's other axes; a tuple without the axis (top on it)
--- is a group of its own.
-groupsBy : String ->
-  List Param ->
-  List (String, List Param) ->
-  List (String, List Param)
-groupsBy _ [] acc = acc
-groupsBy axis (p :: rest) acc =
-  let key = otherAxesKey axis p
-  groupsBy axis rest (addToGroup key p acc)
-
-addToGroup : String ->
-  Param ->
-  List (String, List Param) ->
-  List (String, List Param)
-addToGroup key p [] = [(key, [p])]
-addToGroup key p ((k, ms) :: rest) =
-  if k == key then (k, p :: ms) :: rest else (k, ms) :: addToGroup key p rest
-
-otherAxesKey : String -> Param -> String
-otherAxesKey axis (PProduct ax) = match lookupAxis axis ax
-  Some (PSet (Some _)) =>
-    drenderN (PProduct (filterList (a => fst a /= axis) ax))
-  _ => "whole " ++ drenderN (PProduct ax)
-otherAxesKey _ p = "whole " ++ drenderN p
-
-groupParam : String -> (String, List Param) -> Param
-groupParam axis (_, members) = match members
-  [one] => one
-  (PProduct ax) :: _ =>
-    let others = filterList (a => fst a /= axis) ax
-    productNorm
-      ((axis, PSet (Some (sortUniqS (flatMap (axisMembers axis) members))))
-        :: others)
-  _ => headParam members
-
-axisMembers : String -> Param -> List String
-axisMembers axis (PProduct ax) = match lookupAxis axis ax
-  Some (PSet (Some xs)) => xs
-  _ => []
-axisMembers _ _ = []
-
+-- Sorted by rendering, each rendered once.
 sortParams : List Param -> List Param
-sortParams [] = []
-sortParams (p :: ps) = insertParam p (sortParams ps)
+sortParams ps =
+  map
+    snd
+    (sortByKey
+      (a b => stringCompare (fst a) (fst b) /= Gt)
+      (map (p => (drenderN p, p)) ps))
 
-insertParam : Param -> List Param -> List Param
-insertParam p [] = [p]
-insertParam p (q :: qs) = match stringCompare (drenderN p) (drenderN q)
-  Gt => q :: insertParam p qs
-  _ => p :: q :: qs
+-- A stable merge sort by [le], a total "not after" relation.
+sortByKey : (a -> a -> Bool) -> List a -> List a
+sortByKey _ [] = []
+sortByKey _ [x] = [x]
+sortByKey le xs =
+  let (l, r) = splitHalf xs [] []
+  mergeBy le (sortByKey le l) (sortByKey le r)
+
+splitHalf : List a -> List a -> List a -> (List a, List a)
+splitHalf [] l r = (l, r)
+splitHalf [x] l r = (x :: l, r)
+splitHalf (x :: y :: rest) l r = splitHalf rest (x :: l) (y :: r)
+
+mergeBy : (a -> a -> Bool) -> List a -> List a -> List a
+mergeBy _ [] ys = ys
+mergeBy _ xs [] = xs
+mergeBy le (x :: xs) (y :: ys) =
+  if le x y then x :: mergeBy le xs (y :: ys) else y :: mergeBy le (x :: xs) ys
 
 export
 joinAxis : List (String, Param) ->
@@ -445,7 +556,7 @@ subsetStr : List String -> List String -> Bool
 subsetStr [] _ = True
 subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false))))
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -483,11 +594,9 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "djoinN" ((PCon "PProduct" (PVar "ax")) (PCon "PProduct" (PVar "bx"))) (EApp (EVar "productNorm") (EApp (EApp (EVar "map") (EApp (EApp (EVar "joinAxis") (EVar "ax")) (EVar "bx"))) (EApp (EApp (EVar "axisUnion") (EVar "ax")) (EVar "bx")))))
 (DFunDef false "djoinN" ((PVar "p") PWild) (EVar "p"))
 (DTypeSig true "dantichain" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "dantichain" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "map") (EVar "canonParam")) (EVar "ps"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "isSubTop")) (EVar "cs")) (EListLit (EApp (EVar "subTopOf") (EApp (EVar "headParam") (EVar "cs")))) (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EListLit (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (EVar "setMembers")) (EVar "cs"))))))) (arm (PCons (PCon "PProduct" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "regroup") (EApp (EVar "maximalOf") (EApp (EApp (EVar "flatMap") (EVar "singletonsOf")) (EVar "cs")))))) (arm (PList) () (EListLit)) (arm PWild () (EApp (EVar "sortParams") (EApp (EVar "maximalOf") (EVar "cs")))))))))
-(DTypeSig true "dmaximal" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "dmaximal" ((PVar "ps")) (EApp (EVar "dantichain") (EVar "ps")))
+(DFunDef false "dantichain" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "map") (EVar "canonParam")) (EVar "ps"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "isSubTop")) (EVar "cs")) (EListLit (EApp (EVar "subTopOf") (EApp (EVar "headParam") (EVar "cs")))) (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EListLit (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (EVar "setMembers")) (EVar "cs"))))))) (arm (PCons (PCon "PPrefix" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "maximalPrefixes") (EVar "cs")))) (arm (PCons (PCon "PProduct" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "canonProducts") (EVar "cs")))) (arm (PList) () (EListLit)) (arm PWild () (EApp (EVar "sortParams") (EApp (EVar "maximalOf") (EVar "cs")))))))))
 (DTypeSig true "writtenSetProblem" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "writtenSetProblem" ((PVar "ps")) (EBlock (DoLet false false (PVar "merged") (EApp (EVar "dantichain") (EVar "ps"))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "merged"))) (DoExpr (EIf (EBinOp ">" (EVar "n") (EVar "setCardCap")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a bound admits at most ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " elements of one label, and this one writes "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "; write a pattern that covers several of them")))) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "setCardCap")))) (EApp (EApp (EVar "map") (EVar "largestSet")) (EVar "merged"))) (arm (PCons (PVar "big") PWild) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a set holds at most ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " members, and this one has "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "big")))) (ELit (LString ""))))) (arm (PList) () (EVar "None")))))))
+(DFunDef false "writtenSetProblem" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "map") (EVar "canonParam")) (EVar "ps"))) (DoLet false false (PVar "written") (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EApp (EVar "dantichain") (EVar "cs"))) (arm PWild () (EApp (EVar "maximalOf") (EVar "cs"))))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "written"))) (DoLet false false (PVar "bigs") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "setCardCap")))) (EApp (EApp (EVar "map") (EVar "largestSet")) (EBinOp "++" (EVar "written") (EApp (EVar "dantichain") (EVar "cs")))))) (DoExpr (EIf (EBinOp ">" (EVar "n") (EVar "setCardCap")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a bound admits at most ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " elements of one label, and this one writes "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "; write a pattern that covers several of them")))) (EMatch (EVar "bigs") (arm (PCons (PVar "big") PWild) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a set holds at most ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " members, and this one has "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "big")))) (ELit (LString ""))))) (arm (PList) () (EVar "None")))))))
 (DTypeSig true "dsubAny" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Bool"))))
 (DFunDef false "dsubAny" ((PVar "p") (PVar "qs")) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "canonParam") (EVar "p"))) (DoLet false false (PVar "cqs") (EApp (EApp (EVar "map") (EVar "canonParam")) (EVar "qs"))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "anyList") (EApp (EVar "dsubN") (EVar "cp"))) (EVar "cqs")) (EMatch (EVar "cp") (arm (PCon "PProduct" PWild) () (EApp (EApp (EVar "allList") (ELam ((PVar "s")) (EApp (EApp (EVar "anyList") (EApp (EVar "dsubN") (EVar "s"))) (EVar "cqs")))) (EApp (EVar "singletonsOf") (EVar "cp")))) (arm PWild () (EVar "False")))))))
 (DTypeSig false "setMembers" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
@@ -500,19 +609,64 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig false "headParam" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
 (DFunDef false "headParam" ((PCons (PVar "p") PWild)) (EVar "p"))
 (DFunDef false "headParam" ((PList)) (EVar "PUnit"))
-(DTypeSig false "singletonsOf" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "singletonsOf" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "map") (EVar "productNorm")) (EApp (EVar "axisChoices") (EVar "ax"))))
-(DFunDef false "singletonsOf" ((PVar "p")) (EListLit (EVar "p")))
-(DTypeSig false "axisChoices" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))))
-(DFunDef false "axisChoices" ((PList)) (EListLit (EListLit)))
-(DFunDef false "axisChoices" ((PCons (PTuple (PVar "n") (PCon "PSet" (PCon "Some" (PVar "xs")))) (PVar "rest"))) (EBlock (DoLet false false (PVar "tails") (EApp (EVar "axisChoices") (EVar "rest"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "x")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "x"))))) (EVar "_s")))) (EVar "tails")))) (EVar "xs")))))
-(DFunDef false "axisChoices" ((PCons (PTuple (PVar "n") (PVar "p")) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EVar "p")) (EVar "_s")))) (EApp (EVar "axisChoices") (EVar "rest"))))
 (DTypeSig false "maximalOf" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
 (DFunDef false "maximalOf" ((PVar "ps")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "keepMaximal") (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "ps")))
 (DTypeSig false "keepMaximal" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))
 (DFunDef false "keepMaximal" ((PVar "p") (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "q")) (EApp (EApp (EVar "dsubN") (EVar "p")) (EVar "q")))) (EVar "acc")) (EVar "acc") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "filterList") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "dsubN") (EVar "q")) (EVar "p"))))) (EVar "acc")))))
-(DTypeSig false "regroup" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "regroup" ((PVar "ps")) (EMatch (EApp (EVar "lastSetAxis") (EVar "ps")) (arm (PCon "None") () (EVar "ps")) (arm (PCon "Some" (PVar "axis")) () (EApp (EApp (EVar "map") (EApp (EVar "groupParam") (EVar "axis"))) (EApp (EApp (EApp (EVar "groupsBy") (EVar "axis")) (EVar "ps")) (EListLit))))))
+(DTypeSig false "maximalPrefixes" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "maximalPrefixes" ((PVar "ps")) (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EApp (EApp (EVar "sortByKey") (EVar "prefixOrder")) (EApp (EApp (EVar "map") (EVar "prefixEntry")) (EVar "ps")))) (EListLit)) (EVar "None")) (EListLit)))
+(DData Private "PrefixEntry" () ((variant "PrefixEntry" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "Param")))) ())
+(DTypeSig false "prefixEntry" (TyFun (TyCon "Param") (TyCon "PrefixEntry")))
+(DFunDef false "prefixEntry" ((PAs "p" (PCon "PPrefix" (PCon "Some" (PVar "s"))))) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EApp (EApp (EApp (EVar "PrefixEntry") (EApp (EVar "prefixConcrete") (EVar "s"))) (EVar "True")) (EVar "p")) (EApp (EApp (EApp (EVar "PrefixEntry") (EVar "s")) (EVar "False")) (EVar "p"))))
+(DFunDef false "prefixEntry" ((PVar "p")) (EApp (EApp (EApp (EVar "PrefixEntry") (ELit (LString ""))) (EVar "True")) (EVar "p")))
+(DTypeSig false "prefixOrder" (TyFun (TyCon "PrefixEntry") (TyFun (TyCon "PrefixEntry") (TyCon "Bool"))))
+(DFunDef false "prefixOrder" ((PCon "PrefixEntry" (PVar "a") (PVar "pa") PWild) (PCon "PrefixEntry" (PVar "b") (PVar "pb") PWild)) (EMatch (EApp (EApp (EVar "stringCompare") (EVar "a")) (EVar "b")) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EBinOp "||" (EVar "pa") (EApp (EVar "not") (EVar "pb"))))))
+(DTypeSig false "prefixSweep" (TyFun (TyApp (TyCon "List") (TyCon "PrefixEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))))
+(DFunDef false "prefixSweep" ((PList) PWild PWild (PVar "kept")) (EVar "kept"))
+(DFunDef false "prefixSweep" ((PCons (PCon "PrefixEntry" (PVar "c") (PVar "pat") (PVar "p")) (PVar "rest")) (PVar "open") (PVar "lastExact") (PVar "kept")) (EBlock (DoLet false false (PVar "still") (EApp (EApp (EVar "dropWhileNotPrefix") (EVar "c")) (EVar "open"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmpty") (EVar "still")) (EBinOp "&&" (EApp (EVar "not") (EVar "pat")) (EBinOp "==" (EVar "lastExact") (EApp (EVar "Some") (EVar "c"))))) (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EVar "rest")) (EVar "still")) (EVar "lastExact")) (EVar "kept")) (EIf (EVar "pat") (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EVar "rest")) (EBinOp "::" (EVar "c") (EVar "still"))) (EVar "lastExact")) (EBinOp "::" (EVar "p") (EVar "kept"))) (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EVar "rest")) (EVar "still")) (EApp (EVar "Some") (EVar "c"))) (EBinOp "::" (EVar "p") (EVar "kept"))))))))
+(DTypeSig false "dropWhileNotPrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "dropWhileNotPrefix" (PWild (PList)) (EListLit))
+(DFunDef false "dropWhileNotPrefix" ((PVar "c") (PCons (PVar "o") (PVar "os"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "o")) (EVar "c")) (EBinOp "::" (EVar "o") (EVar "os")) (EApp (EApp (EVar "dropWhileNotPrefix") (EVar "c")) (EVar "os"))))
+(DTypeSig false "isNonEmpty" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isNonEmpty" ((PList)) (EVar "False"))
+(DFunDef false "isNonEmpty" (PWild) (EVar "True"))
+(DTypeSig false "singletonsOf" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "singletonsOf" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "map") (EVar "productNorm")) (EApp (EApp (EVar "axisChoices") (ELit (LString ""))) (EVar "ax"))))
+(DFunDef false "singletonsOf" ((PVar "p")) (EListLit (EVar "p")))
+(DTypeSig false "axisChoices" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))))
+(DFunDef false "axisChoices" (PWild (PList)) (EListLit (EListLit)))
+(DFunDef false "axisChoices" ((PVar "keep") (PCons (PTuple (PVar "n") (PCon "PSet" (PCon "Some" (PVar "xs")))) (PVar "rest"))) (EBlock (DoLet false false (PVar "tails") (EApp (EApp (EVar "axisChoices") (EVar "keep")) (EVar "rest"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "keep")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "PSet") (EApp (EVar "Some") (EVar "xs")))) (EVar "_s")))) (EVar "tails")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "x")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "x"))))) (EVar "_s")))) (EVar "tails")))) (EVar "xs"))))))
+(DFunDef false "axisChoices" ((PVar "keep") (PCons (PTuple (PVar "n") (PVar "p")) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EVar "p")) (EVar "_s")))) (EApp (EApp (EVar "axisChoices") (EVar "keep")) (EVar "rest"))))
+(DTypeSig false "canonProducts" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "canonProducts" ((PVar "ps")) (EMatch (EApp (EVar "lastSetAxis") (EVar "ps")) (arm (PCon "None") () (EApp (EVar "maximalOf") (EVar "ps"))) (arm (PCon "Some" (PVar "axis")) () (EBlock (DoLet false false (PVar "parts") (EApp (EApp (EVar "flatMap") (EApp (EVar "splitAround") (EVar "axis"))) (EVar "ps"))) (DoLet false false (PVar "groups") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EApp (EVar "addGroup") (EVar "axis")) (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "parts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "rebuildGroup") (EVar "axis")) (EVar "groups"))) (EVar "groups")))))))
+(DTypeSig false "splitAround" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "Param")))))
+(DFunDef false "splitAround" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "map") (EVar "productNorm")) (EApp (EApp (EVar "axisChoices") (EVar "axis")) (EVar "ax"))))
+(DFunDef false "splitAround" (PWild (PVar "p")) (EListLit (EVar "p")))
+(DData Private "PGroup" () ((variant "PGroup" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DTypeSig false "addGroup" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "PGroup")) (TyApp (TyCon "List") (TyCon "PGroup"))))))
+(DFunDef false "addGroup" ((PVar "axis") (PVar "p") (PVar "gs")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "otherAxes") (EVar "axis")) (EVar "p"))) (DoLet false false (PVar "key") (EApp (EVar "axesKey") (EVar "others"))) (DoLet false false (PVar "members") (EApp (EApp (EVar "axisMembers") (EVar "axis")) (EVar "p"))) (DoExpr (EMatch (EVar "gs") (arm (PList) () (EListLit (EApp (EApp (EApp (EVar "PGroup") (EVar "key")) (EVar "others")) (EVar "members")))) (arm (PCons (PCon "PGroup" (PVar "k") (PVar "o") (PVar "ms")) (PVar "rest")) () (EIf (EBinOp "==" (EVar "k") (EVar "key")) (EBinOp "::" (EApp (EApp (EApp (EVar "PGroup") (EVar "k")) (EVar "o")) (EApp (EApp (EVar "unionMembers") (EVar "ms")) (EVar "members"))) (EVar "rest")) (EBinOp "::" (EApp (EApp (EApp (EVar "PGroup") (EVar "k")) (EVar "o")) (EVar "ms")) (EApp (EApp (EApp (EVar "addGroup") (EVar "axis")) (EVar "p")) (EVar "rest")))))))))
+(DTypeSig false "otherAxes" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))))
+(DFunDef false "otherAxes" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EBinOp "/=" (EApp (EVar "fst") (EVar "a")) (EVar "axis")))) (EVar "ax")))
+(DFunDef false "otherAxes" (PWild PWild) (EListLit))
+(DTypeSig false "axisMembers" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "axisMembers" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EApp (EVar "lookupAxis") (EVar "axis")) (EVar "ax")) (arm (PCon "Some" (PCon "PSet" (PCon "Some" (PVar "xs")))) () (EApp (EVar "Some") (EVar "xs"))) (arm PWild () (EVar "None"))))
+(DFunDef false "axisMembers" (PWild PWild) (EVar "None"))
+(DTypeSig false "unionMembers" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unionMembers" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "a") (EVar "b")))))
+(DFunDef false "unionMembers" (PWild PWild) (EVar "None"))
+(DTypeSig false "axesKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
+(DFunDef false "axesKey" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "paramKey") (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EVar "ax"))))
+(DTypeSig false "paramKey" (TyFun (TyCon "Param") (TyCon "String")))
+(DFunDef false "paramKey" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (ELit (LString "p")) (EApp (EVar "lenKey") (EVar "s"))))
+(DFunDef false "paramKey" ((PCon "PPrefix" (PCon "None"))) (ELit (LString "P")))
+(DFunDef false "paramKey" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EBinOp "++" (ELit (LString "s")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "lenKey")) (EVar "xs")))))
+(DFunDef false "paramKey" ((PCon "PSet" (PCon "None"))) (ELit (LString "S")))
+(DFunDef false "paramKey" ((PCon "PProduct" (PVar "ax"))) (EBinOp "++" (EBinOp "++" (ELit (LString "x(")) (EApp (EVar "axesKey") (EVar "ax"))) (ELit (LString ")"))))
+(DFunDef false "paramKey" ((PCon "PUnit")) (ELit (LString "u")))
+(DTypeSig false "rebuildGroup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PGroup")) (TyFun (TyCon "PGroup") (TyApp (TyCon "List") (TyCon "Param"))))))
+(DFunDef false "rebuildGroup" ((PVar "axis") (PVar "gs") (PCon "PGroup" (PVar "key") (PVar "others") (PVar "members"))) (EBlock (DoLet false false (PVar "coverers") (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EMatch (EVar "g") (arm (PCon "PGroup" (PVar "k") (PVar "o") PWild) () (EBinOp "&&" (EBinOp "/=" (EVar "k") (EVar "key")) (EApp (EApp (EVar "dsubN") (EApp (EVar "productNorm") (EVar "others"))) (EApp (EVar "productNorm") (EVar "o")))))))) (EVar "gs"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "groupMembersOf") (EVar "g")) (EVar "None")))) (EVar "coverers")) (EListLit) (EMatch (EVar "members") (arm (PCon "None") () (EListLit (EApp (EVar "productNorm") (EVar "others")))) (arm (PCon "Some" (PVar "xs")) () (EBlock (DoLet false false (PVar "taken") (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EVar "groupMembersOf") (EVar "g"))))) (EVar "coverers"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "taken"))))) (EVar "xs")) (arm (PList) () (EListLit)) (arm (PVar "left") () (EListLit (EApp (EVar "productNorm") (EBinOp "::" (ETuple (EVar "axis") (EApp (EVar "PSet") (EApp (EVar "Some") (EVar "left")))) (EVar "others"))))))))))))))
+(DTypeSig false "groupMembersOf" (TyFun (TyCon "PGroup") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "groupMembersOf" ((PCon "PGroup" PWild PWild (PVar "ms"))) (EVar "ms"))
 (DTypeSig false "lastSetAxis" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastSetAxis" ((PVar "ps")) (EMatch (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (EVar "setAxisNames")) (EVar "ps"))) (arm (PList) () (EVar "None")) (arm (PVar "names") () (EApp (EVar "Some") (EApp (EVar "lastOf") (EVar "names"))))))
 (DTypeSig false "setAxisNames" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
@@ -522,26 +676,20 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "lastOf" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastOf") (EVar "rest")))
 (DFunDef false "lastOf" ((PList)) (ELit (LString "")))
-(DTypeSig false "groupsBy" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param"))))))))
-(DFunDef false "groupsBy" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "groupsBy" ((PVar "axis") (PCons (PVar "p") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "otherAxesKey") (EVar "axis")) (EVar "p"))) (DoExpr (EApp (EApp (EApp (EVar "groupsBy") (EVar "axis")) (EVar "rest")) (EApp (EApp (EApp (EVar "addToGroup") (EVar "key")) (EVar "p")) (EVar "acc"))))))
-(DTypeSig false "addToGroup" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param"))))))))
-(DFunDef false "addToGroup" ((PVar "key") (PVar "p") (PList)) (EListLit (ETuple (EVar "key") (EListLit (EVar "p")))))
-(DFunDef false "addToGroup" ((PVar "key") (PVar "p") (PCons (PTuple (PVar "k") (PVar "ms")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "key")) (EBinOp "::" (ETuple (EVar "k") (EBinOp "::" (EVar "p") (EVar "ms"))) (EVar "rest")) (EBinOp "::" (ETuple (EVar "k") (EVar "ms")) (EApp (EApp (EApp (EVar "addToGroup") (EVar "key")) (EVar "p")) (EVar "rest")))))
-(DTypeSig false "otherAxesKey" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "String"))))
-(DFunDef false "otherAxesKey" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EApp (EVar "lookupAxis") (EVar "axis")) (EVar "ax")) (arm (PCon "Some" (PCon "PSet" (PCon "Some" PWild))) () (EApp (EVar "drenderN") (EApp (EVar "PProduct") (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EBinOp "/=" (EApp (EVar "fst") (EVar "a")) (EVar "axis")))) (EVar "ax"))))) (arm PWild () (EBinOp "++" (ELit (LString "whole ")) (EApp (EVar "drenderN") (EApp (EVar "PProduct") (EVar "ax")))))))
-(DFunDef false "otherAxesKey" (PWild (PVar "p")) (EBinOp "++" (ELit (LString "whole ")) (EApp (EVar "drenderN") (EVar "p"))))
-(DTypeSig false "groupParam" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param"))) (TyCon "Param"))))
-(DFunDef false "groupParam" ((PVar "axis") (PTuple PWild (PVar "members"))) (EMatch (EVar "members") (arm (PList (PVar "one")) () (EVar "one")) (arm (PCons (PCon "PProduct" (PVar "ax")) PWild) () (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EBinOp "/=" (EApp (EVar "fst") (EVar "a")) (EVar "axis")))) (EVar "ax"))) (DoExpr (EApp (EVar "productNorm") (EBinOp "::" (ETuple (EVar "axis") (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (EApp (EVar "axisMembers") (EVar "axis"))) (EVar "members")))))) (EVar "others")))))) (arm PWild () (EApp (EVar "headParam") (EVar "members")))))
-(DTypeSig false "axisMembers" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "axisMembers" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EApp (EVar "lookupAxis") (EVar "axis")) (EVar "ax")) (arm (PCon "Some" (PCon "PSet" (PCon "Some" (PVar "xs")))) () (EVar "xs")) (arm PWild () (EListLit))))
-(DFunDef false "axisMembers" (PWild PWild) (EListLit))
 (DTypeSig false "sortParams" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "sortParams" ((PList)) (EListLit))
-(DFunDef false "sortParams" ((PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EVar "insertParam") (EVar "p")) (EApp (EVar "sortParams") (EVar "ps"))))
-(DTypeSig false "insertParam" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))
-(DFunDef false "insertParam" ((PVar "p") (PList)) (EListLit (EVar "p")))
-(DFunDef false "insertParam" ((PVar "p") (PCons (PVar "q") (PVar "qs"))) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "drenderN") (EVar "p"))) (EApp (EVar "drenderN") (EVar "q"))) (arm (PCon "Gt") () (EBinOp "::" (EVar "q") (EApp (EApp (EVar "insertParam") (EVar "p")) (EVar "qs")))) (arm PWild () (EBinOp "::" (EVar "p") (EBinOp "::" (EVar "q") (EVar "qs"))))))
+(DFunDef false "sortParams" ((PVar "ps")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "sortByKey") (ELam ((PVar "a") (PVar "b")) (EBinOp "/=" (EApp (EApp (EVar "stringCompare") (EApp (EVar "fst") (EVar "a"))) (EApp (EVar "fst") (EVar "b"))) (EVar "Gt")))) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "drenderN") (EVar "p")) (EVar "p")))) (EVar "ps")))))
+(DTypeSig false "sortByKey" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "sortByKey" (PWild (PList)) (EListLit))
+(DFunDef false "sortByKey" (PWild (PList (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "sortByKey" ((PVar "le") (PVar "xs")) (EBlock (DoLet false false (PTuple (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "splitHalf") (EVar "xs")) (EListLit)) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "mergeBy") (EVar "le")) (EApp (EApp (EVar "sortByKey") (EVar "le")) (EVar "l"))) (EApp (EApp (EVar "sortByKey") (EVar "le")) (EVar "r"))))))
+(DTypeSig false "splitHalf" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "splitHalf" ((PList) (PVar "l") (PVar "r")) (ETuple (EVar "l") (EVar "r")))
+(DFunDef false "splitHalf" ((PList (PVar "x")) (PVar "l") (PVar "r")) (ETuple (EBinOp "::" (EVar "x") (EVar "l")) (EVar "r")))
+(DFunDef false "splitHalf" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest"))) (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "splitHalf") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "l"))) (EBinOp "::" (EVar "y") (EVar "r"))))
+(DTypeSig false "mergeBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "mergeBy" (PWild (PList) (PVar "ys")) (EVar "ys"))
+(DFunDef false "mergeBy" (PWild (PVar "xs") (PList)) (EVar "xs"))
+(DFunDef false "mergeBy" ((PVar "le") (PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "le") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "mergeBy") (EVar "le")) (EVar "xs")) (EBinOp "::" (EVar "y") (EVar "ys")))) (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "mergeBy") (EVar "le")) (EBinOp "::" (EVar "x") (EVar "xs"))) (EVar "ys")))))
 (DTypeSig true "joinAxis" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Param"))))))
 (DFunDef false "joinAxis" ((PVar "ax") (PVar "bx") (PVar "name")) (EMatch (ETuple (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "ax")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "bx"))) (arm (PTuple (PCon "Some" (PVar "pa")) (PCon "Some" (PVar "pb"))) () (ETuple (EVar "name") (EApp (EApp (EVar "djoinN") (EVar "pa")) (EVar "pb")))) (arm (PTuple (PCon "Some" (PVar "pa")) (PCon "None")) () (ETuple (EVar "name") (EApp (EApp (EVar "djoinN") (EVar "pa")) (EApp (EVar "subTopOf") (EVar "pa"))))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "pb"))) () (ETuple (EVar "name") (EApp (EApp (EVar "djoinN") (EApp (EVar "subTopOf") (EVar "pb"))) (EVar "pb")))) (arm (PTuple (PCon "None") (PCon "None")) () (ETuple (EVar "name") (EVar "PUnit")))))
 (DTypeSig true "axisUnion" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String")))))
@@ -609,7 +757,7 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "subsetStr" ((PList) PWild) (EVar "True"))
 (DFunDef false "subsetStr" ((PCons (PVar "x") (PVar "xs")) (PVar "b")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EApp (EApp (EVar "subsetStr") (EVar "xs")) (EVar "b")) (EVar "False")))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false))))
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -647,11 +795,9 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "djoinN" ((PCon "PProduct" (PVar "ax")) (PCon "PProduct" (PVar "bx"))) (EApp (EVar "productNorm") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "joinAxis") (EVar "ax")) (EVar "bx"))) (EApp (EApp (EVar "axisUnion") (EVar "ax")) (EVar "bx")))))
 (DFunDef false "djoinN" ((PVar "p") PWild) (EVar "p"))
 (DTypeSig true "dantichain" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "dantichain" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EMethodRef "map") (EVar "canonParam")) (EVar "ps"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "isSubTop")) (EVar "cs")) (EListLit (EApp (EVar "subTopOf") (EApp (EVar "headParam") (EVar "cs")))) (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EListLit (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (EVar "setMembers")) (EVar "cs"))))))) (arm (PCons (PCon "PProduct" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "regroup") (EApp (EVar "maximalOf") (EApp (EApp (EDictApp "flatMap") (EVar "singletonsOf")) (EVar "cs")))))) (arm (PList) () (EListLit)) (arm PWild () (EApp (EVar "sortParams") (EApp (EVar "maximalOf") (EVar "cs")))))))))
-(DTypeSig true "dmaximal" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "dmaximal" ((PVar "ps")) (EApp (EVar "dantichain") (EVar "ps")))
+(DFunDef false "dantichain" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EMethodRef "map") (EVar "canonParam")) (EVar "ps"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "isSubTop")) (EVar "cs")) (EListLit (EApp (EVar "subTopOf") (EApp (EVar "headParam") (EVar "cs")))) (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EListLit (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (EVar "setMembers")) (EVar "cs"))))))) (arm (PCons (PCon "PPrefix" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "maximalPrefixes") (EVar "cs")))) (arm (PCons (PCon "PProduct" PWild) PWild) () (EApp (EVar "sortParams") (EApp (EVar "canonProducts") (EVar "cs")))) (arm (PList) () (EListLit)) (arm PWild () (EApp (EVar "sortParams") (EApp (EVar "maximalOf") (EVar "cs")))))))))
 (DTypeSig true "writtenSetProblem" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "writtenSetProblem" ((PVar "ps")) (EBlock (DoLet false false (PVar "merged") (EApp (EVar "dantichain") (EVar "ps"))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "merged"))) (DoExpr (EIf (EBinOp ">" (EVar "n") (EVar "setCardCap")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a bound admits at most ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " elements of one label, and this one writes "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "; write a pattern that covers several of them")))) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "setCardCap")))) (EApp (EApp (EMethodRef "map") (EVar "largestSet")) (EVar "merged"))) (arm (PCons (PVar "big") PWild) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a set holds at most ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " members, and this one has "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "big")))) (ELit (LString ""))))) (arm (PList) () (EVar "None")))))))
+(DFunDef false "writtenSetProblem" ((PVar "ps")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EMethodRef "map") (EVar "canonParam")) (EVar "ps"))) (DoLet false false (PVar "written") (EMatch (EVar "cs") (arm (PCons (PCon "PSet" PWild) PWild) () (EApp (EVar "dantichain") (EVar "cs"))) (arm PWild () (EApp (EVar "maximalOf") (EVar "cs"))))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "written"))) (DoLet false false (PVar "bigs") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "setCardCap")))) (EApp (EApp (EMethodRef "map") (EVar "largestSet")) (EBinOp "++" (EVar "written") (EApp (EVar "dantichain") (EVar "cs")))))) (DoExpr (EIf (EBinOp ">" (EVar "n") (EVar "setCardCap")) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a bound admits at most ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " elements of one label, and this one writes "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "; write a pattern that covers several of them")))) (EMatch (EVar "bigs") (arm (PCons (PVar "big") PWild) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a set holds at most ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "setCardCap")))) (ELit (LString " members, and this one has "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "big")))) (ELit (LString ""))))) (arm (PList) () (EVar "None")))))))
 (DTypeSig true "dsubAny" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Bool"))))
 (DFunDef false "dsubAny" ((PVar "p") (PVar "qs")) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "canonParam") (EVar "p"))) (DoLet false false (PVar "cqs") (EApp (EApp (EMethodRef "map") (EVar "canonParam")) (EVar "qs"))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "anyList") (EApp (EVar "dsubN") (EVar "cp"))) (EVar "cqs")) (EMatch (EVar "cp") (arm (PCon "PProduct" PWild) () (EApp (EApp (EVar "allList") (ELam ((PVar "s")) (EApp (EApp (EVar "anyList") (EApp (EVar "dsubN") (EVar "s"))) (EVar "cqs")))) (EApp (EVar "singletonsOf") (EVar "cp")))) (arm PWild () (EVar "False")))))))
 (DTypeSig false "setMembers" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
@@ -664,19 +810,64 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DTypeSig false "headParam" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
 (DFunDef false "headParam" ((PCons (PVar "p") PWild)) (EVar "p"))
 (DFunDef false "headParam" ((PList)) (EVar "PUnit"))
-(DTypeSig false "singletonsOf" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "singletonsOf" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EMethodRef "map") (EVar "productNorm")) (EApp (EVar "axisChoices") (EVar "ax"))))
-(DFunDef false "singletonsOf" ((PVar "p")) (EListLit (EVar "p")))
-(DTypeSig false "axisChoices" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))))
-(DFunDef false "axisChoices" ((PList)) (EListLit (EListLit)))
-(DFunDef false "axisChoices" ((PCons (PTuple (PVar "n") (PCon "PSet" (PCon "Some" (PVar "xs")))) (PVar "rest"))) (EBlock (DoLet false false (PVar "tails") (EApp (EVar "axisChoices") (EVar "rest"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "x")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "x"))))) (EVar "_s")))) (EVar "tails")))) (EVar "xs")))))
-(DFunDef false "axisChoices" ((PCons (PTuple (PVar "n") (PVar "p")) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EVar "p")) (EVar "_s")))) (EApp (EVar "axisChoices") (EVar "rest"))))
 (DTypeSig false "maximalOf" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
 (DFunDef false "maximalOf" ((PVar "ps")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "keepMaximal") (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "ps")))
 (DTypeSig false "keepMaximal" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))
 (DFunDef false "keepMaximal" ((PVar "p") (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "q")) (EApp (EApp (EVar "dsubN") (EVar "p")) (EVar "q")))) (EVar "acc")) (EVar "acc") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "filterList") (ELam ((PVar "q")) (EApp (EVar "not") (EApp (EApp (EVar "dsubN") (EVar "q")) (EVar "p"))))) (EVar "acc")))))
-(DTypeSig false "regroup" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "regroup" ((PVar "ps")) (EMatch (EApp (EVar "lastSetAxis") (EVar "ps")) (arm (PCon "None") () (EVar "ps")) (arm (PCon "Some" (PVar "axis")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "groupParam") (EVar "axis"))) (EApp (EApp (EApp (EVar "groupsBy") (EVar "axis")) (EVar "ps")) (EListLit))))))
+(DTypeSig false "maximalPrefixes" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "maximalPrefixes" ((PVar "ps")) (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EApp (EApp (EVar "sortByKey") (EVar "prefixOrder")) (EApp (EApp (EMethodRef "map") (EVar "prefixEntry")) (EVar "ps")))) (EListLit)) (EVar "None")) (EListLit)))
+(DData Private "PrefixEntry" () ((variant "PrefixEntry" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "Param")))) ())
+(DTypeSig false "prefixEntry" (TyFun (TyCon "Param") (TyCon "PrefixEntry")))
+(DFunDef false "prefixEntry" ((PAs "p" (PCon "PPrefix" (PCon "Some" (PVar "s"))))) (EIf (EApp (EVar "isPrefixPattern") (EVar "s")) (EApp (EApp (EApp (EVar "PrefixEntry") (EApp (EVar "prefixConcrete") (EVar "s"))) (EVar "True")) (EVar "p")) (EApp (EApp (EApp (EVar "PrefixEntry") (EVar "s")) (EVar "False")) (EVar "p"))))
+(DFunDef false "prefixEntry" ((PVar "p")) (EApp (EApp (EApp (EVar "PrefixEntry") (ELit (LString ""))) (EVar "True")) (EVar "p")))
+(DTypeSig false "prefixOrder" (TyFun (TyCon "PrefixEntry") (TyFun (TyCon "PrefixEntry") (TyCon "Bool"))))
+(DFunDef false "prefixOrder" ((PCon "PrefixEntry" (PVar "a") (PVar "pa") PWild) (PCon "PrefixEntry" (PVar "b") (PVar "pb") PWild)) (EMatch (EApp (EApp (EVar "stringCompare") (EVar "a")) (EVar "b")) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EBinOp "||" (EVar "pa") (EApp (EVar "not") (EVar "pb"))))))
+(DTypeSig false "prefixSweep" (TyFun (TyApp (TyCon "List") (TyCon "PrefixEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))))
+(DFunDef false "prefixSweep" ((PList) PWild PWild (PVar "kept")) (EVar "kept"))
+(DFunDef false "prefixSweep" ((PCons (PCon "PrefixEntry" (PVar "c") (PVar "pat") (PVar "p")) (PVar "rest")) (PVar "open") (PVar "lastExact") (PVar "kept")) (EBlock (DoLet false false (PVar "still") (EApp (EApp (EVar "dropWhileNotPrefix") (EVar "c")) (EVar "open"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmpty") (EVar "still")) (EBinOp "&&" (EApp (EVar "not") (EVar "pat")) (EBinOp "==" (EVar "lastExact") (EApp (EVar "Some") (EVar "c"))))) (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EVar "rest")) (EVar "still")) (EVar "lastExact")) (EVar "kept")) (EIf (EVar "pat") (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EVar "rest")) (EBinOp "::" (EVar "c") (EVar "still"))) (EVar "lastExact")) (EBinOp "::" (EVar "p") (EVar "kept"))) (EApp (EApp (EApp (EApp (EVar "prefixSweep") (EVar "rest")) (EVar "still")) (EApp (EVar "Some") (EVar "c"))) (EBinOp "::" (EVar "p") (EVar "kept"))))))))
+(DTypeSig false "dropWhileNotPrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "dropWhileNotPrefix" (PWild (PList)) (EListLit))
+(DFunDef false "dropWhileNotPrefix" ((PVar "c") (PCons (PVar "o") (PVar "os"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "o")) (EVar "c")) (EBinOp "::" (EVar "o") (EVar "os")) (EApp (EApp (EVar "dropWhileNotPrefix") (EVar "c")) (EVar "os"))))
+(DTypeSig false "isNonEmpty" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isNonEmpty" ((PList)) (EVar "False"))
+(DFunDef false "isNonEmpty" (PWild) (EVar "True"))
+(DTypeSig false "singletonsOf" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "singletonsOf" ((PCon "PProduct" (PVar "ax"))) (EApp (EApp (EMethodRef "map") (EVar "productNorm")) (EApp (EApp (EVar "axisChoices") (ELit (LString ""))) (EVar "ax"))))
+(DFunDef false "singletonsOf" ((PVar "p")) (EListLit (EVar "p")))
+(DTypeSig false "axisChoices" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))))
+(DFunDef false "axisChoices" (PWild (PList)) (EListLit (EListLit)))
+(DFunDef false "axisChoices" ((PVar "keep") (PCons (PTuple (PVar "n") (PCon "PSet" (PCon "Some" (PVar "xs")))) (PVar "rest"))) (EBlock (DoLet false false (PVar "tails") (EApp (EApp (EVar "axisChoices") (EVar "keep")) (EVar "rest"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "keep")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "PSet") (EApp (EVar "Some") (EVar "xs")))) (EVar "_s")))) (EVar "tails")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "x")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "PSet") (EApp (EVar "Some") (EListLit (EVar "x"))))) (EVar "_s")))) (EVar "tails")))) (EVar "xs"))))))
+(DFunDef false "axisChoices" ((PVar "keep") (PCons (PTuple (PVar "n") (PVar "p")) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "n") (EVar "p")) (EVar "_s")))) (EApp (EApp (EVar "axisChoices") (EVar "keep")) (EVar "rest"))))
+(DTypeSig false "canonProducts" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
+(DFunDef false "canonProducts" ((PVar "ps")) (EMatch (EApp (EVar "lastSetAxis") (EVar "ps")) (arm (PCon "None") () (EApp (EVar "maximalOf") (EVar "ps"))) (arm (PCon "Some" (PVar "axis")) () (EBlock (DoLet false false (PVar "parts") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "splitAround") (EVar "axis"))) (EVar "ps"))) (DoLet false false (PVar "groups") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EApp (EVar "addGroup") (EVar "axis")) (EVar "p")) (EVar "acc")))) (EListLit)) (EVar "parts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "rebuildGroup") (EVar "axis")) (EVar "groups"))) (EVar "groups")))))))
+(DTypeSig false "splitAround" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "Param")))))
+(DFunDef false "splitAround" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EApp (EApp (EMethodRef "map") (EVar "productNorm")) (EApp (EApp (EVar "axisChoices") (EVar "axis")) (EVar "ax"))))
+(DFunDef false "splitAround" (PWild (PVar "p")) (EListLit (EVar "p")))
+(DData Private "PGroup" () ((variant "PGroup" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DTypeSig false "addGroup" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "PGroup")) (TyApp (TyCon "List") (TyCon "PGroup"))))))
+(DFunDef false "addGroup" ((PVar "axis") (PVar "p") (PVar "gs")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "otherAxes") (EVar "axis")) (EVar "p"))) (DoLet false false (PVar "key") (EApp (EVar "axesKey") (EVar "others"))) (DoLet false false (PVar "members") (EApp (EApp (EVar "axisMembers") (EVar "axis")) (EVar "p"))) (DoExpr (EMatch (EVar "gs") (arm (PList) () (EListLit (EApp (EApp (EApp (EVar "PGroup") (EVar "key")) (EVar "others")) (EVar "members")))) (arm (PCons (PCon "PGroup" (PVar "k") (PVar "o") (PVar "ms")) (PVar "rest")) () (EIf (EBinOp "==" (EVar "k") (EVar "key")) (EBinOp "::" (EApp (EApp (EApp (EVar "PGroup") (EVar "k")) (EVar "o")) (EApp (EApp (EVar "unionMembers") (EVar "ms")) (EVar "members"))) (EVar "rest")) (EBinOp "::" (EApp (EApp (EApp (EVar "PGroup") (EVar "k")) (EVar "o")) (EVar "ms")) (EApp (EApp (EApp (EVar "addGroup") (EVar "axis")) (EVar "p")) (EVar "rest")))))))))
+(DTypeSig false "otherAxes" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))))
+(DFunDef false "otherAxes" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EBinOp "/=" (EApp (EVar "fst") (EVar "a")) (EVar "axis")))) (EVar "ax")))
+(DFunDef false "otherAxes" (PWild PWild) (EListLit))
+(DTypeSig false "axisMembers" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "axisMembers" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EApp (EVar "lookupAxis") (EVar "axis")) (EVar "ax")) (arm (PCon "Some" (PCon "PSet" (PCon "Some" (PVar "xs")))) () (EApp (EVar "Some") (EVar "xs"))) (arm PWild () (EVar "None"))))
+(DFunDef false "axisMembers" (PWild PWild) (EVar "None"))
+(DTypeSig false "unionMembers" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unionMembers" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "a") (EVar "b")))))
+(DFunDef false "unionMembers" (PWild PWild) (EVar "None"))
+(DTypeSig false "axesKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "String")))
+(DFunDef false "axesKey" ((PVar "ax")) (EApp (EApp (EVar "joinWith") (ELit (LString ";"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "paramKey") (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EVar "ax"))))
+(DTypeSig false "paramKey" (TyFun (TyCon "Param") (TyCon "String")))
+(DFunDef false "paramKey" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EBinOp "++" (ELit (LString "p")) (EApp (EVar "lenKey") (EVar "s"))))
+(DFunDef false "paramKey" ((PCon "PPrefix" (PCon "None"))) (ELit (LString "P")))
+(DFunDef false "paramKey" ((PCon "PSet" (PCon "Some" (PVar "xs")))) (EBinOp "++" (ELit (LString "s")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "lenKey")) (EVar "xs")))))
+(DFunDef false "paramKey" ((PCon "PSet" (PCon "None"))) (ELit (LString "S")))
+(DFunDef false "paramKey" ((PCon "PProduct" (PVar "ax"))) (EBinOp "++" (EBinOp "++" (ELit (LString "x(")) (EApp (EVar "axesKey") (EVar "ax"))) (ELit (LString ")"))))
+(DFunDef false "paramKey" ((PCon "PUnit")) (ELit (LString "u")))
+(DTypeSig false "rebuildGroup" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PGroup")) (TyFun (TyCon "PGroup") (TyApp (TyCon "List") (TyCon "Param"))))))
+(DFunDef false "rebuildGroup" ((PVar "axis") (PVar "gs") (PCon "PGroup" (PVar "key") (PVar "others") (PVar "members"))) (EBlock (DoLet false false (PVar "coverers") (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EMatch (EVar "g") (arm (PCon "PGroup" (PVar "k") (PVar "o") PWild) () (EBinOp "&&" (EBinOp "/=" (EVar "k") (EVar "key")) (EApp (EApp (EVar "dsubN") (EApp (EVar "productNorm") (EVar "others"))) (EApp (EVar "productNorm") (EVar "o")))))))) (EVar "gs"))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "groupMembersOf") (EVar "g")) (EVar "None")))) (EVar "coverers")) (EListLit) (EMatch (EVar "members") (arm (PCon "None") () (EListLit (EApp (EVar "productNorm") (EVar "others")))) (arm (PCon "Some" (PVar "xs")) () (EBlock (DoLet false false (PVar "taken") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EVar "groupMembersOf") (EVar "g"))))) (EVar "coverers"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "taken"))))) (EVar "xs")) (arm (PList) () (EListLit)) (arm (PVar "left") () (EListLit (EApp (EVar "productNorm") (EBinOp "::" (ETuple (EVar "axis") (EApp (EVar "PSet") (EApp (EVar "Some") (EVar "left")))) (EVar "others"))))))))))))))
+(DTypeSig false "groupMembersOf" (TyFun (TyCon "PGroup") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "groupMembersOf" ((PCon "PGroup" PWild PWild (PVar "ms"))) (EVar "ms"))
 (DTypeSig false "lastSetAxis" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "lastSetAxis" ((PVar "ps")) (EMatch (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (EVar "setAxisNames")) (EVar "ps"))) (arm (PList) () (EVar "None")) (arm (PVar "names") () (EApp (EVar "Some") (EApp (EVar "lastOf") (EVar "names"))))))
 (DTypeSig false "setAxisNames" (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String"))))
@@ -686,26 +877,20 @@ subsetStr (x :: xs) b = if contains x b then subsetStr xs b else False
 (DFunDef false "lastOf" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "lastOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastOf") (EVar "rest")))
 (DFunDef false "lastOf" ((PList)) (ELit (LString "")))
-(DTypeSig false "groupsBy" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param"))))))))
-(DFunDef false "groupsBy" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "groupsBy" ((PVar "axis") (PCons (PVar "p") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "otherAxesKey") (EVar "axis")) (EVar "p"))) (DoExpr (EApp (EApp (EApp (EVar "groupsBy") (EVar "axis")) (EVar "rest")) (EApp (EApp (EApp (EVar "addToGroup") (EVar "key")) (EVar "p")) (EVar "acc"))))))
-(DTypeSig false "addToGroup" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param"))))))))
-(DFunDef false "addToGroup" ((PVar "key") (PVar "p") (PList)) (EListLit (ETuple (EVar "key") (EListLit (EVar "p")))))
-(DFunDef false "addToGroup" ((PVar "key") (PVar "p") (PCons (PTuple (PVar "k") (PVar "ms")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "key")) (EBinOp "::" (ETuple (EVar "k") (EBinOp "::" (EVar "p") (EVar "ms"))) (EVar "rest")) (EBinOp "::" (ETuple (EVar "k") (EVar "ms")) (EApp (EApp (EApp (EVar "addToGroup") (EVar "key")) (EVar "p")) (EVar "rest")))))
-(DTypeSig false "otherAxesKey" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "String"))))
-(DFunDef false "otherAxesKey" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EApp (EVar "lookupAxis") (EVar "axis")) (EVar "ax")) (arm (PCon "Some" (PCon "PSet" (PCon "Some" PWild))) () (EApp (EVar "drenderN") (EApp (EVar "PProduct") (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EBinOp "/=" (EApp (EVar "fst") (EVar "a")) (EVar "axis")))) (EVar "ax"))))) (arm PWild () (EBinOp "++" (ELit (LString "whole ")) (EApp (EVar "drenderN") (EApp (EVar "PProduct") (EVar "ax")))))))
-(DFunDef false "otherAxesKey" (PWild (PVar "p")) (EBinOp "++" (ELit (LString "whole ")) (EApp (EVar "drenderN") (EVar "p"))))
-(DTypeSig false "groupParam" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Param"))) (TyCon "Param"))))
-(DFunDef false "groupParam" ((PVar "axis") (PTuple PWild (PVar "members"))) (EMatch (EVar "members") (arm (PList (PVar "one")) () (EVar "one")) (arm (PCons (PCon "PProduct" (PVar "ax")) PWild) () (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "a")) (EBinOp "/=" (EApp (EVar "fst") (EVar "a")) (EVar "axis")))) (EVar "ax"))) (DoExpr (EApp (EVar "productNorm") (EBinOp "::" (ETuple (EVar "axis") (EApp (EVar "PSet") (EApp (EVar "Some") (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "axisMembers") (EVar "axis"))) (EVar "members")))))) (EVar "others")))))) (arm PWild () (EApp (EVar "headParam") (EVar "members")))))
-(DTypeSig false "axisMembers" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "axisMembers" ((PVar "axis") (PCon "PProduct" (PVar "ax"))) (EMatch (EApp (EApp (EVar "lookupAxis") (EVar "axis")) (EVar "ax")) (arm (PCon "Some" (PCon "PSet" (PCon "Some" (PVar "xs")))) () (EVar "xs")) (arm PWild () (EListLit))))
-(DFunDef false "axisMembers" (PWild PWild) (EListLit))
 (DTypeSig false "sortParams" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param"))))
-(DFunDef false "sortParams" ((PList)) (EListLit))
-(DFunDef false "sortParams" ((PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EVar "insertParam") (EVar "p")) (EApp (EVar "sortParams") (EVar "ps"))))
-(DTypeSig false "insertParam" (TyFun (TyCon "Param") (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyApp (TyCon "List") (TyCon "Param")))))
-(DFunDef false "insertParam" ((PVar "p") (PList)) (EListLit (EVar "p")))
-(DFunDef false "insertParam" ((PVar "p") (PCons (PVar "q") (PVar "qs"))) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "drenderN") (EVar "p"))) (EApp (EVar "drenderN") (EVar "q"))) (arm (PCon "Gt") () (EBinOp "::" (EVar "q") (EApp (EApp (EVar "insertParam") (EVar "p")) (EVar "qs")))) (arm PWild () (EBinOp "::" (EVar "p") (EBinOp "::" (EVar "q") (EVar "qs"))))))
+(DFunDef false "sortParams" ((PVar "ps")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EVar "sortByKey") (ELam ((PVar "a") (PVar "b")) (EBinOp "/=" (EApp (EApp (EVar "stringCompare") (EApp (EVar "fst") (EVar "a"))) (EApp (EVar "fst") (EVar "b"))) (EVar "Gt")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "drenderN") (EVar "p")) (EVar "p")))) (EVar "ps")))))
+(DTypeSig false "sortByKey" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "sortByKey" (PWild (PList)) (EListLit))
+(DFunDef false "sortByKey" (PWild (PList (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "sortByKey" ((PVar "le") (PVar "xs")) (EBlock (DoLet false false (PTuple (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "splitHalf") (EVar "xs")) (EListLit)) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "mergeBy") (EVar "le")) (EApp (EApp (EVar "sortByKey") (EVar "le")) (EVar "l"))) (EApp (EApp (EVar "sortByKey") (EVar "le")) (EVar "r"))))))
+(DTypeSig false "splitHalf" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "splitHalf" ((PList) (PVar "l") (PVar "r")) (ETuple (EVar "l") (EVar "r")))
+(DFunDef false "splitHalf" ((PList (PVar "x")) (PVar "l") (PVar "r")) (ETuple (EBinOp "::" (EVar "x") (EVar "l")) (EVar "r")))
+(DFunDef false "splitHalf" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest"))) (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "splitHalf") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "l"))) (EBinOp "::" (EVar "y") (EVar "r"))))
+(DTypeSig false "mergeBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "mergeBy" (PWild (PList) (PVar "ys")) (EVar "ys"))
+(DFunDef false "mergeBy" (PWild (PVar "xs") (PList)) (EVar "xs"))
+(DFunDef false "mergeBy" ((PVar "le") (PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "le") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "mergeBy") (EVar "le")) (EVar "xs")) (EBinOp "::" (EVar "y") (EVar "ys")))) (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "mergeBy") (EVar "le")) (EBinOp "::" (EVar "x") (EVar "xs"))) (EVar "ys")))))
 (DTypeSig true "joinAxis" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Param"))))))
 (DFunDef false "joinAxis" ((PVar "ax") (PVar "bx") (PVar "name")) (EMatch (ETuple (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "ax")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "bx"))) (arm (PTuple (PCon "Some" (PVar "pa")) (PCon "Some" (PVar "pb"))) () (ETuple (EVar "name") (EApp (EApp (EVar "djoinN") (EVar "pa")) (EVar "pb")))) (arm (PTuple (PCon "Some" (PVar "pa")) (PCon "None")) () (ETuple (EVar "name") (EApp (EApp (EVar "djoinN") (EVar "pa")) (EApp (EVar "subTopOf") (EVar "pa"))))) (arm (PTuple (PCon "None") (PCon "Some" (PVar "pb"))) () (ETuple (EVar "name") (EApp (EApp (EVar "djoinN") (EApp (EVar "subTopOf") (EVar "pb"))) (EVar "pb")))) (arm (PTuple (PCon "None") (PCon "None")) () (ETuple (EVar "name") (EVar "PUnit")))))
 (DTypeSig true "axisUnion" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyApp (TyCon "List") (TyCon "String")))))
