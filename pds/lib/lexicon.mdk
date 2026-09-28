@@ -13,11 +13,13 @@
    A verdict is one of four:
      - `LexValid`: every constraint was decided and passed.
      - `LexInvalid`: a constraint was decided and failed.
-     - `LexUndecided`: nothing failed, but a `maxGraphemes` bound was not
-       decided. The reference counts extended grapheme clusters (UAX #29) and
-       this tree has no segmenter. A string with no more codepoints than the
-       bound has no more graphemes either, so only a string past it in
-       codepoints and within its byte bound is left open.
+     - `LexUndecided`: nothing failed, but the record is not known to be
+       what the reference would store: a `maxGraphemes` bound was not
+       decided, or the record has no `$type`. The reference counts extended
+       grapheme clusters (UAX #29) and this tree has no segmenter. A string
+       with no more codepoints than the bound has no more graphemes either,
+       so only a string past it in codepoints and within its byte bound is
+       left open.
      - `LexNoSchema`: the collection is not one of the twenty.
 
    `recordValidationStatus` is the only place a verdict becomes the
@@ -31,8 +33,10 @@
 
    Known differences from the reference, each a case no conforming client
    writes:
-     - a record without `$type` is judged as its collection's, where the
-       reference first adds the field (which changes the stored bytes);
+     - a record without `$type` is judged as its collection's and, if that
+       passes, is `LexUndecided`: the reference first adds the field, which
+       changes the stored bytes and the CID, and this server stores the
+       record as given, so it is never called valid;
      - a `$link` spelled in base36 is read as an ordinary object;
      - a CID whose varints are not minimal is refused;
      - a `$bytes` string carrying whitespace is refused. -}
@@ -182,7 +186,9 @@ validateRecord lex collection rkey record =
         Some reason =>
           LexInvalid "Invalid record key for \{collection}: \{reason} at $"
         None => match checkShape lex "$.record" shape record
-          Pass => LexValid
+          Pass => match get "$type" record
+            None => LexUndecided "no $type"
+            Some _ => LexValid
           Open message => LexUndecided message
           Fail message => LexInvalid "Invalid \{collection} record: \{message}"
       _ => LexNoSchema

@@ -326,6 +326,71 @@ test "putRecord grades as createRecord does" =
     ),
   ]
 
+errorAndStatus : Answer -> (String, String)
+errorAndStatus answer = (errorOf answer, statusOf answer)
+
+{- | A record with no `$type` is stored as given, where the reference adds
+   the field first, so it is never reported valid. -}
+test "a record without $type is written and reported unknown, and one with $type valid" =
+  let cid = "bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm"
+  let subject = jObject [
+    (
+      "uri",
+      JString
+        "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/app.bsky.feed.post/3jzfcijpj2z2a",
+    ),
+    ("cid", JString cid),
+  ]
+  let like = [
+    ("subject", subject),
+    ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+  ]
+  let typedLike = jObject ([("$type", JString "app.bsky.feed.like")] ++ like)
+  let bareProfile = jObject [("displayName", JString "x")]
+  let typedProfile = jObject [
+    ("$type", JString "app.bsky.actor.profile"),
+    ("displayName", JString "x"),
+  ]
+  let untypedPost = jObject [
+    ("text", JString "hello"),
+    ("createdAt", JString "2024-01-01T00:00:00.000Z"),
+  ]
+  expectEach [
+    (
+      "createRecord like without $type",
+      expectEqual
+        ("<missing:error>", "unknown")
+        (errorAndStatus
+          (createRecord "app.bsky.feed.like" "3jzfcijpj2z2a" (jObject like) [])),
+    ),
+    (
+      "createRecord like with $type",
+      expectEqual
+        "valid"
+        (statusOf
+          (createRecord "app.bsky.feed.like" "3jzfcijpj2z2a" typedLike [])),
+    ),
+    (
+      "putRecord profile without $type",
+      expectEqual
+        "unknown"
+        (statusOf (putRecord "app.bsky.actor.profile" "self" bareProfile)),
+    ),
+    (
+      "putRecord profile with $type",
+      expectEqual
+        "valid"
+        (statusOf (putRecord "app.bsky.actor.profile" "self" typedProfile)),
+    ),
+    (
+      "applyWrites create without $type",
+      expectEqual
+        ["unknown"]
+        (resultStatuses
+          (applyWrites [createElement "3ke6kg3wk2c2b" untypedPost] [])),
+    ),
+  ]
+
 -- ── applyWrites ─────────────────────────────────────────────────────────────
 
 resultStatuses : Answer -> List String

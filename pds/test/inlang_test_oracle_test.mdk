@@ -96,7 +96,7 @@ suites = [
   -- lowered from 14: two cells fed out-of-range bytes that `Bytes` cannot
   -- represent, and were deleted rather than converted
   ("car_store_test", (12, Eval)),
-  ("repo_tid_test", (9, NativeCapability)),
+  ("repo_tid_test", (15, NativeCapability)),
   ("field_test", (30, NativeSpeed)),
   ("scalar_test", (38, NativeSpeed)),
   -- lowered from 11: cells fed out-of-range bytes that `Bytes` cannot
@@ -109,7 +109,7 @@ suites = [
   ("pbkdf2_test", (4, NativeSpeed)),
   ("jwt_test", (32, NativeSpeed)),
   ("credential_test", (20, NativeSpeed)),
-  ("session_routes_test", (34, NativeCapability)),
+  ("session_routes_test", (49, NativeCapability)),
   ("auth_seam_test", (32, NativeCapability)),
   ("blob_routes_test", (15, NativeCapability)),
   ("ratelimit_test", (43, Eval)),
@@ -121,7 +121,7 @@ suites = [
   ("route_policy_test", (4, Eval)),
   ("lexicon_corpus_test", (4, NativeCapability)),
   ("lexicon_schemas_test", (3, NativeCapability)),
-  ("lexicon_write_test", (11, NativeCapability)),
+  ("lexicon_write_test", (12, NativeCapability)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -547,7 +547,7 @@ test "pds/test/mst_test.mdk executed >= 12 assertions" =
 test "pds/test/car_store_test.mdk executed >= 12 assertions" =
   floorExpectation "car_store_test"
 
-test "pds/test/repo_tid_test.mdk executed >= 9 assertions" =
+test "pds/test/repo_tid_test.mdk executed >= 15 assertions" =
   floorExpectation "repo_tid_test"
 
 test "pds/test/field_test.mdk executed >= 30 assertions" =
@@ -577,7 +577,7 @@ test "pds/test/jwt_test.mdk executed >= 32 assertions" =
 test "pds/test/credential_test.mdk executed >= 20 assertions" =
   floorExpectation "credential_test"
 
-test "pds/test/session_routes_test.mdk executed >= 34 assertions" =
+test "pds/test/session_routes_test.mdk executed >= 49 assertions" =
   floorExpectation "session_routes_test"
 
 test "pds/test/auth_seam_test.mdk executed >= 32 assertions" =
@@ -613,7 +613,7 @@ test "pds/test/lexicon_corpus_test.mdk executed >= 4 assertions" =
 test "pds/test/lexicon_schemas_test.mdk executed >= 3 assertions" =
   floorExpectation "lexicon_schemas_test"
 
-test "pds/test/lexicon_write_test.mdk executed >= 11 assertions" =
+test "pds/test/lexicon_write_test.mdk executed >= 12 assertions" =
   floorExpectation "lexicon_write_test"
 
 -- # Non-vacuity
