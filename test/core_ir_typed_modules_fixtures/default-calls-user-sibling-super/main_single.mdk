@@ -1,0 +1,36 @@
+-- A user interface whose defaults call a supplied sibling (`hello`), an
+-- inherited sibling (`greet` from `twice`) and a superclass method (`name`),
+-- reached both at a concrete type and through a dictionary parameter.
+interface Named a where
+  name : a -> String
+
+interface Greet a requires Named a where
+  hello : a -> String
+  greet : a -> String
+  greet x = hello x ++ ", " ++ name x ++ "!"
+  twice : a -> String
+  twice x = greet x ++ " " ++ greet x
+
+data Cat = Cat
+
+data Dog = Dog
+
+impl Named Cat where
+  name _ = "cat"
+
+impl Named Dog where
+  name _ = "dog"
+
+impl Greet Cat where
+  hello _ = "hi"
+
+impl Greet Dog where
+  hello _ = "woof"
+  greet _ = "WOOF"
+
+viaDict : Greet a => a -> String
+viaDict x = twice x
+
+main =
+  putStrLn
+    (twice Cat ++ "|" ++ twice Dog ++ "|" ++ viaDict Cat ++ "|" ++ viaDict Dog)

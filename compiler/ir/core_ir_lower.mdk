@@ -61,6 +61,7 @@ import ir.core_ir.{
 import types.disposition.{
   DispositionTable,
   InstanceShape(..),
+  ifaceSuperCount,
   inheritorsOf,
   installedDispositions,
   installedDispositionsOpt,
@@ -100,78 +101,10 @@ composeVar : String
 composeVar = "$cf"
 
 -- ── expressions ────────────────────────────────────────────────────────────
-export
--- The published answer for a method occurrence, as the IR node carries it —
--- rewritten through the receiver remap while a default body is being specialized.
+-- The published answer for a method occurrence, as the IR node carries it.
 cmethodOf : String -> (String, Int, Route, List Route, List Route) -> CExpr
 cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
-  match !receiverRemapRef
-    None => CMethod name iface arity route implRoutes methodRoutes
-    Some rr =>
-      if receiverOf rr route then
-        CMethod
-          name
-          iface
-          arity
-          (RKey (receiverWordFor rr iface) [])
-          rr.rrReqs
-          (map (remapReceiver rr) methodRoutes)
-      else
-        CMethod
-          name
-          iface
-          arity
-          route
-          (map (remapReceiver rr) implRoutes)
-          (map (remapReceiver rr) methodRoutes)
-
--- ── specializing an inherited default for one instance (#1265, #1821, #1619) ──
--- A default body is inferred ONCE, with its receiver as a given
--- (`ast.defaultReceiverDict`), so a sibling or superclass call inside it is routed
--- `RDict`/`RDictFwd` to that receiver.  The receiver is not a parameter: each
--- `InheritedDefault` row lowers the body again with the receiver's routes rewritten
--- to `RKey <word>`, the word a dictionary for the inheriting instance carries — the
--- typechecker's bare head unless that head is ambiguous, its canonical key when it
--- is — so a method of the default's own interface reaches that instance's method
--- (supplied or inherited).  A superclass method called on the receiver dispatches by
--- its OWN instance's word (`rrSuperWords`, keyed by the method's interface word):
--- under a head collision the two words differ, and the subclass word names no
--- superclass method.  The instance's `requires` dictionaries, received as the
--- specialization's own leading parameters, are supplied as the call's impl
--- dictionaries.
-data ReceiverRemap = ReceiverRemap {
-  rrSelf : String,
-  rrWord : String,
-  rrSuperWords : List (String, String),
-  rrReqs : List Route,
-}
-
--- The word a method of interface [iface] dispatches by through the receiver.
-receiverWordFor : ReceiverRemap -> String -> String
-receiverWordFor rr iface =
-  optionOr rr.rrWord (lookupAssoc iface rr.rrSuperWords)
-
-receiverRemapRef : Ref (Option ReceiverRemap)
-receiverRemapRef = Ref None
-
-receiverOf : ReceiverRemap -> Route -> Bool
-receiverOf rr (RDict d) = d == rr.rrSelf
-receiverOf rr (RDictFwd d) = d == rr.rrSelf
-receiverOf _ _ = False
-
-remapReceiver : ReceiverRemap -> Route -> Route
-remapReceiver rr (RDict d)
-  | d == rr.rrSelf = RKey rr.rrWord rr.rrReqs
-remapReceiver rr (RDictFwd d)
-  | d == rr.rrSelf = RKey rr.rrWord rr.rrReqs
-remapReceiver rr (RKey w rs) = RKey w (map (remapReceiver rr) rs)
-remapReceiver _ r = r
-
--- The dictionary routes of a constrained-function occurrence, remapped likewise.
-lowerDictRoutes : List Route -> List Route
-lowerDictRoutes routes = match !receiverRemapRef
-  None => routes
-  Some rr => map (remapReceiver rr) routes
+  CMethod name iface arity route implRoutes methodRoutes
 
 lower : Expr -> CExpr
 lower (ELit l) = CLit l
@@ -246,7 +179,7 @@ lower (EHeadAnnot e _) = lower e
 -- #2705: the occurrence's answer is read from the published evidence table, the
 -- same seam `EDictAt` crosses on the next line.
 lower (EMethodAt name _ ev) = cmethodOf name (evMethodRoutes ev)
-lower (EDictAt name ev) = CDict name (lowerDictRoutes (evDictRoutes ev))
+lower (EDictAt name ev) = CDict name (evDictRoutes ev)
 -- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
 -- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
 -- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
@@ -739,9 +672,8 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- `core_ir_roundtrip_main`, `core_ir_dump_main`, the snapshot tool's CORE_IR
 -- section).  It cannot see an inherited default: which instance inherits which
 -- default is instance identity, and only elaboration establishes that.  An impl that
--- leaves a method of an interface declared in ANOTHER module to its default
--- therefore gets no body for it here (desugar's `fillImplDefaults` still supplies a
--- same-module one).  A driver that typechecks lowers through `lowerTypedProgram`.
+-- leaves a method to its interface's default therefore gets no body for it here.  A
+-- driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog = lowerProgramWith None prog
@@ -760,7 +692,11 @@ lowerProgramWith dispositions prog =
     (lowerGroups prog)
     (ctorArities prog)
     (buildCtorToType prog)
-    (lowerImplsWith (installDispatchTables prog) dispositions prog)
+    (lowerImplsWith
+      (installDispatchTables prog)
+      (instanceReqCounts prog)
+      dispositions
+      prog)
 
 -- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
 -- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
@@ -1104,30 +1040,26 @@ bindFieldTemps ((CField k ex) :: rest) body =
 -- CExpr case — but it is a field of the per-emission carrier, not a module-scope Ref
 -- reset by convention on entry (#1954).
 
--- the (method, SELECTOR) instances that are per-instance CAFs — see the gate above.
--- The selector is the string an RKey occurrence of this instance actually carries:
--- the bare head when this is the SOLE impl at (method, head), else the canonical C7
--- key (TYPECHECK-AUDIT C7).  #731 item 2: two same-head impls (`Foo (MyPair Int
--- Bool)` vs `Foo (MyPair Bool Int)`) share the head `MyPair` but the occurrence route
--- carries the KEY `Foo|(MyPair Int Bool)|`; keying memo on the bare head made
--- `isMemoKey` miss on the collision, so the occurrence was never hoisted and the side
--- effect duplicated on build.  Keying on the same selector the route carries fixes it.
-memoKeys : List CImplEntry -> List (String, String)
+-- the (method, key, SELECTOR) instances that are per-instance CAFs — see the gate
+-- above.  An RKey occurrence carries the instance's canonical `key`, which is what
+-- the walk matches.  The selector only NAMES the CAF: the bare head when this is the
+-- SOLE impl at (method, head), else the key (TYPECHECK-AUDIT C7) — the emitters'
+-- `implFnSymTag` choice, so a dispatcher arm finds the CAF under its symbol tag.
+memoKeys : List CImplEntry -> List (String, String, String)
 memoKeys entries = memoKeysGo entries entries
 
-memoKeysGo : List CImplEntry -> List CImplEntry -> List (String, String)
+memoKeysGo : List CImplEntry -> List CImplEntry -> List (String, String, String)
 memoKeysGo _ [] = []
 memoKeysGo all ((CImplEntry m _ (CImplTagged tag key _ positions pats _)) :: rest)
   | isEmptyL positions && isEmptyL pats =
-    (m, memoSelector all m tag key) :: memoKeysGo all rest
+    (m, key, memoSelector all m tag key) :: memoKeysGo all rest
 memoKeysGo all ((CImplEntry m _ (CImplDefault _ tag key positions pats _)) :: rest)
   | isEmptyL positions && isEmptyL pats =
-    (m, memoSelector all m tag key) :: memoKeysGo all rest
+    (m, key, memoSelector all m tag key) :: memoKeysGo all rest
 memoKeysGo all (_ :: rest) = memoKeysGo all rest
 
--- the string an RKey occurrence of (method, head-tag) carries — bare head when the
--- head is the sole impl of (method, head), else the canonical C7 key.  Mirrors the
--- emitter's implFnSymTag/keyForSite choice (C7), so the CAF and the occurrence agree.
+-- the symbol tag of (method, head-tag): the bare head when the head is the sole impl
+-- of (method, head), else the canonical C7 key.
 memoSelector : List CImplEntry -> String -> String -> String -> String
 memoSelector all method tag key =
   if headTagUniqueL all method tag then tag else key
@@ -1157,10 +1089,14 @@ distinctKeysAtHeadL ((CImplEntry n _ (CImplDefault _ t k _ _ _)) :: rest) method
 distinctKeysAtHeadL (_ :: rest) method tag acc =
   distinctKeysAtHeadL rest method tag acc
 
-isMemoKey : List (String, String) -> String -> String -> Bool
-isMemoKey [] _ _ = False
-isMemoKey ((m2, t2) :: rest) m tag =
-  m == m2 && tag == t2 || isMemoKey rest m tag
+-- the CAF selector of the memoisable instance of [m] whose canonical key is [key]
+memoSelectorOf : List (String, String, String) ->
+  String ->
+  String ->
+  Option String
+memoSelectorOf [] _ _ = None
+memoSelectorOf ((m2, k2, sel) :: rest) m key =
+  if m == m2 && key == k2 then Some sel else memoSelectorOf rest m key
 
 -- #731 item 1: the (method, selector) instances whose dispatch is UNAMBIGUOUS by
 -- STATIC KNOWLEDGE regardless of route — exactly one tagged impl and no interface
@@ -1171,10 +1107,13 @@ isMemoKey ((m2, t2) :: rest) m tag =
 -- the RUNTIME-resolved tag (not statically hoistable) and is left per-call — the
 -- residual multi-impl RDict case tracked separately.  Subset of `keys` (already
 -- nullary/return-position/no-requires), so it never over-memoises past eval.
-soleMemoKeys : List CImplEntry -> List (String, String) -> List (String, String)
+soleMemoKeys : List CImplEntry ->
+  List (String, String, String) ->
+  List (String, (String, String))
 soleMemoKeys _ [] = []
-soleMemoKeys entries ((m, sel) :: rest)
-  | taggedImplCount entries m 1 == 1 = (m, sel) :: soleMemoKeys entries rest
+soleMemoKeys entries ((m, key, sel) :: rest)
+  | taggedImplCount entries m 1 == 1 =
+    (m, (key, sel)) :: soleMemoKeys entries rest
   | otherwise = soleMemoKeys entries rest
 
 -- distinct C7 keys of [method]'s tagged impls (short-circuits at [cap]: this only
@@ -1208,10 +1147,10 @@ distinctImplKeysL (_ :: rest) method cap acc =
 -- by convention.  It REPLACES the walk's existing `keys` parameter rather than
 -- riding alongside it, so no walk function gained an argument.
 --
---   • `memoKeysAll` — #747: ALL (method, selector) memo keys of the program
+--   • `memoKeysAll` — #747: ALL (method, key, selector) memo rows of the program
 --     (nullary/return-position/no-requires impls), computed once in
 --     `hoistNullaryMemo`.  This is one value serving what would otherwise be two: the
---     `keys` parameter the walk threaded (read by `hoistExpr`'s `isMemoKey` gate)
+--     `keys` parameter the walk threaded (read by `hoistExpr`'s `memoSelectorOf` gate)
 --     and `allMemoKeysRef`, which `hoistNullaryMemo` always assigned that same
 --     `keys`.  Read by the RDict/RDictFwd MULTI-impl arm of `hoistDictNullary` to
 --     enumerate every impl tag of the method so a `$memo_<selector>_<method>` CAF
@@ -1219,17 +1158,17 @@ distinctImplKeysL (_ :: rest) method cap acc =
 --     backends' dispatch chain forces the matching per-tag CAF (per-runtime-tag
 --     memoisation), so each resolved tag's side effect fires once — the same
 --     sharing eval's per-VTypedImpl memoThunk gives regardless of route.
---   • `soleKeys` — the (method, selector) instances hoistable through a runtime-dict
+--   • `soleKeys` — the (method, (key, selector)) instances hoistable through a runtime-dict
 --     route (#731 item 1).  Read only by the RDict/RDictFwd `hoistExpr` arm.
---   • `memoRefs` — the walk's collector of rewritten (tag, method) pairs.  The one
+--   • `memoRefs` — the walk's collector of rewritten (selector, key, method) rows.  The one
 --     mutable field, and the only reason the carrier holds a `Ref` at all.
 --
 -- Adding a field is one line here plus the one construction site in
 -- `hoistNullaryMemo`: every walk function already takes the whole record.
 data LowerState = LowerState {
-  memoKeysAll : List (String, String),
-  soleKeys : List (String, String),
-  memoRefs : Ref (List (String, String)),
+  memoKeysAll : List (String, String, String),
+  soleKeys : List (String, (String, String)),
+  memoRefs : Ref (List (String, String, String)),
 }
 
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
@@ -1250,9 +1189,9 @@ data LowerState = LowerState {
 memoBindName : String -> String -> String
 memoBindName selector method = "$memo_\{injectiveIdent selector}_\{method}"
 
-recordMemoRef : LowerState -> String -> String -> Unit
-recordMemoRef st tag method =
-  let refs = st.memoRefs in refs := (tag, method) :: !refs
+recordMemoRef : LowerState -> String -> String -> String -> Unit
+recordMemoRef st sel key method =
+  let refs = st.memoRefs in refs := (sel, key, method) :: !refs
 
 -- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
 --   • single-impl (`st.soleKeys`): the runtime dict can only ever resolve to the
@@ -1267,8 +1206,8 @@ recordMemoRef st tag method =
 --     independently.  A method with no nullary/return-position impl records nothing.
 hoistDictNullary : LowerState -> String -> String -> Route -> CExpr
 hoistDictNullary st name iface route = match lookupAssoc name st.soleKeys
-  Some sel =>
-    let _ = recordMemoRef st sel name
+  Some (key, sel) =>
+    let _ = recordMemoRef st sel key name
     CVar (memoBindName sel name) AGlobal
   None =>
     let _ = recordMultiImplMemo st name
@@ -1283,11 +1222,15 @@ hoistDictNullary st name iface route = match lookupAssoc name st.soleKeys
 recordMultiImplMemo : LowerState -> String -> Unit
 recordMultiImplMemo st name = recordMultiImplMemoGo st name st.memoKeysAll
 
-recordMultiImplMemoGo : LowerState -> String -> List (String, String) -> Unit
+recordMultiImplMemoGo : LowerState ->
+  String ->
+  List (String, String, String) ->
+  Unit
 recordMultiImplMemoGo _ _ [] = ()
-recordMultiImplMemoGo st name ((m, sel) :: rest)
+recordMultiImplMemoGo st name ((m, key, sel) :: rest)
   | m == name =
-    let _ = recordMemoRef st sel name in recordMultiImplMemoGo st name rest
+    let _ = recordMemoRef st sel key name
+    recordMultiImplMemoGo st name rest
   | otherwise = recordMultiImplMemoGo st name rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
@@ -1309,20 +1252,20 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     let refs = dedupPairs (reverseL !st.memoRefs)
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
-memoCafBind : (String, String) -> CBind
-memoCafBind (tag, method) = CBind (memoBindName tag method) [
-  CClause [] (CMethod method "" 0 (RKey tag []) [] []),
+memoCafBind : (String, String, String) -> CBind
+memoCafBind (sel, key, method) = CBind (memoBindName sel method) [
+  CClause [] (CMethod method "" 0 (RKey key [] []) [] []),
 ]
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
 -- private O(n²) `List`-as-a-set scan).  Both components are unconstrained
 -- Strings, so the key length-prefixes the first — a bare separator would not be
 -- injective.  Same first-occurrence order, so the memo-CAF binds are unchanged.
-dedupPairs : List (String, String) -> List (String, String)
+dedupPairs : List (String, String, String) -> List (String, String, String)
 dedupPairs ps = dedupBy memoRefKey ps
 
-memoRefKey : (String, String) -> String
-memoRefKey (tag, method) = lenKey tag ++ method
+memoRefKey : (String, String, String) -> String
+memoRefKey (sel, _, method) = lenKey sel ++ method
 
 hoistBind : LowerState -> CBind -> CBind
 hoistBind st (CBind n clauses) = CBind n (map (hoistClause st) clauses)
@@ -1339,12 +1282,12 @@ hoistImpl st (CImplEntry n s (CImplDefault ifaceId tag key pos pats body)) =
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
 hoistExpr : LowerState -> CExpr -> CExpr
-hoistExpr st (CMethod name iface 0 (RKey tag []) [] []) =
-  if isMemoKey st.memoKeysAll name tag then
-    let _ = recordMemoRef st tag name
-    CVar (memoBindName tag name) AGlobal
-  else
-    CMethod name iface 0 (RKey tag []) [] []
+hoistExpr st (CMethod name iface 0 (RKey key [] sups) [] []) =
+  match memoSelectorOf st.memoKeysAll name key
+    Some sel =>
+      let _ = recordMemoRef st sel key name
+      CVar (memoBindName sel name) AGlobal
+    None => CMethod name iface 0 (RKey key [] sups) [] []
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
 -- (RDictFwd from a polymorphic caller forwarding a concrete dict, or a plain RDict)
 -- resolves — when the method has exactly one impl and no default — statically to
@@ -1356,6 +1299,8 @@ hoistExpr st (CMethod name iface 0 (RDict d) [] []) =
   hoistDictNullary st name iface (RDict d)
 hoistExpr st (CMethod name iface 0 (RDictFwd d) [] []) =
   hoistDictNullary st name iface (RDictFwd d)
+hoistExpr st (CMethod name iface 0 (RProj r path) [] []) =
+  hoistDictNullary st name iface (RProj r path)
 hoistExpr _ (CMethod name iface arity r ir mr) =
   CMethod name iface arity r ir mr
 hoistExpr _ (CLit l) = CLit l
@@ -1536,68 +1481,15 @@ lgToBind ((n, _), cs) = CBind n cs
 -- core_ir_typed_main).  The emit path lowers through here too and never reads the
 -- tables, so installing is a no-op for it.
 
--- ── #948: interface → the HEAD TAGS of its impls, read off the impl DECLS ────
--- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` PER METHOD IT DEFINES, so
--- an impl that defines NONE of the interface's methods — every method inherited
--- from an interface DEFAULT — reaches the Core IR as literally nothing.  The
--- native emitter's `ifaceTags` derives "the tags an `iface` dict can carry" from
--- those entries, so such an impl was INVISIBLE to it: a dict-routed call to the
--- inherited method emitted an ARM-LESS dispatcher ending in `unreachable`
--- (SIGSEGV), and a method with exactly one tagged impl elsewhere took the
--- `soleImplDirect` shortcut straight into the WRONG impl (silent wrongness).
--- Only the CROSS-MODULE case is affected: desugar's `fillImplDefaults` is
--- same-module only, so a same-module impl gets a specialized (and therefore
--- tagged, and therefore visible) clause for each inherited default.
---
--- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
--- (`optionOr noneHeadTag (headTyconHead tys)`), the canonical key EXACTLY as it
--- computes an entry's key (`implRouteKeyWord implOrigin iface tys None` — B-2.2-e:
--- the SAME origin argument, so the two stay equal), and the decl set is matched
--- arm-for-arm with `lowerDeclImpl` — including its `DAttrib` unwrapping (#1037).  So
--- this table is a strict SUPERSET of the (tag, key) pairs the entries already yield:
--- for every program that has no method-less impl the emitter's tag set (and its
--- emitted IR) is unchanged.
---
--- ── #1036: the row carries the CANONICAL KEY too, not just the head tag ──────
--- A head tag is TYPE-ARGUMENT-BLIND: `Box Int` and `Box String` both head at "Box".
--- Recording only the head made a method-less `impl Speak (Box String)` look
--- COVERED by its `impl Speak (Box Int)` sibling, so `defaultReachesOtherTags` saw
--- nothing uncovered and `soleImplDirect` compiled every dict-routed `speak` into a
--- direct call to the `Box Int` body — `use (Box "s")` printed "boxint".
---
--- It is also what the emitter needs to AGREE WITH THE TYPECHECKER on the runtime
--- dict word.  typecheck's `keyForSiteByIface`/`ieHeadCollidesByIface` are INTERFACE-
--- keyed and count every DECLARED impl (`ieEntriesForIface` filters on the
--- impl's iface, not on method-name membership — "so a specific impl that inherits a
--- method via a DEFAULT is still seen"), so it stamps the canonical key
--- `Speak|(Box Int)|` into the caller's dict cell.  The emitter's `headTagUnique`
--- counts CImplEntries, which the method-less impl never produced, so it derived the
--- bare head "Box" — a DIFFERENT hash word.  With the declared keys here the two
--- sides compute the same collision verdict from the same facts.
---
--- This table is an explicit VALUE, never INSTALLED into an ambient `Ref` by
--- `lowerImpls` and read back by the two backends through zero-argument accessors
--- (`lowerImpls` being the one chokepoint every emit path funnels through).  The
--- emit driver mints it with `ifaceImplHeadTable` over the same decl list it lowers
--- and hands it to the backend inside `EmitInput`/`WasmEmitInput`, so the three readers
--- below take it as a parameter.  The forgettable-`install*` hazard the old note
--- worried about is now a TYPE error instead: a driver cannot build an emit input
--- without supplying this table.  A driver that has no decls (a hand-built
--- `CProgram` test harness) passes `[]`, which is the pre-#1036 bare-head answer.
--- ── #1047: the row also carries the INTERFACE IDENTITY ──────────────────────
--- The `iface` field is a BARE NAME, and two unrelated modules may each declare an
--- interface spelled the same way.  `implOrigin` (`frontend/ast.mdk`, stamped by
--- resolve's `fillIfaceOccOrigin` from the impl module's own interface scope) says
--- WHICH `Speak` this impl is an impl of, so the row can answer the one question
--- the untagged-default registry needs and could not previously ask: given the
--- dispatch tag a default is being emitted for, whose interface is it?
---
--- ⚠️ It is a strict WIDENING of the row, not a re-keying: `ifaceImplRouteKeys` /
--- `ifaceDeclHeadUnique` still match on the bare `iface` name exactly as before, so
--- every route key and collision verdict — and therefore every byte of emitted IR
--- on a program with no METHOD-name collision — is unchanged.  (⚠️ METHOD, not
--- interface: the colliding interfaces' own names are irrelevant and may differ.)
--- one row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
+-- ── the declared impls, read off the impl DECLS ────────────────────────────────
+-- One row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
+-- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` per method it defines, so an
+-- impl that inherits every method has no entry of its own; this table still lists it.
+-- The head tag and key are computed exactly as `lowerImplMethod` computes an entry's
+-- (`optionOr noneHeadTag (headTyconHead tys)`, `implRouteKeyWord implOrigin iface tys
+-- None`), matched arm-for-arm with `lowerDeclImpl`, `DAttrib` unwrapping included
+-- (#1037).  Its reader is `llvm_emit.preludeImplSymbols`, which needs the prelude's
+-- own instances by key.
 export
 ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
@@ -1807,22 +1699,18 @@ implSymTagOf collide method tag key =
 -- is the ONE seam every emit driver of BOTH backends funnels through, so one check
 -- serves LLVM and WasmGC instead of two per-backend copies of the predicate
 -- desyncing.  Both hashes are imported from `backend.private_mangle` — the SAME
--- `hashName` the LLVM emitter stamps into `emitDictCell`/`emitRouteWordMatch` and
+-- `hashName` the LLVM emitter stamps into `emitDictCell`/`emitDispatchArm` and
 -- the SAME `dictTag` the wasm emitter stamps into `routeWitness`/
 -- `emitDispatchChain` — because a guard with its own copy of the hash certifies a
 -- property of the copy, not of what shipped.
 --
 -- The pre-image population IS enumerable at this seam.  A dict witness is
--- `hashName key` / `dictTag key` where `key` is the route word a module's typecheck
--- stamped, and `llvm_emit.implEntryRouteWords` states which words those can be: for
--- each declared impl, EITHER its bare head tag (when the stamping module sees no
--- collision at that head) OR its canonical dispatch key (when it does) — the
--- emitter deliberately accepts the union because which one arrives depends on the
--- CALLER's imports.  So the space is exactly `{head tag, canonical key}` over the
--- declarations, which this reads off `DImpl` with the same two expressions
--- `ifaceImplHeadEntries` and `implSymRowsOf` use (DAttrib unwrap included), and
--- `noneHeadTag` for the general-instance dict header.  That is the entry set, not
--- an approximation of it.
+-- `hashName key` / `dictTag key` where `key` is the canonical key of the instance
+-- the typechecker selected (`route_key.implRouteKeyWord`), the one word a
+-- dispatcher arm compares.  So the space is exactly the declared impls' canonical
+-- keys, which this reads off `DImpl` with the same expression `ifaceImplHeadEntries`
+-- and `implSymRowsOf` use (DAttrib unwrap included).  That is the entry set, not an
+-- approximation of it.
 --
 -- SCOPE — stated out loud, because a partial check cited as a total one is how this
 -- bug class survives:
@@ -1852,10 +1740,8 @@ implSymTagOf collide method tag key =
 --     the declaration list this seam sees, so there is no enumerable population to
 --     check at this site.  Deliberately not forced into a shared site that does not
 --     fit; measurement and the site it WOULD need are in the slice report.
---   * it is a check on DISTINCT PRE-IMAGES that belong to DIFFERENT impls.  Two
---     words of ONE impl (its head tag and its own canonical key) are allowed to
---     hash alike: the dispatcher tests both in one `dedupS`'d OR-chain for that same
---     impl, so either match selects the same body and nothing is lost.
+--   * it is a check on DISTINCT PRE-IMAGES that belong to DIFFERENT impls; the
+--     multi-clause and joint prelude+module duplicates of one impl share its key.
 --   * it observes the tag the backends are about to mint; it does not change the
 --     tag scheme.  Every collision-free program emits byte-identical IR and WAT.
 --   * ⚠️ the WASM pass OVER-APPROXIMATES for a caller that cannot positively rule
@@ -1870,17 +1756,7 @@ implSymTagOf collide method tag key =
 --     before, because it cannot rule out wasm either.
 dictWitnessTagGuard : EmitTarget -> List Decl -> Unit
 dictWitnessTagGuard target prog =
-  let implRows = flatMap dictRouteWordsOf prog
-  -- the reserved `noneHeadTag` self-pair is seeded PER METHOD NAME that actually
-  -- has a row, not once program-wide: a general instance's runtime dict header is
-  -- `hashName noneHeadTag` for THAT method's dispatch chain (see the SCOPE note
-  -- above), so the reservation only matters within the method it could actually be
-  -- compared in.
-  let sentinelRows =
-    map
-      (m => (m, noneHeadTag, noneHeadTag))
-      (distinctMethodNamesOf implRows omEmpty)
-  let rows = dedupRouteWords (sentinelRows ++ implRows) omEmpty
+  let rows = dedupRouteWords (flatMap dictRouteWordsOf prog) omEmpty
   -- native FIRST, and ALWAYS: a full-width `hashName` collision is also a
   -- `dictTag` collision (masking cannot separate equal values), so reporting it
   -- in the i64 space names the wider defect regardless of target — this pass is
@@ -1889,16 +1765,6 @@ dictWitnessTagGuard target prog =
   match target
     TargetNative => ()
     _ => checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
-
--- distinct method names appearing in a row list, first-arrival order — used only to
--- scope the `noneHeadTag` sentinel per method (see `dictWitnessTagGuard`).
-distinctMethodNamesOf : List (String, String, String) ->
-  OrdMap Unit ->
-  List String
-distinctMethodNamesOf [] _ = []
-distinctMethodNamesOf ((m, _, _) :: rest) seen
-  | omHasKey m seen = distinctMethodNamesOf rest seen
-  | otherwise = m :: distinctMethodNamesOf rest (omInsert m () seen)
 
 nativeDictTagSpace : String
 nativeDictTagSpace =
@@ -1914,28 +1780,20 @@ wasmDictTagSpace : String
 wasmDictTagSpace =
   "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here; refused anyway because a wasm-target build cannot rule out this narrower width"
 
--- every route word a dict witness for this impl can carry, paired with the impl's
--- own identity (its canonical dispatch key, which is unique per declared impl) and
--- the METHOD NAME that route word's dispatch chain is keyed by — the same grouping
--- key `llvm_emit.implsOf`/`dispFnName` use to decide what a real dispatch chain
--- compares.  The pairing is what keeps an impl's own two words from grading as a
--- collision against each other — see the SCOPE paragraph.  Mirrors
--- `implSymRowsOf`'s per-`ImplMethod` walk: one row-pair per method clause, not one
--- row-pair per `DImpl`.
+-- the word a dict witness for this impl carries (its canonical key), paired with the
+-- impl's identity (that same key) and the METHOD NAME that word's dispatch chain is
+-- keyed by — the same grouping key `llvm_emit.implsOf`/`dispFnName` use to decide
+-- what a real dispatch chain compares.  Mirrors `implSymRowsOf`'s per-`ImplMethod`
+-- walk: one row per method clause, not one row per `DImpl`.
 dictRouteWordsOf : Decl -> List (String, String, String)
 dictRouteWordsOf (DAttrib _ d) = dictRouteWordsOf d
 dictRouteWordsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   let key = implRouteKeyWord o ifaceName typeArgs None
-  let tag = optionOr noneHeadTag (headTyconHead typeArgs)
-  flatMap (dictRouteWordRowsFor tag key) methods
+  map (dictRouteWordRowFor key) methods
 dictRouteWordsOf _ = []
 
-dictRouteWordRowsFor : String ->
-  String ->
-  ImplMethod ->
-  List (String, String, String)
-dictRouteWordRowsFor tag key (ImplMethod mname _ _) =
-  [(mname, tag, key), (mname, key, key)]
+dictRouteWordRowFor : String -> ImplMethod -> (String, String, String)
+dictRouteWordRowFor key (ImplMethod mname _ _) = (mname, key, key)
 
 -- distinct pre-images, first arrival wins, keyed by (method, word) so two DIFFERENT
 -- methods' identical word never spuriously dedup against each other (mirrors
@@ -1987,103 +1845,21 @@ checkDictTagsInjective space hash ((m, w, owner) :: rest) seen =
         panic
           "emitted dict-witness tag collision: two DISTINCT impls of method `\{m}` hash to one dispatch tag.\ntag space: \{space}\ncollided tag: \{t}\nroute word 1: \{w0}\nroute word 2: \{w}\nA dict witness carries this tag, and method `\{m}`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."
 
--- #1036: the ROUTE KEY each declared impl of [iface] is dispatched under at run
--- time, in declaration order (the caller dedups — `ifaceTags` already runs the
--- union through `dedupS`).  Mirrors typecheck's `keyForSiteByIface`: the bare head
--- tag when that head is unique among the interface's declared impls (so every
--- existing program's dict words and dispatch arms are byte-identical), else the
--- canonical full-type key — the same word `keyForSiteByIface` stamps into the
--- caller's dict cell.
-export
-ifaceImplRouteKeys : List (String, String, String, String) ->
-  String ->
-  List String
-ifaceImplRouteKeys heads iface = ifaceRouteKeysGo heads iface heads
-
-ifaceRouteKeysGo : List (String, String, String, String) ->
-  String ->
-  List (String, String, String, String) ->
-  List String
-ifaceRouteKeysGo _ _ [] = []
-ifaceRouteKeysGo heads iface ((_, i, tag, key) :: rest)
-  | i == iface =
-    declRouteKey tag key (ifaceDeclHeadUnique heads i tag)
-      :: ifaceRouteKeysGo heads iface rest
-  | otherwise = ifaceRouteKeysGo heads iface rest
-
-declRouteKey : String -> String -> Bool -> String
-declRouteKey tag key unique = if unique then tag else key
-
--- #2445: the HEAD TYCON tag of the declared impl a route WORD names.  The word is
--- whatever `declRouteKey` minted — the bare head tag when the head is unique, the
--- canonical key when it is NOT — so a caller holding a list of route words cannot
--- compare them to head tags by string equality: at exactly the collision this maps
--- back for, the word is the key and never string-equals the bare tag.  (That is the
--- fail-OPEN a naive duplicate test over `map groupTag groups ++ raw` walks into: the
--- "one impl defines, sibling at the same head inherits the default" shape is the one
--- where the two spellings differ.)  Empty when no declared impl of [iface] answers to
--- the word, which an EMPTY table also gives — the same degrade-to-today's-output
--- direction `ifaceDeclHeadUnique` already takes.
-export
-declHeadOfRouteWord : List (String, String, String, String) ->
-  String ->
-  String ->
-  String
-declHeadOfRouteWord heads iface word = declHeadOfRouteWordGo iface word heads
-
-declHeadOfRouteWordGo : String ->
-  String ->
-  List (String, String, String, String) ->
-  String
-declHeadOfRouteWordGo _ _ [] = ""
-declHeadOfRouteWordGo iface word ((_, i, t, k) :: rest)
-  | i == iface && (t == word || k == word) = t
-  | otherwise = declHeadOfRouteWordGo iface word rest
-
--- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
--- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
--- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
--- typecheck's `ieCountHeadByIface`.  ⚠️ Until ARCH B-2.1-b2 that side counted a
--- TOPOLOGICAL PREFIX of the program's impls while THIS side has always counted
--- `lowerProgramEmit allDecls` — the whole program — so the two could reach opposite
--- collision verdicts on a cross-module program.  It now counts the graph-global
--- `IE`, i.e. the same population.  The arithmetic still differs and that difference
--- is pre-existing: this side counts DISTINCT canonical keys, that side counts rows.
--- An EMPTY table answers True — the
--- pre-#1036 bare-head behaviour — so a driver that supplies no decl-derived table
--- degrades to today's output rather than mis-keying.
-export
-ifaceDeclHeadUnique : List (String, String, String, String) ->
-  String ->
-  String ->
-  Bool
-ifaceDeclHeadUnique heads iface tag =
-  listLen (declKeysAtHead heads iface tag []) <= 1
-
-declKeysAtHead : List (String, String, String, String) ->
-  String ->
-  String ->
-  List String ->
-  List String
-declKeysAtHead [] _ _ acc = acc
-declKeysAtHead ((_, i, t, k) :: rest) iface tag acc
-  | i == iface && t == tag && not (contains k acc) =
-    declKeysAtHead rest iface tag (k :: acc)
-  | otherwise = declKeysAtHead rest iface tag acc
-
 -- lowerImpls against a PRE-BUILT dispatch table — the multi-module driver builds
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
 -- in the prelude needs the prelude's dispatch positions), then lowers each
 -- module's impls against it.
 export
 lowerImplsWith : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   Option DispositionTable ->
   List Decl ->
   List CImplEntry
-lowerImplsWith disp dispositions prog =
-  flatMap (lowerDeclImpl disp dispositions) prog
+lowerImplsWith disp reqCounts dispositions prog =
+  flatMap (lowerDeclImpl disp reqCounts dispositions) prog
 
 lowerDeclImpl : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   Option DispositionTable ->
   Decl ->
   List CImplEntry
@@ -2094,23 +1870,23 @@ lowerDeclImpl : List ((String, String, String), List Int) ->
 -- from the program's impl set.  Native then had an impl-less interface-with-default
 -- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
 -- same shape and silently answered from the interface default instead.
-lowerDeclImpl disp dt (DAttrib _ d) = lowerDeclImpl disp dt d
+lowerDeclImpl disp reqCounts dt (DAttrib _ d) =
+  lowerDeclImpl disp reqCounts dt d
 -- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
 -- word (the definition side of the identity-bearing key `keyForSite` stamps at the
 -- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
 -- same field for the same reason.
-lowerDeclImpl disp _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+lowerDeclImpl disp _ _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (lowerImplMethod disp o ifaceName typeArgs) methods
--- An interface lowers one specialization of each default per instance the table says
--- inherits it — lowered HERE, beside the interface's other code, because the body is
--- the interface module's (its names resolve there).  Every inherited slot therefore
--- has its own entry, cross-module included, and no engine is left to choose a
--- default.  The interface word is read straight off `DInterface.ifaceOrigin`
+-- An interface lowers one entry for each default per instance the table says
+-- inherits it — lowered HERE, beside the interface's other code, because the body
+-- is the interface module's (its names resolve there).  Every inherited slot
+-- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
 -- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
 -- same spelling the table's producer keys the slot by.
-lowerDeclImpl disp (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (lowerInheritedDefault disp dt o ifaceName) methods
-lowerDeclImpl _ _ _ = []
+lowerDeclImpl disp reqCounts (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (lowerInheritedDefault disp reqCounts dt o ifaceName) methods
+lowerDeclImpl _ _ _ _ = []
 
 lowerImplMethod : List ((String, String, String), List Int) ->
   TyConOrigin ->
@@ -2133,59 +1909,236 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
     (CImplTagged tag key ifaceName positions pats (lower body))
 
 lowerInheritedDefault : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   DispositionTable ->
   TyConOrigin ->
   String ->
   IfaceMethod ->
   List CImplEntry
-lowerInheritedDefault _ _ _ _ (IfaceMethod _ _ None _) = []
-lowerInheritedDefault disp dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
+lowerInheritedDefault _ _ _ _ _ (IfaceMethod _ _ None _) = []
+lowerInheritedDefault disp reqCounts dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let ifaceWord = ifaceWordOf o ifaceName
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let nMethodDicts = leadingDictParams pats
+  let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
+  let params =
+    take nMethodDicts pats
+      ++ [PVar receiver (Loc "" 0 0 0 0)]
+      ++ drop nMethodDicts pats
+      ++ lamParams body
+  let lowered = lower (underLam body)
+  let spec =
+    shape => DefaultRow {
+      drSelf = defaultReceiverDict mname,
+      drReceiver = receiver,
+      drIface = ifaceWord,
+      drWord = shape.isWord,
+      drSupers = receiverFields receiver 0 (ifaceSuperCount ifaceWord dt),
+      drReqs =
+        receiverFields
+          receiver
+          (ifaceSuperCount ifaceWord dt)
+          (optionOr 0 (omLookup shape.isWord reqCounts)),
+    }
   map
-    (inheritedDefaultEntry ifaceWord mname positions pats body)
+    (shape =>
+      CImplEntry
+        mname
+        (tyvarsInArgs shape.isTys)
+        (CImplDefault
+          ifaceWord
+          (optionOr noneHeadTag (headTyconHead shape.isTys))
+          shape.isWord
+          positions
+          params
+          (specializeRow (spec shape) lowered)))
     (inheritorsOf ifaceWord mname dt)
 
--- One inheriting instance's copy of the default: the body lowered with its receiver
--- remapped (see `ReceiverRemap`), taking the instance's `requires` dictionaries after
--- its method-level ones — the parameter order of the instance's own supplied methods
--- (`typecheck.implDictPassMethods`) — so a call site passes it what it passes them.
-inheritedDefaultEntry : String ->
-  String ->
-  List Int ->
-  List Pat ->
-  Expr ->
-  InstanceShape ->
-  CImplEntry
-inheritedDefaultEntry ifaceWord mname positions pats body shape =
-  let nMethodDicts = leadingDictParams pats
-  let reqNames =
-    map
-      (i => "$dict_\{mname}_\{intToString i}")
-      (range nMethodDicts (nMethodDicts + shape.isReqCount))
-  let rr = ReceiverRemap {
-    rrSelf = defaultReceiverDict mname,
-    rrWord = shape.isDictWord,
-    rrSuperWords = shape.isSuperWords,
-    rrReqs = map RDict reqNames,
-  }
-  let saved = !receiverRemapRef
-  receiverRemapRef := Some rr
-  let lowered = lower body
-  receiverRemapRef := saved
-  let reqPats = map (n => PVar n (Loc "" 0 0 0 0)) reqNames
-  let allPats = take nMethodDicts pats ++ reqPats ++ drop nMethodDicts pats
-  CImplEntry
-    mname
-    (tyvarsInArgs shape.isTys)
-    (CImplDefault
-      ifaceWord
-      (optionOr noneHeadTag (headTyconHead shape.isTys))
-      shape.isWord
-      positions
-      allPats
-      lowered)
+-- One inheriting instance's entry for a default is the default's body lowered once
+-- and specialized to that instance.  The entry takes the default's method-level
+-- dictionaries, then its RECEIVER -- the dictionary of the instance whose slot it
+-- fills, handed over by whichever call selected this entry -- then the default's
+-- value patterns (and, for a point-free default, its lambda's).  The receiver sits
+-- where a supplied method's first `requires` dictionary sits and is named like one,
+-- so every engine's count of an entry's leading dictionaries covers it; an engine
+-- differs only in passing the selecting dictionary itself there rather than the
+-- dictionary's `requires`.
+--
+-- The entry is reached only through its instance's word, so the receiver IS that
+-- instance's dictionary: a call in the body to a method of the same interface on the
+-- receiver goes straight to the instance's own entry for it (supplied or inherited),
+-- its `requires` read out of the receiver.  Everything else, a superclass call in
+-- particular, still reads the receiver, so it answers with the dictionary the caller
+-- built.
+data DefaultRow = DefaultRow {
+  -- the receiver name the body's evidence was rendered to (`defaultReceiverDict`)
+  drSelf : String,
+  -- the entry's receiver parameter
+  drReceiver : String,
+  -- the interface's word, which a sibling call carries
+  drIface : String,
+  -- the inheriting instance's word
+  drWord : String,
+  -- the receiver's super dictionaries, then its `requires`, as projections of it
+  drSupers : List Route,
+  drReqs : List Route,
+}
+
+-- projections [from, from + n) of the dictionary named [recv]: a dictionary stores
+-- its supers, then its `requires`
+receiverFields : String -> Int -> Int -> List Route
+receiverFields recv from n =
+  map (i => RProj (RDict recv) [i]) (range from (from + n))
+
+specializeRow : DefaultRow -> CExpr -> CExpr
+specializeRow row (CMethod name iface arity route implRoutes methRoutes) =
+  if iface == row.drIface && isReceiverRoute row route then
+    CMethod
+      name
+      iface
+      arity
+      (RKey row.drWord [] row.drSupers)
+      row.drReqs
+      (map (renameReceiver row) methRoutes)
+  else
+    CMethod
+      name
+      iface
+      arity
+      (renameReceiver row route)
+      (map (renameReceiver row) implRoutes)
+      (map (renameReceiver row) methRoutes)
+specializeRow row (CDict name routes) =
+  CDict name (map (renameReceiver row) routes)
+specializeRow row (CVar x addr) =
+  if x == row.drSelf then CVar row.drReceiver addr else CVar x addr
+specializeRow _ (CLit l) = CLit l
+specializeRow row (CApp f x) = CApp (specializeRow row f) (specializeRow row x)
+specializeRow row (CLam pats body) = CLam pats (specializeRow row body)
+specializeRow row (CLet r pat e1 e2) =
+  CLet r pat (specializeRow row e1) (specializeRow row e2)
+specializeRow row (CLetGroup binds body) =
+  CLetGroup (map (specializeBind row) binds) (specializeRow row body)
+specializeRow row (CMatch scrut arms) =
+  CMatch (specializeRow row scrut) (map (specializeArm row) arms)
+specializeRow row (CDecision scrut arms tree) =
+  CDecision (specializeRow row scrut) (map (specializeArm row) arms) tree
+specializeRow row (CIf c t e) =
+  CIf (specializeRow row c) (specializeRow row t) (specializeRow row e)
+specializeRow row (CBinPrim op l r tag) =
+  CBinPrim op (specializeRow row l) (specializeRow row r) tag
+specializeRow row (CUnOp op x) = CUnOp op (specializeRow row x)
+specializeRow row (CTuple es) = CTuple (map (specializeRow row) es)
+specializeRow row (CList es) = CList (map (specializeRow row) es)
+specializeRow row (CRecord name fields) =
+  CRecord name (map (specializeField row) fields)
+specializeRow row (CFieldAccess ex f n) =
+  CFieldAccess (specializeRow row ex) f n
+specializeRow row (CRecordUpdate name base fields) =
+  CRecordUpdate name (specializeRow row base) (map (specializeField row) fields)
+specializeRow row (CVariantUpdate con base fields) =
+  CVariantUpdate con (specializeRow row base) (map (specializeField row) fields)
+specializeRow row (CArray es) = CArray (map (specializeRow row) es)
+specializeRow row (CRangeList lo hi incl) =
+  CRangeList (specializeRow row lo) (specializeRow row hi) incl
+specializeRow row (CRangeArray lo hi incl) =
+  CRangeArray (specializeRow row lo) (specializeRow row hi) incl
+specializeRow row (CIndex a i) =
+  CIndex (specializeRow row a) (specializeRow row i)
+specializeRow row (CSlice a lo hi incl) =
+  CSlice
+    (specializeRow row a)
+    (specializeRow row lo)
+    (specializeRow row hi)
+    incl
+specializeRow row (CStringIndex a i) =
+  CStringIndex (specializeRow row a) (specializeRow row i)
+specializeRow row (CStringSlice a lo hi incl) =
+  CStringSlice
+    (specializeRow row a)
+    (specializeRow row lo)
+    (specializeRow row hi)
+    incl
+specializeRow row (CListIndex a i) =
+  CListIndex (specializeRow row a) (specializeRow row i)
+specializeRow row (CListSlice a lo hi incl) =
+  CListSlice
+    (specializeRow row a)
+    (specializeRow row lo)
+    (specializeRow row hi)
+    incl
+specializeRow row (CBlock stmts) = CBlock (map (specializeStmt row) stmts)
+
+specializeBind : DefaultRow -> CBind -> CBind
+specializeBind row (CBind n clauses) =
+  CBind n (map (specializeClause row) clauses)
+
+specializeClause : DefaultRow -> CClause -> CClause
+specializeClause row (CClause pats body) = CClause pats (specializeRow row body)
+
+specializeArm : DefaultRow -> CArm -> CArm
+specializeArm row (CArm pat guards body) =
+  CArm pat (map (specializeGuard row) guards) (specializeRow row body)
+
+specializeGuard : DefaultRow -> CGuard -> CGuard
+specializeGuard row (CGBool e) = CGBool (specializeRow row e)
+specializeGuard row (CGBind p e) = CGBind p (specializeRow row e)
+
+specializeStmt : DefaultRow -> CStmt -> CStmt
+specializeStmt row (CSExpr e) = CSExpr (specializeRow row e)
+specializeStmt row (CSLet r pat e) = CSLet r pat (specializeRow row e)
+specializeStmt row (CSAssign x e) = CSAssign x (specializeRow row e)
+
+specializeField : DefaultRow -> CField -> CField
+specializeField row (CField k e) = CField k (specializeRow row e)
+
+-- the receiver itself, not a projection of it
+isReceiverRoute : DefaultRow -> Route -> Bool
+isReceiverRoute row (RDict d) = d == row.drSelf
+isReceiverRoute row (RDictFwd d) = d == row.drSelf
+isReceiverRoute _ _ = False
+
+renameReceiver : DefaultRow -> Route -> Route
+renameReceiver row (RDict d) =
+  RDict (if d == row.drSelf then row.drReceiver else d)
+renameReceiver row (RDictFwd d) =
+  RDictFwd (if d == row.drSelf then row.drReceiver else d)
+renameReceiver row (RKey k reqs sups) =
+  RKey k (map (renameReceiver row) reqs) (map (renameReceiver row) sups)
+renameReceiver row (RProj r path) = RProj (renameReceiver row r) path
+renameReceiver row (RLocal sym dicts) =
+  RLocal sym (map (renameReceiver row) dicts)
+renameReceiver _ RNone = RNone
+renameReceiver _ (RScalar t) = RScalar t
+
+-- Each instance's `requires` count, keyed by its word: the length of the segment its
+-- dictionary stores after its supers.  Built from every module's impls, because an
+-- instance can inherit a default declared in another module.
+export
+instanceReqCounts : List Decl -> OrdMap Int
+instanceReqCounts decls = instanceReqCountsGo decls omEmpty
+
+instanceReqCountsGo : List Decl -> OrdMap Int -> OrdMap Int
+instanceReqCountsGo [] acc = acc
+instanceReqCountsGo ((DAttrib _ d) :: rest) acc =
+  instanceReqCountsGo (d :: rest) acc
+instanceReqCountsGo ((DImpl { iface, tys, reqs, implOrigin, ... }) :: rest) acc =
+  instanceReqCountsGo
+    rest
+    (omInsert (implRouteKeyWord implOrigin iface tys None) (listLen reqs) acc)
+instanceReqCountsGo (_ :: rest) acc = instanceReqCountsGo rest acc
+
+-- a default body's leading lambda parameters, and the body under them
+lamParams : Expr -> List Pat
+lamParams (ELoc _ e) = lamParams e
+lamParams (ELam ps _) = ps
+lamParams _ = []
+
+underLam : Expr -> Expr
+underLam (ELoc _ e) = underLam e
+underLam (ELam _ b) = b
+underLam e = e
 
 -- the leading `$dict_*` parameters dict-passing prepended to a default's clause
 leadingDictParams : List Pat -> Int

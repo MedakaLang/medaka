@@ -44,7 +44,6 @@ import ir.core_ir_lower.{
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
-  methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
   validateFfiExternTypeNames,
@@ -111,7 +110,7 @@ preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
     filterList
       (n => not (endsWith autoPrintPinName n))
       (map cbindNameOf groups),
-    preludeImplSymbols impls,
+    preludeImplSymbols (ifaceImplHeadTable coreD) impls,
   )
 
 cbindNameOf : CBind -> String
@@ -141,7 +140,6 @@ emitTail runtimeDecls coreD modules2 =
       (returnsSelfTable allDecls)
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
-      (methodConstraintIfaces allDecls)
       (ctorFieldTypeNames allDecls)
       (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (mainTypeIsUnit ())
@@ -152,7 +150,6 @@ emitTail runtimeDecls coreD modules2 =
       (srcNameFromArgs (args ()))
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-      (ifaceImplHeadTable allDecls)
   let statsOn = statsEnabled ()
   if statsOn then
     let (text, stats) =

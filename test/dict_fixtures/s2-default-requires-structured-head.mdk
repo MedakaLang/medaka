@@ -1,0 +1,43 @@
+-- An inherited default whose dispatching argument is a structure OVER the interface
+-- parameter (`shL : List a -> ...`), called at an instance whose head carries
+-- `requires`: the call hands the default the instance's `requires` at the interface
+-- parameter, not at the argument. One- and two-parameter shapes, then the controls,
+-- then a supplied method passing a sibling method as a value (the lifted closure
+-- builds its dictionary out of the enclosing one).
+-- Expected: ["Ls1", "Ls2s3"]|["Mc1", "Mc2c3"]|["s1", "s2"]|LLs1Ls2s3|BLs1
+interface Sh a where
+  sh : a -> String
+  shL : List a -> List String
+  shL xs = map sh xs
+impl Sh Int where
+  sh n = "s" ++ intToString n
+impl Sh (List a) requires Sh a where
+  sh xs = "L" ++ concatS (map sh xs)
+data Box a = Box a
+impl Sh (Box a) requires Sh a where
+  sh (Box x) = "B" ++ concatS (map sh [[x]])
+interface Conv a b where
+  conv : a -> b
+  convL : List a -> List b
+  convL xs = map conv xs
+impl Conv Int String where
+  conv n = "c" ++ intToString n
+impl Conv (List a) String requires Conv a String where
+  conv xs = "M" ++ concatS (map conv xs)
+concatS : List String -> String
+concatS [] = ""
+concatS (x :: xs) = x ++ concatS xs
+main =
+  let multi = convL [[1], [2, 3]] : List String
+  println
+    (concatS [
+      debug (shL [[1], [2, 3]]),
+      "|",
+      debug multi,
+      "|",
+      debug (shL [1, 2]),
+      "|",
+      sh [[1], [2, 3]],
+      "|",
+      sh (Box 1),
+    ])

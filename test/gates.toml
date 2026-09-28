@@ -281,7 +281,7 @@ toolchain = []
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -356,7 +356,7 @@ toolchain = []
 [[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_3"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -371,7 +371,7 @@ toolchain = []
 [[gate]]
 name = "gzip/test/inflate_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_8"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -443,13 +443,13 @@ project = "pds"
 tiers = ["nightly"]
 # 1091.56s measured (the eval interpreter over the representative repo
 # transcript) — over the 900s "medium" bound, so "heavy". Reachability is the
-# `repo-vectors-eval-engine` job in .github/workflows/nightly.yml, named by
-# literal path, which is what clause (a) of diff_compiler_ci_shard_coverage.sh
-# checks for an `other-job` entry.
+# `repo-vectors-eval-engine` job in .github/workflows/nightly.yml, which runs
+# `medaka test --native` on this module: a native spelling clause (a) of
+# diff_compiler_ci_shard_coverage.sh accepts for an `other-job` entry.
 cost = "heavy"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/nightly/repo_vectors_eval_engine.sh"
+kind = "native"
+migration = "done"
+run = "pds/nightly/repo_vectors_eval_engine_test.mdk"
 oracles = []
 sources = []
 corpus = []
@@ -540,7 +540,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "pds/test/constant_time_signing"
 area = "engines"
-shard = "gates_2"
+shard = "gates_5"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -555,7 +555,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "pds/test/dagcbor_cid_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -625,7 +625,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/field_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -640,7 +640,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/hmac_vectors"
 area = "engines"
-shard = "gates_2"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -729,7 +729,7 @@ toolchain = []
 
 # Two unrelated sections (#2592, #2595), the same pair as
 # pds/test/did_key_all_engines. One is a three-engine value differential over
-# 25 hand-authored cells. The other is a MUTATION self-test that rewrites one
+# hand-authored cells. The other is a MUTATION self-test that rewrites one
 # assertion in pds/test/protocol_all_engines_main.mdk and requires the rebuilt
 # driver to panic with a named witness — this gate's own assertions as the
 # subject, and the inverse of the exit-0/clean-stderr contract
@@ -741,26 +741,30 @@ shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "split-first"
-run = "pds/test/protocol_all_engines.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/protocol_all_engines_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
+# The same pair of sections as pds/test/protocol_all_engines: a three-engine
+# value differential over hand-authored cells, and a mutation self-test that
+# rewrites one line of pds/test/read_routes_all_engines_main.mdk at a time and
+# requires the rebuilt driver to fail with that mutation's named witness.
 [[gate]]
 name = "pds/test/read_routes_all_engines"
 area = "engines"
 shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
-# Repository-free by construction (see the script header): no signing, so the
-# eval arm is seconds, not the >10-minute band #2181 removed from this project.
+# Repository-free by construction (see the test's module doc): no signing, so
+# the eval arm is seconds, not the >10-minute band #2181 removed from this project.
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/test/read_routes_all_engines.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/read_routes_all_engines_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -805,7 +809,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -820,7 +824,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/secp256k1_point_vectors"
 area = "engines"
-shard = "gates_7"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -850,7 +854,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/sha256_vectors"
 area = "engines"
-shard = "gates_2"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -865,7 +869,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/signing_corpus"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -880,13 +884,13 @@ toolchain = []
 [[gate]]
 name = "pds/test/signing_parity"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge", "nightly/SIGNING_DEEP=1"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/test/signing_parity.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/signing_parity_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -895,7 +899,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/store_persistence"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -925,7 +929,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/vector_provenance"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -955,7 +959,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "gates_2"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -970,7 +974,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1035,7 +1039,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/sql_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1054,7 +1058,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1174,7 +1178,7 @@ toolchain = []
 [[gate]]
 name = "check_build_oracles_for_consistency"
 area = "types"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1505,7 +1509,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_typed_modules"
 area = "eval"
-shard = "gates_5"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1569,7 +1573,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dict_semantics_permute"
 area = "infra"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1704,7 +1708,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_error_quality_baseline"
 area = "diagnostics"
-shard = "gates_5"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1741,9 +1745,9 @@ cost = "cheap"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_eval_test.mdk"
-oracles = ["core_ir_main", "core_ir_modules_main", "core_ir_prelude_main", "core_ir_roundtrip_main", "core_ir_run_main", "core_ir_typed_main", "eval_dict_batch", "eval_list_batch", "eval_main", "eval_modules_main", "eval_prelude_batch", "eval_prelude_main", "eval_run_batch", "eval_run_main", "eval_typed_batch", "eval_typed_modules_main"]
+oracles = ["core_ir_main", "core_ir_modules_main", "core_ir_prelude_main", "core_ir_roundtrip_main", "core_ir_run_main", "core_ir_typed_main", "eval_dict_batch", "eval_main", "eval_modules_main", "eval_prelude_batch", "eval_prelude_main", "eval_run_batch", "eval_run_main", "eval_typed_batch", "eval_typed_modules_main"]
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_eval_test.mdk"]
-corpus = ["test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_fixtures", "test/eval_list_fixtures", "test/eval_modules_fixtures", "test/eval_prelude_fixtures", "test/eval_typed_fixtures", "test/eval_typed_modules_fixtures"]
+corpus = ["test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_fixtures", "test/eval_modules_fixtures", "test/eval_prelude_fixtures", "test/eval_typed_fixtures", "test/eval_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1854,7 +1858,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1974,7 +1978,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_multi_dir"
 area = "tools"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2068,7 +2072,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm_modules"
 area = "backend"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2271,7 +2275,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_prelude_obj"
 area = "infra"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2301,7 +2305,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2391,7 +2395,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_run_check_agreement"
 area = "infra"
-shard = "gates_8"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2406,7 +2410,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_run_entry_subdir"
 area = "infra"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2571,7 +2575,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_test_native"
 area = "infra"
-shard = "gates_7"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2631,7 +2635,7 @@ toolchain = []
 [[gate]]
 name = "diff_native_cli"
 area = "infra"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2646,7 +2650,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2676,7 +2680,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "diff_async"
 area = "infra"
-shard = "gates_5"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2706,7 +2710,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "effect_param_domain"
 area = "infra"
-shard = "gates_2"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2871,7 +2875,7 @@ toolchain = []
 [[gate]]
 name = "selfcompile_build_fixpoint"
 area = "backend"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -2886,7 +2890,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_emit"
 area = "backend"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -2916,7 +2920,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_lex"
 area = "backend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3270,7 +3274,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_closure_alloc"
 area = "backend"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3300,7 +3304,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_emitted_code_floor"
 area = "infra"
-shard = "gates_5"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3330,7 +3334,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_cli_help_conformance"
 area = "cli"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3409,7 +3413,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_guide_render"
 area = "infra"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

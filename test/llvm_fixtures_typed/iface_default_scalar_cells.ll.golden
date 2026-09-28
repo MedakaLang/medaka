@@ -165,6 +165,8 @@ declare i64 @mdk_net_try_recv(i64, i64)
 declare i64 @mdk_net_try_recv_bytes(i64, i64)
 declare i64 @mdk_net_try_send(i64, i64)
 declare i64 @mdk_net_try_send_from(i64, i64, i64)
+declare i64 @mdk_net_send_bytes_from(i64, i64, i64, i64)
+declare i64 @mdk_net_try_send_bytes_from(i64, i64, i64, i64)
 declare void @mdk_set_seed(i64)
 declare i64 @mdk_random_int(i64, i64)
 declare i64 @mdk_random_bool(i64)
@@ -208,7 +210,7 @@ entry:
   %t4 = getelementptr i8, ptr %t3, i64 8
   store double 2.5, ptr %t4
   %t5 = ptrtoint ptr %t3 to i64
-  %t6 = call i64 @mdk_impl_Float_ordered(i64 %t2, i64 %t5)
+  %t6 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 %t2, i64 %t5)
   %t7 = call i64 @mdk___user____bit(i64 %t6)
   %t8 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t8
@@ -220,7 +222,7 @@ entry:
   %t12 = getelementptr i8, ptr %t11, i64 8
   store double 1.5, ptr %t12
   %t13 = ptrtoint ptr %t11 to i64
-  %t14 = call i64 @mdk_impl_Float_ordered(i64 %t10, i64 %t13)
+  %t14 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 %t10, i64 %t13)
   %t15 = call i64 @mdk___user____bit(i64 %t14)
   %t16 = sub i64 %t15, 1
   %t17 = ashr i64 5, 1
@@ -246,7 +248,7 @@ intovf29:
   call void @mdk_int_overflow(i64 0, i64 %t30, i64 %t31)
   unreachable
 intok29:
-  %t32 = call i64 @mdk_impl_String_ordered(i64 ptrtoint (ptr @.strc.program.0 to i64), i64 ptrtoint (ptr @.strc.program.1 to i64))
+  %t32 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 ptrtoint (ptr @mdk_dc.program.5 to i64), i64 ptrtoint (ptr @.strc.program.2 to i64), i64 ptrtoint (ptr @.strc.program.3 to i64))
   %t33 = call i64 @mdk___user____bit(i64 %t32)
   %t34 = sub i64 %t33, 1
   %t35 = ashr i64 9, 1
@@ -272,7 +274,7 @@ intovf47:
   call void @mdk_int_overflow(i64 0, i64 %t48, i64 %t49)
   unreachable
 intok47:
-  %t50 = call i64 @mdk_impl_String_ordered(i64 ptrtoint (ptr @.strc.program.2 to i64), i64 ptrtoint (ptr @.strc.program.3 to i64))
+  %t50 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 ptrtoint (ptr @mdk_dc.program.5 to i64), i64 ptrtoint (ptr @.strc.program.6 to i64), i64 ptrtoint (ptr @.strc.program.7 to i64))
   %t51 = call i64 @mdk___user____bit(i64 %t50)
   %t52 = sub i64 %t51, 1
   %t53 = ashr i64 17, 1
@@ -298,7 +300,7 @@ intovf65:
   call void @mdk_int_overflow(i64 0, i64 %t66, i64 %t67)
   unreachable
 intok65:
-  %t68 = call i64 @mdk_impl_Int_ordered(i64 3, i64 5)
+  %t68 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 ptrtoint (ptr @mdk_dc.program.9 to i64), i64 3, i64 5)
   %t69 = call i64 @mdk___user____bit(i64 %t68)
   %t70 = sub i64 %t69, 1
   %t71 = ashr i64 33, 1
@@ -324,7 +326,7 @@ intovf83:
   call void @mdk_int_overflow(i64 0, i64 %t84, i64 %t85)
   unreachable
 intok83:
-  %t86 = call i64 @mdk_impl_Int_ordered(i64 5, i64 3)
+  %t86 = call i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 ptrtoint (ptr @mdk_dc.program.9 to i64), i64 5, i64 3)
   %t87 = call i64 @mdk___user____bit(i64 %t86)
   %t88 = sub i64 %t87, 1
   %t89 = ashr i64 65, 1
@@ -366,17 +368,11 @@ else2:
   ret i64 1
 }
 
-; mdk-module impl:Float_keyOf
-define i64 @mdk_impl_Float_keyOf(i64 %arg0) {
-entry:
-  ret i64 %arg0
-}
-
 ; mdk-module impl:Float_ordered
-define i64 @mdk_impl_Float_ordered(i64 %arg0, i64 %arg1) {
+define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_Float_keyOf(i64 %arg0)
-  %t1 = call i64 @mdk_impl_Float_keyOf(i64 %arg1)
+  %t0 = call i64 @mdk_impl_Float_keyOf(i64 %arg1)
+  %t1 = call i64 @mdk_impl_Float_keyOf(i64 %arg2)
   %t2 = inttoptr i64 %t0 to ptr
   %t3 = getelementptr i8, ptr %t2, i64 8
   %t4 = load double, ptr %t3
@@ -390,17 +386,11 @@ entry:
   ret i64 %t11
 }
 
-; mdk-module impl:String_keyOf
-define i64 @mdk_impl_String_keyOf(i64 %arg0) {
-entry:
-  ret i64 %arg0
-}
-
 ; mdk-module impl:String_ordered
-define i64 @mdk_impl_String_ordered(i64 %arg0, i64 %arg1) {
+define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
-  %t0 = call i64 @mdk_impl_String_keyOf(i64 %arg0)
-  %t1 = call i64 @mdk_impl_String_keyOf(i64 %arg1)
+  %t0 = call i64 @mdk_impl_String_keyOf(i64 %arg1)
+  %t1 = call i64 @mdk_impl_String_keyOf(i64 %arg2)
   %t2 = call i64 @mdk_string_compare_raw(i64 %t0, i64 %t1)
   %t3 = icmp slt i64 %t2, 0
   %t4 = zext i1 %t3 to i64
@@ -409,31 +399,52 @@ entry:
   ret i64 %t6
 }
 
+; mdk-module impl:Int_ordered
+define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+entry:
+  %t0 = call i64 @mdk_impl_Int_keyOf(i64 %arg1)
+  %t1 = call i64 @mdk_impl_Int_keyOf(i64 %arg2)
+  %t2 = call i64 @mdk_value_lt(i64 %t0, i64 %t1)
+  ret i64 %t2
+}
+
+; mdk-module impl:Float_keyOf
+define i64 @mdk_impl_Float_keyOf(i64 %arg0) {
+entry:
+  ret i64 %arg0
+}
+
+; mdk-module impl:String_keyOf
+define i64 @mdk_impl_String_keyOf(i64 %arg0) {
+entry:
+  ret i64 %arg0
+}
+
 ; mdk-module impl:Int_keyOf
 define i64 @mdk_impl_Int_keyOf(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
-; mdk-module impl:Int_ordered
-define i64 @mdk_impl_Int_ordered(i64 %arg0, i64 %arg1) {
-entry:
-  %t0 = call i64 @mdk_impl_Int_keyOf(i64 %arg0)
-  %t1 = call i64 @mdk_impl_Int_keyOf(i64 %arg1)
-  %t2 = icmp slt i64 %t0, %t1
-  %t3 = zext i1 %t2 to i64
-  %t4 = shl i64 %t3, 1
-  %t5 = or i64 %t4, 1
-  ret i64 %t5
-}
-
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 210674569595]
 ; mdk-module program
-@.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+@mdk_dc.program.1 = internal constant [2 x i64] [i64 1173816999876653108, i64 ptrtoint (ptr @mdk_dc.program.0 to i64)]
 ; mdk-module program
-@.strc.program.2 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+@.strc.program.2 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
 ; mdk-module program
-@.strc.program.3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
+@.strc.program.3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+; mdk-module program
+@mdk_dc.program.4 = internal constant [1 x i64] [i64 6952779160540]
+; mdk-module program
+@mdk_dc.program.5 = internal constant [2 x i64] [i64 1842472865616454229, i64 ptrtoint (ptr @mdk_dc.program.4 to i64)]
+; mdk-module program
+@.strc.program.6 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
+; mdk-module program
+@.strc.program.7 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\61\00" }
+; mdk-module program
+@mdk_dc.program.8 = internal constant [1 x i64] [i64 193460240]
+; mdk-module program
+@mdk_dc.program.9 = internal constant [2 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk_dc.program.8 to i64)]

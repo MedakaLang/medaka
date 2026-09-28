@@ -1,0 +1,13 @@
+-- #679: one declared predicate `Hi a` whose super `Sz a` is needed in the body.
+-- Expected value: 11. Expected (spec) arity of useHi: 1 dict + 1 value.
+interface Sz a where
+  sz : a -> Int
+interface Hi a requires Sz a where
+  hi : a -> Int
+impl Sz Int where
+  sz x = 10
+impl Hi Int where
+  hi x = 1
+useHi : Hi a => a -> Int
+useHi x = hi x + sz x
+main = println (useHi (5 : Int))

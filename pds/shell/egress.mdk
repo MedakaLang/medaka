@@ -197,10 +197,7 @@ egressHostValue port = "\{egressAddress}:\{intToString port}"
    `lib.httpclient` owns every framing field besides — including the one
    `content-length`, computed from the body actually being sent rather than
    copied from what the client claimed. -}
-egressRequestBytes : Int ->
-  ProxyAdmission ->
-  String ->
-  Result String (Array Int)
+egressRequestBytes : Int -> ProxyAdmission -> String -> Result String Bytes
 egressRequestBytes port admission minted = do
   relayed <- relayedRequestFieldsOf admission.headers
   authorization <- makeRequestHeader "authorization" ("Bearer " ++ minted)
@@ -227,7 +224,7 @@ relayedRequestFieldsOf fields =
 -- rather than empty: `proxyUpstreamResponse` relays what is here and nothing
 -- else, so an empty value would be this server asserting something the appview
 -- did not say.
-relayedAnswerFields : List Header -> List String -> List (String, Array Int)
+relayedAnswerFields : List Header -> List String -> List (String, Bytes)
 relayedAnswerFields _ [] = []
 relayedAnswerFields headers (name :: rest) = match findHeader name headers
   Some value => (name, value) :: relayedAnswerFields headers rest
@@ -250,7 +247,7 @@ decodeUpstream buffer = match parseResponse buffer
         (responseReason response)
         (findHeader "content-type" (responseHeaders response))
         (relayedAnswerFields (responseHeaders response) relayedResponseFields)
-        (B.toArray (responseBody response)))
+        (responseBody response))
 
 {- | Read until the response is complete: either the bytes so far already
    frame one (`responseBoundaryWithin`) or the peer closed, which is what
@@ -324,14 +321,11 @@ keepChunk deadline mayHold conn acc bytes =
 
 exchange : (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
-  Array Int ->
+  Bytes ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 exchange mayHold conn bytes = defer
   deadline <- deadlineAfter upstreamCallTimeout
-  sent <- A.sendAllWithin
-    upstreamWriteTimeout
-    conn
-    (B.fromArrayAssumeByteDomain bytes)
+  sent <- A.sendAllWithin upstreamWriteTimeout conn bytes
   match sent
     Err message =>
       deferPure (Err "egress: upstream request could not be sent: \{message}")
@@ -342,7 +336,7 @@ exchange mayHold conn bytes = defer
 -- than returned from inside it.
 opened : (Int -> Async <Clock, Net | e> Bool) ->
   Connection * ->
-  Array Int ->
+  Bytes ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 opened mayHold conn bytes = defer
   outcome <- exchange mayHold conn bytes
@@ -367,7 +361,7 @@ opened mayHold conn bytes = defer
 export
 egressConnect : String ->
   Int ->
-  Array Int ->
+  Bytes ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 egressConnect host port bytes =
   egressConnectHolding host port (_ => deferPure True) bytes
@@ -377,7 +371,7 @@ egressConnect host port bytes =
 egressConnectHolding : String ->
   Int ->
   (Int -> Async <Clock, Net | e> Bool) ->
-  Array Int ->
+  Bytes ->
   Async <Clock, Net | e> (Result String UpstreamAnswer)
 egressConnectHolding host port mayHold bytes = defer
   connected <- A.connectWithin upstreamConnectTimeout host port

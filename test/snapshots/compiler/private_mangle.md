@@ -1,5 +1,5 @@
 # META
-source_lines=1820
+source_lines=1822
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -273,7 +273,9 @@ mangleEvVal rm (EvMethod iface arity r reqs mds) =
 mangleRoute : OrdMap String -> Route -> Route
 mangleRoute rm (RLocal sym ds) =
   RLocal (renameDefName rm sym) (map (mangleRoute rm) ds)
-mangleRoute rm (RKey k ds) = RKey k (map (mangleRoute rm) ds)
+mangleRoute rm (RKey k ds sups) =
+  RKey k (map (mangleRoute rm) ds) (map (mangleRoute rm) sups)
+mangleRoute rm (RProj r path) = RProj (mangleRoute rm r) path
 mangleRoute _ (r@RNone) = r
 mangleRoute _ (r@(RDict _)) = r
 mangleRoute _ (r@(RDictFwd _)) = r
@@ -1846,7 +1848,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "reqs") (PVar "mds"))) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "reqs"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "mds"))))
 (DTypeSig false "mangleRoute" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
 (DFunDef false "mangleRoute" ((PVar "rm") (PCon "RLocal" (PVar "sym") (PVar "ds"))) (EApp (EApp (EVar "RLocal") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "sym"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
-(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds"))) (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "sups"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "RProj") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EVar "path")))
 (DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RNone"))) (EVar "r"))
 (DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDict" PWild))) (EVar "r"))
 (DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDictFwd" PWild))) (EVar "r"))
@@ -2256,7 +2259,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "reqs") (PVar "mds"))) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "reqs"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "mds"))))
 (DTypeSig false "mangleRoute" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
 (DFunDef false "mangleRoute" ((PVar "rm") (PCon "RLocal" (PVar "sym") (PVar "ds"))) (EApp (EApp (EVar "RLocal") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "sym"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
-(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds"))) (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "sups"))))
+(DFunDef false "mangleRoute" ((PVar "rm") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "RProj") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EVar "path")))
 (DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RNone"))) (EVar "r"))
 (DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDict" PWild))) (EVar "r"))
 (DFunDef false "mangleRoute" (PWild (PAs "r" (PCon "RDictFwd" PWild))) (EVar "r"))

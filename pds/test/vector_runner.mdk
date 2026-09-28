@@ -28,22 +28,34 @@
    drains itself rather than a redirect that hides.
 
    A check a row cannot state (a wall-clock bound, a mutation self-test)
-   spawns through the same exported pieces: `freshScratch` and `reap` for
-   its directory, `buildNative`, `spawn`, `spawnFindings` and
-   `outputFindings` for its spawns, so it grades exit status, stderr and
-   stdout exactly as a row does.
+   spawns through the same exported pieces: `inScratch` (or `freshScratch`
+   and `reap`) for its directory, `medakaEnv`, `wasmBuildEnv`,
+   `buildNative`, `spawn` and `runWasm` for its spawns, and `spawnFindings`,
+   `gradedSpawn` and `outputFindings` for what they produced, so it grades
+   exit status, stderr and stdout exactly as a row does. A mutation
+   self-test is a `MutationTest` value, graded by `expectMutations`.
 
    Runs under `medaka test --native`: every row spawns a subprocess, and the
    interpreter binds no subprocess extern. -}
 
 import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
-import list.{get, last, reverse, somes}
+import list.{get, last, nub, reverse, somes}
 import path.{stem}
 import string.{
-  contains, indexOf, join, lines, take, toInt, trim, unlines, words
+  contains,
+  countOccurrences,
+  indexOf,
+  join,
+  lines,
+  replace,
+  take,
+  toInt,
+  trim,
+  unlines,
+  words,
 }
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectNoFindings, fail, pass}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 -- # The row
@@ -52,8 +64,8 @@ import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
    `WasmEngine` is the only one that can be absent from a host: it needs the
    Wasm emitter, `node` and `wasm-tools`, none of which a plain Medaka
-   checkout builds. It is therefore the only one an arm may skip, and only
-   when `MEDAKA_REQUIRE_WASM` is unset. -}
+   checkout builds. An absent one is a finding, never a skip: a row that
+   passed without its Wasm arm would still read as three-engine agreement. -}
 public export data Engine = EvalEngine | NativeEngine | WasmEngine
 
 {- | How many files a row's corpus must hold.
@@ -96,13 +108,16 @@ public export data Corpus =
    same corpus at different depths. `countFloor` grades the driver's own
    `<n> ok,` totals, `needs` the substrings its output must contain, and
    `lastLine` the exact final line — the three shapes the retired scripts
-   graded with `awk`, `grep -F -q` and `tail -1`. -}
+   graded with `awk`, `grep -F -q` and `tail -1`. `exactStdout` is the
+   fourth, `cmp` against an expected file: the whole of stdout, so a line
+   printed before, between or after the ones `needs` names is graded too. -}
 public export data Arm = Arm {
   engine : Engine,
   driverArgs : List String,
   countFloor : Option Int,
   needs : List String,
   lastLine : Option String,
+  exactStdout : Option String,
 }
 
 {- | An independent reference implementation, spawned to compute a value the
@@ -133,7 +148,7 @@ public export data Oracle = Oracle {
    anything is built, so a row whose precondition is broken says so instead
    of reporting a compile.
 
-   `parity` requires every non-skipped arm's stdout to be byte-identical to
+   `parity` requires the stdout of every arm that ran to be byte-identical to
    the first arm's — the eval/native/Wasm agreement three engines exist to
    state. It is False for a row whose arms deliberately sweep different
    depths, where identical output would mean the bound did nothing. -}
@@ -166,6 +181,7 @@ expectedStderr = []
 -- How long one spawn may take. A build links a whole driver and its
 -- transitive library, so it gets its own ceiling rather than stretching the
 -- run ceiling to cover both.
+export
 buildSeconds : Int
 buildSeconds = 900
 
@@ -193,12 +209,18 @@ spawn secs envs cmd args = boundedVerbSeconds secs "env" (envs ++ (cmd :: args))
    retired scripts discarded into a hard failure ([B-STALENESS]). Both arms
    of a parity row share one compiler tree, so asserting freshness on each
    of them is consistent rather than self-contradictory. -}
+export
 medakaEnv : <IO> List String
 medakaEnv = [
   "MEDAKA_ROOT=\{medakaRoot}",
   "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
   "MEDAKA_STRICT=1",
 ]
+
+-- `medakaEnv` plus the Wasm emitter, which only a `--target wasm` build reads.
+export
+wasmBuildEnv : <IO> List String
+wasmBuildEnv = medakaEnv ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter}"]
 
 -- Whether `name` resolves to something runnable. A missing command makes
 -- `env` exit 127 without running anything, which is the one code that
@@ -303,10 +325,19 @@ okCount l = match indexOf " ok," l
     None => None
     Some w => toInt w
 
+export
 lastLineOf : String -> String
 lastLineOf out = match last (filter (/= "") (lines out))
   None => ""
   Some l => l
+
+{- | A spawn's stdout and findings, with `a`'s floor, substrings and last
+   line graded only when the spawn itself ran clean: a spawn that failed
+   has no output worth grading. -}
+export
+gradedSpawn : String -> Arm -> (String, List String) -> (String, List String)
+gradedSpawn label a (out, []) = (out, outputFindings label a [] out)
+gradedSpawn _ _ spawned = spawned
 
 -- The findings against one arm's stdout: its floor, its substrings, and its
 -- final line.
@@ -316,6 +347,7 @@ outputFindings label a extraNeeds out =
   floorFindings label a.countFloor out
     ++ somes (map (needFinding label out) (a.needs ++ extraNeeds))
     ++ lastLineFindings label a.lastLine out
+    ++ exactFindings label a.exactStdout out
 
 floorFindings : String -> Option Int -> String -> List String
 floorFindings _ None _ = []
@@ -344,15 +376,39 @@ lastLineFindings label (Some want) out =
   else
     ["\{label}: last output line is \{debug got}, expected \{debug want}"]
 
+exactFindings : String -> Option String -> String -> List String
+exactFindings _ None _ = []
+exactFindings label (Some want) out =
+  if out == want then
+    []
+  else
+    [
+      "\{label}: stdout is not exactly the expected output; \{firstDifference 1 (lines want) (lines out)}",
+    ]
+
+-- The first line, 1-based, at which `got` departs from `want`.
+firstDifference : Int -> List String -> List String -> String
+firstDifference n [] [] =
+  "line \{intToString n}: the two differ only in trailing newlines"
+firstDifference n [] (g :: _) =
+  "line \{intToString n} is unexpected: \{debug g}"
+firstDifference n (w :: _) [] =
+  "line \{intToString n} is missing, expected \{debug w}"
+firstDifference n (w :: ws) (g :: gs) =
+  if w == g then
+    firstDifference (n + 1) ws gs
+  else
+    "line \{intToString n} is \{debug g}, expected \{debug w}"
+
 -- # Running one arm
 
-{- | One arm's outcome. A skipped arm carries no stdout and takes no part in
-   the parity comparison — comparing against the empty string would report
-   agreement nobody observed. -}
+{- | One arm's outcome. An arm that could not run has no stdout and takes no
+   part in the parity comparison: its own findings already say why, and
+   comparing its empty output would add a disagreement nobody observed. -}
 data ArmResult = ArmResult {
   label : String,
   stdout : String,
-  skipped : Bool,
+  ran : Bool,
   findings : List String,
 }
 
@@ -361,13 +417,9 @@ engineLabel EvalEngine = "(eval)"
 engineLabel NativeEngine = "(native)"
 engineLabel WasmEngine = "(wasm)"
 
-skippedArm : String -> ArmResult
-skippedArm label =
-  ArmResult { label = label, stdout = "", skipped = True, findings = [] }
-
 failedArm : String -> List String -> ArmResult
 failedArm label fs =
-  ArmResult { label = label, stdout = "", skipped = False, findings = fs }
+  ArmResult { label = label, stdout = "", ran = False, findings = fs }
 
 runArm : Row ->
   List String ->
@@ -382,7 +434,7 @@ runArm r corpusPaths scratch extraNeeds a =
     (out, []) => ArmResult {
       label = label,
       stdout = out,
-      skipped = False,
+      ran = True,
       findings = outputFindings label a extraNeeds out,
     }
     (_, fs) => failedArm label fs
@@ -451,25 +503,28 @@ wasmStdout : Row ->
   <Exec, IO> (String, List String)
 wasmStdout r a label driver corpusPaths scratch =
   let wasm = "\{scratch}/\{stem r.driver}.wasm"
-  let envs = medakaEnv ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter}"]
   let args = ["build", "--target", "wasm", driver, "-o", wasm]
-  let runJs = "\{medakaRoot}/test/wasm/run.js"
   let built =
     spawnFindings
       label
       "medaka build --target wasm"
-      (spawn buildSeconds envs medakaBin args)
+      (spawn buildSeconds wasmBuildEnv medakaBin args)
   match built
     (_, []) =>
       spawnFindings
         label
         "node test/wasm/run.js"
-        (spawn
-          runSeconds
-          [mdkArgs (a.driverArgs ++ corpusPaths)]
-          "node"
-          [runJs, wasm])
+        (runWasm runSeconds wasm (a.driverArgs ++ corpusPaths))
     (_, fs) => ("", fs)
+
+-- `wasm` run under `node test/wasm/run.js` with `args`, killed after `secs`.
+export
+runWasm : Int ->
+  String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+runWasm secs wasm args =
+  spawn secs [mdkArgs args] "node" ["\{medakaRoot}/test/wasm/run.js", wasm]
 
 -- The Wasm emitter this host would use. It is not built by `make medaka`, so
 -- `wasmUnavailable` grades its presence rather than assuming it.
@@ -490,8 +545,8 @@ spaceStr = " "
 {- | Whether a Wasm arm can run here, or why it cannot.
 
    The three prerequisites are the ones the retired script checked, in the
-   same order. `MEDAKA_REQUIRE_WASM=1` turns every absence into a finding,
-   which is how CI states that a host it controls must have them. -}
+   same order. Each absence is named, so the finding says what to install or
+   build rather than only that the arm did not run. -}
 wasmUnavailable : <Exec, FileRead, IO> Option String
 wasmUnavailable =
   if not (fileExists wasmEmitter) then
@@ -522,16 +577,12 @@ oneArm r corpusPaths scratch extraNeeds a =
   match a.engine
     WasmEngine => match wasmUnavailable
       None => runArm r corpusPaths scratch extraNeeds a
-      Some why =>
-        if getEnvOr "MEDAKA_REQUIRE_WASM" "0" == "1" then
-          failedArm label ["\{label}: Wasm is required here but \{why}"]
-        else
-          skippedArm label
+      Some why => failedArm label ["\{label}: Wasm is required but \{why}"]
     _ => runArm r corpusPaths scratch extraNeeds a
 
 -- # Parity across arms
 
-{- | Every non-skipped arm's stdout compared against the first one's.
+{- | Every arm that ran, its stdout compared against the first one's.
 
    Byte-identical, not "both passed": two engines that each satisfy the same
    floors and substrings can still disagree about a value neither assertion
@@ -539,9 +590,11 @@ oneArm r corpusPaths scratch extraNeeds a =
    arm. -}
 parityFindings : Bool -> List ArmResult -> List String
 parityFindings False _ = []
-parityFindings True rs = match filter (a => not a.skipped) rs
-  [] => []
-  first :: rest => somes (map (differsFrom first) rest)
+parityFindings True rs = parityAgainst (filter (a => a.ran) rs)
+
+parityAgainst : List ArmResult -> List String
+parityAgainst [] = []
+parityAgainst (first :: rest) = somes (map (differsFrom first) rest)
 
 differsFrom : ArmResult -> ArmResult -> Option String
 differsFrom first a =
@@ -714,6 +767,14 @@ freshScratch _ = match spawn 60 [] "mktemp" ["-d"]
   Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
   Err e => Err e
 
+-- `check` run in a fresh scratch directory, which is removed afterwards.
+export
+inScratch : (String -> <Exec | e> List String) ->
+  <Exec | e> Result String (List String)
+inScratch check = match freshScratch ()
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok scratch => Ok (reap scratch (check scratch))
+
 -- The scratch directory is the caller's to remove. The spawn is
 -- wildcard-bound because a cleanup asserts nothing: a failure to reap is
 -- not a finding about the gate's subject.
@@ -739,3 +800,161 @@ expectRow r = match gradeRow r
 
 indent : String -> String
 indent f = "  \{f}"
+
+-- # Mutation self-tests
+
+{- | A transcript arm: `engine` must print exactly `transcript`, one line
+   per element, and nothing else.
+
+   Each line is also a needle of its own, so a red run names the cell that
+   moved rather than only the first line that differs. -}
+export
+transcriptArm : List String -> Engine -> Arm
+transcriptArm transcript e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = transcript,
+  lastLine = None,
+  exactStdout = Some (unlines transcript),
+}
+
+{- | One deliberate break: in repo-relative `file`, the single occurrence of
+   `anchor` becomes `mutant`, and the built driver must then fail with
+   `witness` somewhere in its output. -}
+public export data Mutation = Mutation {
+  name : String,
+  file : String,
+  anchor : String,
+  mutant : String,
+  witness : String,
+}
+
+{- | A gate's mutation self-test: each of `mutations` is applied in turn to a
+   scratch copy of `pds/`, and `driver`, built natively from that copy and
+   run with `args`, must fail with the mutation's witness.
+
+   Native only: eval and native share the typechecker ([D-RUN-VS-BUILD] in
+   AGENTS.md), and a native build turns each check from minutes into
+   seconds. -}
+public export data MutationTest = MutationTest {
+  gate : String,
+  driver : String,
+  args : List String,
+  mutations : List Mutation,
+}
+
+{- | The findings against one mutation, run in the scratch tree `tree`. The
+   mutated file is put back afterwards, whatever the outcome, so the next
+   mutation starts from an unbroken tree. -}
+export
+mutationFindings : MutationTest ->
+  String ->
+  Mutation ->
+  <Exec, FileRead, FileWrite, IO> List String
+mutationFindings t tree m =
+  let label = "\{t.gate} (mutation \{m.name})"
+  match readFile "\{medakaRoot}/\{m.file}"
+    Err e => ["\{label}: could not read \{m.file}: \{e}"]
+    Ok original =>
+      let anchors = countOccurrences m.anchor original
+      if anchors /= 1 then
+        [
+          "\{label}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
+        ]
+      else
+        let target = "\{tree}/\{m.file}"
+        let found = match writeFile target (replace m.anchor m.mutant original)
+          Err e => ["\{label}: could not write the mutant: \{e}"]
+          Ok _ => mutantFindings t tree label m
+        match writeFile target original
+          Err e => found ++ ["\{label}: could not restore \{m.file}: \{e}"]
+          Ok _ => found
+
+-- | The mutant must build, then fail, and fail with its own witness.
+export
+mutantFindings : MutationTest ->
+  String ->
+  String ->
+  Mutation ->
+  <Exec, IO> List String
+mutantFindings t tree label m =
+  let bin = "\{tree}/mutant"
+  match buildNative label "\{tree}/\{t.driver}" bin
+    [] => match spawn runSeconds [] bin t.args
+      Err e => ["\{label}: could not spawn the mutant: \{e}"]
+      Ok (0, _, _) => ["\{label}: the mutant passed; the gate cannot see it"]
+      Ok (_, out, err) =>
+        if contains m.witness (out ++ err) then
+          []
+        else
+          [
+            "\{label}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
+          ]
+    fs => fs
+
+{- | Every mutated file, in the scratch tree and in the live tree, must end
+   byte-identical to its text before the first mutation. A scratch copy left
+   modified means a later mutation graded a doubly-broken tree; a live copy
+   left modified means the test broke the checkout it ran in. `pristine`
+   pairs each repo-relative file with that text. -}
+export
+restoredFindings : MutationTest ->
+  String ->
+  List (String, String) ->
+  <FileRead, IO> List String
+restoredFindings t tree pristine =
+  somes
+    (flatMap
+      ((rel, text) => [
+        restoredFinding t "the mutation tree's copy" "\{tree}/\{rel}" rel text,
+        restoredFinding t "the live copy" "\{medakaRoot}/\{rel}" rel text,
+      ])
+      pristine)
+
+-- | `None` when the file at `path` still reads `text`; otherwise the finding
+-- naming `what` copy of `rel` was left modified.
+export
+restoredFinding : MutationTest ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <FileRead> Option String
+restoredFinding t what path rel text = match readFile path
+  Ok now =>
+    if now == text then
+      None
+    else
+      Some "\{t.gate}: \{what} of \{rel} was left modified"
+  Err e => Some "\{t.gate}: could not read \{what} of \{rel} back: \{e}"
+
+pristineOf : List String -> <FileRead, IO> Result String (List (String, String))
+pristineOf [] = Ok []
+pristineOf (rel :: rest) = match readFile "\{medakaRoot}/\{rel}"
+  Err e => Err "could not read \{rel}: \{e}"
+  Ok text => map ((rel, text) :: _) (pristineOf rest)
+
+-- | Every mutation of `t`, run in the scratch tree `tree`, then the
+-- restoration check over every file a mutation touched.
+export
+allMutationFindings : MutationTest ->
+  String ->
+  <Exec, FileRead, FileWrite, IO> List String
+allMutationFindings t tree =
+  match pristineOf (nub (map (m => m.file) t.mutations))
+    Err e => ["\{t.gate}: \{e}"]
+    Ok pristine =>
+      match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
+        Ok (0, _, _) =>
+          flatMap (mutationFindings t tree) t.mutations
+            ++ restoredFindings t tree pristine
+        Ok (code, _, err) =>
+          ["\{t.gate}: copying pds/ exited \{intToString code}: \{err}"]
+        Err e => ["\{t.gate}: could not copy pds/: \{e}"]
+
+-- | The mutation self-test's verdict, for a `test "…"` block in its own
+-- module, in a scratch directory it makes and removes.
+export
+expectMutations : MutationTest -> <Exec, FileRead, FileWrite, IO> Expectation
+expectMutations t = expectNoFindings t.gate (inScratch (allMutationFindings t))

@@ -10,6 +10,8 @@ import ir.draft_semantic_program.{
   compareDraftSemanticProgram,
   draftWithoutFirstMethodIface,
   draftWithWrongMethodIfaceProvenance,
+  draftWithoutFirstDisposition,
+  draftWithSkewedMethodEvidence,
   draftSemanticProgramToSexp,
 }
 import entries.entry_support.{driveModulesLocated, runEmitWith}
@@ -32,6 +34,8 @@ prepareDraft runtimeDecls coreD modules unitHint floatHint draft =
   match getEnv "MEDAKA_DRAFT_MUTATION"
     Some "method-iface" => draftWithoutFirstMethodIface draft
     Some "method-iface-provenance" => draftWithWrongMethodIfaceProvenance draft
+    Some "method-dispositions" => draftWithoutFirstDisposition draft
+    Some "evidence" => draftWithSkewedMethodEvidence draft
     Some "unrelated-control" =>
       buildDraftSemanticProgram
         runtimeDecls

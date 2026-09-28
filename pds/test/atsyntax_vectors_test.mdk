@@ -58,6 +58,7 @@ row = Row {
         "repo-validateCollection: 25/25 valid accepted, 27/27 invalid rejected",
       ],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

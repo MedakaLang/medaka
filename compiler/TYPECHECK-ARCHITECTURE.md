@@ -394,7 +394,7 @@ what a later group may observe of an earlier one's generalization, is unspecifie
 | Impl method bodies | `inferImplBodies` → `inferOneImpl` → `inferImplMethods` → `inferImplMethod` | 22 / 495 / 11 | DICT §3 **W3**, §4 |
 | Default method bodies | `inferDefaultBodiesIfEnabled` → … → `inferDefaultMethod` | 12 / 260 / 9 | DICT §3 **W3**, §4 |
 | Dictionary insertion | `dictPass` → `dictPassDecl`, `implDictPassMethods` | 37 / 368 / 2 | DICT §4 |
-| **Superclass-evidence expansion (WS-1b)** | `expandSupersTable` | ~100 lines owned | DICT §3 `super` |
+| **Superclass-evidence expansion (WS-1b)** | `registerFunPredGivenSlots` (projection, `ProjectedGiven`); `expandSupersTable` is DELETED (#993/#679, S1) | ~100 lines owned | DICT §3 `super` |
 | Arg-position AST prepass | `prePassDictArg`, `prePassDeclScoped`, `rewriteArgScoped` | 23 / 269 / **0** | SHADOW §1 (S1, S9), §3; DICT §5 |
 | **D3a arg-position dispatch stamping** | `argDispatchIndices` | ~190 lines / 4 cells | DICT §5 |
 | Per-run dispatch indices | `buildImplTable` | ~95 lines | — |

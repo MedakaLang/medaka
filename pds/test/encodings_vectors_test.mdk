@@ -28,6 +28,7 @@ row = Row {
       countFloor = None,
       needs = ["counted: 29/29 PASS lines"],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

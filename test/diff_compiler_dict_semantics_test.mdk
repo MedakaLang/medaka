@@ -574,7 +574,7 @@ table = [
   Row {
     entry = "s3-w3-default-method-rigidity.mdk",
     label =
-      "§3 W3 DEFAULT-BODY half: W3 also governs \"the class`s default, which is checked by this same rule\". A different site (`checkDefaultMethodRigidity`) from the two impl-body rows, and the corpus previously had NO fixture declaring a default body inside an `interface` at all",
+      "§3 W3 DEFAULT-BODY half: W3 also governs \"the class`s default, which is checked by this same rule\". A different body kind (the default kind of `MethodBodyKind`) from the two impl-body rows, and the corpus previously had NO fixture declaring a default body inside an `interface` at all",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -1612,7 +1612,7 @@ table = [
   Row {
     entry = "b1-xmod-default-inherited-tag/main.mdk",
     label =
-      "ARCH B-2 (B-2.2-b1): `keyForSite`s NO-ROW arm. A CROSS-MODULE method-less impl inherits the interface default -- `fillImplDefaults` is same-module only, so the impl has no method entry, the candidate scan cannot see it, and `optionOr tag` supplies the `<TAG>` of `@mdk_default_sz_Box`. Its SAME-MODULE twin in the same program takes the ordinary tagged route. ⚠️ THE VALUE CANNOT DISCRIMINATE (both arms answer 42 and both exit 0 even with a wrong symbol, until the link fails) -- section 3 carries it",
+      "ARCH B-2 (B-2.2-b1): a CROSS-MODULE method-less impl inherits the interface default. The disposition table publishes an `InheritedDefault` row for it regardless of module, so `keyForSite` selects it and stamps its canonical dictionary word (`rowRouteKey`), the same as a same-module impl. Its SAME-MODULE twin in the same program takes the identical route.",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2381,6 +2381,17 @@ table = [
     codes = [],
   },
   Row {
+    entry = "s3-xe-one-word-per-arm/main.mdk",
+    label =
+      "#1403 X-E.C (the value half of the structural exit in `diff_compiler_dict_semantics_ir.sh`): two interfaces' defaults for one method spelling at one type, each reached through a dictionary whose word is the instance's canonical key, plus a supplied method beside them. `viaA Dog` runs Speak's default, `viaB Dog` Greet's, `viaA Cat` Cat's own method",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "A-default|B-default|meow\n",
+    codes = [],
+  },
+  Row {
     entry = "s5-xmod-default-sibling-amod-first/main.mdk",
     label =
       "§5 (#1821, drained from its must-fail pin): IA's cross-module default `dflt x = sib x + 1` calls its sibling through the default's receiver, so it reaches T's own `sib`, never the same-spelled `dflt` default of an interface imported under no name. 7 * 10 + 1",
@@ -2414,9 +2425,131 @@ table = [
     codes = [],
   },
   Row {
+    entry = "s2-super-declared-single-level.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: one declared predicate `Hi a` whose super `Sz a` is needed in the body. Today's representation widens `useHi`'s emitted arity past its declared 1 dict + 1 value (pinned separately as a CURRENT-VALUE row in diff_compiler_dict_semantics_ir.sh); this row pins the VALUE only, so #993's flip is a visible arity-only golden move there, not a value regression here",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-super-chain3.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: a three-level super chain (Top requires Mid requires Base) reached through one declared `Top a =>` dict. Value is conformant today; the arity this call site's `useTop` widens to is pinned separately in diff_compiler_dict_semantics_ir.sh so the next slice's representation flip is a visible IR move rather than a silent one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "321\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-requires-super-projected.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: an impl with `requires Hi a` whose own body needs Hi's super `Sz a`, exercised through a dict constructed with its requires. Value is conformant today; the impl fn's widened arity is pinned separately in diff_compiler_dict_semantics_ir.sh",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "111\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-local-super-projected.mdk",
+    label =
+      "#679/#993 BEFORE-PICTURE: a dict-abstracted local closure projecting a super at two different instance types, plus a polymorphic-recursive group member forwarding a super through recursion. Both values are conformant today under the representation #993 replaces",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11|1011|3\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-requires.mdk",
+    label =
+      "#679/#993: a default method body calling a super method on the receiver, inherited by an instance carrying `requires`. The super is projected out of the receiver dictionary the caller built; `s2-default-super-call-receiver` is the adjacent case where a more-specific super impl exists and must be the one reached",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[b:cat]|[b:box(cat)]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-call-receiver.mdk",
+    label =
+      "#3509 (drained from its must-fail pin), #993 A2: an inherited default's super call on its receiver, with a more-specific super impl at the receiver's type. The caller builds `Fmt (Box Int)` with its `Named` super solved at that goal; the default receives that dictionary as a real parameter and projects the SPECIFIC `Named (Box Int)` out of it, never a super pre-baked per instance",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[b:spec]|[b:gen(cat)]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-call-receiver-xmod/main.mdk",
+    label =
+      "#3509 CROSS-MODULE twin of the row above: interface and default in `fmtlib`, instances in the entry module. Same answer -- where the interface is declared does not decide how a default reaches its receiver's supers",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[b:spec]|[b:gen(cat)]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-super-head-collision/main.mdk",
+    label =
+      "Review F5 (m-evidence): an inherited default's super call on its receiver while the interface's head collides with a same-spelled interface at the same type, so the receiver dictionary's word is its canonical key. The super is projected out of that dictionary and dispatches by its own instance's word",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "sq4|9\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-ord-requires-two-types.mdk",
+    label =
+      "Every `Ord` default inherited by one `requires`-carrying instance used at two element types in one module (the Ord shape desugar's retired same-module default copy used to cover): each shared default body reads `compare` and the element dictionary through its receiver",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True|True|True|False|2,9|x,z|False\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-foldable-eta-short.mdk",
+    label =
+      "`Foldable`'s ETA-SHORT `foldMap` default (plus `length`/`isEmpty`) inherited by a same-module instance and reached through the receiver at two monoids (the Foldable shape desugar's retired same-module default copy used to cover)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "123|[4, 4, 5, 5]|3|True\n",
+    codes = [],
+  },
+  Row {
+    entry = "s2-default-requires-structured-head.mdk",
+    label =
+      "#3538: an inherited default dispatching on a structure over the interface parameter (`shL : List a -> ...`), at a `requires`-bearing instance, one- and two-parameter. The call's element dictionaries are the instance's `requires` at the interface parameter (`Sh Int` for `Sh (List Int)`), not at the argument; the last cell is a supplied method passing a sibling method as a value, whose lifted closure builds its dictionary from the enclosing one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned =
+      "[\"Ls1\", \"Ls2s3\"]|[\"Mc1\", \"Mc2c3\"]|[\"s1\", \"s2\"]|LLs1Ls2s3|BLs1\n",
+    codes = [],
+  },
+  Row {
     entry = "impl-head-repeated-var-three-positions.mdk",
     label =
-      "§3 one matcher for the whole head vector: `impl Pick a a a` never matches `Pick (List x) (List Int) (List U8)`, whichever position binds `a` first. Was accepted, printing a U8 list holding 300",
+      "§3 one matcher for the whole head vector: `impl Pick a a a` never matches `Pick (List x) (List Int) (List U8)`, whichever position binds `a` first. Was accepted, printing a U8 list holding 300. The Int list is a bound `List Int`: a literal list there is fixed to `List U8` by §3 improvement before defaulting, and is then refused as out of range (L-INT-OVERFLOW), which is a different goal",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -2546,6 +2679,39 @@ table = [
     codes = [],
   },
   Row {
+    entry = "impl-improvement-unique-instance.mdk",
+    label =
+      "§3 improvement: `impl Pick a a a` is the only instance unifying with `Pick (List t) (List Int) (List Int)`, so `t = Int` is committed and `mk` at `t` selects `impl Mk Int`; `wrap` is improved before it generalizes, to `a -> List a`. Hand-derived: [42] ++ [3, 7], then [] twice. Before improvement `mk`'s goal stayed `Mk t` and `pick`'s stamp was the bare head word, which the build could not emit",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[42, 3, 7]\n[]\n[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-improvement-overlap-no-commit.mdk",
+    label =
+      "§3 improvement never fires under overlap: `Pick a a a` and `Pick a (List Int) a` both unify with the goal, so `t` stays undetermined (§6.2 T4, #3535) and the build has no instance to emit, as before improvement existed. `T-AMBIGUOUS-INSTANCE` absent is the discriminator: a uniqueness count over one-sided matches committed `t = Int` at the group's close, where the literals were not yet defaulted, and then rejected the program as ambiguous. Both bodies return their first argument, so run prints [] under either impl order",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "W-INCOMPARABLE-IMPLS", Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "impl-improvement-before-num-default.mdk",
+    label =
+      "§3 improvement runs before §6.3 defaulting: `Get (Box Float) e` against the only instance `Get (Box a) a` fixes `e = Float` before the literal `4` could default `e` to Int. Hand-derived: 3.0 > 4 is false, \"small\". Drained from the must-fail pin 3521-num-default-before-impl-improvement, which was refused with T-NO-IMPL at `Get (Box Float) Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "small\n",
+    codes = [],
+  },
+  Row {
     entry = "impl-heads-cycle-no-overlap.mdk",
     label =
       "§4 coherence: `Tri a (List a) a` and `Tri b b b` share an instance only if `a = List a`, so they do not overlap; the check terminates (it looped on main). Hand-derived: `tri 1 [1] 1` is the first impl, `one`; `tri True True True` the second, `two`",
@@ -2567,7 +2733,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 221
+tableRows = 236
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

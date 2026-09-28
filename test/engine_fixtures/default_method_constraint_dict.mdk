@@ -1,0 +1,29 @@
+-- A method with its own constraint (`Debug d =>`) reached through a dictionary
+-- parameter, once where the instance inherits the interface's default and once
+-- where it supplies the method.  Every dispatch arm passes the method-level
+-- dictionary ahead of the instance's own.
+interface Coll t where
+  total : t -> Int
+  render : Debug d => d -> t -> String
+  render d c = debug d ++ ":" ++ debug (total c)
+
+data Box = Box Int
+
+data Pair = Pair Int Int
+
+impl Coll Box where
+  total (Box n) = n
+
+impl Coll Pair where
+  total (Pair a b) = a + b
+  render d _ = "pair " ++ debug d
+
+viaColl : Coll t => t -> String
+viaColl c = render "k" c
+
+main = (
+  render True (Box 1),
+  viaColl (Box 2),
+  render 'c' (Pair 1 2),
+  viaColl (Pair 3 4),
+)

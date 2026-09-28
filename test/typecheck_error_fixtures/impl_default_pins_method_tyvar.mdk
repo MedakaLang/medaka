@@ -1,5 +1,5 @@
--- #814 (S0): the DEFAULT body has the same obligation — specialized into the
--- impl, it is checked by the same W3 rule and rejected.
+-- #814 (S0): the DEFAULT body has the same obligation — checked once by the same
+-- W3 rule and rejected; an impl inheriting it adds no second diagnostic.
 interface Mk a where
   other : a -> Int
   mk : a -> b

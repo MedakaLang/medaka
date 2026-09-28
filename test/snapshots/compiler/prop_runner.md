@@ -1,5 +1,5 @@
 # META
-source_lines=1259
+source_lines=1256
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -34,7 +34,7 @@ import frontend.ast.{
 import types.route_key.{implRouteKeyWord}
 import u32 as U32
 import eval.eval.{
-  Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasTag, ppValue
+  Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasKey, ppValue
 }
 import support.util.{
   listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains, anyList
@@ -957,15 +957,12 @@ arbImplKeyFor arbs n o = match filterList (arbImplAt n o) arbs
 arbImplAt : String -> TyConOrigin -> ArbImpl -> Bool
 arbImplAt n o (ArbImpl n2 o2 _) = sameTyConHead n o n2 o2
 
--- The route's word is an impl route word, and `implRouteKeyWord` always joins
--- on `|`, which no head tag can contain — so `hasTag`'s `t == tag || k == tag`
--- reduces to exact impl-key equality here and never matches a candidate on its
--- head spelling.
+-- The route's word is an impl's canonical key, matched exactly (`hasKey`).
 userArbitraryAt : ArbRoute -> Value e -> <e> Option (Value e)
 userArbitraryAt (route@(ArbRoute key _ _)) (VMulti vs) =
-  drawArbitrary route (filterList (hasTag key) vs)
+  drawArbitrary route (filterList (hasKey key) vs)
 userArbitraryAt (route@(ArbRoute key _ _)) v =
-  drawArbitrary route (filterList (hasTag key) [v])
+  drawArbitrary route (filterList (hasKey key) [v])
 
 -- Two same-spelled types that BOTH carry an instance produce two candidates
 -- under one route word, so the word is not enough to choose between them; the
@@ -1265,7 +1262,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseAlias ("u32") "U32"))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasKey" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
@@ -1488,8 +1485,8 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "arbImplAt" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "ArbImpl") (TyCon "Bool")))))
 (DFunDef false "arbImplAt" ((PVar "n") (PVar "o") (PCon "ArbImpl" (PVar "n2") (PVar "o2") PWild)) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")))
 (DTypeSig false "userArbitraryAt" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EVar "vs"))))
-(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PVar "v")) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EListLit (EVar "v")))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasKey") (EVar "key"))) (EVar "vs"))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PVar "v")) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasKey") (EVar "key"))) (EListLit (EVar "v")))))
 (DTypeSig false "drawArbitrary" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "drawArbitrary" ((PCon "ArbRoute" PWild (PVar "i") (PVar "total")) (PVar "cands")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "cands")) (EVar "total")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EVar "force") (EApp (EApp (EVar "apply") (EVar "c")) (EVar "VUnit"))))) (EApp (EApp (EVar "candAt") (EVar "i")) (EVar "cands"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "candAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
@@ -1572,7 +1569,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "ImplMethod" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "sameTyConHead" false) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
 (DUse false (UseAlias ("u32") "U32"))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasTag" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "hasKey" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false) (mem "contains" false) (mem "anyList" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
@@ -1795,8 +1792,8 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "arbImplAt" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "ArbImpl") (TyCon "Bool")))))
 (DFunDef false "arbImplAt" ((PVar "n") (PVar "o") (PCon "ArbImpl" (PVar "n2") (PVar "o2") PWild)) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")))
 (DTypeSig false "userArbitraryAt" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EVar "vs"))))
-(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PVar "v")) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "key"))) (EListLit (EVar "v")))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasKey") (EVar "key"))) (EVar "vs"))))
+(DFunDef false "userArbitraryAt" ((PAs "route" (PCon "ArbRoute" (PVar "key") PWild PWild)) (PVar "v")) (EApp (EApp (EVar "drawArbitrary") (EVar "route")) (EApp (EApp (EVar "filterList") (EApp (EVar "hasKey") (EVar "key"))) (EListLit (EVar "v")))))
 (DTypeSig false "drawArbitrary" (TyFun (TyCon "ArbRoute") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "drawArbitrary" ((PCon "ArbRoute" PWild (PVar "i") (PVar "total")) (PVar "cands")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "cands")) (EVar "total")) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EVar "force") (EApp (EApp (EVar "apply") (EVar "c")) (EVar "VUnit"))))) (EApp (EApp (EVar "candAt") (EVar "i")) (EVar "cands"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "candAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))

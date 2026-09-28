@@ -45,6 +45,7 @@ row = Row {
         "PASS\tkeygen-fresh-key-round-trips",
       ],
       lastLine = Some "ASSERTIONS: 10/10",
+      exactStdout = None,
     },
   ],
   parity = False,

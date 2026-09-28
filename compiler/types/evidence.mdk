@@ -38,13 +38,24 @@ public export data PrerequisiteEvidence = PrerequisiteEvidence {
   prerequisiteArguments : List Mono,
 }
 
+-- One direct superinterface of a selected instance's interface, at the instance's
+-- argument vector, in the interface's declaration order: the predicate the
+-- dictionary's super segment is solved for at the construction goal.  Predicate only,
+-- like a prerequisite; the solved sub-evidence lives in the route that dictionary is
+-- built from.
+public export data SuperEvidence = SuperEvidence {
+  superInterface : IfaceRef,
+  superArguments : List Mono,
+}
+
 -- Request evidence forms a DAG: a superclass edge names the binder it projects
--- from, and a prerequisite names only its predicate.  No constructor embeds a
--- recursively copied proof tree.  `Mono` is permitted here because this value is request-owned; a later
--- frozen contract must translate it to immutable templates before publication.
+-- from, and a prerequisite or super names only its predicate.  No constructor embeds
+-- a recursively copied proof tree.  `Mono` is permitted here because this value is
+-- request-owned; a later frozen contract must translate it to immutable templates
+-- before publication.
 public export data SolverEvidence =
   | GivenEvidence EvidenceBinderId
-  | InstanceEvidence RequestInstanceId (List Mono) (List PrerequisiteEvidence)
+  | InstanceEvidence RequestInstanceId (List Mono) (List PrerequisiteEvidence) (List SuperEvidence)
   -- The dictionary bound at a formal evidence binder, projected onto one of its
   -- interface's transitive supers.  The path indexes successive DIRECT-super lists,
   -- starting at the bound predicate's own interface.

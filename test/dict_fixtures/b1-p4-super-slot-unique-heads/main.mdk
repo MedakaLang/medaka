@@ -1,13 +1,13 @@
 -- ORGAN 4 (P4) -- THE SUPER-SLOT TRIPWIRE, and the "unchanged" half of it.
 --
--- `both` declares ONE predicate, `Deriv a`.  `expandSupersPairs` APPENDS a second
--- dict slot for the superinterface `Base a`, so the emitted definition takes TWO
--- dict params for a one-argument source function (asserted in Section 3).  The
--- tripwire is what is APPLIED at those two slots: today both words are the bare
--- head tag `T`, so the SAME one-word dict constant is passed twice.  The tree
--- states the premise at `typecheck.mdk` ("Because the dict VALUE is just a type
--- tag, the super slot's route is identical to the sub slot's"), and Phase 3′ is
--- what eventually falsifies it.
+-- `both` declares ONE predicate, `Deriv a`, and takes ONE dict param for it: the
+-- superinterface `Base a` travels INSIDE the `Deriv` dictionary (#993), so the
+-- emitted definition takes 1 dict + 1 value (asserted in Section 3).  The
+-- tripwire is what that dictionary CARRIES: with every head unique, its own word
+-- and its `Base` super cell's word are both the bare head tag `T` (Section 3
+-- pins the two-word cell and its super cell).  Before #993 the super was an
+-- appended second slot handed the same constant again; the premise that a super
+-- slot's route equals the sub's is gone with the slot.
 --
 -- 🚨 THIS FIXTURE PINS THAT `B-2.2-b1` DID **NOT** MOVE THIS PROGRAM, WHICH IS THE
 -- POINT OF IT.  With ONE impl per interface the collision gate in `keyForSite` is

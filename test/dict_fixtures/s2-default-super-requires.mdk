@@ -1,0 +1,21 @@
+-- A default body calling a SUPER method on the receiver, inherited by an instance with
+-- requires (the disposition-table specialization path). Expected: [b:cat]|[b:box(cat)]
+interface Named a where
+  nm : a -> String
+interface Fmt a requires Named a where
+  fmt : a -> String
+  loud : a -> String
+  loud x = "[" ++ fmt x ++ ":" ++ nm x ++ "]"
+data Cat = Cat
+data Box a = Box a
+impl Named Cat where
+  nm _ = "cat"
+impl Fmt Cat where
+  fmt _ = "b"
+impl Named (Box a) requires Named a where
+  nm (Box v) = "box(" ++ nm v ++ ")"
+impl Fmt (Box a) requires Fmt a where
+  fmt (Box v) = fmt v
+shout : Fmt a => a -> String
+shout x = loud x
+main = println (shout Cat ++ "|" ++ shout (Box Cat))

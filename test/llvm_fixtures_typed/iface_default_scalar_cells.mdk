@@ -1,28 +1,18 @@
--- An interface default body is SPECIALIZED into every impl that does not override
--- it (desugar's fillImplDefaults).  Each specialization must reach its OWN route
--- cell: the cells on `EBinOp`/`EUnOp`/`ENumLit` are stamped from the grounded
--- operand type, so one cell shared by N specializations lets whichever impl
--- grounds first decide codegen for all of them.  With `RScalar "Int"` in the tree
--- (#2356 ground Int comparison), a single `impl Keyed Int` anywhere in the graph
--- compiled every other impl's `<` to an `icmp` over BOXED pointers — silently
--- wrong, no error.
---
--- The shape is load-bearing: it must be an interface DEFAULT METHOD.  A plain
--- polymorphic binding pins nothing here — its `<` never grounds, so it stays on
--- `@mdk_value_lt` whether or not the cells are shared.
+-- An interface default body is ONE shared body that every impl not overriding it
+-- reaches with its own dictionary as the receiver.  Its `<` is therefore typed at
+-- the interface's parameter, not at any one impl's type, so no impl's grounding can
+-- decide codegen for the others: a single `impl Keyed Int` must not turn the Float
+-- and String comparisons into an `icmp` over BOXED pointers (the #2356 shape:
+-- silently wrong, no error).
 --
 -- The three impls are the three scalar dispositions the emitter distinguishes:
--- Float (inline `load double` + `fcmp`), String (`@mdk_string_compare_raw`), Int
--- (inline `icmp slt` on the tagged words).  The Int arm is half the property —
--- separating the cells must not COST Int its witness, only stop it from being
--- spent on the others.
+-- Float, String and Int.  Each must answer its own comparison.
 --
 --   b0 ordered 1.5 2.5 = True  -> 1     b3 ordered "b" "a" = False -> 0
 --   b1 ordered 2.5 1.5 = False -> 0     b4 ordered 1   2   = True  -> 16
 --   b2 ordered "a" "b" = True  -> 4     b5 ordered 2   1   = False -> 0
 --
--- main = 1 + 4 + 16 = 21.  A poisoned Float or String body moves the low bits; a
--- withdrawn Int witness leaves the value at 21 but moves the .ll golden.
+-- main = 1 + 4 + 16 = 21.  A poisoned Float or String comparison moves the low bits.
 
 interface Keyed a requires Ord a where
   keyOf : a -> a

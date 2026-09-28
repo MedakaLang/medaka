@@ -82,7 +82,7 @@ import types.typecheck.{
   tcCode,
   tcMsg,
 }
-import support.util.{contains, joinNl, listLen, lookupAssoc}
+import support.util.{contains, joinNl, joinWith, listLen, lookupAssoc}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -101,12 +101,14 @@ data NumericTraceView = NumericTraceView {
 
 numericRouteView : Route -> String
 numericRouteView RNone = "none"
-numericRouteView (RKey key prerequisites) =
+numericRouteView (RKey key prerequisites _) =
   "\{key}[\{joinNl (map numericRouteView prerequisites)}]"
 numericRouteView (RDict name) = "dict:" ++ name
 numericRouteView (RDictFwd name) = "given:" ++ name
 numericRouteView (RLocal name _) = "local:" ++ name
 numericRouteView (RScalar name) = "scalar:" ++ name
+numericRouteView (RProj route path) =
+  "projected:\{numericRouteView route}.\{joinWith "." (map intToString path)}"
 
 numericTraceView : NumericPredicateTraceEntry -> NumericTraceView
 numericTraceView entry =
@@ -280,12 +282,12 @@ test "numeric return keeps the Num predicate through production checking and sta
         (filter (view => view.ntvStage == NPTReturn) trace)),
   ]
 
-test "numeric return without a method collision preserves the short route ABI" =
+test "numeric return without a method collision stamps the same canonical key" =
   let (errors, trace) = numericCheckObserved (numericValueSource False)
   expectAll [
     expectEqual [] errors,
     expectEqual
-      ["numeric_predicate.N[]"]
+      ["core::Num|numeric_predicate.N|[]"]
       (map
         (view => view.ntvRoute)
         (filter (view => view.ntvStage == NPTReturn) trace)),
@@ -349,7 +351,7 @@ test "numeric return selects prerequisites from the Num instance row" =
   expectAll [
     expectEqual [] errors,
     expectEqual
-      [("core::Num", ["Box Int"], "Num", ["Int[]"])]
+      [("core::Num", ["Box Int"], "Num", ["core::Num|Int|[]"])]
       (map
         (view => (
           view.ntvInterface,
@@ -870,35 +872,35 @@ test "arithmetic collision imports select the exact Num row and prerequisites" =
           "core::Num",
           "core::Num",
           "core::Num|(arithmetic_shape.Box a)|[]",
-          ["Int[]"],
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:divValue",
           "core::Num",
           "core::Num",
-          "arithmetic_shape.Box[]",
-          ["Int[]"],
+          "core::Num|(arithmetic_shape.Box a)|[]",
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:mulValue",
           "core::Num",
           "core::Num",
-          "arithmetic_shape.Box[]",
-          ["Int[]"],
+          "core::Num|(arithmetic_shape.Box a)|[]",
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:subValue",
           "core::Num",
           "core::Num",
-          "arithmetic_shape.Box[]",
-          ["Int[]"],
+          "core::Num|(arithmetic_shape.Box a)|[]",
+          ["core::Num|Int|[]"],
         ),
         (
           "binding:addValue",
           "core::Num",
           "core::Num",
           "core::Num|(arithmetic_shape.Box a)|[]",
-          ["Int[]"],
+          ["core::Num|Int|[]"],
         ),
       ]
       (map
@@ -1313,7 +1315,12 @@ wrappedReturnFlatRoutes source =
 
 test "wrapped return prerequisites use the class parameter, not the result type" =
   expectEqual
-    [Some ["Int[]"], Some ["Int[]"], Some ["Int[]"], Some ["Int[]"]]
+    [
+      Some ["wrapped_return::Seed|Int|[]"],
+      Some ["wrapped_return::Seed|Int|[]"],
+      Some ["wrapped_return_flat::Seed|Int|[]"],
+      Some ["wrapped_return_flat::Seed|Int|[]"],
+    ]
     [
       wrappedReturnRoutes (wrappedReturnSource True True),
       wrappedReturnRoutes (wrappedReturnSource True False),
@@ -1352,7 +1359,7 @@ test "wrapped return routes survive an intervening failed request" =
   let after = wrappedReturnRoutes (wrappedReturnSource True True)
   expectAll [
     expectTrue (listLen errors > 0),
-    expectEqual (Some ["Int[]"]) before,
+    expectEqual (Some ["wrapped_return::Seed|Int|[]"]) before,
     expectEqual before after,
   ]
 
@@ -1408,7 +1415,7 @@ methodPrerequisiteView prerequisite = (
 methodOutcomeView : MethodReturnTraceEntry -> Option MethodOutcomeView
 methodOutcomeView entry = match entry.mrtOutcome
   Some (Solved (GivenEvidence binder)) => Some (MOVGiven binder)
-  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites)) =>
+  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites _)) =>
     Some
       (MOVInstance
         identity
@@ -1619,7 +1626,7 @@ test "ordinary return instance evidence retains selected prerequisites" =
       _ => False),
     expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
-        Some (RKey _ _) => listLen stamped.mrtPrerequisites == 1
+        Some (RKey _ _ _) => listLen stamped.mrtPrerequisites == 1
         _ => False
       _ => False),
   ]
@@ -1930,9 +1937,10 @@ methodOutcomeSemanticView entry = match methodOutcomeView entry
 
 methodRouteKind : MethodReturnTraceEntry -> String
 methodRouteKind entry = match entry.mrtRoute
-  Some (RKey _ _) => "instance"
+  Some (RKey _ _ _) => "instance"
   Some (RDict _) => "given"
   Some (RDictFwd _) => "given-forwarded"
+  Some (RProj _ _) => "given-projected"
   Some (RLocal _ _) => "local"
   Some (RScalar _) => "scalar"
   Some RNone => "none"
@@ -3080,7 +3088,7 @@ test "same spelling retains module identity while impl bodies stay ordinary" =
       ],
     )
 
-test "synthesized impl copy retains ordinary binding ownership" =
+test "an inherited default is inferred once, as the default body" =
   let observed = runModulesObserved [
     (
       "specialized_default",
@@ -3100,10 +3108,7 @@ test "synthesized impl copy retains ordinary binding ownership" =
   ]
   expectEqual
     (
-      [
-        (ATDirectPredicate, 0, "default:use", "default:use", True),
-        (ATDirectPredicate, 0, "binding:use", "binding:use", True),
-      ],
+      [(ATDirectPredicate, 0, "default:use", "default:use", True)],
       0,
     )
     (map assumptionShape observed.mtvAssumptions, observed.mtvErrors)
@@ -3189,8 +3194,9 @@ test "a construction goal packs its prerequisite into the instance route (#2095 
   expectTrue (match constructed
     [e] =>
       e.eoeOutcome == EOKInstance
-        && e.eoeInstanceKey == Some "evidence_observation.Box"
-        && e.eoePrerequisites == ["RKey Int"]
+        && e.eoeInstanceKey
+          == Some "evidence_observation::Build|(evidence_observation.Box a)|"
+        && e.eoePrerequisites == ["RKey evidence_observation::Need|Int|"]
     _ => False)
 
 test "the construction goal's pin is sensitive to identity, prerequisites, and scope (#2095 mutation)" =
@@ -3217,29 +3223,47 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
       expectAll [
         expectTrue
           (evidenceEntryMatches
-            (EOKInstance, Some "evidence_observation.Box", ["RKey Int"], scopeN)
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (EOKInstance, Some "SomethingElse", ["RKey Int"], scopeN)
-            e),
-        expectFalse
-          (evidenceEntryMatches
-            (EOKInstance, Some "evidence_observation.Box", [], scopeN)
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN,
+            )
             e),
         expectFalse
           (evidenceEntryMatches
             (
               EOKInstance,
-              Some "evidence_observation.Box",
-              ["RKey Int"],
+              Some "SomethingElse",
+              ["RKey evidence_observation::Need|Int|"],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              [],
+              scopeN,
+            )
+            e),
+        expectFalse
+          (evidenceEntryMatches
+            (
+              EOKInstance,
+              Some "evidence_observation::Build|(evidence_observation.Box a)|",
+              ["RKey evidence_observation::Need|Int|"],
               scopeN + 1,
             )
             e),
       ]
     _ => fail "expected exactly one Box Int construction goal"
 
-test "an appended super slot at an instance construction goal is solved at that goal (#2095, DICT §3 construction)" =
+-- The super `A Int` takes no slot of its own: it is solved at this same goal and
+-- carried inside the `B Int` dictionary (#993), which `dict_semantics_ir` pins as the
+-- constant's super segment.
+test "a super at an instance construction goal rides inside that goal's one slot (#2095, #993, DICT §3 construction)" =
   let trace =
     evidenceObservationTrace
       (joinNl [
@@ -3258,13 +3282,13 @@ test "an appended super slot at an instance construction goal is solved at that 
       ])
   let slots = evidenceEntriesOfKind "GKDictApp" trace
   expectAll [
-    expectEqual 2 (listLen slots),
+    expectEqual 1 (listLen slots),
     expectTrue
       (all
         (e =>
-          e.eoeArity == 2
+          e.eoeArity == 1
             && e.eoeOutcome == EOKInstance
-            && e.eoeInstanceKey == Some "Int")
+            && e.eoeInstanceKey == Some "evidence_observation::B|Int|")
         slots),
   ]
 
@@ -3456,3 +3480,110 @@ test "#1020: cross-module empty and overriding impls disposition correctly" =
     expectTrue
       (anyMatchInheritedDefault "entry" "Loud" "loud" (dispositionRows table)),
   ]
+
+-- The same method body, written as a supplied impl method or inherited as the
+-- interface default, is checked by the one method-body driver and must be judged
+-- alike: `inherited` places [body] under the interface, otherwise under the impl.
+placedBodySource : Bool ->
+  List String ->
+  List String ->
+  String ->
+  List String ->
+  String
+placedBodySource inherited prelude ifaceLines implHead body =
+  joinNl
+    (prelude
+      ++ ifaceLines
+      ++ (if inherited then body ++ [implHead] else implHead :: body))
+
+placedEffectSource : Bool -> List String -> String
+placedEffectSource inherited body =
+  placedBodySource
+    inherited
+    ["put : Unit -> <Stdout> Unit", "put _ = ()"]
+    [
+      "interface Speak a where",
+      "  speak : a -> (Unit -> <e> Unit) -> <e> Unit",
+    ]
+    "impl Speak Unit where"
+    body
+
+placedEffectCodes : Bool -> List String -> List String
+placedEffectCodes inherited body =
+  map fst (methodBodyCheck "placed_effect" (placedEffectSource inherited body))
+
+-- The body performs <Stdout> inside the row <e> its caller chooses: a launder on
+-- either placement.  Performing only the callback's row is the accepted control.
+test "a supplied and an inherited body are judged alike on a method effect variable" =
+  let launders = ["  speak _ k =", "    let _ = put ()", "    k ()"]
+  let threads = ["  speak _ k = k ()"]
+  expectEqual
+    (["T-EFFECT-LAUNDER"], ["T-EFFECT-LAUNDER"], [], [])
+    (
+      placedEffectCodes False launders,
+      placedEffectCodes True launders,
+      placedEffectCodes False threads,
+      placedEffectCodes True threads,
+    )
+
+placedNumSource : Bool -> String
+placedNumSource inherited =
+  placedBodySource
+      inherited
+      [
+        "interface S a where",
+        "  s : a -> Int",
+        "impl S (List a) where",
+        "  s _ = 0",
+        "impl S (List Int) where",
+        "  s _ = 1",
+        "data Foo = Foo",
+      ]
+      ["interface T a where", "  t : a -> Int"]
+      "impl T Foo where"
+      ["  t _ = s [1, 2]"]
+    ++ "\nmain : Int\nmain = t Foo\n"
+
+placedNumCodes : Bool -> List String
+placedNumCodes inherited =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated (placedNumSource inherited))
+  let (errors, _) = checkOneDiags [] core ("placed_num", program)
+  map tcCode errors
+
+placedNumElaborated : Bool -> List Decl
+placedNumElaborated inherited =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated (placedNumSource inherited))
+  elaborateOne [] core ("placed_num", program)
+
+placedNumSuppliedValue : Int
+placedNumSuppliedValue =
+  let bindings = evalOne [] ("placed_num", placedNumElaborated False)
+  match lookupAssoc "main" bindings
+    Some v => match force v
+      VInt n => n
+      _ => 0 - 1
+    _ => 0 - 1
+
+placedNumInheritedValue : Int
+placedNumInheritedValue =
+  let bindings = evalOne [] ("placed_num", placedNumElaborated True)
+  match lookupAssoc "main" bindings
+    Some v => match force v
+      VInt n => n
+      _ => 0 - 1
+    _ => 0 - 1
+
+-- The body-local literal `[1, 2]` appears nowhere in `t`'s declared type, so the
+-- body's own numeric boundary grounds it to Int on either placement, and the call
+-- selects the more specific `impl S (List Int)`.
+test "a supplied and an inherited body ground a body-local literal alike" =
+  expectEqual
+    ([], [], 1, 1)
+    (
+      placedNumCodes False,
+      placedNumCodes True,
+      placedNumSuppliedValue,
+      placedNumInheritedValue,
+    )

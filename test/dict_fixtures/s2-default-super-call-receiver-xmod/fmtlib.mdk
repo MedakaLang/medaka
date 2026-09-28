@@ -1,0 +1,8 @@
+export interface Named a where
+  nm : a -> String
+
+-- `loud`'s default calls the SUPERCLASS method `nm` on its receiver.
+export interface Fmt a requires Named a where
+  fmt : a -> String
+  loud : a -> String
+  loud x = "[" ++ fmt x ++ ":" ++ nm x ++ "]"

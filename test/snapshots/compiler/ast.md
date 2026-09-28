@@ -1,5 +1,5 @@
 # META
-source_lines=2508
+source_lines=2517
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -158,11 +158,11 @@ ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
 
 -- The dictionary name an interface default body's RECEIVER evidence renders to: a
--- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` to
--- it.  It is not a parameter of the lowered body.  Each engine rebinds it to the
--- instance the body is running for — lowering rewrites it to that instance's route
--- (`core_ir_lower`), eval binds it in the specialized body's frame — so the body is
--- inferred once and selects nothing.  `$` keeps it out of every user namespace.
+-- sibling or superclass call inside `method`'s default routes `RDict`/`RDictFwd` (or
+-- a projection of it) to it.  It is a real parameter of the default's body (each
+-- inheriting instance's entry in `core_ir_lower.lowerInheritedDefault`, eval's
+-- `sharedDefaultValue`), bound to the dictionary of whichever instance the call
+-- selected, so the body is inferred once and selects nothing.  `$` keeps it out of every user namespace.
 export
 defaultReceiverDict : String -> String
 defaultReceiverDict method = "$self_\{method}"
@@ -1087,10 +1087,18 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- RKey = a concrete impl head tag (or, for two same-head impls, the canonical impl
 --   key — TYPECHECK-AUDIT C7) plus its own requires routes recursively (Phase
 --   83/84 #5: the nested element-dict routes so dict_of_route builds a structured
---   VDict carrying every element dict the impl body needs);
+--   VDict carrying every element dict the impl body needs), then one route per
+--   DIRECT superinterface of the dictionary's interface, in declaration order, each
+--   solved at the same goal (DICT-SEMANTICS §2: a dictionary carries its supers);
 -- RDict = read the named dict parameter at runtime (enclosing constraint);
 -- RDictFwd = like RDict but for return-position sites: also forward the structured
 --   dict's own requires into the selected impl body (Phase 83/84 #5).
+-- RProj = the dictionary a route denotes, projected along a path of direct-super
+--   indices (DICT-SEMANTICS §3 `super`).  A dictionary stores its supers before its
+--   requires, so an index names the same slot whichever instance the dictionary is.
+--   An index past the supers names a `requires` dictionary, which only a projection
+--   of a dictionary whose instance is known may use (an inherited default's body
+--   specialized to its instance, `core_ir_lower.specializeRow`).
 -- RLocal = NOT a method dispatch (Phase 112 / TYPECHECK-AUDIT C5): at this call
 --   site the interface has no impl for the concrete receiver, but an explicitly-
 --   imported/local standalone function shadows the method name, so eval ignores
@@ -1133,11 +1141,12 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- too, since the Int primitive is the default.
 public export data Route =
   | RNone
-  | RKey String (List Route)
+  | RKey String (List Route) (List Route)
   | RDict String
   | RDictFwd String
   | RLocal String (List Route)
   | RScalar String
+  | RProj Route (List Int)
 
 -- The fixed-width integer heads (`docs/design/INTEGER-TYPES-DESIGN.md` §2).  Each
 -- shares `Int`'s tagged word and holds a value in `0 .. 2^n - 1`; the static type
@@ -2667,7 +2676,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "firstTyLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
-(DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
+(DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String"))) (variant "RProj" (ConPos (TyCon "Route") (TyApp (TyCon "List") (TyCon "Int"))))) ())
 (DTypeSig true "fixedWidthMask" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "fixedWidthMask" ((PLit (LString "U8"))) (EApp (EVar "Some") (ELit (LInt 255))))
 (DFunDef false "fixedWidthMask" ((PLit (LString "U16"))) (EApp (EVar "Some") (ELit (LInt 65535))))
@@ -3068,7 +3077,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "firstTyLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
-(DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
+(DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String"))) (variant "RProj" (ConPos (TyCon "Route") (TyApp (TyCon "List") (TyCon "Int"))))) ())
 (DTypeSig true "fixedWidthMask" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "fixedWidthMask" ((PLit (LString "U8"))) (EApp (EVar "Some") (ELit (LInt 255))))
 (DFunDef false "fixedWidthMask" ((PLit (LString "U16"))) (EApp (EVar "Some") (ELit (LInt 65535))))

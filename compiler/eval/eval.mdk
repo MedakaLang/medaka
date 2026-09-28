@@ -79,7 +79,7 @@ import support.util.{
   startsWith,
   zipL,
 }
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import list.{drop}
 import eval.u64_halves as H
 import u64 as U64
@@ -162,8 +162,10 @@ public export data Value (e : Effect) =
   -- Phase 83/84 #5: the value list carries this impl's own requires dicts (each
   -- itself a VDict), so a recursive instance (def : List (List Int)) unfolds
   -- level by level — the inner return-position `def` reads its element dict from
-  -- the forwarded requires rather than failing arg-tag dispatch.
-  | VDict String (List (Value e))
+  -- the forwarded requires rather than failing arg-tag dispatch.  The second list
+  -- is the dictionary's direct superinterface dicts, in declaration order.  A
+  -- projection (`RProj`) indexes the supers, then the requires, as one sequence.
+  | VDict String (List (Value e)) (List (Value e))
 
 -- an environment is a stack of frames; each frame maps names to mutable cells
 -- (so letrec / mutual recursion can back-patch a closure's own binding).
@@ -203,7 +205,7 @@ ppValue (VPrim _) = "<prim>"
 ppValue (VMulti vs) = "<dispatch/" ++ intToString (listLen vs) ++ ">"
 ppValue (VTypedImpl t _ _ _ inner) = "<impl@\{t}:\{ppValue inner}>"
 ppValue (VThunk _) = "<thunk>"
-ppValue (VDict key _) = "<dict:" ++ key ++ ">"
+ppValue (VDict key _ _) = "<dict:" ++ key ++ ">"
 ppValue VFallthrough = "<fallthrough>"
 
 ppField : (String, Value e) -> String
@@ -386,26 +388,55 @@ installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
   methodReqCountRef := methodReqCountIndex (buildMethodReqCounts allDecls)
+  inheritedEntryRef :=
+    methodReqCountIndex
+      (flatMap (inheritedEntryRows (installedDispositionsOpt ())) allDecls)
   disp
+
+-- Per (method, instance word): the entries that are an inherited default rather
+-- than a method the instance supplies.  Such an entry's leading dictionary after
+-- its method-level ones is its RECEIVER -- the dictionary that selected it -- where
+-- a supplied method takes that dictionary's `requires` (`applyMethodDicts`).
+inheritedEntryRef : Ref (OrdMap (OrdMap Int))
+inheritedEntryRef = Ref omEmpty
+
+inheritedEntryRows : Option DispositionTable ->
+  Decl ->
+  List ((String, String), Int)
+inheritedEntryRows dt (DAttrib _ d) = inheritedEntryRows dt d
+inheritedEntryRows (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
+  flatMap
+    (m =>
+      map
+        (shape => ((ifaceMethodName m, shape.isWord), 1))
+        (inheritorsOf (ifaceWordOf ifaceOrigin name) (ifaceMethodName m) dt))
+    methods
+inheritedEntryRows _ _ = []
+
+ifaceMethodName : IfaceMethod -> String
+ifaceMethodName (IfaceMethod mname _ _ _) = mname
+
+isInheritedEntry : String -> String -> Bool
+isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
+  Some words => omHasKey word words
+  None => False
 
 export
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildMethodReqCounts prog =
   flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
 
--- Each defined impl method is addressable by both route words carried on its
--- VTypedImpl: the short head tag and the canonical interface/type key.  A collision
--- selects by the latter, so both aliases must report the same leading-dictionary ABI.
+-- Each defined impl method is addressed by the word a dictionary for its instance
+-- carries: the instance's canonical interface/type key.
 implMethodReqCounts : Option DispositionTable ->
   Decl ->
   List ((String, String), Int)
 implMethodReqCounts dt (DAttrib _ d) = implMethodReqCounts dt d
 implMethodReqCounts _ (DImpl { iface, tys, methods, implOrigin, ... }) =
-  let tag = optionOr noneHeadTag (headTyconHead tys)
   let key = implRouteKeyWord implOrigin iface tys None
-  flatMap (implMethodReqCountEntries tag key) methods
--- an inherited default's specialization takes the instance's `requires`
--- dictionaries after its own method-level ones (`inheritedDefaultEntries`)
+  map (implMethodReqCountEntry key) methods
+-- an inherited default's entry takes its receiver after its own method-level
+-- dictionaries (`inheritedDefaultEntries`)
 implMethodReqCounts (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
   flatMap (inheritedDefaultReqCounts dt (ifaceWordOf ifaceOrigin name)) methods
 implMethodReqCounts _ _ = []
@@ -415,23 +446,14 @@ inheritedDefaultReqCounts : DispositionTable ->
   IfaceMethod ->
   List ((String, String), Int)
 inheritedDefaultReqCounts dt ifaceWord (IfaceMethod mname _ (Some (MethodDefault pats _)) _) =
-  flatMap
-    (shape =>
-      let count = leadingImplDictPats pats + shape.isReqCount
-      [
-        ((mname, optionOr noneHeadTag (headTyconHead shape.isTys)), count),
-        ((mname, shape.isWord), count),
-      ])
+  map
+    (shape => ((mname, shape.isWord), leadingImplDictPats pats + 1))
     (inheritorsOf ifaceWord mname dt)
 inheritedDefaultReqCounts _ _ _ = []
 
-implMethodReqCountEntries : String ->
-  String ->
-  ImplMethod ->
-  List ((String, String), Int)
-implMethodReqCountEntries tag key (ImplMethod mname pats _) =
-  let count = leadingImplDictPats pats
-  [((mname, tag), count), ((mname, key), count)]
+implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
+implMethodReqCountEntry key (ImplMethod mname pats _) =
+  ((mname, key), leadingImplDictPats pats)
 
 -- Count the ABI already written into the dict-passed definition.  Deriving this
 -- from a bare method-name signature is ambiguous when unrelated interfaces reuse a
@@ -474,9 +496,8 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 --     reads none) ⇒ the call site's impl dicts must be DROPPED, or the dict lands in
 --     the first value param.  That is #413.
 --   * None  = no entry answers, and the call site's dicts pass through unchanged.
--- Every inherited default has an entry too: its per-instance specialization takes
--- its method-level and then the instance's `requires` dictionaries, exactly as a
--- supplied method does (`inheritedDefaultReqCounts`).
+-- Every inherited default has an entry too: it takes its method-level dictionaries
+-- and then one more, its receiver (`inheritedDefaultReqCounts`).
 -- Callers take the indexed Option once and derive every consumer from it (see
 -- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
@@ -603,12 +624,11 @@ tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 -- ⚠️ THE `TyFun` ARM IS THE DEFINITION-SIDE HALF OF #1617 AND CANNOT BE OMITTED
 -- WHEN `typecheck.headTyconTy` GAINS ITS OWN.  This projection is what
 -- `headTyconHead` (below) hands to `core_ir_lower.ifaceImplHeadEntries` /
--- `lowerImplMethod` as an impl's `CImplTagged` tag, and `declRouteKey`'s
--- uniqueness verdict is counted over THESE tags — so for a LONE arrow-headed
--- impl the caller side would stamp `__fun__` (unique at that head) while this
--- side still filed the impl under `__none__`, and the emitter would fail to find
--- it.  `funHeadTag` is imported from `types/route_key.mdk` rather than respelled
--- so the two sides cannot drift.
+-- `lowerImplMethod` as an impl's `CImplTagged` tag, which arg-tag dispatch and
+-- symbol naming read -- so for a LONE arrow-headed impl the caller side would
+-- tag `__fun__` while this side still filed the impl under `__none__`.
+-- `funHeadTag` is imported from `types/route_key.mdk` rather than respelled so
+-- the two sides cannot drift.
 --
 -- ⚠️ `TyConstrained` IS NO LONGER A DIVERGENCE — `typecheck.headTyNode` peels it
 -- too as of #1630, exactly as it peels `TyEffect` as of #1618.  This arm was the
@@ -1250,14 +1270,14 @@ candIface v = match splitOnChar '|' (candKey v)
   [] => ""
   w :: _ => w
 
--- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
--- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
--- empty tag (an unresolved route, or a dict whose key is blank) leaves the VMulti
--- for arg-tag fallback.
+-- return-position dispatch (RKey): narrow a method's VMulti to the impl filed under
+-- the instance key the typechecker selected (no runtime arg).  An empty key (an
+-- unresolved route, or a dict whose key is blank) leaves the VMulti for arg-tag
+-- fallback.
 export
 narrowMethod : EvalEnv (Value e) -> String -> Value e -> String -> <e> Value e
 narrowMethod _ _ (VMulti vs) "" = VMulti vs
-narrowMethod _ _ (VMulti vs) tag = stripResolved (pickByTag vs tag)
+narrowMethod _ _ (VMulti vs) key = stripResolved (pickByKey vs key)
 -- A single-impl interface method binds to a BARE VTypedImpl (never coalesced into
 -- a VMulti).  A resolved route (non-empty tag) still has to strip its dispatch
 -- wrapper for a nullary return-position body — there's only one impl, so it IS the
@@ -1269,26 +1289,14 @@ narrowMethod _ _ (VTypedImpl t k p s inner) _ =
   stripResolved (VTypedImpl t k p s inner)
 narrowMethod _ _ v _ = v
 
--- A concrete route tag picks the impl whose VTypedImpl tag matches.  An inherited
--- default is one of those candidates — installed per inheriting instance, tagged
--- like the instance's own methods (`inheritedDefaultEntries`) — so no default tier
--- exists below this.
-pickByTag : List (Value e) -> String -> <e> Value e
-pickByTag vs tag = match filterList (hasTag tag) vs
-  [] => pickTagFallback vs
-  matched => oneOrMultiV matched vs
-
--- No concrete impl carries the route tag: a GENERAL instance (`impl Iface a`, whose
--- method is tagged noneHeadTag because a type-variable head has no head tycon) is the
--- `min⊑` selection (DICT-SEMANTICS §3) for an uncovered concrete type — its methods,
--- supplied or inherited, are all tagged noneHeadTag.  It must be selected here
--- BEFORE punting to the untyped arg-tag path, which would grab the first CONCRETE
--- sibling and mis-dispatch (#667).  Mirrors the LLVM emitGeneralRKey fallback.  With
--- no general instance either, the VMulti is left for arg-tag fallback.
-pickTagFallback : List (Value e) -> <e> Value e
-pickTagFallback vs = match filterList (hasTag noneHeadTag) vs
+-- A route key picks the impl filed under it -- a general instance's too, whose
+-- entries carry its own canonical key.  An inherited default is one of those
+-- candidates, installed per inheriting instance under the instance's key
+-- (`inheritedDefaultEntries`), so no default tier exists below this.
+pickByKey : List (Value e) -> String -> <e> Value e
+pickByKey vs key = match filterList (hasKey key) vs
   [] => VMulti vs
-  gens => oneOrMultiV gens vs
+  matched => oneOrMultiV matched vs
 
 -- Once a route has pinned a single impl, strip the dispatch wrapper iff its body
 -- is a terminal value (a nullary return-position method like `empty`/`minBound`
@@ -1319,12 +1327,15 @@ awaitsArgs _ = False
 export
 routeTag : EvalEnv (Value e) -> Route -> <e> String
 routeTag _ RNone = ""
-routeTag _ (RKey key _) = key
+routeTag _ (RKey key _ _) = key
 routeTag env (RDict d) = match lookupEnv env d
-  VDict key _ => key
+  VDict key _ _ => key
   _ => ""
 routeTag env (RDictFwd d) = match lookupEnv env d
-  VDict key _ => key
+  VDict key _ _ => key
+  _ => ""
+routeTag env (RProj r path) = match dictOfRoute env (RProj r path)
+  VDict key _ _ => key
   _ => ""
 routeTag _ (RLocal _ _) = ""
 -- RScalar tags an EBinOp with its grounded scalar type (Float arithmetic / Int
@@ -1348,27 +1359,40 @@ applyValues v [] = v
 applyValues v (x :: rest) = applyValues (apply v x) rest
 
 -- build the runtime dictionary for one route: RKey builds a structured VDict
--- carrying the impl's own requires dicts recursively (Phase 83/84 #5); RDict/
--- RDictFwd forward the enclosing dict param in full; RNone is a no-op dict.
+-- carrying the impl's own requires dicts and its supers recursively (Phase 83/84
+-- #5); RDict/RDictFwd forward the enclosing dict param in full; RProj reads a
+-- super (or, past the supers, a `requires` dictionary) out of the dictionary its
+-- inner route denotes; RNone is a no-op dict.
+export
 dictOfRoute : EvalEnv (Value e) -> Route -> <e> Value e
-dictOfRoute env (RKey key reqs) = VDict key (map (dictOfRoute env) reqs)
+dictOfRoute env (RKey key reqs sups) =
+  VDict key (map (dictOfRoute env) reqs) (map (dictOfRoute env) sups)
 dictOfRoute env (RDict d) = match lookupEnv env d
-  VDict key reqs => VDict key reqs
-  _ => VDict "" []
+  VDict key reqs sups => VDict key reqs sups
+  _ => VDict "" [] []
 dictOfRoute env (RDictFwd d) = match lookupEnv env d
-  VDict key reqs => VDict key reqs
-  _ => VDict "" []
-dictOfRoute _ RNone = VDict "" []
+  VDict key reqs sups => VDict key reqs sups
+  _ => VDict "" [] []
+dictOfRoute env (RProj r path) = projectDict (dictOfRoute env r) path
+dictOfRoute _ RNone = VDict "" [] []
 -- S-1: an RLocal route's OWN dicts (the shadowing standalone's `=>` constraints) are
 -- applied by evalMethodAt's RLocal arm via applyDicts — they are the call's leading
 -- dict ARGS, not a dict witness FOR this route.  So as a *witness* RLocal is still the
 -- no-op dict.  (Pre-S1 this arm's comment claimed "RLocal never carries a dict"; that
 -- invariant was the S-1 bug and is now false — see ast.mdk's Route doc + S9.)
-dictOfRoute _ (RLocal _ _) = VDict "" []
+dictOfRoute _ (RLocal _ _) = VDict "" [] []
 -- RScalar is a scalar-type binop tag (Float arithmetic / Int comparison),
 -- never a dict route.
 dictOfRoute _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
+
+-- the super dictionary at [path] (direct-super indices, outermost first)
+projectDict : Value e -> List Int -> Value e
+projectDict d [] = d
+projectDict (VDict _ reqs sups) (i :: rest) = match drop i (sups ++ reqs)
+  s :: _ => projectDict s rest
+  [] => panic "dictionary projection past its fields"
+projectDict _ _ = panic "dictionary projection of a non-dictionary"
 
 -- narrow a method VMulti by a route, returning the narrowed value and any
 -- forwarded requires (non-empty only for RDictFwd return-position sites where the
@@ -1383,7 +1407,7 @@ methodAtNarrow : EvalEnv (Value e) ->
 -- fallback.  (A sibling call inside an interface default is routed to the body's
 -- receiver, never RNone — see `inheritedDefaultEntries`.)
 methodAtNarrow _ _ v RNone = (v, [])
-methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
+methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
 -- RDict site's narrowed impl method ALSO carries leading element-dict params
 -- (resolveArgStamps ran on eval too), so forward the dict's nested `reqs` exactly as
@@ -1393,11 +1417,17 @@ methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
 -- List impl method's leading `Debug Int` param.  Pre-unify RDict impl methods had NO
 -- dict slot (arg-tag), so reqs were discarded; now they need them.
 methodAtNarrow env method v (RDict d) = match lookupEnv env d
-  VDict key reqs => (narrowMethod env method v key, reqs)
+  VDict key reqs _ => (narrowMethod env method v key, reqs)
   _ => (v, [])
 methodAtNarrow env method v (RDictFwd d) = match lookupEnv env d
-  VDict key reqs => (narrowMethod env method v key, reqs)
+  VDict key reqs _ => (narrowMethod env method v key, reqs)
   _ => (v, [])
+-- A projected super dictionary narrows and forwards exactly as a dictionary
+-- parameter does.
+methodAtNarrow env method v (RProj r path) =
+  match dictOfRoute env (RProj r path)
+    VDict key reqs _ => (narrowMethod env method v key, reqs)
+    _ => (v, [])
 -- RLocal: not a method dispatch — the EMethodAt arm resolves the standalone
 -- directly (lookupEnv) and never calls methodAtNarrow with RLocal.  This arm
 -- exists only to keep the match exhaustive; it returns the value unnarrowed.
@@ -1420,9 +1450,9 @@ oneOrMultiV many _ = VMulti many
 -- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
 -- narrow to the one the checker picked instead of first-impl-wins.
 export
-hasTag : String -> Value e -> Bool
-hasTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
-hasTag _ _ = False
+hasKey : String -> Value e -> Bool
+hasKey key (VTypedImpl _ k _ _ _) = k == key
+hasKey _ _ = False
 
 matchesTag : String -> Value e -> Bool
 matchesTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
@@ -1685,14 +1715,28 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   -- absent/present distinction.  A narrowed candidate is asked by its own canonical
   -- key, which names one interface's impl where the route tag may name a head
   -- several interfaces implement.
-  let reqCount = lookupMethodReqCountOpt name (narrowedWord env route narrowed)
+  let word = narrowedWord env route narrowed
+  let reqCount = lookupMethodReqCountOpt name word
   let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs narrowed then
     let v1 = applyDicts env narrowed methodRoutes
-    let v2 = applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
-    applyValues v2 fwdReqs
+    if isInheritedEntry name word then
+      applyValues v1 [receiverOf env route implRoutes]
+    else
+      let v2 =
+        applyDicts env v1 (implDictRoutes reqCount methodRoutes implRoutes)
+      applyValues v2 fwdReqs
   else
     narrowed
+
+-- The dictionary that selected an inherited default, which the default receives as
+-- its receiver: a dictionary route denotes it directly; a statically selected
+-- instance's is built from its word, its `requires` (the site's impl routes) and
+-- its supers.
+receiverOf : EvalEnv (Value e) -> Route -> List Route -> <e> Value e
+receiverOf env (RKey key _ sups) implRoutes =
+  VDict key (map (dictOfRoute env) implRoutes) (map (dictOfRoute env) sups)
+receiverOf env route _ = dictOfRoute env route
 
 narrowedWord : EvalEnv (Value e) -> Route -> Value e -> <e> String
 narrowedWord _ _ (VTypedImpl _ k _ _ _) = k
@@ -2475,10 +2519,11 @@ declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
 -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
 declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (implMethodEntry env disp o ifaceName typeArgs) methods
--- An interface installs one specialization of each default per instance the
--- disposition table says inherits it, closed over the INTERFACE module's env (the
--- body's names resolve there) and tagged with the instance's head and key, so it is
--- dispatched exactly like the instance's own methods and nothing chooses a default.
+-- An interface installs one entry for each default per instance the disposition
+-- table says inherits it, all sharing one value closed over the INTERFACE module's
+-- env (the body's names resolve there), each tagged with the instance's head and
+-- key, so it is dispatched exactly like the instance's own methods and nothing
+-- chooses a default.
 -- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
 -- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
 -- BUILD process share), the spelling the table's producer keys the slot by.
@@ -2516,12 +2561,11 @@ headTyconHead : List Ty -> Option String
 headTyconHead [] = None
 headTyconHead (t :: _) = headTycon t
 
--- One inheriting instance's specialization of a default: the body with its receiver
--- (`ast.defaultReceiverDict`) bound to a dictionary for the instance, so a sibling
--- or superclass call inside it dispatches on that instance.  Like the instance's own
--- methods it takes its method-level dictionaries and then the instance's `requires`
--- dictionaries (`implMethodReqCounts` reports that count); the latter are what the
--- receiver's dictionary carries.
+-- Each inheriting instance's entry for a default: the interface's one shared value,
+-- filed under the instance's tag and word.  It takes its method-level dictionaries
+-- and then its receiver -- the dictionary that selected the entry
+-- (`applyMethodDicts`) -- so a sibling or superclass call inside the body reads the
+-- caller's dictionary, never one rebuilt for the instance.
 inheritedDefaultEntries : EvalEnv (Value e) ->
   List ((String, String, String), List Int) ->
   DispositionTable ->
@@ -2532,6 +2576,7 @@ inheritedDefaultEntries : EvalEnv (Value e) ->
 inheritedDefaultEntries env disp dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let shared = sharedDefaultValue env positions pats body mname
   map
     (shape => (
       mname,
@@ -2542,69 +2587,29 @@ inheritedDefaultEntries env disp dt o ifaceName (IfaceMethod mname _ (Some (Meth
           shape.isWord
           positions
           0
-          (receiverBoundDefault env positions pats body mname shape),
+          shared,
       ),
     ))
     (inheritorsOf (ifaceWordOf o ifaceName) mname dt)
 inheritedDefaultEntries _ _ _ _ _ _ = []
 
-receiverBoundDefault : EvalEnv (Value e) ->
+-- The interface's one value for a default, shared by every inheritor: its
+-- method-level dictionaries, then its receiver (`defaultReceiverDict`), then its own
+-- value patterns.
+sharedDefaultValue : EvalEnv (Value e) ->
   List Int ->
   List Pat ->
   Expr ->
   String ->
-  InstanceShape ->
   Value e
-receiverBoundDefault env positions pats body mname shape =
+sharedDefaultValue env positions pats body mname =
   let nMethod = leadingImplDictPats pats
-  let receiverEnv =
-    reqs =>
-      extendEnv env [(defaultReceiverDict mname, VDict shape.isDictWord reqs)]
-  if nMethod + shape.isReqCount == 0 then
-    implMethodValue (receiverEnv []) positions pats body
-  else
-    collectDicts (nMethod + shape.isReqCount) [] (dicts =>
-      receiverBodyApplied
-        (receiverEnv (drop nMethod dicts))
-        positions
-        pats
-        body
-        (takeN nMethod dicts))
-
--- the body once every leading dictionary has arrived: its method-level ones bound to
--- its own dictionary parameters, then run (a nullary body) or left awaiting its
--- value arguments
-receiverBodyApplied : EvalEnv (Value e) ->
-  List Int ->
-  List Pat ->
-  Expr ->
-  List (Value e) ->
-  <e> Value e
-receiverBodyApplied env positions pats body methodDicts =
-  let nMethod = listLen methodDicts
-  let valuePats = drop nMethod pats
-  let dictEnv =
-    extendEnv env (zipL (map patVarName (takeN nMethod pats)) methodDicts)
-  if isEmptyL valuePats then
-    if isEmptyL positions then
-      eval dictEnv body
-    else
-      implMethodValue dictEnv positions [] body
-  else
-    VClosure dictEnv valuePats body
-
-patVarName : Pat -> String
-patVarName (PVar x _) = x
-patVarName _ = panic "a dictionary parameter is always a variable pattern"
-
--- a curried value that gathers [n] arguments, then hands them in order to [k]
-collectDicts : Int ->
-  List (Value e) ->
-  (List (Value e) -> <e> Value e) ->
-  Value e
-collectDicts n acc k
-  | n <= 1 = VPrim (d => k (reverseL (d :: acc)))
-  | otherwise = VPrim (d => collectDicts (n - 1) (d :: acc) k)
+  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0)
+  implMethodValue
+    env
+    positions
+    (takeN nMethod pats ++ [receiver] ++ drop nMethod pats)
+    body
 
 -- coalesce all candidates for each method name into one VMulti, most-specific
 -- (fewest type vars) first
@@ -2646,7 +2651,7 @@ implDeclNames : Decl -> List String
 implDeclNames (DAttrib _ d) = implDeclNames d
 implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- A default method's name needs its cell even when no impl supplies it, because
--- every inheriting instance's specialization installs under it
+-- every inheriting instance's entry installs under it
 -- (`inheritedDefaultEntries`); `evalModules`/`cevalModules` both build
 -- `globalCells` from this, and `installConsts`' `findCell` PANICS on a name with no
 -- cell, so the two halves cannot be split.
@@ -3727,19 +3732,18 @@ pByteBlockFromString : Value e -> <e> Value e
 pByteBlockFromString (VString s) = VByteBlock (stringToUtf8Bytes s)
 pByteBlockFromString _ = panic "byteBlockFromString: not a String"
 
--- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8.
--- The same permissive route as `stringFromUtf8Bytes`: bytes are copied verbatim
--- and the codepoint count is recomputed, so invalid UTF-8 survives unchanged.
+-- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8,
+-- through the host's `stringFromUtf8Bytes`: valid UTF-8 is copied verbatim and
+-- each ill-formed subpart becomes U+FFFD.
 pByteBlockToString : Value e -> <e> Value e
 pByteBlockToString (VByteBlock b) = VString (stringFromUtf8Bytes b)
 pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
 
--- byteBlockWriteStdout : ByteBlock -> <Stdout> Unit — writes the block's bytes
--- to stdout byte-for-byte, no encoding assumption. Routes through the SAME
--- buffered path putStr/putStrLn use (appendOutput/outputRef), not a bypass:
--- the permissive UTF-8 conversion here (the same one byteBlockToString uses)
--- preserves the raw bytes verbatim even when they are not valid UTF-8, so the
--- buffer still carries the exact byte sequence through to the CLI's flush.
+-- byteBlockWriteStdout : ByteBlock -> <Stdout> Unit — the oracle's form, which
+-- appends to the same captured String putStr/putStrLn use (appendOutput /
+-- outputRef).  A String holds only well-formed UTF-8, so a block that is not
+-- UTF-8 is captured with U+FFFD for each ill-formed subpart; `medaka run`
+-- overrides this with pByteBlockWriteStdoutIO, which writes the bytes as-is.
 pByteBlockWriteStdout : Value e -> <e> Value e
 pByteBlockWriteStdout (VByteBlock b) = appendOutput (stringFromUtf8Bytes b)
 pByteBlockWriteStdout _ = panic "byteBlockWriteStdout: not a ByteBlock"
@@ -4748,6 +4752,24 @@ pReadExactly : Value e -> <Stdin | e> Value e
 pReadExactly (VInt n) = vOptionString (readExactly n)
 pReadExactly _ = panic "readExactly: expected Int"
 
+-- ── Stdout bytes ──────────────────────────────────────────────────────────
+-- The buffered stdout is a String, which holds only well-formed UTF-8, so a
+-- block that is not UTF-8 cannot pass through it byte-for-byte.  `medaka run`
+-- writes the text buffered so far, then the block's own bytes, to the host
+-- stdout and flushes it.  The flush is what keeps program order: every abort
+-- path writes the stash with write(2) before exit() flushes stdio, so any
+-- stdio byte still buffered then would land after text printed later.
+-- Flushing here leaves stdio empty whenever the stash holds anything.
+pByteBlockWriteStdoutIO : Value e -> <Stdout | e> Value e
+pByteBlockWriteStdoutIO (VByteBlock b) =
+  let _ = putStr !outputRef
+  outputRef := ""
+  let _ = stashRunStdout ""
+  let _ = byteBlockWriteStdout (byteBlockFromIntArray b)
+  let _ = flushStdout ()
+  VUnit
+pByteBlockWriteStdoutIO _ = panic "byteBlockWriteStdout: not a ByteBlock"
+
 -- ── OS entropy ────────────────────────────────────────────────────────────
 -- This binding is deliberately installed only by `medaka run`. It must not
 -- enter the deterministic oracle table or the long-lived test/repl process.
@@ -4794,6 +4816,8 @@ ioExternBindings _ = [
   ("readLineOpt", prim1M pReadLineOpt),
   ("readAll", prim1M pReadAll),
   ("readExactly", prim1 pReadExactly),
+  -- Stdout
+  ("byteBlockWriteStdout", prim1M pByteBlockWriteStdoutIO),
   -- Entropy
   ("osEntropyBytes", prim1M pOsEntropyBytes),
   -- Process

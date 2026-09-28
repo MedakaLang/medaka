@@ -31,9 +31,7 @@
    refused. -}
 
 import bytes as B
-import bytes.{
-  Bytes, encodeUtf8, fromArrayAssumeByteDomain, fromU8Array, sliceClamped
-}
+import bytes.{Bytes, encodeUtf8, fromU8Array, sliceClamped}
 import crypto.sha256.{sha256}
 import hex.{encode}
 import list.{lookup, range, sort}
@@ -370,10 +368,10 @@ rebuiltRepo revN rows =
 -- `a.b.c/` followed by one byte that no UTF-8 sequence starts with. A lossy
 -- decode maps both to U+FFFD, so an index keyed on text sees one path.
 keyFF : Bytes
-keyFF = fromArrayAssumeByteDomain [|97, 46, 98, 46, 99, 47, 255|]
+keyFF = fromU8Array [|97, 46, 98, 46, 99, 47, 255|]
 
 keyFE : Bytes
-keyFE = fromArrayAssumeByteDomain [|97, 46, 98, 46, 99, 47, 254|]
+keyFE = fromU8Array [|97, 46, 98, 46, 99, 47, 254|]
 
 oneAtFF : Repo
 oneAtFF = rebuiltRepo 1 [(keyFF, "one")]

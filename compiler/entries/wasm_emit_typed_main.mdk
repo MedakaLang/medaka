@@ -41,7 +41,6 @@ import ir.core_ir.{
   CImplBody(..),
 }
 import ir.core_ir_lower.{
-  ifaceImplHeadTable,
   lowerProgramEmit,
   EmitTarget(..),
   declSigTypeNames,
@@ -116,7 +115,6 @@ typedInput runtimeDecls preludeDecls userDecls =
     False
     (declaredRecordFieldOrders mangled)
     []
-    (ifaceImplHeadTable mangled)
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -151,12 +149,8 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let pSigs = declSigTypeNames runtimeDecls ++ declSigTypeNames pMangled
         let pCtors = ctorFieldTypeNames pMangled
         let pRecords = declaredRecordFieldOrders pMangled
-        -- held CONSTANT across the five inputs below: this harness varies ONE
-        -- input family at a time, and the declared-impl head table is not the
-        -- family under test here.
-        let pHeads = ifaceImplHeadTable pMangled
         let pInput =
-          makeWasmEmitInputFull pMethods pSigs pCtors False pRecords [] pHeads
+          makeWasmEmitInputFull pMethods pSigs pCtors False pRecords []
         let p1 = emitProgram pInput pProgram
         -- these four deliberately pair P's REAL program with a MISMATCHED
         -- (U-derived or dummy) table -- never a real compile combination, so
@@ -169,8 +163,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pCtors
               False
               pRecords
-              []
-              pHeads)
+              [])
             pProgram
         let sigWat =
           emitProgramUnchecked
@@ -180,8 +173,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pCtors
               False
               pRecords
-              []
-              pHeads)
+              [])
             pProgram
         let ctorWat =
           emitProgramUnchecked
@@ -191,8 +183,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               (ctorFieldTypeNames uMangled)
               False
               pRecords
-              []
-              pHeads)
+              [])
             pProgram
         let recordWat =
           emitProgramUnchecked
@@ -202,8 +193,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pCtors
               False
               (declaredRecordFieldOrders uMangled)
-              []
-              pHeads)
+              [])
             pProgram
         let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
         let mainMangled = typedElaborated runtimeDecls [] mainDecls
@@ -222,8 +212,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               (ctorFieldTypeNames mainMangled)
               True
               (declaredRecordFieldOrders mainMangled)
-              []
-              (ifaceImplHeadTable mainMangled))
+              [])
             mainProgram
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
@@ -1209,7 +1198,7 @@ implSelfProgram tag base depth =
   let n = CVar "n" (ALocal 0 1)
   let recurse =
     CApp
-      (CApp (CMethod "walk" "" 2 (RKey tag []) [] []) self)
+      (CApp (CMethod "walk" "" 2 (RKey tag [] []) [] []) self)
       (CBinPrim "-" n (CLit (LInt 1)) "Int")
   let body =
     CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
@@ -1346,7 +1335,15 @@ defaultStateInputU =
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag =
-  CApp (CMethod "synthDefault" "DefaultFace" 1 (RKey tag []) [] []) (CLit LUnit)
+  CApp
+    (CMethod
+      "synthDefault"
+      "DefaultFace"
+      1
+      (RKey "DefaultFace|\{tag}|" [] [])
+      []
+      [])
+    (CLit LUnit)
 
 defaultStateProgram : String -> Int -> CProgram
 defaultStateProgram tag bodyConstant =

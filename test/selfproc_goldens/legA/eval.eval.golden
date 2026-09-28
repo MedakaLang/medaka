@@ -55,7 +55,6 @@ clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Ex
 coalesceImpls : List (String, (Int, Value a)) -> List (String, Value a)
 coalesceOne : String -> List (String, (Int, Value a)) -> Value a
 collectCtors : List Decl -> List (String, Value a)
-collectDicts : Int -> List (Value a) -> (List (Value a) -> <a> Value a) -> Value a
 collectPartials : List (Value a) -> List (Value a) -> Value a -> <a> Option (Value a)
 compareValueLists : List (Value a) -> List (Value a) -> Ordering
 composeBwd : Value a -> Value a -> Value a
@@ -160,13 +159,14 @@ groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> <a> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsOf : List Decl -> List (String, List (List Pat, Expr))
+hasKey : String -> Value a -> Bool
 hasLaterSlot : Value a -> Bool
-hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
 i64Value : (Int, Int) -> Value a
 ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
+ifaceMethodName : IfaceMethod -> String
 ifaceMethodNmE : IfaceMethod -> String
 ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 implDeclNames : Decl -> List String
@@ -174,7 +174,7 @@ implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
-implMethodReqCountEntries : String -> String -> ImplMethod -> List ((String, String), Int)
+implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
 implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
@@ -182,6 +182,8 @@ inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 inheritedDefaultEntries : EvalEnv (Value a) -> List ((String, String, String), List Int) -> DispositionTable -> TyConOrigin -> String -> IfaceMethod -> List (String, (Int, Value a))
 inheritedDefaultReqCounts : DispositionTable -> String -> IfaceMethod -> List ((String, String), Int)
+inheritedEntryRef : Ref (Map String (Map String Int))
+inheritedEntryRows : Option DispositionTable -> Decl -> List ((String, String), Int)
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 installConsts : List (String, Ref (Value a)) -> List (String, Value a) -> <a> Unit
 installDispatchTables : List Decl -> List ((String, String, String), List Int)
@@ -193,6 +195,7 @@ intSeq : Int -> Int -> List Int
 intSeqIncl : Int -> Int -> List Int
 ioExternBindings : Unit -> List (String, Value <IO>)
 isDispatching : Value a -> Bool
+isInheritedEntry : String -> String -> Bool
 isMethodBinding : Value a -> Bool
 isNullary : List Pat -> Bool
 isPartial : Value a -> Bool
@@ -296,6 +299,7 @@ pByteBlockSetUnsafe : Value a -> Value a -> Value a -> <a> Value a
 pByteBlockToIntArray : Value a -> <a> Value a
 pByteBlockToString : Value a -> <a> Value a
 pByteBlockWriteStdout : Value a -> <a> Value a
+pByteBlockWriteStdoutIO : Value a -> <Stdout | a> Value a
 pBytesToFloat64 : Value a -> Value a -> <a> Value a
 pCanonicalizePath : Value a -> <FileRead | a> Value a
 pCbrt : Value a -> <a> Value a
@@ -404,11 +408,9 @@ pWallTimeSecIO : Value a -> <Clock | a> Value a
 pWriteFile : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileBytes : Value a -> Value a -> <FileWrite | a> Value a
 pWriteFileMode : Value a -> Value a -> Value a -> <FileWrite | a> Value a
-patVarName : Pat -> String
 payloadArity : ConPayload -> Int
 pendingRunDiags : Ref (List (String, String, List Diag))
-pickByTag : List (Value a) -> String -> <a> Value a
-pickTagFallback : List (Value a) -> <a> Value a
+pickByKey : List (Value a) -> String -> <a> Value a
 positionsById : String -> String -> List ((String, String, String), List Int) -> Option (List Int)
 positionsByName : String -> String -> List ((String, String, String), List Int) -> List Int
 ppField : (String, Value a) -> String
@@ -423,14 +425,14 @@ prim3 : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
 prim3M : (Value a -> Value a -> Value a -> <a> Value a) -> Value a
 prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> <a> Value a) -> Value a
 progArgsRef : Ref (List String)
+projectDict : Value a -> List Int -> Value a
 pubReexports : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
 rangeListMk : List Int -> Value a
 reTag : String -> String -> List Int -> Int -> Value a -> Value a
-receiverBodyApplied : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> List (Value a) -> <a> Value a
-receiverBoundDefault : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> String -> InstanceShape -> Value a
+receiverOf : EvalEnv (Value a) -> Route -> List Route -> <a> Value a
 receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
@@ -452,6 +454,7 @@ selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)
 selfBind : String -> (String, String)
 seqV : Unit -> Value a -> Value a
 shadowedFun : List String -> Decl -> Bool
+sharedDefaultValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> String -> Value a
 signExtend32 : Int -> Int
 sliceArray : Array (Value a) -> Int -> Int -> Value a
 sortByScore : List (Int, Value a) -> List (Int, Value a)

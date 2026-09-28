@@ -20,26 +20,26 @@
    midstate, #3371 Part B). -}
 
 import crypto.hmac.{ctEq, hmacSha256, hmacSha256Key, hmacSha256WithKey}
-import bytes.{fromArrayAssumeByteDomain, toArray}
+import bytes as B
+import bytes.{Bytes}
 import hex.{decode}
-import array.{take}
 import list.{somes}
 import string.{toInt, trim, words}
 import io.{readLines}
 
 data Row = Row {
   tcId : Int,
-  key : Array Int,
-  msg : Array Int,
-  tag : Array Int,
+  key : Bytes,
+  msg : Bytes,
+  tag : Bytes,
   tagBits : Int,
   expectedValid : Bool,
 }
 
-hexField : String -> Array Int
-hexField "-" = [||]
+hexField : String -> Bytes
+hexField "-" = empty
 hexField h = match decode h
-  Ok bytes => toArray bytes
+  Ok bytes => bytes
   Err e => panic "hmac_vectors_main: bad hex \{debug h}: \{e}"
 
 parseLine : String -> Option Row
@@ -70,17 +70,10 @@ parseRows lns = somes (map parseLine lns)
 -- untruncated tag.
 rowHolds : Row -> Bool
 rowHolds r =
-  let full =
-    toArray
-      (hmacSha256
-        (fromArrayAssumeByteDomain r.key)
-        (fromArrayAssumeByteDomain r.msg))
-  let key = hmacSha256Key (fromArrayAssumeByteDomain r.key)
-  let keyed = toArray (hmacSha256WithKey key (fromArrayAssumeByteDomain r.msg))
-  let truncated = take (r.tagBits / 8) full
-  ctEq (fromArrayAssumeByteDomain truncated) (fromArrayAssumeByteDomain r.tag)
-      == r.expectedValid
-    && keyed == full
+  let full = hmacSha256 r.key r.msg
+  let keyed = hmacSha256WithKey (hmacSha256Key r.key) r.msg
+  let truncated = B.take (r.tagBits / 8) full
+  ctEq truncated r.tag == r.expectedValid && keyed == full
 
 checkRow : Row -> <IO> (Int, Int)
 checkRow r =

@@ -230,7 +230,6 @@ import support.util.{
   lookupAssoc,
   listLen,
   maxI,
-  noneHeadTag,
   dedupBy,
   startsWith,
   splitNl,
@@ -240,9 +239,11 @@ import support.util.{
 import ir.core_ir_lower.{ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
   SelfRef(..),
+  methodSelf,
   trmcEligible,
   isCtorTail,
   isSelfSatApp,
+  isSelfHead,
   consTailArgs,
   ctorTailName,
   ctorTailIsCons,
@@ -264,6 +265,7 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import backend.private_mangle.{dictTag, hashName, injectiveIdent}
+import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -313,6 +315,7 @@ import backend.wasm_preamble.{
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strCodecRuntimeLines,
+  utf8LossyRuntimeLines,
   byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
@@ -358,7 +361,6 @@ data WasmEmit = WasmEmit {
   nextLambdaId : Ref Int,
   liftedDefinitions : Ref (List (List String)),
   liftedDefinitionNames : Ref (OrdMap Unit),
-  usedDictRouteKeys : Ref (OrdMap Unit),
   -- S-4: the capture-free closure globals this emission hoisted.  `constClosIdx`
   -- maps an initializer's TEXT to its global name (the dedup key — an OrdMap, not
   -- a List-as-map, so N distinct cells cost N log N and not N²); `constClosCells`
@@ -437,7 +439,6 @@ freshWasmEmit mode = WasmEmit {
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
   liftedDefinitionNames = Ref omEmpty,
-  usedDictRouteKeys = Ref omEmpty,
   constClosIdx = Ref omEmpty,
   constClosCells = Ref [],
   nextConstClosId = Ref 0,
@@ -489,13 +490,12 @@ freshWasmEmit mode = WasmEmit {
 -- Declaration-derived semantic input. Raw lists retain table order where a full
 -- table is required; indexes preserve lookupAssoc's first-match result.
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String)) (List (String, String, String, String))
+  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String))
 
 export type WasmEmitInput = WasmEmitInputData
 
 -- The DECL-FREE form: for the hand-built-`CProgram` harnesses that have no
--- declaration list to project, so both the FFI extern index and the declared-impl
--- head table are legitimately empty.  Every driver that lowers real decls uses
+-- declaration list to project, so the FFI extern index is legitimately empty.  Every driver that lowers real decls uses
 -- `makeWasmEmitInputFull` instead.
 export
 makeWasmEmitInput : List (String, (String, String, Int)) ->
@@ -512,7 +512,6 @@ makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFie
     mainIsFloat
     recordFieldOrders
     []
-    []
 
 -- #2076: the same widening `makeEmitInput`/`ffiExternIndex` gets on the LLVM
 -- side (llvm_emit.mdk) — an index of USER-declared FFI extern names (name ->
@@ -523,14 +522,8 @@ makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFie
 -- `makeWasmEmitInput`'s own arity, so the ~25 existing single-file test-harness
 -- callers (wasm_emit_typed_main.mdk and friends, which never declare a user FFI
 -- extern) are untouched; only the real multi-module build entry
--- (wasm_emit_modules_main.mdk) needs to pass this.
---
--- 2026-09-01: renamed from `makeWasmEmitInputWithFfi` and widened again, by
--- `ifaceImplHeads` — `core_ir_lower.ifaceImplHeadTable` over the SAME decl list the
--- caller lowers.  It is a carried value, never read through an ambient `Ref`
--- installed by lowering, so this is no longer the
--- FFI-only widening the name claimed.  The decl-free harnesses keep the 5-argument
--- `makeWasmEmitInput` above.
+-- (wasm_emit_modules_main.mdk) needs to pass this.  The decl-free harnesses keep
+-- the 5-argument `makeWasmEmitInput` above.
 export
 makeWasmEmitInputFull : List (String, (String, String, Int)) ->
   List (String, (List String, String)) ->
@@ -538,9 +531,8 @@ makeWasmEmitInputFull : List (String, (String, String, Int)) ->
   Bool ->
   List (String, List String) ->
   List (String, (List String, String)) ->
-  List (String, String, String, String) ->
   WasmEmitInput
-makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders ffiExternTypes ifaceImplHeads =
+makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders ffiExternTypes =
   WasmEmitInputData
     (map bareIfaceArityRowW methodIfaces)
     (omFromPairs (reverseL (map bareIfaceArityRowW methodIfaces)) omEmpty)
@@ -554,7 +546,6 @@ makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat recor
     (recordLabelIndex recordFieldOrders omEmpty)
     (omFromPairs (reverseL (map ifaceIdArityRowW methodIfaces)) omEmpty)
     (omFromPairs (reverseL ffiExternTypes) omEmpty)
-    ifaceImplHeads
 
 -- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row (mirror of
 -- llvm_emit's `bareIfaceArityRow`/`ifaceIdArityRow`).  The bare projection
@@ -571,7 +562,7 @@ ifaceIdArityRowW (m, (_, ifaceWord, arity)) =
   (ifaceMethodArityKey ifaceWord m, arity)
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _) = isFloat
 
 recordLabelIndex : List (String, List String) ->
   OrdMap (String, List String) ->
@@ -697,7 +688,7 @@ methodArityOfW prog name = match progInput prog
   input => methodArityOfInput input name
 
 methodArityOfInput : WasmEmitInput -> String -> Int
-methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name =
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _) name =
   match omLookup name methodIndex
     Some (_, arity) => arity
     None => 0
@@ -716,7 +707,7 @@ methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name 
 -- PR #1346's E4 result and re-opens CLOSED S0 #1277.  A miss on the identity key
 -- falls back to the bare table, so collision-free programs emit unchanged.
 inputMethodIfaceIdIndex : WasmEmitInput -> OrdMap Int
-inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _ _) =
+inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _) =
   idIndex
 
 methodArityOfIfaceInput : WasmEmitInput -> String -> String -> Int
@@ -757,10 +748,9 @@ implEntryPatsW (CImplEntry _ _ (CImplDefault _ _ _ _ pats _)) = pats
 implEntryMethodW : CImplEntry -> String
 implEntryMethodW (CImplEntry m _ _) = m
 
--- does [entry] answer to the route word [word] — its head tag or its canonical key?
+-- does [entry] answer to the route word [word]?  A word names exactly one instance.
 implEntryAnswersW : String -> CImplEntry -> Bool
-implEntryAnswersW word entry =
-  implEntryTagW entry == word || implEntryKeyW entry == word
+implEntryAnswersW word entry = implEntryKeyW entry == word
 
 -- the entries of the interface an occurrence resolved to (`""`: none recorded, and
 -- nothing is narrowed), so two interfaces' same-spelled methods are never candidates
@@ -778,14 +768,14 @@ methodArityOfEntryW prog ent method =
 -- that hold a tag rather than the entry.  No impl at that tag ⇒ the bare table.
 methodArityOfTagW : Prog -> String -> String -> Int
 methodArityOfTagW prog method tag =
-  match findByTagW method tag (methodEntriesW prog method)
+  match findByKeyW method tag (methodEntriesW prog method)
     Some ent => methodArityOfEntryW prog ent method
     None => methodArityOfW prog method
 
 -- Declared parameter/return type heads drive Unit-main and Float recovery.
 declRetLookupW : Prog -> String -> Option (List String, String)
 declRetLookupW prog name = match progInput prog
-  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ _ => omLookup name declIndex
+  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ => omLookup name declIndex
 
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
 -- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
@@ -797,7 +787,7 @@ declRetLookupW prog name = match progInput prog
 -- through to a generic unbound-variable panic.
 ffiSigOfW : Prog -> String -> Option (List String, String)
 ffiSigOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex _ => omLookup name ffiIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex => omLookup name ffiIndex
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = match ffiSigOfW prog name
@@ -844,16 +834,16 @@ arityOfIndexW fnArs f = match omLookup f fnArs
 -- ── impl INDEX by method name (perf #382 — the #350/#349 twins) ───────────────
 -- The `Prog` carries every impl clause as one flat `List CImplEntry` (`progImpls`),
 -- and the emitter scans the WHOLE list per RKey/RDict dispatch site: `implForW`,
--- `methodImpls`, `implReqDictCount`,
+-- `methodImpls`,
 -- `methodReturnsBoolW`, and the `emitImplFns`/`gatherImplGroup` group builder all do
--- `findByTagW`/`flatMap implClauseFor`/`flatMap methodImplKey` over one method bucket.
+-- `findByKeyW`/`flatMap implClauseFor`/`flatMap methodImplKey` over one method bucket.
 -- EVERY one of those first filters by the METHOD name (`n == method`) — so restricting
 -- the scan to just that method's entries yields the IDENTICAL first-match/flat-map
 -- result, only faster.  Wasm inlines a dispatch chain PER call site (llvm outlines one
 -- dispatcher), so these per-site scans multiply → O(sites · impls) on dispatch-heavy
 -- code (#382). The private immutable index groups the entries by method name once per
 -- invocation into per-method lists in ORIGINAL ORDER, so a multi-clause impl's first
--- clause still wins findByTagW. Every per-method scan below routes through it.
+-- clause still wins findByKeyW. Every per-method scan below routes through it.
 -- method name of an impl entry (field 1 — the interface method it implements).
 implEntryMethod : CImplEntry -> String
 implEntryMethod (CImplEntry n _ _) = n
@@ -1221,7 +1211,7 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ =>
     match omLookup ctor ctorFloatIndex
       Some idxs => containsInt idx idxs
       None => False
@@ -1982,6 +1972,8 @@ isNetExternW name = contains name [
   "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
+  "netSendBytesFrom",
+  "netTrySendBytesFrom",
 ]
 
 -- W9: arity of a str/leaf extern (the param count its emit* arm consumes).  Used to
@@ -2368,11 +2360,6 @@ scanExprW7 emit (CApp f a) =
   forEachU (arg => scanExprW7 emit arg) args
 scanExprW7 emit (CVar x _) =
   if x == "Ref" then setRef emit.useRefBox True else noteW8Extern emit x
-scanExprW7 emit (CDict _ routes) = scanDictRoutesW emit routes
-scanExprW7 emit (CMethod _ _ _ route implRoutes methRoutes) =
-  let _ = scanMethodRouteW emit route
-  let _ = scanDictRoutesW emit implRoutes
-  scanDictRoutesW emit methRoutes
 -- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
 -- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
 -- would false-positive; useFloat is instead forced by a Float literal, a Float
@@ -2415,25 +2402,6 @@ scanExprW7 emit (CMatch scrut arms) =
 scanExprW7 emit (CLetGroup binds b) =
   let _ = forEachU (bd => scanBindW7 emit bd) binds in scanExprW7 emit b
 scanExprW7 _ _ = ()
-
--- Only materialized dictionary words need dynamic aliases. A direct method's
--- principal RKey selects a symbol; its nested requirements still carry words.
-scanMethodRouteW : WasmEmit -> Route -> Unit
-scanMethodRouteW emit (RKey _ routes) = scanDictRoutesW emit routes
-scanMethodRouteW emit (RLocal _ routes) = scanDictRoutesW emit routes
-scanMethodRouteW _ _ = ()
-
-scanDictRoutesW : WasmEmit -> List Route -> Unit
-scanDictRoutesW emit routes =
-  forEachU (route => scanDictRouteW emit route) routes
-
-scanDictRouteW : WasmEmit -> Route -> Unit
-scanDictRouteW emit (RKey key routes) =
-  let _ =
-    setRef emit.usedDictRouteKeys (omInsert key () !emit.usedDictRouteKeys)
-  scanDictRoutesW emit routes
-scanDictRouteW emit (RLocal _ routes) = scanDictRoutesW emit routes
-scanDictRouteW _ _ = ()
 
 scanW7Head : WasmEmit -> CExpr -> Unit
 scanW7Head emit (CVar "Ref" _) = setRef emit.useRefBox True
@@ -3764,6 +3732,14 @@ emitRefProgram prog groups =
   let ioHostRt = if (progEmit prog).useIO.value then ioHostRuntimeLines else []
   let ioArgsRt =
     if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
+  -- the UTF-8 validation every producer of outside bytes reads a $str through,
+  -- emitted exactly when one of the blocks that call it is: the byte codec,
+  -- byteBlockToString, and the IO host surface.
+  let utf8LossyRt =
+    if isEmptyList (strCodecRt ++ byteBlockRt ++ ioHostRt) then
+      []
+    else
+      utf8LossyRuntimeLines
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt =
@@ -3827,6 +3803,7 @@ emitRefProgram prog groups =
       ++ hashFloatRt
       ++ randomFloatRt
       ++ strSearchRt
+      ++ utf8LossyRt
       ++ strCodecRt
       ++ byteBlockRt
       ++ charFromCodeRt
@@ -5131,7 +5108,7 @@ emitMethodRef : Prog ->
 -- the rest.  This is the peer of llvm_emit's emitImplCallSat and of the RDict arms
 -- below.  The eta closure's own body applies exactly `valArity` args, so it lands on
 -- the direct call.  A method with no recorded value arity (0) keeps the direct call.
-emitMethodRef prog env d name iface siteArity (route@(RKey tag _)) implRoutes methRoutes args =
+emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args =
   let valArity = methodValArity prog name iface siteArity route
   let nArgs = listLen args
   if valArity > 0 && nArgs < valArity then
@@ -5155,7 +5132,7 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _)) implRoutes me
         name
         iface
         siteArity
-        tag
+        route
         implRoutes
         methRoutes
         (take valArity args)
@@ -5169,13 +5146,13 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _)) implRoutes me
       name
       iface
       siteArity
-      tag
+      route
       implRoutes
       methRoutes
       args
 emitMethodRef prog env d name iface siteArity (route@(RDict dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
-    emitMethodDispatchRef prog env d name iface siteArity dpar args
+    emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args
   else
     emitMethodValueRef
         prog
@@ -5191,7 +5168,37 @@ emitMethodRef prog env d name iface siteArity (route@(RDict dpar)) implRoutes me
       ++ ["call $__mdk_apply"]
 emitMethodRef prog env d name iface siteArity (route@(RDictFwd dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
-    emitMethodDispatchRef prog env d name iface siteArity dpar args
+    emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args
+  else
+    emitMethodValueRef
+        prog
+        env
+        d
+        name
+        iface
+        siteArity
+        route
+        implRoutes
+        methRoutes
+      ++ emitArgsArray prog env d args
+      ++ ["call $__mdk_apply"]
+-- A projected super dictionary is read into its own local (`projLocalName`,
+-- declared by `collectExprLocals`) and dispatched on exactly as a dict parameter.
+emitMethodRef prog env d name iface siteArity (route@(RProj r path)) implRoutes methRoutes args =
+  if listLen args == siteArity then
+    let local = projLocalName r path
+    routeWitness prog env d route
+      ++ ["local.set $" ++ gname local]
+      ++ emitMethodDispatchRef
+        prog
+        (local :: env)
+        d
+        name
+        iface
+        siteArity
+        local
+        methRoutes
+        args
   else
     emitMethodValueRef
         prog
@@ -5258,16 +5265,17 @@ emitMethodRKeyCallRef : Prog ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List Route ->
   List CExpr ->
   List String
-emitMethodRKeyCallRef prog env d name iface siteArity tag implRoutes methRoutes args =
+emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoutes args =
+  let tag = routeKeyWordW route
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   -- `RKey tag` selects a STATIC impl (peer of llvm_emit's emitMethod RKey arm): the
-  -- entry of the occurrence's interface at [tag] — a supplied method, or an inherited
-  -- default's per-instance body — else a GENERAL instance's, else nothing (a gap).
+  -- entry of the occurrence's interface filed under the instance key [tag] — a
+  -- supplied method, or an inherited default's per-instance body — else a gap.
   match implForWSite prog name iface tag siteArity
     -- P3 (dropped-requires-dict over-forwarding, #717): a TERMINAL impl body that IGNORES
     -- its `requires` dict (`impl S (List a) requires S a where s _ = 2`) has that dict
@@ -5280,23 +5288,60 @@ emitMethodRKeyCallRef prog env d name iface siteArity tag implRoutes methRoutes 
     -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
     -- all its dicts is byte-identical.
     Some entry =>
-      let keep = implLeadingDictCountOfEntryW entry
       let keptWords =
         flatMap
           (routeWitness prog env d)
-          (takeRoutesW keep (methRoutes ++ implRoutes))
+          (staticEntryDictRoutesW entry route methRoutes implRoutes)
       keptWords ++ argInstrs ++ ["call $" ++ implEntrySymW prog name entry]
     None =>
-      emitGeneralRKeyRef
+      gapLP
         prog
-        env
-        d
-        (methRoutes ++ implRoutes)
-        argInstrs
-        name
-        iface
-        siteArity
-        tag
+        "wasm layer-15: no impl of method '\{name}' for instance '\{tag}'"
+
+-- The leading dictionaries a static call to [ent] passes after its method-level
+-- ones (llvm_emit's `staticEntryDictRoutes`): a supplied method's kept `requires`,
+-- or an inherited default's RECEIVER, the selected instance's dictionary built from
+-- the site's word, `requires` routes and the supers the route carries for this case.
+staticEntryDictRoutesW : CImplEntry ->
+  Route ->
+  List Route ->
+  List Route ->
+  List Route
+staticEntryDictRoutesW ent route methRoutes implRoutes =
+  if isInheritedEntryW ent then
+    methRoutes ++ [receiverRouteW route implRoutes]
+  else
+    takeRoutesW (implLeadingDictCountOfEntryW ent) (methRoutes ++ implRoutes)
+
+receiverRouteW : Route -> List Route -> Route
+receiverRouteW (RKey word _ sups) implRoutes = RKey word implRoutes sups
+receiverRouteW route _ = route
+
+routeKeyWordW : Route -> String
+routeKeyWordW (RKey word _ _) = word
+routeKeyWordW _ = ""
+
+-- an inherited default's per-instance entry
+isInheritedEntryW : CImplEntry -> Bool
+isInheritedEntryW (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntryW _ = False
+
+-- A dispatch site's method-level dictionaries: the instructions that push their
+-- witnesses, and how many there are.
+data MethodDictsW = MethodDictsW { mdInstrs : List String, mdCount : Int }
+
+-- The dictionaries a dispatch arm loads for its entry after the [nMeth] method-level
+-- ones: an inherited default receives the dictionary that selected it; a supplied
+-- method its `requires` -- the rest of the entry's own leading `$dict_*` count --
+-- which follow the dictionary's super segment (llvm_emit's `emitDispatchArmBody`).
+armDictLoadsW : CImplEntry -> String -> Int -> List String
+armDictLoadsW ent dpar nMeth =
+  if isInheritedEntryW ent then
+    ["local.get $" ++ gname dpar]
+  else
+    let reqDicts = maxI 0 (implLeadingDictCountOfEntryW ent - nMeth)
+    let supers = entrySuperCountW ent
+    flatMap (loadReqDict dpar) (rangeList supers (supers + reqDicts))
 
 -- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
 -- it, then if-chain over the method's candidate impls comparing the loaded tag
@@ -5309,78 +5354,38 @@ emitMethodDispatchRef : Prog ->
   String ->
   Int ->
   String ->
+  List Route ->
   List CExpr ->
   List String
-emitMethodDispatchRef prog env d name iface siteArity dpar args =
+emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args =
   -- the occurrence's interface's candidates (#1265, #1619), and (#1852, LOCKSTEP with
   -- llvm_emit's `narrowImplsByArity`) only those whose own declared arity is the
   -- arity this site supplies.
   let impls =
     narrowImplsByArityW prog name (methodImpls prog name iface) siteArity
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
+  -- every arm passes the site's method-level dictionaries ahead of its own
+  let methInstrs = flatMap (routeWitness prog env d) methRoutes
   -- the dict tag is read repeatedly; stash it in the scratch local for this depth.
   let tagRead = readDictParam prog env dpar
   let blk = "$disp_\{name}_\{intToString d}"
-  -- #667: a GENERAL instance (`impl Iface a`) is registered under noneHeadTag, so its
-  -- runtime dict header never equals the CONCRETE receiver tag a caller's dict carries
-  -- — a tag-guarded arm for it can never fire.  It is the `min⊑` catch-all for any
-  -- receiver no concrete arm claimed (DICT-SEMANTICS §3), so emit every concrete arm
-  -- guarded, then the general's body UNCONDITIONALLY at block level (the fallthrough
-  -- point reached when no concrete arm matched), replacing the trailing `unreachable`.
-  -- Byte-identical when no general instance is present (genTail = []).
-  let concretes = filterList (arm => armSymTagW arm /= noneHeadTag) impls
+  -- every entry is a guarded arm, a general instance's too: its dictionary carries
+  -- its own canonical key
   let chain =
     emitDispatchChain
       prog
       name
-      concretes
+      impls
       blk
       tagRead
       dpar
+      MethodDictsW { mdInstrs = methInstrs, mdCount = listLen methRoutes }
       argInstrs
       (listLen args)
       0
-  let genTail =
-    emitGeneralArm
-      prog
-      name
-      (firstGeneralImplW impls)
-      blk
-      dpar
-      argInstrs
-      (listLen args)
   ["block " ++ blk ++ " (result (ref eq))"]
     ++ indent chain
-    ++ indent genTail
     ++ ["unreachable", "end"]
-
--- the general instance's catch-all body (mirror of a concrete dispatch arm minus the
--- `dictTag == key` `if` guard): load its nested requires-dicts, push the args, call
--- the lifted fn, and `br` out of the result block.  Placed at block level after the
--- concrete chain, so it runs precisely when no concrete arm matched (#667).  Peer of
--- llvm_emit's emitDispatchArmBody catch-all path.
-firstGeneralImplW : List ImplArmW -> Option ImplArmW
-firstGeneralImplW [] = None
-firstGeneralImplW (arm :: rest)
-  | armSymTagW arm == noneHeadTag = Some arm
-  | otherwise = firstGeneralImplW rest
-
-emitGeneralArm : Prog ->
-  String ->
-  Option ImplArmW ->
-  String ->
-  String ->
-  List String ->
-  Int ->
-  List String
-emitGeneralArm _ _ None _ _ _ _ = []
-emitGeneralArm prog name (Some arm) blk dpar argInstrs nArgs =
-  let reqDicts = implReqDictCount prog name (armRouteKeyW arm) nArgs
-  let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
-  reqLoads
-    ++ argInstrs
-    ++ dispatchCallSeqW prog arm name nArgs
-    ++ ["br " ++ blk]
 
 -- #747: the call instruction(s) a matched dispatch arm emits.  A nullary/return-
 -- position/no-requires impl (nArgs == 0 and a `$memo_<symTag>_<method>` LAZY value
@@ -5392,7 +5397,7 @@ emitGeneralArm prog name (Some arm) blk dpar argInstrs nArgs =
 -- CAF ⇒ distinct tags memoise independently.  Otherwise the ordinary impl call.
 dispatchCallSeqW : Prog -> ImplArmW -> String -> Int -> List String
 dispatchCallSeqW prog arm name nArgs =
-  let key = armRouteKeyW arm
+  let key = armKeyW arm
   let memoName = "$memo_\{armSymTagW arm}_\{name}"
   if nArgs == 0 && isLazyGlobalW prog memoName then
     ["call $force_" ++ gname memoName]
@@ -5418,7 +5423,7 @@ dispatchCallSeqW prog arm name nArgs =
 -- operand count cannot match its callee.  Loud stays loud, and it is attributed.
 --
 -- The predicate is exactly the malformedness condition, not an approximation.  The
--- arm pushes `implReqDictCount + nArgs` operands and the define takes
+-- arm pushes its entry's leading-dict count + `nArgs` operands and the define takes
 -- `maxI (implGroupArity cls) (declaredArity + nDicts)`; both reduce to equality iff
 -- `nArgs == declaredArity`.  `> 0` guards the prelude-free / typed path, where the
 -- iface table is absent and `methodArityOfTagW` answers 0 for every method (see
@@ -5442,28 +5447,29 @@ emitDispatchChain : Prog ->
   String ->
   List String ->
   String ->
+  MethodDictsW ->
   List String ->
   Int ->
   Int ->
   List String
-emitDispatchChain _ _ [] _ _ _ _ _ _ = []
-emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
-  let key = armRouteKeyW arm
+emitDispatchChain _ _ [] _ _ _ _ _ _ _ = []
+emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs idt =
   -- W5: a `requires`-bearing impl (e.g. `Debug (a,b) requires Debug a, Debug b`) compiles
   -- to a fn whose leading params are the forwarded `requires` dicts BEFORE the method args.
   -- The dispatch site holds the dict param ($dpar): when this impl is constrained, the dict
   -- reaching this arm is a $dictcell whose field-1 $dictarr carries those nested req dicts in
   -- order (built by routeWitness).  Load field 0..reqDicts-1 and prepend them as the impl fn's
   -- leading dict args, mirroring llvm_emit's loadReqDicts (fields 1..n of the boxed cell).
-  let reqDicts = implReqDictCount prog name key nArgs
-  let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
-  indentBy idt (dispatchKeyTestW prog arm tagRead ++ ["if"])
+  let reqLoads = armDictLoadsW (armEntryW arm) dpar meth.mdCount
+  let callSeq =
+    if meth.mdCount > 0 then
+      ["call $" ++ armFnSymW arm]
+    else
+      dispatchCallSeqW prog arm name nArgs
+  indentBy idt (dispatchKeyTestW arm tagRead ++ ["if"])
     ++ indentBy
       (idt + 1)
-      (reqLoads
-        ++ argInstrs
-        ++ dispatchCallSeqW prog arm name nArgs
-        ++ ["br " ++ blk])
+      (meth.mdInstrs ++ reqLoads ++ argInstrs ++ callSeq ++ ["br " ++ blk])
     ++ indentBy idt ["else"]
     ++ emitDispatchChain
       prog
@@ -5472,34 +5478,17 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar argInstrs nArgs idt =
       blk
       tagRead
       dpar
+      meth
       argInstrs
       nArgs
       (idt + 1)
     ++ indentBy idt ["end"]
 
--- The words that select one implementation: its route word, and — the peer of
--- llvm_emit's `implEntryRouteWords` — its canonical key and its bare head tag when
--- some dictionary in the program carries them.  The arms are already narrowed to the
--- site's interface (`methodImpls`), so the bare head names one of them even where the
--- route word is canonical because another interface implements a same-spelled
--- method at the head: a dictionary whose own interface sees no such collision (an
--- instance inheriting that method's default) carries the bare head.  Keep the
--- argument code in one arm: it may itself contain another dictionary dispatch.
-dispatchKeyTestW : Prog -> ImplArmW -> List String -> List String
-dispatchKeyTestW prog arm tagRead =
-  let key = armRouteKeyW arm
-  let used = !(progEmit prog).usedDictRouteKeys
-  let aliases =
-    filterList
-      (w => w /= key && omHasKey w used)
-      (dedupBy (w => w) [armKeyW arm, armHeadTagW arm])
-  tagRead
-    ++ ["i32.const " ++ intToString (dictTag key), "i32.eq"]
-    ++ flatMap
-      (w =>
-        tagRead
-          ++ ["i32.const " ++ intToString (dictTag w), "i32.eq", "i32.or"])
-      aliases
+-- The test that selects one implementation: the dictionary's word against the arm's
+-- canonical key.  A word names exactly one instance, the same one in every module.
+dispatchKeyTestW : ImplArmW -> List String -> List String
+dispatchKeyTestW arm tagRead =
+  tagRead ++ ["i32.const " ++ intToString (dictTag (armKeyW arm)), "i32.eq"]
 
 -- load nested req dict `i` from the dict param $dpar's $dictcell (field 1 = $dictarr).
 -- Only reached for a constrained impl arm, where the in-scope dict IS a $dictcell.
@@ -5525,19 +5514,22 @@ loadReqDict dpar i =
     ]
     ++ ["end"]
 
--- leading dictionary count for a method's impl at `tag`: the `$dict_*` patterns
--- the dict-pass put at the front of the impl's clause, counted DIRECTLY — the peer of
--- llvm_emit's `implReqCount` (`leadingDictPats (implPats ent)`), the same ruler the
--- define is minted with.  Not the clause's pattern count less the method's declared
--- arity: that is a different quantity for a POINT-FREE clause, whose value
--- parameters are not patterns (an inherited `loud = x => …` at an instance with two
--- expanded `requires` has two patterns and arity 1, and the difference loaded one
--- dictionary where the define takes two).  0 when no impl answers [tag].
-implReqDictCount : Prog -> String -> String -> Int -> Int
-implReqDictCount prog method tag _userArgs =
-  match findByTagW method tag (methodEntriesW prog method)
-    Some ent => implLeadingDictCountOfEntryW ent
-    None => 0
+-- the super dictionaries a dictionary of [ent]'s interface stores ahead of its
+-- `requires` dictionaries (llvm_emit's `entrySuperCount`)
+entrySuperCountW : CImplEntry -> Int
+entrySuperCountW ent = match installedDispositionsOpt ()
+  Some table => ifaceSuperCount (implEntryIfaceWordW ent) table
+  None => 0
+
+-- the local a projected super dictionary is dispatched through
+projLocalName : Route -> List Int -> String
+projLocalName (RDict d) path = "\{d}$p\{projPathWord path}"
+projLocalName (RDictFwd d) path = "\{d}$p\{projPathWord path}"
+projLocalName (RProj r p) path = projLocalName r (p ++ path)
+projLocalName _ path = "$proj$p\{projPathWord path}"
+
+projPathWord : List Int -> String
+projPathWord path = joinWith "_" (map intToString path)
 
 implLeadingDictCountOfEntryW : CImplEntry -> Int
 implLeadingDictCountOfEntryW ent = wLeadingDictPats (implEntryPatsW ent)
@@ -5572,20 +5564,26 @@ readDictParam prog env dpar =
 -- the i31 of hashName(tag); a forwarded RDict/RDictFwd → re-push the in-scope dict
 -- param.  Nested `requires` (RKey with non-empty reqs) are out of the minimal slice.
 routeWitness : Prog -> List String -> Int -> Route -> List String
-routeWitness _ _ _ (RKey tag []) =
+routeWitness _ _ _ (RKey tag [] []) =
   ["i32.const " ++ intToString (dictTag tag), "ref.i31"]
 -- W5 (nested requires-dict): build a $dictcell — push the tag, recursively build each
 -- nested req witness onto the stack, pack them into a $dictarr (array.new_fixed), then
 -- struct.new $dictcell.  Mirrors llvm_emit's emitDictCell (header + recursively-built
 -- req fields); the recursion is dictWordsOf == flatMap routeWitness over reqs.
-routeWitness prog env d (RKey tag reqs) =
-  let reqWitnesses = flatMap (routeWitness prog env d) reqs
+-- The array holds the dictionary's direct supers first, then its requires (the
+-- LLVM cell's order), so a projection indexes the same slot whichever instance the
+-- dictionary is.
+routeWitness prog env d (RKey tag reqs sups) =
+  let fieldWitnesses = flatMap (routeWitness prog env d) (sups ++ reqs)
   ["i32.const " ++ intToString (dictTag tag)]
-    ++ reqWitnesses
+    ++ fieldWitnesses
     ++ [
-      "array.new_fixed $dictarr " ++ intToString (listLen reqs),
+      "array.new_fixed $dictarr " ++ intToString (listLen sups + listLen reqs),
       "struct.new $dictcell",
     ]
+-- a super projected out of a dictionary: a dictionary with supers is always a cell
+routeWitness prog env d (RProj r path) =
+  routeWitness prog env d r ++ flatMap superFieldW path
 routeWitness prog env _ (RDict dpar) =
   if contains dpar env then
     ["local.get $" ++ gname dpar]
@@ -5604,6 +5602,15 @@ routeWitness prog _ _ RNone =
 -- `dictWordOfRoute (RLocal _ _) = "0"`.  RScalar (scalar-tag) likewise.
 routeWitness _ _ _ (RLocal _ _) = ["i32.const 0", "ref.i31"]
 routeWitness _ _ _ (RScalar _) = ["i32.const 0", "ref.i31"]
+
+superFieldW : Int -> List String
+superFieldW i = [
+  "ref.cast (ref $dictcell)",
+  "struct.get $dictcell 1",
+  "i32.const " ++ intToString i,
+  "array.get $dictarr",
+  "ref.as_non_null",
+]
 
 -- a constrained-function occurrence applied to `args`: prepend the materialized
 -- dict witnesses (one per `=>` constraint, in route order) to the args, then call
@@ -5729,7 +5736,7 @@ methodValArity prog name _ siteArity (RLocal sym dicts) =
   let target = if sym == "" then name else sym
   let a = progFnArity prog target - listLen dicts
   if a <= 0 then siteArity else a
-methodValArity prog name iface siteArity (RKey tag _) =
+methodValArity prog name iface siteArity (RKey tag _ _) =
   match implForWSite prog name iface tag siteArity
     Some entry => methodArityOfEntryW prog entry name
     None => siteArity
@@ -5806,7 +5813,7 @@ defaultFnNameW ifaceWord method key =
 -- build the symbol from an ALREADY-RESOLVED symbol tag (a bare head, or an
 -- injectively encoded canonical key) — used where the caller already computed the
 -- symTag (the RDict dispatch chain, via methodImpls) so it need not re-resolve
--- through findByTagW.
+-- through findByKeyW.
 implFnSymOfTag : String -> String -> String
 implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 
@@ -5847,17 +5854,6 @@ distinctKeysAtHeadW (ent :: rest) method tag acc
     && not (contains (implEntryKeyW ent) acc) =
     distinctKeysAtHeadW rest method tag (implEntryKeyW ent :: acc)
   | otherwise = distinctKeysAtHeadW rest method tag acc
-
--- the ROUTE key an impl is dispatched under at runtime (mirror of llvm_emit's
--- implEntryRouteKey): the bare head when the head is unique (byte-identical to the
--- pre-C7 dict header hash), else the RAW canonical key.  Distinct from the SYMBOL tag
--- (implFnSymTagW) only in the collision arm — the symbol SANITIZES the key while the
--- route key is hashed raw, and the dict WITNESS (routeWitness `dictTag routeTag`)
--- hashes the SAME raw canonical key the typechecker stamps, so witness and dispatch
--- agree.
-implEntryRouteKeyW : List CImplEntry -> String -> String -> String -> String
-implEntryRouteKeyW entries method tag key =
-  if headTagUniqueW entries method tag then tag else key
 
 -- the head tycon of the impl whose canonical key is [key] (mirror of llvm_emit's
 -- headTagForKey) — the group's dispatch/self/Float tag, distinct from its symbol tag.
@@ -6081,12 +6077,9 @@ applyEtaArgsW body ((PVar x _) :: rest) =
   applyEtaArgsW (CApp body (CVar x AGlobal)) rest
 applyEtaArgsW body (_ :: rest) = applyEtaArgsW body rest
 
--- clauses of (method, tag) where [tag] is EITHER the head tycon OR the canonical key
--- (#324): the def-side grouping passes a canonical key (selecting exactly one impl's
--- clauses even when it shares a head with an overlapping sibling), while a route's
--- probes (`findByTagW`) pass its head tag.  Matching on `t == tag || k == tag` (as
--- findByTagW does) serves both; a canonical key contains `|` so it never spuriously
--- equals a bare head, and vice versa.
+-- the clauses of (method, key): the def-side grouping passes a canonical key, which
+-- selects exactly one impl's clauses even when it shares a head with an overlapping
+-- sibling (#324).
 implClauseFor : String -> String -> CImplEntry -> List CClause
 implClauseFor m tag ent =
   if implEntryMethodW ent == m && implEntryAnswersW tag ent then
@@ -6109,7 +6102,7 @@ emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
   -- destination-passing loop — the WasmGC peer of llvm_emit's trmcImplTry.  Eligibility +
   -- the safety-critical `mentionsSelfMethod` disqualification are in wTrmcImplTry; an
   -- ineligible impl (non-tail self, dict-passed, no cons-tail) returns None → ordinary body.
-  match wTrmcImplTry prog method headTag fnName arity clauses
+  match wTrmcImplTry prog method key fnName arity clauses
     Some tmcDef => tmcDef
     None =>
       -- W8b: an `impl … Float` method's params are Float — record their (pattern-var) names
@@ -6294,30 +6287,24 @@ emitClausesImpl : Prog ->
 emitClausesImpl prog fnName params arity clauses =
   emitClausesRef prog fnName params arity clauses
 
--- One dispatch arm: the entry's symbol tag (memo naming), the route word its
--- dictionary witness carries, its canonical key, the function the arm calls, and
--- its head tag.
-data ImplArmW = ImplArmW String String String String String
+-- One dispatch arm: the entry's symbol tag (memo naming), the function the arm
+-- calls, and the entry itself, whose canonical key its dictionary carries.
+data ImplArmW = ImplArmW String String CImplEntry
 
 armSymTagW : ImplArmW -> String
-armSymTagW (ImplArmW symTag _ _ _ _) = symTag
-
-armRouteKeyW : ImplArmW -> String
-armRouteKeyW (ImplArmW _ routeKey _ _ _) = routeKey
-
-armKeyW : ImplArmW -> String
-armKeyW (ImplArmW _ _ key _ _) = key
+armSymTagW (ImplArmW symTag _ _) = symTag
 
 armFnSymW : ImplArmW -> String
-armFnSymW (ImplArmW _ _ _ fnSym _) = fnSym
+armFnSymW (ImplArmW _ fnSym _) = fnSym
 
-armHeadTagW : ImplArmW -> String
-armHeadTagW (ImplArmW _ _ _ _ tag) = tag
+armEntryW : ImplArmW -> CImplEntry
+armEntryW (ImplArmW _ _ ent) = ent
+
+armKeyW : ImplArmW -> String
+armKeyW arm = implEntryKeyW (armEntryW arm)
 
 -- The candidate implementations of the interface a site resolved to ([iface]; `""`
--- narrows nothing), one arm per implementation, first-seen order.  A sibling method's
--- collision can canonicalize the shared interface dictionary, so dispatchKeyTestW
--- accepts both words without duplicating argument code.
+-- narrows nothing), one arm per implementation, first-seen order.
 methodImpls : Prog -> String -> String -> List ImplArmW
 methodImpls prog method iface =
   let mEntries = methodEntriesW prog method
@@ -6331,14 +6318,10 @@ methodImpls prog method iface =
 
 methodImplArm : Prog -> List CImplEntry -> String -> CImplEntry -> ImplArmW
 methodImplArm prog entries method ent =
-  let t = implEntryTagW ent
-  let k = implEntryKeyW ent
   ImplArmW
-    (implFnSymTagW entries method t k)
-    (implEntryRouteKeyW entries method t k)
-    k
+    (implFnSymTagW entries method (implEntryTagW ent) (implEntryKeyW ent))
     (implEntrySymW prog method ent)
-    t
+    ent
 
 -- one arm per called function, first-seen order
 dedupArmsW : List ImplArmW -> OrdMap Unit -> List ImplArmW
@@ -6353,82 +6336,49 @@ dedupArmsW (arm :: rest) seen =
 -- declaring the same-spelled method at DIFFERENT arity on one receiver head put two
 -- candidates of different declared arity under one bare-name dispatcher; keep only the
 -- ones whose interface declaration arity matches the occurrence's carried scalar.
--- Each pair's
--- routeKey identifies its entry (`implEntryRouteKeyW` hands back the RAW canonical key
--- exactly when the head is NOT unique, which is precisely the colliding case), so
--- declaration identity is recovered from its entry rather than from the supplied
--- argument count.  No match stays empty: restoring the whole list would make the
+-- Each arm carries its entry, so declaration identity is recovered from that entry
+-- rather than from the supplied argument count.  No match stays empty: restoring the whole list would make the
 -- bare-name collision authoritative again.
 narrowImplsByArityW : Prog -> String -> List ImplArmW -> Int -> List ImplArmW
 narrowImplsByArityW prog method impls siteArity =
   filterList
-    (arm => methodDeclaredArityOfTagW prog method (armKeyW arm) == siteArity)
+    (arm =>
+      methodArityOfIfaceW prog (implEntryIfaceWordW (armEntryW arm)) method
+        == siteArity)
     impls
-
-methodDeclaredArityOfTagW : Prog -> String -> String -> Int
-methodDeclaredArityOfTagW prog method tag =
-  match findByTagW method tag (methodEntriesW prog method)
-    Some ent => methodArityOfIfaceW prog (implEntryIfaceWordW ent) method
-    None => methodArityOfW prog method
 
 -- the entry of the occurrence's interface [iface] for (method, tag) at the site's
 -- arity (mirror of llvm_emit's implForSite): a supplied method, or an inherited
 -- default's per-instance body.
 implForWSite : Prog -> String -> String -> String -> Int -> Option CImplEntry
 implForWSite prog method iface tag siteArity =
-  findByTagArityW
+  findByKeyArityW
     prog
     method
     tag
     siteArity
     (narrowByIfaceW iface (methodEntriesW prog method))
 
-findByTagArityW : Prog ->
+findByKeyArityW : Prog ->
   String ->
   String ->
   Int ->
   List CImplEntry ->
   Option CImplEntry
-findByTagArityW _ _ _ _ [] = None
-findByTagArityW prog method tag siteArity (entry :: rest) =
+findByKeyArityW _ _ _ _ [] = None
+findByKeyArityW prog method tag siteArity (entry :: rest) =
   if implEntryAnswersW tag entry
     && methodArityOfIfaceW prog (implEntryIfaceWordW entry) method
       == siteArity then
     Some entry
   else
-    findByTagArityW prog method tag siteArity rest
+    findByKeyArityW prog method tag siteArity rest
 
-findByTagW : String -> String -> List CImplEntry -> Option CImplEntry
-findByTagW _ _ [] = None
-findByTagW method tag (entry :: rest)
+findByKeyW : String -> String -> List CImplEntry -> Option CImplEntry
+findByKeyW _ _ [] = None
+findByKeyW method tag (entry :: rest)
   | implEntryMethodW entry == method && implEntryAnswersW tag entry = Some entry
-  | otherwise = findByTagW method tag rest
-
--- the RKey-arm fallback (direct dispatch, no entry at the concrete tag): a GENERAL
--- instance (`impl Iface a`, registered under noneHeadTag) is the `min⊑` selection
--- (DICT-SEMANTICS §3) for an uncovered concrete type — call its lifted fn directly,
--- exactly as the concrete-hit path does; its method, supplied or inherited, is
--- filed under noneHeadTag either way.  No general ⇒ gap (the same missing-impl error
--- llvm_emit's `emitGeneralRKey` reports).
-emitGeneralRKeyRef : Prog ->
-  List String ->
-  Int ->
-  List Route ->
-  List String ->
-  String ->
-  String ->
-  Int ->
-  String ->
-  List String
-emitGeneralRKeyRef prog env d routes argInstrs name iface siteArity tag =
-  match implForWSite prog name iface noneHeadTag siteArity
-    Some entry =>
-      let keep = implLeadingDictCountOfEntryW entry
-      let keptWords =
-        flatMap (routeWitness prog env d) (takeRoutesW keep routes)
-      keptWords ++ argInstrs ++ ["call $" ++ implEntrySymW prog name entry]
-    None =>
-      gapLP prog "wasm layer-15: no impl of method '\{name}' for type '\{tag}'"
+  | otherwise = findByKeyW method tag rest
 
 -- `hashName` (djb2, seed 5381) lives in `backend.private_mangle`, shared verbatim
 -- with the LLVM emitter so the dict-witness tag matches across backends + the
@@ -7354,7 +7304,7 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ =>
     match omLookup c ctorFloatIndex
       Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
       None => []
@@ -9135,11 +9085,8 @@ clauseToPair (CClause pats body) = (pats, body)
 -- count is uniform across clauses.  Returns Some def when eligible (the whole
 -- `(func …)` define via emitWasmTrmcCore with the impl symbol + SelfByMethod), else None
 -- so emitImplGroup falls back to the ordinary emitClausesImpl body.
--- #324: [headTag] drives the SelfByMethod self-call recognition (the in-body self
--- route is stamped with the head for a sole impl), while [key] drives the emitted
--- SYMBOL (via implFnSym) so it agrees with emitImplGroup's fnName.  For a sole impl
--- per head the two coincide (headTagUniqueW ⇒ symbol == headTag), keeping every
--- existing trmc'd impl byte-identical.
+-- [key] drives the SelfByMethod self-call recognition: the in-body self route
+-- carries the instance's canonical key.
 wTrmcImplTry : Prog ->
   String ->
   String ->
@@ -9147,9 +9094,11 @@ wTrmcImplTry : Prog ->
   Int ->
   List CClause ->
   Option (List String)
-wTrmcImplTry prog method headTag fnName arity clauses =
-  let self = SelfByMethod method headTag
+wTrmcImplTry prog method key fnName arity clauses =
   let pairs = map clauseToPair clauses
+  let self = methodSelf method key (match pairs
+    (ps, _) :: _ => ps
+    [] => [])
   if arity > 0
     && dictUniformClauses clauses
     && trmcEligible
@@ -9646,16 +9595,24 @@ implSelfReturnCall : Prog ->
 implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app args =
   match (progEmit prog).implSelfCtx.value
     ImplSelfOff => None
-    ImplSelfOn method tag key fnName arity =>
+    ImplSelfOn method _ key fnName arity =>
       if name == method
-        && isSelfSatApp (SelfByMethod method tag) arity app then match route
-        RKey rtag _ => match implForWSite prog name iface rtag siteArity
+        && isSelfHead (SelfByMethod method key 0) (appHead app) then match route
+        RKey rtag _ _ => match implForWSite prog name iface rtag siteArity
           Some entry =>
+            -- the define's arity counts its leading dictionaries (an inherited
+            -- default's receiver among them), so the call is saturated when those
+            -- and the value arguments fill it
+            let dictRoutes =
+              staticEntryDictRoutesW entry route methRoutes implRoutes
+            let saturated = listLen dictRoutes + listLen args == arity
             if implEntryKeyW entry == key then
-              let dictWords =
-                flatMap (routeWitness prog env 0) (methRoutes ++ implRoutes)
-              let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
-              Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
+              if saturated then
+                let dictWords = flatMap (routeWitness prog env 0) dictRoutes
+                let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
+                Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
+              else
+                None
             else
               None
           None => None
@@ -10618,7 +10575,9 @@ freeVarsExpr bound _ = []
 freeVarsRoute : List String -> Route -> List String
 freeVarsRoute bound (RDict d) = if contains d bound then [] else [d]
 freeVarsRoute bound (RDictFwd d) = if contains d bound then [] else [d]
-freeVarsRoute bound (RKey _ rs) = flatMap (freeVarsRoute bound) rs
+freeVarsRoute bound (RKey _ rs sups) =
+  flatMap (freeVarsRoute bound) (rs ++ sups)
+freeVarsRoute bound (RProj r _) = freeVarsRoute bound r
 freeVarsRoute bound RNone = []
 -- S-1 (wasm peer of llvm_emit's methValDictNames RLocal arm): an RLocal route's TARGET
 -- is a global symbol, but its DICT slots can hold an RDict — the enclosing constrained
@@ -11173,14 +11132,14 @@ findRecByField ((ctor, labels) :: rest) label =
 
 recordFieldsOf : Prog -> String -> Option (List String)
 recordFieldsOf prog ctor = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ =>
     match omLookup ctor recordIndex
       Some labels => Some labels
       None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
 
 recordByField : Prog -> String -> Option (String, List String)
 recordByField prog label = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ =>
     match omLookup label labelIndex
       Some entry => Some entry
       None => findRecByField (indexRecFieldsW (progIndex prog)) label
@@ -11935,6 +11894,8 @@ collectExprLocals (CLetGroup binds body) =
   map lgBindName binds
     ++ flatMap collectLgValLocals binds
     ++ collectExprLocals body
+-- a method dispatched on a projected super dictionary reads it through a local
+collectExprLocals (CMethod _ _ _ (RProj r path) _ _) = [projLocalName r path]
 collectExprLocals _ = []
 
 collectFieldLocals : CField -> List String
@@ -12584,8 +12545,9 @@ letStashIndex PWild _ d = d - 1
 letStashIndex _ e d = maxIndexAt e d + 1
 
 -- the highest scratch index used emitting a decision tree at depth d (a CTSwitch
--- stashes the focus at index d and recurses subtrees at d+1; leaves/guards re-emit
--- arm bodies via emitTreeRef at the same depth, accounted by the arm walk above).
+-- stashes the focus at index d and recurses subtrees, the default included, at d+1;
+-- leaves/guards re-emit arm bodies via emitTreeRef at the same depth, accounted by the
+-- arm walk above).
 maxIndexTree : CTree -> Int -> Int
 maxIndexTree CTFail d = d - 1
 maxIndexTree (CTLeaf _) d = d - 1

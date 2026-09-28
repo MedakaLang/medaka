@@ -1,6 +1,8 @@
 -- `impl Pick a a a` binds `a` at three positions. The goal
 -- `Pick (List x) (List Int) (List U8)` is refused: the second and third
 -- positions can never be equal, whichever order the matcher visits them in.
+-- `ns` is bound at `List Int` first: passed as a literal, `[300, 7]` would be
+-- fixed to `List U8` by §3 improvement, and the goal would be a different one.
 import u8 as U
 
 interface Pick a b c where
@@ -10,5 +12,6 @@ impl Pick a a a where
   pick _ y = y
 
 main =
-  let r : List U8 = pick [] [300, 7]
+  let ns : List Int = [300, 7]
+  let r : List U8 = pick [] ns
   println (debug (map U.toInt r))

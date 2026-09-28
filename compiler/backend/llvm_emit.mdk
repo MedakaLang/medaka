@@ -205,8 +205,6 @@ import ir.core_ir.{
 import ir.core_ir_lower.{
   compileTree,
   canonPat,
-  ifaceImplRouteKeys,
-  ifaceDeclHeadUnique,
   ifaceMethodArityKey,
   ifaceWordOfKey,
   ifaceNameOfWord,
@@ -221,7 +219,6 @@ import support.util.{
   anyList,
   startsWith,
   fallthroughName,
-  noneHeadTag,
   dedup,
   dedupBy,
   lenKey,
@@ -246,6 +243,7 @@ import support.ordmap.{
 -- flattenApp/lengthS/pattern + bind helpers) live there too so the analysis is self-contained.
 import backend.trmc_analysis.{
   SelfRef(..),
+  methodSelf,
   flattenApp,
   lengthS,
   freeVars,
@@ -276,6 +274,8 @@ import backend.trmc_analysis.{
   clauseArityOf,
 }
 import backend.private_mangle.{hashName, injectiveIdent}
+import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
+import types.route_key.{numIntWord}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -536,14 +536,10 @@ methodArityOfInput e method = match omLookup method e.input.methodIfaceIndex
 -- own `impl` head names, recovered from that entry's route key (which
 -- `route_key.implRouteKeyWord` already mints identity-bearing).
 --
--- WHY THE ROUTE LEG STAYS BARE.  `CImplTagged`'s third field keeps its current
--- bare contents and its current meaning; `implEntryRouteKey`, `ifaceTagsGo`/
--- `declTagOrKey` and `implEntryIface`/`methodReturnsSelf` all read it as a bare
--- ROUTE WORD, and re-keying it in place compares `"zmod::IZ"` against `"IZ"`,
--- moving route arms on programs that never collided.  That is exactly PR #1346's
--- E4 result and it re-opens CLOSED S0 #1277, so the identity travels as an
--- ADDITIONAL fact (the `methodIfaceIdIndex` above) rather than by re-purposing
--- the field.  A miss on the identity key falls back to the bare table, so every
+-- Why the field stays bare: `CImplTagged`'s third field keeps its current bare
+-- contents and its current meaning; `implEntryIface`/`methodReturnsSelf` read it
+-- as a bare word, so the identity travels as an ADDITIONAL fact (the
+-- `methodIfaceIdIndex` above) rather than by re-purposing the field.  A miss on the identity key falls back to the bare table, so every
 -- collision-free program emits byte-identically to before.
 methodArityOfIface : Emit -> String -> String -> Int
 methodArityOfIface e ifaceWord method =
@@ -832,7 +828,6 @@ data EmitInputData = EmitInputData {
   methodIfaces : List (String, (String, Int)),
   methodIfaceIndex : OrdMap (String, Int),
   methodIfaceIdIndex : OrdMap Int,
-  methodConstraintIfaces : List (String, List String),
   ctorFieldIndex : OrdMap (List String),
   declSigIndex : OrdMap (List String, String),
   -- #2074: the USER-declared externs only (the runtime catalog's own names are
@@ -853,13 +848,6 @@ data EmitInputData = EmitInputData {
   -- to it byte-identical to the symbol that prelude.o actually exports.
   preludeImplIndex : OrdMap (OrdMap String),
   srcName : String,
-  -- #948/#1036/#1047: one row per DECLARED impl,
-  -- (iface identity, iface, head tag, canonical impl key), minted by the emit
-  -- driver from the SAME decl list it lowers (`core_ir_lower.ifaceImplHeadTable`).
-  -- It is a carried value, never an ambient `Ref` installed by lowering.  `[]` (a
-  -- hand-built-`CProgram` harness with no
-  -- decls) is the pre-#1036 bare-head answer, not a missing install.
-  ifaceImplHeads : List (String, String, String, String),
   -- the method names two or more interfaces declare (by declaration word), whose
   -- dispatchers therefore carry the interface in their symbol (`dispMethodWord`)
   sharedMethodNames : OrdMap Unit,
@@ -877,7 +865,6 @@ makeEmitInput : List ((String, String), Bool) ->
   List ((String, String), List Int) ->
   List (String, (String, String, Int)) ->
   List (String, List String) ->
-  List (String, List String) ->
   List (String, (List String, String)) ->
   Bool ->
   Bool ->
@@ -887,9 +874,8 @@ makeEmitInput : List ((String, String), Bool) ->
   String ->
   List (String, List String) ->
   List (String, (List String, String)) ->
-  List (String, String, String, String) ->
   EmitInput
-makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes ifaceImplHeads = EmitInputData {
+makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes = EmitInputData {
   returnsSelf = returnsSelf,
   selfFnParams = selfFnParams,
   methodIfaces = map bareIfaceArityRow methodIfaces,
@@ -897,7 +883,6 @@ makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorF
     omFromPairs (reverseL (map bareIfaceArityRow methodIfaces)) omEmpty,
   methodIfaceIdIndex =
     omFromPairs (reverseL (map ifaceIdArityRow methodIfaces)) omEmpty,
-  methodConstraintIfaces = methodConstraintIfaces,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty,
   ffiExternIndex = omFromPairs (reverseL ffiExternTypes) omEmpty,
@@ -908,7 +893,6 @@ makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorF
   preludeImplIndex = preludeImplIndexOf preludeImpls omEmpty,
   srcName = srcName,
   recordFieldOrders = recordFieldOrders,
-  ifaceImplHeads = ifaceImplHeads,
   sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
 }
 
@@ -1463,7 +1447,7 @@ implEntriesOf e = !e.implEntries
 -- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
 -- filters it by the interface METHOD name: `implsOf`/`filterTagged`, and
 -- `implFnSymOf`→`headTagUnique`→`distinctKeysAtHead` (the C7 collision
--- count) + `implEntryRouteKey`.  The LLVM emitter resolves an RKey call site directly
+-- count).  The LLVM emitter resolves an RKey call site directly
 -- (`emitMethod`'s `implFor` + `implFnSymOf` per site) and outlines one dispatcher per
 -- method, so on dispatch-heavy code (many interfaces × many sites) each per-site scan is
 -- O(impls) ⇒ O(sites·impls) = O(N²) `emit`-stage work (measured `emit` op-ratio ~3.77×/
@@ -1573,12 +1557,10 @@ narrowImplsByArity e method impls siteArity =
     (ent => methodArityOfIface e (implEntryIfaceWord ent) method == siteArity)
     impls
 
--- the single tagged impl an RKey route names: the CImplTagged of `method` whose
--- type-head tag `t` OR canonical full-type key `k` equals `tag`.  The typechecker
--- stamps the canonical key (TYPECHECK-AUDIT C7) when ≥2 impls share a head tycon
--- but differ in type args; otherwise the bare head tag.  Mirrors eval.mdk's hasTag
--- (`t == tag || k == tag`).  None ⇒ the route named an impl not in the program
--- (an internal error — the typechecker only stamps tags it resolved an impl for).
+-- the single entry an RKey route names: the entry of `method` filed under the
+-- route's word, which is always the selected instance's canonical key (a general
+-- instance's included).  None ⇒ the route named an instance not in the program (an
+-- internal error — the typechecker only stamps words it selected an instance for).
 implForSite : Emit -> String -> String -> String -> Int -> Option CImplEntry
 implForSite e method iface tag siteArity =
   findByTagArity
@@ -1602,10 +1584,9 @@ findByTagArity e method tag siteArity (entry :: rest) =
   else
     findByTagArity e method tag siteArity rest
 
--- does [entry] answer to the route word [word] — its head tag or its canonical key?
+-- does [entry] answer to the route word [word]?  A word names exactly one instance.
 implEntryAnswers : String -> CImplEntry -> Bool
-implEntryAnswers word entry =
-  implEntryTag entry == word || implEntryKey entry == word
+implEntryAnswers word entry = implEntryKey entry == word
 
 -- the lifted LLVM name of an inherited default's per-instance body:
 -- `mdk_default_<iface>_<method>_<instance key>`.  It is keyed by the interface that
@@ -1658,10 +1639,21 @@ implFnSymTag entries method tag key =
 -- keys and are built once in O(entries log entries), rather than rescanning the
 -- impl list for every row.
 export
-preludeImplSymbols : List CImplEntry -> List (String, String, String)
-preludeImplSymbols entries =
+-- [ownImpls] is the prelude's own declared-impl table (`core_ir_lower.
+-- ifaceImplHeadTable`): an inherited default's entry is prelude code only for a
+-- PRELUDE instance -- the table lowered alone still lists the program's instances
+-- as inheritors of a prelude interface's default, and those entries are the
+-- program's to define.
+preludeImplSymbols : List (String, String, String, String) ->
+  List CImplEntry ->
+  List (String, String, String)
+preludeImplSymbols ownImpls entries =
   let collisions = preludeImplCollisions entries omEmpty omEmpty
-  preludeImplSymbolsGo entries collisions omEmpty
+  let own = omFromNames (map (row => implHeadRowKey row) ownImpls) omEmpty
+  preludeImplSymbolsGo own entries collisions omEmpty
+
+implHeadRowKey : (String, String, String, String) -> String
+implHeadRowKey (_, _, _, key) = key
 
 preludeImplCollisions : List CImplEntry ->
   OrdMap String ->
@@ -1681,15 +1673,16 @@ preludeImplCollisions ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: re
 preludeImplCollisions (_ :: rest) firstKeys collisions =
   preludeImplCollisions rest firstKeys collisions
 
-preludeImplSymbolsGo : List CImplEntry ->
+preludeImplSymbolsGo : OrdMap Unit ->
+  List CImplEntry ->
   OrdMap Unit ->
   OrdMap Unit ->
   List (String, String, String)
-preludeImplSymbolsGo [] _ _ = []
-preludeImplSymbolsGo ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
+preludeImplSymbolsGo _ [] _ _ = []
+preludeImplSymbolsGo own ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
   let implKey = preludeImplPairKey method key
   if omHasKey implKey seen then
-    preludeImplSymbolsGo rest collisions seen
+    preludeImplSymbolsGo own rest collisions seen
   else
     let symTag =
       if omHasKey (preludeImplPairKey method tag) collisions then
@@ -1697,9 +1690,16 @@ preludeImplSymbolsGo ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: res
       else
         tag
     (method, key, symTag)
-      :: preludeImplSymbolsGo rest collisions (omInsert implKey () seen)
-preludeImplSymbolsGo (_ :: rest) collisions seen =
-  preludeImplSymbolsGo rest collisions seen
+      :: preludeImplSymbolsGo own rest collisions (omInsert implKey () seen)
+-- an inherited default's entry is named by its interface and instance key, never by
+-- a symbol tag, so the tag it records is only its head
+preludeImplSymbolsGo own ((CImplEntry method _ (CImplDefault _ tag key _ _ _)) :: rest) collisions seen =
+  let implKey = preludeImplPairKey method key
+  if omHasKey implKey seen || not (omHasKey key own) then
+    preludeImplSymbolsGo own rest collisions seen
+  else
+    (method, key, tag)
+      :: preludeImplSymbolsGo own rest collisions (omInsert implKey () seen)
 
 preludeImplPairKey : String -> String -> String
 preludeImplPairKey method identity = "\{method}\n\{identity}"
@@ -1820,61 +1820,6 @@ implEntryTag (CImplEntry _ _ (CImplDefault _ tag _ _ _ _)) = tag
 implEntryKey : CImplEntry -> String
 implEntryKey (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) = key
 implEntryKey (CImplEntry _ _ (CImplDefault _ _ key _ _ _)) = key
-
--- the ROUTE key the typechecker stamps for this impl — the bare head tag when the
--- head is unique (byte-identical to the pre-C7 dict header), else the canonical
--- key (C7).  Matches dictWordOfRoute's `hashName key`, so emitDispatchChain's
--- runtime `icmp` compares against the right word.
---
--- #1036: "unique head" must be decided over the DECLARED impls, not over the
--- CImplEntries.  An impl that overrides nothing (every method inherited from an
--- interface DEFAULT, cross-module) produces no entry at all, so `headTagUnique`
--- saw ONE key at head "Box" for `impl Speak (Box Int)` + `impl Speak (Box String)`
--- and derived the bare head "Box" — while typecheck's `keyForSiteByIface` counts
--- DECLARED impls of the INTERFACE (it deliberately does not filter on method-name
--- membership, so it sees the inheriting impl) and stamped `Speak|(Box Int)|` into
--- the caller's dict cell.  Emitter and typechecker then hashed DIFFERENT words for
--- the same impl, which is why no arm could have matched even once #948 made the
--- inheriting impl visible as a tag.
---
--- ⚠️ There is NO single right answer here, which is why this returns a SET (see
--- `implEntryRouteWords`) and why the scalar form below is kept only for the ONE
--- caller that genuinely wants a scalar (`headTagForKey`-style symbol naming).
---
--- The emitter cannot recompute typecheck's verdict, because that verdict is not a
--- property of the impl — it is a property of the SITE'S MODULE.  `KeyBuckets` is
--- built per module from that module's import closure, so the same impl is stamped
--- `"Box"` by a module that cannot see its sibling and `Speak|(Box Int)|` by one that
--- can.  Deciding it here from ANY global table — entries or decls — is a second
--- opinion that will disagree with one of them.
-implEntryRouteKey : List (String, String, String, String) ->
-  List CImplEntry ->
-  CImplEntry ->
-  String
-implEntryRouteKey heads entries ent =
-  let t = implEntryTag ent
-  if headTagUnique entries (implEntryMethodOf ent) t
-    && ifaceDeclHeadUnique heads (implEntryIface ent) t then
-    t
-  else
-    implEntryKey ent
-
--- #990: the index-backed form of `implEntryRouteKey (implEntriesOf e) ent`.  The route
--- key's `headTagUnique` count filters by the entry's own method (field 0), so [ent]'s
--- method bucket gives the byte-identical result — O(bucket) not O(impls) per arm.
-implEntryRouteKeyE : Emit -> CImplEntry -> String
-implEntryRouteKeyE e ent =
-  implEntryRouteKey
-    e.input.ifaceImplHeads
-    (methodEntries e (implEntryMethodOf ent))
-    ent
-
--- A dictionary is shared by every method of its interface. A collision on another
--- method can require the canonical instance key even when this method's head is
--- unique. Accept that key alongside the legacy words without reselecting the impl.
-implEntryRouteWords : Emit -> CImplEntry -> List String
-implEntryRouteWords e ent =
-  dedupS [implEntryRouteKeyE e ent, implEntryTag ent, implEntryKey ent]
 
 -- ── ctor→type map ─────────────────────────────────────────────────
 -- the program's constructor→type-name map (CProgram's 3rd field).  An arg-tag
@@ -3353,6 +3298,8 @@ isNetExtern name = contains name [
   "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
+  "netSendBytesFrom",
+  "netTrySendBytesFrom",
 ]
 
 emitNetExtern : Emit ->
@@ -3529,6 +3476,24 @@ emitNetExtern e env "netTrySendFrom" args = match emitArgs e env args
         "  \{r} = call i64 @mdk_net_try_send_from(i64 \{fd}, i64 \{bs}, i64 \{off})"
     (r, LTCon)
   _ => panic "llvm: netTrySendFrom takes three arguments"
+emitNetExtern e env "netSendBytesFrom" args = match emitArgs e env args
+  [fd, bb, lo, hi] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_net_send_bytes_from(i64 \{fd}, i64 \{bb}, i64 \{lo}, i64 \{hi})"
+    (r, LTCon)
+  _ => panic "llvm: netSendBytesFrom takes four arguments"
+emitNetExtern e env "netTrySendBytesFrom" args = match emitArgs e env args
+  [fd, bb, lo, hi] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_net_try_send_bytes_from(i64 \{fd}, i64 \{bb}, i64 \{lo}, i64 \{hi})"
+    (r, LTCon)
+  _ => panic "llvm: netTrySendBytesFrom takes four arguments"
 emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 
 -- Tier D: RNG. The deterministic random* family uses SplitMix64 state in the C
@@ -4696,8 +4661,8 @@ u64AliasBody ps body _ = match u64KernelApplied ps body
 -- `fromInt` application the typechecker routed to `Num Int`.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" _ _ (RKey "Int" _) _ _) (CLit (LInt n))) =
-  Some n
+intLitOf (CApp (CMethod "fromInt" _ _ (RKey word _ _) _ _) (CLit (LInt n)))
+  | word == numIntWord = Some n
 intLitOf _ = None
 
 -- a guard's `| otherwise = e` arm, which lowers to `if otherwise then e else …`.
@@ -5764,8 +5729,8 @@ floatFromIntArg ex = match flattenApp ex []
 -- #2729 item 3: `Num Int`'s own `fromInt` IS the identity — `stdlib/core.mdk` defines
 -- it `fromInt x = x`, on a word that is already a tagged Int — so a SATURATED
 -- occurrence routed to that impl emits its argument and nothing else.  The witness is
--- the route's own `RKey "Int"` (the same tag emitMethod would turn into the
--- `@mdk_impl_Int_fromInt` symbol), never the argument's shape: `fromInt` at any other
+-- the route's own word, `Num Int`'s (`numIntWord`, the instance emitMethod would
+-- call as `@mdk_impl_Int_fromInt`), never the argument's shape: `fromInt` at any other
 -- head (`Float`'s intToFloat, a user `impl Num`) is a real conversion and keeps its
 -- call.  Empty impl/method dict routes are required rather than assumed — `Num` has no
 -- element `requires`, so a non-empty route vector here is some other shape and is left
@@ -5776,7 +5741,8 @@ intFromIntIdentityArg : String ->
   List Route ->
   List CExpr ->
   Option CExpr
-intFromIntIdentityArg "fromInt" (RKey "Int" []) [] [] (a :: []) = Some a
+intFromIntIdentityArg "fromInt" (RKey word [] _) [] [] (a :: [])
+  | word == numIntWord = Some a
 intFromIntIdentityArg _ _ _ _ _ = None
 
 headNameIs : CExpr -> String -> Bool
@@ -7357,18 +7323,17 @@ emitMethod : Emit ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethod e env name iface siteArity (RKey tag _) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes argOps =
   match implForSite e name iface tag siteArity
     Some entry =>
       let dictWords =
         dictWordsOf
           e
           env
-          (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
-      -- [tag] is the stamped route tag — the bare head when the head is unique, the
-      -- canonical key on a C7 collision.  For tagToLTy/returns-self use the matched
-      -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
-      -- unique, sanitized key on collision) so it matches emitGroup's name.
+          (staticEntryDictRoutes e name entry route methRoutes implRoutes)
+      -- [tag] is the selected instance's canonical key.  For tagToLTy/returns-self
+      -- use the matched entry's head tag; the lifted-fn symbol uses implFnSymOf so
+      -- it matches emitGroup's name.
       let headTag = implEntryTag entry
       let resTy =
         if methodReturnsSelf e (implEntryIface entry) name then
@@ -7381,21 +7346,14 @@ emitMethod e env name iface siteArity (RKey tag _) implRoutes methRoutes argOps 
         (dictWords ++ argOps)
         (methodArityOfEntry e entry name + lengthS dictWords)
         resTy
-    None =>
-      emitGeneralRKey
-        e
-        env
-        name
-        iface
-        siteArity
-        tag
-        methRoutes
-        implRoutes
-        argOps
+    None => gapE e "no impl of method '\{name}' for instance '\{tag}'"
 emitMethod e env name iface siteArity (RDict d) implRoutes methRoutes argOps =
-  emitMethodDispatch e env name iface siteArity d methRoutes argOps
+  emitMethodDispatch e env name iface siteArity (RDict d) methRoutes argOps
 emitMethod e env name iface siteArity (RDictFwd d) implRoutes methRoutes argOps =
-  emitMethodDispatch e env name iface siteArity d methRoutes argOps
+  emitMethodDispatch e env name iface siteArity (RDictFwd d) methRoutes argOps
+-- a projected super dictionary dispatches exactly as a dictionary parameter does
+emitMethod e env name iface siteArity (RProj r path) implRoutes methRoutes argOps =
+  emitMethodDispatch e env name iface siteArity (RProj r path) methRoutes argOps
 emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps =
   emitMethodArgDispatch e name iface siteArity argOps
 -- S-1: a CONSTRAINED shadowing standalone was given leading dict PARAMS by
@@ -7495,7 +7453,11 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
   if isDynamicMethodRoute route || arity <= 0 then
     emitMethod e env name iface siteArity route implRoutes methRoutes []
   else
-    let capNames = methValDictNames route
+    -- the lifted body builds the site's impl and method dictionaries too, and
+    -- either may read an enclosing dictionary parameter
+    let capNames =
+      dedupS
+        (methValDictNames route ++ routeDictNames [] (implRoutes ++ methRoutes))
     let capWords = capDictWords e env capNames
     let lamName = "mdk_methval_\{name}\{mangleScoped e}"
     let _ =
@@ -7544,7 +7506,7 @@ methValArity e name _ siteArity (RLocal sym dicts) =
     None =>
       let a = fnArity e target - listLen dicts
       if a <= 0 then siteArity else a
-methValArity e name iface siteArity (RKey tag _) =
+methValArity e name iface siteArity (RKey tag _ _) =
   match implForSite e name iface tag siteArity
     Some entry => methodArityOfEntry e entry name
     None => siteArity
@@ -7565,6 +7527,7 @@ methodArgDispatchArity e name iface siteArity =
 isDynamicMethodRoute : Route -> Bool
 isDynamicMethodRoute (RDict _) = True
 isDynamicMethodRoute (RDictFwd _) = True
+isDynamicMethodRoute (RProj _ _) = True
 isDynamicMethodRoute _ = False
 
 -- the dict-witness param name(s) a route reads at runtime (the names whose words the
@@ -7579,6 +7542,7 @@ methValDictNames (RDictFwd d) = [d]
 -- dict param.  That word must be CAPTURED or the lifted body reads an out-of-scope
 -- name.  Empty dicts ⇒ [] ⇒ byte-identical to the pre-S1 catch-all.
 methValDictNames (RLocal _ dicts) = routeDictNames [] dicts
+methValDictNames (RProj r _) = methValDictNames r
 methValDictNames _ = []
 
 -- the operand words for each captured dict name, looked up in the current emit env.
@@ -7681,46 +7645,32 @@ emitDictValDefine e lamName name nDicts valArity =
   let _ = endDefine e scope
   bufRef e := saved
 
--- Dispatch tier for an RKey route that matched no concrete impl: a GENERAL instance
--- (`impl Iface a`), whose head is a bare type variable and so is registered under
--- noneHeadTag ("__none__") — never under the concrete receiver tag.  A general
--- instance is the `min⊑` match (DICT-SEMANTICS §3) when the receiver's concrete
--- type has no impl of its own, so we emit a direct call to its lifted fn exactly as
--- the concrete-hit path does (mirrors eval's pickTagFallback general tier) — its
--- method, supplied or inherited, is filed under noneHeadTag either way.  Concrete
--- impls still win: emitMethod consults the concrete tag first, so this fires only on
--- a concrete miss.
-emitGeneralRKey : Emit ->
-  OrdMap (String, LTy) ->
+-- The leading dictionaries a static call to [ent] passes after its method-level
+-- ones.  A supplied method takes the instance's `requires` (#1648: no more than its
+-- define binds); an inherited default takes its RECEIVER, the dictionary of the
+-- selected instance -- built here from the site's word, its `requires` routes and
+-- the supers the typechecker put on the route for exactly this case.
+staticEntryDictRoutes : Emit ->
   String ->
-  String ->
-  Int ->
-  String ->
+  CImplEntry ->
+  Route ->
   List Route ->
   List Route ->
-  List String ->
-  (String, LTy)
-emitGeneralRKey e env name iface siteArity tag methRoutes implRoutes argOps =
-  match implForSite e name iface noneHeadTag siteArity
-    Some entry =>
-      let dictWords =
-        dictWordsOf
-          e
-          env
-          (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
-      let headTag = implEntryTag entry
-      let resTy =
-        if methodReturnsSelf e (implEntryIface entry) name then
-          tagToLTy headTag
-        else
-          LTInt
-      emitImplCallSat
-        e
-        (implEntryFnName e name entry)
-        (dictWords ++ argOps)
-        (methodArityOfEntry e entry name + lengthS dictWords)
-        resTy
-    None => gapE e "no impl of method '\{name}' for type '\{tag}'"
+  List Route
+staticEntryDictRoutes e name ent route methRoutes implRoutes =
+  if isInheritedEntry ent then
+    methRoutes ++ [receiverRoute route implRoutes]
+  else
+    methRoutes ++ implRoutesForDefine e name ent methRoutes implRoutes
+
+receiverRoute : Route -> List Route -> Route
+receiverRoute (RKey word _ sups) implRoutes = RKey word implRoutes sups
+receiverRoute route _ = route
+
+-- an inherited default's per-instance entry
+isInheritedEntry : CImplEntry -> Bool
+isInheritedEntry (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntry _ = False
 
 -- a direct call to a statically-resolved impl fn (RKey).  Nullary (argOps == [])
 -- ⇒ `call @mdk_impl_<tag>_<method>()`, yielding the impl's value.  `resTy` is the
@@ -7952,9 +7902,9 @@ implEntryIface (CImplEntry _ _ (CImplTagged _ _ iface _ _ _)) = iface
 implEntryIface (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceNameOfWord ifaceWord
 
--- a runtime method dispatch (RDict/RDictFwd): the enclosing function's dict
--- PARAMETER `d` (a BOXED dict-witness pointer, GAP 1 Option A) selects the impl at
--- run time.  Load the head tag from the cell's field 0, then emit an if-chain over
+-- a runtime method dispatch (RDict/RDictFwd/RProj): the dictionary [dict] denotes
+-- — the enclosing function's dict PARAMETER or a super projected out of one (a BOXED
+-- dict-witness pointer, GAP 1 Option A) — selects the impl at run time.  Load the head tag from the cell's field 0, then emit an if-chain over
 -- the method's tagged impls — compare the head tag to each impl's hashName tag, on
 -- a match load the matched impl's nested per-instance dicts from the cell's fields
 -- 1..n, PREPEND them to argOps (the impl fn's leading element-dict params), call
@@ -7965,11 +7915,11 @@ emitMethodDispatch : Emit ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatch e env name iface siteArity d methRoutes argOps =
+emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
   match soleImplDirectSite e name iface siteArity
     Some ent =>
       -- WS-1b: the selected interface method has exactly ONE impl with no `requires`
@@ -7989,7 +7939,8 @@ emitMethodDispatch e env name iface siteArity d methRoutes argOps =
         argOps
         (methodArityOfEntry e ent name)
         LTInt
-    _ => emitMethodDispatchChain e env name iface siteArity d methRoutes argOps
+    _ =>
+      emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps
 
 -- WS-1b: Some impl iff the occurrence's interface has exactly one entry for [name]
 -- AND that entry takes no leading `requires` element-dict params (reqCount 0) — the
@@ -8216,12 +8167,12 @@ emitMethodDispatchChain : Emit ->
   String ->
   String ->
   Int ->
-  String ->
+  Route ->
   List Route ->
   List String ->
   (String, LTy)
-emitMethodDispatchChain e env name iface siteArity d methRoutes argOps =
-  let dictPtr = dictOperand e env d
+emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps =
+  let dictPtr = dictWordOfRoute e env dict
   let methWords = dictWordsOf e env methRoutes
   let nmw = lengthS methWords
   let nargs = lengthS argOps
@@ -8405,9 +8356,8 @@ emitDispatchBody e name iface dictPtr methWords argOps siteArity =
 -- `$dict_*`-named patterns dict_pass prepended, never a subtraction.  That is the
 -- identical ruler `gatherGroup` sizes the define with (`nDicts = leadingDictPats
 -- (firstClausePats cls0)`), so caller and callee agree by construction rather than
--- by coincidence.  Exact peer of wasm_emit's `implLeadingDictCountW`, which made
--- this same choice for #717 and states in its own comment that it deliberately does
--- NOT use the subtraction-shaped `implReqDictCount`.
+-- by coincidence.  Exact peer of wasm_emit's `implLeadingDictCountOfEntryW`, which
+-- made this same choice for #717.
 --
 -- ⚠️ The old body was `listLen (implPats ent) - methodArityOfEntry e ent name`.
 -- That agrees with the direct count only when the clause's VALUE-pattern count
@@ -8474,9 +8424,16 @@ takeRoutes n (r :: rest)
   | n > 0 = r :: takeRoutes (n - 1) rest
 takeRoutes _ _ = []
 
--- load `n` nested dict words from the boxed dict cell `dictPtr`.  The head tag is
--- the cell header (offset 0); the nested req dicts are fields 0..n-1 (loadField i ⇒
--- offset 8*(i+1)), stored by emitDictCell via storeFields at the same field indices.
+-- The super dictionaries a dictionary of [ent]'s interface stores ahead of its
+-- `requires` dictionaries (see `dictWordOfRoute`).
+entrySuperCount : CImplEntry -> Int
+entrySuperCount ent = match installedDispositionsOpt ()
+  Some table => ifaceSuperCount (implEntryIfaceWord ent) table
+  None => 0
+
+-- load dict words [i, n) from the boxed dict cell `dictPtr`.  The head tag is the
+-- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
+-- by emitDictCell via storeFields at the same field indices.
 loadReqDicts : Emit -> String -> Int -> Int -> List String
 loadReqDicts e dictPtr n i
   | i >= n = []
@@ -8495,35 +8452,9 @@ loadReqDicts e dictPtr n i
 -- the cell (the old behavior) was an OUT-OF-BOUNDS load whenever the dispatch dict
 -- was a bare tag (no requires) → a garbage dict → SIGSEGV (e.g. `traverse` whose
 -- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
--- #1036 leg 2: the arm matches EVERY word the typechecker could have stamped for this
--- impl, not one word the emitter recomputed.
---
--- The dispatcher is emitted ONCE per (method, arity) from the WHOLE-program impl
--- table, but the dict word reaching it was chosen PER MODULE: typecheck's
--- `keyForSiteByIface` upgrades a bare head tag to the canonical key only when the
--- SITE'S MODULE can see two impls at that head (`KeyBuckets` is built from that
--- module's import closure).  So for one impl, `a.mdk` may stamp the bare head `"Box"`
--- while `entry.mdk` — which imports the inheriting sibling too — stamps
--- `Speak|(Box Int)|`.  BOTH words legitimately name this impl.
---
--- Recomputing a single verdict here cannot be right for both: making the emitter's
--- verdict program-global while typecheck's stays module-local means a module
--- that cannot see the sibling stamps `"Box"`, matches no arm, and falls to the
--- interface default — turning a program that is
--- CORRECT on main into a silent wrong answer.  That is the relocate-vs-eliminate
--- trap: the disagreement moves from "entries vs decls" to "module-local vs global"
--- instead of going away.
---
--- Consuming the WORD SET makes the arm a superset instead of a competing verdict, so
--- no module's stamp can miss.  `implEntryRouteWords` returns one word when the head
--- is unambiguous program-wide (every program in the tree today) — then this emits the
--- identical single `icmp` and the IR is byte-for-byte unchanged.
---
--- RESIDUAL, stated rather than papered over: the bare head is still only ONE arm, so
--- if two modules each see a DIFFERENT single impl at the same head they both stamp
--- the bare head and only one impl can own it.  That is a PRE-EXISTING defect (it
--- reproduces identically with and without this fix) and it is tracked separately; the
--- point here is that this change cannot make it worse.
+-- The arm tests the dictionary's word against this entry's canonical key: a word
+-- names exactly one instance, the same one in every module, so one comparison
+-- selects it.
 emitDispatchArm : Emit ->
   String ->
   String ->
@@ -8536,7 +8467,11 @@ emitDispatchArm : Emit ->
   String ->
   Unit
 emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL =
-  let cmp = emitRouteWordMatch e headTag (implEntryRouteWords e ent)
+  let cmp = freshReg e
+  let _ =
+    emit
+      e
+      "  \{cmp} = icmp eq i64 \{headTag}, \{intToString (hashName (implEntryKey ent))}"
   let n = intToString (freshLocal e)
   let yes = "dispyes" ++ n
   let next = "dispnext" ++ n
@@ -8546,45 +8481,9 @@ emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL =
     emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL
   emit e (next ++ ":")
 
--- `headTag == w` for a ONE-word set (byte-identical to the pre-#1036 single `icmp`),
--- else the OR of one `icmp` per word.  Emitted as a left-folded chain of `or`s so the
--- register sequence is stable and no basic block is added — the arm keeps its exact
--- two-label shape, which is what lets a one-word set stay byte-identical.
---
--- Deliberately NOT the `emitTagMatch` further down this file: that one belongs to the
--- ARG-TAG path and compares a loaded CONSTRUCTOR tag against `cellTag`, whereas this
--- compares a DICT WORD against `hashName`.  Same shape, different namespaces — merging
--- them would silently cross dict-word and ctor-tag hashing.
-emitRouteWordMatch : Emit -> String -> List String -> String
-emitRouteWordMatch e _ [] = emitConstFalse e
-emitRouteWordMatch e headTag (w :: rest) =
-  let first = freshReg e
-  let _ =
-    emit e "  \{first} = icmp eq i64 \{headTag}, \{intToString (hashName w)}"
-  emitRouteWordMatchOr e headTag first rest
-
-emitRouteWordMatchOr : Emit -> String -> String -> List String -> String
-emitRouteWordMatchOr _ _ acc [] = acc
-emitRouteWordMatchOr e headTag acc (w :: rest) =
-  let c = freshReg e
-  let _ = emit e "  \{c} = icmp eq i64 \{headTag}, \{intToString (hashName w)}"
-  let o = freshReg e
-  let _ = emit e "  \{o} = or i1 \{acc}, \{c}"
-  emitRouteWordMatchOr e headTag o rest
-
--- an impl with no route word can match nothing; materialise `false` rather than
--- emitting a bare `br` on a nonexistent register.  Unreachable in practice (every
--- CImplTagged has a head tag), but a silently-malformed arm is the worse failure.
-emitConstFalse : Emit -> String
-emitConstFalse e =
-  let r = freshReg e
-  let _ = emit e "  \{r} = icmp eq i64 0, 1"
-  r
-
--- the matched-arm body — shared by the guarded concrete arm (emitDispatchArm) and
--- the general instance's UNCONDITIONAL catch-all arm (emitDispatchChain).  Load the
--- impl's per-instance cell `requires` dicts, call its lifted fn, store the result,
--- and jump to the dispatcher exit.
+-- the matched-arm body (emitDispatchArm): load the impl's per-instance cell
+-- `requires` dicts, call its lifted fn, store the result, and jump to the dispatcher
+-- exit.
 emitDispatchArmBody : Emit ->
   String ->
   CImplEntry ->
@@ -8632,7 +8531,13 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- recomputed from `cellCount`.  Byte-identical either way for every shape the
     -- clamp fires on.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
-    let cellDicts = loadReqDicts e dictPtr cellCount 0
+    let superCount = entrySuperCount ent
+    -- an inherited default receives the dictionary that selected it
+    let cellDicts =
+      if isInheritedEntry ent then
+        [dictPtr]
+      else
+        loadReqDicts e dictPtr (superCount + cellCount) superCount
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
     -- The dispatcher is keyed by BARE method name and its `%argK` count is the arity
     -- the SITE saw, so on an arity collision (two modules declaring same-spelled
@@ -8682,24 +8587,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
 memoGlobalName : String -> String -> String
 memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
 
--- a GENERAL instance (`impl Iface a`) is stored under noneHeadTag, so its runtime
--- dict header is hashName noneHeadTag — but a caller's dict carries the CONCRETE
--- receiver tag ("Bool"), never that key, so an icmp arm keyed on the general's own
--- header never fires (the tag falls through to `unreachable`; #667).  A general
--- instance is the `min⊑` match for ANY receiver a concrete arm did not claim
--- (DICT-SEMANTICS §3), so it is the dispatcher's CATCH-ALL: emit every concrete arm
--- as a guarded icmp first (most-specific-wins preserved), then the general's body
--- UNCONDITIONALLY in place of the trailing `unreachable`.  Byte-identical when no
--- general instance is present (the whole compiler + stdlib), so the fixpoint holds.
-isGeneralEntry : CImplEntry -> Bool
-isGeneralEntry ent = implEntryTag ent == noneHeadTag
-
-firstGeneralEntry : List CImplEntry -> Option CImplEntry
-firstGeneralEntry [] = None
-firstGeneralEntry (ent :: rest)
-  | isGeneralEntry ent = Some ent
-  | otherwise = firstGeneralEntry rest
-
+-- every entry is a guarded arm, a general instance's too: its dictionary carries its
+-- own canonical key.  A word no arm claims traps.
 emitDispatchChain : Emit ->
   String ->
   String ->
@@ -8717,22 +8606,17 @@ emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL
       e
       dictPtr
       headTag
-      (filterList (ent => not (isGeneralEntry ent)) impls)
+      impls
       groups
       name
       methWords
       argOps
       slot
       endL
-  match firstGeneralEntry impls
-    Some gen =>
-      emitDispatchArmBody e dictPtr gen groups name methWords argOps slot endL
-    -- #1958: no concrete arm matched and no general (catch-all) impl exists —
-    -- a dict-key mismatch.  Trap loudly (see emitDefaultDispatchChain above)
-    -- instead of a bare `unreachable`.
-    None =>
-      let _ = emit e "  call void @mdk_dispatch_no_impl()"
-      emit e "  unreachable"
+  -- #1958: no arm matched -- a dict-key mismatch.  Trap loudly instead of a bare
+  -- `unreachable`.
+  let _ = emit e "  call void @mdk_dispatch_no_impl()"
+  emit e "  unreachable"
 
 emitConcreteArms : Emit ->
   String ->
@@ -9060,32 +8944,43 @@ dictWordsOf : Emit -> OrdMap (String, LTy) -> List Route -> List String
 dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 
 -- one route -> its dict witness word (GAP 1, Option A — BOXED dict witness).
--- A dict witness is a POINTER to a heap cell `[ i64 head_tag | i64 reqdict_0 | … ]`
--- allocated via @mdk_alloc (the same boxed-cell shape emitCtorAlloc uses): field 0
--- is `hashName(impl-head-tag)`, fields 1..n are the RECURSIVELY-built witness words
--- for the impl's per-instance `requires` dicts, in `reqs` order (matching the
--- interpreter's structured `VDict(key, map dict_of_route reqs)` and the leading
--- dict-param order dict_pass binds — methRoutes then implRoutes, here the impl's
--- own requires).  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
+-- A dict witness is a POINTER to a heap cell
+-- `[ i64 head_tag | i64 super_0 | … | i64 reqdict_0 | … ]` allocated via @mdk_alloc
+-- (the same boxed-cell shape emitCtorAlloc uses): field 0 is
+-- `hashName(impl-head-tag)`, then one RECURSIVELY-built witness word per direct
+-- superinterface of the dictionary's interface (declaration order), then one per
+-- impl's per-instance `requires` dict, in `reqs` order (matching the interpreter's
+-- structured `VDict key reqs supers` and the leading dict-param order dict_pass
+-- binds — methRoutes then implRoutes, here the impl's own requires).  Supers come
+-- first so that a projection indexes the same field whichever instance the
+-- dictionary is; a dispatch arm skips them by its interface's super count.  This makes the rep UNIFORM: a one-level dict (`RKey k []`) is a
 -- pointer to a 1-word cell `[ hashName k ]`; a two-level dict nests another cell
 -- pointer in field 1.  Consumption (emitDispatchChain / the RKey direct-call path)
 -- loads field 0 for the icmp and prepends fields 1..n as the matched impl's leading
 -- element-dict args.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
-dictWordOfRoute e env (RKey key reqs) =
-  let reqWords = dictWordsOf e env reqs
-  if allConstWords reqWords then
-    emitConstDictCell e (hashName key) reqWords
+dictWordOfRoute e env (RKey key reqs sups) =
+  let fieldWords = dictWordsOf e env (sups ++ reqs)
+  if allConstWords fieldWords then
+    emitConstDictCell e (hashName key) fieldWords
   else
-    emitDictCell e (hashName key) reqWords
+    emitDictCell e (hashName key) fieldWords
 dictWordOfRoute e env (RDict d) = dictOperand e env d
 dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
+dictWordOfRoute e env (RProj r path) =
+  loadSuperPath e (dictWordOfRoute e env r) path
 dictWordOfRoute _ _ RNone = "0"
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
 -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
 -- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
 dictWordOfRoute _ _ (RLocal _ _) = "0"
+
+-- the super dictionary at [path] below the dictionary word [w]: a super index i is
+-- cell field i
+loadSuperPath : Emit -> String -> List Int -> String
+loadSuperPath _ w [] = w
+loadSuperPath e w (i :: rest) = loadSuperPath e (loadField e w i) rest
 
 -- allocate a boxed dict-witness cell `[ i64 headTag | i64 req_0 | … | i64 req_(n-1) ]`
 -- via @mdk_alloc and return its pointer word (ptrtoint).  Mirrors emitCtorAlloc's
@@ -9228,7 +9123,7 @@ emitGroup e (ImplGroup method tag key _ positions arity clauses fname) =
   let iface = ifaceNameOfWord (ifaceWordOfKey key)
   let selfFnPos = selfFnParamPositions e iface method
   let _ = setCurImplSelfFns e tag (selfFnParamNames clauses selfFnPos)
-  if trmcImplTry e fname method tag positions arity clauses then
+  if trmcImplTry e fname method tag key positions arity clauses then
     let _ = clearCurImplSelfFns e
     ()
   else
@@ -9267,12 +9162,15 @@ trmcImplTry : Emit ->
   String ->
   String ->
   String ->
+  String ->
   List Int ->
   Int ->
   List (List Pat, CExpr) ->
   Bool
-trmcImplTry e fname method tag positions arity clauses =
-  let self = SelfByMethod method tag
+-- [key] is the instance's canonical key, the word its own self-calls route on;
+-- [tag] is its head tag, which types the receiver slots.
+trmcImplTry e fname method tag key positions arity clauses =
+  let self = methodSelf method key (firstClausePats clauses)
   if arity > 0
     && dictUniformPairs clauses
     && trmcEligible (isCtor e) (ctorArity e) self arity clauses then
@@ -9635,10 +9533,8 @@ gatherGroup e entries (method, key) =
   -- instead of from the bare-method-name table, which two modules declaring
   -- same-spelled methods on unrelated interfaces silently share.  ONLY THE ARITY LEG
   -- MOVES: `iface` (`CImplTagged` field 3) keeps its bare spelling, because
-  -- `implEntryRouteKey`, `ifaceTagsGo`/`declTagOrKey` and `implEntryIface`/
-  -- `methodReturnsSelf` read it as a ROUTE WORD -- re-keying it in place is PR
-  -- #1346's E4 result and re-opens CLOSED S0 #1277.  A miss falls back to the bare
-  -- table, so a collision-free program emits byte-identically to before.
+  -- `implEntryIface`/`methodReturnsSelf` read it as a bare word.  A miss falls back
+  -- to the bare table, so a collision-free program emits byte-identically to before.
   -- #1034, THE DEFINE-ARITY MIRROR of `methodArityOfEntry`'s lowering rule.  A clause
   -- that binds at least one VALUE pattern but fewer than the declared spine proves a
   -- SHORTER source arity than the type can express, and eta-expanding it to the
@@ -12056,7 +11952,7 @@ methodBodyDeficit e app =
     _ => 0
 
 methodOccurrenceCallableArity : Emit -> String -> String -> Int -> Route -> Int
-methodOccurrenceCallableArity e name iface arity (RKey tag _) =
+methodOccurrenceCallableArity e name iface arity (RKey tag _ _) =
   match implForSite e name iface tag arity
     Some entry => methodArityOfEntry e entry name
     None => arity
@@ -15581,7 +15477,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   let _ = installRecFieldIndex e (recFieldTable e)
   let _ = installSigMap e (sigTable e)
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
-  -- dispatch scan (implsOf/implFnSymE/implEntryRouteKeyE) is O(bucket) not
+  -- dispatch scan (implsOf/implFnSymE) is O(bucket) not
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
   -- ⚠️ RUN-EMIT-003: these two MUST precede `installDefArityMap`.  That install
   -- replays `etaSaturateMethodBody` per bind, which reaches `methodBodyDeficit` →

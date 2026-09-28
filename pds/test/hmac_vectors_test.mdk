@@ -29,6 +29,7 @@ row = Row {
         "Wycheproof HMAC-SHA256: 174 unique tcIds; 87 truncated-tag rows checked via ctEq",
       ],
       lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
     },
   ],
   parity = False,

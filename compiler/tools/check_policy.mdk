@@ -24,8 +24,8 @@ import types.effect_rows.{
 --   1. parse + desugar the file;
 --   2. build a call graph (name → set of called top-level names) from the
 --      DESUGARED AST (conservative EVar collection, like collect_evars);
---   3. typecheck single-file (checkOneSchemeFull, the Module-arm full-environment
---      entry) for inferred schemes -- `--fn <name>` is arbitrary user input
+--   3. elaborate single-file (elaborateModulesWithSchemes, one drive) for inferred
+--      schemes and the tree step 6 runs -- `--fn <name>` is arbitrary user input
 --      looked up DIRECTLY in the effect table, so the schemes must include
 --      prelude names too (see the call-site comments below);
 --   4. read each fn's inferred effect row → its concrete labels
@@ -66,7 +66,10 @@ import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude}
 import tools.check.{checkHasErrors}
 import types.repr.{Scheme(..), Mono(..), normalize}
+import backend.private_mangle.{mangleCtorCollisionsPair}
 import types.typecheck.{
+  ElabResult,
+  elaborateModulesWithSchemes,
   checkOneSchemeFull,
   lastInvocationOps,
   checkModulesEntryFullSplitK,
@@ -568,12 +571,15 @@ stubSource = stringConcat
 -- Run `fn` on the sample request "X-Forwarded-For: 192.168.1.1" with stub
 -- platform impls, returning the captured stdout (LOG lines) ++ the transform
 -- line.  Mirror the OCaml accept-path eval block.
-runPlugin : String -> List Decl -> List Decl -> List Decl -> String
-runPlugin fnName rtD coreD userD =
+runPlugin : String -> ElabResult -> String
+runPlugin fnName (coreD, modules, _, _, _, _) =
   let stubD = desugar (parse stubSource)
-  let prelude = coreD ++ stubD
+  -- The plugin runs ELABORATED, as `run` does: an interface default reaches an
+  -- instance only through the elaboration's disposition table.  The stubs are
+  -- plain prelude-level values the evaluator binds after the prelude.
+  let (coreE, modulesE) = mangleCtorCollisionsPair (coreD, modules)
   outputRef := ""
-  let rootEnv = evalModulesRootEnv prelude [("__plugin__", userD)]
+  let rootEnv = evalModulesRootEnv (coreE ++ stubD) modulesE
   match lookupValue fnName rootEnv
     None => "   (no '" ++ fnName ++ "' binding in output)\n"
     Some fnVal =>
@@ -630,9 +636,10 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
   -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
   -- which is why this site was parked on the Flat wrapper until #1116 grew
   -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) =
-    checkOneSchemeFull rtD coreD ("__user__", userD)
+  -- plugin that redefines a prelude name must win its own lookup.  The same drive
+  -- elaborates the program the plugin run evaluates (see `runPlugin`).
+  let (elaborated, preludeSchemes, ownSchemes) =
+    elaborateModulesWithSchemes rtD coreD [("__plugin__", userD)]
   let schemes = ownSchemes ++ preludeSchemes
   let ops = lastInvocationOps ()
   let effTable = fnEffectsTable schemes
@@ -652,7 +659,7 @@ runCheckPolicyWith policy src rtSrc coreSrc fnName =
             else
               "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
           let header = "accepted. \{fnName} requires only \{effStr}\n"
-          let pluginOutput = runPlugin fnName rtD coreD userD
+          let pluginOutput = runPlugin fnName elaborated
           PolicyAccept (header ++ pluginOutput)
         _ =>
           let chain = findChain callGraph effTable fnName (firstOf forbidden)

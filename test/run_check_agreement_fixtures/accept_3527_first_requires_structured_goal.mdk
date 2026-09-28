@@ -1,0 +1,21 @@
+-- #3527: a goal on the FIRST `requires` predicate of a type variable, reached through
+-- a structured instance (`Debug (List k)`, `Debug (Option k)` need `Debug k`), is
+-- answered by that predicate's given even though `Ord k` was registered after it.
+-- The same constraints on a `=>` function and a default body answer alike.
+interface Look c k where
+  look : c -> k -> String
+interface Rank c where
+  rank : c -> String
+  rankD : (Debug k, Ord k) => c -> k -> String
+  rankD c b = rank c ++ debug [b]
+f : (Debug k, Ord k) => k -> String
+f b = debug [b] ++ debug (Some b)
+data Tag = Tag
+impl Rank Tag where
+  rank _ = "t:"
+data Box k = Box k
+impl Look (Box k) k requires Debug k, Ord k where
+  look (Box a) b = debug [b] ++ debug (Some a)
+viaLook : Look c k => c -> k -> String
+viaLook c k = look c k
+main = println (f (1 : Int) ++ "|" ++ rankD Tag "x" ++ "|" ++ look (Box (1 : Int)) 2 ++ "|" ++ viaLook (Box "q") "r")

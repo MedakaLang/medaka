@@ -81,6 +81,7 @@ tText = mkRowType 1 decodeText
 
 decodeText : List Cell -> Result String String
 decodeText ((CText s) :: []) = Ok s
+decodeText ((CTextRaw b) :: []) = Ok (cellToString (CTextRaw b))
 decodeText (c :: []) = Err "tText: expected text column, got \{debug c}"
 decodeText _ = Err "tText: expected exactly 1 column"
 

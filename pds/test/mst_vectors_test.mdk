@@ -4,9 +4,9 @@
 
    The value row grades the two ledgered corpora (the reference roots and
    node bytes, and the covering proofs) and the hostile-validation routes on
-   eval, and requires native and Wasm to print the same bytes. The Wasm arm
-   is skipped on a host without the Wasm emitter, `node` or `wasm-tools`,
-   unless `MEDAKA_REQUIRE_WASM=1`.
+   eval, and requires native and Wasm to print the same bytes. A host without
+   the Wasm emitter, `node` or `wasm-tools` fails the row rather than
+   skipping the Wasm arm.
 
    The scaling test builds `performance_resource_main.mdk` once and times
    four routes at 1000 and 2000 rows: `mstValidateBlocks` rejecting a
@@ -42,8 +42,7 @@ import test.vector_runner.{
   Row(..),
   buildNative,
   expectRow,
-  freshScratch,
-  reap,
+  inScratch,
   runSeconds,
   spawn,
   spawnFindings,
@@ -119,6 +118,7 @@ arm e needs = Arm {
   countFloor = None,
   needs = needs,
   lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
 }
 
 -- The driver reads the reference corpus first and the covering-proof corpus
@@ -395,12 +395,6 @@ pageFindings scratch =
   match built
     [] => costCorpora scratch synth
     fs => fs
-
-inScratch : (String -> <Clock, Exec, IO> List String) ->
-  <Clock, Exec, IO> Result String (List String)
-inScratch check = match freshScratch ()
-  Err e => Err "could not make a scratch directory: \{e}"
-  Ok scratch => Ok (reap scratch (check scratch))
 
 test "MST: 11 official-reference cases, 17 covering-proof rows, 14 hostile routes, 3 lexical controls, eval == native == Wasm" =
   expectRow row

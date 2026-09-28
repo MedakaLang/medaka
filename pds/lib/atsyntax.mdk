@@ -6,8 +6,11 @@
    `pds/test/atsyntax_vectors_test.mdk`). NSID and TID have their own modules
    (`lib.nsid`, `lib.tid`) and are graded there. -}
 
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import regex.{Regex, isFullMatchBytes, mustCompile}
-import string.{contains, indexOf, split, take, toUtf8, utf8ByteLength}
+import string.{contains, indexOf, split, take, utf8ByteLength}
+import u8 as U8
 import lib.nsid.{nsidErrorMessage, validateNsid}
 
 -- | The DID portion of a DID URL or service identifier.
@@ -38,36 +41,34 @@ alphaByte byte = lowerByte byte || upperByte byte
 alphaNumericByte : Int -> Bool
 alphaNumericByte byte = alphaByte byte || digitByte byte
 
+byteAt : Bytes -> Int -> Int
+byteAt bytes i = U8.toInt bytes[i]
+
 -- handle ------------------------------------------------------------------------
 
 handleLabelRe : Regex
 handleLabelRe = mustCompile "[a-zA-Z0-9-]*"
 
-validateHandleLabel : Array Int -> Int -> Int -> Bool -> Result String Unit
+validateHandleLabel : Bytes -> Int -> Int -> Bool -> Result String Unit
 validateHandleLabel bytes start end isFinal =
   let size = end - start
   if size < 1 || size > 63 then
     Err "handle: label length must be 1..63 characters"
-  else if bytes[start] == 45 || bytes[end - 1] == 45 then
+  else if byteAt bytes start == 45 || byteAt bytes (end - 1) == 45 then
     Err "handle: label must not start or end with a hyphen"
   else if not (isFullMatchBytes handleLabelRe bytes start end) then
     Err "handle: label contains invalid characters"
-  else if isFinal && not (alphaByte bytes[start]) then
+  else if isFinal && not (alphaByte (byteAt bytes start)) then
     Err "handle: final label must start with an ASCII letter"
   else
     Ok ()
 
-validateHandleLabels : Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Result String Int
+validateHandleLabels : Bytes -> Int -> Int -> Int -> Int -> Result String Int
 validateHandleLabels bytes i end labelStart labelCount =
   if i >= end then do
     () <- validateHandleLabel bytes labelStart end True
     Ok (labelCount + 1)
-  else if bytes[i] == 46 then do
+  else if byteAt bytes i == 46 then do
     () <- validateHandleLabel bytes labelStart i False
     validateHandleLabels bytes (i + 1) end (i + 1) (labelCount + 1)
   else
@@ -79,8 +80,8 @@ validateHandleLabels bytes i end labelStart labelCount =
 export
 validateHandle : String -> Result String Unit
 validateHandle handle =
-  let bytes = toUtf8 handle
-  let len = arrayLength bytes
+  let bytes = encodeUtf8 handle
+  let len = B.length bytes
   if len < 1 || len > 253 then
     Err "handle: length must be 1..253 characters"
   else match validateHandleLabels bytes 0 len 0 0
@@ -97,21 +98,16 @@ didLastByte : Int -> Bool
 didLastByte byte =
   alphaNumericByte byte || byte == 46 || byte == 95 || byte == 45
 
-hasDidPrefix : Array Int -> Bool
-hasDidPrefix bytes =
-  arrayLength bytes >= 4
-    && bytes[0] == 100
-    && bytes[1] == 105
-    && bytes[2] == 100
-    && bytes[3] == 58
+hasDidPrefix : Bytes -> Bool
+hasDidPrefix bytes = B.startsWith (encodeUtf8 "did:") bytes
 
-didMethodEnd : Array Int -> Int -> Int -> Option Int
+didMethodEnd : Bytes -> Int -> Int -> Option Int
 didMethodEnd bytes i end =
   if i >= end then
     None
-  else if bytes[i] == 58 then
+  else if byteAt bytes i == 58 then
     Some i
-  else if lowerByte bytes[i] then
+  else if lowerByte (byteAt bytes i) then
     didMethodEnd bytes (i + 1) end
   else
     None
@@ -122,8 +118,8 @@ didMethodEnd bytes i end =
 export
 validateDid : String -> Result String Unit
 validateDid did =
-  let bytes = toUtf8 did
-  let len = arrayLength bytes
+  let bytes = encodeUtf8 did
+  let len = B.length bytes
   if len > 2048 then
     Err "did: exceeds 2048 characters"
   else if not (hasDidPrefix bytes) then
@@ -140,7 +136,7 @@ validateDid did =
         else if not
           (isFullMatchBytes didIdentifierRe bytes idStart (len - 1)) then
           Err "did: identifier contains invalid characters"
-        else if not (didLastByte bytes[len - 1]) then
+        else if not (didLastByte (byteAt bytes (len - 1))) then
           Err "did: identifier must not end with \":\" or \"%\""
         else
           Ok ()
@@ -151,7 +147,7 @@ validateDid did =
 export
 validateAtIdentifier : String -> Result String Unit
 validateAtIdentifier id =
-  if hasDidPrefix (toUtf8 id) then validateDid id else validateHandle id
+  if hasDidPrefix (encodeUtf8 id) then validateDid id else validateHandle id
 
 -- record key ------------------------------------------------------------------
 
@@ -163,13 +159,13 @@ recordKeyRe = mustCompile "[a-zA-Z0-9_~.:-]*"
 export
 validateRecordKey : String -> Result String Unit
 validateRecordKey key =
-  let bytes = toUtf8 key
-  let len = arrayLength bytes
+  let bytes = encodeUtf8 key
+  let len = B.length bytes
   if len < 1 || len > 512 then
     Err "record key: length must be 1..512 characters"
-  else if len == 1 && bytes[0] == 46 then
+  else if len == 1 && byteAt bytes 0 == 46 then
     Err "record key: must not be \".\" or \"..\""
-  else if len == 2 && bytes[0] == 46 && bytes[1] == 46 then
+  else if len == 2 && byteAt bytes 0 == 46 && byteAt bytes 1 == 46 then
     Err "record key: must not be \".\" or \"..\""
   else if not (isFullMatchBytes recordKeyRe bytes 0 len) then
     Err "record key: invalid characters"

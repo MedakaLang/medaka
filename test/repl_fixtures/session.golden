@@ -2,5 +2,7 @@ medaka repl (:quit to exit, :reset to clear session)
 > val x : Int
 > val y : Int
 > [42, 43] : List Int
+> [2, 3] : List Int
+> 2.5 : Float
 > > 43 : Int
 > 

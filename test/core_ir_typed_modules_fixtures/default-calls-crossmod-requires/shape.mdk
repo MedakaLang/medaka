@@ -1,0 +1,4 @@
+export interface Show2 a where
+  show2 : a -> String
+  showTwice : a -> String
+  showTwice x = show2 x ++ show2 x

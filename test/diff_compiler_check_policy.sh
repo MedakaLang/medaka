@@ -69,6 +69,8 @@ one_case "good-reject"        demo/plugin_good.mdk      "Cache"     transform ws
 one_case "malicious-reject"   demo/plugin_malicious.mdk "Cache,Log" transform ws1a_malicious_reject
 # Reject from a mid-graph entry: trace from tagVisit (chain to fetch).
 one_case "midgraph-reject"    demo/plugin_malicious.mdk "Cache,Log" tagVisit  ws1a_midgraph_reject
+# Accept: the plugin run reaches a user interface default and a prelude one.
+one_case "defaults-accept"    test/check_policy_fixtures/defaults_plugin.mdk "Log,FFI" transform defaults_accept
 #
 # NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
 # is deliberately NOT tested.  check-policy ACCEPT runs the plugin with stubs for

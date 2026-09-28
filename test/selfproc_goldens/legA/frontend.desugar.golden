@@ -43,12 +43,8 @@ eqSameConArm : Variant -> Arm
 expandDecl : Decl -> List Decl
 exprLoc : Expr -> Option Loc
 fallthrough : Expr
-fillImplDecl : List Decl -> Decl -> Decl
-fillImplDefaults : List Decl -> List Decl
 firstDoStmtLoc : List DoStmt -> Option Loc
 foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
-freshenExprCells : Expr -> Expr
-freshenNodeCells : Expr -> Expr
 genVars : String -> Int -> List String
 genVarsGo : String -> Int -> Int -> List String
 genericArm : Variant -> Arm
@@ -57,11 +53,6 @@ genericRep : String -> ConPayload -> List String -> Expr
 guardsToCore : List GuardArm -> Expr
 hashArm : (Int, Variant) -> Arm
 hashFold : Expr -> List String -> Expr
-ifaceDefaults : String -> List Decl -> List IfaceMethod
-ifaceDefaultsStep : String -> Decl -> List Decl -> List IfaceMethod
-ifaceMethodHasDefault : IfaceMethod -> Bool
-implDefines : String -> List ImplMethod -> Bool
-implMethodNamed : String -> ImplMethod -> Bool
 indexFrom : Int -> List a -> List (Int, a)
 insertMethod : (Map String IfaceMethod, List String) -> IfaceMethod -> (Map String IfaceMethod, List String)
 intLit : Int -> Expr
@@ -128,8 +119,6 @@ showFieldParts : String -> Int -> List String -> List Expr
 showNamedPart : String -> Int -> String -> String -> List Expr
 showNamedParts : String -> Int -> List Field -> List String -> List Expr
 stripLocE : Expr -> Expr
-synthDefaultMethods : List ImplMethod -> List IfaceMethod -> List ImplMethod
-synthFromDefault : IfaceMethod -> ImplMethod
 toRep : String -> Expr
 typeKindedParams : List String -> List (Option KindAnn) -> List String
 unknownDerive : String -> List String -> DeriveRef -> List (String, Option Loc)

@@ -1,0 +1,49 @@
+-- Recursive interface defaults, deep enough that each needs a constant-stack self
+-- call: `count` recurses in tail position, `path` conses onto its recursive call
+-- (tail recursion modulo cons).  An inheriting instance's entry calls ITSELF
+-- directly, so native and wasm run both in constant stack -- at an instance with
+-- no dictionary fields (`Walk Int`) and at one whose receiver carries a super and
+-- a `requires` (`Walk (Box a)`).  The interpreter has no TCO and stops at 25000.
+interface Named a where
+  name : a -> String
+
+interface Walk a requires Named a where
+  step : a -> a
+  done : a -> Bool
+  toI : a -> Int
+  count : a -> Int -> Int
+  count x acc = if done x then acc else count (step x) (acc + 1)
+  path : a -> List Int
+  path x = if done x then [] else toI x :: path (step x)
+
+data Box a = Box a
+
+impl Named Int where
+  name _ = "int"
+
+impl Named (Box a) where
+  name _ = "box"
+
+impl Walk Int where
+  step n = n - 1
+  done n = n == 0
+  toI n = n
+
+impl Walk (Box a) requires Walk a where
+  step (Box v) = Box (step v)
+  done (Box v) = done v
+  toI (Box v) = toI v
+
+-- the length of a list, in constant stack in this program's own code
+size : List Int -> Int -> Int
+size [] n = n
+size (_ :: rest) n = size rest (n + 1)
+
+-- Every depth is past wasm's stack without a constant-stack self call (it overflows
+-- before 200000 frames); `path` at 10000000 is also past native's.
+main = (
+  count (3000000 : Int) 0,
+  size (path (10000000 : Int)) 0,
+  count (Box (3000000 : Int)) 0,
+  size (path (Box (3000000 : Int))) 0,
+)

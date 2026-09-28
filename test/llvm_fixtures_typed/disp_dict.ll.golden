@@ -165,6 +165,8 @@ declare i64 @mdk_net_try_recv(i64, i64)
 declare i64 @mdk_net_try_recv_bytes(i64, i64)
 declare i64 @mdk_net_try_send(i64, i64)
 declare i64 @mdk_net_try_send_from(i64, i64, i64)
+declare i64 @mdk_net_send_bytes_from(i64, i64, i64, i64)
+declare i64 @mdk_net_try_send_bytes_from(i64, i64, i64, i64)
 declare void @mdk_set_seed(i64)
 declare i64 @mdk_random_int(i64, i64)
 declare i64 @mdk_random_bool(i64)
@@ -287,9 +289,9 @@ entry:
 ; mdk-module $memo_zZ_5f
 @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero = global i8 0
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -2139650227136221560]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 -3893398351438382513]
 ; mdk-module program
-@mdk_dc.program.1 = internal constant [1 x i64] [i64 193460240]
+@mdk_dc.program.1 = internal constant [1 x i64] [i64 -1783691015315715305]
 ; mdk-module program
 @.gname.$memo_Int_zero = private unnamed_addr constant [15 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\7A\65\72\6F\00"
 ; mdk-module $memo_zZ_5f
@@ -300,27 +302,23 @@ entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
-  %t4 = icmp eq i64 %t1, 193460240
-  %t5 = icmp eq i64 %t1, -1783691015315715305
-  %t6 = or i1 %t4, %t5
-  br i1 %t6, label %dispyes7, label %dispnext7
-dispyes7:
-  %t8 = call i64 @mdk_force_$memo_Int_zero()
-  store i64 %t8, ptr %t2
+  %t4 = icmp eq i64 %t1, -1783691015315715305
+  br i1 %t4, label %dispyes5, label %dispnext5
+dispyes5:
+  %t6 = call i64 @mdk_force_$memo_Int_zero()
+  store i64 %t6, ptr %t2
   br label %dispend3
-dispnext7:
-  %t9 = icmp eq i64 %t1, -2139650227136221560
-  %t10 = icmp eq i64 %t1, -3893398351438382513
-  %t11 = or i1 %t9, %t10
-  br i1 %t11, label %dispyes12, label %dispnext12
-dispyes12:
-  %t13 = call i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero()
-  store i64 %t13, ptr %t2
+dispnext5:
+  %t7 = icmp eq i64 %t1, -3893398351438382513
+  br i1 %t7, label %dispyes8, label %dispnext8
+dispyes8:
+  %t9 = call i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero()
+  store i64 %t9, ptr %t2
   br label %dispend3
-dispnext12:
+dispnext8:
   call void @mdk_dispatch_no_impl()
   unreachable
 dispend3:
-  %t14 = load i64, ptr %t2
-  ret i64 %t14
+  %t10 = load i64, ptr %t2
+  ret i64 %t10
 }

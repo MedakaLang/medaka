@@ -64,10 +64,9 @@ import test.{
   pass,
 }
 import bytes as B
-import bytes.{Bytes, encodeUtf8, fromArray}
-import string.{contains, toUtf8}
+import bytes.{Bytes, encodeUtf8, fromArray, fromU8Array}
+import string.{contains}
 import mut_bytes as MB
-import test.fixture_support.{appendBytes}
 
 rejects : String -> Bytes -> Bool
 rejects expected input = match parseRequest input
@@ -82,13 +81,8 @@ mustRequest input = match parseRequest input
 names : List Header -> List String
 names = map headerName
 
-mustBytes : Array Int -> Bytes
-mustBytes arr = match fromArray arr
-  Some bytes => bytes
-  None => panic "http_test: element outside the byte domain"
-
 emptyBytes : Bytes
-emptyBytes = mustBytes [||]
+emptyBytes = empty
 
 mustHeader : String -> Bytes -> Header
 mustHeader name value = match makeHeader name value
@@ -122,7 +116,7 @@ fixedBinary : Bytes
 fixedBinary =
   encodeUtf8
       "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 3\r\nConnection: keep-alive, CLOSE\r\nX-Repeat: one\r\nX-Repeat: two\r\n\r\n"
-    ++ mustBytes [|0, 128, 255|]
+    ++ fromU8Array [|0, 128, 255|]
 
 chunked : Bytes
 chunked =
@@ -154,7 +148,7 @@ test "fixed-length framing preserves raw binary body and ordered duplicates" =
   expectEach [
     (
       "the binary body survives byte for byte",
-      expectEqual (mustBytes [|0, 128, 255|]) (requestBody request),
+      expectEqual (fromU8Array [|0, 128, 255|]) (requestBody request),
     ),
     (
       "the header names keep their order, repeats included",
@@ -333,7 +327,7 @@ test "non-ASCII byte in method is rejected" =
   expectTrue
     (rejects
       "method token"
-      (mustBytes [|255|]
+      (fromU8Array [|255|]
         ++ encodeUtf8 "ET / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "non-ASCII byte in target is rejected" =
@@ -341,7 +335,7 @@ test "non-ASCII byte in target is rejected" =
     (rejects
       "origin-form ASCII target"
       (encodeUtf8 "GET /"
-        ++ mustBytes [|128|]
+        ++ fromU8Array [|128|]
         ++ encodeUtf8 " HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "invalid header-name token is rejected" =
@@ -356,7 +350,7 @@ test "control byte in header value is rejected" =
     (rejects
       "control byte"
       (encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test: "
-        ++ mustBytes [|1|]
+        ++ fromU8Array [|1|]
         ++ encodeUtf8 "\r\n\r\n"))
 
 test "CRLF injection in request target is rejected" =
@@ -375,9 +369,9 @@ test "a non-byte input element is refused at the door, not interpreted" =
   expectTrue
     (isNone
       (fromArray
-        (appendBytes
-          [|71, 256|]
-          (toUtf8 "T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))))
+        ([|71, 256|]
+          ++ B.toArray
+            (encodeUtf8 "T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))))
 
 test "absolute-form request target is rejected" =
   expectTrue
@@ -582,12 +576,12 @@ test "binary response serialization preserves header order and bytes" =
         mustHeader "X-First" (encodeUtf8 "one"),
         mustHeader "Content-Type" (encodeUtf8 "application/octet-stream"),
       ]
-      (mustBytes [|0, 255|])
+      (fromU8Array [|0, 255|])
   expectEqual
     (serializeResponse response)
     (encodeUtf8
         "HTTP/1.1 200 OK\r\nx-first: one\r\ncontent-type: application/octet-stream\r\ncontent-length: 2\r\n\r\n"
-      ++ mustBytes [|0, 255|])
+      ++ fromU8Array [|0, 255|])
 
 test "response status outside the three-digit supported range is rejected" = expectEach
   [
@@ -731,7 +725,7 @@ test "malformed and non-ASCII media types are rejected" = expectEach [
   ),
   (
     "a non-ASCII byte in the media type is refused",
-    expectTrue (isErr (parseMediaType (mustBytes [|97, 112, 112, 47, 255|]))),
+    expectTrue (isErr (parseMediaType (fromU8Array [|97, 112, 112, 47, 255|]))),
   ),
 ]
 
@@ -753,7 +747,7 @@ test "invalid JSON UTF-8 is rejected before syntax parsing" =
   expectTrue
     (bodyRejects
       "not valid UTF-8"
-      (requestWithBody "application/json" (mustBytes [|0xc0, 0xaf|])))
+      (requestWithBody "application/json" (fromU8Array [|0xc0, 0xaf|])))
 
 test "duplicate Content-Type is rejected" =
   let request =
@@ -785,11 +779,11 @@ test "invalid text UTF-8 is rejected" =
   expectTrue
     (bodyRejects
       "not valid UTF-8"
-      (requestWithBody "text/plain" (mustBytes [|0xed, 0xa0, 0x80|])))
+      (requestWithBody "text/plain" (fromU8Array [|0xed, 0xa0, 0x80|])))
 
 test "raw media types preserve binary bytes" =
   match (decodeRequestBody
-    (requestWithBody "image/png" (mustBytes [|0, 128, 255|])))
+    (requestWithBody "image/png" (fromU8Array [|0, 128, 255|])))
     Ok (RawBody mediaType bytes) => expectEach [
       (
         "the media type is image",
@@ -801,7 +795,7 @@ test "raw media types preserve binary bytes" =
       ),
       (
         "the body bytes are passed through untouched",
-        expectEqual (mustBytes [|0, 128, 255|]) bytes,
+        expectEqual (fromU8Array [|0, 128, 255|]) bytes,
       ),
     ]
     _ => fail "expected a RawBody decode result"
@@ -1009,7 +1003,7 @@ test "pipelined requests are framed one at a time from a single buffer" =
         ),
         (
           "the second request's body is framed whole",
-          expectEqual (mustBytes [|0, 128, 255|]) (requestBody tail),
+          expectEqual (fromU8Array [|0, 128, 255|]) (requestBody tail),
         ),
       ]
       _ => fail "expected both parseRequestAt calls to succeed"
@@ -1147,7 +1141,7 @@ tenByteBody =
     "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 10\r\n\r\nabc"
 
 test "a body short of its content length is pending, padding notwithstanding" =
-  let padded = tenByteBody ++ mustBytes (arrayMakeWith 7 (_ => 0))
+  let padded = tenByteBody ++ fromU8Array (arrayMakeWith 7 (_ => 0))
   match (
     fst
       (scanRequestBoundaryWithin
