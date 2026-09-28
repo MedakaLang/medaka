@@ -1,11 +1,32 @@
-{- | Structural TID and pre-sign repository admission tests.
-   Protocol answer bytes remain only in the provenance-ledgered corpus. -}
+{- | Structural TID and pre-sign repository admission tests, and the
+   revision a write commits at, driven through the record-write handler at a
+   chosen clock. Protocol answer bytes remain only in the provenance-ledgered
+   corpus. -}
 
-import bytes.{fromU8Array}
+import bytes.{encodeUtf8, fromU8Array}
+import json.{Json(..), jObject}
 import string.{contains}
-import test.{expectEach, expectEqual, expectFalse, expectOkThen, expectTrue}
+import test.{
+  Expectation,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectOkThen,
+  expectTrue,
+  fail,
+}
+import lib.handlers.{recordHandler}
 import lib.nsid.{validateNsid}
-import lib.repo.{repoInitFromKeyBytes}
+import lib.repo.{
+  repoCommitTid,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoLookup,
+}
+import lib.server_core.{Account, AuthOutcome(..), makeAccount}
+import lib.store.{Store, storeFromRepo, storeRepo}
+import lib.xrpc.{XrpcCall(..)}
+import test.fixture_support.{contextAt}
 import lib.tid.{
   Tid,
   tidClockId,
@@ -117,5 +138,134 @@ test "shared generic NSID authority accepts uppercase while retaining lowercase 
     (
       "the lowercase spelling is still accepted",
       expectFalse (isErr (validateNsid "com.atproto.test")),
+    ),
+  ]
+
+-- # The revision a write commits at
+
+revisionDid : String
+revisionDid = "did:plc:medakarevision"
+
+revisionAccount : Account
+revisionAccount =
+  resultOrPanic
+    "repo_tid_test: account setup failed"
+    (makeAccount revisionDid "medaka.example" "pds.example")
+
+-- The latest commit's revision: exactly second 1700000100, clock id 7.
+priorSeconds : Int
+priorSeconds = 1700000100
+
+priorStore : Store
+priorStore =
+  storeFromRepo
+    (resultOrPanic
+      "repo_tid_test: repository setup failed"
+      (repoInitFromKeyBytes
+        revisionDid
+        (fromU8Array (arrayMake 32 1))
+        (mustTid (priorSeconds * 1000000) 7)))
+
+postValue : Json
+postValue = jObject [
+  ("$type", JString "app.bsky.feed.post"),
+  ("text", JString "hello"),
+  ("createdAt", JString "2023-11-14T22:15:00Z"),
+]
+
+createWithoutRkey : Json
+createWithoutRkey = jObject [
+  ("repo", JString revisionDid),
+  ("collection", JString "app.bsky.feed.post"),
+  ("record", postValue),
+]
+
+batchCreate : Json
+batchCreate = jObject [
+  ("$type", JString "com.atproto.repo.applyWrites#create"),
+  ("collection", JString "app.bsky.feed.post"),
+  ("value", postValue),
+]
+
+threeCreates : Json
+threeCreates = jObject [
+  ("repo", JString revisionDid),
+  ("writes", JArray (arrayFromList [batchCreate, batchCreate, batchCreate])),
+]
+
+writeAt : Int -> String -> Json -> Store -> Store
+writeAt seconds nsid body store =
+  let (next, _) =
+    recordHandler
+      revisionAccount
+      (contextAt seconds 1)
+      Unauthenticated
+      store
+      (ProcedureJsonCall nsid [] body)
+  next
+
+createAt : Int -> Store -> Store
+createAt seconds =
+  writeAt seconds "com.atproto.repo.createRecord" createWithoutRkey
+
+latestRevision : Store -> Option Int
+latestRevision store =
+  map
+    (repo => tidMicros (repoCommitTid (repoLatestCommit repo)))
+    (storeRepo store)
+
+keyPresent : Store -> Int -> Expectation
+keyPresent store micros = match storeRepo store
+  None => fail "the store holds no repository"
+  Some repo =>
+    let key = "app.bsky.feed.post/\{tidToString (mustTid micros 7)}"
+    expectEqual (Ok True) (map isSome (repoLookup (encodeUtf8 key) repo))
+
+test "a clock behind the latest commit still advances the revision" =
+  let stepped = createAt (priorSeconds - 3600) priorStore
+  expectEqual (Some (priorSeconds * 1000000 + 1)) (latestRevision stepped)
+
+test "a clock that steps back after a clock-based write keeps the revision rising" =
+  let ahead = createAt (priorSeconds + 60) priorStore
+  let back = createAt priorSeconds ahead
+  expectEach [
+    (
+      "the first write commits at its clock",
+      expectEqual (Some ((priorSeconds + 60) * 1000000)) (latestRevision ahead),
+    ),
+    (
+      "the stepped-back write commits one microsecond later",
+      expectEqual
+        (Some ((priorSeconds + 60) * 1000000 + 1))
+        (latestRevision back),
+    ),
+  ]
+
+test "three rkey-less creates in one batch get three distinct keys" =
+  let clock = priorSeconds + 1
+  let batched =
+    writeAt clock "com.atproto.repo.applyWrites" threeCreates priorStore
+  expectEach [
+    ("the first key is the clock", keyPresent batched (clock * 1000000)),
+    ("the second key follows it", keyPresent batched (clock * 1000000 + 1)),
+    ("the third key follows that", keyPresent batched (clock * 1000000 + 2)),
+    (
+      "the commit lands past every key",
+      expectEqual (Some (clock * 1000000 + 3)) (latestRevision batched),
+    ),
+  ]
+
+test "a clock one second past the latest commit sets the revision" =
+  let clock = priorSeconds + 1
+  let first = createAt clock priorStore
+  let second = createAt clock first
+  expectEach [
+    (
+      "the first write in that second commits at its start",
+      expectEqual (Some (clock * 1000000)) (latestRevision first),
+    ),
+    (
+      "a second write in that second leads the clock by one microsecond",
+      expectEqual (Some (clock * 1000000 + 1)) (latestRevision second),
     ),
   ]

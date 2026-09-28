@@ -374,31 +374,49 @@ seconds-long merge-queue gate into the >10-minute band that #2208 removed from
 this project. A record write against an unconfigured store is refused with
 `RepoNotFound`, never silently accepted.
 
-### Where the revision comes from (there is no clock)
+### Where the revision comes from
 
 `repoCreate`/`repoUpdate`/`repoDelete` each require an explicit, strictly
-monotonic `Tid`, but the pinned lexicon input has no `rev` or `tid` field for a
-caller to supply one, and nothing in the pure core may read a clock. The
-revision is therefore derived from the repository's OWN latest commit:
+monotonic `Tid`, and the pinned lexicon input has no `rev` or `tid` field for a
+caller to supply one. Nothing in the pure core may read a clock, so the shell
+passes its instant in as `RequestContext`'s `nowSeconds`, and
+`pds/lib/handlers.mdk`'s `nextRevision` proposes the revision from it:
 
 ```
-next = tidNext prior (tidMicros prior) (tidClockId prior)
+next = tidNext prior (nowSeconds * 1000000) (tidClockId prior)
 ```
 
-`tidNext` returns the proposal when it is strictly newer than `prior` and
-otherwise advances `prior` by exactly one microsecond under the proposed clock
-id. The proposal here IS the prior timestamp, so the second arm always fires:
-every write advances the repository revision by one microsecond and keeps the
-clock id the repository was initialized with. The whole revision sequence is a
-pure function of the initializing `Tid`, which is why it reproduces the
-reference transcript's revisions exactly — initialized at `3ke6kg3wk222b`
-(micros `1700000000000000`, clock id `7`), then `…232b`, `…242b`, `…252b`,
-`…262b` — and therefore reproduces that transcript's record CIDs, `rev`s, and
-commit CIDs byte for byte.
+`tidNext` returns the proposal when it is strictly newer than `prior`, the
+latest commit's revision, and otherwise advances `prior` by exactly one
+microsecond. Four properties follow:
 
-`createRecord` with no `rkey` uses that same derived revision's canonical
+- The revision is strictly increasing across a restart, across a clock that
+  steps backwards, and across several writes in one second, because the
+  fallback always moves forward from the latest commit.
+- Several rkey-less creates in one `applyWrites` batch get distinct keys: each
+  takes the next one-microsecond successor of the batch's revision, and the
+  commit lands past all of them.
+- While the clock has not stepped backwards, the revision runs ahead of it by
+  at most the number of revisions and keys already minted in the current
+  second, in microseconds. The proposal is the start of the request's second,
+  never rounded up, because a relay refuses a commit whose revision is in the
+  future. After a backwards step, the one-microsecond successors lead the
+  clock until it catches up; strict increase wins.
+- A repository whose revision was minted by any earlier rule, including the
+  one that advanced every write by one microsecond from the initializing
+  `Tid`, is followed by a clock-based revision on its next write, with no
+  special case.
+
+The clock id is always the one the repository was initialized with. The
+reference transcript is replayed at the instant its repository was initialized
+(`3ke6kg3wk222b`, micros `1700000000000000`, clock id `7`), so no proposal there
+is newer, and its revisions are the successors `…232b`, `…242b`, `…252b`,
+`…262b`. That is why the handler layer still reproduces the transcript's record
+CIDs, `rev`s, and commit CIDs byte for byte.
+
+`createRecord` with no `rkey` uses its commit revision's canonical
 thirteen-character TID spelling as the record key, which is what a real PDS
-does with its clock, and is deterministic here for the same reason.
+does with its clock.
 
 ### Blob persistence on disk
 
