@@ -1,0 +1,1285 @@
+{
+ "app.bsky.actor.profile#main": {
+  "type": "record",
+  "key": "literal:self",
+  "record": {
+   "type": "object",
+   "required": [],
+   "properties": {
+    "displayName": {
+     "type": "string",
+     "maxGraphemes": 64,
+     "maxLength": 640
+    },
+    "description": {
+     "type": "string",
+     "maxGraphemes": 256,
+     "maxLength": 2560
+    },
+    "pronouns": {
+     "type": "string",
+     "maxGraphemes": 20,
+     "maxLength": 200
+    },
+    "website": {
+     "type": "string",
+     "format": "uri"
+    },
+    "avatar": {
+     "type": "blob",
+     "accept": [
+      "image/png",
+      "image/jpeg"
+     ],
+     "maxSize": 1000000
+    },
+    "banner": {
+     "type": "blob",
+     "accept": [
+      "image/png",
+      "image/jpeg"
+     ],
+     "maxSize": 1000000
+    },
+    "labels": {
+     "type": "union",
+     "refs": [
+      "com.atproto.label.defs#selfLabels"
+     ],
+     "closed": false
+    },
+    "joinedViaStarterPack": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    },
+    "pinnedPost": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.actor.status#main": {
+  "type": "record",
+  "key": "literal:self",
+  "record": {
+   "type": "object",
+   "required": [
+    "status",
+    "createdAt"
+   ],
+   "properties": {
+    "status": {
+     "type": "string"
+    },
+    "embed": {
+     "type": "union",
+     "refs": [
+      "app.bsky.embed.external#main"
+     ],
+     "closed": false
+    },
+    "durationMinutes": {
+     "type": "integer",
+     "minimum": 1
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.ageassurance.defs#access": {
+  "type": "string"
+ },
+ "app.bsky.embed.defs#aspectRatio": {
+  "type": "object",
+  "required": [
+   "width",
+   "height"
+  ],
+  "properties": {
+   "width": {
+    "type": "integer",
+    "minimum": 1
+   },
+   "height": {
+    "type": "integer",
+    "minimum": 1
+   }
+  }
+ },
+ "app.bsky.embed.external#external": {
+  "type": "object",
+  "required": [
+   "uri",
+   "title",
+   "description"
+  ],
+  "properties": {
+   "uri": {
+    "type": "string",
+    "format": "uri"
+   },
+   "title": {
+    "type": "string"
+   },
+   "description": {
+    "type": "string"
+   },
+   "thumb": {
+    "type": "blob",
+    "accept": [
+     "image/*"
+    ],
+    "maxSize": 1000000
+   },
+   "associatedRefs": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    }
+   }
+  }
+ },
+ "app.bsky.embed.external#main": {
+  "type": "object",
+  "required": [
+   "external"
+  ],
+  "properties": {
+   "external": {
+    "type": "ref",
+    "ref": "app.bsky.embed.external#external"
+   }
+  }
+ },
+ "app.bsky.embed.gallery#image": {
+  "type": "object",
+  "required": [
+   "image",
+   "alt",
+   "aspectRatio"
+  ],
+  "properties": {
+   "image": {
+    "type": "blob",
+    "accept": [
+     "image/*"
+    ],
+    "maxSize": 2000000
+   },
+   "alt": {
+    "type": "string"
+   },
+   "aspectRatio": {
+    "type": "ref",
+    "ref": "app.bsky.embed.defs#aspectRatio"
+   }
+  }
+ },
+ "app.bsky.embed.gallery#main": {
+  "type": "object",
+  "required": [
+   "items"
+  ],
+  "properties": {
+   "items": {
+    "type": "array",
+    "items": {
+     "type": "union",
+     "refs": [
+      "app.bsky.embed.gallery#image"
+     ],
+     "closed": false
+    },
+    "maxLength": 20
+   }
+  }
+ },
+ "app.bsky.embed.images#image": {
+  "type": "object",
+  "required": [
+   "image",
+   "alt"
+  ],
+  "properties": {
+   "image": {
+    "type": "blob",
+    "accept": [
+     "image/*"
+    ],
+    "maxSize": 2000000
+   },
+   "alt": {
+    "type": "string"
+   },
+   "aspectRatio": {
+    "type": "ref",
+    "ref": "app.bsky.embed.defs#aspectRatio"
+   }
+  }
+ },
+ "app.bsky.embed.images#main": {
+  "type": "object",
+  "required": [
+   "images"
+  ],
+  "properties": {
+   "images": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "app.bsky.embed.images#image"
+    },
+    "maxLength": 4
+   }
+  }
+ },
+ "app.bsky.embed.record#main": {
+  "type": "object",
+  "required": [
+   "record"
+  ],
+  "properties": {
+   "record": {
+    "type": "ref",
+    "ref": "com.atproto.repo.strongRef#main"
+   }
+  }
+ },
+ "app.bsky.embed.recordWithMedia#main": {
+  "type": "object",
+  "required": [
+   "record",
+   "media"
+  ],
+  "properties": {
+   "record": {
+    "type": "ref",
+    "ref": "app.bsky.embed.record#main"
+   },
+   "media": {
+    "type": "union",
+    "refs": [
+     "app.bsky.embed.images#main",
+     "app.bsky.embed.video#main",
+     "app.bsky.embed.gallery#main",
+     "app.bsky.embed.external#main"
+    ],
+    "closed": false
+   }
+  }
+ },
+ "app.bsky.embed.video#caption": {
+  "type": "object",
+  "required": [
+   "lang",
+   "file"
+  ],
+  "properties": {
+   "lang": {
+    "type": "string",
+    "format": "language"
+   },
+   "file": {
+    "type": "blob",
+    "accept": [
+     "text/vtt"
+    ],
+    "maxSize": 20000
+   }
+  }
+ },
+ "app.bsky.embed.video#main": {
+  "type": "object",
+  "required": [
+   "video"
+  ],
+  "properties": {
+   "video": {
+    "type": "blob",
+    "accept": [
+     "video/mp4"
+    ],
+    "maxSize": 300000000
+   },
+   "captions": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "app.bsky.embed.video#caption"
+    },
+    "maxLength": 20
+   },
+   "alt": {
+    "type": "string",
+    "maxGraphemes": 1000,
+    "maxLength": 10000
+   },
+   "aspectRatio": {
+    "type": "ref",
+    "ref": "app.bsky.embed.defs#aspectRatio"
+   },
+   "presentation": {
+    "type": "string"
+   }
+  }
+ },
+ "app.bsky.feed.generator#main": {
+  "type": "record",
+  "key": "any",
+  "record": {
+   "type": "object",
+   "required": [
+    "did",
+    "displayName",
+    "createdAt"
+   ],
+   "properties": {
+    "did": {
+     "type": "string",
+     "format": "did"
+    },
+    "displayName": {
+     "type": "string",
+     "maxGraphemes": 24,
+     "maxLength": 240
+    },
+    "description": {
+     "type": "string",
+     "maxGraphemes": 300,
+     "maxLength": 3000
+    },
+    "descriptionFacets": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.richtext.facet#main"
+     }
+    },
+    "avatar": {
+     "type": "blob",
+     "accept": [
+      "image/png",
+      "image/jpeg"
+     ],
+     "maxSize": 1000000
+    },
+    "acceptsInteractions": {
+     "type": "boolean"
+    },
+    "labels": {
+     "type": "union",
+     "refs": [
+      "com.atproto.label.defs#selfLabels"
+     ],
+     "closed": false
+    },
+    "contentMode": {
+     "type": "string"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.feed.like#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    },
+    "via": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    }
+   }
+  }
+ },
+ "app.bsky.feed.post#entity": {
+  "type": "object",
+  "required": [
+   "index",
+   "type",
+   "value"
+  ],
+  "properties": {
+   "index": {
+    "type": "ref",
+    "ref": "app.bsky.feed.post#textSlice"
+   },
+   "type": {
+    "type": "string"
+   },
+   "value": {
+    "type": "string"
+   }
+  }
+ },
+ "app.bsky.feed.post#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "text",
+    "createdAt"
+   ],
+   "properties": {
+    "text": {
+     "type": "string",
+     "maxLength": 3000,
+     "maxGraphemes": 300
+    },
+    "entities": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.feed.post#entity"
+     }
+    },
+    "facets": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.richtext.facet#main"
+     }
+    },
+    "reply": {
+     "type": "ref",
+     "ref": "app.bsky.feed.post#replyRef"
+    },
+    "embed": {
+     "type": "union",
+     "refs": [
+      "app.bsky.embed.images#main",
+      "app.bsky.embed.video#main",
+      "app.bsky.embed.gallery#main",
+      "app.bsky.embed.external#main",
+      "app.bsky.embed.record#main",
+      "app.bsky.embed.recordWithMedia#main"
+     ],
+     "closed": false
+    },
+    "langs": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "language"
+     },
+     "maxLength": 3
+    },
+    "labels": {
+     "type": "union",
+     "refs": [
+      "com.atproto.label.defs#selfLabels"
+     ],
+     "closed": false
+    },
+    "tags": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "maxLength": 640,
+      "maxGraphemes": 64
+     },
+     "maxLength": 8
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.feed.post#replyRef": {
+  "type": "object",
+  "required": [
+   "root",
+   "parent"
+  ],
+  "properties": {
+   "root": {
+    "type": "ref",
+    "ref": "com.atproto.repo.strongRef#main"
+   },
+   "parent": {
+    "type": "ref",
+    "ref": "com.atproto.repo.strongRef#main"
+   }
+  }
+ },
+ "app.bsky.feed.post#textSlice": {
+  "type": "object",
+  "required": [
+   "start",
+   "end"
+  ],
+  "properties": {
+   "start": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "end": {
+    "type": "integer",
+    "minimum": 0
+   }
+  }
+ },
+ "app.bsky.feed.postgate#disableRule": {
+  "type": "object",
+  "required": [],
+  "properties": {}
+ },
+ "app.bsky.feed.postgate#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "createdAt",
+    "post"
+   ],
+   "properties": {
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    },
+    "post": {
+     "type": "string",
+     "format": "at-uri"
+    },
+    "detachedEmbeddingUris": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "at-uri"
+     },
+     "maxLength": 50
+    },
+    "embeddingRules": {
+     "type": "array",
+     "items": {
+      "type": "union",
+      "refs": [
+       "app.bsky.feed.postgate#disableRule"
+      ],
+      "closed": false
+     },
+     "maxLength": 5
+    }
+   }
+  }
+ },
+ "app.bsky.feed.repost#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    },
+    "via": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    }
+   }
+  }
+ },
+ "app.bsky.feed.threadgate#followerRule": {
+  "type": "object",
+  "required": [],
+  "properties": {}
+ },
+ "app.bsky.feed.threadgate#followingRule": {
+  "type": "object",
+  "required": [],
+  "properties": {}
+ },
+ "app.bsky.feed.threadgate#listRule": {
+  "type": "object",
+  "required": [
+   "list"
+  ],
+  "properties": {
+   "list": {
+    "type": "string",
+    "format": "at-uri"
+   }
+  }
+ },
+ "app.bsky.feed.threadgate#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "post",
+    "createdAt"
+   ],
+   "properties": {
+    "post": {
+     "type": "string",
+     "format": "at-uri"
+    },
+    "allow": {
+     "type": "array",
+     "items": {
+      "type": "union",
+      "refs": [
+       "app.bsky.feed.threadgate#mentionRule",
+       "app.bsky.feed.threadgate#followerRule",
+       "app.bsky.feed.threadgate#followingRule",
+       "app.bsky.feed.threadgate#listRule"
+      ],
+      "closed": false
+     },
+     "maxLength": 5
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    },
+    "hiddenReplies": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "at-uri"
+     },
+     "maxLength": 300
+    }
+   }
+  }
+ },
+ "app.bsky.feed.threadgate#mentionRule": {
+  "type": "object",
+  "required": [],
+  "properties": {}
+ },
+ "app.bsky.graph.block#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "string",
+     "format": "did"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.graph.follow#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "string",
+     "format": "did"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    },
+    "via": {
+     "type": "ref",
+     "ref": "com.atproto.repo.strongRef#main"
+    }
+   }
+  }
+ },
+ "app.bsky.graph.list#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "purpose",
+    "name",
+    "createdAt"
+   ],
+   "properties": {
+    "purpose": {
+     "type": "ref",
+     "ref": "app.bsky.ageassurance.defs#access"
+    },
+    "name": {
+     "type": "string",
+     "maxLength": 64,
+     "minLength": 1
+    },
+    "description": {
+     "type": "string",
+     "maxGraphemes": 300,
+     "maxLength": 3000
+    },
+    "descriptionFacets": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.richtext.facet#main"
+     }
+    },
+    "avatar": {
+     "type": "blob",
+     "accept": [
+      "image/png",
+      "image/jpeg"
+     ],
+     "maxSize": 1000000
+    },
+    "labels": {
+     "type": "union",
+     "refs": [
+      "com.atproto.label.defs#selfLabels"
+     ],
+     "closed": false
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.graph.listblock#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "string",
+     "format": "at-uri"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.graph.listitem#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "list",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "string",
+     "format": "did"
+    },
+    "list": {
+     "type": "string",
+     "format": "at-uri"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.graph.starterpack#feedItem": {
+  "type": "object",
+  "required": [
+   "uri"
+  ],
+  "properties": {
+   "uri": {
+    "type": "string",
+    "format": "at-uri"
+   }
+  }
+ },
+ "app.bsky.graph.starterpack#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "name",
+    "list",
+    "createdAt"
+   ],
+   "properties": {
+    "name": {
+     "type": "string",
+     "maxGraphemes": 50,
+     "maxLength": 500,
+     "minLength": 1
+    },
+    "description": {
+     "type": "string",
+     "maxGraphemes": 300,
+     "maxLength": 3000
+    },
+    "descriptionFacets": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.richtext.facet#main"
+     }
+    },
+    "list": {
+     "type": "string",
+     "format": "at-uri"
+    },
+    "feeds": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.graph.starterpack#feedItem"
+     },
+     "maxLength": 3
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.graph.verification#main": {
+  "type": "record",
+  "key": "tid",
+  "record": {
+   "type": "object",
+   "required": [
+    "subject",
+    "handle",
+    "displayName",
+    "createdAt"
+   ],
+   "properties": {
+    "subject": {
+     "type": "string",
+     "format": "did"
+    },
+    "handle": {
+     "type": "string",
+     "format": "handle"
+    },
+    "displayName": {
+     "type": "string"
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    }
+   }
+  }
+ },
+ "app.bsky.labeler.defs#labelerPolicies": {
+  "type": "object",
+  "required": [
+   "labelValues"
+  ],
+  "properties": {
+   "labelValues": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "app.bsky.ageassurance.defs#access"
+    }
+   },
+   "labelValueDefinitions": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "com.atproto.label.defs#labelValueDefinition"
+    }
+   }
+  }
+ },
+ "app.bsky.labeler.service#main": {
+  "type": "record",
+  "key": "literal:self",
+  "record": {
+   "type": "object",
+   "required": [
+    "policies",
+    "createdAt"
+   ],
+   "properties": {
+    "policies": {
+     "type": "ref",
+     "ref": "app.bsky.labeler.defs#labelerPolicies"
+    },
+    "labels": {
+     "type": "union",
+     "refs": [
+      "com.atproto.label.defs#selfLabels"
+     ],
+     "closed": false
+    },
+    "createdAt": {
+     "type": "string",
+     "format": "datetime"
+    },
+    "reasonTypes": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.ageassurance.defs#access"
+     }
+    },
+    "subjectTypes": {
+     "type": "array",
+     "items": {
+      "type": "ref",
+      "ref": "app.bsky.ageassurance.defs#access"
+     }
+    },
+    "subjectCollections": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "nsid"
+     }
+    }
+   }
+  }
+ },
+ "app.bsky.notification.declaration#main": {
+  "type": "record",
+  "key": "literal:self",
+  "record": {
+   "type": "object",
+   "required": [
+    "allowSubscriptions"
+   ],
+   "properties": {
+    "allowSubscriptions": {
+     "type": "string"
+    }
+   }
+  }
+ },
+ "app.bsky.richtext.facet#byteSlice": {
+  "type": "object",
+  "required": [
+   "byteStart",
+   "byteEnd"
+  ],
+  "properties": {
+   "byteStart": {
+    "type": "integer",
+    "minimum": 0
+   },
+   "byteEnd": {
+    "type": "integer",
+    "minimum": 0
+   }
+  }
+ },
+ "app.bsky.richtext.facet#link": {
+  "type": "object",
+  "required": [
+   "uri"
+  ],
+  "properties": {
+   "uri": {
+    "type": "string",
+    "format": "uri"
+   }
+  }
+ },
+ "app.bsky.richtext.facet#main": {
+  "type": "object",
+  "required": [
+   "index",
+   "features"
+  ],
+  "properties": {
+   "index": {
+    "type": "ref",
+    "ref": "app.bsky.richtext.facet#byteSlice"
+   },
+   "features": {
+    "type": "array",
+    "items": {
+     "type": "union",
+     "refs": [
+      "app.bsky.richtext.facet#mention",
+      "app.bsky.richtext.facet#link",
+      "app.bsky.richtext.facet#tag"
+     ],
+     "closed": false
+    }
+   }
+  }
+ },
+ "app.bsky.richtext.facet#mention": {
+  "type": "object",
+  "required": [
+   "did"
+  ],
+  "properties": {
+   "did": {
+    "type": "string",
+    "format": "did"
+   }
+  }
+ },
+ "app.bsky.richtext.facet#tag": {
+  "type": "object",
+  "required": [
+   "tag"
+  ],
+  "properties": {
+   "tag": {
+    "type": "string",
+    "maxLength": 640,
+    "maxGraphemes": 64
+   }
+  }
+ },
+ "chat.bsky.actor.declaration#main": {
+  "type": "record",
+  "key": "literal:self",
+  "record": {
+   "type": "object",
+   "required": [
+    "allowIncoming"
+   ],
+   "properties": {
+    "allowIncoming": {
+     "type": "string"
+    },
+    "allowGroupInvites": {
+     "type": "string"
+    }
+   }
+  }
+ },
+ "com.atproto.label.defs#labelValueDefinition": {
+  "type": "object",
+  "required": [
+   "identifier",
+   "severity",
+   "blurs",
+   "locales"
+  ],
+  "properties": {
+   "identifier": {
+    "type": "string",
+    "maxLength": 100,
+    "maxGraphemes": 100
+   },
+   "severity": {
+    "type": "string"
+   },
+   "blurs": {
+    "type": "string"
+   },
+   "defaultSetting": {
+    "type": "string",
+    "default": "warn"
+   },
+   "adultOnly": {
+    "type": "boolean"
+   },
+   "locales": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "com.atproto.label.defs#labelValueDefinitionStrings"
+    }
+   }
+  }
+ },
+ "com.atproto.label.defs#labelValueDefinitionStrings": {
+  "type": "object",
+  "required": [
+   "lang",
+   "name",
+   "description"
+  ],
+  "properties": {
+   "lang": {
+    "type": "string",
+    "format": "language"
+   },
+   "name": {
+    "type": "string",
+    "maxGraphemes": 64,
+    "maxLength": 640
+   },
+   "description": {
+    "type": "string",
+    "maxGraphemes": 10000,
+    "maxLength": 100000
+   }
+  }
+ },
+ "com.atproto.label.defs#selfLabel": {
+  "type": "object",
+  "required": [
+   "val"
+  ],
+  "properties": {
+   "val": {
+    "type": "string",
+    "maxLength": 128
+   }
+  }
+ },
+ "com.atproto.label.defs#selfLabels": {
+  "type": "object",
+  "required": [
+   "values"
+  ],
+  "properties": {
+   "values": {
+    "type": "array",
+    "items": {
+     "type": "ref",
+     "ref": "com.atproto.label.defs#selfLabel"
+    },
+    "maxLength": 10
+   }
+  }
+ },
+ "com.atproto.lexicon.schema#main": {
+  "type": "record",
+  "key": "nsid",
+  "record": {
+   "type": "object",
+   "required": [
+    "lexicon"
+   ],
+   "properties": {
+    "lexicon": {
+     "type": "integer"
+    }
+   }
+  }
+ },
+ "com.atproto.repo.strongRef#main": {
+  "type": "object",
+  "required": [
+   "uri",
+   "cid"
+  ],
+  "properties": {
+   "uri": {
+    "type": "string",
+    "format": "at-uri"
+   },
+   "cid": {
+    "type": "string",
+    "format": "cid"
+   }
+  }
+ },
+ "com.germnetwork.declaration#main": {
+  "type": "record",
+  "key": "literal:self",
+  "record": {
+   "type": "object",
+   "required": [
+    "version",
+    "currentKey"
+   ],
+   "properties": {
+    "version": {
+     "type": "string",
+     "minLength": 5,
+     "maxLength": 14
+    },
+    "currentKey": {
+     "type": "bytes"
+    },
+    "messageMe": {
+     "type": "ref",
+     "ref": "com.germnetwork.declaration#messageMe"
+    },
+    "keyPackage": {
+     "type": "bytes"
+    },
+    "continuityProofs": {
+     "type": "array",
+     "items": {
+      "type": "bytes"
+     },
+     "maxLength": 1000
+    }
+   }
+  }
+ },
+ "com.germnetwork.declaration#messageMe": {
+  "type": "object",
+  "required": [
+   "messageMeUrl",
+   "showButtonTo"
+  ],
+  "properties": {
+   "messageMeUrl": {
+    "type": "string",
+    "format": "uri",
+    "minLength": 1,
+    "maxLength": 2047
+   },
+   "showButtonTo": {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 100
+   }
+  }
+ }
+}
