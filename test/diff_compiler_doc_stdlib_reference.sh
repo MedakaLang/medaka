@@ -34,9 +34,12 @@ if [ "$status" -ne 0 ]; then
 fi
 
 # The import id of each stdlib module, one per line: `list`, `crypto.hmac`.
+# A `*_test.mdk` sibling is a module's tests, and `medaka doc` writes no page
+# for it.
 stdlib_module_ids() {
   for f in "$ROOT"/stdlib/*.mdk "$ROOT"/stdlib/*/*.mdk; do
     [ -f "$f" ] || continue
+    case "$f" in *_test.mdk) continue ;; esac
     rel="${f#"$ROOT"/stdlib/}"
     printf '%s\n' "${rel%.mdk}" | tr / .
   done

@@ -1,5 +1,5 @@
 # META
-source_lines=1406
+source_lines=1442
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -119,6 +119,41 @@ export
 moduleIdOfPath : List String -> String -> String
 moduleIdOfPath roots path =
   slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
+
+-- The text of a Medaka source file, or why it could not be read: `Err None`
+-- for a file that is not valid UTF-8, `Err (Some msg)` with `readFile`'s own
+-- message for any other failure.  `readFile` words the encoding refusal for a
+-- library caller (use `readFileBytes`); a source file wants the compiler's own
+-- wording, and `--json` its own code.
+export
+readSourceE : String -> <FileRead> Result (Option String) String
+readSourceE path = match readFile path
+  Ok src => Ok src
+  Err e => if endsWith readFileNotUtf8Suffix e then Err None else Err (Some e)
+
+-- What `readFile` puts after the path when it refuses a file that is not
+-- valid UTF-8: `mdk_read_file` in runtime/medaka_rt.c, and `$mdk_str_not_utf8`
+-- in compiler/backend/wasm_preamble.mdk for the wasm runtime.  Matched rather
+-- than confirmed with `readFileBytes`, whose wasm host surface carries the
+-- file-writing imports too, which the playground's compiler does not provide.
+readFileNotUtf8Suffix : String
+readFileNotUtf8Suffix = ": not valid UTF-8 (use readFileBytes for raw bytes)"
+
+-- The message for a source file that is not valid UTF-8.
+export
+sourceNotUtf8Message : String -> String
+sourceNotUtf8Message path =
+  "\{path}: not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"
+
+-- `readSourceE` with the failure as the line a verb prints: the encoding
+-- refusal as an `Error:` naming the path, any other failure `readFile`'s own
+-- message, unchanged.
+export
+readSource : String -> <FileRead> Result String String
+readSource path = match readSourceE path
+  Ok src => Ok src
+  Err None => Err "Error: \{sourceNotUtf8Message path}"
+  Err (Some e) => Err e
 
 -- Walk up from `startDir` to the nearest directory containing `medaka.toml` (the
 -- project / module root).  This
@@ -572,8 +607,9 @@ readModuleProgF parseFn read deps roots modId =
     None => Err (LoadMsg (stringConcat ["unknown module: ", modId]))
     Some (path, owningRoot) => match read path
       Some src => parsedModule parseFn owningRoot path src
-      None => match readFile path
-        Err e => Err (LoadMsg e)
+      None => match readSourceE path
+        Err None => Err (LoadMsg (sourceNotUtf8Message path))
+        Err (Some e) => Err (LoadMsg e)
         Ok src => parsedModule parseFn owningRoot path src
 -- unsaved editor buffer shadows disk
 
@@ -1437,6 +1473,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "relUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "path")) (EBlock (DoLet false false (PVar "pre") (EApp (EVar "stringConcat") (EListLit (EVar "r") (ELit (LString "/"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "path")) (EApp (EApp (EVar "dropPrefix") (EApp (EVar "stringLength") (EVar "pre"))) (EVar "path")) (EApp (EApp (EVar "relUnderRoots") (EVar "rs")) (EVar "path"))))))
 (DTypeSig true "moduleIdOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "moduleIdOfPath" ((PVar "roots") (PVar "path")) (EApp (EVar "slashToDot") (EApp (EApp (EVar "stripSuffixStr") (ELit (LString ".mdk"))) (EApp (EApp (EVar "relUnderRoots") (EVar "roots")) (EVar "path")))))
+(DTypeSig true "readSourceE" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))))
+(DFunDef false "readSourceE" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src"))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EApp (EVar "endsWith") (EVar "readFileNotUtf8Suffix")) (EVar "e")) (EApp (EVar "Err") (EVar "None")) (EApp (EVar "Err") (EApp (EVar "Some") (EVar "e")))))))
+(DTypeSig false "readFileNotUtf8Suffix" (TyCon "String"))
+(DFunDef false "readFileNotUtf8Suffix" () (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))
+(DTypeSig true "sourceNotUtf8Message" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "sourceNotUtf8Message" ((PVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"))))
+(DTypeSig true "readSource" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readSource" ((PVar "path")) (EMatch (EApp (EVar "readSourceE") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src"))) (arm (PCon "Err" (PCon "None")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "Error: ")) (EApp (EVar "display") (EApp (EVar "sourceNotUtf8Message") (EVar "path")))) (ELit (LString ""))))) (arm (PCon "Err" (PCon "Some" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EVar "findRootGo") (EVar "startDir")))
 (DTypeSig true "findProjectRootOrSelf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -1521,7 +1565,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "loadErrorMessage" ((PCon "LoadMsg" (PVar "m"))) (EVar "m"))
 (DFunDef false "loadErrorMessage" ((PCon "LoadParseFailed" (PVar "path") PWild (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "parseErrorLine") (EVar "e")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "parseErrorCol") (EVar "e")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "parseErrorMessage") (EVar "e")))) (ELit (LString ""))))
 (DTypeSig false "readModuleProgF" (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
-(DFunDef false "readModuleProgF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unknown module: ")) (EVar "modId")))))) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EVar "e")))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src")))))))))
+(DFunDef false "readModuleProgF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unknown module: ")) (EVar "modId")))))) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src"))) (arm (PCon "None") () (EMatch (EApp (EVar "readSourceE") (EVar "path")) (arm (PCon "Err" (PCon "None")) () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EApp (EVar "sourceNotUtf8Message") (EVar "path"))))) (arm (PCon "Err" (PCon "Some" (PVar "e"))) () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EVar "e")))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src")))))))))
 (DTypeSig false "parsedModule" (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "parsedModule" ((PVar "parseFn") (PVar "owningRoot") (PVar "path") (PVar "src")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteLoadedSource") (EVar "path")) (EVar "src"))) (DoExpr (EMatch (EApp (EVar "parseFn") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LoadParseFailed") (EVar "path")) (EVar "src")) (EVar "e")))) (arm (PCon "Ok" (PVar "prog")) () (EApp (EVar "Ok") (ETuple (EVar "owningRoot") (EVar "path") (EVar "prog"))))))))
 (DTypeSig false "loadedSourcesLimit" (TyCon "Int"))
@@ -1653,6 +1697,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "relUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "path")) (EBlock (DoLet false false (PVar "pre") (EApp (EVar "stringConcat") (EListLit (EVar "r") (ELit (LString "/"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "path")) (EApp (EApp (EVar "dropPrefix") (EApp (EVar "stringLength") (EVar "pre"))) (EVar "path")) (EApp (EApp (EVar "relUnderRoots") (EVar "rs")) (EVar "path"))))))
 (DTypeSig true "moduleIdOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "moduleIdOfPath" ((PVar "roots") (PVar "path")) (EApp (EVar "slashToDot") (EApp (EApp (EVar "stripSuffixStr") (ELit (LString ".mdk"))) (EApp (EApp (EVar "relUnderRoots") (EVar "roots")) (EVar "path")))))
+(DTypeSig true "readSourceE" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))))
+(DFunDef false "readSourceE" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src"))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EApp (EVar "endsWith") (EVar "readFileNotUtf8Suffix")) (EVar "e")) (EApp (EVar "Err") (EVar "None")) (EApp (EVar "Err") (EApp (EVar "Some") (EVar "e")))))))
+(DTypeSig false "readFileNotUtf8Suffix" (TyCon "String"))
+(DFunDef false "readFileNotUtf8Suffix" () (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))
+(DTypeSig true "sourceNotUtf8Message" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "sourceNotUtf8Message" ((PVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"))))
+(DTypeSig true "readSource" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "readSource" ((PVar "path")) (EMatch (EApp (EVar "readSourceE") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src"))) (arm (PCon "Err" (PCon "None")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "Error: ")) (EApp (EMethodRef "display") (EApp (EVar "sourceNotUtf8Message") (EVar "path")))) (ELit (LString ""))))) (arm (PCon "Err" (PCon "Some" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EVar "findRootGo") (EVar "startDir")))
 (DTypeSig true "findProjectRootOrSelf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -1737,7 +1789,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "loadErrorMessage" ((PCon "LoadMsg" (PVar "m"))) (EVar "m"))
 (DFunDef false "loadErrorMessage" ((PCon "LoadParseFailed" (PVar "path") PWild (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "parseErrorLine") (EVar "e")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "parseErrorCol") (EVar "e")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "parseErrorMessage") (EVar "e")))) (ELit (LString ""))))
 (DTypeSig false "readModuleProgF" (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
-(DFunDef false "readModuleProgF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unknown module: ")) (EVar "modId")))))) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EVar "e")))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src")))))))))
+(DFunDef false "readModuleProgF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "modId")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unknown module: ")) (EVar "modId")))))) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src"))) (arm (PCon "None") () (EMatch (EApp (EVar "readSourceE") (EVar "path")) (arm (PCon "Err" (PCon "None")) () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EApp (EVar "sourceNotUtf8Message") (EVar "path"))))) (arm (PCon "Err" (PCon "Some" (PVar "e"))) () (EApp (EVar "Err") (EApp (EVar "LoadMsg") (EVar "e")))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EApp (EApp (EVar "parsedModule") (EVar "parseFn")) (EVar "owningRoot")) (EVar "path")) (EVar "src")))))))))
 (DTypeSig false "parsedModule" (TyFun (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
 (DFunDef false "parsedModule" ((PVar "parseFn") (PVar "owningRoot") (PVar "path") (PVar "src")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteLoadedSource") (EVar "path")) (EVar "src"))) (DoExpr (EMatch (EApp (EVar "parseFn") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LoadParseFailed") (EVar "path")) (EVar "src")) (EVar "e")))) (arm (PCon "Ok" (PVar "prog")) () (EApp (EVar "Ok") (ETuple (EVar "owningRoot") (EVar "path") (EVar "prog"))))))))
 (DTypeSig false "loadedSourcesLimit" (TyCon "Int"))

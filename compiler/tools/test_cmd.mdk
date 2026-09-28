@@ -63,6 +63,7 @@ import driver.loader.{
   readDeps,
   findProjectRoot,
   findProjectRootOrSelf,
+  readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import types.typecheck.{elaborateOne, elaborateModules, TcDiag}
@@ -194,7 +195,7 @@ runTest engines runtimeP coreP target roots cases filterOpt =
       Err e =>
         let _ = ePutStrLn e
         False
-      Ok csrc => match readFile target
+      Ok csrc => match readSource target
         Err e =>
           let _ = ePutStrLn e
           False

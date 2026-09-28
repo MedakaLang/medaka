@@ -124,7 +124,7 @@ engineLabel EvalAndNative = "eval+native"
    what typechecks the generated file, and it is the only arm that can say
    so.
 
-   `NativeCapability` (four rows): the eval arm refuses the module outright
+   `NativeCapability` (five rows): the eval arm refuses the module outright
    with `E-PANIC: unbound identifier` on `listDir`, `readFile` or
    `runCommand` — host primitives `medaka test`'s interpreter capability
    policy does not bind — so this is a capability question, not a timing
@@ -170,9 +170,16 @@ suites = [
   -- closure is what keeps this module free of a seed re-mint, and neither
   -- of the two vehicles named in the header reaches it either.
   ("bytes", (87, EvalAndNative)),
+  -- `bytes`'s and `string.fromUtf8`'s UTF-8 decoding against an independent
+  -- reference reading, and the overrun and overlong cases. A sibling, so
+  -- importing `bytes` does not import `test` with it.
+  ("bytes_test", (5, EvalAndNative)),
   ("core", (123, Eval)),
   ("crypto/hmac", (12, EvalAndNative)),
   ("fs", (8, NativeCapability)),
+  -- `readFile` of a file that is not UTF-8. Writes a scratch file, so it is
+  -- a capability row like `fs` itself.
+  ("fs_test", (1, NativeCapability)),
   ("hash_map", (24, EvalAndNative)),
   ("hash_set", (13, EvalAndNative)),
   -- `encodeBytes`/`decodeBytes` merged into `encode`/`decode` (S-codecs-
@@ -491,11 +498,13 @@ test "stdlib in-language suite ran at least one assertion" =
    its assertions run by nothing, which is the state #3214 records and this
    gate exists to close, and nothing anywhere would say so.
 
-   The roster is over the modules themselves, not over `*_test.mdk`
-   siblings, so the unit namer is `stripSuffix ".mdk"` rather than
+   The roster is over every `.mdk` file in `stdlib/`, a `*_test.mdk`
+   sibling included, so the unit namer is `stripSuffix ".mdk"` rather than
    `test_process.testFileStem`, and the two general helpers
    (`unrosteredUnits`/`missingUnits`) are called directly rather than
-   through their `*TestFiles` wrappers. A directory entry that is not a
+   through their `*TestFiles` wrappers. A sibling is named by its full stem
+   (`bytes_test`), and it is what runs the tests a module keeps out of its
+   own import surface. A directory entry that is not a
    Medaka module (`README.md`, the `.lextok.golden` and `.test.golden`
    files) names no unit and is skipped. -}
 

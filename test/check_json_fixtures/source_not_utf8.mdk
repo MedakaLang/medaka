@@ -1,0 +1,3 @@
+-- A Latin-1 source file: the string literal holds the single byte 0xE9.
+-- Medaka source must be UTF-8, so `check` refuses the file before lexing it.
+main = println "café"

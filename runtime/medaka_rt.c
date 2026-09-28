@@ -756,8 +756,15 @@ static char *mdk_build_stdout_buf = NULL;
 static long long mdk_build_stdout_len = 0;
 static long long mdk_build_stdout_cap = 0;
 
+/* Set once by `medaka run`'s driver (mdk_enable_run_stdout_flush, below).  In
+   that mode the only stdout bytes this process writes during the program are
+   the ones eval.mdk flushes at once (pByteBlockWriteStdoutIO), and the run
+   stash is the one record of what is still unwritten; replaying this tracker
+   on a fatal signal would print those flushed bytes a second time. */
+static volatile int mdk_run_stdout_flush_enabled = 0;
+
 static void mdk_build_stdout_track(const char *bytes, long long n) {
-  if (n <= 0) return;
+  if (n <= 0 || mdk_run_stdout_flush_enabled) return;
   if (mdk_build_stdout_len + n > mdk_build_stdout_cap) {
     long long newcap = mdk_build_stdout_cap == 0 ? 4096 : mdk_build_stdout_cap;
     while (newcap < mdk_build_stdout_len + n) newcap *= 2;
@@ -775,6 +782,7 @@ static void mdk_build_stdout_track(const char *bytes, long long n) {
    buffer above; see the block comment there for why the two must stay separate
    flush entry points despite doing the same thing. */
 static void mdk_flush_build_stdout_on_fatal_signal(void) {
+  if (mdk_run_stdout_flush_enabled) return;
   const char *bytes = mdk_build_stdout_buf;
   long long len = mdk_build_stdout_len;
   while (len > 0) {
@@ -855,7 +863,6 @@ void mdk_print_unit(void)       { printf("()\n"); }
  * already flushes automatically), so the flag stays 0 and every check below
  * is a no-op for it.
  */
-static volatile int mdk_run_stdout_flush_enabled = 0;
 static const char *volatile mdk_run_stdout_bytes = NULL;
 static volatile long long mdk_run_stdout_len = 0;
 

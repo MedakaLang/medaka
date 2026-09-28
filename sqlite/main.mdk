@@ -40,13 +40,14 @@
 -- (`lib.mutate` builds the whole new image in memory and only then writes it, so
 -- a refused statement cannot leave a half-written database behind.)
 --
+-- Rows go to stdout as bytes, not through a `String`: a TEXT value whose stored
+-- bytes are not UTF-8 (`CTextRaw`) prints as those bytes, as sqlite3 prints it.
+--
 -- ## Known divergence from the `sqlite3` CLI
 --
 -- A BLOB column prints as `<blob>` (`lib.recordfmt.cellToString`), where sqlite3
--- prints the blob's raw bytes.  Medaka strings are UTF-8, so a raw non-ASCII byte
--- cannot be put on stdout at all; rather than print something almost-right, this
--- prints a marker.  Blob STORAGE is gated instead by comparing `sqlite3`'s own
--- `hex(col)` across the two engines (see `dml_oracle.sh`).
+-- prints the blob's raw bytes.  Blob STORAGE is gated instead by comparing
+-- `sqlite3`'s own `hex(col)` across the two engines (see `dml_oracle.sh`).
 
 import lib.sqlite.{
   Db,
@@ -65,11 +66,22 @@ import lib.sqlite.{
 import lib.btree.{Row, rowRowid, rowCells}
 import lib.recordfmt.{Cell(..), cellToString}
 import lib.sqlexec.{execSql, outRows}
-import string.{join, toUpper, words}
+import bytes as B
+import list.{intersperse}
+import string.{toUpper, words}
 
--- Render a row to a "|"-joined line, substituting the rowid for the PK column.
-renderRow : Option Int -> Row -> String
-renderRow pkIdx row = join "|" (map cellToString (rowCellsWithIpk pkIdx row))
+-- A cell's bytes as the CLI prints them.
+cellOutBytes : Cell -> B.Bytes
+cellOutBytes (CTextRaw b) = B.fromArrayAssumeByteDomain b
+cellOutBytes c = B.encodeUtf8 (cellToString c)
+
+-- Print one row: its cells joined by "|", then a newline.
+printCellLine : List Cell -> <IO> Unit
+printCellLine cells =
+  B.writeStdoutBytes
+    (B.concat
+      (intersperse (B.encodeUtf8 "|") (map cellOutBytes cells)
+        ++ [B.encodeUtf8 "\n"]))
 
 -- Dump the stored CREATE statement + all rows of a table.
 dumpTable : Db -> String -> <IO> Unit
@@ -85,7 +97,7 @@ dumpTableRows db table entry = match scanTableRows db table
 printRows : Option Int -> List Row -> <IO> Unit
 printRows pkIdx [] = ()
 printRows pkIdx (r :: rest) =
-  println (renderRow pkIdx r)
+  printCellLine (rowCellsWithIpk pkIdx r)
   printRows pkIdx rest
 
 -- Dump the schema (type|name|rootpage) — the schema gate.
@@ -126,7 +138,7 @@ runSql path sql = match execSql path sql
 printCellRows : List (List Cell) -> <IO> Unit
 printCellRows [] = ()
 printCellRows (cells :: rest) =
-  println (join "|" (map cellToString cells))
+  printCellLine cells
   printCellRows rest
 
 -- ---------------------------------------------------------------------------

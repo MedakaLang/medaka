@@ -1,5 +1,5 @@
 # META
-source_lines=4901
+source_lines=4905
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3731,9 +3731,9 @@ pByteBlockFromString : Value e -> <e> Value e
 pByteBlockFromString (VString s) = VByteBlock (stringToUtf8Bytes s)
 pByteBlockFromString _ = panic "byteBlockFromString: not a String"
 
--- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8.
--- The same permissive route as `stringFromUtf8Bytes`: bytes are copied verbatim
--- and the codepoint count is recomputed, so invalid UTF-8 survives unchanged.
+-- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8,
+-- through the host's `stringFromUtf8Bytes`: valid UTF-8 is copied verbatim and
+-- each ill-formed subpart becomes U+FFFD.
 pByteBlockToString : Value e -> <e> Value e
 pByteBlockToString (VByteBlock b) = VString (stringFromUtf8Bytes b)
 pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
@@ -4754,14 +4754,18 @@ pReadExactly _ = panic "readExactly: expected Int"
 -- ── Stdout bytes ──────────────────────────────────────────────────────────
 -- The buffered stdout is a String, which holds only well-formed UTF-8, so a
 -- block that is not UTF-8 cannot pass through it byte-for-byte.  `medaka run`
--- writes the text buffered so far, then the block's own bytes, straight to the
--- host stdout; output stays in program order.
+-- writes the text buffered so far, then the block's own bytes, to the host
+-- stdout and flushes it.  The flush is what keeps program order: every abort
+-- path writes the stash with write(2) before exit() flushes stdio, so any
+-- stdio byte still buffered then would land after text printed later.
+-- Flushing here leaves stdio empty whenever the stash holds anything.
 pByteBlockWriteStdoutIO : Value e -> <Stdout | e> Value e
 pByteBlockWriteStdoutIO (VByteBlock b) =
   let _ = putStr !outputRef
   outputRef := ""
   let _ = stashRunStdout ""
   let _ = byteBlockWriteStdout (byteBlockFromIntArray b)
+  let _ = flushStdout ()
   VUnit
 pByteBlockWriteStdoutIO _ = panic "byteBlockWriteStdout: not a ByteBlock"
 
@@ -6520,7 +6524,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pReadExactly" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vOptionString") (EApp (EVar "readExactly") (EVar "n"))))
 (DFunDef false "pReadExactly" (PWild) (EApp (EVar "panic") (ELit (LString "readExactly: expected Int"))))
 (DTypeSig false "pByteBlockWriteStdoutIO" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stdout") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pByteBlockWriteStdoutIO" ((PCon "VByteBlock" (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EUnOp "!" (EVar "outputRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "stashRunStdout") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "byteBlockWriteStdout") (EApp (EVar "byteBlockFromIntArray") (EVar "b")))) (DoExpr (EVar "VUnit"))))
+(DFunDef false "pByteBlockWriteStdoutIO" ((PCon "VByteBlock" (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EUnOp "!" (EVar "outputRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "stashRunStdout") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "byteBlockWriteStdout") (EApp (EVar "byteBlockFromIntArray") (EVar "b")))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pByteBlockWriteStdoutIO" (PWild) (EApp (EVar "panic") (ELit (LString "byteBlockWriteStdout: not a ByteBlock"))))
 (DTypeSig false "pOsEntropyBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Rand") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))
@@ -8158,7 +8162,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pReadExactly" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vOptionString") (EApp (EVar "readExactly") (EVar "n"))))
 (DFunDef false "pReadExactly" (PWild) (EApp (EVar "panic") (ELit (LString "readExactly: expected Int"))))
 (DTypeSig false "pByteBlockWriteStdoutIO" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stdout") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pByteBlockWriteStdoutIO" ((PCon "VByteBlock" (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EUnOp "!" (EVar "outputRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "stashRunStdout") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "byteBlockWriteStdout") (EApp (EVar "byteBlockFromIntArray") (EVar "b")))) (DoExpr (EVar "VUnit"))))
+(DFunDef false "pByteBlockWriteStdoutIO" ((PCon "VByteBlock" (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EUnOp "!" (EVar "outputRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "stashRunStdout") (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "byteBlockWriteStdout") (EApp (EVar "byteBlockFromIntArray") (EVar "b")))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pByteBlockWriteStdoutIO" (PWild) (EApp (EVar "panic") (ELit (LString "byteBlockWriteStdout: not a ByteBlock"))))
 (DTypeSig false "pOsEntropyBytes" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Rand") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pOsEntropyBytes" ((PCon "VInt" (PVar "n"))) (EApp (EVar "vIntArray") (EApp (EVar "osEntropyBytes") (EVar "n"))))

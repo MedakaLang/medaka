@@ -514,6 +514,82 @@ test "update_expr: arithmetic UPDATE matches the sqlite3 CLI on every table" =
           ]
           ++ r.tableDiffs)
 
+-- # malformed TEXT
+--
+-- SQLite stores TEXT bytes without validating them as UTF-8.  A write through
+-- the Medaka CLI rewrites the whole file, so every TEXT cell it did not target
+-- must go back out as the bytes it came in as, and the CLI must print such a
+-- cell as those bytes, as `sqlite3` does.  The bytes are compared as hex:
+-- a spawned process's output reaches this file as a `String`, which reads
+-- ill-formed bytes as U+FFFD and so cannot tell `c0 ae` from `ef bf bd`.
+
+malformedSeedSql : String
+malformedSeedSql =
+  "CREATE TABLE t(a TEXT, b INTEGER); INSERT INTO t VALUES ('ok', 2), (CAST(x'61ff62' AS TEXT), 7); CREATE TABLE u(c TEXT); INSERT INTO u VALUES (CAST(x'c0ae' AS TEXT));"
+
+-- The expected table state after the INSERT and the UPDATE below, as sqlite3
+-- reports it: every stored byte untouched but the two targeted.
+malformedExpectedLines : List String
+malformedExpectedLines = [
+  "# u after an INSERT and an UPDATE on t",
+  "C0AE",
+  "# t",
+  "1|6F6B|5",
+  "2|61FF62|7",
+  "3|6E6577|3",
+  "# CLI SELECT c FROM u, as hex",
+  "c0 ae 0a",
+  "# sqlite3 SELECT c FROM u, as hex",
+  "c0 ae 0a",
+]
+
+-- `cmd db sql`'s stdout, as hex bytes, through `od`.
+stdoutHex : String -> String -> String -> <Exec, IO> Result String String
+stdoutHex cmd db sql =
+  map
+    trim
+    (spawnOut queryTimeoutSeconds "sh" [
+      "-c", "\"$0\" \"$1\" \"$2\" | od -An -tx1", cmd, db, sql
+    ])
+
+malformedResult : <Exec, IO> Result String (List String)
+malformedResult = match rowScratch "dml-malformed"
+  Err e => Err e
+  Ok prefix =>
+    let db = "\{prefix}.db"
+    let cli = "\{prefix}-cli"
+    let out = runMalformed db cli
+    let _ = runVerb "rm" ["-rf", db, cli]
+    out
+
+runMalformed : String -> String -> <Exec, IO> Result String (List String)
+runMalformed db cli = do
+  _ <- buildBin [] "sqlite/main.mdk" cli
+  _ <- seedDb db [SeedSql malformedSeedSql]
+  _ <- spawnOut queryTimeoutSeconds cli [db, "INSERT INTO t VALUES ('new', 3)"]
+  _ <- spawnOut queryTimeoutSeconds cli [db, "UPDATE t SET b = 5 WHERE b = 2"]
+  u <- sqlite3Query db "SELECT hex(c) FROM u;"
+  t <- sqlite3Query db "SELECT rowid, hex(a), b FROM t ORDER BY rowid;"
+  cliHex <- stdoutHex cli db "SELECT c FROM u"
+  sqliteHex <- stdoutHex "sqlite3" db "SELECT c FROM u"
+  Ok
+    (flatLines [
+      ["# u after an INSERT and an UPDATE on t"],
+      outLines u,
+      ["# t"],
+      outLines t,
+      ["# CLI SELECT c FROM u, as hex"],
+      [cliHex],
+      ["# sqlite3 SELECT c FROM u, as hex"],
+      [sqliteHex],
+    ])
+
+test "malformed TEXT: an unrelated INSERT or UPDATE leaves its bytes, and the CLI prints them as sqlite3 does" =
+  match malformedResult
+    Err e => Fail e (join "\n" malformedExpectedLines) "the row did not run"
+    Ok lines =>
+      expectEqualLines (join "\n" malformedExpectedLines) (join "\n" lines)
+
 -- # dml
 --
 -- `sqlite/test/dml_oracle.sh`'s six sections. See the module header for why

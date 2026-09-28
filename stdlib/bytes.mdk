@@ -78,9 +78,7 @@ import core.{
   Hashable,
 }
 import array.{findIndex, fromList}
-import list as L
-import string.{fromUtf8, split, toChars, toDigit}
-import test.{expectEqual}
+import string.{toDigit}
 import u8 as U8
 
 {- | The byte-string type.
@@ -779,11 +777,11 @@ export
 encodeUtf8 : String -> Bytes
 encodeUtf8 s = Bytes (byteBlockFromString s)
 
--- `byteBlockToString` itself substitutes U+FFFD for ill-formed input, by the
--- same maximal-subpart rule, so a `String` is always well-formed UTF-8.  The
--- decoders below keep their own Medaka reading of that rule: `decodeUtf8`
--- needs the verdict to refuse, and `decodeUtf8Lossy` is the independent
--- reference the runtime's substitution is tested against.
+-- `byteBlockToString` substitutes U+FFFD for each maximal ill-formed subpart,
+-- so a `String` is always well-formed UTF-8 and `decodeUtf8Lossy` is that
+-- conversion.  `decodeUtf8` needs a verdict instead, to refuse, so it reads the
+-- rule itself below.  `stdlib/bytes_test.mdk` keeps an independent reading of
+-- the lossy form that the runtime's is tested against.
 --
 -- The rules below are `mdk_utf8_step` in `runtime/medaka_rt.c`, which is
 -- what the runtime applies to every byte sequence it turns into a `String`
@@ -895,33 +893,6 @@ decodeUtf8 (Bytes bb) =
   else
     None
 
-lossyLength : ByteBlock -> Int -> Int -> Int -> Int
-lossyLength bb i n acc =
-  if i >= n then
-    acc
-  else
-    let step = utf8StepAt bb i n
-    if step > 0 then
-      lossyLength bb (i + step) n (acc + step)
-    else
-      lossyLength bb (i + (0 - step)) n (acc + 3)
-
-lossyFill : ByteBlock -> Int -> Int -> ByteBlock -> Int -> Unit
-lossyFill bb i n dst j =
-  if i >= n then
-    ()
-  else
-    let step = utf8StepAt bb i n
-    if step > 0 then
-      let _ = byteBlockBlit bb i dst j step
-      lossyFill bb (i + step) n dst (j + step)
-    else
-      -- U+FFFD is `ef bf bd`, the three bytes `lossyLength` counted for it.
-      let _ = byteBlockSetUnsafe j 0xef dst
-      let _ = byteBlockSetUnsafe (j + 1) 0xbf dst
-      let _ = byteBlockSetUnsafe (j + 2) 0xbd dst
-      lossyFill bb (i + (0 - step)) n dst (j + 3)
-
 {- | The string `b` encodes, read as UTF-8, with one U+FFFD replacement
    character substituted for each ill-formed sequence.
 
@@ -936,72 +907,12 @@ lossyFill bb i n dst j =
    "��hi" -}
 export
 decodeUtf8Lossy : Bytes -> String
-decodeUtf8Lossy (Bytes bb) =
-  let n = byteBlockLength bb
-  if utf8ValidFrom bb 0 n then
-    byteBlockToString bb
-  else
-    let dst = byteBlockMake (lossyLength bb 0 n 0)
-    let _ = lossyFill bb 0 n dst 0
-    byteBlockToString dst
+decodeUtf8Lossy (Bytes bb) = byteBlockToString bb
 
 -- > decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])
 -- "�"
 -- > toArray (encodeUtf8 (decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])))
 -- [|239, 191, 189|]
-
--- `string.fromUtf8` is the runtime's own reading of bytes as UTF-8, and
--- `decodeUtf8Lossy` above is this module's; they must agree subpart for
--- subpart, since a `String` is well-formed UTF-8 whichever route built it.
-lossyAgrees : Array Int -> Bool
-lossyAgrees raw =
-  toChars (fromUtf8 raw)
-    == toChars (decodeUtf8Lossy (fromArrayAssumeByteDomain raw))
-
--- Second bytes either side of every lead's bound, and ASCII / lead / 0xFF.
-lossyEdgeBytes : List Int
-lossyEdgeBytes =
-  [0x00, 0x41, 0x7f, 0x80, 0x8f, 0x90, 0x9f, 0xa0, 0xbf, 0xc0, 0xff]
-
--- Every non-ASCII first byte against `lossyEdgeBytes`, then every three- and
--- four-byte lead class against them with a good, bad or missing tail.
-lossyGrid : List (Array Int)
-lossyGrid =
-  flatMap (b0 => flatMap (b1 => [[|b0, b1|]]) lossyEdgeBytes) [0x80..=0xff]
-    ++ flatMap
-      (b0 =>
-        flatMap
-          (b1 =>
-            flatMap (b2 => lossyTails [b0, b1, b2]) [0x41, 0x80, 0xbf, 0xc0])
-          lossyEdgeBytes)
-      [0xe0, 0xe1, 0xed, 0xef, 0xf0, 0xf1, 0xf4, 0xf5]
-
-lossyTails : List Int -> List (Array Int)
-lossyTails front = [
-  arrayFromList front,
-  arrayFromList (front ++ [0x41]),
-  arrayFromList (front ++ [0x80]),
-]
-
-test "fromUtf8 and decodeUtf8Lossy agree on every lead against edge bytes" =
-  expectEqual [] (filter (raw => not (lossyAgrees raw)) lossyGrid)
-
--- 4000 stray continuation bytes are 4000 maximal subparts; `toChars` sizes
--- its result from the count the string caches, so the two must agree.
-test "fromUtf8 of stray continuation bytes gives one U+FFFD each" =
-  expectEqual (arrayMake 4000 '�') (toChars (fromUtf8 (arrayMake 4000 0x80)))
-
-test "an overlong encoding is U+FFFD, never the ASCII it spells" =
-  expectEqual [|'�', '�'|] (toChars (fromUtf8 [|0xc0, 0xae|]))
-
--- A 0xFF lead is one ill-formed byte, so the comma after it survives:
--- 64 of them alternating with commas split into 65 parts, 64 U+FFFD and the
--- empty part after the last comma.
-test "split sees U+FFFD, not a 0xFF lead swallowing the comma after it" =
-  let raw = arrayMakeWith 128 (i => if i % 2 == 0 then 255 else 44)
-  expectEqual (L.replicate 64 "�" ++ [""]) (split "," (fromUtf8 raw))
-
-prop "fromUtf8 agrees with decodeUtf8Lossy" (raw : Array Int) = lossyAgrees raw
 
 -- LAW: every `String` survives the encode/decode round trip unchanged. This
 -- is the property `decodeUtf8`'s refusal must not overreach into: a validator
@@ -1028,7 +939,9 @@ propBytes x n
 
    The bytes need not be valid UTF-8. Nothing decodes or re-encodes them, so
    a sequence that a `String` path would reject or alter is written exactly
-   as it is. -}
+   as it is. The exception is `medaka test`'s interpreter, which captures a
+   program's output as a string, so there bytes that are not UTF-8 are
+   captured as U+FFFD. -}
 export
 writeStdoutBytes : Bytes -> <Stdout> Unit
 writeStdoutBytes (Bytes bb) = byteBlockWriteStdout bb

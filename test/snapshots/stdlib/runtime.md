@@ -1,5 +1,5 @@
 # META
-source_lines=903
+source_lines=917
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -48,13 +48,16 @@ extern flushStdout : Unit -> <Stdout> Unit
 
 -- # Input
 
--- | Reads one line from standard input, without its newline.
+-- | Reads one line from standard input, without its newline. Bytes that are
+-- not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 extern readLine : Unit -> <Stdin> String
 
--- | Reads one line from standard input, or `None` at end of input.
+-- | Reads one line from standard input, or `None` at end of input. Bytes
+-- that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 extern readLineOpt : Unit -> <Stdin> Option String
 
--- | Reads all of standard input.
+-- | Reads all of standard input. Bytes that are not valid UTF-8 read as
+-- U+FFFD, one per ill-formed sequence.
 extern readAll : Unit -> <Stdin> String
 
 -- | Reads exactly the given number of bytes from standard input, or `None`
@@ -121,10 +124,14 @@ extern fileExists : (path : String) -> <FileRead path> Bool
 extern fileMode : (path : String) -> <FileRead path> Result String Int
 
 -- | The absolute path with `.`, `..`, and symbolic links resolved. The
--- input, unchanged, when it cannot be resolved.
+-- input, unchanged, when it cannot be resolved. A resolved path whose bytes
+-- are not valid UTF-8 reads with U+FFFD in their place, and so may not name
+-- the entry it came from.
 extern canonicalizePath : (path : String) -> <FileRead path> String
 
--- | The names of the entries in a directory.
+-- | The names of the entries in a directory. A name whose bytes are not
+-- valid UTF-8 reads with U+FFFD in their place, so two such names can read
+-- alike and a returned name may not open the entry it came from.
 extern listDir : (path : String) -> <FileRead path> Result String (List String)
 
 -- | Creates a directory.
@@ -154,13 +161,16 @@ extern statFile : (path : String) ->
 
 -- # Processes and environment
 
--- | The command-line arguments after the program name.
+-- | The command-line arguments after the program name. Bytes that are not
+-- valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 extern args : Unit -> <Env> List String
 
 -- | The value of an environment variable, or `None` when it is unset.
+-- Bytes that are not valid UTF-8 read as U+FFFD, one per ill-formed sequence.
 extern getEnv : (name : String) -> <Env name> Option String
 
--- | The absolute path of the running executable.
+-- | The absolute path of the running executable. Bytes that are not valid
+-- UTF-8 read as U+FFFD, one per ill-formed sequence.
 extern executablePath : Unit -> <Env> String
 
 -- Compiler-source fingerprint this binary was built from, stamped in at link
@@ -183,7 +193,9 @@ extern buildDate : Unit -> <Env> String
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit
 -- code, the captured standard output, and the captured standard error; a
 -- non-zero exit code is still `Ok`. `Err` carries the host's message when
--- the program could not be started.
+-- the program could not be started. The captured output is read as UTF-8:
+-- bytes that are not valid UTF-8 read as U+FFFD, so output that is binary
+-- data does not come back unchanged.
 extern runCommand : (program : String) ->
   List String ->
   <Exec program> Result String (Int, String, String)
@@ -812,8 +824,10 @@ extern byteBlockToString : ByteBlock -> String
 
 -- | Writes the block's bytes to stdout as-is, with no bounds check and no
 -- encoding assumption: unlike `putStr`, the bytes are not required to be
--- valid UTF-8 and are written byte-for-byte. Restricted to the standard
--- library and to modules compiled with `--allow-internal`.
+-- valid UTF-8 and are written byte-for-byte. Under `medaka test`'s
+-- interpreter, which captures a program's output as a string, bytes that are
+-- not UTF-8 are captured as U+FFFD. Restricted to the standard library and to
+-- modules compiled with `--allow-internal`.
 extern byteBlockWriteStdout : ByteBlock -> <Stdout> Unit
 
 -- # Strings

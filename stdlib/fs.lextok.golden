@@ -28,20 +28,6 @@ DOT_LBRACE
 IDENT "contains"
 RBRACE
 NEWLINE
-IMPORT
-TEST
-DOT_LBRACE
-IDENT "expectErrContains"
-COMMA
-IDENT "fail"
-RBRACE
-NEWLINE
-IMPORT
-IDENT "test_process"
-DOT_LBRACE
-IDENT "scratchDir"
-RBRACE
-NEWLINE
 PUBLIC
 EXPORT
 DATA
@@ -1146,60 +1132,6 @@ IDENT "debug"
 IDENT "y"
 EQ_EQ
 UPPER "False"
-NEWLINE
-DEDENT
-NEWLINE
-TEST
-STRING "readFile of a file that is not UTF-8 is an Err naming readFileBytes"
-EQUAL
-INDENT
-MATCH
-IDENT "scratchDir"
-INDENT
-UPPER "Err"
-IDENT "e"
-FAT_ARROW
-IDENT "fail"
-INTERP_OPEN "no scratch directory: "
-IDENT "e"
-INTERP_END ""
-NEWLINE
-UPPER "Ok"
-IDENT "dir"
-FAT_ARROW
-INDENT
-LET
-IDENT "path"
-EQUAL
-IDENT "joinPath"
-IDENT "dir"
-STRING "not-utf8.bin"
-NEWLINE
-LET
-UNDERSCORE
-EQUAL
-IDENT "writeFileBytes"
-IDENT "path"
-LARRAY
-INT 97
-COMMA
-INT 192
-COMMA
-INT 174
-RARRAY
-NEWLINE
-IDENT "expectErrContains"
-INTERP_OPEN ""
-IDENT "path"
-INTERP_END ": not valid UTF-8 (use readFileBytes for raw bytes)"
-LPAREN
-IDENT "readFile"
-IDENT "path"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
 NEWLINE
 DEDENT
 NEWLINE

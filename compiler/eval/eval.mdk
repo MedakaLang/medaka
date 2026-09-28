@@ -3727,9 +3727,9 @@ pByteBlockFromString : Value e -> <e> Value e
 pByteBlockFromString (VString s) = VByteBlock (stringToUtf8Bytes s)
 pByteBlockFromString _ = panic "byteBlockFromString: not a String"
 
--- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8.
--- The same permissive route as `stringFromUtf8Bytes`: bytes are copied verbatim
--- and the codepoint count is recomputed, so invalid UTF-8 survives unchanged.
+-- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8,
+-- through the host's `stringFromUtf8Bytes`: valid UTF-8 is copied verbatim and
+-- each ill-formed subpart becomes U+FFFD.
 pByteBlockToString : Value e -> <e> Value e
 pByteBlockToString (VByteBlock b) = VString (stringFromUtf8Bytes b)
 pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
@@ -4750,14 +4750,18 @@ pReadExactly _ = panic "readExactly: expected Int"
 -- ── Stdout bytes ──────────────────────────────────────────────────────────
 -- The buffered stdout is a String, which holds only well-formed UTF-8, so a
 -- block that is not UTF-8 cannot pass through it byte-for-byte.  `medaka run`
--- writes the text buffered so far, then the block's own bytes, straight to the
--- host stdout; output stays in program order.
+-- writes the text buffered so far, then the block's own bytes, to the host
+-- stdout and flushes it.  The flush is what keeps program order: every abort
+-- path writes the stash with write(2) before exit() flushes stdio, so any
+-- stdio byte still buffered then would land after text printed later.
+-- Flushing here leaves stdio empty whenever the stash holds anything.
 pByteBlockWriteStdoutIO : Value e -> <Stdout | e> Value e
 pByteBlockWriteStdoutIO (VByteBlock b) =
   let _ = putStr !outputRef
   outputRef := ""
   let _ = stashRunStdout ""
   let _ = byteBlockWriteStdout (byteBlockFromIntArray b)
+  let _ = flushStdout ()
   VUnit
 pByteBlockWriteStdoutIO _ = panic "byteBlockWriteStdout: not a ByteBlock"
 

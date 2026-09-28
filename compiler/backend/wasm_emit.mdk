@@ -3837,8 +3837,8 @@ emitRefProgram prog groups =
       ++ hashFloatRt
       ++ randomFloatRt
       ++ strSearchRt
-      ++ strCodecRt
       ++ utf8LossyRt
+      ++ strCodecRt
       ++ byteBlockRt
       ++ charFromCodeRt
       ++ charClassRt
