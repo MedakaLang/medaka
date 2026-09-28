@@ -57,6 +57,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
   authTermNames,
+  effParamNames,
 }
 import support.ordmap.{
   OrdMap,
@@ -592,9 +593,9 @@ checkEffAtoms bound cur env atoms =
   flatMap
     (a =>
       checkEffect (orElseLoc a.eatLoc cur) env a.eatLabel
-        ++ (match a.eatParam
-          EPName n => checkAuthorityName bound (orElseLoc a.eatLoc cur) n
-          _ => []))
+        ++ flatMap
+          (checkAuthorityName bound (orElseLoc a.eatLoc cur))
+          (effParamNames a.eatParam))
     atoms
 
 checkAuthorityName : List String -> Option Loc -> String -> List ResError

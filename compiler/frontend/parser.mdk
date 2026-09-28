@@ -2187,51 +2187,65 @@ effParamP = defer
 -- atom — but atoms are comma-SEPARATED, so a label-juxtaposed upper can only be a
 -- product axis; the `= ` lookahead distinguishes it cleanly with zero collision.
 effParamDispatch : Token -> Token -> Parser EffParamTy
-effParamDispatch (TUpper _) TEqual = productParamP
+effParamDispatch (TUpper _) TEqual = productParamP True
 effParamDispatch t _ = effParamFor t
 
 -- parse `Host="…" Method={…} …` (space-separated axes; loop while peek is an
--- upper-name followed by `=`).
-productParamP : Parser EffParamTy
-productParamP = defer
-  axes <- productAxes
+-- upper-name followed by `=`).  [named]: an axis may name an argument, which
+-- only an effect atom's parameter may do.
+productParamP : Bool -> Parser EffParamTy
+productParamP named = defer
+  axes <- productAxes named
   deferPure (EPProduct axes)
 
-productAxes : Parser (List (String, EffParamTy))
-productAxes = defer
-  a <- productAxis
-  rest <- productAxesMore
+productAxes : Bool -> Parser (List (String, EffParamTy))
+productAxes named = defer
+  a <- productAxis named
+  rest <- productAxesMore named
   deferPure (a :: rest)
 
-productAxesMore : Parser (List (String, EffParamTy))
-productAxesMore = defer
+productAxesMore : Bool -> Parser (List (String, EffParamTy))
+productAxesMore named = defer
   t <- peekP
   t2 <- peek2P
-  productAxesMoreFor t t2
+  productAxesMoreFor named t t2
 
-productAxesMoreFor : Token -> Token -> Parser (List (String, EffParamTy))
-productAxesMoreFor (TUpper _) TEqual = productAxes
-productAxesMoreFor _ _ = deferPure []
+productAxesMoreFor : Bool ->
+  Token ->
+  Token ->
+  Parser (List (String, EffParamTy))
+productAxesMoreFor named (TUpper _) TEqual = productAxes named
+productAxesMoreFor _ _ _ = deferPure []
 
--- one `Axis=val` axis: val is `"…"` (Prefix) or `{a,b}` (Set).
-productAxis : Parser (String, EffParamTy)
-productAxis = defer
+-- one `Axis=val` axis: val is `"…"` (Prefix), `{a,b}` (Set), or in an atom an
+-- argument's name.
+productAxis : Bool -> Parser (String, EffParamTy)
+productAxis named = defer
   name <- upperNameP
   expectTok TEqual
-  v <- productAxisVal
+  v <- productAxisVal named
   deferPure (name, v)
 
-productAxisVal : Parser EffParamTy
-productAxisVal = defer
+productAxisVal : Bool -> Parser EffParamTy
+productAxisVal named = defer
   t <- peekP
-  productAxisValFor t
+  productAxisValFor named t
 
-productAxisValFor : Token -> Parser EffParamTy
-productAxisValFor (TString s) = defer
+productAxisValFor : Bool -> Token -> Parser EffParamTy
+productAxisValFor _ (TString s) = defer
   advance
   deferPure (EPLit s)
-productAxisValFor TLBrace = effSetLiteralP
-productAxisValFor _ = failP "expected product axis value (\"prefix\" or {set})"
+productAxisValFor _ TLBrace = effSetLiteralP
+productAxisValFor True (TIdent n) = defer
+  advance
+  deferPure (EPName n)
+productAxisValFor True _ =
+  failP "expected product axis value (\"prefix\", {set} or an argument's name)"
+productAxisValFor False (TIdent _) =
+  failP
+    "an axis of an authority term takes a \"prefix\" or a {set}; an argument names an axis only in an effect row (`<L Axis=name>`)"
+productAxisValFor False _ =
+  failP "expected product axis value (\"prefix\" or {set})"
 
 -- A parameter nothing in the signature determines would be an unchecked
 -- claim, so `_` (quoted or bare) is rejected with the three admissible forms
@@ -2405,7 +2419,7 @@ authTermP = defer
   authTermFor t t2
 
 authTermFor : Token -> Token -> Parser EffParamTy
-authTermFor (TUpper _) TEqual = productParamP
+authTermFor (TUpper _) TEqual = productParamP False
 authTermFor (t@(TString _)) _ = effParamFor t
 authTermFor (t@(TIdent _)) _ = effParamFor t
 authTermFor TLBrace _ = effSetLiteralP

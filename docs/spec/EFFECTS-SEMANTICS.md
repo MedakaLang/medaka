@@ -481,6 +481,24 @@ labels are one domain only when they declare the same axes (the same names,
 of the same domains) in the same order. A written product names each axis
 at most once. Domain mismatches are errors, never proofs of containment.
 
+Any axis of a written product may name a binder, `<Http Host=host
+Method=method>`, under the rules a whole parameter's binder obeys (to the left
+in the same signature, a `String`, one domain), where the binder's domain is
+that axis's sub-domain, not the label's: `host` is a Prefix element and
+`method` a Set element. The atom's authority is then one tuple whose axes are
+terms, each a term of its axis's domain; an axis it leaves out is that axis's
+top. An argument is abstracted in the domain of the axis it determines, so a
+runtime method is the Method axis's top and a host passed as the method is a
+Set member named by the host. A tuple lies within another when each axis does,
+and an obligation `lo ⊑ (h, m)` is the pair `lo|Host ⊑ h`, `lo|Method ⊑ m` of
+its projections, which is exact because a tuple of terms denotes a product of
+sets. A term with no projection, a variable of the whole Product domain, keeps
+the obligation whole, where it is not proven; so is a tuple holding a variable
+that several elements of a set cover only together. Extending a binder an axis
+names (`host ++ x`) gives that axis's top, whether or not the axis is primary.
+Only an atom's axes take a binder; an axis in a qualifier or an index is a
+literal.
+
 At a call, instantiation freshens all quantified variables with one substitution.
 Checking an argument against `τ @κ` checks its underlying type and generates
 `α_𝔻(argument) ⊑ κ`, where `α` reads the argument's syntax first (a literal, a

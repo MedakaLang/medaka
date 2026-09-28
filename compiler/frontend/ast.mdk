@@ -995,6 +995,14 @@ qualifierSource : (String -> String) -> List EffParamTy -> String
 qualifierSource esc [EPSet xs] = "@(" ++ authTermsSurface esc [EPSet xs] ++ ")"
 qualifierSource esc ps = "@" ++ authTermsSurface esc ps
 
+-- The names an atom's written parameter refers to: the parameter itself, or
+-- the axes of a product.
+export
+effParamNames : EffParamTy -> List String
+effParamNames (EPName n) = [n]
+effParamNames (EPProduct axes) = flatMap (a => effParamNames (snd a)) axes
+effParamNames _ = []
+
 -- The names a written authority term refers to.
 export
 authTermNames : List EffParamTy -> List String

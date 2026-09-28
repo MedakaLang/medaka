@@ -11,10 +11,11 @@ import types.typecheck.{
 import types.repr.{Scheme(..), ppScheme}
 import frontend.ast.{Loc(..)}
 import types.effect_authority.{
-  Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority
+  Authority(..), Authvar(..), authNorm, authSub, authJoin, renderAuthority,
+  authSplit, authExtend, authIsTop
 }
 import types.effect_domain.{Param(..)}
-import support.util.{contains, lookupAssoc, anyList}
+import support.util.{contains, lookupAssoc, anyList, listLen}
 import string as S
 
 -- A prefix-domain label with a named-authority extern and a set-domain
@@ -238,8 +239,8 @@ test "the authority algebra" =
   let top = AConst (PPrefix None)
   let a = AConst (PPrefix (Some "a/*"))
   let ab = AConst (PPrefix (Some "a/b/*"))
-  let k = AVar (Ref (AUnbound 1 0 (PPrefix None) (Some "k")))
-  let j = AVar (Ref (AUnbound 2 0 (PPrefix None) None))
+  let k = AVar (Ref (AUnbound 1 0 (PPrefix None) (Some "k") False))
+  let j = AVar (Ref (AUnbound 2 0 (PPrefix None) None False))
   expectAll [
     expectTrue (authSub ab a),
     expectFalse (authSub a ab),
@@ -253,6 +254,55 @@ test "the authority algebra" =
     expectEqual " (\"a/*\" | k)" (renderAuthority (authJoin k a)),
     expectEqual "" (renderAuthority (authJoin top k)),
   ]
+
+-- A Product tuple whose axes are terms: each axis is compared on its own, a
+-- tuple of constants is a constant, and a cover is proven only by one element.
+test "the Product tuple algebra" =
+  let h = AVar (Ref (AUnbound 10 0 (PPrefix None) (Some "h") True))
+  let m = AVar (Ref (AUnbound 11 0 (PSet None) (Some "m") True))
+  let u = AVar (Ref (AUnbound 12 0 (PProduct []) (Some "u") False))
+  let pre s = AConst (PPrefix (Some s))
+  let set xs = AConst (PSet (Some xs))
+  let tuple host method = AProduct [("Host", host), ("Method", method)]
+  let elem host method =
+    AConst (PProduct [("Host", PPrefix host), ("Method", PSet method)])
+  expectAll
+    [
+      expectTrue (authSub (tuple h m) (tuple h m)),
+      expectFalse (authSub (tuple h (set ["GET"])) (tuple h m)),
+      expectFalse (authSub (elem (Some "a/x") (Some ["GET"])) (tuple h m)),
+      expectTrue (authSub (tuple h m) (elem None None)),
+      expectTrue (authSub (tuple h (set ["GET"])) (elem None (Some ["GET"]))),
+      expectFalse (authSub (tuple h (set ["GET"])) (elem None (Some ["POST"]))),
+      expectTrue
+        (authSub
+          (elem (Some "a/x") (Some ["GET"]))
+          (tuple (pre "a/*") (AConst (PSet None)))),
+      -- two elements cover this tuple only together: not proven
+      expectFalse
+        (authSub
+          (tuple (authJoin (pre "a/x") (pre "b/x")) m)
+          (authJoin (elem (Some "a/*") None) (elem (Some "b/*") None))),
+      expectEqual " Host=h Method=m" (renderAuthority (tuple h m)),
+      expectEqual " Host=h" (renderAuthority (tuple h (AConst (PSet None)))),
+      expectEqual
+        " Host=\"a/x\" Method={\"GET\"}"
+        (renderAuthority (tuple (pre "a/x") (set ["GET"]))),
+      expectEqual
+        ["\"a/x\" <= h", "{\"GET\"} <= m"]
+        (map
+          (p =>
+            "\{S.trim (renderAuthority (fst p))} <= \{S.trim (renderAuthority (snd p))}")
+          (authSplit (elem (Some "a/x") (Some ["GET"])) (tuple h m))),
+      -- a variable of the whole Product domain has no projection on an axis
+      expectEqual 1 (listLen (authSplit u (tuple h m))),
+      expectTrue (authIsTop (authExtend h)),
+      expectEqual
+        " h"
+        (renderAuthority
+          (authExtend
+            (AVar (Ref (AUnbound 13 0 (PPrefix None) (Some "h") False))))),
+    ]
 
 -- ── The data half (EFFECTS-SEMANTICS §4.1): fields, constructors, patterns ──
 
@@ -1413,4 +1463,60 @@ test "a concatenation extends a Product's primary axis; a literal chain is a lit
         ("effect M Product (Method : Set, Host : Prefix)\n"
           ++ "extern call : (m : String) -> <M m> Unit\n"
           ++ "bad : String -> <M \"GET\"> Unit\nbad s = call (\"GE\" ++ s)\n")),
+  ]
+
+-- A label whose every axis an argument names, for the tests below.
+httpPrelude : String
+httpPrelude =
+  "effect Http Product (Host : Prefix, Method : Set)\n"
+    ++ "extern request : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\n"
+    ++ "extern whole : (u : String) -> <Http u> Int\n"
+
+test "every axis takes a binder: each argument is charged on its own axis" = expectAll
+  [
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "get : Unit -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget _ = request \"a.com/x\" \"GET\"\n")),
+    expectFalse
+      (accepts
+        (httpPrelude
+          ++ "get : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nget m = request \"a.com/x\" m\n")),
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "fwd : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nfwd host method = request host method\n")),
+    expectTrue
+      (rejects
+        (httpPrelude
+          ++ "swap : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nswap host method = request method host\n")),
+    expectEqual
+      "(host : String) -> (method : String) -> <Http Host=host Method=method> Int"
+      (schemeOf httpPrelude "request"),
+  ]
+
+test "an axis variable extends to its axis's top; a whole-domain binder is no axis's" = expectAll
+  [
+    -- `host ++ "/x"` may leave what the caller's exact host admits
+    expectTrue
+      (rejects
+        (httpPrelude
+          ++ "under : (host : String) -> (method : String) -> <Http Host=host Method=method> Int\nunder host method = request (host ++ \"/x\") method\n")),
+    expectTrue
+      (accepts
+        (httpPrelude
+          ++ "lit : String -> <Http Host=\"a.com/*\" Method={\"GET\"}> Int\nlit s = request (\"a.com/\" ++ s) \"GET\"\n")),
+    -- `u` is an element of the whole Product domain, so on the Host axis its
+    -- value is that axis's top
+    expectTrue
+      (rejects
+        (httpPrelude
+          ++ "via : (u : String) -> (method : String) -> <Http u> Int\nvia u method = request u method\n")),
+    -- one binder at an axis and at a label of another domain
+    expectTrue
+      (contains
+        "T-AUTHORITY-DOMAIN"
+        (codes
+          (httpPrelude
+            ++ "extern two : (m : String) -> <Http Method=m, Store m> Int\n"))),
   ]
