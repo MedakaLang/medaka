@@ -46,7 +46,7 @@
    corpus it claims to copy — which is why this driver takes that corpus as its
    one argument. -}
 
-import bytes.{Bytes, fromArray, fromU8Array, toArray}
+import bytes.{Bytes, decodeUtf8Lossy, fromArray, fromU8Array, toArray}
 import u8 as U8
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
@@ -576,7 +576,7 @@ proxyOutcome _ (ProxyRefused response) =
   let bytes = toArray (serializeResponse response)
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
 proxyOutcome table (ProxyAdmitted admission) =
-  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{fromUtf8 admission.body} port=\{routeText table admission.audience}"
+  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{decodeUtf8Lossy admission.body} port=\{routeText table admission.audience}"
 
 proxyCell : String -> Option AppviewTable -> Array Int -> String -> <IO> Int
 proxyCell label policy bytes expected =

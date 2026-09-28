@@ -160,7 +160,7 @@ accountHostText = "pds.example"
 -- is a public query. The context only has to be fixed.
 testContext : RequestContext
 testContext =
-  RequestContext { nowSeconds = 1700000000, nonce = [||], login = None }
+  RequestContext { nowSeconds = 1700000000, nonce = empty, login = None }
 
 mustHex : String -> Bytes
 mustHex text = resultOrPanic "sync_car_shapes: malformed hex" (decode text)

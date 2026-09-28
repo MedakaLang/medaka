@@ -110,8 +110,8 @@ testInstant = 1700000000
 {- | A fixed nonce. It identifies any token a route mints while serving the
    request; no route in this file's synthetic registry mints one, so the value
    only has to be fixed. -}
-testNonce : Array Int
-testNonce = arrayMakeWith 16 (i => (i * 17 + 3) % 256)
+testNonce : Bytes
+testNonce = fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 17 + 3)))
 
 testContext : RequestContext
 testContext =

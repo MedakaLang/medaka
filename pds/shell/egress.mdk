@@ -206,11 +206,6 @@ egressRequestBytes port admission minted = do
   authorization <- makeRequestHeader "authorization" ("Bearer " ++ minted)
   accept <- makeRequestHeader "accept" "application/json"
   closing <- makeRequestHeader "connection" "close"
-  -- Door: the admitted body is still `Array Int`; an element outside 0..255
-  -- is refused here, under the serializer's own message, rather than packed.
-  body <- toResult
-    "httpclient: request body element outside byte range 0..255"
-    (B.fromArray admission.body)
   -- Door: the serialized request is `Bytes`; `toArray` is total.
   map
     B.toArray
@@ -219,7 +214,7 @@ egressRequestBytes port admission minted = do
       admission.target
       (egressHostValue port)
       (relayed ++ [authorization, accept, closing])
-      body)
+      admission.body)
 
 -- The relayed pairs `lib.server_core` selected, in the outbound serializer's
 -- own `Header` type. `makeRequestHeader` grades them a second time and cannot
@@ -235,11 +230,10 @@ relayedRequestFieldsOf fields =
 -- rather than empty: `proxyUpstreamResponse` relays what is here and nothing
 -- else, so an empty value would be this server asserting something the appview
 -- did not say.
-relayedAnswerFields : List Header -> List String -> List (String, Array Int)
+relayedAnswerFields : List Header -> List String -> List (String, Bytes)
 relayedAnswerFields _ [] = []
 relayedAnswerFields headers (name :: rest) = match findHeader name headers
-  -- Door: `UpstreamAnswer` still carries `Array Int`; `toArray` is total.
-  Some value => (name, B.toArray value) :: relayedAnswerFields headers rest
+  Some value => (name, value) :: relayedAnswerFields headers rest
   None => relayedAnswerFields headers rest
 
 {- | Decode one complete upstream buffer.
@@ -257,9 +251,9 @@ decodeUpstream buffer = match parseResponse buffer
       (UpstreamAnswer
         (responseStatus response)
         (responseReason response)
-        (map B.toArray (findHeader "content-type" (responseHeaders response)))
+        (findHeader "content-type" (responseHeaders response))
         (relayedAnswerFields (responseHeaders response) relayedResponseFields)
-        (B.toArray (responseBody response)))
+        (responseBody response))
 
 {- | Read until the response is complete: either the bytes so far already
    frame one (`responseBoundaryWithin`) or the peer closed, which is what

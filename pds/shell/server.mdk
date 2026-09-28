@@ -269,6 +269,11 @@ lingerDrainReads = 128
 requestNonceBytes : Int
 requestNonceBytes = 16
 
+-- Door, masked: `osEntropyBytes` is the runtime's integer-array extern, and
+-- every element it returns is a byte by construction.
+requestNonce : Unit -> <Rand> Bytes
+requestNonce () = B.fromArrayAssumeByteDomain (osEntropyBytes requestNonceBytes)
+
 {- | How many connections may be in flight at once. An accepted connection past
    the ceiling is closed immediately, without a read: answering it would need
    the very socket work the ceiling exists to bound. -}
@@ -545,7 +550,7 @@ applyRequest server dir storeRef login bytes =
   let nowSeconds = floatToInt (now ())
   let context = RequestContext {
     nowSeconds = nowSeconds,
-    nonce = osEntropyBytes requestNonceBytes,
+    nonce = requestNonce (),
     login = login,
   }
   let (next, response) = handleBytes server context store bytes
@@ -2907,7 +2912,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
     server
     RequestContext {
       nowSeconds = nowSeconds,
-      nonce = osEntropyBytes requestNonceBytes,
+      nonce = requestNonce (),
       login = None,
     }
     (map egressAppviews (servingEgress serving))
@@ -2946,7 +2951,7 @@ serviceAuthDecisionFor server serving storeRef nowSeconds (Ok request) =
     server
     RequestContext {
       nowSeconds = nowSeconds,
-      nonce = osEntropyBytes requestNonceBytes,
+      nonce = requestNonce (),
       login = None,
     }
     (map egressAppviews (servingEgress serving))
@@ -3359,7 +3364,7 @@ upgradeDecision server storeRef nowSeconds (Ok request) =
     server
     RequestContext {
       nowSeconds = nowSeconds,
-      nonce = osEntropyBytes requestNonceBytes,
+      nonce = requestNonce (),
       login = None,
     }
     !storeRef

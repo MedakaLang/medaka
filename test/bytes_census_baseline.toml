@@ -17,6 +17,18 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "pds/lib/handlers.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/server_core.mdk"
+count = 0
+
+[[entry]]
+file = "pds/lib/proxy.mdk"
+count = 0
+
+[[entry]]
 file = "pds/lib/nsid.mdk"
 count = 0
 
@@ -107,10 +119,6 @@ count = 0
 [[entry]]
 file = "pds/shell/server.mdk"
 count = 4
-
-[[entry]]
-file = "pds/lib/server_core.mdk"
-count = 6
 
 [[entry]]
 file = "gzip/lib/deflate.mdk"

@@ -40,7 +40,9 @@ import lib.store.{
   storeSessionOpen,
   storeWithServerSecret,
 }
-import test.fixture_support.{appendBytes, field, meaningful, testSecret}
+import test.fixture_support.{
+  appendBytes, field, meaningful, testNonce, testSecret
+}
 import test.response_support.{hasContentType, rawBodyOf}
 
 accountDidText : String
@@ -70,7 +72,7 @@ testInstant = 1700000000
 testContext : RequestContext
 testContext = RequestContext {
   nowSeconds = testInstant,
-  nonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256),
+  nonce = testNonce,
   login = None,
 }
 
