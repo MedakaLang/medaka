@@ -128,9 +128,10 @@ what a client and a relay expect.
 Out of scope for every gate, by decision: OAuth (#2610, L2), the read-only web
 view (#2607), email verification and password reset (single owner, offline
 rotation), app passwords (#2658, ruled out), invite codes and admin routes,
-multi-account. Lexicon validation is NOT implemented, but `validate: true` is
-accepted rather than refused as of ruling **R5** below — the refusal blocked the
-official app entirely.
+multi-account. Records are validated against the twenty lexicons the pinned
+reference PDS knows (`pds/lib/lexicon.mdk`) when `validate` is absent or `true`,
+and a collection outside them is stored and reported `"unknown"` rather than
+refused, per ruling **R5** below.
 
 ### 2.B Security
 
@@ -333,7 +334,7 @@ blocks the deploy — do not let them delay G-QUIET.
 | **R2** | **"Box lost = identity lost" is accepted for the `did:web` account** through G-QUIET and G-ANNOUNCE, given the custody criteria (D5/B16). It is the price of L1's ordering and it expires at G-MIGRATE, where off-box rotation keys invert it. | #2962, #2609 |
 | **R3** | **The KDF residual is accepted.** 3000 PBKDF2 iterations stand for a single-owner server whose password never leaves its owner; the attacker who holds the credential file also holds the signing key, so a higher work factor buys nothing against the threat that reaches the file. Revisit on a second account or a custody split. | comment on #2659 |
 | **R4** | **The read-derived S0/S1 candidates are filed now** at their candidate severities with `needs-repro`; the sprint that reproduces them relabels or closes. An unfiled S0 candidate is the shape #518 sat in. | #2946, #2947, #2952 |
-| **R5** | **`validate: true` is ACCEPTED, not refused** (2026-09-16, taken against a live server). This tree implements no lexicon validation and the flag was refused outright, on the reasoning that accepting it would report a validation that never happened. That reasoning does not survive `writeOutput`/`batchResult`, which report `validationStatus: "unknown"` on **every** write — a client is already told the record was stored ungraded, so the refusal bought no honesty the response was not already delivering. It cost the client bar instead: the official Bluesky app sends `validate: true` on `applyWrites`, so posting and editing a profile both returned `400` from the first live deploy. **L2 makes that app the bar, so the two decisions could not both stand.** Implementing validation is the follow-up, due before G-ANNOUNCE. | #3098, `admitValidateFlag` |
+| **R5** | **`validate: true` is ACCEPTED, not refused** (2026-09-16, taken against a live server). This tree implements no lexicon validation and the flag was refused outright, on the reasoning that accepting it would report a validation that never happened. That reasoning does not survive `writeOutput`/`batchResult`, which report `validationStatus: "unknown"` on **every** write — a client is already told the record was stored ungraded, so the refusal bought no honesty the response was not already delivering. It cost the client bar instead: the official Bluesky app sends `validate: true` on `applyWrites`, so posting and editing a profile both returned `400` from the first live deploy. **L2 makes that app the bar, so the two decisions could not both stand.** Validation has since landed (#3098): with `validate` absent or `true`, a record in one of the reference's twenty known collections is graded by `pds/lib/lexicon.mdk`, reported `"valid"` when it passes, refused `400 InvalidRequest` when it fails, and reported `"unknown"` when only a grapheme bound is left undecided. **One divergence from the reference is kept on purpose (F7):** a collection outside those twenty is stored and reported `"unknown"` under `validate: true`, where the reference refuses it, because the official app is newer than the pinned reference and writes record types it does not know. `validate: false` stores ungraded and reports `"unknown"`. | #3098, `admitValidateFlag`, `pds/lib/lexicon.mdk` |
 | **R6** | **The raised KDF count, 60,000, is ACCEPTED for a single-owner server** (2026-09-24), re-ruling R3 now that `defaultIterations` moved from 3,000. Sprint `pds-a-login-costs-what-it-should` (PR #3398) made the derivation cheaper (ThinLTO-linked runtime, allocation-free SHA-256, keyed-HMAC midstate, a yielding/chunked KDF) and raised the count to the largest value that stays inside a 500 ms/login budget on the reference box: measured 0.26-0.52 s/login under the live unit's own resource limits. The residual gap to OWASP's 600,000-iteration floor narrows from 200x to 10x; reaching the floor outright would cost 3.5-5 s/login, 7-10x the budget, and needs a cheaper primitive (native SHA-256, #3367), not a larger constant. The 10x residual is recorded on the claims page as a known limitation, same reasoning as R3: whoever reads the credential file also reads the signing key, so a higher work factor alone buys little against that threat. Revisit alongside R3's own triggers (a second account or a custody split) or if #3367 lands. | #3373, PR #3398 |
 
 ## 6. What "written entirely in Medaka" will mean, honestly
@@ -351,6 +352,8 @@ checks it, and what is not claimed.
 
 ## 7. Out of scope for this plan
 
-OAuth (#2610). The web view (#2607). Multi-account. Email. Lexicon validation.
+OAuth (#2610). The web view (#2607). Multi-account. Email. Lexicon validation
+beyond the reference's twenty known collections, and grapheme counting (a
+record whose only open question is a grapheme bound is reported `"unknown"`).
 Moving the deployment to another host (the restore drill is the mechanism if
 it ever happens). The language's own 0.1.0 preview, which has its own plan.

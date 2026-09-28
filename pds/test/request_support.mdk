@@ -60,6 +60,11 @@ loginJson identifier passwordText =
       ("password", JString passwordText),
     ])
 
+{- | A write body that replays a pinned transcript record, which is why it
+   says `validate: false`: the transcripts key `app.bsky.feed.post` records
+   `medaka-a` and `medaka-b`, which are not TIDs, so the reference PDS itself
+   refuses them unless grading is off. The keys cannot change, since they are
+   inside the pinned repository bytes. -}
 export
 createBody : String -> String -> String -> Json -> String
 createBody did collection rkey record =
@@ -69,6 +74,7 @@ createBody did collection rkey record =
       ("collection", JString collection),
       ("rkey", JString rkey),
       ("record", record),
+      ("validate", JBool False),
     ])
 
 export

@@ -969,10 +969,11 @@ synthesized NSIDs, and reach the handler through the same `routeRequest`/
 `handle` seam as every XRPC method. `sync.getRepo` returns `repoExportCar`'s
 bytes verbatim, graded byte-for-byte against the provenance-pinned corpus.
 
-Deliberately NOT shipped, and each refused rather than faked: lexicon record
-validation (`validate: true` is refused), `describeRepo`'s `didDoc` (no DID
-resolver, so any document would be invented), `sync.getRepo`'s `since` (no
-incremental sync), and `validationStatus`.
+Deliberately NOT shipped, and each refused rather than faked: `describeRepo`'s
+`didDoc` (no DID resolver, so any document would be invented) and
+`sync.getRepo`'s `since` (no incremental sync). Lexicon record validation has
+since shipped for the reference's twenty known collections
+(`pds/lib/lexicon.mdk`; `docs/ops/PDS-LAUNCH-PLAN.md` ruling R5).
 
 **Read-path cost bounds (#2478).** Every read route above is a `PublicRoute` —
 unauthenticated by the atproto spec, not by omission — so the cost of serving

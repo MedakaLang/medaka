@@ -1,0 +1,924 @@
+{- | Lexicon record validation: the verdict the reference PDS reaches on a
+   record it is asked to write, against the record schemas it knows.
+
+   The schemas are data (`lib.lexicon_schemas`, generated from
+   `pds/test/vectors/lexicon_schemas.json`): the twenty collections in the
+   reference's `knownSchemas` (`repo/prepare.js`, `@atproto/pds@0.5.27`) and
+   the definitions they reach. The semantics are `@atproto/lex-schema`'s
+   `validate` mode, which is strict and applies no defaults, run after
+   `@atproto/lex-json`'s `jsonToLex`. `pds/test/lexicon_corpus_test.mdk`
+   holds this module to the reference's own verdict on every row of
+   `pds/test/vectors/lexicon_record_corpus.jsonl`.
+
+   A verdict is one of four:
+     - `LexValid`: every constraint was decided and passed.
+     - `LexInvalid`: a constraint was decided and failed.
+     - `LexUndecided`: nothing failed, but a `maxGraphemes` bound was not
+       decided. The reference counts extended grapheme clusters (UAX #29) and
+       this tree has no segmenter. A string with no more codepoints than the
+       bound has no more graphemes either, so only a string past it in
+       codepoints and within its byte bound is left open.
+     - `LexNoSchema`: the collection is not one of the twenty.
+
+   `recordValidationStatus` is the only place a verdict becomes the
+   `validationStatus` a write reports, and the only place `"valid"` is
+   produced.
+
+   A record is judged as JSON. The reference judges it after `jsonToLex`,
+   which turns a lone `{"$link": <cid>}` into a CID and a lone
+   `{"$bytes": <base64>}` into bytes, and refuses a `__proto__` key anywhere
+   in the record; `special` and `hasProtoKey` are those two rules here.
+
+   Known differences from the reference, each a case no conforming client
+   writes:
+     - a record without `$type` is judged as its collection's, where the
+       reference first adds the field (which changes the stored bytes);
+     - a `$link` spelled in base36 is read as an ordinary object;
+     - a CID whose varints are not minimal is refused;
+     - a `$bytes` string carrying whitespace is refused. -}
+
+import bytes as B
+import bytes.{Bytes, decodeUtf8, encodeUtf8}
+import json.{Json(..), get}
+import list.{dropWhile, reverse}
+import map as M
+import map.{Map}
+import set as S
+import set.{Set}
+import regex.{Regex, isFullMatch, mustCompile}
+import string.{contains, endsWith, indexOf, split, startsWith, toInt, toLower}
+import string.{utf8ByteLength}
+import lib.atsyntax.{
+  validateAtIdentifier,
+  validateAtUri,
+  validateDid,
+  validateHandle,
+  validateRecordKey,
+}
+import lib.base58.{base58btcDecode}
+import lib.multiformats.{
+  multibaseBase32LowerDecode, multicodecRaw, multicodecSha2_256, uvarintDecode
+}
+import lib.nsid.{validateNsid}
+import lib.tid.{tidParse}
+
+-- ── the schema language ─────────────────────────────────────────────────────
+
+-- | The string formats the Lexicon language defines.
+public export data LexFormat =
+  | FormatAtIdentifier
+  | FormatAtUri
+  | FormatCid
+  | FormatDatetime
+  | FormatDid
+  | FormatHandle
+  | FormatLanguage
+  | FormatNsid
+  | FormatRecordKey
+  | FormatTid
+  | FormatUri
+  deriving (Eq, Debug)
+
+{- | A `string` definition. `minLength` and `maxLength` count UTF-8 bytes,
+   `maxGraphemes` extended grapheme clusters. `defaultValue` is carried so the
+   data says everything its JSON does; validation never applies it. -}
+public export data LexString = LexString {
+  minLength : Option Int,
+  maxLength : Option Int,
+  maxGraphemes : Option Int,
+  format : Option LexFormat,
+  defaultValue : Option String,
+}
+  deriving (Eq, Debug)
+
+{- | A field's type. `LexInteger` carries its `minimum`, `LexBlob` its
+   `accept` list and `maxSize`, `LexArray` its item type and `maxLength`, and
+   `LexUnion` its member references and whether it is closed. A reference
+   names a definition as `nsid#name`. -}
+public export data LexType =
+  | LexBoolean
+  | LexInteger (Option Int)
+  | LexText LexString
+  | LexBytes
+  | LexBlob (Option (List String)) (Option Int)
+  | LexArray LexType (Option Int)
+  | LexObject LexShape
+  | LexRef String
+  | LexUnion (List String) Bool
+  deriving (Eq, Debug)
+
+-- | An object: its required property names, then every property in order.
+public export data LexShape =
+  | LexShape (List String) (List (String, LexType))
+  deriving (Eq, Debug)
+
+-- | What a record key must be: `any`, `nsid`, `tid` or `literal:<value>`.
+public export data LexKey =
+  | KeyAny
+  | KeyNsid
+  | KeyTid
+  | KeyLiteral String
+  deriving (Eq, Debug)
+
+-- | One named definition: a record, or any other type.
+public export data LexDef =
+  | LexRecordDef LexKey LexShape
+  | LexTypeDef LexType
+  deriving (Eq, Debug)
+
+-- | A set of definitions, looked up by `nsid#name`.
+export data Lexicons = Lexicons (Map String LexDef)
+
+export
+lexicons : List (String, LexDef) -> Lexicons
+lexicons defs = Lexicons (M.fromList defs)
+
+lookupDef : Lexicons -> String -> Option LexDef
+lookupDef (Lexicons defs) name = M.get name defs
+
+-- | The `$type` a definition's values carry: its name, less a `#main`.
+typeName : String -> String
+typeName name =
+  if endsWith "#main" name then
+    stringSlice 0 (stringLength name - 5) name
+  else
+    name
+
+-- ── verdicts ────────────────────────────────────────────────────────────────
+
+-- | Every message is the text of the refusal a client is sent.
+public export data LexVerdict =
+  | LexValid
+  | LexUndecided String
+  | LexInvalid String
+  | LexNoSchema
+  deriving (Eq, Debug)
+
+{- | The `validationStatus` a write reports for a verdict, or the refusal an
+   invalid record gets. A record with no schema and one with an undecided
+   bound are both `"unknown"`: neither was checked in full. -}
+export
+recordValidationStatus : LexVerdict -> Result String String
+recordValidationStatus LexValid = Ok "valid"
+recordValidationStatus (LexUndecided _) = Ok "unknown"
+recordValidationStatus LexNoSchema = Ok "unknown"
+recordValidationStatus (LexInvalid message) = Err message
+
+{- | The verdict on `record` written to `collection` under `rkey`.
+
+   The order is the reference's: a `__proto__` key refuses the record before
+   anything is looked up, and a `$type` naming another collection refuses it
+   whether or not the collection has a schema. Then the record key, then the
+   record. -}
+export
+validateRecord : Lexicons -> String -> String -> Json -> LexVerdict
+validateRecord lex collection rkey record =
+  if hasProtoKey record then
+    LexInvalid "Invalid key: __proto__"
+  else match recordTypeMismatch collection record
+    Some message => LexInvalid message
+    None => match lookupDef lex "\{collection}#main"
+      Some (LexRecordDef key shape) => match checkKey key rkey
+        Some reason =>
+          LexInvalid "Invalid record key for \{collection}: \{reason} at $"
+        None => match checkShape lex "$.record" shape record
+          Pass => LexValid
+          Open message => LexUndecided message
+          Fail message => LexInvalid "Invalid \{collection} record: \{message}"
+      _ => LexNoSchema
+
+recordTypeMismatch : String -> Json -> Option String
+recordTypeMismatch collection record = match get "$type" record
+  None => None
+  Some (JString given) =>
+    if given == collection then
+      None
+    else
+      Some "Invalid $type: expected \{collection}, got \{given}"
+  Some _ => Some "Invalid $type: expected \{collection}"
+
+checkKey : LexKey -> String -> Option String
+checkKey KeyAny rkey = match validateRecordKey rkey
+  Ok () => None
+  Err _ => Some "Invalid record key"
+checkKey KeyNsid rkey = match validateNsid rkey
+  Ok () => None
+  Err _ => Some "Invalid NSID"
+checkKey KeyTid rkey = match tidParse rkey
+  Ok _ => None
+  Err _ => Some "Invalid TID string"
+checkKey (KeyLiteral literal) rkey =
+  if rkey == literal then None else Some "Expected \"\{literal}\""
+
+-- ── checking values ─────────────────────────────────────────────────────────
+
+-- | A check's outcome. `Open` is an undecided bound; it is kept only while
+-- nothing fails, since any failure decides the whole record.
+data Check = Pass | Open String | Fail String
+
+keepOpen : Option String -> Check
+keepOpen None = Pass
+keepOpen (Some message) = Open message
+
+-- The first open bound wins, so a message names where the record was left
+-- undecided first.
+firstOpen : Option String -> String -> Option String
+firstOpen None message = Some message
+firstOpen earlier _ = earlier
+
+-- Two checks in order: the second runs only if the first did not fail.
+andThen : Check -> (Unit -> Check) -> Check
+andThen (Fail message) _ = Fail message
+andThen Pass next = next ()
+andThen (Open message) next = match next ()
+  Fail failure => Fail failure
+  _ => Open message
+
+expected : String -> String -> Check
+expected kind path = Fail "Expected \{kind} value type at \{path}"
+
+checkValue : Lexicons -> String -> LexType -> Json -> Check
+checkValue _ _ LexBoolean (JBool _) = Pass
+checkValue _ path LexBoolean _ = expected "boolean" path
+checkValue _ path (LexInteger minimum) value = match safeInteger value
+  None => expected "integer" path
+  Some n => match minimum
+    Some least if n < least =>
+      Fail
+        "integer too small (minimum \{intToString least}, got \{intToString n}) at \{path}"
+    _ => Pass
+checkValue _ path (LexText rules) (JString text) = checkString path rules text
+checkValue _ path (LexText _) _ = expected "string" path
+checkValue _ path LexBytes (JObject pairs) = match special pairs
+  SpecialBytes => Pass
+  _ => expected "bytes" path
+checkValue _ path LexBytes _ = expected "bytes" path
+checkValue _ path (LexBlob accept maxSize) value =
+  checkBlob path accept maxSize value
+checkValue lex path (LexArray items maxLength) (JArray elements) =
+  match maxLength
+    Some most if arrayLength elements > most =>
+      Fail
+        "array too big (maximum \{intToString most}, got \{intToString (arrayLength elements)}) at \{path}"
+    _ => checkElements lex path items elements 0 None
+checkValue _ path (LexArray _ _) _ = expected "array" path
+checkValue lex path (LexObject shape) value = checkShape lex path shape value
+checkValue lex path (LexRef name) value = checkRef lex path name value
+checkValue lex path (LexUnion refs closed) value =
+  checkUnion lex path refs closed value
+
+checkElements : Lexicons ->
+  String ->
+  LexType ->
+  Array Json ->
+  Int ->
+  Option String ->
+  Check
+checkElements lex path items elements i open =
+  if i >= arrayLength elements then
+    keepOpen open
+  else match checkValue lex "\{path}[\{intToString i}]" items elements[i]
+    Fail message => Fail message
+    Open message =>
+      checkElements lex path items elements (i + 1) (firstOpen open message)
+    Pass => checkElements lex path items elements (i + 1) open
+
+{- | An object: a plain JSON object (not a `$link` or `$bytes` one) whose
+   declared properties check. A property that is absent is refused only if it
+   is required; one that is present, `null` included, must check. Properties
+   the definition does not declare are never looked at. -}
+checkShape : Lexicons -> String -> LexShape -> Json -> Check
+checkShape lex path (LexShape required properties) value =
+  if isPlainObject value then
+    checkProperties lex path required value properties None
+  else
+    expected "object" path
+
+checkProperties : Lexicons ->
+  String ->
+  List String ->
+  Json ->
+  List (String, LexType) ->
+  Option String ->
+  Check
+checkProperties _ _ _ _ [] open = keepOpen open
+checkProperties lex path required value ((name, fieldType) :: rest) open =
+  match get name value
+    None =>
+      if elem name required then
+        Fail "Missing required key \"\{name}\" at \{path}"
+      else
+        checkProperties lex path required value rest open
+    Some field => match checkValue lex "\{path}.\{name}" fieldType field
+      Fail message => Fail message
+      Open message =>
+        checkProperties lex path required value rest (firstOpen open message)
+      Pass => checkProperties lex path required value rest open
+
+{- | A reference to an object definition is a typed object: `$type` may be
+   absent, but if present it must name that definition. A reference to any
+   other definition checks as that definition's type. -}
+checkRef : Lexicons -> String -> String -> Json -> Check
+checkRef lex path name value = match lookupDef lex name
+  Some (LexTypeDef (LexObject shape)) =>
+    checkTyped lex path (typeName name) shape value
+  Some (LexTypeDef other) => checkValue lex path other value
+  Some (LexRecordDef _ shape) => checkTyped lex path (typeName name) shape value
+  None => Fail "Unresolved lexicon reference \{name} at \{path}"
+
+checkTyped : Lexicons -> String -> String -> LexShape -> Json -> Check
+checkTyped lex path wanted shape value =
+  if isPlainObject value then match get "$type" value
+    None => checkShape lex path shape value
+    Some (JString given) if given == wanted => checkShape lex path shape value
+    Some _ => Fail "Expected \"\{wanted}\" at \{path}.$type"
+  else
+    expected "object" path
+
+{- | A union value is an object carrying `$type`. A member it names is
+   checked; in an open union any other string `$type` is accepted unchecked.
+   Members are matched by `$type`, which drops a reference's `#main`, so a
+   value typed `…#main` is an unknown member. -}
+checkUnion : Lexicons -> String -> List String -> Bool -> Json -> Check
+checkUnion lex path refs closed value =
+  let typed = "an object which includes the \"$type\" property"
+  if isPlainObject value then match get "$type" value
+    None => expected typed path
+    Some tag => match unionMember refs tag
+      Some ref => checkRef lex path ref value
+      None =>
+        if closed then
+          Fail "Expected a member of the union at \{path}.$type"
+        else match tag
+          JString _ => Pass
+          _ => expected "string" "\{path}.$type"
+  else
+    expected typed path
+
+unionMember : List String -> Json -> Option String
+unionMember refs (JString tag) = find (ref => typeName ref == tag) refs
+unionMember _ _ = None
+
+-- ── scalars ─────────────────────────────────────────────────────────────────
+
+maxSafeInteger : Int
+maxSafeInteger = 9007199254740991
+
+-- | JavaScript's `Number.isSafeInteger`: an integral number of magnitude at
+-- most 2^53 - 1, so `2.0` is one and `2^53` is not.
+safeInteger : Json -> Option Int
+safeInteger (JInt n) =
+  if n <= maxSafeInteger && n >= 0 - maxSafeInteger then Some n else None
+safeInteger (JFloat f) =
+  if f == floor f
+    && f <= intToFloat maxSafeInteger
+    && f >= intToFloat (0 - maxSafeInteger) then
+    Some (floatToInt f)
+  else
+    None
+safeInteger _ = None
+
+-- Bytes bounds, then the grapheme bound, then the format: the reference's
+-- order, which matters only for which failure a message names.
+checkString : String -> LexString -> String -> Check
+checkString path rules text = andThen (checkByteBounds
+  path
+  rules
+  text) (_ => andThen (checkGraphemes path rules.maxGraphemes text) (_ =>
+  checkFormat path rules.format text))
+
+checkByteBounds : String -> LexString -> String -> Check
+checkByteBounds path rules text = match (rules.minLength, rules.maxLength)
+  (None, None) => Pass
+  (least, most) =>
+    let size = utf8ByteLength text
+    match least
+      Some bound if size < bound =>
+        Fail
+          "string too small (minimum \{intToString bound}, got \{intToString size}) at \{path}"
+      _ => match most
+        Some bound if size > bound =>
+          Fail
+            "string too big (maximum \{intToString bound}, got \{intToString size}) at \{path}"
+        _ => Pass
+
+-- A grapheme is one or more codepoints, so a count of codepoints within the
+-- bound decides it; a count past it does not.
+checkGraphemes : String -> Option Int -> String -> Check
+checkGraphemes _ None _ = Pass
+checkGraphemes path (Some most) text =
+  let count = stringLength text
+  if count <= most then
+    Pass
+  else
+    Open
+      "grapheme count not decided (maximum \{intToString most}, \{intToString count} codepoints) at \{path}"
+
+checkFormat : String -> Option LexFormat -> String -> Check
+checkFormat _ None _ = Pass
+checkFormat path (Some format) text =
+  if formatValid format text then
+    Pass
+  else
+    Fail "Invalid \{formatLabel format} at \{path}"
+
+formatLabel : LexFormat -> String
+formatLabel FormatAtIdentifier = "at-identifier"
+formatLabel FormatAtUri = "at-uri"
+formatLabel FormatCid = "CID string"
+formatLabel FormatDatetime = "datetime"
+formatLabel FormatDid = "DID"
+formatLabel FormatHandle = "handle"
+formatLabel FormatLanguage = "language"
+formatLabel FormatNsid = "NSID"
+formatLabel FormatRecordKey = "record key"
+formatLabel FormatTid = "TID string"
+formatLabel FormatUri = "uri"
+
+formatValid : LexFormat -> String -> Bool
+formatValid FormatAtIdentifier text = isOk (validateAtIdentifier text)
+formatValid FormatAtUri text = atUriValid text
+formatValid FormatCid text = cidStringValid text
+formatValid FormatDatetime text = datetimeValid text
+formatValid FormatDid text = isOk (validateDid text)
+formatValid FormatHandle text = isOk (validateHandle text)
+formatValid FormatLanguage text = languageValid text
+formatValid FormatNsid text = isOk (validateNsid text)
+formatValid FormatRecordKey text = isOk (validateRecordKey text)
+formatValid FormatTid text = isOk (tidParse text)
+formatValid FormatUri text = isFullMatch uriRe text
+
+-- ── blobs ───────────────────────────────────────────────────────────────────
+
+{- | A blob is `{"$type": "blob", "ref": {"$link": <cid>}, "mimeType",
+   "size"}` and nothing else, its CID a version-1 raw one, its MIME type
+   containing a `/`, and its size a non-negative safe integer. -}
+checkBlob : String -> Option (List String) -> Option Int -> Json -> Check
+checkBlob path accept maxSize value = match typedBlob value
+  None => expected "blob" path
+  Some (mimeType, size) =>
+    if not (acceptsMime accept mimeType) then
+      Fail "MIME type \"\{mimeType}\" is not accepted at \{path}.mimeType"
+    else match maxSize
+      Some most if size > most =>
+        Fail
+          "blob too big (maximum \{intToString most}, got \{intToString size}) at \{path}"
+      _ => Pass
+
+blobKeys : List String
+blobKeys = ["$type", "mimeType", "ref", "size"]
+
+typedBlob : Json -> Option (String, Int)
+typedBlob (JObject pairs) =
+  let value = JObject pairs
+  if isPlainObject value
+    && all (pair => elem (fst pair) blobKeys) pairs then match (
+    get "$type" value,
+    get "mimeType" value,
+  )
+    (Some (JString "blob"), Some (JString mimeType)) if contains "/" mimeType =>
+      blobSized mimeType (get "size" value) (get "ref" value)
+    _ => None
+  else
+    None
+typedBlob _ = None
+
+blobSized : String -> Option Json -> Option Json -> Option (String, Int)
+blobSized mimeType (Some sizeValue) (Some (JObject refPairs)) = match (
+  safeInteger sizeValue,
+  special refPairs,
+)
+  (Some size, SpecialLink version codec) if size >= 0
+    && version == 1
+    && codec == multicodecRaw => Some (mimeType, size)
+  _ => None
+blobSized _ _ _ = None
+
+acceptsMime : Option (List String) -> String -> Bool
+acceptsMime None _ = True
+acceptsMime (Some accepted) mimeType =
+  elem "*/*" accepted
+    || elem mimeType accepted
+    || any (pattern => wildcardAccepts pattern mimeType) accepted
+
+wildcardAccepts : String -> String -> Bool
+wildcardAccepts pattern mimeType =
+  endsWith "/*" pattern
+    && startsWith (stringSlice 0 (stringLength pattern - 1) pattern) mimeType
+
+-- ── `$link`, `$bytes` and `__proto__` ───────────────────────────────────────
+
+data Special = SpecialLink Int Int | SpecialBytes | NotSpecial
+
+{- | What `jsonToLex` makes of an object: a CID when its one key is `$link`
+   naming a CID, bytes when its one key is `$bytes` holding base64, and
+   otherwise an ordinary object. An object with a `$link` key is never read
+   as bytes. -}
+special : Array (String, Json) -> Special
+special pairs =
+  let object = JObject pairs
+  let single = arrayLength pairs == 1
+  match get "$link" object
+    Some (JString text) if single => match looseCid text
+      Some (version, codec) => SpecialLink version codec
+      None => NotSpecial
+    Some _ => NotSpecial
+    None => match get "$bytes" object
+      Some (JString text) if single && base64Loose text => SpecialBytes
+      _ => NotSpecial
+
+isPlainObject : Json -> Bool
+isPlainObject (JObject pairs) = match special pairs
+  NotSpecial => True
+  _ => False
+isPlainObject _ = False
+
+hasProtoKey : Json -> Bool
+hasProtoKey (JObject pairs) = anyProtoPair pairs 0
+hasProtoKey (JArray values) = anyProtoValue values 0
+hasProtoKey _ = False
+
+anyProtoPair : Array (String, Json) -> Int -> Bool
+anyProtoPair pairs i
+  | i >= arrayLength pairs = False
+  | fst pairs[i] == "__proto__" || hasProtoKey (snd pairs[i]) = True
+  | otherwise = anyProtoPair pairs (i + 1)
+
+anyProtoValue : Array Json -> Int -> Bool
+anyProtoValue values i
+  | i >= arrayLength values = False
+  | hasProtoKey values[i] = True
+  | otherwise = anyProtoValue values (i + 1)
+
+{- | Base64 as the reference decodes a `$bytes` value: the standard
+   alphabet, with padding or without it, but when padded, padded to a whole
+   quantum. -}
+base64Loose : String -> Bool
+base64Loose text =
+  let codes = B.toArray (encodeUtf8 text)
+  let n = arrayLength codes
+  let pads = trailingPads codes n 0
+  let body = n - pads
+  pads <= 2
+    && body % 4 /= 1
+    && (pads == 0 || n % 4 == 0)
+    && allBase64 codes 0 body
+
+trailingPads : Array Int -> Int -> Int -> Int
+trailingPads codes i count =
+  if i > 0 && codes[i - 1] == 61 then
+    trailingPads codes (i - 1) (count + 1)
+  else
+    count
+
+allBase64 : Array Int -> Int -> Int -> Bool
+allBase64 codes i end
+  | i >= end = True
+  | isBase64Code codes[i] = allBase64 codes (i + 1) end
+  | otherwise = False
+
+isBase64Code : Int -> Bool
+isBase64Code c =
+  c >= 65 && c <= 90
+    || c >= 97 && c <= 122
+    || c >= 48 && c <= 57
+    || c == 43
+    || c == 47
+
+-- ── CIDs ────────────────────────────────────────────────────────────────────
+
+{- | A `$link` CID as `multiformats`' `CID.parse` reads one: a version-0 CID
+   spelled bare in base58btc (`Q…`), or any CID multibase-prefixed in
+   base58btc (`z…`) or base32 (`b…`), of any codec and hash. Answers the
+   version and codec. -}
+looseCid : String -> Option (Int, Int)
+looseCid text =
+  if text == "" || stringLength text > 2048 then
+    None
+  else if startsWith "Q" text then
+    decodedCid (base58btcDecode text)
+  else if startsWith "z" text then
+    versionOne
+      (decodedCid (base58btcDecode (stringSlice 1 (stringLength text) text)))
+  else if startsWith "b" text then
+    versionOne (decodedCid (base32Cid text))
+  else
+    None
+
+{- | Format `cid`: a CID string that re-renders as itself, which leaves a
+   version-0 CID in base58btc (`Q…`) and a version-1 CID in base32 (`b…`). -}
+cidStringValid : String -> Bool
+cidStringValid text =
+  if startsWith "Q" text then match decodedCid (base58btcDecode text)
+    Some (0, _) => True
+    _ => False
+  else if startsWith "b" text then
+    isSome (versionOne (decodedCid (base32Cid text)))
+  else
+    False
+
+-- `multiformats` drops trailing `=` before decoding base32.
+base32Cid : String -> Result String Bytes
+base32Cid text = multibaseBase32LowerDecode (stripPads text)
+
+stripPads : String -> String
+stripPads text =
+  if endsWith "=" text then
+    stripPads (stringSlice 0 (stringLength text - 1) text)
+  else
+    text
+
+versionOne : Option (Int, Int) -> Option (Int, Int)
+versionOne (Some (1, codec)) = Some (1, codec)
+versionOne _ = None
+
+{- | A binary CID's version and codec. Version 0 is a bare SHA-256
+   multihash (`0x12` first), whose codec is dag-pb; version 1 is
+   `<1><codec><hash><length><digest>`. The digest must end the bytes. -}
+decodedCid : Result String Bytes -> Option (Int, Int)
+decodedCid (Err _) = None
+decodedCid (Ok bytes) = match varintsAt bytes 0 1 []
+  Some ([first], _) =>
+    if first == multicodecSha2_256 then match varintsAt bytes 0 2 []
+      Some ([_, length], offset) if offset + length == B.length bytes =>
+        Some (0, 0x70)
+      _ => None
+    else if first == 1 then match varintsAt bytes 0 4 []
+      Some ([_, codec, _, length], offset) if offset + length
+        == B.length bytes => Some (1, codec)
+      _ => None
+    else
+      None
+  _ => None
+
+-- `count` varints from `offset`, in order, and the offset after them.
+varintsAt : Bytes -> Int -> Int -> List Int -> Option (List Int, Int)
+varintsAt bytes offset count acc =
+  if count == 0 then
+    Some (reverse acc, offset)
+  else match uvarintDecode (B.drop offset bytes)
+    Ok (value, used) =>
+      varintsAt bytes (offset + used) (count - 1) (value :: acc)
+    Err _ => None
+
+-- ── datetime ────────────────────────────────────────────────────────────────
+
+-- The reference's pattern, less a day `00` and a second `60`, which it
+-- matches and then fails to parse as a date.
+datetimeRe : Regex
+datetimeRe =
+  mustCompile
+    "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])"
+
+{- | Format `datetime`: RFC 3339 with `Z` or a numeric offset other than
+   `-00:00`, at most 64 characters, whose instant falls in a UTC year from 0
+   to 9999. Any day up to 31 is accepted in any month, as the reference's
+   date parser does. -}
+datetimeValid : String -> Bool
+datetimeValid text =
+  stringLength text <= 64
+    && not (endsWith "-00:00" text)
+    && isFullMatch datetimeRe text
+    && utcYearInRange text
+
+digitsAt : Int -> Int -> String -> Int
+digitsAt from to text = match toInt (stringSlice from to text)
+  Some n => n
+  None => 0
+
+-- Only an offset can move the instant into another year: a positive one
+-- from the first minutes of January 1st, a negative one from the last of
+-- December 31st.
+utcYearInRange : String -> Bool
+utcYearInRange text =
+  let year = digitsAt 0 4 text
+  let month = digitsAt 5 7 text
+  let day = digitsAt 8 10 text
+  let local =
+    digitsAt 11 13 text * 3600 + digitsAt 14 16 text * 60 + digitsAt 17 19 text
+  let offset = offsetSeconds text
+  let utcYear =
+    if month == 1 && day == 1 && local < offset then
+      year - 1
+    else if month == 12 && day == 31 && local - offset >= 86400 then
+      year + 1
+    else
+      year
+  utcYear >= 0 && utcYear <= 9999
+
+offsetSeconds : String -> Int
+offsetSeconds text =
+  if endsWith "Z" text then
+    0
+  else
+    let n = stringLength text
+    let magnitude =
+      digitsAt (n - 5) (n - 3) text * 3600 + digitsAt (n - 2) n text * 60
+    if stringSlice (n - 6) (n - 5) text == "-" then 0 - magnitude else magnitude
+
+-- ── language ────────────────────────────────────────────────────────────────
+
+grandfatheredTags : List String
+grandfatheredTags = [
+  "en-GB-oed",
+  "i-ami",
+  "i-bnn",
+  "i-default",
+  "i-enochian",
+  "i-hak",
+  "i-klingon",
+  "i-lux",
+  "i-mingo",
+  "i-navajo",
+  "i-pwn",
+  "i-tao",
+  "i-tay",
+  "i-tsu",
+  "sgn-BE-FR",
+  "sgn-BE-NL",
+  "sgn-CH-DE",
+  "art-lojban",
+  "cel-gaulish",
+  "no-bok",
+  "no-nyn",
+  "zh-guoyu",
+  "zh-hakka",
+  "zh-min",
+  "zh-min-nan",
+  "zh-xiang",
+]
+
+{- | Format `language`: a BCP 47 tag whose primary language subtag is two or
+   three lowercase letters, with no variant or extension singleton repeated,
+   or a grandfathered tag, or a private-use tag (`x-…`). -}
+languageValid : String -> Bool
+languageValid text =
+  elem text grandfatheredTags
+    || (match split "-" text
+      primary :: rest =>
+        if isPrivateSingleton primary then
+          privateUseTail rest
+        else if subtagOf 2 3 isLowerCode primary then
+          languageTail rest
+        else
+          False
+      [] => False)
+
+languageTail : List String -> Bool
+languageTail subtags =
+  let afterExtlang = dropUpTo 3 (subtagOf 3 3 isAlphaCode) subtags
+  let afterScript = dropOne (subtagOf 4 4 isAlphaCode) afterExtlang
+  let afterRegion = dropOne isRegion afterScript
+  variantsTail (S.fromList []) afterRegion
+
+dropUpTo : Int -> (String -> Bool) -> List String -> List String
+dropUpTo n accepts (first :: rest)
+  | n > 0 && accepts first = dropUpTo (n - 1) accepts rest
+  | otherwise = first :: rest
+dropUpTo _ _ [] = []
+
+dropOne : (String -> Bool) -> List String -> List String
+dropOne accepts (first :: rest)
+  | accepts first = rest
+  | otherwise = first :: rest
+dropOne _ [] = []
+
+-- The subtags already seen are a set: a tag is as long as its field allows,
+-- and every subtag is compared against all earlier ones.
+variantsTail : Set String -> List String -> Bool
+variantsTail seen (first :: rest)
+  | isVariant first =
+    if S.has (toLower first) seen then
+      False
+    else
+      variantsTail (S.insert (toLower first) seen) rest
+  | otherwise = extensionsTail (S.fromList []) (first :: rest)
+variantsTail _ [] = True
+
+extensionsTail : Set String -> List String -> Bool
+extensionsTail seen (first :: rest)
+  | isExtensionSingleton first =
+    if S.has (toLower first) seen || not (startsExtension rest) then
+      False
+    else
+      extensionsTail
+        (S.insert (toLower first) seen)
+        (dropWhile isExtensionPayload rest)
+  | otherwise = isPrivateSingleton first && privateUseTail rest
+extensionsTail _ [] = True
+
+startsExtension : List String -> Bool
+startsExtension (payload :: _) = isExtensionPayload payload
+startsExtension [] = False
+
+privateUseTail : List String -> Bool
+privateUseTail subtags = subtags /= [] && all (subtagOf 1 8 isAlnumCode) subtags
+
+isRegion : String -> Bool
+isRegion subtag =
+  subtagOf 2 2 isAlphaCode subtag || subtagOf 3 3 isDigitCode subtag
+
+isVariant : String -> Bool
+isVariant subtag =
+  subtagOf 5 8 isAlnumCode subtag
+    || subtagOf 4 4 isAlnumCode subtag && isDigitCode (firstCode subtag)
+
+isExtensionSingleton : String -> Bool
+isExtensionSingleton subtag =
+  subtagOf 1 1 isAlnumCode subtag && not (isPrivateSingleton subtag)
+
+isExtensionPayload : String -> Bool
+isExtensionPayload = subtagOf 2 8 isAlnumCode
+
+isPrivateSingleton : String -> Bool
+isPrivateSingleton subtag = subtag == "x" || subtag == "X"
+
+-- `subtag` has between `least` and `most` characters, each accepted.
+subtagOf : Int -> Int -> (Int -> Bool) -> String -> Bool
+subtagOf least most accepts subtag =
+  let codes = B.toArray (encodeUtf8 subtag)
+  let n = arrayLength codes
+  n >= least && n <= most && all accepts codes
+
+firstCode : String -> Int
+firstCode subtag = match B.toArray (encodeUtf8 subtag)
+  codes if arrayLength codes > 0 => codes[0]
+  _ => 0
+
+isLowerCode : Int -> Bool
+isLowerCode c = c >= 97 && c <= 122
+
+isAlphaCode : Int -> Bool
+isAlphaCode c = isLowerCode c || c >= 65 && c <= 90
+
+isDigitCode : Int -> Bool
+isDigitCode c = c >= 48 && c <= 57
+
+isAlnumCode : Int -> Bool
+isAlnumCode c = isAlphaCode c || isDigitCode c
+
+-- ── uri and at-uri ──────────────────────────────────────────────────────────
+
+-- JavaScript's `\s`, which is wider than ASCII whitespace.
+jsSpace : String
+jsSpace =
+  "\\t\\n\\x0b\\x0c\\r \\u{a0}\\u{1680}\\u{2000}-\\u{200a}\\u{2028}\\u{2029}\\u{202f}\\u{205f}\\u{3000}\\u{feff}"
+
+-- | Format `uri`: a scheme, then a non-space run that does not begin with a
+-- third `/`.
+uriRe : Regex
+uriRe = mustCompile "\\w+:(//)?[^/\{jsSpace}][^\{jsSpace}]*"
+
+{- | Format `at-uri`: `lib.atsyntax`'s AT-URI, optionally followed by a
+   fragment that is a JSON pointer (`#/…`) whose percent-escapes decode to
+   UTF-8. -}
+atUriValid : String -> Bool
+atUriValid text =
+  stringLength text <= 8192
+    && (match indexOf "#" text
+      None => isOk (validateAtUri text)
+      Some at =>
+        isOk (validateAtUri (stringSlice 0 at text))
+          && jsonPointerValid (stringSlice (at + 1) (stringLength text) text))
+
+jsonPointerRe : Regex
+jsonPointerRe = mustCompile "/[a-zA-Z0-9._~:@!$&')(*+,;=%\\[\\]/-]*"
+
+jsonPointerValid : String -> Bool
+jsonPointerValid pointer =
+  isFullMatch jsonPointerRe pointer
+    && (match percentDecoded (B.toArray (encodeUtf8 pointer)) 0 []
+      Some decoded =>
+        isSome
+          (decodeUtf8 (B.fromArrayAssumeByteDomain (arrayFromList decoded)))
+      None => False)
+
+-- The bytes a percent-encoded ASCII string stands for, or `None` when a
+-- `%` is not followed by two hex digits.
+percentDecoded : Array Int -> Int -> List Int -> Option (List Int)
+percentDecoded codes i acc =
+  if i >= arrayLength codes then
+    Some (reverse acc)
+  else if codes[i] == 37 then
+    if i + 2 < arrayLength codes then match (
+      hexValue codes[i + 1],
+      hexValue codes[i + 2],
+    )
+      (Some high, Some low) =>
+        percentDecoded codes (i + 3) (high * 16 + low :: acc)
+      _ => None
+    else
+      None
+  else
+    percentDecoded codes (i + 1) (codes[i] :: acc)
+
+hexValue : Int -> Option Int
+hexValue c =
+  if isDigitCode c then
+    Some (c - 48)
+  else if c >= 97 && c <= 102 then
+    Some (c - 87)
+  else if c >= 65 && c <= 70 then
+    Some (c - 55)
+  else
+    None

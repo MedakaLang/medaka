@@ -89,6 +89,15 @@ createRecordNsid = "com.atproto.repo.createRecord"
 scratchCollection : String
 scratchCollection = "app.medaka.scratch"
 
+-- | A record of the scratch collection. A record's `$type` must name the
+-- collection it is written to, or the write is refused before any key is
+-- minted.
+scratchRecord : Json
+scratchRecord = jObject [
+  ("$type", JString scratchCollection),
+  ("text", JString "scratch"),
+]
+
 mustHex : String -> Bytes
 mustHex text = resultOrPanic "batch_handlers: malformed hex" (decode text)
 
@@ -233,9 +242,18 @@ writeElement fields =
     ]
     _ => panic "batch_handlers: unknown batch operation \{kind}"
 
+{- | Every batch this driver sends says `validate: false`: the corpus keys
+   its `app.bsky.feed.post` records `medaka-a`, `medaka-b` and `medaka-c`,
+   which are not TIDs, so the reference PDS itself refuses the batch unless
+   grading is off, and the keys are inside the pinned bytes. -}
 batchBody : String -> List Json -> String
 batchBody did writes =
-  stringify (jObject [("repo", JString did), ("writes", jArray writes)])
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("writes", jArray writes),
+      ("validate", JBool False),
+    ])
 
 batchBodyWithSwap : String -> List Json -> String -> String
 batchBodyWithSwap did writes swap =
@@ -244,6 +262,7 @@ batchBodyWithSwap did writes swap =
       ("repo", JString did),
       ("writes", jArray writes),
       ("swapCommit", JString swap),
+      ("validate", JBool False),
     ])
 
 -- ── grading ─────────────────────────────────────────────────────────────────
@@ -370,7 +389,7 @@ runBatch lines =
   let () =
     println "cells: \{intToString cells}/3 state-preserving batch properties"
   let writes =
-    autoRkeyCell did server store firstRecord
+    autoRkeyCell did server store scratchRecord
       + absentDeleteCell did server store before
   let () =
     println "writes: \{intToString writes}/2 revision-consistency properties"

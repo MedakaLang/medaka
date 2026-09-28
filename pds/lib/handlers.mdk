@@ -78,7 +78,26 @@
    `createRecord` with no `rkey` uses its commit revision's canonical TID
    spelling as the record key, and an `applyWrites` batch keys each such
    create by the next successor (`autoRkey`), so every minted key is unique
-   and no newer than the revision that commits it. -}
+   and no newer than the revision that commits it.
+
+   ── What a write's record is checked against ───────────────────────────────
+
+   `createRecord`, `putRecord` and each `applyWrites` create or update grade
+   the record and its key with `lib.lexicon`, as the reference PDS does, unless
+   the request says `validate: false`. An absent `validate` grades exactly as
+   `true` does. A record the validator refuses is answered
+   `400 InvalidRequest`, in the reference's wording, and nothing is written; in
+   a batch, one refused record refuses the whole batch. A record it accepts is
+   reported `validationStatus: "valid"`, and one it could not decide in full
+   (a grapheme bound, see `lib.lexicon`) `"unknown"`.
+
+   One difference from the reference is deliberate: a collection outside the
+   twenty the reference knows is stored and reported `"unknown"` under
+   `validate: true` too, where the reference refuses it. The official app is
+   newer than the pinned reference and writes record types that version does
+   not know; refusing them would refuse the app (`docs/ops/PDS-LAUNCH-PLAN.md`,
+   ruling R5). `validate: false` stores the record ungraded and reports
+   `"unknown"`, where the reference omits the field. -}
 
 import http.{
   Header,
@@ -106,6 +125,8 @@ import lib.cid.{
 }
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
+import lib.lexicon.{recordValidationStatus, validateRecord}
+import lib.lexicon_schemas.{knownLexicons}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.mst.{MstRangeQuery(..), mstCoveringProofBlocks}
 import lib.query_params as QueryParams
@@ -394,29 +415,32 @@ optionalString name body = match get name body
     Err (invalidRequest "Request field '\{name}' must be a string, not null")
   Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
 
-{- | `validate` is admitted in all three of its spellings and changes nothing
-   about what this server does: the record is stored as given, and the write's
-   `validationStatus` reports `"unknown"` either way.
+-- | Whether a write's record is graded against its lexicon.
+data Validation = Graded | Ungraded
 
-   This server implements no lexicon validation, so `true` cannot be HONORED in
-   the sense of performing the check. It was refused outright until 2026-09-16,
-   on the reasoning that accepting it would report a validation that never
-   happened. That reasoning does not survive contact with `writeOutput` and
-   `batchResult`, which never claim one: `validationStatus` is `"unknown"` on
-   every write this server accepts, so a client is TOLD the record was stored
-   ungraded. Refusing bought no honesty the response was not already
-   delivering, and it cost the entire client bar — the official Bluesky app
-   sends `validate: true` on `applyWrites`, so posting and editing a profile
-   both failed `400` against a live server (ruling, Val, 2026-09-16;
-   `docs/ops/PDS-LAUNCH-PLAN.md` §5).
+{- | `validate` absent or `true` grades the record, `false` skips grading.
+   Absent grades because the reference PDS grades then too; the flag's only
+   other effect there, refusing a collection it has no schema for under
+   `true`, is the difference this server does not take (module doc).
 
-   A non-boolean is still refused, because that is a malformed request rather
-   than a request for something this server cannot do. -}
-admitValidateFlag : Json -> Result Response Unit
+   A non-boolean is refused as a malformed request. -}
+admitValidateFlag : Json -> Result Response Validation
 admitValidateFlag body = match get "validate" body
-  None => Ok ()
-  Some (JBool _) => Ok ()
+  None => Ok Graded
+  Some (JBool True) => Ok Graded
+  Some (JBool False) => Ok Ungraded
   Some _ => Err (invalidRequest "Request field 'validate' must be a boolean")
+
+{- | The `validationStatus` a write reports, or the refusal its record gets:
+   `lib.lexicon`'s verdict on the record written to `collection` under
+   `rkey`, or `"unknown"` when grading was skipped. -}
+recordStatus : Validation -> String -> String -> Json -> Result Response String
+recordStatus Ungraded _ _ _ = Ok "unknown"
+recordStatus Graded collection rkey record =
+  mapErr
+    invalidRequest
+    (recordValidationStatus
+      (validateRecord knownLexicons collection rkey record))
 
 requireConfiguredRepo : Store -> Result Response Repo
 requireConfiguredRepo store = match storeRepo store
@@ -472,11 +496,12 @@ requireHostedRepo account body = do
   target <- requiredString "repo" body
   requireHostedIdentifier "repo" account target
 
-{- | A record-valued request field. The single-record lexicons spell it
+{- | A record-valued request field, as the JSON the lexicon grades and the
+   atproto data the repository stores. The single-record lexicons spell it
    `record`; `applyWrites` spells the same thing `value` inside each batch
    element, so the field name is a parameter and the diagnostic names whichever
    one the caller actually sent. -}
-requireRecordField : String -> Json -> Result Response DagCbor
+requireRecordField : String -> Json -> Result Response (Json, DagCbor)
 requireRecordField name body = match get name body
   None => Err (invalidRequest "Request field '\{name}' is required")
   Some value => match lexJsonToDagCbor value
@@ -484,9 +509,9 @@ requireRecordField name body = match get name body
       Err
         (invalidRequest
           "Request field '\{name}' is not representable as atproto data: \{message}")
-    Ok record => Ok record
+    Ok record => Ok (value, record)
 
-requireRecord : Json -> Result Response DagCbor
+requireRecord : Json -> Result Response (Json, DagCbor)
 requireRecord = requireRecordField "record"
 
 encodeRecordField : String -> DagCbor -> Result Response Bytes
@@ -606,20 +631,16 @@ commitJson commit = jObject [
   ("rev", JString (tidToString (repoCommitTid commit))),
 ]
 
-{- | `validationStatus` is always `"unknown"`, and that is not a placeholder.
-   This server grades no record against a lexicon, whatever `validate` asked
-   for — `admitValidateFlag` admits every boolean spelling of it and performs
-   no check for any of them. `"valid"` would claim a check that never ran;
-   omitting the field would leave a client unable to tell an unvalidated write
-   from a validated one. This field is the whole reason accepting
-   `validate: true` is honest rather than a silent lie, so it must not be
-   changed to `"valid"` without a validator behind it. -}
-writeOutput : Account -> String -> String -> Cid -> RepoCommit -> Json
-writeOutput account collection rkey recordCid commit = jObject [
+{- | `status` is `recordStatus`'s answer, the only source of a
+   `validationStatus`: `"valid"` only when `lib.lexicon` decided every
+   constraint of the record, `"unknown"` whenever grading was skipped or left a
+   bound open. -}
+writeOutput : Account -> String -> String -> Cid -> RepoCommit -> String -> Json
+writeOutput account collection rkey recordCid commit status = jObject [
   ("uri", JString "at://\{accountDid account}/\{collection}/\{rkey}"),
   ("cid", JString (cidToString recordCid)),
   ("commit", commitJson commit),
-  ("validationStatus", JString "unknown"),
+  ("validationStatus", JString status),
 ]
 
 deleteOutput : RepoCommit -> Json
@@ -647,14 +668,15 @@ applyCreateRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
-  () <- admitValidateFlag body
+  validation <- admitValidateFlag body
   collection <- requiredString "collection" body
-  record <- requireRecord body
+  (recordJson, record) <- requireRecord body
   rev <- nextRevision context repo
   proposedRkey <- optionalString "rkey" body
   let rkey = match proposedRkey
     None => tidToString rev
     Some value => value
+  status <- recordStatus validation collection rkey recordJson
   let path = recordPath collection rkey
   () <- checkSwapCommit body repo
   () <- checkSwapRecord body path repo
@@ -667,7 +689,8 @@ applyCreateRecord account context store body = do
       collection
       rkey
       (cidForDagCbor bytes)
-      (repoMutationCommit mutation),
+      (repoMutationCommit mutation)
+      status,
   )
 
 applyPutRecord : Account ->
@@ -679,10 +702,11 @@ applyPutRecord account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
-  () <- admitValidateFlag body
+  validation <- admitValidateFlag body
   collection <- requiredString "collection" body
   rkey <- requiredString "rkey" body
-  record <- requireRecord body
+  (recordJson, record) <- requireRecord body
+  status <- recordStatus validation collection rkey recordJson
   rev <- nextRevision context repo
   let path = recordPath collection rkey
   () <- checkSwapCommit body repo
@@ -700,7 +724,8 @@ applyPutRecord account context store body = do
       collection
       rkey
       (cidForDagCbor bytes)
-      (repoMutationCommit mutation),
+      (repoMutationCommit mutation)
+      status,
   )
 
 {- | `deleteRecord` is IDEMPOTENT: atproto's contract is that deleting a record
@@ -756,12 +781,13 @@ autoRkey rev n = do
   tid <- advanceTidBy rev n
   Ok (tidToString tid)
 
-batchResult : String -> String -> String -> String -> Cid -> Json
-batchResult fragment did collection rkey recordCid = jObject [
+-- | `status` is `recordStatus`'s answer, as for `writeOutput`.
+batchResult : String -> String -> String -> String -> Cid -> String -> Json
+batchResult fragment did collection rkey recordCid status = jObject [
   ("$type", JString (applyWritesType fragment)),
   ("uri", JString "at://\{did}/\{collection}/\{rkey}"),
   ("cid", JString (cidToString recordCid)),
-  ("validationStatus", JString "unknown"),
+  ("validationStatus", JString status),
 ]
 
 requireWrites : Json -> Result Response (Array Json)
@@ -772,40 +798,55 @@ requireWrites body = match get "writes" body
 
 {- | One batch element, as the operation to apply, the result row it will
    report, and the successor rkey-less-create counter. -}
-batchElement : String ->
+batchElement : Validation ->
+  String ->
   Tid ->
   Int ->
   Json ->
   Result Response (RepoWrite, Json, Int)
-batchElement did rev auto element = do
+batchElement validation did rev auto element = do
   () <- match element
     JObject _ => Ok ()
     _ => Err (invalidRequest "Every 'writes' element must be a JSON object")
   kind <- requiredString "$type" element
   collection <- requiredString "collection" element
   if kind == applyWritesType "create" then do
-    record <- requireRecordField "value" element
+    (recordJson, record) <- requireRecordField "value" element
     proposed <- optionalString "rkey" element
     (rkey, nextAuto) <- match proposed
       Some value => Ok (value, auto)
       None => do
         derived <- autoRkey rev auto
         Ok (derived, auto + 1)
+    status <- recordStatus validation collection rkey recordJson
     bytes <- encodeRecordField "value" record
     let key = recordPath collection rkey
     Ok (
       RepoWriteCreate key record,
-      batchResult "createResult" did collection rkey (cidForDagCbor bytes),
+      batchResult
+        "createResult"
+        did
+        collection
+        rkey
+        (cidForDagCbor bytes)
+        status,
       nextAuto,
     )
   else if kind == applyWritesType "update" then do
     rkey <- requiredString "rkey" element
-    record <- requireRecordField "value" element
+    (recordJson, record) <- requireRecordField "value" element
+    status <- recordStatus validation collection rkey recordJson
     bytes <- encodeRecordField "value" record
     let key = recordPath collection rkey
     Ok (
       RepoWriteUpdate key record,
-      batchResult "updateResult" did collection rkey (cidForDagCbor bytes),
+      batchResult
+        "updateResult"
+        did
+        collection
+        rkey
+        (cidForDagCbor bytes)
+        status,
       auto,
     )
   else if kind == applyWritesType "delete" then do
@@ -824,18 +865,25 @@ batchElement did rev auto element = do
 {- | Every element's operation and result row, plus the rkey-less-create
    counter left over at the end — the count the commit revision has to clear
    so no auto-minted record key is ever proposed again. -}
-batchElements : String ->
+batchElements : Validation ->
+  String ->
   Tid ->
   Array Json ->
   Int ->
   Int ->
   Result Response (List RepoWrite, List Json, Int)
-batchElements did rev elements i auto =
+batchElements validation did rev elements i auto =
   if i >= arrayLength elements then
     Ok ([], [], auto)
   else do
-    (write, result, nextAuto) <- batchElement did rev auto elements[i]
+    (write, result, nextAuto) <- batchElement
+      validation
+      did
+      rev
+      auto
+      elements[i]
     (rest, results, finalAuto) <- batchElements
+      validation
       did
       rev
       elements
@@ -879,11 +927,11 @@ applyBatchWrites account context store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
-  () <- admitValidateFlag body
+  validation <- admitValidateFlag body
   elements <- requireWrites body
   rev <- nextRevision context repo
   let did = accountDid account
-  (writes, results, finalAuto) <- batchElements did rev elements 0 0
+  (writes, results, finalAuto) <- batchElements validation did rev elements 0 0
   () <- checkSwapCommit body repo
   commitRev <- advanceTidBy rev finalAuto
   mutation <- admitMutation (repoApplyWrites writes commitRev repo)

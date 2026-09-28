@@ -3354,7 +3354,8 @@ assert head.endswith(b'\r\n\r\n'), 'unexpected initial event during handshake'
 body = json.dumps({'repo': did, 'collection': collection,
                    'rkey': 'term-ack',
                    'record': {'$type': 'app.bsky.feed.post', 'text': text,
-                              'createdAt': '2026-09-02T00:00:00.000Z'}}).encode()
+                              'createdAt': '2026-09-02T00:00:00.000Z'},
+                   'validate': False}).encode()
 write = connect()
 write.sendall((f'POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\n'
                f'Host: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n'
