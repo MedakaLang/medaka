@@ -45,8 +45,16 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  EngineDeath(..), RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
+  Agreement(..),
+  EngineDeath(..),
+  RuntimeOutcome(..),
+  checkRunBuild,
+  fatalOutcomeSweep,
+  rosterAgreement,
 }
+import io.{runVerb}
+import string.{trim}
+import test.{Expectation, expectEach, expectEqual, fail}
 import test_process.{medakaRoot}
 
 corpus : <IO> String
@@ -91,3 +99,57 @@ test "every fixture pins a runtime outcome" =
 
 test "run and build+exec agree with every fixture's pinned outcome" =
   fatalOutcomeSweep corpus declaredFixtureCount rows
+
+-- # Order around `writeStdoutBytes`
+--
+-- `medaka run` writes a byte block to stdout itself rather than through its
+-- String buffer, so the text before the block, the block, and the text after
+-- it reach stdout by two routes.  Every way the program can end must still
+-- print them in program order.  Each program prints `A`, the one-byte block
+-- `B`, then `C`, and ends as its row says; both engines owe exactly `ABC` on
+-- stdout and the row's exit code.
+
+orderSource : String -> String
+orderSource ending =
+  "import bytes.{writeStdoutBytes, fromArrayAssumeByteDomain}\n\nmain =\n  let _ = putStr \"A\"\n  let _ = writeStdoutBytes (fromArrayAssumeByteDomain [|66|])\n  let _ = putStr \"C\"\n  \{ending}\n"
+
+orderRows : List (String, String, Int)
+orderRows = [
+  ("return", "()", 0),
+  ("exit_0", "exit 0", 0),
+  ("exit_3", "exit 3", 3),
+  ("panic", "(panic \"after the block\" : Unit)", 1),
+]
+
+orderRow : String ->
+  (String, String, Int) ->
+  <Exec, FileWrite, IO> (String, Expectation)
+orderRow dir (name, ending, code) =
+  let entry = "\{dir}/\{name}.mdk"
+  match writeFile entry (orderSource ending)
+    Err e => (name, fail "could not write \{entry}: \{e}")
+    Ok _ => match checkRunBuild entry "\{dir}/\{name}.bin"
+      Err e => (name, fail e)
+      Ok a => (
+        name,
+        expectEqual
+          [(code, "ABC"), (code, "ABC")]
+          [(a.runCode, a.runOut), (a.binCode, a.binOut)],
+      )
+
+-- A directory of this test's own.  Not `test_process.scratchDir`: that is one
+-- value for the whole process, and the fixture sweep above removes it when it
+-- finishes.
+orderDir : Unit -> <Exec> Result String String
+orderDir _ = match runVerb "mktemp" ["-d"]
+  Err e => Err e
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
+test "run and build+exec print text and writeStdoutBytes in program order on every exit" =
+  match orderDir ()
+    Err e => fail "no scratch directory: \{e}"
+    Ok dir =>
+      let result = expectEach (map (orderRow dir) orderRows)
+      let _ = runVerb "rm" ["-rf", dir]
+      result

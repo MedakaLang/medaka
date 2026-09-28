@@ -25,7 +25,7 @@ import frontend.parser.{
   parseWithPositions,
   parseWithPositionsLocated,
 }
-import driver.loader.{findProjectRoot, findProjectRootOrSelf}
+import driver.loader.{findProjectRoot, findProjectRootOrSelf, readSource}
 import driver.diagnostics.{
   Diag,
   cjAllToJson,
@@ -484,7 +484,7 @@ lintOneFileReport : StdlibIndex ->
   String ->
   <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
 lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCtx target =
-  match readFile target
+  match readSource target
     Err msg =>
       let _ = ePutStrLn msg
       (True, [], [])
@@ -575,7 +575,7 @@ lintFileFresh idx target src hash wantOccs =
 
 -- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
 lintOneFileFix : List String -> List String -> String -> <IO> Bool
-lintOneFileFix onlyNames disableNames target = match readFile target
+lintOneFileFix onlyNames disableNames target = match readSource target
   Err msg =>
     let _ = ePutStrLn msg
     True

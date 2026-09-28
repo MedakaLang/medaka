@@ -313,6 +313,7 @@ import backend.wasm_preamble.{
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strCodecRuntimeLines,
+  utf8LossyRuntimeLines,
   byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
@@ -3766,6 +3767,14 @@ emitRefProgram prog groups =
   let ioHostRt = if (progEmit prog).useIO.value then ioHostRuntimeLines else []
   let ioArgsRt =
     if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
+  -- the UTF-8 validation every producer of outside bytes reads a $str through,
+  -- emitted exactly when one of the blocks that call it is: the byte codec,
+  -- byteBlockToString, and the IO host surface.
+  let utf8LossyRt =
+    if isEmptyList (strCodecRt ++ byteBlockRt ++ ioHostRt) then
+      []
+    else
+      utf8LossyRuntimeLines
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt =
@@ -3829,6 +3838,7 @@ emitRefProgram prog groups =
       ++ hashFloatRt
       ++ randomFloatRt
       ++ strSearchRt
+      ++ utf8LossyRt
       ++ strCodecRt
       ++ byteBlockRt
       ++ charFromCodeRt

@@ -25,13 +25,13 @@ import byteparser.{
   failWith,
   beFloat64,
 }
-import bytes.{Bytes, fromU8Array, toArray}
+import bytes.{Bytes, decodeUtf8, fromU8Array, toArray}
 import lib.varint.{sqVarint}
 import lib.wideint as W
 import i64 as I64
 import list.{reverse}
 import array
-import string.{join, fromUtf8}
+import string.{join, fromUtf8, toUtf8}
 
 -- | One decoded column value.
 --
@@ -39,11 +39,18 @@ import string.{join, fromUtf8}
 -- not (above 2^62 - 1 or below -2^62): SQLite's integers are 64-bit, Medaka's
 -- `Int` holds 63 bits.  One value never has two spellings, so the derived `Eq`
 -- and every comparison that dispatches on the constructor stay right.
+--
+-- A TEXT value is `CText` when its stored bytes are UTF-8 and `CTextRaw`, the
+-- bytes themselves, when they are not: SQLite does not validate TEXT, and a
+-- `String` cannot hold such bytes.  A rewrite that does not target the cell
+-- stores the bytes back unchanged; rendering and comparing as text read them
+-- as `string.fromUtf8` does.
 public export data Cell =
   | CNull
   | CInt Int
   | CInt64 I64
   | CText String
+  | CTextRaw (Array Int)
   | CBlob (Array Int)
   | CFloat Float
   deriving (Debug, Eq)
@@ -68,6 +75,7 @@ export impl Display Cell where
   display (CInt n) = intToString n
   display (CInt64 x) = display x
   display (CText s) = s
+  display (CTextRaw b) = fromUtf8 b
   display (CBlob _) = "<blob>"
   display (CFloat f) = floatToString f
 
@@ -77,6 +85,7 @@ cellToString CNull = ""
 cellToString (CInt n) = intToString n
 cellToString (CInt64 x) = display x
 cellToString (CText s) = s
+cellToString (CTextRaw b) = fromUtf8 b
 cellToString (CBlob _) = "<blob>"
 cellToString (CFloat f) = floatToString f
 
@@ -209,9 +218,27 @@ readBody input pos end (STInt 8) =
 readBody input pos end (STInt nbytes) =
   map CInt (runBP (beSint nbytes) input pos end)
 readBody input pos end (STText nbytes) =
-  map
-    (bs => CText (fromUtf8 (toArray bs)))
-    (runBP (takeBytes nbytes) input pos end)
+  map textCell (runBP (takeBytes nbytes) input pos end)
 readBody input pos end (STBlob nbytes) =
   map (bs => CBlob (toArray bs)) (runBP (takeBytes nbytes) input pos end)
 readBody input pos end STFloat = map CFloat (runBP beFloat64 input pos end)
+
+textCell : Bytes -> Cell
+textCell bs = match decodeUtf8 bs
+  Some s => CText s
+  None => CTextRaw (toArray bs)
+
+-- | A TEXT cell's value read as text, `CText` for `CTextRaw` too; every other
+--   cell unchanged.  For code that compares or computes on text, where
+--   ill-formed bytes read as U+FFFD.
+export
+textView : Cell -> Cell
+textView (CTextRaw b) = CText (fromUtf8 b)
+textView c = c
+
+-- | The bytes a TEXT cell stores; `None` for every other cell.
+export
+cellTextBytes : Cell -> Option (Array Int)
+cellTextBytes (CText s) = Some (toUtf8 s)
+cellTextBytes (CTextRaw b) = Some b
+cellTextBytes _ = None
